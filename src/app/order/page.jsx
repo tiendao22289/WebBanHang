@@ -82,6 +82,19 @@ function OrderContent() {
     } catch { return null; }
   }
 
+  // Body scroll lock effect
+  useEffect(() => {
+    const isModalOpen = showInfoModal || showCart || showOrdered;
+    if (isModalOpen) {
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+      document.body.style.setProperty('--scrollbar-width', `${scrollbarWidth}px`);
+      document.body.classList.add('modal-open');
+    } else {
+      document.body.classList.remove('modal-open');
+    }
+    return () => document.body.classList.remove('modal-open');
+  }, [showInfoModal, showCart, showOrdered]);
+
   // ─── Init: check localStorage session ───
   useEffect(() => {
     initSession();

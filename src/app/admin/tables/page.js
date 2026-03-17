@@ -65,6 +65,20 @@ export default function TablesPage() {
 
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
+  // Body scroll lock effect
+  useEffect(() => {
+    const isModalOpen = selectedTable || showQR || showAddModal;
+    if (isModalOpen) {
+      // Calculate scrollbar width to prevent jumping
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+      document.body.style.setProperty('--scrollbar-width', `${scrollbarWidth}px`);
+      document.body.classList.add('modal-open');
+    } else {
+      document.body.classList.remove('modal-open');
+    }
+    return () => document.body.classList.remove('modal-open');
+  }, [selectedTable, showQR, showAddModal]);
+
   const handlePrintInvoice = useReactToPrint({ contentRef: invoiceRef });
 
   const fetchTables = useCallback(async () => {

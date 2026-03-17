@@ -34,6 +34,18 @@ export default function MenuPage() {
   });
 
   useEffect(() => {
+    const isModalOpen = showCatModal || showItemModal;
+    if (isModalOpen) {
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+      document.body.style.setProperty('--scrollbar-width', `${scrollbarWidth}px`);
+      document.body.classList.add('modal-open');
+    } else {
+      document.body.classList.remove('modal-open');
+    }
+    return () => document.body.classList.remove('modal-open');
+  }, [showCatModal, showItemModal]);
+
+  useEffect(() => {
     fetchData();
   }, []);
 

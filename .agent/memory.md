@@ -39,48 +39,40 @@ src/
 ```
 
 ## Tính năng đã hoàn thành
-1. ✅ **Trang View Bàn** (`/admin/tables`) - Grid bàn, QR code, chi tiết đơn, hoàn thành bàn, realtime
-2. ✅ **Trang Thực đơn** (`/admin/menu`) - CRUD danh mục + món ăn, toggle hiển thị
-3. ✅ **Trang Khách đặt món** (`/order?table=XX`) - 4 bước: nhập thông tin → chọn món → giỏ hàng → in hoá đơn
-4. ✅ **Trang Hoá đơn** (`/admin/orders`) - Filter ngày/trạng thái/tìm kiếm, quản lý trạng thái đơn
-5. ✅ **Trang Thống kê** (`/admin/stats`) - Biểu đồ doanh thu, pie chart danh mục, top món bán chạy
-6. ✅ **Auto-print invoice** cho bếp khi có đơn mới
-7. ✅ **Realtime** cập nhật trạng thái bàn
+1. ✅ **Trang View Bàn** (`/admin/tables`) - Grid bàn, QR code (dynamic URL), chi tiết đơn, quản lý chi tiết món (admin có thể thêm/xoá món ngay tại chỗ), realtime.
+2. ✅ **Trang Thực đơn** (`/admin/menu`) - CRUD danh mục + món ăn, toggle hiển thị.
+3. ✅ **Trang Khách đặt món** (`/order`) - Đồng bộ session qua `localStorage`, hiển thị bill đang active của bàn (tất cả khách ngồi chung bàn thấy đơn của nhau), xem lại lịch sử đơn cá nhân và nút "Đặt lại" (Reorder).
+4. ✅ **Trang Hoá đơn** (`/admin/orders`) - Filter ngày/trạng thái/tìm kiếm, quản lý trạng thái đơn.
+5. ✅ **Trang Thống kê** (`/admin/stats`) - Biểu đồ doanh thu, pie chart danh mục, top món bán chạy.
+6. ✅ **Thiết kế UI Admin** - Refactor sang phong cách **"Modern - Vibrant - Warm"** (Premium Red/Gold theme, DM Sans font, bo góc lớn 1.5rem, glassmorphism), giữ nguyên giao diện khách hàng.
+7. ✅ **Deployment & Network** - Tích hợp Cloudflare Tunnel để truy cập từ xa, QR code tự động cập nhật link theo domain đang chạy.
 
 ## Lưu ý quan trọng
-- **KHÔNG** có hệ thống phân quyền/đăng nhập (theo yêu cầu)
-- QR code encode URL dạng: `{BASE_URL}/order?table={table_number}`
-- Trang khách đặt món: mobile-first design
-- Supabase cần được setup riêng (URL + Anon Key trong `.env.local`)
-- Có thể mở rộng cho Zalo Mini App sau này
+- **QR Code**: Sử dụng `window.location.origin` giúp mã QR luôn đúng dù chạy ở localhost hay link tunnel.
+- **Đồng bộ đơn hàng**: Nếu 2 khách cùng quét 1 bàn, họ sẽ thấy các "đơn hàng đang chờ" (pending/preparing) của nhau để tránh gọi trùng món, nhưng lịch sử "đã hoàn thành" là riêng tư theo phone khách.
+- **Admin POS**: Admin có quyền can thiệp vào bill (thêm món, xoá món) trực tiếp từ giao diện quản lý bàn.
+- **Hệ thống Font**: `globals.css` hỗ trợ nhiều font, Admin ưu tiên dùng DM Sans.
 
-## Global Skill
-- **Đường dẫn**: `E:\AntigravitySkill`
-- Đây là thư mục **global skill** dùng chung cho tất cả workspace
-- Khi nhắc tới "global skill" tức là đang nhắc tới folder này
-- Luôn kiểm tra thư mục này để tìm skill có thể dùng được
-- **⚠️ Quan trọng**: Mỗi khi cần kiểm tra skill phù hợp, **đọc file `E:\AntigravitySkill\skill-details.md` và `E:\AntigravitySkill\CATALOG.md` trước** rồi tìm skill phù hợp để copy vào workspace
-
-## Database Schema
-- `categories` - Danh mục món ăn
-- `menu_items` - Các món ăn (FK → categories)
-- `tables` - Bàn ăn (status: available/occupied)
-- `orders` - Đơn hàng (FK → tables, status: pending/preparing/completed/paid)
-- `order_items` - Chi tiết đơn hàng (FK → orders, menu_items)
+## Quy tắc Workspace (User Rules)
+- **Lệnh "kết thúc"**: Mỗi khi người dùng nói "kết thúc", AI phải:
+    1. Lưu lại toàn bộ diễn biến, thay đổi và logic trong phiên làm việc.
+    2. Cập nhật chi tiết vào `.agent/memory.md`.
+    3. Tóm tắt các thay đổi quan trọng nhất và các file đã chỉnh sửa.
 
 ## Việc cần làm tiếp
-- [ ] Setup Supabase project (tạo project, lấy URL + Anon Key)
-- [ ] Chạy `database.sql` trên Supabase SQL Editor
-- [ ] Cập nhật `.env.local` với credentials thật
-- [ ] Test toàn bộ flow end-to-end
-- [ ] Deploy lên Vercel
+- [ ] Tối ưu hóa hiệu suất load ảnh (WebP).
+- [ ] Thêm tính năng sửa số lượng món trực tiếp trong bill Admin (hiện mới có thêm/xoá).
+- [ ] Setup CI/CD tự động deploy khi push master.
 
 ## Ghi chú phiên làm việc
 ### 2026-03-18
-- Đã lên kế hoạch chi tiết toàn bộ ứng dụng
-- User đã approve implementation plan
-- Khởi tạo Next.js project, cài dependencies
-- Tạo design system (Playfair Display + Be Vietnam Pro, warm earth tones)
-- Build hoàn thành tất cả 6 trang: tables, menu, orders, stats, order (customer)
-- Build verification: ✅ thành công, tất cả 7 routes compile OK
-- Fix: useSearchParams Suspense boundary cho /order page
+- **Session 1**: Khởi tạo project, build skeleton, setup base UI/UX.
+- **Session 2**: 
+    - Fix logic session `localStorage` cho khách hàng.
+    - Live-syncing hoá đơn: Khách ngồi chung bàn thấy đơn active của nhau.
+    - Tính năng Admin: Thêm/xoá món trực tiếp trong bill tại `admin/tables`.
+    - Tích hợp Cloudflare Tunnel và dynamic QR code.
+    - **Refactor UI Admin**: Chuyển toàn bộ quản lý sang theme Premium (Red/Gold/Warm), font DM Sans.
+    - Setup Git repository: [tiendao22289/WebBanHang](https://github.com/tiendao22289/WebBanHang) (Latest commit: `491554e`).
+    - Cập nhật quy tắc: Tự động update memory khi nhận lệnh "kết thúc".
+    - **Trạng thái**: Phiên làm việc kết thúc thành công.

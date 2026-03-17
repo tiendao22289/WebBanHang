@@ -25,6 +25,17 @@ export default function CustomersPage() {
   const [loadingOrders, setLoadingOrders] = useState(false);
 
   useEffect(() => {
+    if (selectedCustomer) {
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+      document.body.style.setProperty('--scrollbar-width', `${scrollbarWidth}px`);
+      document.body.classList.add('modal-open');
+    } else {
+      document.body.classList.remove('modal-open');
+    }
+    return () => document.body.classList.remove('modal-open');
+  }, [selectedCustomer]);
+
+  useEffect(() => {
     fetchCustomers();
   }, []);
 

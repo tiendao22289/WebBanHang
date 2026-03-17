@@ -25,6 +25,17 @@ export default function OrdersPage() {
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
+    if (selectedOrder) {
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+      document.body.style.setProperty('--scrollbar-width', `${scrollbarWidth}px`);
+      document.body.classList.add('modal-open');
+    } else {
+      document.body.classList.remove('modal-open');
+    }
+    return () => document.body.classList.remove('modal-open');
+  }, [selectedOrder]);
+
+  useEffect(() => {
     fetchOrders();
   }, [dateFilter, statusFilter]);
 
