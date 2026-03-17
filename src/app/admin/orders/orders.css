@@ -11,10 +11,11 @@
   align-items: center;
   gap: var(--space-2);
   background: white;
-  border: 1.5px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-primary-light);
+  border-radius: var(--radius-lg);
   padding: 0 var(--space-3);
   color: var(--color-text-secondary);
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.03);
 }
 
 .filter-group .input,
@@ -48,9 +49,11 @@
 
 /* ── Order Detail Info ── */
 .order-detail-info {
-  background: var(--color-bg);
-  border-radius: var(--radius-md);
+  background: white;
+  border: 1px solid var(--color-primary-light);
+  border-radius: var(--radius-lg);
   padding: var(--space-4);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
 }
 
 .detail-row {

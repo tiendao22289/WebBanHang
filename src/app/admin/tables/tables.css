@@ -129,7 +129,7 @@
 
 /* ── Table Card ── */
 .table-card {
-  background: var(--color-bg-card);
+  background: white;
   border-radius: var(--radius-xl);
   padding: var(--space-4);
   cursor: pointer;
@@ -139,17 +139,19 @@
   flex-direction: column;
   align-items: center;
   gap: var(--space-3);
-  border: 1.5px solid var(--color-border-light);
+  border: 1px solid var(--color-primary-light);
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.04);
 }
 
 .table-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.1);
+  transform: translateY(-6px);
+  box-shadow: 0 20px 40px -8px rgba(220, 38, 38, 0.12);
+  border-color: var(--color-primary);
 }
 
 .table-card.occupied {
-  border-color: rgba(45, 182, 124, 0.3);
-  background: linear-gradient(135deg, rgba(45, 182, 124, 0.03), rgba(255, 255, 255, 1));
+  border-color: var(--color-primary);
+  background: white;
 }
 
 /* ── Dining Table Visual ── */
@@ -241,16 +243,16 @@
 /* Pulse ring for occupied */
 .table-pulse {
   position: absolute;
-  inset: -6px;
+  inset: -8px;
   border-radius: 50%;
-  border: 2px solid var(--color-success);
+  border: 2px solid var(--color-primary);
   opacity: 0;
   animation: tablePulse 2s ease-in-out infinite;
 }
 
 @keyframes tablePulse {
-  0% { transform: scale(0.95); opacity: 0.5; }
-  50% { transform: scale(1.08); opacity: 0; }
+  0% { transform: scale(0.95); opacity: 0.4; }
+  50% { transform: scale(1.1); opacity: 0; }
   100% { transform: scale(0.95); opacity: 0; }
 }
 
@@ -319,8 +321,8 @@
 }
 
 .table-status-dot.occupied {
-  background: var(--color-success-light);
-  color: var(--color-success);
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
 }
 
 /* ── Bill Preview ── */
@@ -337,18 +339,20 @@
   font-size: 0.72rem;
   color: var(--color-accent);
   font-weight: 700;
-  background: #FEF3D9;
-  padding: 2px 8px;
+  background: #FFFBEB;
+  padding: 2px 10px;
   border-radius: var(--radius-full);
+  border: 1px solid #FEF3D9;
 }
 
 .table-items-count {
   font-size: 0.72rem;
   font-weight: 700;
-  color: var(--color-success);
-  background: var(--color-success-light);
-  padding: 2px 8px;
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+  padding: 2px 10px;
   border-radius: var(--radius-full);
+  border: 1px solid var(--color-primary-light);
 }
 
 /* ── Card Actions ── */
@@ -415,11 +419,12 @@
 
 /* ── Order Detail Card ── */
 .order-detail-card {
-  background: var(--color-bg);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
-  margin-bottom: var(--space-4);
-  border: 1px solid var(--color-border-light);
+  background: white;
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  margin-bottom: var(--space-6);
+  border: 1px solid var(--color-primary-light);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
 }
 
 .order-detail-header {

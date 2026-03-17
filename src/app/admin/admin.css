@@ -1,14 +1,31 @@
-/* ── Admin Layout ── */
 .admin-layout {
   display: flex;
   min-height: 100vh;
+  /* Design Tokens Overrides for Admin */
+  --color-primary: #DC2626;
+  --color-primary-dark: #B91C1C;
+  --color-primary-light: #FEE2E2;
+  --color-primary-bg: #FEF2F2;
+  --color-accent: #CA8A04;
+  --color-accent-dark: #A16207;
+  --color-bg: #FFFBFB;
+  --color-text: #450A0A;
+  --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-display: 'DM Sans', sans-serif;
+  --radius-lg: 1.25rem;
+  --radius-xl: 1.5rem;
+  --shadow-md: 0 10px 25px -5px rgba(220, 38, 38, 0.08), 0 8px 10px -6px rgba(220, 38, 38, 0.08);
+  
+  font-family: var(--font-body);
+  color: var(--color-text);
 }
 
 /* ── Sidebar (Desktop) ── */
 .sidebar {
   width: var(--sidebar-width);
-  background: linear-gradient(180deg, #1A1A2E 0%, #16213E 100%);
-  color: var(--color-text-inverse);
+  background: white;
+  border-right: 1px solid var(--color-primary-light);
+  color: var(--color-text);
   display: flex;
   flex-direction: column;
   position: fixed;
@@ -20,8 +37,8 @@
 }
 
 .sidebar-header {
-  padding: var(--space-6);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: var(--space-8) var(--space-6);
+  border-bottom: 1px solid var(--color-primary-light);
 }
 
 .sidebar-logo {
@@ -36,25 +53,27 @@
 
 .sidebar-title {
   font-family: var(--font-display);
-  font-size: 1.2rem;
-  font-weight: 700;
-  color: white;
-  line-height: 1.2;
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: var(--color-primary);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
 }
 
 .sidebar-subtitle {
-  font-size: 0.7rem;
-  color: rgba(255, 255, 255, 0.4);
-  letter-spacing: 0.5px;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
 .sidebar-nav {
-  padding: var(--space-4) var(--space-3);
+  padding: var(--space-6) var(--space-4);
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-2);
 }
 
 .nav-item {
@@ -62,23 +81,24 @@
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-md);
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.6);
-  transition: all var(--transition-fast);
+  border-radius: var(--radius-lg);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  transition: all var(--transition-normal);
   text-decoration: none;
 }
 
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: white;
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  transform: translateX(4px);
 }
 
 .nav-item.active {
-  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
+  background: var(--color-primary);
   color: white;
-  box-shadow: 0 4px 12px rgba(212, 165, 116, 0.3);
+  box-shadow: 0 8px 16px -4px rgba(220, 38, 38, 0.25);
 }
 
 .nav-item.active svg {
@@ -90,13 +110,14 @@
 }
 
 .sidebar-footer {
-  padding: var(--space-4) var(--space-6);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: var(--space-6);
+  border-top: 1px solid var(--color-primary-light);
 }
 
 .sidebar-version {
-  font-size: 0.7rem;
-  color: rgba(255, 255, 255, 0.3);
+  font-size: 0.75rem;
+  color: var(--color-text-light);
+  font-weight: 500;
 }
 
 /* ── Main Content ── */
@@ -125,8 +146,9 @@
     right: 0;
     bottom: 0;
     flex-direction: row;
-    background: linear-gradient(0deg, #1A1A2E 0%, #1e2140 100%);
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    background: white;
+    border-top: 1px solid var(--color-primary-light);
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.04);
     overflow: visible;
     z-index: 200;
     padding: 0;
@@ -169,6 +191,7 @@
     box-shadow: none;
     color: var(--color-primary);
     position: relative;
+    transform: none;
   }
 
   .nav-item.active::after {
@@ -177,9 +200,9 @@
     top: 0;
     left: 20%;
     right: 20%;
-    height: 3px;
+    height: 4px;
     background: var(--color-primary);
-    border-radius: 0 0 4px 4px;
+    border-radius: 0 0 100px 100px;
   }
 
   .nav-item.active svg {

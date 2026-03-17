@@ -4,12 +4,13 @@
   align-items: center;
   gap: var(--space-2);
   background: white;
-  border: 1.5px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-primary-light);
+  border-radius: var(--radius-lg);
   padding: 0 var(--space-3);
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-6);
   color: var(--color-text-secondary);
   max-width: 400px;
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.03);
 }
 
 .customer-search .input {
@@ -47,8 +48,9 @@
   background: var(--color-primary-bg);
   border-radius: var(--radius-full);
   font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--color-primary-dark);
+  font-weight: 700;
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary-light);
 }
 
 /* ── Customer Info Card (Modal) ── */
@@ -56,9 +58,10 @@
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  background: var(--color-bg);
-  border-radius: var(--radius-lg);
-  padding: var(--space-5);
+  background: white;
+  border-radius: var(--radius-xl);
+  padding: var(--space-6);
+  border: 1px solid var(--color-primary-light);
 }
 
 .customer-info-avatar {
@@ -149,9 +152,10 @@
 
 .timeline-content {
   background: white;
-  border: 1px solid var(--color-border-light);
-  border-radius: var(--radius-md);
-  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-primary-light);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
 }
 
 .timeline-header {
