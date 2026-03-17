@@ -20,6 +20,7 @@ import {
   BellRing,
   Receipt,
   Search,
+  ChefHat,
 } from 'lucide-react';
 import './tables.css';
 
@@ -57,7 +58,9 @@ export default function TablesPage() {
   const [newOrderAlert, setNewOrderAlert] = useState(null);
   const [columnsPerRow, setColumnsPerRow] = useState(5);
   const [menuItems, setMenuItems] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [addingToOrder, setAddingToOrder] = useState(null); // order id being added to
+  const [activeMenuCategory, setActiveMenuCategory] = useState('all');
   const [addItemSearch, setAddItemSearch] = useState('');
 
   const invoiceRef = useRef(null);
@@ -82,9 +85,10 @@ export default function TablesPage() {
   const handlePrintInvoice = useReactToPrint({ contentRef: invoiceRef });
 
   const fetchTables = useCallback(async () => {
-    const [{ data: tablesData }, { data: menuData }] = await Promise.all([
+    const [{ data: tablesData }, { data: menuData }, { data: catsData }] = await Promise.all([
       supabase.from('tables').select('*').order('table_number'),
       supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).order('name'),
+      supabase.from('categories').select('*').order('sort_order'),
     ]);
 
     if (tablesData) {
@@ -117,6 +121,7 @@ export default function TablesPage() {
       }
     }
     setMenuItems(menuData || []);
+    setCategories(catsData || []);
     setLoading(false);
   }, []);
 
@@ -255,11 +260,53 @@ export default function TablesPage() {
   }
 
   async function addItemToOrder(orderId, menuItem) {
-    // Check if item already exists in this order
+    let targetOrderId = orderId;
+
+    // Special case: Admin adding a new item via the footer "+ THÊM MÓN" button
+    if (orderId === 'admin') {
+      // Find or create an 'Admin' bill for this table
+      const { data: adminOrder } = await supabase
+        .from('orders')
+        .select('id')
+        .eq('table_id', selectedTable.id)
+        .eq('customer_name', 'Admin')
+        .in('status', ['pending', 'preparing', 'completed'])
+        .maybeSingle();
+
+      if (adminOrder) {
+        targetOrderId = adminOrder.id;
+      } else {
+        // Create new Admin bill
+        const { data: newOrder, error } = await supabase
+          .from('orders')
+          .insert({
+            table_id: selectedTable.id,
+            customer_name: 'Admin',
+            customer_phone: 'Quản lý',
+            status: 'pending',
+            total_amount: 0
+          })
+          .select()
+          .single();
+        
+        if (error || !newOrder) return;
+        targetOrderId = newOrder.id;
+        
+        // Mark table as occupied if it was available
+        if (selectedTable.status === 'available') {
+          await supabase
+            .from('tables')
+            .update({ status: 'occupied', occupied_at: new Date().toISOString() })
+            .eq('id', selectedTable.id);
+        }
+      }
+    }
+
+    // Check if item already exists in the target order
     const { data: existing } = await supabase
       .from('order_items')
       .select('*')
-      .eq('order_id', orderId)
+      .eq('order_id', targetOrderId)
       .eq('menu_item_id', menuItem.id)
       .maybeSingle();
 
@@ -272,22 +319,73 @@ export default function TablesPage() {
     } else {
       // Add new item
       await supabase.from('order_items').insert({
-        order_id: orderId,
+        order_id: targetOrderId,
         menu_item_id: menuItem.id,
         quantity: 1,
         unit_price: menuItem.price,
       });
     }
+
     // Recalculate order total
     const { data: allItems } = await supabase
       .from('order_items')
       .select('unit_price, quantity')
-      .eq('order_id', orderId);
+      .eq('order_id', targetOrderId);
     const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
-    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
+    
     setAddingToOrder(null);
     setAddItemSearch('');
     fetchTables();
+  }
+
+  async function mergeBills() {
+    if (!selectedTable) return;
+    const tableBills = orders[selectedTable.id] || [];
+    if (tableBills.length <= 1) {
+      alert('Không có đủ bill để gộp!');
+      return;
+    }
+
+    if (!confirm(`Bạn có chắc muốn gộp ${tableBills.length} bill của bàn ${selectedTable.table_number} thành 1 bill duy nhất?`)) return;
+
+    // Use the oldest bill as the main one
+    const sortedBills = [...tableBills].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    const mainBill = sortedBills[0];
+    const otherBills = sortedBills.slice(1);
+    const otherIds = otherBills.map(b => b.id);
+
+    // 1. Move all items to the main bill
+    // We update order_id for all items in the other bills
+    const { error: moveError } = await supabase
+      .from('order_items')
+      .update({ order_id: mainBill.id })
+      .in('order_id', otherIds);
+
+    if (moveError) {
+      alert('Lỗi khi chuyển món ăn: ' + moveError.message);
+      return;
+    }
+
+    // 2. Delete the empty orders
+    await supabase.from('orders').delete().in('id', otherIds);
+
+    // 3. Recalculate main bill total
+    const { data: allItems } = await supabase
+      .from('order_items')
+      .select('unit_price, quantity')
+      .eq('order_id', mainBill.id);
+    
+    // Group items of same ID if needed? 
+    // Actually, SQL allows multiple rows of same menu_item_id. 
+    // For simplicity, we just recalculate total. 
+    // Optional: Merge duplicate item rows? -> For now just update total.
+    
+    const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', mainBill.id);
+
+    fetchTables();
+    alert('Đã gộp đơn thành công!');
   }
 
   function formatPrice(price) {
@@ -610,39 +708,6 @@ export default function TablesPage() {
                           </button>
                         </div>
                       ))}
-                      {/* Add item row */}
-                      {addingToOrder === order.id ? (
-                        <div className="add-item-row">
-                          <div className="add-item-search">
-                            <Search size={14} />
-                            <input
-                              className="add-item-input"
-                              placeholder="Tìm món..."
-                              value={addItemSearch}
-                              onChange={(e) => setAddItemSearch(e.target.value)}
-                              autoFocus
-                            />
-                            <button className="btn-item-remove" onClick={() => { setAddingToOrder(null); setAddItemSearch(''); }}>
-                              <X size={14} />
-                            </button>
-                          </div>
-                          <div className="add-item-results">
-                            {menuItems
-                              .filter(m => m.name.toLowerCase().includes(addItemSearch.toLowerCase()))
-                              .slice(0, 5)
-                              .map(m => (
-                                <button key={m.id} className="add-item-option" onClick={() => addItemToOrder(order.id, m)}>
-                                  <span>{m.name}</span>
-                                  <span className="text-muted">{formatPrice(m.price)}</span>
-                                </button>
-                              ))}
-                          </div>
-                        </div>
-                      ) : (
-                        <button className="btn-add-item" onClick={() => setAddingToOrder(order.id)}>
-                          <Plus size={14} /> Thêm món
-                        </button>
-                      )}
                     </div>
                     <div className="order-total">
                       <span>Tổng bill:</span>
@@ -657,17 +722,126 @@ export default function TablesPage() {
               )}
             </div>
             <div className="modal-footer">
-              <button className="btn btn-outline" onClick={() => setSelectedTable(null)}>
-                Đóng
-              </button>
-              {orders[selectedTable.id]?.length > 0 && (
-                <button className="btn btn-primary" onClick={handlePrintInvoice}>
-                  <Printer size={16} /> In hoá đơn
+              <div className="footer-actions-left">
+                <button className="btn btn-primary btn-outline" onClick={() => setAddingToOrder('admin')}>
+                  <Plus size={16} /> THÊM MÓN
                 </button>
-              )}
-              <button className="btn btn-success" onClick={() => completeTable(selectedTable.id)}>
-                <Check size={16} /> Hoàn thành
+                {orders[selectedTable.id]?.length > 1 && (
+                  <button className="btn btn-accent btn-outline" onClick={mergeBills}>
+                    <ShoppingBag size={16} /> GỘP ĐƠN
+                  </button>
+                )}
+              </div>
+              <div className="footer-actions-right">
+                <button className="btn btn-outline" onClick={() => setSelectedTable(null)}>
+                  Đóng
+                </button>
+                {orders[selectedTable.id]?.length > 0 && (
+                  <button className="btn btn-primary" onClick={handlePrintInvoice}>
+                    <Printer size={16} /> In hoá đơn
+                  </button>
+                )}
+                <button className="btn btn-success" onClick={() => completeTable(selectedTable.id)}>
+                  <Check size={16} /> Hoàn thành
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Menu Modal (Full Menu View) */}
+      {addingToOrder && (
+        <div className="modal-overlay" onClick={() => { setAddingToOrder(null); setAddItemSearch(''); }}>
+          <div className="modal-content menu-pos-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="flex items-center gap-3">
+                <ChefHat size={20} className="text-accent" />
+                <h3>Thêm món vào Bill</h3>
+              </div>
+              <button className="btn btn-ghost btn-icon" onClick={() => { setAddingToOrder(null); setAddItemSearch(''); }}>
+                <X size={20} />
               </button>
+            </div>
+            
+            <div className="menu-pos-container">
+              {/* Search & Categories */}
+              <div className="menu-pos-sidebar">
+                <div className="menu-pos-search">
+                  <Search size={18} />
+                  <input 
+                    placeholder="Tìm tên món ăn..." 
+                    value={addItemSearch}
+                    onChange={(e) => setAddItemSearch(e.target.value)}
+                  />
+                  {addItemSearch && (
+                    <button className="clear-search" onClick={() => setAddItemSearch('')}>
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+                
+                <div className="menu-pos-categories">
+                  <button 
+                    className={`pos-cat-item ${activeMenuCategory === 'all' ? 'active' : ''}`}
+                    onClick={() => setActiveMenuCategory('all')}
+                  >
+                    Tất cả ({menuItems.length})
+                  </button>
+                  {categories.map(cat => (
+                    <button 
+                      key={cat.id}
+                      className={`pos-cat-item ${activeMenuCategory === cat.id ? 'active' : ''}`}
+                      onClick={() => setActiveMenuCategory(cat.id)}
+                    >
+                      {cat.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Items Grid */}
+              <div className="menu-pos-main">
+                <div className="menu-pos-grid">
+                  {menuItems
+                    .filter(item => {
+                      const matchesCat = activeMenuCategory === 'all' || item.category_id === activeMenuCategory;
+                      const matchesSearch = item.name.toLowerCase().includes(addItemSearch.toLowerCase());
+                      return matchesCat && matchesSearch;
+                    })
+                    .map(item => (
+                      <div key={item.id} className="pos-item-card" onClick={() => addItemToOrder(addingToOrder, item)}>
+                        <div className="pos-item-img">
+                          {item.image_url ? (
+                            <img src={item.image_url} alt={item.name} />
+                          ) : (
+                            <div className="pos-item-placeholder">
+                              <ChefHat size={32} />
+                            </div>
+                          )}
+                        </div>
+                        <div className="pos-item-details">
+                          <span className="pos-item-category">{item.category?.name}</span>
+                          <h4 className="pos-item-name">{item.name}</h4>
+                          <span className="pos-item-price">{formatPrice(item.price)}</span>
+                        </div>
+                        <div className="pos-item-add">
+                          <Plus size={18} />
+                        </div>
+                      </div>
+                    ))}
+                </div>
+                
+                {menuItems.filter(item => {
+                  const matchesCat = activeMenuCategory === 'all' || item.category_id === activeMenuCategory;
+                  const matchesSearch = item.name.toLowerCase().includes(addItemSearch.toLowerCase());
+                  return matchesCat && matchesSearch;
+                }).length === 0 && (
+                  <div className="empty-state">
+                    <p>Không tìm thấy món ăn nào</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
