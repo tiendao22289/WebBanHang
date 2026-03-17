@@ -6,6 +6,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
 import {
   Plus,
+  Minus,
   QrCode,
   X,
   Check,
@@ -18,6 +19,7 @@ import {
   Printer,
   BellRing,
   Receipt,
+  Search,
 } from 'lucide-react';
 import './tables.css';
 
@@ -54,6 +56,9 @@ export default function TablesPage() {
   const [newTableNumber, setNewTableNumber] = useState('');
   const [newOrderAlert, setNewOrderAlert] = useState(null);
   const [columnsPerRow, setColumnsPerRow] = useState(5);
+  const [menuItems, setMenuItems] = useState([]);
+  const [addingToOrder, setAddingToOrder] = useState(null); // order id being added to
+  const [addItemSearch, setAddItemSearch] = useState('');
 
   const invoiceRef = useRef(null);
   const isFirstLoad = useRef(true);
@@ -63,10 +68,10 @@ export default function TablesPage() {
   const handlePrintInvoice = useReactToPrint({ contentRef: invoiceRef });
 
   const fetchTables = useCallback(async () => {
-    const { data: tablesData } = await supabase
-      .from('tables')
-      .select('*')
-      .order('table_number');
+    const [{ data: tablesData }, { data: menuData }] = await Promise.all([
+      supabase.from('tables').select('*').order('table_number'),
+      supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).order('name'),
+    ]);
 
     if (tablesData) {
       setTables(tablesData);
@@ -97,6 +102,7 @@ export default function TablesPage() {
         setOrders({});
       }
     }
+    setMenuItems(menuData || []);
     setLoading(false);
   }, []);
 
@@ -212,6 +218,62 @@ export default function TablesPage() {
     };
 
     img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+  }
+
+  async function removeItemFromOrder(orderId, itemId) {
+    if (!confirm('Xóa món này khỏi bill?')) return;
+    // Delete the order item
+    const { data: deletedItem } = await supabase
+      .from('order_items')
+      .delete()
+      .eq('id', itemId)
+      .select()
+      .single();
+    if (!deletedItem) return;
+    // Recalculate order total
+    const { data: remaining } = await supabase
+      .from('order_items')
+      .select('unit_price, quantity')
+      .eq('order_id', orderId);
+    const newTotal = (remaining || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+    fetchTables();
+  }
+
+  async function addItemToOrder(orderId, menuItem) {
+    // Check if item already exists in this order
+    const { data: existing } = await supabase
+      .from('order_items')
+      .select('*')
+      .eq('order_id', orderId)
+      .eq('menu_item_id', menuItem.id)
+      .maybeSingle();
+
+    if (existing) {
+      // Increase quantity
+      await supabase
+        .from('order_items')
+        .update({ quantity: existing.quantity + 1 })
+        .eq('id', existing.id);
+    } else {
+      // Add new item
+      await supabase.from('order_items').insert({
+        order_id: orderId,
+        menu_item_id: menuItem.id,
+        quantity: 1,
+        unit_price: menuItem.price,
+      });
+    }
+    // Recalculate order total
+    const { data: allItems } = await supabase
+      .from('order_items')
+      .select('unit_price, quantity')
+      .eq('order_id', orderId);
+    const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+    setAddingToOrder(null);
+    setAddItemSearch('');
+    fetchTables();
   }
 
   function formatPrice(price) {
@@ -525,8 +587,48 @@ export default function TablesPage() {
                           <span className="item-name">{item.menu_item?.name || 'Món đã xoá'}</span>
                           {item.note && <span className="item-note">({item.note})</span>}
                           <span className="item-price">{formatPrice(item.unit_price * item.quantity)}</span>
+                          <button
+                            className="btn-item-remove"
+                            title="Xóa món"
+                            onClick={() => removeItemFromOrder(order.id, item.id)}
+                          >
+                            <Trash2 size={13} />
+                          </button>
                         </div>
                       ))}
+                      {/* Add item row */}
+                      {addingToOrder === order.id ? (
+                        <div className="add-item-row">
+                          <div className="add-item-search">
+                            <Search size={14} />
+                            <input
+                              className="add-item-input"
+                              placeholder="Tìm món..."
+                              value={addItemSearch}
+                              onChange={(e) => setAddItemSearch(e.target.value)}
+                              autoFocus
+                            />
+                            <button className="btn-item-remove" onClick={() => { setAddingToOrder(null); setAddItemSearch(''); }}>
+                              <X size={14} />
+                            </button>
+                          </div>
+                          <div className="add-item-results">
+                            {menuItems
+                              .filter(m => m.name.toLowerCase().includes(addItemSearch.toLowerCase()))
+                              .slice(0, 5)
+                              .map(m => (
+                                <button key={m.id} className="add-item-option" onClick={() => addItemToOrder(order.id, m)}>
+                                  <span>{m.name}</span>
+                                  <span className="text-muted">{formatPrice(m.price)}</span>
+                                </button>
+                              ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <button className="btn-add-item" onClick={() => setAddingToOrder(order.id)}>
+                          <Plus size={14} /> Thêm món
+                        </button>
+                      )}
                     </div>
                     <div className="order-total">
                       <span>Tổng bill:</span>

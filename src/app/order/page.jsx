@@ -152,21 +152,46 @@ function OrderContent() {
 
   async function fetchPreviousOrders(phone = null) {
     const phoneToUse = (phone || customerPhone || '').trim();
-    if (!tableId || !phoneToUse) return;
-    // Use local midnight → UTC ISO for correct timezone filtering
+    if (!tableId) return;
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
-    const { data } = await supabase
+
+    // 1. All active (pending/preparing) bills at this table today — any customer
+    const { data: activeBills } = await supabase
       .from('orders')
       .select(`*, order_items(*, menu_item:menu_items(name, price))`)
       .eq('table_id', tableId)
-      .eq('customer_phone', phoneToUse)
       .gte('created_at', startOfDay)
       .lt('created_at', endOfDay)
-      .in('status', ['pending', 'preparing', 'completed', 'paid'])
+      .in('status', ['pending', 'preparing'])
       .order('created_at', { ascending: false });
-    setPreviousOrders(data || []);
+
+    // 2. This customer's own completed/paid bills at this table today
+    let myFinished = [];
+    if (phoneToUse) {
+      const { data } = await supabase
+        .from('orders')
+        .select(`*, order_items(*, menu_item:menu_items(name, price))`)
+        .eq('table_id', tableId)
+        .eq('customer_phone', phoneToUse)
+        .gte('created_at', startOfDay)
+        .lt('created_at', endOfDay)
+        .in('status', ['completed', 'paid'])
+        .order('created_at', { ascending: false });
+      myFinished = data || [];
+    }
+
+    // Merge & deduplicate
+    const allIds = new Set();
+    const merged = [];
+    [...(activeBills || []), ...myFinished].forEach(order => {
+      if (!allIds.has(order.id)) {
+        allIds.add(order.id);
+        merged.push(order);
+      }
+    });
+    setPreviousOrders(merged);
   }
 
   function reorderBill(order) {
@@ -642,6 +667,7 @@ function OrderContent() {
                       <div className="co-prev-time">
                         <Clock size={14} />
                         {new Date(order.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
+                        {order.customer_name && <span className="co-prev-name">• {order.customer_name}</span>}
                       </div>
                       <span className={`co-status co-status-${order.status}`}>
                         {order.status === 'pending' ? 'Chờ xác nhận' :

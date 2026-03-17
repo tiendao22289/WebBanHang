@@ -567,3 +567,106 @@
     align-items: flex-start;
   }
 }
+
+/* ── Admin Bill Item Controls ── */
+.order-item-row {
+  position: relative;
+}
+
+.btn-item-remove {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--color-text-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.btn-item-remove:hover {
+  background: var(--color-accent-light);
+  color: var(--color-accent);
+}
+
+.btn-add-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 8px;
+  border: 1.5px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-primary);
+  font-family: var(--font-body);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.btn-add-item:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-bg);
+}
+
+.add-item-row {
+  margin-top: 6px;
+  border: 1.5px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.add-item-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+}
+
+.add-item-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  outline: none;
+  color: var(--color-text);
+}
+
+.add-item-results {
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.add-item-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: white;
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.1s;
+  text-align: left;
+}
+
+.add-item-option:hover {
+  background: var(--color-bg-main);
+}
+
+.add-item-option + .add-item-option {
+  border-top: 1px solid var(--color-border-light);
+}

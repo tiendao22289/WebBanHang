@@ -619,6 +619,11 @@
   color: var(--color-text-secondary);
 }
 
+.co-prev-name {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
 .co-status {
   font-size: 0.7rem;
   font-weight: 700;
