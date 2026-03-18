@@ -1,0 +1,459 @@
+/* =========================================
+   STAFF NOTES PAGE & LOGIN STYLES
+   ========================================= */
+
+.notes-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--color-bg);
+  position: relative;
+}
+
+/* ── Login Overlay ── */
+.login-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: white;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  background: white;
+  border-radius: 20px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.login-header {
+  margin-bottom: 24px;
+}
+
+.login-header h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 8px;
+}
+
+.login-header p {
+  color: #6b7280;
+  font-size: 0.95rem;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.form-group.centered {
+  text-align: left;
+}
+
+.login-input {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 12px;
+  font-size: 1.1rem;
+  outline: none;
+  transition: all 0.2s;
+  background: #f9fafb;
+}
+
+.login-input:focus {
+  border-color: var(--color-primary);
+  background: white;
+  box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.1);
+}
+
+.btn-login {
+  width: 100%;
+  padding: 14px;
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: all 0.2s;
+}
+
+.btn-login:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.btn-login:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+/* ── Notes Main Layout ── */
+.notes-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  background: white;
+  border-bottom: 1px solid var(--color-border-light);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.02);
+}
+
+.notes-header h2 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #111827;
+}
+
+.user-badge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px;
+  background: #f3f4f6;
+  border-radius: 20px;
+}
+
+.user-badge span {
+  font-weight: 600;
+  color: #374151;
+  font-size: 0.95rem;
+}
+
+.btn-logout {
+  background: none;
+  border: none;
+  color: #ef4444;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.btn-logout:hover {
+  text-decoration: underline;
+}
+
+/* ── Notes Actions ── */
+.notes-toolbar {
+  padding: 20px 24px;
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.btn-create-note {
+  padding: 12px 24px;
+  background: #10b981;
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
+}
+
+/* ── Keep-Style Masonry Layout ── */
+.notes-masonry {
+  display: block;
+  column-count: 1;
+  column-gap: 12px;
+}
+@media (min-width: 640px) { .notes-masonry { column-count: 2; } }
+@media (min-width: 1024px) { .notes-masonry { column-count: 3; } }
+@media (min-width: 1280px) { .notes-masonry { column-count: 4; } }
+
+.note-card-keep {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+  break-inside: avoid;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.note-card-keep:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  border-color: #d1d5db;
+}
+
+.keep-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.keep-author {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #111827;
+}
+
+.keep-date {
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.keep-body {
+  font-size: 0.95rem;
+  color: #374151;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 8;
+  line-clamp: 8;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.keep-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.keep-tag {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+.keep-tag.expense { background: #e0e7ff; color: #4338ca; }
+.keep-tag.stock { background: #fef3c7; color: #b45309; }
+.keep-tag.repair { background: #fee2e2; color: #b91c1c; }
+.keep-tag.other { background: #f3f4f6; color: #4b5563; }
+
+.keep-status-dot {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.keep-status-dot.pending { background: #fbbf24; }
+.keep-status-dot.approved { background: #34d399; }
+.keep-status-dot.rejected { background: #ef4444; }
+
+.btn-delete-keep {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  color: #9ca3af;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: all 0.2s;
+}
+
+.note-card-keep:hover .btn-delete-keep {
+  opacity: 1;
+}
+
+.btn-delete-keep:hover {
+  background: #fee2e2;
+  color: #ef4444;
+  border-color: #fca5a5;
+}
+
+.keep-modal .modal-body {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.keep-modal-content {
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: #1f2937;
+  white-space: pre-wrap;
+}
+
+/* ── Admin Review Section ── */
+.admin-review-box {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f9fafb;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+}
+
+.admin-review-box h5 {
+  margin: 0 0 8px 0;
+  font-size: 0.85rem;
+  color: #4b5563;
+}
+
+.admin-review-input {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  margin-bottom: 8px;
+}
+
+.admin-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.admin-btn {
+  flex: 1;
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.admin-btn.approve { background: #10b981; color: white; }
+.admin-btn.reject { background: #ef4444; color: white; }
+
+.admin-reply-text {
+  font-size: 0.9rem;
+  color: #059669;
+  font-weight: 500;
+  background: #ecfdf5;
+  padding: 8px;
+  border-radius: 8px;
+  margin-top: 8px;
+}
+
+/* ── Modern Expense Form ── */
+.expense-row {
+  background: #ffffff;
+  border: 1px solid #f3f4f6;
+  border-radius: 12px;
+  padding: 8px 12px;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+  margin-bottom: 8px;
+}
+
+.expense-row:focus-within {
+  border-color: #fca5a5;
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.08);
+  transform: translateY(-1px);
+}
+
+.expense-input-clean {
+  border: 1px solid transparent;
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 0.95rem;
+  color: #1f2937;
+  transition: all 0.2s;
+  outline: none;
+}
+
+.expense-input-clean:hover {
+  background: #f3f4f6;
+}
+
+.expense-input-clean:focus {
+  background: #ffffff;
+  border-color: #fca5a5;
+  box-shadow: 0 0 0 3px rgba(254, 226, 226, 0.5);
+}
+
+.expense-input-clean::placeholder {
+  color: #9ca3af;
+  font-weight: 400;
+}
+
+.expense-status-wrapper {
+  display: flex;
+  background: #f3f4f6;
+  border-radius: 8px;
+  padding: 4px;
+  gap: 4px;
+}
+
+.status-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #6b7280;
+  transition: all 0.2s;
+}
+
+.status-label input {
+  display: none;
+}
+
+.status-label.checked-full {
+  background: white;
+  color: #059669;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.status-label.checked-debt {
+  background: white;
+  color: #dc2626;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.status-label:hover:not(.checked-full):not(.checked-debt) {
+  color: #374151;
+  background: #e5e7eb;
+}
+
+.btn-remove-row {
+  color: #d1d5db;
+  background: white;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.btn-remove-row:hover {
+  color: #ef4444;
+  background: #fee2e2;
+  transform: scale(1.1);
+}

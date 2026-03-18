@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import {
   Plus,
@@ -103,6 +104,7 @@ export default function MenuPage() {
         category_id: item.category_id || '',
         image_url: item.image_url || '',
         is_available: item.is_available,
+        options: item.options || [],
       });
     } else {
       setEditingItem(null);
@@ -110,6 +112,7 @@ export default function MenuPage() {
         name: '', description: '', price: '',
         category_id: activeCategory || '',
         image_url: '', is_available: true,
+        options: [],
       });
     }
     setShowItemModal(true);
@@ -117,11 +120,25 @@ export default function MenuPage() {
 
   async function saveItem() {
     if (!itemForm.name.trim() || !itemForm.price) return;
+
+    // Clean up options (remove empty choices, remove options without names or choices)
+    const cleanedOptions = itemForm.options
+      .map(opt => ({
+        name: opt.name.trim(),
+        choices: opt.choices.map(c => c.trim()).filter(c => c)
+      }))
+      .filter(opt => opt.name && opt.choices.length > 0);
+
     const data = {
-      ...itemForm,
+      name: itemForm.name,
+      description: itemForm.description,
+      image_url: itemForm.image_url,
+      is_available: itemForm.is_available,
       price: parseInt(itemForm.price),
       category_id: itemForm.category_id || null,
+      options: cleanedOptions,
     };
+
     if (editingItem) {
       await supabase.from('menu_items').update(data).eq('id', editingItem.id);
     } else {
@@ -140,6 +157,44 @@ export default function MenuPage() {
   async function toggleAvailable(item) {
     await supabase.from('menu_items').update({ is_available: !item.is_available }).eq('id', item.id);
     fetchData();
+  }
+
+  // Option Handlers
+  function addOption() {
+    setItemForm(prev => ({
+      ...prev,
+      options: [...prev.options, { name: '', choices: [''] }]
+    }));
+  }
+
+  function updateOptionName(index, name) {
+    const newOptions = [...itemForm.options];
+    newOptions[index].name = name;
+    setItemForm({ ...itemForm, options: newOptions });
+  }
+
+  function removeOption(index) {
+    const newOptions = [...itemForm.options];
+    newOptions.splice(index, 1);
+    setItemForm({ ...itemForm, options: newOptions });
+  }
+
+  function addOptionChoice(optIndex) {
+    const newOptions = [...itemForm.options];
+    newOptions[optIndex].choices.push('');
+    setItemForm({ ...itemForm, options: newOptions });
+  }
+
+  function updateOptionChoice(optIndex, choiceIndex, value) {
+    const newOptions = [...itemForm.options];
+    newOptions[optIndex].choices[choiceIndex] = value;
+    setItemForm({ ...itemForm, options: newOptions });
+  }
+
+  function removeOptionChoice(optIndex, choiceIndex) {
+    const newOptions = [...itemForm.options];
+    newOptions[optIndex].choices.splice(choiceIndex, 1);
+    setItemForm({ ...itemForm, options: newOptions });
   }
 
   function formatPrice(price) {
@@ -200,9 +255,9 @@ export default function MenuPage() {
         {filteredItems.length > 0 ? (
           filteredItems.map((item) => (
             <div key={item.id} className={`menu-card ${!item.is_available ? 'unavailable' : ''}`}>
-              <div className="menu-card-image">
+              <div className="menu-card-image" style={{ position: 'relative' }}>
                 {item.image_url ? (
-                  <img src={item.image_url} alt={item.name} />
+                  <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 100vw, 300px" style={{ objectFit: 'cover' }} />
                 ) : (
                   <div className="menu-card-placeholder">
                     <ImageIcon size={32} />
@@ -307,10 +362,57 @@ export default function MenuPage() {
                 <label className="form-label">URL hình ảnh</label>
                 <input className="input" value={itemForm.image_url} onChange={(e) => setItemForm({ ...itemForm, image_url: e.target.value })} placeholder="https://..." />
               </div>
-              <label className="flex items-center gap-2" style={{ cursor: 'pointer' }}>
+              <label className="flex items-center gap-2 mb-4" style={{ cursor: 'pointer' }}>
                 <input type="checkbox" checked={itemForm.is_available} onChange={(e) => setItemForm({ ...itemForm, is_available: e.target.checked })} />
                 <span className="text-sm">Hiển thị trên thực đơn</span>
               </label>
+
+              {/* Options Section */}
+              <div className="options-section" style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
+                <div className="flex justify-between items-center mb-3">
+                  <h4 style={{ margin: 0 }}>Tuỳ chọn món (Khẩu vị, Size...)</h4>
+                  <button className="btn btn-outline btn-sm" onClick={addOption}>
+                    <Plus size={14} /> Thêm tuỳ chọn
+                  </button>
+                </div>
+                
+                {itemForm.options.map((opt, optIndex) => (
+                  <div key={optIndex} className="option-group" style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 'var(--radius-md)', marginBottom: '1rem' }}>
+                    <div className="flex justify-between items-center mb-3 gap-2">
+                      <input 
+                        className="input" 
+                        value={opt.name} 
+                        onChange={(e) => updateOptionName(optIndex, e.target.value)} 
+                        placeholder="Tên tuỳ chọn (VD: Khẩu vị, Độ cay)" 
+                        style={{ flex: 1 }}
+                      />
+                      <button className="btn btn-ghost btn-icon text-danger" onClick={() => removeOption(optIndex)} title="Xoá tuỳ chọn này">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                    
+                    <div className="option-choices">
+                      {opt.choices.map((choice, choiceIndex) => (
+                        <div key={choiceIndex} className="flex items-center gap-2 mb-2">
+                          <input 
+                            className="input input-sm" 
+                            value={choice} 
+                            onChange={(e) => updateOptionChoice(optIndex, choiceIndex, e.target.value)} 
+                            placeholder={`Lựa chọn ${choiceIndex + 1} (VD: Xào, Hấp)`} 
+                            style={{ flex: 1 }}
+                          />
+                          <button className="btn btn-ghost btn-icon btn-sm text-danger" onClick={() => removeOptionChoice(optIndex, choiceIndex)}>
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))}
+                      <button className="btn btn-ghost btn-sm mt-1" onClick={() => addOptionChoice(optIndex)}>
+                        <Plus size={14} /> Thêm lựa chọn
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
             <div className="modal-footer">
               <button className="btn btn-outline" onClick={() => setShowItemModal(false)}>Huỷ</button>

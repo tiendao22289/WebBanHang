@@ -1,10 +1,13 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
 import {
+  Bell,
+  ChevronRight,
   Plus,
   Minus,
   QrCode,
@@ -62,6 +65,13 @@ export default function TablesPage() {
   const [addingToOrder, setAddingToOrder] = useState(null); // order id being added to
   const [activeMenuCategory, setActiveMenuCategory] = useState('all');
   const [addItemSearch, setAddItemSearch] = useState('');
+  const [addedItemAlert, setAddedItemAlert] = useState(null);
+  
+  // States for Item Options
+  const [optionModalItem, setOptionModalItem] = useState(null);
+  const [selectedOptions, setSelectedOptions] = useState({});
+  const [optionQuantity, setOptionQuantity] = useState(1);
+  const [optionNote, setOptionNote] = useState('');
 
   const invoiceRef = useRef(null);
   const isFirstLoad = useRef(true);
@@ -70,7 +80,7 @@ export default function TablesPage() {
 
   // Body scroll lock effect
   useEffect(() => {
-    const isModalOpen = selectedTable || showQR || showAddModal;
+    const isModalOpen = selectedTable || showQR || showAddModal || optionModalItem;
     if (isModalOpen) {
       // Calculate scrollbar width to prevent jumping
       const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
@@ -79,8 +89,10 @@ export default function TablesPage() {
     } else {
       document.body.classList.remove('modal-open');
     }
-    return () => document.body.classList.remove('modal-open');
-  }, [selectedTable, showQR, showAddModal]);
+    return () => {
+      document.body.classList.remove('modal-open');
+    };
+  }, [selectedTable, showQR, showAddModal, optionModalItem]);
 
   const handlePrintInvoice = useReactToPrint({ contentRef: invoiceRef });
 
@@ -259,12 +271,49 @@ export default function TablesPage() {
     fetchTables();
   }
 
-  async function addItemToOrder(orderId, menuItem) {
+  async function updateItemQuantity(orderId, itemId, currentQuantity, change) {
+    const newQuantity = currentQuantity + change;
+    if (newQuantity <= 0) {
+      return removeItemFromOrder(orderId, itemId);
+    }
+    
+    // Update quantity
+    await supabase
+      .from('order_items')
+      .update({ quantity: newQuantity })
+      .eq('id', itemId);
+      
+    // Recalculate order total
+    const { data: allItems } = await supabase
+      .from('order_items')
+      .select('unit_price, quantity')
+      .eq('order_id', orderId);
+    const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+    
+    fetchTables();
+  }
+
+  async function addItemToOrder(orderId, menuItem, optionsData = [], qty = 1, note = '') {
+    // If the item has options and we haven't selected them yet, show the modal
+    if (menuItem.options && menuItem.options.length > 0 && optionsData.length === 0) {
+      setOptionModalItem(menuItem);
+      // Pre-select the first choice for each option
+      const initialOptions = {};
+      menuItem.options.forEach(opt => {
+        if (opt.choices && opt.choices.length > 0) {
+          initialOptions[opt.name] = opt.choices[0];
+        }
+      });
+      setSelectedOptions(initialOptions);
+      setOptionQuantity(1);
+      setOptionNote('');
+      return;
+    }
+
     let targetOrderId = orderId;
 
-    // Special case: Admin adding a new item via the footer "+ THÊM MÓN" button
     if (orderId === 'admin') {
-      // Find or create an 'Admin' bill for this table
       const { data: adminOrder } = await supabase
         .from('orders')
         .select('id')
@@ -276,7 +325,6 @@ export default function TablesPage() {
       if (adminOrder) {
         targetOrderId = adminOrder.id;
       } else {
-        // Create new Admin bill
         const { data: newOrder, error } = await supabase
           .from('orders')
           .insert({
@@ -292,7 +340,6 @@ export default function TablesPage() {
         if (error || !newOrder) return;
         targetOrderId = newOrder.id;
         
-        // Mark table as occupied if it was available
         if (selectedTable.status === 'available') {
           await supabase
             .from('tables')
@@ -302,41 +349,73 @@ export default function TablesPage() {
       }
     }
 
-    // Check if item already exists in the target order
-    const { data: existing } = await supabase
+    // Convert options data to JSONB array or keep it easy to query
+    const optionsJsonb = optionsData.length > 0 ? optionsData : [];
+
+    // Check if item already exists in the target order WITH THE SAME EXACT OPTIONS & NOTE
+    const { data: existingItems } = await supabase
       .from('order_items')
       .select('*')
       .eq('order_id', targetOrderId)
-      .eq('menu_item_id', menuItem.id)
-      .maybeSingle();
+      .eq('menu_item_id', menuItem.id);
 
-    if (existing) {
-      // Increase quantity
-      await supabase
-        .from('order_items')
-        .update({ quantity: existing.quantity + 1 })
-        .eq('id', existing.id);
-    } else {
-      // Add new item
-      await supabase.from('order_items').insert({
-        order_id: targetOrderId,
-        menu_item_id: menuItem.id,
-        quantity: 1,
-        unit_price: menuItem.price,
+    let existing = null;
+    if (existingItems && existingItems.length > 0) {
+      existing = existingItems.find(item => {
+        const itemOpts = item.item_options || [];
+        const sameOptions = JSON.stringify(itemOpts) === JSON.stringify(optionsJsonb);
+        const sameNote = (item.note || '') === note;
+        return sameOptions && sameNote;
       });
     }
 
-    // Recalculate order total
+    if (existing) {
+      await supabase
+        .from('order_items')
+        .update({ quantity: existing.quantity + qty })
+        .eq('id', existing.id);
+    } else {
+      await supabase.from('order_items').insert({
+        order_id: targetOrderId,
+        menu_item_id: menuItem.id,
+        quantity: qty,
+        unit_price: menuItem.price,
+        item_options: optionsJsonb,
+        note: note
+      });
+    }
+
     const { data: allItems } = await supabase
       .from('order_items')
       .select('unit_price, quantity')
       .eq('order_id', targetOrderId);
+      
     const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
     
-    setAddingToOrder(null);
-    setAddItemSearch('');
+    // Reset option modal state if it was open
+    setOptionModalItem(null);
+    setSelectedOptions({});
+    setOptionQuantity(1);
+    setOptionNote('');
+    
+    setAddedItemAlert(menuItem.name);
+    setTimeout(() => setAddedItemAlert(null), 2000);
+    
     fetchTables();
+  }
+
+  function handleConfirmOptions() {
+    if (!optionModalItem) return;
+    
+    // Format selected options into array
+    const optionsData = Object.keys(selectedOptions).map(key => ({
+      name: key,
+      choice: selectedOptions[key]
+    }));
+    
+    // The target order ID is always 'admin' for the POS modal
+    addItemToOrder('admin', optionModalItem, optionsData, optionQuantity, optionNote);
   }
 
   async function mergeBills() {
@@ -428,6 +507,14 @@ export default function TablesPage() {
         </div>
       )}
 
+      {/* Added item notification toast */}
+      {addedItemAlert && (
+        <div className="notification-toast animate-slide-up" style={{ bottom: '80px', background: 'var(--color-success)', color: 'white' }}>
+          <Check size={20} />
+          <span>Đã thêm <strong>{addedItemAlert}</strong> vào bill</span>
+        </div>
+      )}
+
       {/* Header */}
       <div className="page-header">
         <div>
@@ -490,6 +577,24 @@ export default function TablesPage() {
         <div className="mobile-stat"><Check size={14} /> <span>{availableCount} trống</span></div>
       </div>
 
+      {/* Action Notification Banners (KiotViet style) */}
+      <div className="table-notifications" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#FEF0E5', color: '#D97706', padding: '12px 16px', borderRadius: '12px', cursor: 'pointer', border: '1px solid #FCD34D' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600' }}>
+            <Bell size={18} />
+            <span>0 lượt gọi món qua QR</span>
+          </div>
+          <ChevronRight size={18} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#EFF6FF', color: '#2563EB', padding: '12px 16px', borderRadius: '12px', cursor: 'pointer', border: '1px solid #BFDBFE' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600' }}>
+            <Bell size={18} />
+            <span>0 đơn tự đặt món tại bàn</span>
+          </div>
+          <ChevronRight size={18} />
+        </div>
+      </div>
+
       {/* Tables Grid */}
       <div className="tables-grid" style={{ '--cols': columnsPerRow }}>
         {tables.map((table) => {
@@ -501,48 +606,36 @@ export default function TablesPage() {
             <div
               key={table.id}
               className={`table-card ${table.status}`}
-              onClick={() => isOccupied && setSelectedTable(table)}
+              onClick={() => {
+                setSelectedTable(table);
+                if (!isOccupied) {
+                  setAddingToOrder('admin');
+                }
+              }}
             >
-              {/* Dining table visual */}
-              <div className="table-visual">
-                {/* Chair dots */}
-                <div className="chair chair-top" />
-                <div className="chair chair-right" />
-                <div className="chair chair-bottom" />
-                <div className="chair chair-left" />
-
-                {/* Table surface */}
-                <div className="table-surface">
-                  <span className="table-num">{table.table_number}</span>
-                  {isOccupied && <div className="table-pulse" />}
-                </div>
+              {/* Table Name */}
+              <div className="table-name" style={{ flex: 1 }}>
+                B{table.table_number}
               </div>
 
-              {/* Status & Info */}
-              <div className="table-info">
-                <span className="table-label">Bàn {table.table_number}</span>
-                <span className={`table-status-dot ${table.status}`}>
-                  {isOccupied ? 'Có khách' : 'Trống'}
+              {/* Status Area */}
+              <div className="table-status-area">
+                <span className="table-status-text">
+                  {isOccupied ? 'Có khách' : ''}
                 </span>
-              </div>
-
-              {/* Bill preview */}
-              {isOccupied && tableBills.length > 0 && (
-                <div className="table-bills-preview">
-                  <div className="table-bill-count">
+                {isOccupied && tableBills.length > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
                     <Receipt size={12} />
-                    <span>{tableBills.length} bill</span>
+                    <span>{tableBills.length} đơn</span>
                   </div>
-                  <div className="table-items-count">
-                    {totalItems} món
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
 
               {/* Actions */}
-              <div className="table-card-actions" onClick={(e) => e.stopPropagation()}>
+              <div className="table-card-actions" onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: 'var(--space-2)', right: 'var(--space-2)' }}>
                 <button
                   className="btn btn-ghost btn-sm"
+                  style={{ padding: '4px', height: 'auto' }}
                   onClick={() => setShowQR(table)}
                   title="Xem QR Code"
                 >
@@ -550,7 +643,8 @@ export default function TablesPage() {
                 </button>
                 {!isOccupied && (
                   <button
-                    className="btn btn-ghost btn-sm"
+                    className="btn btn-ghost btn-sm text-danger"
+                    style={{ padding: '4px', height: 'auto' }}
                     onClick={() => deleteTable(table.id)}
                     title="Xoá bàn"
                   >
@@ -599,7 +693,7 @@ export default function TablesPage() {
       )}
 
       {/* Table Detail Modal with Print Invoice */}
-      {selectedTable && (
+      {selectedTable && !addingToOrder && (
         <div className="modal-overlay" onClick={() => setSelectedTable(null)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px' }}>
             <div className="modal-header">
@@ -694,38 +788,71 @@ export default function TablesPage() {
                     </div>
                     <div className="order-items-list">
                       {order.order_items?.map((item) => (
-                        <div key={item.id} className="order-item-row">
-                          <span className="item-qty">{item.quantity}x</span>
-                          <span className="item-name">{item.menu_item?.name || 'Món đã xoá'}</span>
-                          {item.note && <span className="item-note">({item.note})</span>}
-                          <span className="item-price">{formatPrice(item.unit_price * item.quantity)}</span>
-                          <button
-                            className="btn-item-remove"
-                            title="Xóa món"
-                            onClick={() => removeItemFromOrder(order.id, item.id)}
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                        <div key={item.id} className="order-item-row" style={{ display: 'flex', flexDirection: 'column' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                            <div className="item-qty-controls">
+                              <button
+                                className="btn-qty-adj"
+                                onClick={() => updateItemQuantity(order.id, item.id, item.quantity, -1)}
+                              >
+                                <Minus size={12} />
+                              </button>
+                              <span className="item-qty">{item.quantity}</span>
+                              <button
+                                className="btn-qty-adj"
+                                onClick={() => updateItemQuantity(order.id, item.id, item.quantity, 1)}
+                              >
+                                <Plus size={12} />
+                              </button>
+                            </div>
+                            <span className="item-name">{item.menu_item?.name || 'Món đã xoá'}</span>
+                            {item.note && <span className="item-note">({item.note})</span>}
+                            <span className="item-price" style={{ marginLeft: 'auto', marginRight: '8px' }}>{formatPrice(item.unit_price * item.quantity)}</span>
+                            <button
+                              className="btn-item-remove"
+                              title="Xóa món"
+                              onClick={() => removeItemFromOrder(order.id, item.id)}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                          
+                          {/* Display selected options */}
+                          {item.item_options && item.item_options.length > 0 && (
+                            <div className="item-options-text" style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px', paddingLeft: '80px', width: '100%' }}>
+                              {item.item_options.map((o, i) => (
+                                <span key={i} style={{ display: 'inline-block', backgroundColor: 'var(--bg-secondary)', padding: '2px 6px', borderRadius: '4px', marginRight: '4px', border: '1px solid var(--border-color)' }}>
+                                  {o.name}: {o.choice}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
                     <div className="order-total">
-                      <span>Tổng bill:</span>
-                      <strong>{formatPrice(order.total_amount)}</strong>
+                       <span>Tổng bill:</span>
+                       <strong>{formatPrice(order.total_amount)}</strong>
                     </div>
                   </div>
                 ))
               ) : (
                 <div className="empty-state" style={{ padding: 'var(--space-8)' }}>
-                  <p>Chưa có đơn hàng nào</p>
+                  <ChefHat size={48} className="text-muted" />
+                  <p className="mt-4">Bàn này chưa có đơn hàng nào.</p>
+                  <button className="btn btn-primary mt-4" onClick={() => setAddingToOrder('admin')}>
+                    <Plus size={16} /> Bắt đầu gọi món
+                  </button>
                 </div>
               )}
             </div>
             <div className="modal-footer">
               <div className="footer-actions-left">
-                <button className="btn btn-primary btn-outline" onClick={() => setAddingToOrder('admin')}>
-                  <Plus size={16} /> THÊM MÓN
-                </button>
+                {orders[selectedTable.id]?.length > 0 && (
+                  <button className="btn btn-primary btn-outline" onClick={() => setAddingToOrder('admin')}>
+                    <Plus size={16} /> THÊM MÓN
+                  </button>
+                )}
                 {orders[selectedTable.id]?.length > 1 && (
                   <button className="btn btn-accent btn-outline" onClick={mergeBills}>
                     <ShoppingBag size={16} /> GỘP ĐƠN
@@ -741,9 +868,11 @@ export default function TablesPage() {
                     <Printer size={16} /> In hoá đơn
                   </button>
                 )}
-                <button className="btn btn-success" onClick={() => completeTable(selectedTable.id)}>
-                  <Check size={16} /> Hoàn thành
-                </button>
+                {orders[selectedTable.id]?.length > 0 && (
+                  <button className="btn btn-success" onClick={() => completeTable(selectedTable.id)}>
+                    <Check size={16} /> Hoàn thành
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -752,84 +881,98 @@ export default function TablesPage() {
 
       {/* Admin Menu Modal (Full Menu View) */}
       {addingToOrder && (
-        <div className="modal-overlay" onClick={() => { setAddingToOrder(null); setAddItemSearch(''); }}>
+        <div className="modal-overlay" onClick={() => { 
+          setAddingToOrder(null); 
+          setAddItemSearch('');
+          if (selectedTable && (!orders[selectedTable.id] || orders[selectedTable.id].length === 0)) {
+            setSelectedTable(null);
+          }
+        }}>
           <div className="modal-content menu-pos-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="flex items-center gap-3">
-                <ChefHat size={20} className="text-accent" />
-                <h3>Thêm món vào Bill</h3>
+            <div className="pos-sf-topbar">
+              <div className="flex items-center gap-2">
+                <ChefHat size={18} className="text-accent" />
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Thêm món (Bàn {selectedTable?.table_number})</h3>
               </div>
-              <button className="btn btn-ghost btn-icon" onClick={() => { setAddingToOrder(null); setAddItemSearch(''); }}>
+              <button className="btn btn-ghost btn-icon" onClick={() => { 
+                setAddingToOrder(null); 
+                setAddItemSearch('');
+                if (selectedTable && (!orders[selectedTable.id] || orders[selectedTable.id].length === 0)) {
+                  setSelectedTable(null);
+                }
+              }}>
                 <X size={20} />
               </button>
             </div>
             
-            <div className="menu-pos-container">
-              {/* Search & Categories */}
-              <div className="menu-pos-sidebar">
-                <div className="menu-pos-search">
-                  <Search size={18} />
-                  <input 
-                    placeholder="Tìm tên món ăn..." 
-                    value={addItemSearch}
-                    onChange={(e) => setAddItemSearch(e.target.value)}
-                  />
-                  {addItemSearch && (
-                    <button className="clear-search" onClick={() => setAddItemSearch('')}>
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-                
-                <div className="menu-pos-categories">
+            <div className="pos-sf-search-wrap">
+              <Search size={16} className="search-icon" />
+              <input 
+                placeholder="Tìm món ăn..." 
+                value={addItemSearch}
+                onChange={(e) => setAddItemSearch(e.target.value)}
+                className="pos-sf-search-input"
+              />
+              {addItemSearch && (
+                <button className="pos-sf-search-clear" onClick={() => setAddItemSearch('')}>
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+
+            <div className="pos-sf-body">
+              {/* Left sidebar: Categories */}
+              <div className="pos-sf-sidebar">
+                <button 
+                  className={`pos-sf-cat ${activeMenuCategory === 'all' ? 'active' : ''}`}
+                  onClick={() => setActiveMenuCategory('all')}
+                >
+                  <div className="cat-name">Tất cả</div>
+                </button>
+                {categories.map(cat => (
                   <button 
-                    className={`pos-cat-item ${activeMenuCategory === 'all' ? 'active' : ''}`}
-                    onClick={() => setActiveMenuCategory('all')}
+                    key={cat.id}
+                    className={`pos-sf-cat ${activeMenuCategory === cat.id ? 'active' : ''}`}
+                    onClick={() => setActiveMenuCategory(cat.id)}
                   >
-                    Tất cả ({menuItems.length})
+                    <div className="cat-name">{cat.name}</div>
                   </button>
-                  {categories.map(cat => (
-                    <button 
-                      key={cat.id}
-                      className={`pos-cat-item ${activeMenuCategory === cat.id ? 'active' : ''}`}
-                      onClick={() => setActiveMenuCategory(cat.id)}
-                    >
-                      {cat.name}
-                    </button>
-                  ))}
-                </div>
+                ))}
               </div>
 
-              {/* Items Grid */}
-              <div className="menu-pos-main">
-                <div className="menu-pos-grid">
+              {/* Right main: Item List */}
+              <div className="pos-sf-main">
+                <div className="pos-sf-list">
                   {menuItems
                     .filter(item => {
                       const matchesCat = activeMenuCategory === 'all' || item.category_id === activeMenuCategory;
                       const matchesSearch = item.name.toLowerCase().includes(addItemSearch.toLowerCase());
                       return matchesCat && matchesSearch;
                     })
-                    .map(item => (
-                      <div key={item.id} className="pos-item-card" onClick={() => addItemToOrder(addingToOrder, item)}>
-                        <div className="pos-item-img">
-                          {item.image_url ? (
-                            <img src={item.image_url} alt={item.name} />
-                          ) : (
-                            <div className="pos-item-placeholder">
-                              <ChefHat size={32} />
-                            </div>
-                          )}
+                    .map(item => {
+                      return (
+                        <div key={item.id} className="pos-sf-item" onClick={() => addItemToOrder('admin', item)}>
+                          <div className="pos-sf-item-img">
+                            {item.image_url ? (
+                              <Image src={item.image_url} alt={item.name} fill sizes="80px" style={{ objectFit: 'cover' }} />
+                            ) : (
+                              <div className="pos-item-placeholder" style={{ background: '#fdf2f2', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fca5a5' }}>
+                                <ChefHat size={20} />
+                              </div>
+                            )}
+                          </div>
+                          
+                          <div className="pos-sf-item-info">
+                            <h4 className="pos-sf-item-name" title={item.name}>{item.name}</h4>
+                            <span className="pos-sf-item-price">{formatPrice(item.price)}</span>
+                          </div>
+
+                          <button className="pos-sf-item-add" onClick={(e) => { e.stopPropagation(); addItemToOrder('admin', item); }}>
+                            <Plus size={16} />
+                          </button>
                         </div>
-                        <div className="pos-item-details">
-                          <span className="pos-item-category">{item.category?.name}</span>
-                          <h4 className="pos-item-name">{item.name}</h4>
-                          <span className="pos-item-price">{formatPrice(item.price)}</span>
-                        </div>
-                        <div className="pos-item-add">
-                          <Plus size={18} />
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                 </div>
                 
                 {menuItems.filter(item => {
@@ -837,11 +980,85 @@ export default function TablesPage() {
                   const matchesSearch = item.name.toLowerCase().includes(addItemSearch.toLowerCase());
                   return matchesCat && matchesSearch;
                 }).length === 0 && (
-                  <div className="empty-state">
+                  <div className="empty-state" style={{ padding: '2rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
                     <p>Không tìm thấy món ăn nào</p>
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Item Options Modal */}
+      {optionModalItem && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }} onClick={() => setOptionModalItem(null)}>
+          <div className="options-modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="options-modal-header">
+              <h3>Tuỳ chọn món</h3>
+              <button className="btn btn-ghost btn-icon" onClick={() => setOptionModalItem(null)}>
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="options-modal-body">
+              <div className="options-item-info">
+                {optionModalItem.image_url ? (
+                  <img src={optionModalItem.image_url} alt={optionModalItem.name} />
+                ) : (
+                  <div className="flex justify-center items-center rounded-xl bg-gray-100 text-gray-400" style={{ width: '80px', height: '80px' }}>
+                    <ChefHat size={32} />
+                  </div>
+                )}
+                <div className="options-item-info-text">
+                  <div className="name">{optionModalItem.name}</div>
+                  <div className="price">{formatPrice(optionModalItem.price)}</div>
+                </div>
+              </div>
+
+              {optionModalItem.options && optionModalItem.options.map((opt, idx) => (
+                <div key={idx}>
+                  <div className="options-group-title">{opt.name}</div>
+                  <div className="options-chip-container">
+                    {opt.choices.map((choice, cIdx) => (
+                      <button 
+                        key={cIdx}
+                        className={`options-chip ${selectedOptions[opt.name] === choice ? 'active' : ''}`}
+                        onClick={() => setSelectedOptions({ ...selectedOptions, [opt.name]: choice })}
+                      >
+                        {choice}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+              <div>
+                <div className="options-group-title">Ghi chú</div>
+                <input 
+                  type="text" 
+                  className="options-note-input" 
+                  placeholder="Thêm ghi chú cho nhà bếp..."
+                  value={optionNote}
+                  onChange={(e) => setOptionNote(e.target.value)}
+                />
+              </div>
+
+              <div className="options-qty-control">
+                <button className="options-qty-btn" onClick={() => setOptionQuantity(Math.max(1, optionQuantity - 1))}>
+                  <Minus size={20} />
+                </button>
+                <div className="options-qty-value">{optionQuantity}</div>
+                <button className="options-qty-btn" onClick={() => setOptionQuantity(optionQuantity + 1)}>
+                  <Plus size={20} />
+                </button>
+              </div>
+            </div>
+            
+            <div className="options-bottom-bar">
+              <button className="btn-add-to-order" onClick={handleConfirmOptions}>
+                Thêm vào đơn • {formatPrice(optionModalItem.price * optionQuantity)}
+              </button>
             </div>
           </div>
         </div>

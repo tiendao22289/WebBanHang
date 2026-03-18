@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
+import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import {
   Search,
@@ -548,9 +549,9 @@ function OrderContent() {
                 const qty = getCartQty(item.id);
                 return viewMode === 'list' ? (
                   <div key={item.id} className="co-item-row">
-                    <div className="co-item-img">
+                    <div className="co-item-img" style={{ position: 'relative' }}>
                       {item.image_url ? (
-                        <img src={item.image_url} alt={item.name} />
+                        <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 100px, 150px" style={{ objectFit: 'cover' }} />
                       ) : (
                         <div className="co-item-placeholder"><ChefHat size={20} /></div>
                       )}
@@ -575,9 +576,9 @@ function OrderContent() {
                   </div>
                 ) : (
                   <div key={item.id} className="co-item-card">
-                    <div className="co-card-img">
+                    <div className="co-card-img" style={{ position: 'relative' }}>
                       {item.image_url ? (
-                        <img src={item.image_url} alt={item.name} />
+                        <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 50vw, 33vw" style={{ objectFit: 'cover' }} />
                       ) : (
                         <div className="co-item-placeholder"><ChefHat size={24} /></div>
                       )}
