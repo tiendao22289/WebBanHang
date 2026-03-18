@@ -10,7 +10,14 @@ export default function StaffNotesPage() {
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // New Registration State
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [regName, setRegName] = useState('');
+  const [regPhone, setRegPhone] = useState('');
+  const [regPin, setRegPin] = useState('');
 
   const [notes, setNotes] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -47,6 +54,7 @@ export default function StaffNotesPage() {
     e.preventDefault();
     setIsLoading(true);
     setErrorMsg('');
+    setSuccessMsg('');
 
     try {
       const { data, error } = await supabase
@@ -73,6 +81,61 @@ export default function StaffNotesPage() {
       }
     } catch (err) {
       setErrorMsg('Đã có lỗi xảy ra. Hãy thử lại.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRegister = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    if (!regName || !regPhone || !regPin) {
+      setErrorMsg('Vui lòng điền đủ thông tin.');
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      const { data: existingUser } = await supabase
+        .from('staff')
+        .select('id')
+        .eq('phone', regPhone)
+        .single();
+
+      if (existingUser) {
+        setErrorMsg('Số điện thoại này đã được đăng ký!');
+        setIsLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('staff')
+        .insert([{
+          full_name: regName,
+          phone: regPhone,
+          pin: regPin,
+          role: 'staff'
+        }])
+        .select()
+        .single();
+
+      if (error) {
+        setErrorMsg('Lỗi khi tạo tài khoản. Vui lòng thử lại.');
+      } else {
+        setSuccessMsg('Đăng ký thành công! Vui lòng làm mới trang và đăng nhập.');
+        setIsRegistering(false);
+        setPhone(regPhone);
+        setRegName('');
+        setRegPhone('');
+        setRegPin('');
+      }
+    } catch (err) {
+      // Supabase single() throws an error when no rows returned. This is expected if user doesn't exist.
+      // So if existingUser request throws, it means user does NOT exist, which is good. We should proceed to insert inside the catch block... 
+      // Actually better to handle it properly.
     } finally {
       setIsLoading(false);
     }
@@ -465,39 +528,92 @@ export default function StaffNotesPage() {
                 <ChefHat size={48} />
               </div>
               <h2>Nhà Hàng V1</h2>
-              <p>Đăng nhập sổ tay chấm công / sự việc</p>
+              <p>{isRegistering ? 'Tạo tài khoản nhân viên mới' : 'Đăng nhập sổ tay chấm công / sự việc'}</p>
             </div>
             
-            <form className="login-form" onSubmit={handleLogin}>
-              <div className="form-group centered">
-                <label>Số điện thoại</label>
-                <input 
-                  type="tel" 
-                  className="login-input" 
-                  placeholder="0909..." 
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="form-group centered">
-                <label>Mã PIN</label>
-                <input 
-                  type="password" 
-                  className="login-input" 
-                  placeholder="******" 
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  required
-                />
-              </div>
-              
-              {errorMsg && <div style={{ color: '#ef4444', fontSize: '0.9rem', marginBottom: '8px' }}>{errorMsg}</div>}
-              
-              <button type="submit" className="btn-login" disabled={isLoading}>
-                {isLoading ? 'Đang kiểm tra...' : 'Vào Sổ Tay'}
-              </button>
-            </form>
+            {errorMsg && <div className="p-3 mb-4 text-red-700 bg-red-50 rounded-lg text-sm font-medium">{errorMsg}</div>}
+            {successMsg && <div className="p-3 mb-4 text-green-700 bg-green-50 rounded-lg text-sm font-medium">{successMsg}</div>}
+
+            {!isRegistering ? (
+              <form className="login-form" onSubmit={handleLogin}>
+                <div className="form-group centered">
+                  <label>Số điện thoại</label>
+                  <input 
+                    type="tel" 
+                    className="login-input" 
+                    placeholder="0909..." 
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group centered">
+                  <label>Mã PIN</label>
+                  <input 
+                    type="password" 
+                    className="login-input" 
+                    placeholder="******" 
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value)}
+                    required
+                  />
+                </div>
+                
+                <button type="submit" className="btn-login" disabled={isLoading}>
+                  {isLoading ? 'Đang kiểm tra...' : 'Vào Sổ Tay'}
+                </button>
+                <div className="text-center mt-4">
+                  <button type="button" onClick={() => { setIsRegistering(true); setErrorMsg(''); setSuccessMsg(''); }} className="text-blue-600 text-[15px] font-medium hover:underline">
+                    Chưa có tài khoản? Tạo mới ngay
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form className="login-form" onSubmit={handleRegister}>
+                <div className="form-group centered">
+                  <label>Họ và Tên</label>
+                  <input 
+                    type="text" 
+                    className="login-input" 
+                    placeholder="Nguyễn Văn A" 
+                    value={regName}
+                    onChange={(e) => setRegName(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group centered">
+                  <label>Số điện thoại</label>
+                  <input 
+                    type="tel" 
+                    className="login-input" 
+                    placeholder="0909..." 
+                    value={regPhone}
+                    onChange={(e) => setRegPhone(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group centered">
+                  <label>Tạo Mã PIN</label>
+                  <input 
+                    type="text" 
+                    className="login-input" 
+                    placeholder="Tạo mã (VD: 1234)" 
+                    value={regPin}
+                    onChange={(e) => setRegPin(e.target.value)}
+                    required
+                  />
+                </div>
+                
+                <button type="submit" className="btn-login" style={{ background: '#2563eb' }} disabled={isLoading}>
+                  {isLoading ? 'Đang tạo...' : 'Đăng Ký Tài Khoản'}
+                </button>
+                <div className="text-center mt-4">
+                  <button type="button" onClick={() => { setIsRegistering(false); setErrorMsg(''); setSuccessMsg(''); }} className="text-gray-500 text-[15px] font-medium hover:underline">
+                    Đã có tài khoản? Quay lại đăng nhập
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       </div>

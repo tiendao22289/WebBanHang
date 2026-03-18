@@ -490,9 +490,9 @@ img {
     grid-template-columns: 1fr;
   }
 
-  /* Page content: tighter padding */
+  /* Page content: no padding on mobile — let sections control their own spacing */
   .page-content {
-    padding: var(--space-4) var(--space-4) var(--space-6);
+    padding: 0;
   }
 
   .page-header {
@@ -626,9 +626,17 @@ img {
 
 /* ── Page content wrapper ── */
 .page-content {
-  padding: var(--space-8);
-  max-width: 1400px;
-  margin: 0 auto;
+  padding: 0;
+  max-width: 100%;
+  margin: 0;
+}
+
+@media (min-width: 769px) {
+  .page-content {
+    padding: 2rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
 }
 
 .page-header {

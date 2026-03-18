@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
+import Swal from 'sweetalert2';
 import {
   Bell,
   ChevronRight,
@@ -59,6 +60,7 @@ export default function TablesPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newTableNumber, setNewTableNumber] = useState('');
   const [newOrderAlert, setNewOrderAlert] = useState(null);
+  const [filterTab, setFilterTab] = useState('ALL');
   const [columnsPerRow, setColumnsPerRow] = useState(5);
   const [menuItems, setMenuItems] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -72,11 +74,37 @@ export default function TablesPage() {
   const [selectedOptions, setSelectedOptions] = useState({});
   const [optionQuantity, setOptionQuantity] = useState(1);
   const [optionNote, setOptionNote] = useState('');
+  const [editingPrice, setEditingPrice] = useState(false);
+  const [customPrice, setCustomPrice] = useState(null);
+  const [showBillPreview, setShowBillPreview] = useState(false);
+  const [tableNote, setTableNote] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(null); // { orderId, itemId, itemName }
+  const [editItemPrice, setEditItemPrice] = useState(null); // { orderId, itemId, value } — LEGACY, replaced by showPriceModal
+  const [editingOrderItem, setEditingOrderItem] = useState(null); // { orderId, itemId } for editing options
+  const [showPriceModal, setShowPriceModal] = useState(null); // { orderId, itemId, originalPrice }
+  const [discountMode, setDiscountMode] = useState('VND'); // 'VND' | 'PCT'
+  const [discountValue, setDiscountValue] = useState(0);
+  const [customNewPrice, setCustomNewPrice] = useState(null); // null = use calculated
+  const [desktopSearch, setDesktopSearch] = useState('');
+  const [desktopView, setDesktopView] = useState('tables'); // 'tables' | 'menu'
+  const [desktopMenuCat, setDesktopMenuCat] = useState('all');
+  const [desktopInlinePriceItem, setDesktopInlinePriceItem] = useState(null); // item.id being edited
+  const [desktopInlinePriceVal, setDesktopInlinePriceVal] = useState(''); // temp price string
+  const [confirmPayment, setConfirmPayment] = useState(null); // { table, totalAmount }
 
   const invoiceRef = useRef(null);
   const isFirstLoad = useRef(true);
+  const [isMobile, setIsMobile] = useState(true);
 
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+
+  // Detect mobile vs desktop
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth <= 768);
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
 
   // Body scroll lock effect
   useEffect(() => {
@@ -105,29 +133,37 @@ export default function TablesPage() {
 
     if (tablesData) {
       setTables(tablesData);
-      const occupiedIds = tablesData.filter(t => t.status === 'occupied').map(t => t.id);
-      if (occupiedIds.length > 0) {
-        const { data: ordersData } = await supabase
-          .from('orders')
-          .select(`
-            *,
-            order_items (
+      // ── Fetch ALL pending/preparing orders for ALL tables (not just occupied) ──
+      // This avoids the race condition where the order arrives before the table status updates.
+      const allTableIds = tablesData.map(t => t.id);
+      if (allTableIds.length > 0) {
+        try {
+          const { data: ordersData, error: ordErr } = await supabase
+            .from('orders')
+            .select(`
               *,
-              menu_item:menu_items (name, price)
-            )
-          `)
-          .in('table_id', occupiedIds)
-          .in('status', ['pending', 'preparing'])
-          .order('created_at', { ascending: false });
+              order_items (
+                *,
+                menu_item:menu_items (name, price, image_url)
+              )
+            `)
+            .in('table_id', allTableIds)
+            .in('status', ['pending', 'preparing'])
+            .order('created_at', { ascending: false });
 
-        const ordersByTable = {};
-        ordersData?.forEach(order => {
-          if (!ordersByTable[order.table_id]) {
-            ordersByTable[order.table_id] = [];
-          }
-          ordersByTable[order.table_id].push(order);
-        });
-        setOrders(ordersByTable);
+          if (ordErr) console.error('[fetchTables] orders error:', ordErr.message);
+
+          const ordersByTable = {};
+          ordersData?.forEach(order => {
+            if (!ordersByTable[order.table_id]) {
+              ordersByTable[order.table_id] = [];
+            }
+            ordersByTable[order.table_id].push(order);
+          });
+          setOrders(ordersByTable);
+        } catch (e) {
+          console.error('[fetchTables] unexpected error:', e);
+        }
       } else {
         setOrders({});
       }
@@ -139,24 +175,39 @@ export default function TablesPage() {
 
   useEffect(() => {
     fetchTables();
+
+    // Use a unique channel name each mount to avoid stale channel on HMR
+    const channelName = `tables-realtime-${Date.now()}`;
     const channel = supabase
-      .channel('tables-realtime')
+      .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tables' }, () => {
         fetchTables();
       })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orders' }, (payload) => {
-        // Play sound for new orders (skip on first load)
-        if (!isFirstLoad.current) {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+        if (payload.eventType === 'INSERT' && !isFirstLoad.current) {
           playNotificationSound();
           setNewOrderAlert(payload.new);
           setTimeout(() => setNewOrderAlert(null), 5000);
         }
         fetchTables();
       })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
         fetchTables();
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log('[Realtime] channel status:', status);
+      });
+
+    // ── Fallback: poll every 5s in case Supabase Realtime is not enabled ──
+    const pollInterval = setInterval(() => {
+      fetchTables();
+    }, 5000);
+
+    // ── Re-fetch when user switches back to this tab ──
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') fetchTables();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
 
     // Mark first load complete after a short delay
     setTimeout(() => { isFirstLoad.current = false; }, 2000);
@@ -191,6 +242,8 @@ export default function TablesPage() {
     return () => {
       supabase.removeChannel(channel);
       clearInterval(autoExpireInterval);
+      clearInterval(pollInterval);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [fetchTables]);
 
@@ -251,8 +304,12 @@ export default function TablesPage() {
     img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
   }
 
-  async function removeItemFromOrder(orderId, itemId) {
-    if (!confirm('Xóa món này khỏi bill?')) return;
+  async function removeItemFromOrder(orderId, itemId, itemName) {
+    setConfirmDelete({ orderId, itemId, itemName });
+  }
+
+  async function performDeleteItem(orderId, itemId) {
+    setConfirmDelete(null);
     // Delete the order item
     const { data: deletedItem } = await supabase
       .from('order_items')
@@ -294,6 +351,47 @@ export default function TablesPage() {
     fetchTables();
   }
 
+  async function updateItemPrice(orderId, itemId, newPrice) {
+    if (!newPrice || newPrice <= 0) return;
+    await supabase.from('order_items').update({ unit_price: newPrice }).eq('id', itemId);
+    // recalculate order total
+    const { data: allItems } = await supabase
+      .from('order_items').select('unit_price, quantity').eq('order_id', orderId);
+    const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+    setEditItemPrice(null);
+    setShowPriceModal(null);
+    setDiscountValue(0);
+    setDiscountMode('VND');
+    setCustomNewPrice(null);
+    fetchTables();
+  }
+
+  async function updateOrderItemOptions(orderId, itemId, newOptions, note) {
+    await supabase.from('order_items').update({ item_options: newOptions, note: note || '' }).eq('id', itemId);
+    setEditingOrderItem(null);
+    setOptionModalItem(null);
+    setSelectedOptions({});
+    setOptionNote('');
+    fetchTables();
+  }
+
+  const decreaseItemFromMenu = async (menuItemId) => {
+    const activeOrder = selectedTable && orders[selectedTable.id] 
+      ? (orders[selectedTable.id].find(o => o.customer_name === 'Admin') || orders[selectedTable.id][0])
+      : null;
+      
+    if (!activeOrder) return;
+    
+    const existingItems = activeOrder.order_items?.filter(oi => oi.menu_item_id === menuItemId) || [];
+    if (existingItems.length === 0) return;
+    
+    // Pick the last added item variant directly to decrement
+    const existing = existingItems[existingItems.length - 1];
+    await updateItemQuantity(activeOrder.id, existing.id, existing.quantity, -1);
+  };
+
+
   async function addItemToOrder(orderId, menuItem, optionsData = [], qty = 1, note = '') {
     // If the item has options and we haven't selected them yet, show the modal
     if (menuItem.options && menuItem.options.length > 0 && optionsData.length === 0) {
@@ -308,6 +406,8 @@ export default function TablesPage() {
       setSelectedOptions(initialOptions);
       setOptionQuantity(1);
       setOptionNote('');
+      setEditingPrice(false);
+      setCustomPrice(null);
       return;
     }
 
@@ -398,24 +498,29 @@ export default function TablesPage() {
     setSelectedOptions({});
     setOptionQuantity(1);
     setOptionNote('');
-    
-    setAddedItemAlert(menuItem.name);
-    setTimeout(() => setAddedItemAlert(null), 2000);
-    
     fetchTables();
   }
 
   function handleConfirmOptions() {
     if (!optionModalItem) return;
-    
     // Format selected options into array
     const optionsData = Object.keys(selectedOptions).map(key => ({
       name: key,
       choice: selectedOptions[key]
     }));
-    
-    // The target order ID is always 'admin' for the POS modal
-    addItemToOrder('admin', optionModalItem, optionsData, optionQuantity, optionNote);
+    // Use custom price if set
+    const itemWithPrice = customPrice != null
+      ? { ...optionModalItem, price: customPrice }
+      : optionModalItem;
+    setEditingPrice(false);
+    setCustomPrice(null);
+
+    if (editingOrderItem) {
+      // UPDATE existing order item's options
+      updateOrderItemOptions(editingOrderItem.orderId, editingOrderItem.itemId, optionsData, optionNote);
+    } else {
+      addItemToOrder('admin', itemWithPrice, optionsData, optionQuantity, optionNote);
+    }
   }
 
   async function mergeBills() {
@@ -498,7 +603,7 @@ export default function TablesPage() {
   }
 
   return (
-    <div className="page-content">
+    <div className="page-content" style={{ background: '#f3f4f6', minHeight: '100vh' }}>
       {/* New order notification toast */}
       {newOrderAlert && (
         <div className="notification-toast animate-slide-up">
@@ -507,155 +612,449 @@ export default function TablesPage() {
         </div>
       )}
 
-      {/* Added item notification toast */}
-      {addedItemAlert && (
-        <div className="notification-toast animate-slide-up" style={{ bottom: '80px', background: 'var(--color-success)', color: 'white' }}>
-          <Check size={20} />
-          <span>Đã thêm <strong>{addedItemAlert}</strong> vào bill</span>
-        </div>
-      )}
+      {/* Helper: shared filtered tables + card data */}
+      {(() => {
+        const filteredTables = tables.filter(t => {
+          if (filterTab === 'OCCUPIED') return t.status === 'occupied';
+          if (filterTab === 'EMPTY') return t.status !== 'occupied';
+          return true;
+        });
 
-      {/* Header */}
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Quản lý bàn</h1>
-          <p className="page-subtitle">Theo dõi trạng thái và quản lý bàn ăn</p>
-        </div>
-        <div className="header-actions">
-          <select
-            className="columns-select"
-            value={columnsPerRow}
-            onChange={(e) => setColumnsPerRow(Number(e.target.value))}
-            title="Số bàn / hàng"
-          >
-            <option value={3}>3 / hàng</option>
-            <option value={4}>4 / hàng</option>
-            <option value={5}>5 / hàng</option>
-            <option value={6}>6 / hàng</option>
-          </select>
-          <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
-            <Plus size={18} /> Thêm bàn
-          </button>
-        </div>
-      </div>
-
-      {/* Summary - Desktop */}
-      <div className="summary-cards desktop-only">
-        <div className="summary-card">
-          <div className="icon-wrapper" style={{ background: 'var(--color-primary-bg)', color: 'var(--color-primary)' }}>
-            <Hash size={22} />
-          </div>
-          <div>
-            <div className="value">{tables.length}</div>
-            <div className="label">Tổng số bàn</div>
-          </div>
-        </div>
-        <div className="summary-card">
-          <div className="icon-wrapper" style={{ background: 'var(--color-success-light)', color: 'var(--color-success)' }}>
-            <Users size={22} />
-          </div>
-          <div>
-            <div className="value">{occupiedCount}</div>
-            <div className="label">Đang có khách</div>
-          </div>
-        </div>
-        <div className="summary-card">
-          <div className="icon-wrapper" style={{ background: '#E8EDE7', color: 'var(--color-table-available)' }}>
-            <Check size={22} />
-          </div>
-          <div>
-            <div className="value">{availableCount}</div>
-            <div className="label">Bàn trống</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Summary - Mobile compact */}
-      <div className="mobile-summary-bar mobile-only">
-        <div className="mobile-stat"><Hash size={14} /> <span>{tables.length} bàn</span></div>
-        <div className="mobile-stat text-success"><Users size={14} /> <span>{occupiedCount} có khách</span></div>
-        <div className="mobile-stat"><Check size={14} /> <span>{availableCount} trống</span></div>
-      </div>
-
-      {/* Action Notification Banners (KiotViet style) */}
-      <div className="table-notifications" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#FEF0E5', color: '#D97706', padding: '12px 16px', borderRadius: '12px', cursor: 'pointer', border: '1px solid #FCD34D' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600' }}>
-            <Bell size={18} />
-            <span>0 lượt gọi món qua QR</span>
-          </div>
-          <ChevronRight size={18} />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#EFF6FF', color: '#2563EB', padding: '12px 16px', borderRadius: '12px', cursor: 'pointer', border: '1px solid #BFDBFE' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '600' }}>
-            <Bell size={18} />
-            <span>0 đơn tự đặt món tại bàn</span>
-          </div>
-          <ChevronRight size={18} />
-        </div>
-      </div>
-
-      {/* Tables Grid */}
-      <div className="tables-grid" style={{ '--cols': columnsPerRow }}>
-        {tables.map((table) => {
+        const tableCard = (table, compact = false) => {
           const tableBills = orders[table.id] || [];
-          const totalItems = tableBills.reduce((acc, o) => acc + (o.order_items?.length || 0), 0);
           const isOccupied = table.status === 'occupied';
-
+          const totalAmount = tableBills.reduce((s, o) => s + (o.total_amount || 0), 0);
+          const guestCount = tableBills.length;
+          let timeElapsed = '';
+          if (isOccupied && table.occupied_at) {
+            const diffMs = Date.now() - new Date(table.occupied_at).getTime();
+            const h = Math.floor(diffMs / 3600000);
+            const m = Math.floor((diffMs % 3600000) / 60000);
+            timeElapsed = h > 0 ? `${h}g ${m}p` : `${m}p`;
+          }
           return (
             <div
               key={table.id}
-              className={`table-card ${table.status}`}
-              onClick={() => {
-                setSelectedTable(table);
-                if (!isOccupied) {
-                  setAddingToOrder('admin');
-                }
+              onClick={() => { setSelectedTable(table); if (!isOccupied) setAddingToOrder('admin'); }}
+              style={{
+                background: isOccupied ? '#dbeafe' : 'white',
+                border: isOccupied ? '1.5px solid #93c5fd' : '1.5px solid #e5e7eb',
+                borderRadius: compact ? 12 : 16,
+                padding: compact ? '12px 12px 10px' : '14px 14px 12px',
+                cursor: 'pointer',
+                minHeight: compact ? 90 : 110,
+                display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+                boxShadow: isOccupied ? '0 2px 8px rgba(37,99,235,0.10)' : '0 1px 4px rgba(0,0,0,0.06)',
+                position: 'relative', transition: 'transform 0.1s, box-shadow 0.1s',
               }}
             >
-              {/* Table Name */}
-              <div className="table-name" style={{ flex: 1 }}>
+              <div style={{ fontSize: compact ? '1rem' : '1.2rem', fontWeight: 800, color: isOccupied ? '#1d4ed8' : '#1f2937' }}>
                 B{table.table_number}
               </div>
-
-              {/* Status Area */}
-              <div className="table-status-area">
-                <span className="table-status-text">
-                  {isOccupied ? 'Có khách' : ''}
-                </span>
-                {isOccupied && tableBills.length > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-                    <Receipt size={12} />
-                    <span>{tableBills.length} đơn</span>
+              {isOccupied ? (
+                <div style={{ marginTop: 6 }}>
+                  <div style={{ fontSize: '0.75rem', color: '#3b82f6', fontWeight: 500, marginBottom: 2 }}>
+                    {timeElapsed} • {guestCount} khách
                   </div>
-                )}
-              </div>
-
-              {/* Actions */}
-              <div className="table-card-actions" onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', top: 'var(--space-2)', right: 'var(--space-2)' }}>
-                <button
-                  className="btn btn-ghost btn-sm"
-                  style={{ padding: '4px', height: 'auto' }}
-                  onClick={() => setShowQR(table)}
-                  title="Xem QR Code"
-                >
-                  <QrCode size={14} />
-                </button>
-                {!isOccupied && (
-                  <button
-                    className="btn btn-ghost btn-sm text-danger"
-                    style={{ padding: '4px', height: 'auto' }}
-                    onClick={() => deleteTable(table.id)}
-                    title="Xoá bàn"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                )}
+                  <div style={{ fontSize: compact ? '0.88rem' : '0.95rem', fontWeight: 700, color: '#1d4ed8' }}>
+                    {totalAmount.toLocaleString('vi-VN')}đ
+                  </div>
+                </div>
+              ) : <div />}
+              <div style={{ position: 'absolute', bottom: 6, right: 6 }}
+                onClick={e => { e.stopPropagation(); setShowQR(table); }}>
+                <QrCode size={13} style={{ color: isOccupied ? '#93c5fd' : '#d1d5db' }} />
               </div>
             </div>
           );
-        })}
-      </div>
+        };
+
+        if (isMobile) {
+          // ── Mobile: KiotViet fullscreen 2-col ──
+          return (
+            <>
+              {/* Underline Tabs */}
+              <div style={{ background: 'white', borderBottom: '1px solid #e5e7eb', position: 'sticky', top: 0, zIndex: 10 }}>
+                <div style={{ display: 'flex' }}>
+                  {[{ key: 'ALL', label: 'Tất cả' }, { key: 'OCCUPIED', label: 'Sử dụng' }, { key: 'EMPTY', label: 'Còn trống' }].map(tab => (
+                    <button key={tab.key} onClick={() => setFilterTab(tab.key)} style={{
+                      flex: 1, padding: '14px 8px', border: 'none', background: 'none',
+                      fontSize: '0.95rem', fontWeight: 600, cursor: 'pointer',
+                      color: filterTab === tab.key ? '#2563eb' : '#6b7280',
+                      borderBottom: filterTab === tab.key ? '2.5px solid #2563eb' : '2.5px solid transparent',
+                    }}>{tab.label}</button>
+                  ))}
+                </div>
+              </div>
+              {/* 2-col grid edge-to-edge */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, padding: '8px 8px 24px' }}>
+                {filteredTables.map(t => tableCard(t, false))}
+                <div onClick={() => setShowAddModal(true)} style={{
+                  border: '1.5px dashed #d1d5db', borderRadius: 16, minHeight: 110,
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  cursor: 'pointer', color: '#9ca3af', gap: 6, background: 'white',
+                }}>
+                  <Plus size={24} strokeWidth={1.5} />
+                  <span style={{ fontSize: '0.82rem', fontWeight: 500 }}>Thêm bàn</span>
+                </div>
+              </div>
+            </>
+          );
+        }
+
+        // ── Desktop: KiotViet 2-pane POS layout ──
+        const desktopOrderDetail = () => {
+          if (!selectedTable) return (
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af', flexDirection: 'column', gap: 10 }}>
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.3"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M6 7V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/><line x1="12" y1="12" x2="12" y2="12"/></svg>
+              <p style={{ fontSize: '0.9rem' }}>Chọn bàn để xem đơn hàng</p>
+            </div>
+          );
+          const tableBills = orders[selectedTable.id] || [];
+          // ── Collect ALL items from ALL orders (same as mobile) ──
+          const allOrderItems = tableBills.flatMap(order =>
+            (order.order_items || []).map(item => ({ ...item, _orderId: order.id }))
+          );
+          // Total = sum of all orders' total_amount (consistent with mobile bill total)
+          const totalAmount = tableBills.reduce((s, o) => s + (o.total_amount || 0), 0);
+          return (
+            <>
+              {/* Order header */}
+              <div style={{ padding: '8px 12px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', gap: 8, background: 'white', flexShrink: 0 }}>
+                <div style={{ background: '#2563eb', color: 'white', borderRadius: 6, padding: '4px 14px', fontSize: '0.9rem', fontWeight: 700 }}>B{selectedTable.table_number}</div>
+                <button style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: '#6b7280' }}>+</button>
+                <div style={{ flex: 1, background: '#f9fafb', borderRadius: 6, padding: '6px 12px', fontSize: '0.82rem', color: '#9ca3af', border: '1px solid #f3f4f6', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Search size={13} /><span>Tìm khách hàng</span>
+                </div>
+                <span style={{ background: '#f0fdf4', color: '#16a34a', borderRadius: 100, padding: '4px 10px', fontSize: '0.72rem', fontWeight: 600, border: '1px solid #bbf7d0' }}>giá khuyến mãi</span>
+                <button onClick={() => setAddingToOrder('admin')} style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>+ Thêm món</button>
+              </div>
+              {/* Items */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
+                {allOrderItems.length === 0 ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#9ca3af', fontSize: '0.9rem' }}>Chưa có món nào</div>
+                ) : allOrderItems.map((item, idx) => {
+                  const optionText = item.item_options?.map(o => o.choice).join(', ') || '';
+                  const isEditingThisPrice = desktopInlinePriceItem === item.id;
+                  const subtotal = item.unit_price * item.quantity;
+                  return (
+                    <div key={item.id} style={{ display: 'flex', alignItems: 'flex-start', padding: '9px 12px', borderBottom: '1px solid #f3f4f6', gap: 8, background: isEditingThisPrice ? '#fefce8' : 'white', transition: 'background 0.15s' }}>
+                      {/* Index */}
+                      <span style={{ color: '#9ca3af', fontSize: '0.78rem', minWidth: 16, paddingTop: 3, flexShrink: 0 }}>{idx + 1}.</span>
+
+                      {/* Name + option + note */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#111827' }}>{item.menu_item?.name || item.name}</div>
+                        {optionText ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
+                            <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>{optionText}</span>
+                            {item.menu_item && (
+                              <div
+                                onClick={() => { setOptionModalItem(item.menu_item); setSelectedOptions({}); setOptionQuantity(item.quantity); setOptionNote(''); setEditingPrice(false); setCustomPrice(null); }}
+                                style={{ width: 11, height: 11, background: '#ef4444', borderRadius: 2, cursor: 'pointer', flexShrink: 0 }}
+                                title="Sửa khẩu vị"
+                              />
+                            )}
+                          </div>
+                        ) : item.menu_item ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
+                            <span style={{ fontSize: '0.72rem', color: '#d1d5db', fontStyle: 'italic' }}>chưa chọn khẩu vị</span>
+                            <div
+                              onClick={() => { setOptionModalItem(item.menu_item); setSelectedOptions({}); setOptionQuantity(item.quantity); setOptionNote(''); setEditingPrice(false); setCustomPrice(null); }}
+                              style={{ width: 11, height: 11, background: '#d1d5db', borderRadius: 2, cursor: 'pointer', flexShrink: 0 }}
+                              title="Chọn khẩu vị"
+                            />
+                          </div>
+                        ) : null}
+                        <div style={{ fontSize: '0.72rem', color: '#2563eb', cursor: 'pointer', marginTop: 1 }}>📝 Ghi chú/Món thêm</div>
+                      </div>
+
+                      {/* Qty controls */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, paddingTop: 1 }}>
+                        <button onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, -1)} style={{ width: 22, height: 22, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem' }}>−</button>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{item.quantity}</span>
+                        <button onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, 1)} style={{ width: 22, height: 22, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem' }}>+</button>
+                      </div>
+
+                      {/* Unit price — inline editable */}
+                      <div style={{ flexShrink: 0, paddingTop: 1 }}>
+                        {isEditingThisPrice ? (
+                          <input
+                            type="text" inputMode="numeric" pattern="[0-9]*" autoFocus
+                            value={desktopInlinePriceVal}
+                            onChange={e => setDesktopInlinePriceVal(e.target.value.replace(/\D/g, ''))}
+                            onBlur={async () => {
+                              const newP = parseInt(desktopInlinePriceVal, 10);
+                              if (!isNaN(newP) && newP >= 0) await updateItemPrice(item._orderId, item.id, newP);
+                              setDesktopInlinePriceItem(null);
+                            }}
+                            onKeyDown={async e => {
+                              if (e.key === 'Enter') {
+                                const newP = parseInt(desktopInlinePriceVal, 10);
+                                if (!isNaN(newP) && newP >= 0) await updateItemPrice(item._orderId, item.id, newP);
+                                setDesktopInlinePriceItem(null);
+                              } else if (e.key === 'Escape') setDesktopInlinePriceItem(null);
+                            }}
+                            style={{ width: 72, textAlign: 'right', border: '1.5px solid #ef4444', borderRadius: 4, padding: '2px 4px', fontSize: '0.82rem', outline: 'none', fontWeight: 600, background: 'white' }}
+                          />
+                        ) : (
+                          <span
+                            onClick={() => { setDesktopInlinePriceItem(item.id); setDesktopInlinePriceVal(String(item.unit_price)); }}
+                            style={{ display: 'block', minWidth: 65, textAlign: 'right', fontSize: '0.82rem', color: '#374151', cursor: 'text', padding: '2px 4px', borderRadius: 4, border: '1.5px solid transparent' }}
+                            title="Click để sửa giá"
+                          >{item.unit_price.toLocaleString('vi-VN')}</span>
+                        )}
+                      </div>
+
+                      {/* Subtotal */}
+                      <span style={{ minWidth: 68, textAlign: 'right', fontSize: '0.85rem', fontWeight: 700, color: '#111827', flexShrink: 0, paddingTop: 3 }}>{subtotal.toLocaleString('vi-VN')}</span>
+
+                      {/* Action icons */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0, paddingTop: 1 }}>
+                        <button title="Thêm ghi chú" style={{ width: 20, height: 20, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280' }}>+</button>
+                        <button title="Yêu thích" style={{ width: 20, height: 20, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f59e0b' }}>☆</button>
+                        <button
+                          title="Xóa món"
+                          onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, -item.quantity)}
+                          style={{ width: 20, height: 20, border: '1px solid #fca5a5', borderRadius: 4, background: '#fff5f5', cursor: 'pointer', fontSize: '0.7rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ef4444' }}
+                        >🗑</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Footer total */}
+              <div style={{ padding: '8px 14px', background: '#f9fafb', borderTop: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexShrink: 0 }}>
+                <span style={{ fontSize: '0.85rem', color: '#374151' }}>Tổng tiền đ:</span>
+                <span style={{ fontSize: '1rem', fontWeight: 800, color: '#1d4ed8' }}>{totalAmount.toLocaleString('vi-VN')}</span>
+              </div>
+              {/* Action buttons */}
+              <div style={{ display: 'flex', gap: 8, padding: '10px 12px', borderTop: '1px solid #e5e7eb', background: 'white', flexShrink: 0 }}>
+                <button style={{ flex: 1, padding: '10px', border: '1.5px solid #2563eb', borderRadius: 8, background: 'white', color: '#2563eb', fontWeight: 600, cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                  🔔 Thông báo
+                </button>
+                <button onClick={handlePrintInvoice} style={{ flex: 1, padding: '10px', border: '1.5px solid #e5e7eb', borderRadius: 8, background: 'white', color: '#374151', fontWeight: 600, cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                  📄 In tạm tính
+                </button>
+                <button
+                  onClick={() => {
+                    if (!selectedTable) return;
+                    setConfirmPayment({ table: selectedTable, totalAmount });
+                  }}
+                  style={{ flex: 2, padding: '10px', border: 'none', borderRadius: 8, background: '#2563eb', color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                  💵 Thanh toán
+                </button>
+              </div>
+            </>
+          );
+        };
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', margin: '-2rem', marginTop: '-2rem' }}>
+            {/* Blue top nav bar */}
+            <div style={{ background: '#1e3a8a', display: 'flex', alignItems: 'center', gap: 4, padding: '8px 12px', flexShrink: 0 }}>
+              {[{ label: 'Phòng bàn', view: 'tables' }, { label: 'Thực đơn', view: 'menu' }, { label: 'Đặt gọi món', view: 'tables' }].map((tab, i) => (
+                <button key={tab.label}
+                  onClick={() => { if (i !== 2) setDesktopView(tab.view); }}
+                  style={{ background: desktopView === tab.view && i < 2 ? 'rgba(255,255,255,0.22)' : 'transparent', color: 'white', border: 'none', padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: '0.88rem', fontWeight: desktopView === tab.view && i < 2 ? 700 : 400, display: 'flex', alignItems: 'center', gap: 5 }}
+                >{tab.label}</button>
+              ))}
+              <div style={{ position: 'relative', flex: 1, maxWidth: 400 }}>
+                <div style={{ background: 'rgba(255,255,255,0.15)', borderRadius: 8, padding: '0', display: 'flex', alignItems: 'center', gap: 8, color: 'white', border: desktopSearch ? '1.5px solid rgba(255,255,255,0.4)' : '1.5px solid transparent' }}>
+                  <Search size={13} style={{ opacity: 0.7, marginLeft: 12, flexShrink: 0 }} />
+                  <input
+                    type="text"
+                    value={desktopSearch}
+                    onChange={e => setDesktopSearch(e.target.value)}
+                    placeholder="Tìm món..."
+                    style={{
+                      flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                      color: 'white', fontSize: '0.85rem', padding: '7px 12px 7px 0',
+                    }}
+                  />
+                  {desktopSearch && (
+                    <button onClick={() => setDesktopSearch('')} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', padding: '0 10px', fontSize: '1rem' }}>×</button>
+                  )}
+                </div>
+                {/* Search results dropdown */}
+                {desktopSearch.trim() && (() => {
+                  const q = desktopSearch.trim().toLowerCase();
+                  const results = menuItems.filter(m => m.name?.toLowerCase().includes(q)).slice(0, 8);
+                  return results.length > 0 ? (
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,0.18)', zIndex: 1000, marginTop: 4, overflow: 'hidden' }}>
+                      {results.map(item => (
+                        <div
+                          key={item.id}
+                          onClick={() => {
+                            setOptionModalItem(item);
+                            setSelectedOptions({});
+                            setOptionQuantity(1);
+                            setOptionNote('');
+                            setEditingPrice(false);
+                            setCustomPrice(null);
+                            setDesktopSearch('');
+                          }}
+                          style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid #f3f4f6', transition: 'background 0.1s' }}
+                          onMouseEnter={e => e.currentTarget.style.background = '#f0f9ff'}
+                          onMouseLeave={e => e.currentTarget.style.background = 'white'}
+                        >
+                          <div style={{ width: 36, height: 36, background: '#dbeafe', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                            <ChefHat size={18} style={{ color: '#2563eb' }} />
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</div>
+                            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                              {item.category?.name || ''} • Giá: <span style={{ color: '#2563eb', fontWeight: 600 }}>{item.price?.toLocaleString('vi-VN')}đ</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,0.18)', zIndex: 1000, marginTop: 4, padding: '14px', textAlign: 'center', color: '#9ca3af', fontSize: '0.85rem' }}>
+                      Không tìm thấy món nào
+                    </div>
+                  );
+                })()}
+              </div>
+              <div style={{ width: 8 }} />
+              <button onClick={() => setShowAddModal(true)} style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: 6, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '1.1rem', fontWeight: 700 }}>+</button>
+            </div>
+
+            {/* 2-pane content */}
+            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+              {/* LEFT: Table browser or Menu view */}
+              <div style={{ width: '42%', display: 'flex', flexDirection: 'column', background: 'white', borderRight: '1px solid #e5e7eb', overflow: 'hidden' }}>
+                {desktopView === 'menu' ? (
+                  /* ── Menu Grid View ── */
+                  <>
+                    {/* Category tabs */}
+                    <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid #e5e7eb', overflowX: 'auto', flexShrink: 0, background: 'white' }}>
+                      {[{ id: 'all', name: 'Tất cả' }, ...categories].map(cat => (
+                        <button key={cat.id} onClick={() => setDesktopMenuCat(cat.id)}
+                          style={{ padding: '8px 14px', border: 'none', background: 'none', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: '0.82rem', fontWeight: desktopMenuCat === cat.id ? 700 : 400,
+                            color: desktopMenuCat === cat.id ? '#2563eb' : '#374151',
+                            borderBottom: desktopMenuCat === cat.id ? '2.5px solid #2563eb' : '2.5px solid transparent' }}
+                        >{cat.name}</button>
+                      ))}
+                    </div>
+                    {/* Menu grid 5 columns */}
+                    <div style={{ flex: 1, overflowY: 'auto', padding: '10px', background: '#f8fafc' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8 }}>
+                        {menuItems
+                          .filter(m => desktopMenuCat === 'all' || m.category?.id === desktopMenuCat || m.category_id === desktopMenuCat)
+                          .map(item => (
+                            <div key={item.id}
+                              onClick={() => {
+                                setOptionModalItem(item);
+                                setSelectedOptions({});
+                                setOptionQuantity(1);
+                                setOptionNote('');
+                                setEditingPrice(false);
+                                setCustomPrice(null);
+                              }}
+                              style={{ background: 'white', borderRadius: 10, overflow: 'hidden', cursor: 'pointer', border: '1px solid #e5e7eb', transition: 'box-shadow 0.15s' }}
+                              onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 12px rgba(37,99,235,0.12)'}
+                              onMouseLeave={e => e.currentTarget.style.boxShadow = 'none'}
+                            >
+                              {/* Image or placeholder */}
+                              <div style={{ position: 'relative' }}>
+                                {item.image_url ? (
+                                  <img src={item.image_url} alt={item.name} style={{ width: '100%', height: 72, objectFit: 'cover', display: 'block' }} />
+                                ) : (
+                                  <div style={{ width: '100%', height: 72, background: '#dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <ChefHat size={28} style={{ color: '#93c5fd' }} />
+                                  </div>
+                                )}
+                                {/* Price badge top */}
+                                <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(37,99,235,0.85)', color: 'white', textAlign: 'center', fontSize: '0.7rem', fontWeight: 700, padding: '2px 0' }}>
+                                  {item.price?.toLocaleString('vi-VN')}
+                                </div>
+                              </div>
+                              {/* Name + option */}
+                              <div style={{ padding: '5px 6px 6px' }}>
+                                <div style={{ fontSize: '0.73rem', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</div>
+                                {item.options?.length > 0 && (
+                                  <div style={{ fontSize: '0.65rem', color: '#f97316', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.options[0]?.name || ''}</div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  /* ── Table Browser ── */
+                  <>
+                    {/* Filter bar */}
+                    <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 12, borderBottom: '1px solid #e5e7eb', flexWrap: 'wrap', flexShrink: 0 }}>
+                      {[{ key: 'ALL', label: `Tất cả (${tables.length})` }, { key: 'OCCUPIED', label: `Sử dụng (${occupiedCount})` }, { key: 'EMPTY', label: `Còn trống (${availableCount})` }].map(f => (
+                        <div key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }} onClick={() => setFilterTab(f.key)}>
+                          <div style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid ' + (filterTab === f.key ? '#2563eb' : '#d1d5db'), display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {filterTab === f.key && <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#2563eb' }} />}
+                          </div>
+                          <span style={{ fontSize: '0.8rem', color: filterTab === f.key ? '#2563eb' : '#374151', fontWeight: filterTab === f.key ? 600 : 400 }}>{f.label}</span>
+                        </div>
+                      ))}
+                      <div style={{ flex: 1 }} />
+                      <button style={{ background: '#fff7ed', color: '#ea580c', border: '1px solid #fed7aa', borderRadius: 100, padding: '3px 10px', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                        🔔 Gọi món qua QR
+                      </button>
+                    </div>
+                    {/* Table grid */}
+                    <div style={{ flex: 1, overflowY: 'auto', padding: 10, background: '#f8fafc' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8 }}>
+                        {filteredTables.map(table => {
+                          const isOccupied = table.status === 'occupied';
+                          const isSelected = selectedTable?.id === table.id;
+                          return (
+                            <div key={table.id}
+                              onClick={() => { setSelectedTable(table); setDesktopView('menu'); if (!isOccupied && isMobile) setAddingToOrder('admin'); }}
+                              style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', padding: '8px 4px 6px', borderRadius: 8, cursor: 'pointer', minHeight: 72, transition: 'all 0.12s',
+                                background: isSelected ? '#2563eb' : isOccupied ? '#dbeafe' : 'white',
+                                border: '1.5px solid ' + (isSelected ? '#2563eb' : isOccupied ? '#93c5fd' : '#e5e7eb') }}
+                            >
+                              <svg width="38" height="30" viewBox="0 0 38 30" fill="none">
+                                <rect x="4" y="9" width="30" height="12" rx="3"
+                                  fill={isSelected ? 'rgba(255,255,255,0.25)' : '#dbeafe'}
+                                  stroke={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'} strokeWidth="1.5"/>
+                                <rect x="7" y="1" width="4" height="9" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'}/>
+                                <rect x="27" y="1" width="4" height="9" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'}/>
+                                <rect x="7" y="21" width="4" height="8" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'}/>
+                                <rect x="27" y="21" width="4" height="8" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'}/>
+                              </svg>
+                              <span style={{ fontSize: '0.72rem', fontWeight: 700, marginTop: 2, color: isSelected ? 'white' : isOccupied ? '#1d4ed8' : '#374151' }}>B{table.table_number}</span>
+                            </div>
+                          );
+                        })}
+                        <div onClick={() => setShowAddModal(true)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: '1.5px dashed #d1d5db', minHeight: 72, cursor: 'pointer', color: '#9ca3af', gap: 2, background: 'white' }}>
+                          <Plus size={16} strokeWidth={1.5} />
+                          <span style={{ fontSize: '0.65rem' }}>Thêm bàn</span>
+                        </div>
+                      </div>
+                    </div>
+                    {/* Bottom bar */}
+                    <div style={{ padding: '8px 12px', background: 'white', borderTop: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', cursor: 'pointer', color: '#374151' }}>
+                        <input type="checkbox" defaultChecked style={{ accentColor: '#2563eb' }} />
+                        Mở thực đơn khi chọn bàn
+                      </label>
+                      <button onClick={() => setShowAddModal(true)} style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <Plus size={13} /> Thêm bàn
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* RIGHT: Order detail */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'white', overflow: 'hidden', minWidth: 0 }}>
+                {desktopOrderDetail()}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* QR Code Modal - uses table UUID in URL */}
       {showQR && (
@@ -692,29 +1091,34 @@ export default function TablesPage() {
         </div>
       )}
 
-      {/* Table Detail Modal with Print Invoice */}
-      {selectedTable && !addingToOrder && (
+      {/* Table Detail Modal - mobile only; desktop shows inline in right panel */}
+      {isMobile && selectedTable && !addingToOrder && (
         <div className="modal-overlay" onClick={() => setSelectedTable(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px' }}>
-            <div className="modal-header">
-              <h3>Bàn {selectedTable.table_number}</h3>
-              <button className="btn btn-ghost btn-icon" onClick={() => setSelectedTable(null)}>
-                <X size={20} />
-              </button>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+            <div className="modal-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2, paddingBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                <h3 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Bàn {selectedTable.table_number}</h3>
+                <button className="btn btn-ghost btn-icon" onClick={() => setSelectedTable(null)}>
+                  <X size={20} />
+                </button>
+              </div>
+              {/* Show first order info (customer name, time, status) */}
+              {orders[selectedTable.id]?.[0] && (() => {
+                const o = orders[selectedTable.id][0];
+                return (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.82rem', color: '#6b7280' }}>
+                    <span style={{ fontWeight: 600, color: '#374151' }}>{o.customer_name}</span>
+                    <span>·</span>
+                    <Clock size={12} />
+                    <span>{formatTime(o.created_at)}</span>
+                    <span className={`badge badge-${o.status}`} style={{ fontSize: '0.75rem', padding: '2px 8px' }}>
+                      {o.status === 'pending' ? 'Chờ' : o.status === 'preparing' ? 'Đang làm' : o.status === 'completed' ? 'Xong' : 'Đã TT'}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
-            <div className="modal-body">
-              {/* Bill count summary */}
-              {orders[selectedTable.id]?.length > 0 && (
-                <div className="bill-summary-bar">
-                  <div className="bill-summary-left">
-                    <Receipt size={16} />
-                    <strong>{orders[selectedTable.id].length} bill</strong>
-                  </div>
-                  <div className="bill-summary-right">
-                    Tổng cộng: <strong>{formatPrice(orders[selectedTable.id].reduce((sum, o) => sum + (o.total_amount || 0), 0))}</strong>
-                  </div>
-                </div>
-              )}
+            <div className="modal-body" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
 
               {/* Printable Invoice (hidden on screen, shown on print) */}
               <div style={{ display: 'none' }}>
@@ -770,69 +1174,152 @@ export default function TablesPage() {
               {orders[selectedTable.id]?.length > 0 ? (
                 orders[selectedTable.id].map((order, idx) => (
                   <div key={order.id} className="order-detail-card">
-                    <div className="bill-number-badge">Bill #{idx + 1}</div>
-                    <div className="order-detail-header">
-                      <div>
-                        <strong>{order.customer_name}</strong>
-                        <span className="text-muted text-sm"> • {order.customer_phone}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Clock size={14} className="text-muted" />
-                        <span className="text-sm text-muted">{formatTime(order.created_at)}</span>
-                        <span className={`badge badge-${order.status}`}>
-                          {order.status === 'pending' ? 'Chờ' :
-                           order.status === 'preparing' ? 'Đang làm' :
-                           order.status === 'completed' ? 'Xong' : 'Đã thanh toán'}
-                        </span>
-                      </div>
-                    </div>
                     <div className="order-items-list">
                       {order.order_items?.map((item) => (
-                        <div key={item.id} className="order-item-row" style={{ display: 'flex', flexDirection: 'column' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                            <div className="item-qty-controls">
-                              <button
-                                className="btn-qty-adj"
-                                onClick={() => updateItemQuantity(order.id, item.id, item.quantity, -1)}
-                              >
-                                <Minus size={12} />
-                              </button>
-                              <span className="item-qty">{item.quantity}</span>
-                              <button
-                                className="btn-qty-adj"
-                                onClick={() => updateItemQuantity(order.id, item.id, item.quantity, 1)}
-                              >
-                                <Plus size={12} />
-                              </button>
-                            </div>
-                            <span className="item-name">{item.menu_item?.name || 'Món đã xoá'}</span>
-                            {item.note && <span className="item-note">({item.note})</span>}
-                            <span className="item-price" style={{ marginLeft: 'auto', marginRight: '8px' }}>{formatPrice(item.unit_price * item.quantity)}</span>
-                            <button
-                              className="btn-item-remove"
-                              title="Xóa món"
-                              onClick={() => removeItemFromOrder(order.id, item.id)}
-                            >
-                              <Trash2 size={13} />
-                            </button>
+                        <div key={item.id} style={{
+                          display: 'flex', gap: 12, padding: '10px 0',
+                          borderBottom: '1px solid #f3f4f6', alignItems: 'flex-start'
+                        }}>
+                          {/* Food Image */}
+                          <div style={{
+                            width: 52, height: 52, borderRadius: 10,
+                            flexShrink: 0, overflow: 'hidden',
+                            background: '#f3f4f6',
+                            border: '1px solid #e5e7eb',
+                          }}>
+                            {item.menu_item?.image_url ? (
+                              <img
+                                src={item.menu_item.image_url}
+                                alt={item.menu_item.name}
+                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                              />
+                            ) : (
+                              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem' }}>🍽️</div>
+                            )}
                           </div>
-                          
-                          {/* Display selected options */}
-                          {item.item_options && item.item_options.length > 0 && (
-                            <div className="item-options-text" style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px', paddingLeft: '80px', width: '100%' }}>
-                              {item.item_options.map((o, i) => (
-                                <span key={i} style={{ display: 'inline-block', backgroundColor: 'var(--bg-secondary)', padding: '2px 6px', borderRadius: '4px', marginRight: '4px', border: '1px solid var(--border-color)' }}>
-                                  {o.name}: {o.choice}
-                                </span>
-                              ))}
+
+                          {/* Content */}
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            {/* Row 1: Name + delete button */}
+                            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 4 }}>
+                              <span style={{ fontSize: '0.97rem', fontWeight: 600, color: '#111827', lineHeight: 1.3 }}>
+                                {item.menu_item?.name || 'Món đã xoá'}
+                              </span>
+                              <button
+                                title="Xóa món"
+                                onClick={() => removeItemFromOrder(order.id, item.id, item.menu_item?.name || 'Món này')}
+                                style={{
+                                  flexShrink: 0, background: 'none', border: 'none',
+                                  color: '#9ca3af', cursor: 'pointer', padding: '0 2px',
+                                  fontSize: '1.1rem', lineHeight: 1,
+                                }}
+                              >
+                                ···
+                              </button>
                             </div>
-                          )}
+
+                            {/* Row 2: Option/khẩu vị + edit button */}
+                            {item.item_options?.length > 0 && (() => {
+                              const fullItem = menuItems.find(m => m.id === item.menu_item_id);
+                              const hasOptions = fullItem?.options?.length > 0;
+                              const openEdit = () => {
+                                if (!hasOptions) return;
+                                const current = {};
+                                item.item_options.forEach(o => { current[o.name] = o.choice; });
+                                setSelectedOptions(current);
+                                setOptionQuantity(item.quantity);
+                                setOptionNote(item.note || '');
+                                setEditingOrderItem({ orderId: order.id, itemId: item.id });
+                                setOptionModalItem(fullItem);
+                                setEditingPrice(false);
+                                setCustomPrice(null);
+                              };
+                              return (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                                  <span style={{ fontSize: '0.82rem', color: '#9ca3af', fontStyle: 'italic' }}>
+                                    {item.item_options.map(o => o.choice).join(', ')}
+                                  </span>
+                                  {hasOptions && (
+                                    <button
+                                      onClick={openEdit}
+                                      title="Đổi khẩu vị"
+                                      style={{
+                                        background: '#eff6ff', border: '1px solid #bfdbfe',
+                                        borderRadius: 5, padding: '1px 6px',
+                                        cursor: 'pointer', color: '#2563eb',
+                                        fontSize: '0.72rem', fontWeight: 600,
+                                        display: 'flex', alignItems: 'center', gap: 3,
+                                        whiteSpace: 'nowrap', flexShrink: 0
+                                      }}
+                                    >
+                                      ✏️ Đổi
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                            {item.note && (
+                              <div style={{ fontSize: '0.82rem', color: '#9ca3af', fontStyle: 'italic', marginTop: 2 }}>
+                                {item.note}
+                              </div>
+                            )}
+
+                            {/* Row 3: Price left + qty controls right */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+                              {/* Editable price */}
+                              {/* Normal price display + edit button */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                                <span style={{ fontSize: '1rem', fontWeight: 700, color: '#111827' }}>
+                                  {formatPrice(item.unit_price * item.quantity).replace('đ', '')}
+                                </span>
+                                <button
+                                  onClick={() => {
+                                    setDiscountValue(0);
+                                    setDiscountMode('VND');
+                                    setCustomNewPrice(null);
+                                    setShowPriceModal({ orderId: order.id, itemId: item.id, originalPrice: item.unit_price });
+                                  }}
+                                  title="Sửa giá"
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#d1d5db', padding: 2, display: 'flex', alignItems: 'center' }}
+                                >
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                  </svg>
+                                </button>
+                              </div>
+                              {/* Qty controls */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                <button
+                                  onClick={() => updateItemQuantity(order.id, item.id, item.quantity, -1)}
+                                  style={{
+                                    width: 28, height: 28, borderRadius: 50,
+                                    border: '1.5px solid #d1d5db', background: 'white',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    cursor: 'pointer', color: '#374151'
+                                  }}
+                                >
+                                  <Minus size={13} strokeWidth={2} />
+                                </button>
+                                <span style={{ fontSize: '1rem', fontWeight: 600, color: '#111827', minWidth: 16, textAlign: 'center' }}>
+                                  {item.quantity}
+                                </span>
+                                <button
+                                  onClick={() => updateItemQuantity(order.id, item.id, item.quantity, 1)}
+                                  style={{
+                                    width: 28, height: 28, borderRadius: 50,
+                                    border: '1.5px solid #d1d5db', background: 'white',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    cursor: 'pointer', color: '#374151'
+                                  }}
+                                >
+                                  <Plus size={13} strokeWidth={2} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       ))}
-                    </div>
-                    <div className="order-total">
-                       <span>Tổng bill:</span>
-                       <strong>{formatPrice(order.total_amount)}</strong>
                     </div>
                   </div>
                 ))
@@ -846,149 +1333,479 @@ export default function TablesPage() {
                 </div>
               )}
             </div>
-            <div className="modal-footer">
-              <div className="footer-actions-left">
+
+            {/* Floating FAB — absolutely positioned on modal, not in scroll area */}
+            {orders[selectedTable.id]?.length > 0 && (
+              <button
+                onClick={() => setAddingToOrder('admin')}
+                style={{
+                  position: 'absolute',
+                  right: 16,
+                  bottom: 115,
+                  width: 50, height: 50,
+                  borderRadius: '50%',
+                  background: '#2563eb',
+                  border: 'none',
+                  color: 'white',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 20px rgba(37,99,235,0.45)',
+                  zIndex: 20,
+                }}
+              >
+                <Plus size={22} strokeWidth={2.5} />
+              </button>
+            )}
+            <div className="modal-footer" style={{ padding: '8px 12px', gap: 6, flexDirection: 'column', alignItems: 'stretch' }}>
+                {/* Total summary row */}
+                {orders[selectedTable.id]?.length > 0 && (() => {
+                  const total = orders[selectedTable.id].reduce((s, o) => s + (o.total_amount || 0), 0);
+                  return (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid #f3f4f6' }}>
+                      <span style={{ fontSize: '0.88rem', color: '#6b7280', fontWeight: 500 }}>Tổng cộng:</span>
+                      <span style={{ fontSize: '1.05rem', fontWeight: 800, color: '#c53b3b' }}>{formatPrice(total)}</span>
+                    </div>
+                  );
+                })()}
+                {/* Action buttons row — styled like reference image */}
                 {orders[selectedTable.id]?.length > 0 && (
-                  <button className="btn btn-primary btn-outline" onClick={() => setAddingToOrder('admin')}>
-                    <Plus size={16} /> THÊM MÓN
-                  </button>
-                )}
-                {orders[selectedTable.id]?.length > 1 && (
-                  <button className="btn btn-accent btn-outline" onClick={mergeBills}>
-                    <ShoppingBag size={16} /> GỘP ĐƠN
-                  </button>
+                  <div style={{ display: 'flex', gap: 8, width: '100%', alignItems: 'stretch' }}>
+
+                    {/* Tạm tính — small square outlined, icon+text stacked */}
+                    <button
+                      onClick={() => setShowBillPreview(true)}
+                      style={{
+                        width: 64, minWidth: 64,
+                        padding: '6px 4px',
+                        border: '1.5px solid #2563eb',
+                        borderRadius: 14,
+                        background: 'white',
+                        color: '#2563eb',
+                        cursor: 'pointer',
+                        display: 'flex', flexDirection: 'column',
+                        alignItems: 'center', justifyContent: 'center',
+                        gap: 2,
+                        fontSize: '0.72rem', fontWeight: 600,
+                      }}
+                    >
+                      <Receipt size={18} strokeWidth={1.8} />
+                      Tạm tính
+                    </button>
+
+                    {/* In hoá đơn — outlined pill */}
+                    <button
+                      onClick={handlePrintInvoice}
+                      style={{
+                        flex: 1,
+                        padding: '10px 8px',
+                        border: '1.5px solid #2563eb',
+                        borderRadius: 100,
+                        background: 'white',
+                        color: '#2563eb',
+                        cursor: 'pointer',
+                        fontSize: '0.9rem', fontWeight: 600,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      In hoá đơn
+                    </button>
+
+                    {/* Thanh toán — solid blue pill, widest */}
+                    <button
+                      onClick={() => completeTable(selectedTable.id)}
+                      style={{
+                        flex: 2,
+                        padding: '10px 12px',
+                        border: 'none',
+                        borderRadius: 100,
+                        background: '#2563eb',
+                        color: 'white',
+                        cursor: 'pointer',
+                        fontSize: '0.95rem', fontWeight: 700,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      Thanh toán
+                    </button>
+                  </div>
                 )}
               </div>
-              <div className="footer-actions-right">
-                <button className="btn btn-outline" onClick={() => setSelectedTable(null)}>
-                  Đóng
-                </button>
-                {orders[selectedTable.id]?.length > 0 && (
-                  <button className="btn btn-primary" onClick={handlePrintInvoice}>
-                    <Printer size={16} /> In hoá đơn
-                  </button>
-                )}
-                {orders[selectedTable.id]?.length > 0 && (
-                  <button className="btn btn-success" onClick={() => completeTable(selectedTable.id)}>
-                    <Check size={16} /> Hoàn thành
-                  </button>
-                )}
-              </div>
-            </div>
           </div>
         </div>
       )}
 
-      {/* Admin Menu Modal (Full Menu View) */}
-      {addingToOrder && (
-        <div className="modal-overlay" onClick={() => { 
-          setAddingToOrder(null); 
+      {/* ── Sửa giá bán bottom-sheet modal ── */}
+      {showPriceModal && (() => {
+        const orig = showPriceModal.originalPrice;
+        const newPrice = discountMode === 'VND'
+          ? Math.max(0, orig - (discountValue || 0))
+          : Math.max(0, orig - Math.round(orig * (discountValue || 0) / 100));
+        return (
+          <div
+            style={{
+              position: 'fixed', inset: 0, zIndex: 1200,
+              background: 'rgba(0,0,0,0.45)',
+              display: 'flex', alignItems: 'flex-end',
+            }}
+            onClick={() => setShowPriceModal(null)}
+          >
+            <div
+              style={{
+                width: '100%', background: 'white',
+                borderRadius: '20px 20px 0 0',
+                padding: '0 0 32px 0',
+                boxShadow: '0 -4px 30px rgba(0,0,0,0.15)',
+                animation: 'slideUp 0.25s ease-out',
+              }}
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '18px 20px 14px',
+                borderBottom: '1px solid #f3f4f6',
+              }}>
+                <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#111827' }}>Sửa giá bán</span>
+                <button
+                  onClick={() => setShowPriceModal(null)}
+                  style={{ background: 'none', border: 'none', fontSize: '1.3rem', color: '#6b7280', cursor: 'pointer', lineHeight: 1 }}
+                >×</button>
+              </div>
+
+              <div style={{ padding: '20px 20px 0' }}>
+                {/* Giá bán */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 6, fontWeight: 500 }}>Giá bán</div>
+                  <div style={{
+                    background: '#f9fafb', borderRadius: 12, padding: '14px 16px',
+                    textAlign: 'right', fontSize: '1.05rem', fontWeight: 700, color: '#111827',
+                    border: '1px solid #f3f4f6',
+                  }}>
+                    {orig.toLocaleString('vi-VN')}
+                  </div>
+                </div>
+
+                {/* Giảm giá */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 6, fontWeight: 500 }}>Giảm giá</div>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 0,
+                    border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden',
+                    background: 'white',
+                  }}>
+                    {/* Toggle VNĐ / % */}
+                    <div style={{ display: 'flex', borderRight: '1px solid #e5e7eb', flexShrink: 0 }}>
+                      {['VND', '% '].map(m => (
+                        <button
+                          key={m}
+                          onClick={() => { setDiscountMode(m.trim()); setDiscountValue(0); }}
+                          style={{
+                            padding: '12px 14px', border: 'none', cursor: 'pointer',
+                            fontSize: '0.85rem', fontWeight: 700,
+                            background: discountMode === m.trim() ? '#eff6ff' : 'white',
+                            color: discountMode === m.trim() ? '#2563eb' : '#9ca3af',
+                          }}
+                        >{m.trim() === 'VND' ? 'VNĐ' : '%'}</button>
+                      ))}
+                    </div>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      placeholder="0"
+                      value={discountValue || ''}
+                      onChange={e => {
+                        const v = Number(e.target.value.replace(/\D/g,'')) || 0;
+                        setDiscountValue(v);
+                        // recalculate and clear customNewPrice so Giá mới reflects calculation
+                        setCustomNewPrice(null);
+                      }}
+                      style={{
+                        flex: 1, border: 'none', outline: 'none',
+                        padding: '12px 16px', fontSize: '16px',
+                        fontWeight: 600, textAlign: 'right', background: 'white',
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Giá mới — editable */}
+                <div style={{ marginBottom: 24 }}>
+                  <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 6, fontWeight: 500 }}>Giá mới</div>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={customNewPrice != null ? customNewPrice : newPrice}
+                    onChange={e => setCustomNewPrice(Number(e.target.value.replace(/\D/g,'')) || 0)}
+                    style={{
+                      width: '100%', boxSizing: 'border-box',
+                      background: '#f9fafb', borderRadius: 12, padding: '14px 16px',
+                      textAlign: 'right', fontSize: '16px', fontWeight: 700,
+                      color: (customNewPrice != null ? customNewPrice : newPrice) < orig ? '#2563eb' : '#111827',
+                      border: '1.5px solid #2563eb', outline: 'none',
+                    }}
+                  />
+                </div>
+
+                {/* Lưu button */}
+                <button
+                  onClick={() => updateItemPrice(showPriceModal.orderId, showPriceModal.itemId, customNewPrice != null ? customNewPrice : newPrice)}
+                  style={{
+                    width: '100%', padding: '15px', borderRadius: 100,
+                    background: '#2563eb', border: 'none', color: 'white',
+                    fontSize: '1rem', fontWeight: 700, cursor: 'pointer',
+                    boxShadow: '0 4px 16px rgba(37,99,235,0.35)',
+                  }}
+                >
+                  Lưu
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Admin Menu Modal */}
+
+      {addingToOrder && (() => {
+        const closeModal = () => {
+          setAddingToOrder(null);
           setAddItemSearch('');
           if (selectedTable && (!orders[selectedTable.id] || orders[selectedTable.id].length === 0)) {
             setSelectedTable(null);
           }
-        }}>
-          <div className="modal-content menu-pos-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="pos-sf-topbar">
-              <div className="flex items-center gap-2">
-                <ChefHat size={18} className="text-accent" />
-                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Thêm món (Bàn {selectedTable?.table_number})</h3>
-              </div>
-              <button className="btn btn-ghost btn-icon" onClick={() => { 
-                setAddingToOrder(null); 
-                setAddItemSearch('');
-                if (selectedTable && (!orders[selectedTable.id] || orders[selectedTable.id].length === 0)) {
-                  setSelectedTable(null);
-                }
-              }}>
-                <X size={20} />
+        };
+
+        const activeOrder = selectedTable && orders[selectedTable.id]
+          ? (orders[selectedTable.id].find(o => o.customer_name === 'Admin') || orders[selectedTable.id][0])
+          : null;
+        const orderItems = activeOrder?.order_items || [];
+        const totalCartItems = orderItems.reduce((sum, oi) => sum + oi.quantity, 0);
+
+        const filteredItems = menuItems.filter(item => {
+          const matchesCat = activeMenuCategory === 'all' || item.category_id === activeMenuCategory;
+          const matchesSearch = item.name.toLowerCase().includes(addItemSearch.toLowerCase());
+          return matchesCat && matchesSearch;
+        });
+
+        // Group filtered items by category
+        const grouped = categories
+          .map(cat => ({
+            ...cat,
+            items: filteredItems.filter(item => item.category_id === cat.id)
+          }))
+          .filter(cat => cat.items.length > 0);
+
+        return (
+          <div
+            style={{
+              position: 'fixed', inset: 0, zIndex: 1050,
+              background: 'white',
+              display: 'flex', flexDirection: 'column',
+              overflow: 'hidden'
+            }}
+          >
+            {/* Top bar */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #f3f4f6' }}>
+              <span style={{ fontWeight: 700, fontSize: '1rem', color: '#111827' }}>Thêm món — Bàn {selectedTable?.table_number}</span>
+              <button
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4 }}
+                onClick={closeModal}
+              >
+                <X size={22} />
               </button>
             </div>
-            
-            <div className="pos-sf-search-wrap">
-              <Search size={16} className="search-icon" />
-              <input 
-                placeholder="Tìm món ăn..." 
+
+            {/* Search */}
+            <div style={{ position: 'relative', padding: '8px 16px', borderBottom: '1px solid #f3f4f6' }}>
+              <Search size={16} style={{ position: 'absolute', left: 28, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
+              <input
+                placeholder="Tìm món ăn..."
                 value={addItemSearch}
-                onChange={(e) => setAddItemSearch(e.target.value)}
-                className="pos-sf-search-input"
+                onChange={e => setAddItemSearch(e.target.value)}
+                style={{
+                  width: '100%', padding: '9px 32px 9px 38px',
+                  borderRadius: 24, border: '1px solid #e5e7eb',
+                  background: '#f9fafb', fontSize: '0.9rem', outline: 'none'
+                }}
               />
               {addItemSearch && (
-                <button className="pos-sf-search-clear" onClick={() => setAddItemSearch('')}>
+                <button
+                  onClick={() => setAddItemSearch('')}
+                  style={{ position: 'absolute', right: 28, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af' }}
+                >
                   <X size={14} />
                 </button>
               )}
             </div>
 
-            <div className="pos-sf-body">
-              {/* Left sidebar: Categories */}
-              <div className="pos-sf-sidebar">
-                <button 
-                  className={`pos-sf-cat ${activeMenuCategory === 'all' ? 'active' : ''}`}
-                  onClick={() => setActiveMenuCategory('all')}
+            {/* Category pills */}
+            <div style={{ display: 'flex', gap: 8, padding: '10px 16px', overflowX: 'auto', flexShrink: 0, borderBottom: '1px solid #f3f4f6' }}>
+              {[{ id: 'all', name: 'Tất cả' }, ...categories].map(cat => (
+                <button
+                  key={cat.id}
+                  onClick={() => setActiveMenuCategory(cat.id)}
+                  style={{
+                    flexShrink: 0,
+                    padding: '7px 18px',
+                    borderRadius: 24,
+                    border: '1.5px solid',
+                    borderColor: activeMenuCategory === cat.id ? '#2563eb' : '#e5e7eb',
+                    background: activeMenuCategory === cat.id ? '#2563eb' : 'white',
+                    color: activeMenuCategory === cat.id ? 'white' : '#374151',
+                    fontWeight: activeMenuCategory === cat.id ? 700 : 500,
+                    fontSize: '0.88rem',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
                 >
-                  <div className="cat-name">Tất cả</div>
+                  {cat.name}
                 </button>
-                {categories.map(cat => (
-                  <button 
-                    key={cat.id}
-                    className={`pos-sf-cat ${activeMenuCategory === cat.id ? 'active' : ''}`}
-                    onClick={() => setActiveMenuCategory(cat.id)}
-                  >
-                    <div className="cat-name">{cat.name}</div>
-                  </button>
-                ))}
-              </div>
-
-              {/* Right main: Item List */}
-              <div className="pos-sf-main">
-                <div className="pos-sf-list">
-                  {menuItems
-                    .filter(item => {
-                      const matchesCat = activeMenuCategory === 'all' || item.category_id === activeMenuCategory;
-                      const matchesSearch = item.name.toLowerCase().includes(addItemSearch.toLowerCase());
-                      return matchesCat && matchesSearch;
-                    })
-                    .map(item => {
-                      return (
-                        <div key={item.id} className="pos-sf-item" onClick={() => addItemToOrder('admin', item)}>
-                          <div className="pos-sf-item-img">
-                            {item.image_url ? (
-                              <Image src={item.image_url} alt={item.name} fill sizes="80px" style={{ objectFit: 'cover' }} />
-                            ) : (
-                              <div className="pos-item-placeholder" style={{ background: '#fdf2f2', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fca5a5' }}>
-                                <ChefHat size={20} />
-                              </div>
-                            )}
-                          </div>
-                          
-                          <div className="pos-sf-item-info">
-                            <h4 className="pos-sf-item-name" title={item.name}>{item.name}</h4>
-                            <span className="pos-sf-item-price">{formatPrice(item.price)}</span>
-                          </div>
-
-                          <button className="pos-sf-item-add" onClick={(e) => { e.stopPropagation(); addItemToOrder('admin', item); }}>
-                            <Plus size={16} />
-                          </button>
-                        </div>
-                      );
-                    })}
-                </div>
-                
-                {menuItems.filter(item => {
-                  const matchesCat = activeMenuCategory === 'all' || item.category_id === activeMenuCategory;
-                  const matchesSearch = item.name.toLowerCase().includes(addItemSearch.toLowerCase());
-                  return matchesCat && matchesSearch;
-                }).length === 0 && (
-                  <div className="empty-state" style={{ padding: '2rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
-                    <p>Không tìm thấy món ăn nào</p>
-                  </div>
-                )}
-              </div>
+              ))}
             </div>
+
+            {/* Item list */}
+            <div style={{ flex: 1, overflowY: 'auto', background: '#fafafa', paddingBottom: totalCartItems > 0 ? 90 : 16 }}>
+              {grouped.length === 0 && (
+                <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>Không tìm thấy món ăn nào</div>
+              )}
+              {grouped.map(cat => (
+                <div key={cat.id}>
+                  <div style={{ padding: '12px 16px 4px', fontSize: '0.9rem', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    {cat.name} ({cat.items.length})
+                  </div>
+                  {cat.items.map(item => {
+                    const itemsInOrder = orderItems.filter(oi => oi.menu_item_id === item.id);
+                    const qty = itemsInOrder.reduce((s, oi) => s + oi.quantity, 0);
+
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={() => addItemToOrder('admin', item)}
+                        style={{
+                          display: 'flex', alignItems: 'center',
+                          padding: '12px 16px',
+                          background: 'white',
+                          borderBottom: '1px solid #f3f4f6',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {/* Thumbnail */}
+                        <div style={{
+                          width: 64, height: 64, borderRadius: 12,
+                          overflow: 'hidden', flexShrink: 0,
+                          background: '#eff6ff',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          position: 'relative'
+                        }}>
+                          {item.image_url
+                            ? <Image src={item.image_url} alt={item.name} fill sizes="64px" style={{ objectFit: 'cover' }} />
+                            : <ChefHat size={24} style={{ color: '#93c5fd' }} />}
+                        </div>
+
+                        {/* Info */}
+                        <div style={{ flex: 1, marginLeft: 12, paddingRight: 8 }}>
+                          <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#111827', marginBottom: 4, lineHeight: 1.3 }}>{item.name}</div>
+                          <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#6b7280' }}>{formatPrice(item.price)}</div>
+                        </div>
+
+                        {/* Qty controls */}
+                        {qty > 0 ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }} onClick={e => e.stopPropagation()}>
+                            <button
+                              onClick={() => decreaseItemFromMenu(item.id)}
+                              style={{
+                                width: 30, height: 30, borderRadius: '50%',
+                                border: '1.5px solid #d1d5db', background: 'white',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                cursor: 'pointer', color: '#374151'
+                              }}
+                            >
+                              <Minus size={15} strokeWidth={2.5} />
+                            </button>
+                            <span style={{ width: 20, textAlign: 'center', fontWeight: 700, fontSize: '1rem', color: '#111827' }}>{qty}</span>
+                            <button
+                              onClick={() => addItemToOrder('admin', item)}
+                              style={{
+                                width: 30, height: 30, borderRadius: '50%',
+                                border: '1.5px solid #d1d5db', background: 'white',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                cursor: 'pointer', color: '#374151'
+                              }}
+                            >
+                              <Plus size={15} strokeWidth={2.5} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={e => { e.stopPropagation(); addItemToOrder('admin', item); }}
+                            style={{
+                              width: 32, height: 32, borderRadius: '50%',
+                              background: 'white', border: '1.5px solid #d1d5db',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              cursor: 'pointer', flexShrink: 0, color: '#374151'
+                            }}
+                          >
+                            <Plus size={18} strokeWidth={2} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+
+            {/* Floating cart bar */}
+            {activeOrder && totalCartItems > 0 && (
+              <div
+                style={{
+                  position: 'absolute', bottom: 0, left: 0, right: 0,
+                  padding: '10px 16px 14px',
+                  background: 'white',
+                  borderTop: '1px solid #f3f4f6'
+                }}
+              >
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {/* Chọn lại */}
+                  <button
+                    onClick={() => { closeModal(); }}
+                    style={{
+                      flex: 1, padding: '10px 0', borderRadius: 100,
+                      border: '1.5px solid #e5e7eb', background: 'white',
+                      fontSize: '0.9rem', fontWeight: 600, color: '#374151',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Chọn lại
+                  </button>
+                  {/* Xem đơn */}
+                  <button
+                    onClick={closeModal}
+                    style={{
+                      flex: 1, padding: '10px 16px', borderRadius: 100,
+                      border: 'none', background: '#2563eb',
+                      color: 'white', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      boxShadow: '0 4px 14px rgba(37,99,235,0.35)'
+                    }}
+                  >
+                    <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Xem đơn</span>
+                    <span style={{
+                      background: 'white', color: '#2563eb',
+                      borderRadius: 20, padding: '2px 8px',
+                      fontSize: '0.82rem', fontWeight: 700
+                    }}>{totalCartItems}</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Item Options Modal */}
       {optionModalItem && (
@@ -1012,7 +1829,43 @@ export default function TablesPage() {
                 )}
                 <div className="options-item-info-text">
                   <div className="name">{optionModalItem.name}</div>
-                  <div className="price">{formatPrice(optionModalItem.price)}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {editingPrice ? (
+                      <>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          autoFocus
+                          value={customPrice ?? optionModalItem.price}
+                          onChange={e => setCustomPrice(Number(e.target.value.replace(/\D/g,'')))}
+                          style={{
+                            width: 100, padding: '5px 10px', borderRadius: 8,
+                            border: '1.5px solid #2563eb', fontSize: '16px',
+                            fontWeight: 600, outline: 'none'
+                          }}
+                        />
+                        <button
+                          onClick={() => setEditingPrice(false)}
+                          style={{ background: '#2563eb', border: 'none', borderRadius: 6, color: 'white', padding: '3px 8px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
+                        >✓</button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="price">{formatPrice(customPrice ?? optionModalItem.price)}</span>
+                        <button
+                          onClick={() => { setCustomPrice(customPrice ?? optionModalItem.price); setEditingPrice(true); }}
+                          title="Sửa giá"
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 2, display: 'flex', alignItems: 'center' }}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                          </svg>
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1057,7 +1910,7 @@ export default function TablesPage() {
             
             <div className="options-bottom-bar">
               <button className="btn-add-to-order" onClick={handleConfirmOptions}>
-                Thêm vào đơn • {formatPrice(optionModalItem.price * optionQuantity)}
+                Thêm vào đơn • {formatPrice((customPrice ?? optionModalItem.price) * optionQuantity)}
               </button>
             </div>
           </div>
@@ -1092,6 +1945,252 @@ export default function TablesPage() {
               <button className="btn btn-outline" onClick={() => setShowAddModal(false)}>Huỷ</button>
               <button className="btn btn-primary" onClick={addTable}>
                 <Plus size={16} /> Thêm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Full-screen Bill Preview Modal */}
+      {showBillPreview && selectedTable && (() => {
+        const tableBills = orders[selectedTable.id] || [];
+        const allItems = tableBills.flatMap(b => b.order_items || []);
+        const grandTotal = tableBills.reduce((s, b) => s + b.total_amount, 0);
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+        const dateStr = now.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+        return (
+          <div
+            style={{
+              position: 'fixed', inset: 0, zIndex: 2000,
+              background: 'white',
+              display: 'flex', flexDirection: 'column',
+              fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 20px', borderBottom: '1px solid #f3f4f6' }}>
+              <button
+                onClick={() => setShowBillPreview(false)}
+                style={{
+                  width: 36, height: 36, borderRadius: '50%',
+                  border: '1.5px solid #e5e7eb', background: 'white',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: 'pointer', color: '#374151', fontSize: '1.1rem', flexShrink: 0
+                }}
+              >✕</button>
+              <span style={{ fontSize: '1.1rem', fontWeight: 700, color: '#111827' }}>
+                Xem tạm tính
+              </span>
+              <span style={{ width: 1, height: 18, background: '#d1d5db', flexShrink: 0 }} />
+              <span style={{
+                fontSize: '0.95rem', fontWeight: 700, color: '#2563eb',
+                background: '#eff6ff', borderRadius: 8, padding: '3px 10px',
+              }}>
+                Bàn {selectedTable.table_number}
+              </span>
+            </div>
+
+            {/* Items list */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px' }}>
+              {allItems.map((item, idx) => {
+                const optionText = item.item_options?.map(o => o.choice).join(', ') || item.note || '';
+                const subtotal = item.unit_price * item.quantity;
+                return (
+                  <div key={idx} style={{ paddingTop: 16, paddingBottom: 14, borderBottom: '1px solid #f0f0f0' }}>
+                    {/* Row 1: Name · option(orange) */}
+                    <div style={{ fontSize: '1rem', fontWeight: 600, color: '#111827', marginBottom: 2 }}>
+                      {item.menu_item?.name || 'Món đã xoá'}
+                      {optionText && (
+                        <span style={{ fontWeight: 400, color: '#f59e0b' }}> · {optionText}</span>
+                      )}
+                    </div>
+                    {/* Row 2: khẩu vị gray italic */}
+                    {optionText && (
+                      <div style={{ fontSize: '0.85rem', color: '#9ca3af', marginBottom: 6 }}>{optionText}</div>
+                    )}
+                    {/* Row 3: unit_price × qty (left) | subtotal (right) */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.95rem', color: '#374151' }}>
+                        {item.unit_price.toLocaleString('vi-VN')} × {item.quantity}
+                      </span>
+                      <span style={{ fontSize: '0.95rem', fontWeight: 500, color: '#111827' }}>
+                        {subtotal.toLocaleString('vi-VN')}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Gray summary section */}
+            <div style={{ background: '#f8f8f8', padding: '0 20px', borderTop: '8px solid #f0f0f0' }}>
+              {/* Tổng tiền hàng */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0', borderBottom: '1px solid #e5e5e5' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: '0.85rem', color: '#374151' }}>Tổng tiền hàng</span>
+                  <span style={{ fontSize: '0.72rem', background: '#e5e7eb', color: '#6b7280', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>
+                    {allItems.reduce((s, i) => s + i.quantity, 0)}
+                  </span>
+                </div>
+                <span style={{ fontSize: '0.85rem', color: '#111827', fontWeight: 500 }}>
+                  {grandTotal.toLocaleString('vi-VN')}
+                </span>
+              </div>
+              {/* Giảm giá */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0', borderBottom: '1px solid #e5e5e5' }}>
+                <span style={{ fontSize: '0.85rem', color: '#374151' }}>Giảm giá (0%)</span>
+                <span style={{ fontSize: '0.85rem', color: '#111827' }}>0</span>
+              </div>
+              {/* Thu khác */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0', borderBottom: '1px solid #e5e5e5' }}>
+                <span style={{ fontSize: '0.85rem', color: '#374151' }}>Thu khác</span>
+                <span style={{ fontSize: '0.85rem', color: '#111827' }}>0</span>
+              </div>
+              {/* Khách cần trả */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0' }}>
+                <span style={{ fontSize: '0.92rem', fontWeight: 700, color: '#111827' }}>Khách cần trả</span>
+                <span style={{ fontSize: '0.92rem', fontWeight: 700, color: '#111827' }}>
+                  {grandTotal.toLocaleString('vi-VN')}
+                </span>
+              </div>
+            </div>
+
+            {/* Blue print button */}
+            <div style={{ padding: '12px 20px 20px', background: 'white' }}>
+              <button
+                onClick={handlePrintInvoice}
+                style={{
+                  width: '100%', padding: '16px 0',
+                  borderRadius: 100, border: 'none',
+                  background: '#2563eb', color: 'white',
+                  fontSize: '1rem', fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                In phiếu tạm tính
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+      {/* Custom Delete Confirmation Modal */}
+      {confirmDelete && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 3000,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 20,
+          }}
+          onClick={() => setConfirmDelete(null)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'white',
+              borderRadius: 20,
+              padding: '28px 24px 20px',
+              maxWidth: 340,
+              width: '100%',
+              textAlign: 'center',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+            }}
+          >
+            <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>🗑️</div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#111827', marginBottom: 8 }}>
+              Xoá món này?
+            </div>
+            <div style={{ fontSize: '0.9rem', color: '#6b7280', marginBottom: 24 }}>
+              <span style={{ fontWeight: 600, color: '#374151' }}>{confirmDelete.itemName}</span> sẽ bị xoá khỏi bill.
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button
+                onClick={() => setConfirmDelete(null)}
+                style={{
+                  flex: 1, padding: '12px 0', borderRadius: 12,
+                  border: '1.5px solid #e5e7eb', background: 'white',
+                  fontSize: '0.95rem', fontWeight: 600, color: '#374151',
+                  cursor: 'pointer'
+                }}
+              >
+                Huỷ
+              </button>
+              <button
+                onClick={() => performDeleteItem(confirmDelete.orderId, confirmDelete.itemId)}
+                style={{
+                  flex: 1, padding: '12px 0', borderRadius: 12,
+                  border: 'none', background: '#e11d48',
+                  fontSize: '0.95rem', fontWeight: 700, color: 'white',
+                  cursor: 'pointer'
+                }}
+              >
+                Xoá món
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ── Custom Payment Confirmation Modal ── */}
+      {confirmPayment && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => setConfirmPayment(null)}>
+          <div style={{ background: 'white', borderRadius: 16, boxShadow: '0 20px 60px rgba(0,0,0,0.2)', minWidth: 340, maxWidth: 420, width: '100%', overflow: 'hidden' }}
+            onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div style={{ background: '#2563eb', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: '1.4rem' }}>💵</span>
+              <div>
+                <div style={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>Thanh toán</div>
+                <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.82rem' }}>Bàn B{confirmPayment.table.table_number}</div>
+              </div>
+            </div>
+            {/* Item list */}
+            <div style={{ padding: '12px 20px', maxHeight: 260, overflowY: 'auto' }}>
+              {(orders[confirmPayment.table.id] || []).flatMap(o => o.order_items || []).map((item, idx) => (
+                <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f3f4f6' }}>
+                  <div>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#111827' }}>{item.menu_item?.name || item.name}</span>
+                    <span style={{ fontSize: '0.75rem', color: '#9ca3af', marginLeft: 6 }}>x{item.quantity}</span>
+                  </div>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#374151' }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
+                </div>
+              ))}
+            </div>
+            {/* Total */}
+            <div style={{ padding: '10px 20px', background: '#f8fafc', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '2px solid #e5e7eb' }}>
+              <span style={{ fontWeight: 700, color: '#374151' }}>Tổng cộng</span>
+              <span style={{ fontWeight: 800, fontSize: '1.1rem', color: '#1d4ed8' }}>{confirmPayment.totalAmount.toLocaleString('vi-VN')}đ</span>
+            </div>
+            {/* Buttons */}
+            <div style={{ display: 'flex', gap: 10, padding: '14px 20px' }}>
+              <button onClick={() => setConfirmPayment(null)}
+                style={{ flex: 1, padding: '10px', border: '1.5px solid #e5e7eb', borderRadius: 8, background: 'white', color: '#6b7280', fontWeight: 600, cursor: 'pointer', fontSize: '0.9rem' }}>
+                Hủy
+              </button>
+              <button
+                onClick={async () => {
+                  await completeTable(confirmPayment.table.id);
+                  setConfirmPayment(null);
+                  setSelectedTable(null);
+                  setDesktopView('tables');
+                  Swal.fire({
+                    icon: 'success',
+                    title: '✅ Thanh toán thành công!',
+                    html: `<span style="font-size:1rem">Bàn <b>B${confirmPayment.table.table_number}</b> — Tổng: <b style="color:#ffffff;font-size:1.1rem">${confirmPayment.totalAmount.toLocaleString('vi-VN')}đ</b></span>`,
+                    timer: 3000,
+                    timerProgressBar: true,
+                    showConfirmButton: false,
+                    position: 'top-end',
+                    toast: true,
+                    background: '#16a34a',
+                    color: '#ffffff',
+                    iconColor: '#ffffff',
+                  });
+                }}
+                style={{ flex: 2, padding: '10px', border: 'none', borderRadius: 8, background: '#2563eb', color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem' }}>
+                ✅ Xác nhận thanh toán
               </button>
             </div>
           </div>
