@@ -389,39 +389,48 @@ export default function StaffNotesPage() {
         const data = JSON.parse(strToParse);
         return (
           <div className="flex flex-col gap-2 w-full mt-1">
-            {data.note && <div className="text-amber-700 italic text-sm mb-2 whitespace-pre-wrap">{data.note}</div>}
+            {data.note && <div className="text-blue-600 bg-blue-50 p-2 rounded block text-sm mb-2 whitespace-pre-wrap font-medium border border-blue-100 italic">{data.note}</div>}
             {trailingLog && <div className="text-amber-700 italic text-sm mb-2 whitespace-pre-wrap">{trailingLog}</div>}
             
-            <div className="flex justify-between items-center gap-1 text-[11px] font-semibold text-gray-500 uppercase border-b border-gray-100 pb-1 px-1">
-              <div className="w-[45%]">Tên món</div>
-              <div className="w-[20%] text-right">Giá</div>
-              <div className="w-[10%] text-center">SL</div>
-              <div className="w-[25%] text-right">Tổng</div>
-            </div>
-            
-            {data.items.map((item, idx) => {
-              const p = parseVal(item.price);
-              const q = parseVal(item.qty, true) || 1;
-              const total = p * q;
+            <div className="flex flex-col gap-0 border-t-2 border-b-2 border-red-500 mt-2">
+              <div className="flex justify-between items-center text-[11px] font-semibold text-gray-500 uppercase border-b border-red-500 bg-red-50/30">
+                <div className="w-[35%] py-1.5 px-2">Tên món</div>
+                <div className="w-[20%] text-right py-1.5 px-2 border-l border-red-500">Giá</div>
+                <div className="w-[10%] text-center py-1.5 px-2 border-l border-red-500">SL</div>
+                <div className="w-[20%] text-right py-1.5 px-2 border-l border-red-500">Tổng</div>
+                <div className="w-[15%] text-center py-1.5 px-2 border-l border-red-500">Trạng thái</div>
+              </div>
               
-              return (
-                <div key={idx} className="flex justify-between items-start gap-1 text-xs sm:text-sm py-1.5 px-1 border-b border-gray-50 last:border-0">
-                  <div className="w-[45%] font-medium text-[#115e59] break-words">
-                    {item.name}
-                    {item.paymentStatus === 'debt' && <span className="block text-[10px] text-red-500 font-normal mt-0.5">Nợ {item.creditor ? `(${item.creditor})` : ''}</span>}
+              {data.items.map((item, idx) => {
+                const p = parseVal(item.price);
+                const q = parseVal(item.qty, true) || 1;
+                const total = p * q;
+                
+                return (
+                  <div key={idx} className="flex justify-between items-stretch text-xs sm:text-sm border-b border-gray-100 last:border-0 bg-white hover:bg-slate-50 transition-colors">
+                    <div className="w-[35%] font-bold text-[#115e59] break-words text-[13px] sm:text-[15px] py-1.5 px-2">
+                      {item.name}
+                    </div>
+                    <div className="w-[20%] text-right text-[#ea580c] font-medium py-1.5 px-2 border-l border-red-500 flex items-center justify-end">
+                      {p > 0 ? formatMoney(p).replace('₫', '') : '-'}
+                    </div>
+                    <div className="w-[10%] text-center text-[#9333ea] font-bold py-1.5 px-2 border-l border-red-500 flex items-center justify-center">
+                      {item.qty || 1}
+                    </div>
+                    <div className="w-[20%] text-right text-[#be123c] font-bold text-[13px] sm:text-[15px] py-1.5 px-2 border-l border-red-500 flex items-center justify-end">
+                      {total > 0 ? formatMoney(total).replace('₫', '') : '-'}
+                    </div>
+                    <div className="w-[15%] text-center py-1.5 px-1 border-l border-red-500 flex items-center justify-center">
+                      {item.paymentStatus === 'debt' ? (
+                        <span className="text-[10px] text-red-500 font-bold bg-white px-0.5 rounded whitespace-nowrap">Nợ</span>
+                      ) : (
+                        <span className="text-[10px] text-green-600 font-bold bg-white px-0.5 rounded whitespace-nowrap">Đủ</span>
+                      )}
+                    </div>
                   </div>
-                  <div className="w-[20%] text-right text-[#ea580c] font-medium">
-                    {p > 0 ? formatMoney(p).replace('₫', '') : '-'}
-                  </div>
-                  <div className="w-[10%] text-center text-[#9333ea] font-bold">
-                    {item.qty || 1}
-                  </div>
-                  <div className="w-[25%] text-right text-[#be123c] font-bold">
-                    {total > 0 ? formatMoney(total).replace('₫', '') : '-'}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         );
       }

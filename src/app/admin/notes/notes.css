@@ -175,8 +175,8 @@
 /* ── Keep-Style Masonry Layout ── */
 .notes-masonry {
   display: block;
-  column-count: 1;
-  column-gap: 12px;
+  column-count: 2;
+  column-gap: 8px;
 }
 @media (min-width: 640px) { .notes-masonry { column-count: 2; } }
 @media (min-width: 1024px) { .notes-masonry { column-count: 3; } }
