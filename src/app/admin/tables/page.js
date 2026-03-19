@@ -271,10 +271,10 @@ export default function TablesPage() {
     fetchTables();
   }
 
-  async function completeTable(tableId) {
+  async function completeTable(tableId, paymentMethod = 'cash') {
     await supabase
       .from('orders')
-      .update({ status: 'paid' })
+      .update({ status: 'paid', payment_method: paymentMethod })
       .eq('table_id', tableId)
       .in('status', ['pending', 'preparing', 'completed']);
 
@@ -1226,19 +1226,19 @@ export default function TablesPage() {
 
         const doCashPayment = async () => {
           closeModal();
-          await completeTable(table.id);
+          await completeTable(table.id, 'cash');
         };
 
         const doTransferPayment = async () => {
           if (qrAccount) await recordBankPayment(qrAccount.id, total);
           closeModal();
-          await completeTable(table.id);
+          await completeTable(table.id, 'transfer');
         };
 
         const doCancelOrder = async () => {
           if (!window.confirm('Bạn có chắc muốn huỷ tất cả đơn của bàn này?')) return;
           await supabase.from('orders')
-            .update({ status: 'cancelled' })
+            .update({ status: 'cancelled', payment_method: 'cancelled' })
             .eq('table_id', table.id)
             .in('status', ['pending', 'preparing', 'completed']);
           await supabase.from('tables')
@@ -1812,7 +1812,7 @@ export default function TablesPage() {
                       onClick={async () => {
                         if (!window.confirm('Bạn có chắc muốn huỷ toàn bộ đơn của bàn này?')) return;
                         await supabase.from('orders')
-                          .update({ status: 'cancelled' })
+                          .update({ status: 'cancelled', payment_method: 'cancelled' })
                           .eq('table_id', selectedTable.id)
                           .in('status', ['pending', 'preparing', 'completed']);
                         await supabase.from('tables')

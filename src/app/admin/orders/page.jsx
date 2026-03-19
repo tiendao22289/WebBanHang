@@ -1,33 +1,41 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
-  Search,
-  Calendar,
-  Eye,
-  X,
-  Clock,
-  Filter,
-  Receipt,
-  CheckCircle,
-  AlertCircle,
-  ChefHat,
+  Search, Calendar, Eye, X, Clock, Filter,
+  Receipt, CheckCircle, AlertCircle, ChefHat, Ban,
+  Banknote, Smartphone,
 } from 'lucide-react';
 import './orders.css';
 
-export default function OrdersPage() {
-  const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedOrder, setSelectedOrder] = useState(null);
-  const [dateFilter, setDateFilter] = useState(new Date().toISOString().split('T')[0]);
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [searchTerm, setSearchTerm] = useState('');
+const STATUS_META = {
+  pending:   { label: 'Chờ xác nhận', color: '#f59e0b', bg: '#fef9c3', icon: <AlertCircle size={13}/> },
+  preparing: { label: 'Đang làm',     color: '#3b82f6', bg: '#dbeafe', icon: <ChefHat size={13}/> },
+  completed: { label: 'Hoàn thành',   color: '#10b981', bg: '#d1fae5', icon: <CheckCircle size={13}/> },
+  paid:      { label: 'Đã thanh toán',color: '#6366f1', bg: '#ede9fe', icon: <Receipt size={13}/> },
+  cancelled: { label: 'Đã huỷ',       color: '#ef4444', bg: '#fee2e2', icon: <Ban size={13}/> },
+};
 
+const PAYMENT_META = {
+  cash:      { label: 'Tiền mặt',     icon: '💵', color: '#15803d' },
+  transfer:  { label: 'Chuyển khoản', icon: '📲', color: '#1d4ed8' },
+  cancelled: { label: 'Huỷ đơn',      icon: '🗑️', color: '#dc2626' },
+};
+
+export default function OrdersPage() {
+  const [orders, setOrders]           = useState([]);
+  const [loading, setLoading]         = useState(true);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [dateFilter, setDateFilter]   = useState(new Date().toISOString().split('T')[0]);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [searchTerm, setSearchTerm]   = useState('');
+
+  // Lock body scroll when modal open
   useEffect(() => {
     if (selectedOrder) {
-      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
-      document.body.style.setProperty('--scrollbar-width', `${scrollbarWidth}px`);
+      const w = window.innerWidth - document.documentElement.clientWidth;
+      document.body.style.setProperty('--scrollbar-width', `${w}px`);
       document.body.classList.add('modal-open');
     } else {
       document.body.classList.remove('modal-open');
@@ -35,134 +43,165 @@ export default function OrdersPage() {
     return () => document.body.classList.remove('modal-open');
   }, [selectedOrder]);
 
-  useEffect(() => {
-    fetchOrders();
-  }, [dateFilter, statusFilter]);
-
-  async function fetchOrders() {
+  const fetchOrders = useCallback(async () => {
     setLoading(true);
     let query = supabase
       .from('orders')
       .select(`
         *,
         table:tables(table_number, table_type, table_name),
-        order_items (
-          *,
-          menu_item:menu_items(name, price)
-        )
+        order_items (*, menu_item:menu_items(name, price))
       `)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false }); // newest first
 
-    // Date filter
     if (dateFilter) {
-      const start = new Date(dateFilter);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(dateFilter);
-      end.setHours(23, 59, 59, 999);
+      const start = new Date(dateFilter); start.setHours(0, 0, 0, 0);
+      const end   = new Date(dateFilter); end.setHours(23, 59, 59, 999);
       query = query.gte('created_at', start.toISOString()).lte('created_at', end.toISOString());
     }
 
-    // Status filter
-    if (statusFilter !== 'all') {
+    if (statusFilter === 'active') {
+      query = query.in('status', ['pending', 'preparing', 'completed']);
+    } else if (statusFilter !== 'all') {
       query = query.eq('status', statusFilter);
     }
 
     const { data } = await query;
     setOrders(data || []);
+
+    // Keep selected order in sync
+    if (selectedOrder) {
+      const fresh = data?.find(o => o.id === selectedOrder.id);
+      if (fresh) setSelectedOrder(fresh);
+    }
     setLoading(false);
-  }
+  }, [dateFilter, statusFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Initial fetch + re-fetch on filter change
+  useEffect(() => { fetchOrders(); }, [fetchOrders]);
+
+  // ── Realtime subscription ──
+  useEffect(() => {
+    const channel = supabase
+      .channel('orders-realtime-' + Date.now())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+        fetchOrders();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
+        fetchOrders();
+      })
+      .subscribe();
+
+    // Fallback poll every 8s
+    const poll = setInterval(fetchOrders, 8000);
+    const onVisible = () => { if (document.visibilityState === 'visible') fetchOrders(); };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(poll);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [fetchOrders]);
 
   async function updateStatus(orderId, newStatus) {
     await supabase.from('orders').update({ status: newStatus }).eq('id', orderId);
     fetchOrders();
-    if (selectedOrder?.id === orderId) {
-      setSelectedOrder(prev => ({ ...prev, status: newStatus }));
-    }
   }
 
-  function formatPrice(price) {
-    return new Intl.NumberFormat('vi-VN').format(price) + 'đ';
-  }
-
-  function formatTime(dateStr) {
-    return new Date(dateStr).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-  }
-
-  function formatDate(dateStr) {
-    return new Date(dateStr).toLocaleDateString('vi-VN');
-  }
-
-  const statusLabels = {
-    pending: 'Chờ xác nhận',
-    preparing: 'Đang làm',
-    completed: 'Hoàn thành',
-    paid: 'Đã thanh toán',
-  };
-
-  const statusIcons = {
-    pending: <AlertCircle size={14} />,
-    preparing: <ChefHat size={14} />,
-    completed: <CheckCircle size={14} />,
-    paid: <Receipt size={14} />,
-  };
+  const fmt = n => new Intl.NumberFormat('vi-VN').format(n) + 'đ';
+  const fmtTime = d => new Date(d).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+  const fmtDate = d => new Date(d).toLocaleDateString('vi-VN');
 
   const filteredOrders = orders.filter(o => {
     if (!searchTerm) return true;
-    const term = searchTerm.toLowerCase();
+    const t = searchTerm.toLowerCase();
     return (
-      o.customer_name?.toLowerCase().includes(term) ||
-      o.customer_phone?.includes(term) ||
-      o.table?.table_number?.toString().includes(term)
+      o.customer_name?.toLowerCase().includes(t) ||
+      o.customer_phone?.includes(t) ||
+      o.table?.table_number?.toString().includes(t)
     );
   });
 
-  const totalRevenue = filteredOrders.reduce((sum, o) => sum + (o.total_amount || 0), 0);
+  const totalRevenue = filteredOrders
+    .filter(o => o.status === 'paid')
+    .reduce((s, o) => s + (o.total_amount || 0), 0);
+
+  const StatusBadge = ({ status }) => {
+    const m = STATUS_META[status] || STATUS_META.pending;
+    return (
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        background: m.bg, color: m.color,
+        borderRadius: 20, padding: '3px 9px',
+        fontSize: '0.75rem', fontWeight: 700, whiteSpace: 'nowrap',
+      }}>
+        {m.icon} {m.label}
+      </span>
+    );
+  };
+
+  const PaymentBadge = ({ method }) => {
+    if (!method) return null;
+    const m = PAYMENT_META[method];
+    if (!m) return null;
+    return (
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 3,
+        fontSize: '0.72rem', fontWeight: 600, color: m.color,
+        background: 'white', border: `1px solid ${m.color}30`,
+        borderRadius: 12, padding: '2px 7px', whiteSpace: 'nowrap',
+      }}>
+        {m.icon} {m.label}
+      </span>
+    );
+  };
 
   return (
     <div className="page-content">
       <div className="page-header">
         <div>
           <h1 className="page-title">Hoá đơn</h1>
-          <p className="page-subtitle">Quản lý đơn hàng và lịch sử</p>
+          <p className="page-subtitle">Lịch sử đơn hàng theo thời gian thực</p>
         </div>
+        <button onClick={fetchOrders}
+          style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600, color: '#374151', display: 'flex', alignItems: 'center', gap: 6 }}>
+          🔄 Tải lại
+        </button>
       </div>
 
       {/* Filters */}
       <div className="orders-filters">
         <div className="filter-group">
           <Calendar size={16} />
-          <input
-            type="date"
-            className="input"
-            value={dateFilter}
-            onChange={(e) => setDateFilter(e.target.value)}
-          />
+          <input type="date" className="input" value={dateFilter}
+            onChange={e => setDateFilter(e.target.value)} />
         </div>
         <div className="filter-group">
           <Filter size={16} />
-          <select className="select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <select className="select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
             <option value="all">Tất cả</option>
+            <option value="active">Đang xử lý</option>
             <option value="pending">Chờ xác nhận</option>
             <option value="preparing">Đang làm</option>
             <option value="completed">Hoàn thành</option>
             <option value="paid">Đã thanh toán</option>
+            <option value="cancelled">Đã huỷ</option>
           </select>
         </div>
         <div className="filter-group">
           <Search size={16} />
-          <input
-            className="input"
-            placeholder="Tìm theo tên, SĐT, bàn..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
+          <input className="input" placeholder="Tìm tên, SĐT, bàn..."
+            value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
         </div>
       </div>
 
       {/* Summary */}
       <div className="orders-summary">
         <span>{filteredOrders.length} đơn hàng</span>
-        <span className="orders-summary-total">Tổng: <strong>{formatPrice(totalRevenue)}</strong></span>
+        <span className="orders-summary-total">
+          Doanh thu: <strong>{fmt(totalRevenue)}</strong>
+        </span>
       </div>
 
       {/* Orders Table */}
@@ -170,57 +209,47 @@ export default function OrdersPage() {
         <div className="empty-state"><p>Đang tải...</p></div>
       ) : filteredOrders.length > 0 ? (
         <div className="card" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-          <table className="data-table" style={{ minWidth: 620, whiteSpace: 'nowrap' }}>
+          <table className="data-table" style={{ minWidth: 680, whiteSpace: 'nowrap' }}>
             <thead>
               <tr>
-                <th>Giờ</th>
+                <th>Giờ tạo</th>
                 <th>Bàn</th>
                 <th>Khách</th>
                 <th>Món</th>
                 <th>Tiền</th>
                 <th>Trạng thái</th>
+                <th>Thanh toán</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {filteredOrders.map((order) => (
-                <tr key={order.id}>
+              {filteredOrders.map(order => (
+                <tr key={order.id} style={{ opacity: order.status === 'cancelled' ? 0.55 : 1 }}>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Clock size={13} style={{ color: '#9ca3af', flexShrink: 0 }} />
-                      {formatTime(order.created_at)}
+                      <Clock size={13} style={{ color: '#9ca3af' }} />
+                      {fmtTime(order.created_at)}
                     </div>
                   </td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    <strong>
-                      {order.table?.table_number === 0 ? '🛵 Mang về' : `Bàn ${order.table?.table_number ?? '?'}`}
-                    </strong>
-                  </td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
+                  <td><strong>{order.table?.table_number === 0 ? '🛵 Mang về' : `Bàn ${order.table?.table_number ?? '?'}`}</strong></td>
+                  <td>
                     <div style={{ fontWeight: 600 }}>{order.customer_name}</div>
                     <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{order.customer_phone}</div>
                   </td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{order.order_items?.length || 0} món</td>
-                  <td style={{ whiteSpace: 'nowrap' }}><strong className="text-accent">{formatPrice(order.total_amount)}</strong></td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    <span className={`badge badge-${order.status}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      {statusIcons[order.status]} {statusLabels[order.status]}
-                    </span>
-                  </td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
+                  <td>{order.order_items?.length || 0} món</td>
+                  <td><strong className="text-accent">{fmt(order.total_amount)}</strong></td>
+                  <td><StatusBadge status={order.status} /></td>
+                  <td><PaymentBadge method={order.payment_method} /></td>
+                  <td>
                     <div style={{ display: 'flex', gap: 4 }}>
                       <button className="btn btn-ghost btn-sm" onClick={() => setSelectedOrder(order)}>
                         <Eye size={14} />
                       </button>
                       {order.status === 'pending' && (
-                        <button className="btn btn-sm btn-primary" onClick={() => updateStatus(order.id, 'preparing')}>
-                          Nhận
-                        </button>
+                        <button className="btn btn-sm btn-primary" onClick={() => updateStatus(order.id, 'preparing')}>Nhận</button>
                       )}
                       {order.status === 'preparing' && (
-                        <button className="btn btn-sm btn-success" onClick={() => updateStatus(order.id, 'completed')}>
-                          Xong
-                        </button>
+                        <button className="btn btn-sm btn-success" onClick={() => updateStatus(order.id, 'completed')}>Xong</button>
                       )}
                     </div>
                   </td>
@@ -239,7 +268,7 @@ export default function OrdersPage() {
       {/* Order Detail Modal */}
       {selectedOrder && (
         <div className="modal-overlay" onClick={() => setSelectedOrder(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 600 }}>
             <div className="modal-header">
               <h3>Chi tiết đơn hàng</h3>
               <button className="btn btn-ghost btn-icon" onClick={() => setSelectedOrder(null)}><X size={20} /></button>
@@ -260,31 +289,35 @@ export default function OrdersPage() {
                 </div>
                 <div className="detail-row">
                   <span className="detail-label">Thời gian</span>
-                  <span>{formatDate(selectedOrder.created_at)} {formatTime(selectedOrder.created_at)}</span>
+                  <span>{fmtDate(selectedOrder.created_at)} {fmtTime(selectedOrder.created_at)}</span>
                 </div>
                 <div className="detail-row">
                   <span className="detail-label">Trạng thái</span>
-                  <span className={`badge badge-${selectedOrder.status}`}>
-                    {statusLabels[selectedOrder.status]}
-                  </span>
+                  <StatusBadge status={selectedOrder.status} />
                 </div>
+                {selectedOrder.payment_method && (
+                  <div className="detail-row">
+                    <span className="detail-label">Thanh toán</span>
+                    <PaymentBadge method={selectedOrder.payment_method} />
+                  </div>
+                )}
               </div>
 
               <h4 className="mt-4 mb-2">Danh sách món</h4>
               <div className="order-items-list">
-                {selectedOrder.order_items?.map((item) => (
+                {selectedOrder.order_items?.map(item => (
                   <div key={item.id} className="order-item-row">
                     <span className="item-qty">{item.quantity}x</span>
                     <span className="item-name">{item.menu_item?.name || 'Món đã xoá'}</span>
                     {item.note && <span className="item-note">({item.note})</span>}
-                    <span className="item-price">{formatPrice(item.unit_price * item.quantity)}</span>
+                    <span className="item-price">{fmt(item.unit_price * item.quantity)}</span>
                   </div>
                 ))}
               </div>
 
               <div className="order-total mt-4">
                 <span>Tổng cộng:</span>
-                <strong>{formatPrice(selectedOrder.total_amount)}</strong>
+                <strong>{fmt(selectedOrder.total_amount)}</strong>
               </div>
             </div>
             <div className="modal-footer">
