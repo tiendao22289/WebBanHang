@@ -2774,17 +2774,9 @@ export default function TablesPage() {
               <button
                 onClick={async () => {
                   const t = cancelConfirm;
-                  // 1. Close ALL UI panels immediately
-                  setCancelConfirm(null);
-                  setSelectedTable(null);
-                  setAddingToOrder(null);
-                  setAddItemSearch('');
-                  setActiveMenuCategory('all');
-                  setShowBillPreview(false);
-                  setPaymentModal(null);
-                  // 2. Clear local orders for this table so no panel re-renders
-                  setOrders(prev => ({ ...prev, [t.id]: [] }));
-                  // 3. DB updates
+                  setCancelConfirm(null); // close the modal immediately
+
+                  // 1. DB updates FIRST — before anything else so Realtime fires with correct state
                   await supabase.from('orders')
                     .update({ status: 'cancelled', payment_method: 'cancelled' })
                     .eq('table_id', t.id)
@@ -2792,6 +2784,17 @@ export default function TablesPage() {
                   await supabase.from('tables')
                     .update({ status: 'available', occupied_at: null })
                     .eq('id', t.id);
+
+                  // 2. Clear ALL local UI state AFTER DB is committed
+                  setSelectedTable(null);
+                  setAddingToOrder(null);
+                  setAddItemSearch('');
+                  setActiveMenuCategory('all');
+                  setShowBillPreview(false);
+                  setPaymentModal(null);
+                  setOrders(prev => ({ ...prev, [t.id]: [] }));
+
+                  // 3. Refresh table list
                   fetchTables();
                 }}
                 style={{
