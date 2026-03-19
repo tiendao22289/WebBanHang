@@ -25,8 +25,10 @@ function OrderContent() {
   const tableId = searchParams.get('table');
 
   const [tableNumber, setTableNumber] = useState(null);
+  const [isTakeaway, setIsTakeaway] = useState(false);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
   const [showInfoModal, setShowInfoModal] = useState(true);
   const [categories, setCategories] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
@@ -55,22 +57,24 @@ function OrderContent() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
-  function saveSession(name, phone) {
+  function saveSession(name, phone, address = '') {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       tableId,
       customerName: name,
       customerPhone: phone,
+      deliveryAddress: address,
       date: getTodayStr(),
     }));
   }
 
   function clearSession() {
-    // Keep name/phone for reuse, only clear table-specific data
+    // Keep name/phone/address for reuse, only clear table-specific data
     const saved = getSavedSession();
     if (saved) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         customerName: saved.customerName,
         customerPhone: saved.customerPhone,
+        deliveryAddress: saved.deliveryAddress,
       }));
     }
   }
@@ -102,14 +106,61 @@ function OrderContent() {
   }, []);
 
   async function initSession() {
-    await fetchMenu();
+    const isTW = await fetchMenu();
     if (!tableId) return;
 
     const saved = getSavedSession();
 
-    // Always pre-fill name/phone if available
+    // Always pre-fill name/phone/address if available
     if (saved?.customerName) setCustomerName(saved.customerName);
     if (saved?.customerPhone) setCustomerPhone(saved.customerPhone);
+    if (saved?.deliveryAddress) setDeliveryAddress(saved.deliveryAddress);
+
+    // Takeaway: check if there's an existing active order first
+    if (isTW) {
+      const savedPhone = saved?.customerPhone || '';
+      if (savedPhone) {
+        // Look for an existing active, not-yet-completed takeaway order for this customer
+        const { data: activeOrders } = await supabase
+          .from('orders')
+          .select('*, order_items(*, menu_item:menu_items(name, price))')
+          .eq('table_id', tableId)
+          .eq('customer_phone', savedPhone)
+          .eq('kitchen_completed', false)
+          .in('status', ['pending', 'preparing'])
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (activeOrders && activeOrders.length > 0) {
+          // Has active order → skip info modal, load orders and show the "Đã gọi" modal
+          setShowInfoModal(false);
+
+          // Pre-fill cart with items from the existing order
+          const cartItems = [];
+          const seen = new Set();
+          activeOrders.forEach(order => {
+            (order.order_items || []).forEach(oi => {
+              if (!oi.menu_item) return;
+              if (seen.has(oi.menu_item_id)) {
+                const idx = cartItems.findIndex(c => c.id === oi.menu_item_id);
+                if (idx !== -1) cartItems[idx].quantity += oi.quantity;
+              } else {
+                seen.add(oi.menu_item_id);
+                cartItems.push({ id: oi.menu_item_id, name: oi.menu_item.name, price: oi.unit_price, quantity: oi.quantity });
+              }
+            });
+          });
+          if (cartItems.length > 0) setCart(cartItems);
+
+          await fetchPreviousOrders(savedPhone);
+          setShowOrdered(true);
+          return;
+        }
+      }
+      // No active order → show info modal (pre-filled)
+      setShowInfoModal(true);
+      return;
+    }
 
     // Different table → update tableId, show modal for new bill
     if (saved?.tableId && saved.tableId !== tableId) {
@@ -140,7 +191,6 @@ function OrderContent() {
       .single();
 
     if (tableData?.status !== 'occupied') {
-      // Table paid/available → clear history, new bill
       clearSession();
       setPreviousOrders([]);
       setShowInfoModal(true);
@@ -156,12 +206,17 @@ function OrderContent() {
     const [{ data: cats }, { data: items }, { data: tableData }] = await Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
       supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).order('created_at'),
-      tableId ? supabase.from('tables').select('table_number, status').eq('id', tableId).single() : { data: null },
+      tableId ? supabase.from('tables').select('table_number, status, table_type, table_name').eq('id', tableId).single() : { data: null },
     ]);
     setCategories(cats || []);
     setMenuItems(items || []);
-    if (tableData) setTableNumber(tableData.table_number);
+    const isTW = tableData?.table_type === 'takeaway';
+    if (tableData) {
+      setTableNumber(isTW ? (tableData.table_name || 'Mang về') : tableData.table_number);
+      setIsTakeaway(isTW);
+    }
     setLoading(false);
+    return isTW; // return so initSession can decide immediately
   }
 
   async function fetchPreviousOrders(phone = null) {
@@ -296,6 +351,7 @@ function OrderContent() {
           customer_phone: customerPhone.trim(),
           status: 'pending',
           total_amount: totalAmount,
+          ...(isTakeaway && deliveryAddress.trim() ? { delivery_address: deliveryAddress.trim() } : {}),
         })
         .select()
         .single();
@@ -458,16 +514,28 @@ function OrderContent() {
                   onChange={(e) => setCustomerPhone(e.target.value)}
                 />
               </div>
+              {isTakeaway && (
+                <div className="co-field" style={{ borderColor: '#bfdbfe', background: '#eff6ff' }}>
+                  <span style={{ fontSize: '1rem', flexShrink: 0 }}>📍</span>
+                  <input
+                    className="co-input"
+                    placeholder="Địa chỉ nhận hàng (bắt buộc)"
+                    value={deliveryAddress}
+                    onChange={(e) => setDeliveryAddress(e.target.value)}
+                    style={{ background: 'transparent' }}
+                  />
+                </div>
+              )}
               <button
                 className="co-btn-start"
-                disabled={!customerName.trim() || !customerPhone.trim()}
+                disabled={!customerName.trim() || !customerPhone.trim() || (isTakeaway && !deliveryAddress.trim())}
                 onClick={() => {
-                  saveSession(customerName.trim(), customerPhone.trim());
+                  saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim());
                   setShowInfoModal(false);
                   fetchPreviousOrders();
                 }}
               >
-                Xem thực đơn
+                {isTakeaway ? '🛵 Đặt món Mang về' : 'Xem thực đơn'}
               </button>
             </div>
           </div>

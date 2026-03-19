@@ -45,7 +45,7 @@ export default function OrdersPage() {
       .from('orders')
       .select(`
         *,
-        table:tables(table_number),
+        table:tables(table_number, table_type, table_name),
         order_items (
           *,
           menu_item:menu_items(name, price)
@@ -169,63 +169,65 @@ export default function OrdersPage() {
       {loading ? (
         <div className="empty-state"><p>Đang tải...</p></div>
       ) : filteredOrders.length > 0 ? (
-        <div className="card">
-          <div style={{ overflowX: 'auto' }}>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Thời gian</th>
-                  <th>Bàn</th>
-                  <th>Khách hàng</th>
-                  <th>Số món</th>
-                  <th>Tổng tiền</th>
-                  <th>Trạng thái</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredOrders.map((order) => (
-                  <tr key={order.id}>
-                    <td>
-                      <div className="flex items-center gap-2">
-                        <Clock size={14} className="text-muted" />
-                        {formatTime(order.created_at)}
-                      </div>
-                    </td>
-                    <td><strong>Bàn {order.table?.table_number || '?'}</strong></td>
-                    <td>
-                      <div>{order.customer_name}</div>
-                      <div className="text-xs text-muted">{order.customer_phone}</div>
-                    </td>
-                    <td>{order.order_items?.length || 0} món</td>
-                    <td><strong className="text-accent">{formatPrice(order.total_amount)}</strong></td>
-                    <td>
-                      <span className={`badge badge-${order.status}`}>
-                        {statusIcons[order.status]} {statusLabels[order.status]}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="flex gap-1">
-                        <button className="btn btn-ghost btn-sm" onClick={() => setSelectedOrder(order)}>
-                          <Eye size={14} />
+        <div className="card" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          <table className="data-table" style={{ minWidth: 620, whiteSpace: 'nowrap' }}>
+            <thead>
+              <tr>
+                <th>Giờ</th>
+                <th>Bàn</th>
+                <th>Khách</th>
+                <th>Món</th>
+                <th>Tiền</th>
+                <th>Trạng thái</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredOrders.map((order) => (
+                <tr key={order.id}>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <Clock size={13} style={{ color: '#9ca3af', flexShrink: 0 }} />
+                      {formatTime(order.created_at)}
+                    </div>
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <strong>
+                      {order.table?.table_number === 0 ? '🛵 Mang về' : `Bàn ${order.table?.table_number ?? '?'}`}
+                    </strong>
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <div style={{ fontWeight: 600 }}>{order.customer_name}</div>
+                    <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{order.customer_phone}</div>
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{order.order_items?.length || 0} món</td>
+                  <td style={{ whiteSpace: 'nowrap' }}><strong className="text-accent">{formatPrice(order.total_amount)}</strong></td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <span className={`badge badge-${order.status}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      {statusIcons[order.status]} {statusLabels[order.status]}
+                    </span>
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setSelectedOrder(order)}>
+                        <Eye size={14} />
+                      </button>
+                      {order.status === 'pending' && (
+                        <button className="btn btn-sm btn-primary" onClick={() => updateStatus(order.id, 'preparing')}>
+                          Nhận
                         </button>
-                        {order.status === 'pending' && (
-                          <button className="btn btn-sm btn-primary" onClick={() => updateStatus(order.id, 'preparing')}>
-                            Nhận đơn
-                          </button>
-                        )}
-                        {order.status === 'preparing' && (
-                          <button className="btn btn-sm btn-success" onClick={() => updateStatus(order.id, 'completed')}>
-                            Xong
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      )}
+                      {order.status === 'preparing' && (
+                        <button className="btn btn-sm btn-success" onClick={() => updateStatus(order.id, 'completed')}>
+                          Xong
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : (
         <div className="empty-state">

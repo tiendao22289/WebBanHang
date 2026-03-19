@@ -37,9 +37,96 @@ export default function StaffNotesPage() {
   // Analytics & Filter
   const [selectedStaff, setSelectedStaff] = useState('ALL');
 
-  // Pay Debt State
+  // Date filter: day/month/year (empty string = not set)
+  const now = new Date();
+  const [filterDay, setFilterDay] = useState('');
+  const [filterMonth, setFilterMonth] = useState(String(now.getMonth() + 1));
+  const [filterYear, setFilterYear] = useState(String(now.getFullYear()));
+
+  // Pay Debt State (note-level)
   const [payDebtNoteId, setPayDebtNoteId] = useState(null);
   const [payDebtAmount, setPayDebtAmount] = useState('');
+
+  // Pay Debt State (per-item)
+  const [payingItem, setPayingItem] = useState(null); // { noteId, idx }
+  const [payItemInput, setPayItemInput] = useState('');
+  const [expandedHistory, setExpandedHistory] = useState({}); // { 'noteId-idx': true }
+  const toggleHistory = (noteId, idx) => setExpandedHistory(prev => ({ ...prev, [`${noteId}-${idx}`]: !prev[`${noteId}-${idx}`] }));
+
+  // Employee self-service — Bảng Công
+  const [activeNotesTab, setActiveNotesTab] = useState('notes'); // 'notes' | 'cong'
+  const [todayAttendance, setTodayAttendance] = useState(null); // today's log
+  const [empRequests, setEmpRequests] = useState([]); // this month's requests
+  const [empSalaryRec, setEmpSalaryRec] = useState(null);
+  const [advanceForm, setAdvanceForm] = useState({ amount: '', reason: '' });
+  const [absentForm, setAbsentForm] = useState({ days: '1', reason: '' });
+  const [showAdvForm, setShowAdvForm] = useState(false);
+  const [showAbsForm, setShowAbsForm] = useState(false);
+
+  const fetchEmpData = async (staffId) => {
+    const today = new Date().toISOString().split('T')[0];
+    const m = now.getMonth() + 1; const y = now.getFullYear();
+    const [attRes, reqRes] = await Promise.all([
+      supabase.from('attendance_logs').select('*').eq('staff_id', staffId).eq('date', today).maybeSingle(),
+      supabase.from('payroll_requests').select('*').eq('staff_id', staffId).eq('month', m).eq('year', y).order('created_at', { ascending: false }),
+    ]);
+    setTodayAttendance(attRes.data);
+    setEmpRequests(reqRes.data || []);
+  };
+
+  const handleClockIn = async () => {
+    await supabase.from('attendance_logs').insert({ staff_id: currentUser.id, clock_in: new Date().toISOString(), date: new Date().toISOString().split('T')[0] });
+    fetchEmpData(currentUser.id);
+  };
+
+  const handleClockOut = async () => {
+    if (!todayAttendance) return;
+    const cin = new Date(todayAttendance.clock_in);
+    const cout = new Date();
+    const diffH = (cout - cin) / 3600000;
+    const workH = Math.round(diffH * 10) / 10;
+    const otH = Math.max(0, Math.round((diffH - 8) * 10) / 10);
+    await supabase.from('attendance_logs').update({ clock_out: cout.toISOString(), work_hours: workH, overtime_hours: otH }).eq('id', todayAttendance.id);
+    fetchEmpData(currentUser.id);
+  };
+
+  const handleSubmitAdvance = async () => {
+    if (!advanceForm.amount || !advanceForm.reason) return alert('Vui lòng điền đầy đủ!');
+    const m = now.getMonth() + 1; const y = now.getFullYear();
+    await supabase.from('payroll_requests').insert({ staff_id: currentUser.id, request_type: 'advance', amount: Number(advanceForm.amount.replace(/\./g, '')), reason: advanceForm.reason, month: m, year: y });
+    setAdvanceForm({ amount: '', reason: '' }); setShowAdvForm(false);
+    fetchEmpData(currentUser.id);
+    alert('Đã gửi yêu cầu ứng lương!');
+  };
+
+  const handleSubmitAbsent = async () => {
+    if (!absentForm.reason) return alert('Vui lòng điền lý do!');
+    const m = now.getMonth() + 1; const y = now.getFullYear();
+    await supabase.from('payroll_requests').insert({ staff_id: currentUser.id, request_type: 'absent', days: Number(absentForm.days), reason: absentForm.reason, month: m, year: y });
+    setAbsentForm({ days: '1', reason: '' }); setShowAbsForm(false);
+    fetchEmpData(currentUser.id);
+    alert('Đã gửi báo nghỉ!');
+  };
+
+  // Filter notes by date
+  const filterNotesByDate = (notesList) => {
+    return notesList.filter(note => {
+      const d = new Date(note.created_at);
+      if (filterDay) {
+        return d.getDate() === parseInt(filterDay)
+          && d.getMonth() + 1 === parseInt(filterMonth || d.getMonth() + 1)
+          && d.getFullYear() === parseInt(filterYear || d.getFullYear());
+      }
+      if (filterMonth) {
+        return d.getMonth() + 1 === parseInt(filterMonth)
+          && d.getFullYear() === parseInt(filterYear || d.getFullYear());
+      }
+      if (filterYear) {
+        return d.getFullYear() === parseInt(filterYear);
+      }
+      return true;
+    });
+  };
 
   // ── Authentication Logic ──
   useEffect(() => {
@@ -236,7 +323,10 @@ export default function StaffNotesPage() {
         if (item.paymentStatus === 'full') {
           totalPaid += totalItemPrice;
         } else if (item.paymentStatus === 'debt') {
-          totalDebt += totalItemPrice;
+          const debtAmt = item.debtAmount ? parseVal(item.debtAmount.replace(/\./g, '')) : totalItemPrice;
+          const cappedDebt = Math.min(debtAmt, totalItemPrice);
+          totalDebt += cappedDebt;
+          totalPaid += totalItemPrice - cappedDebt;
           if (item.creditor && item.creditor.trim() !== '') {
             creditors.push(item.creditor.trim());
           }
@@ -282,7 +372,7 @@ export default function StaffNotesPage() {
     if (!error) {
       setShowAddModal(false);
       setNewNoteContent('');
-      setExpenseItems([{ name: '', price: '', qty: '', paymentStatus: 'full', creditor: '' }]);
+      setExpenseItems([{ name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }]);
       setNewNoteAmount(0);
       setNewNoteDebt(0);
       setNewNoteType('other');
@@ -383,6 +473,34 @@ export default function StaffNotesPage() {
     }
   };
 
+  const handleItemPayment = async (note, itemIdx, payAmount) => {
+    try {
+      const data = JSON.parse(note.content);
+      const item = data.items[itemIdx];
+      const p = parseVal(item.price);
+      const q = parseVal(item.qty, true) || 1;
+      const itemTotal = p * q;
+      const debtBase = item.debtAmount ? Math.min(parseVal(item.debtAmount.replace(/\./g, '')), itemTotal) : itemTotal;
+      const alreadyPaid = item.paid_amount || 0;
+      const remaining = debtBase - alreadyPaid;
+      if (payAmount <= 0 || payAmount > remaining) return alert('Số tiền không hợp lệ!');
+      data.items[itemIdx].paid_amount = alreadyPaid + payAmount;
+      if (data.items[itemIdx].paid_amount >= debtBase) {
+        data.items[itemIdx].paymentStatus = 'full';
+      }
+      // Append payment log to this item
+      const tsStr = new Date().toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
+      data.items[itemIdx].payment_logs = [...(item.payment_logs || []), { amount: payAmount, ts: tsStr }];
+      const newContent = JSON.stringify(data);
+      const totalPaid = data.items.filter(i => i.name?.trim()).reduce((sum, i) => sum + (i.paid_amount || 0), 0);
+      await supabase.from('staff_notes').update({ content: newContent, paid_debt: totalPaid }).eq('id', note.id);
+      setPayingItem(null); setPayItemInput('');
+      // Directly update notes state so card turns green immediately
+      setNotes(prev => prev.map(n => n.id === note.id ? { ...n, content: newContent, paid_debt: totalPaid } : n));
+      setViewingNote(prev => prev ? { ...prev, content: newContent, paid_debt: totalPaid } : null);
+    } catch { alert('Lỗi cập nhật!'); }
+  };
+
   const handlePayDebt = async (note) => {
     const payAmount = Number(payDebtAmount);
     if (!payAmount || payAmount <= 0) return alert('Vui lòng nhập số tiền hợp lệ');
@@ -438,7 +556,6 @@ export default function StaffNotesPage() {
       let jsonContent = content;
       let trailingLog = '';
 
-      // Recover JSON if a log was appended raw
       if (content && typeof content === 'string' && content.startsWith('{') && content.includes('}[')) {
         const splitIndex = content.lastIndexOf('}[');
         if (splitIndex !== -1) {
@@ -450,62 +567,233 @@ export default function StaffNotesPage() {
       const strToParse = typeof jsonContent === 'string' ? jsonContent : '';
       if (strToParse && strToParse.startsWith('{') && strToParse.includes('"type":"structured_expense"')) {
         const data = JSON.parse(strToParse);
+
+        // compute totals
+        let grandTotal = 0, paidTotal = 0, debtTotal = 0;
+        const rows = data.items.filter(i => i.name?.trim());
+        rows.forEach(item => {
+          const p = parseVal(item.price);
+          const q = parseVal(item.qty, true) || 1;
+          const t = p * q;
+          grandTotal += t;
+          if (item.paymentStatus === 'debt') {
+            const da = item.debtAmount ? parseVal(item.debtAmount.replace(/\./g, '')) : t;
+            const cappedDebt = Math.min(da, t);
+            debtTotal += cappedDebt;
+            paidTotal += t - cappedDebt;
+          } else paidTotal += t;
+        });
+
         return (
-          <div className="flex flex-col gap-2 w-full mt-1">
-            {data.note && <div className="text-blue-600 bg-blue-50 p-2 rounded block text-sm mb-2 whitespace-pre-wrap font-medium border border-blue-100 italic">{data.note}</div>}
-            {trailingLog && <div className="text-amber-700 italic text-sm mb-2 whitespace-pre-wrap">{trailingLog}</div>}
-            
-            <div className="flex flex-col gap-0 border-t-2 border-b-2 border-red-500 mt-2">
-              <div className="flex justify-between items-center text-[11px] font-semibold text-gray-500 uppercase border-b border-red-500 bg-red-50/30">
-                <div className="w-[35%] py-1.5 px-2">Tên món</div>
-                <div className="w-[20%] text-right py-1.5 px-2 border-l border-red-500">Giá</div>
-                <div className="w-[10%] text-center py-1.5 px-2 border-l border-red-500">SL</div>
-                <div className="w-[20%] text-right py-1.5 px-2 border-l border-red-500">Tổng</div>
-                <div className="w-[15%] text-center py-1.5 px-2 border-l border-red-500">Trạng thái</div>
+          <div>
+            {/* Note comment */}
+            {data.note && (
+              <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, padding: '7px 10px', fontSize: '0.82rem', color: '#1e40af', fontStyle: 'italic', marginBottom: 10, whiteSpace: 'pre-wrap' }}>
+                💬 {data.note}
               </div>
-              
-              {data.items.map((item, idx) => {
+            )}
+            {trailingLog && (
+              <div style={{ color: '#92400e', fontStyle: 'italic', fontSize: '0.78rem', marginBottom: 8, whiteSpace: 'pre-wrap', padding: '6px 8px', background: '#fffbeb', borderRadius: 6 }}>{trailingLog}</div>
+            )}
+
+            {/* Desktop: HTML Table */}
+            <div className="expense-desktop-table">
+              <table className="expense-table">
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: 'left', width: '4%' }}>#</th>
+                    <th style={{ textAlign: 'left', width: '40%' }}>Tên món / hàng</th>
+                    <th style={{ textAlign: 'right', width: '17%' }}>Đơn giá</th>
+                    <th style={{ textAlign: 'center', width: '9%' }}>SL</th>
+                    <th style={{ textAlign: 'right', width: '18%' }}>Thành tiền</th>
+                    <th style={{ textAlign: 'center', width: '12%' }}>TT</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((item, idx) => {
+                    const p = parseVal(item.price);
+                    const q = parseVal(item.qty, true) || 1;
+                    const total = p * q;
+                    const isDebt = item.paymentStatus === 'debt';
+                    return (
+                      <tr key={idx}>
+                        <td style={{ textAlign: 'center' }}>{idx + 1}</td>
+                        <td style={{ fontWeight: 600 }}>
+                          {item.name}
+                          {isDebt && item.creditor?.trim() && (
+                            <div style={{ fontSize: '0.75rem', color: '#dc2626', fontWeight: 400, marginTop: 1 }}>👤 {item.creditor}</div>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'right' }}>{p > 0 ? formatMoney(p).replace('₫', '') : '—'}</td>
+                        <td style={{ textAlign: 'center' }}>{item.qty || 1}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700, color: isDebt ? '#dc2626' : undefined }}>
+                          {total > 0 ? formatMoney(total).replace('₫', '') : '—'}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          {isDebt ? <span className="badge-debt">Nợ</span> : <span className="badge-paid">Đủ</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: 'right', fontWeight: 600 }}>Tổng:</td>
+                    <td style={{ textAlign: 'right', color: debtTotal > 0 ? '#dc2626' : '#111827' }}>
+                      {formatMoney(grandTotal).replace('₫', '')}đ
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      {debtTotal > 0 && <span className="badge-debt">Nợ</span>}
+                      {debtTotal === 0 && paidTotal > 0 && <span className="badge-paid">✓ Đủ</span>}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            {/* Mobile: Card list */}
+            <div className="expense-mobile-cards">
+              {rows.map((item, idx) => {
                 const p = parseVal(item.price);
                 const q = parseVal(item.qty, true) || 1;
                 const total = p * q;
-                
+                const isDebt = item.paymentStatus === 'debt';
+                const paidAmt = item.paid_amount || 0;
+                const debtBase = item.debtAmount ? Math.min(parseVal(item.debtAmount.replace(/\./g, '')), total) : (isDebt ? total : 0);
+                const remaining = debtBase > 0 ? Math.max(0, debtBase - paidAmt) : 0;
+                const isThisPaying = payingItem?.idx === idx;
+                const hasPayHistory = item.payment_logs?.length > 0;
+                const debtFullyPaid = hasPayHistory && remaining <= 0;
                 return (
-                  <div key={idx} className="flex justify-between items-stretch text-xs sm:text-sm border-b border-gray-100 last:border-0 bg-white hover:bg-slate-50 transition-colors">
-                    <div className="w-[35%] font-bold text-[#115e59] break-words text-[13px] sm:text-[15px] py-1.5 px-2">
-                      {item.name}
+                  <div key={idx} style={{
+                    background: (isDebt && remaining > 0) ? '#fef2f2' : debtFullyPaid ? '#f0fdf4' : '#f9fafb',
+                    border: `1px solid ${(isDebt && remaining > 0) ? '#fca5a5' : debtFullyPaid ? '#86efac' : '#e5e7eb'}`,
+                    borderRadius: 12, padding: '10px 14px', marginBottom: 8,
+                  }}>
+                    {/* Top row: name + Trả nợ button — full width */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{idx + 1}. {item.name}</div>
+                      <div style={{ paddingLeft: 10 }}>
+                        {isDebt && remaining > 0 ? (
+                          <button
+                            onClick={e => { e.stopPropagation(); setPayingItem(isThisPaying ? null : { idx }); setPayItemInput(''); }}
+                            style={{ fontSize: '0.78rem', background: '#dc2626', color: 'white', border: 'none', borderRadius: 7, padding: '4px 10px', cursor: 'pointer', fontWeight: 700 }}
+                          >
+                            Trả nợ
+                          </button>
+                        ) : !isDebt ? (
+                          <span className="badge-paid">✓ Đủ</span>
+                        ) : null}
+                      </div>
                     </div>
-                    <div className="w-[20%] text-right text-[#ea580c] font-medium py-1.5 px-2 border-l border-red-500 flex items-center justify-end">
-                      {p > 0 ? formatMoney(p).replace('₫', '') : '-'}
-                    </div>
-                    <div className="w-[10%] text-center text-[#9333ea] font-bold py-1.5 px-2 border-l border-red-500 flex items-center justify-center">
-                      {item.qty || 1}
-                    </div>
-                    <div className="w-[20%] text-right text-[#be123c] font-bold text-[13px] sm:text-[15px] py-1.5 px-2 border-l border-red-500 flex items-center justify-end">
-                      {total > 0 ? formatMoney(total).replace('₫', '') : '-'}
-                    </div>
-                    <div className="w-[15%] text-center py-1.5 px-1 border-l border-red-500 flex items-center justify-center">
-                      {item.paymentStatus === 'debt' ? (
-                        <span className="text-[10px] text-red-500 font-bold bg-white px-0.5 rounded whitespace-nowrap">Nợ</span>
-                      ) : (
-                        <span className="text-[10px] text-green-600 font-bold bg-white px-0.5 rounded whitespace-nowrap">Đủ</span>
+                    {item.creditor?.trim() && (
+                      <div style={{ fontSize: '0.75rem', color: '#dc2626', marginTop: 2 }}>👤 {item.creditor}</div>
+                    )}
+                    {/* Price row full width — status pushed to far right */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
+                      <div style={{ fontSize: '0.78rem', color: '#6b7280' }}>
+                        {p > 0 ? formatMoney(p).replace('₫', '') : '—'} × {q} = <strong>{total > 0 ? formatMoney(total) : '—'}</strong>
+                      </div>
+                      {(paidAmt > 0 || remaining > 0) && (
+                        <div style={{ fontSize: '0.75rem', display: 'flex', gap: 5, alignItems: 'center' }}>
+                          {paidAmt > 0 && <span style={{ color: '#16a34a' }}>✓ {formatMoney(paidAmt)}</span>}
+                          {remaining > 0 && <span style={{ color: '#dc2626', fontWeight: 700 }}>⚠️ {formatMoney(remaining)}</span>}
+                          {remaining <= 0 && paidAmt > 0 && <span style={{ color: '#16a34a', fontWeight: 700 }}>✅</span>}
+                        </div>
                       )}
                     </div>
+
+                    {/* Debt inline pay input + history — inside dashed section */}
+                    {(isDebt || item.payment_logs?.length > 0) && (() => {
+                      const histKey = `${viewingNote.id}-${idx}`;
+                      const isExpanded = !!expandedHistory[histKey];
+                      const borderColor = isDebt ? '#fca5a5' : '#d1fae5';
+                      return (
+                        <div style={{ marginTop: 8, borderTop: `1px dashed ${borderColor}`, paddingTop: 6 }}>
+                          {item.payment_logs?.length > 0 && (
+                            <div style={{ marginBottom: isThisPaying ? 6 : 0 }}>
+                              <button
+                                onClick={e => { e.stopPropagation(); toggleHistory(viewingNote.id, idx); }}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.72rem', color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 3, padding: '0 0 4px 0' }}
+                              >
+                                🕐 {isExpanded ? 'Ẩn lịch sử' : `Lịch sử (${item.payment_logs.length})`}
+                              </button>
+                              {isExpanded && (
+                                <div style={{ marginBottom: 6 }}>
+                                  {!isDebt && <div style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 700, marginBottom: 2 }}>✅ Đã trả đủ nợ</div>}
+                                  {item.payment_logs.map((log, li) => (
+                                    <div key={li} style={{ fontSize: '0.73rem', color: '#6b7280', padding: '1px 0', display: 'flex', gap: 5 }}>
+                                      <span style={{ color: '#16a34a' }}>🔔</span>
+                                      <span>Đã trả <strong style={{ color: '#16a34a' }}>{formatMoney(log.amount)}</strong> — {log.ts}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {isDebt && <div style={{ marginBottom: isThisPaying ? 8 : 0 }} />}
+
+                        {isThisPaying && remaining > 0 && (
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }} onClick={e => e.stopPropagation()}>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              placeholder={`Tối đa ${remaining.toLocaleString('vi-VN')}`}
+                              value={payItemInput}
+                              onChange={e => {
+                                const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
+                                const num = Number(raw);
+                                if (num > remaining) {
+                                  setPayItemInput(remaining.toLocaleString('vi-VN'));
+                                  return;
+                                }
+                                setPayItemInput(raw ? num.toLocaleString('vi-VN') : '');
+                              }}
+                              style={{ flex: 1, minWidth: 130, padding: '6px 10px', border: '1.5px solid #fca5a5', borderRadius: 7, fontSize: '0.88rem', outline: 'none' }}
+                              autoFocus
+                            />
+                            <button
+                              onClick={() => {
+                                const num = Number(payItemInput.replace(/\./g, ''));
+                                handleItemPayment(viewingNote, idx, num);
+                              }}
+                              style={{ padding: '6px 14px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 7, fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}
+                            >
+                              Xác nhận
+                            </button>
+                            <button
+                              onClick={() => setPayingItem(null)}
+                              style={{ padding: '6px 10px', background: '#f3f4f6', color: '#6b7280', border: 'none', borderRadius: 7, fontSize: '0.82rem', cursor: 'pointer' }}
+                            >
+                              Huỷ
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                        );
+                    })()}
+
                   </div>
                 );
               })}
+              {/* Total row */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, borderTop: '2px solid #e5e7eb', paddingTop: 8, marginTop: 4, fontSize: '0.92rem' }}>
+                <span>Tổng cộng</span>
+                <span style={{ color: debtTotal > 0 ? '#dc2626' : '#15803d' }}>{formatMoney(grandTotal)}</span>
+              </div>
             </div>
           </div>
         );
       }
     } catch {}
 
-    // Fallback for old simple text format
-    return <div className="text-gray-700 whitespace-pre-wrap">{content}</div>;
+    return <div style={{ color: '#374151', whiteSpace: 'pre-wrap', fontSize: '0.92rem', lineHeight: 1.6 }}>{content}</div>;
   };
 
   const formatDate = (isoString) => {
-    const date = new Date(isoString);
-    return date.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
+    const d = new Date(isoString);
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
 
   const getNoteTypeLabel = (type) => {
@@ -620,131 +908,356 @@ export default function StaffNotesPage() {
     );
   }
 
-  // Logged In - Notes Screen
+  // ── Logged In ──
+  const filteredByDate = filterNotesByDate(
+    notes.filter(n => currentUser.role !== 'admin' || selectedStaff === 'ALL' || n.staff?.full_name === selectedStaff)
+  );
+  const totalSpent = filteredByDate.reduce((a, n) => a + (n.amount || 0) + (n.paid_debt || 0), 0);
+  const totalDebt  = filteredByDate.reduce((a, n) => a + Math.max(0, (n.debt || 0) - (n.paid_debt || 0)), 0);
+  const totalOrigDebt = filteredByDate.reduce((a, n) => a + (n.debt || 0), 0);
+
+  // Label for current filter
+  const filterLabel = filterDay
+    ? `Ngày ${filterDay}/${filterMonth}/${filterYear}`
+    : filterMonth
+    ? `Tháng ${filterMonth}/${filterYear}`
+    : filterYear ? `Năm ${filterYear}` : 'Tất cả';
+
   return (
     <div className="notes-container">
-      {/* Top compact Header */}
-      <div className="notes-header px-4 py-3 flex justify-between items-center bg-white sticky top-0 z-10 shadow-sm">
-        <div className="flex items-center gap-2 bg-gray-100 rounded-full pr-3 pl-1 py-1">
-          <div className="w-7 h-7 rounded-full bg-primary text-white flex items-center justify-center font-bold text-sm">
+
+      {/* ── Header ── */}
+      <div style={{ position: 'sticky', top: 0, zIndex: 20, background: 'white', borderBottom: '1px solid #e5e7eb', padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        {/* User pill */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f3f4f6', borderRadius: 999, padding: '5px 12px 5px 5px' }}>
+          <div style={{ width: 30, height: 30, borderRadius: '50%', background: '#dc2626', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
             {currentUser.full_name.charAt(0)}
           </div>
-          <span className="text-sm font-semibold text-gray-800 hidden sm:inline-block">{currentUser.full_name}</span>
-          <span className="text-sm font-semibold text-gray-800 sm:hidden">{currentUser.full_name.split(' ').pop()}</span>
-          <div className="w-[1px] h-4 bg-gray-300 mx-1"></div>
-          <button className="text-red-500 hover:text-red-700 flex items-center justify-center p-1" onClick={handleLogout} title="Thoát">
-            <LogOut size={16} />
+          <span style={{ fontWeight: 600, fontSize: 14, color: '#111827', maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {currentUser.full_name}
+          </span>
+          <div style={{ width: 1, height: 16, background: '#d1d5db', margin: '0 2px' }} />
+          <button onClick={handleLogout} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', display: 'flex', padding: 2 }}>
+            <LogOut size={15} />
           </button>
         </div>
-        
-        <button 
-          className="flex items-center gap-1.5 bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-full text-sm font-bold shadow-sm transition-colors" 
-          onClick={() => setShowAddModal(true)}
-        >
-          <Plus size={18} /> Ghi chú
-        </button>
+        {/* Add button - only show on notes tab */}
+        {activeNotesTab === 'notes' && (
+          <button
+            onClick={() => setShowAddModal(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#16a34a', color: 'white', border: 'none', borderRadius: 999, padding: '9px 18px', fontWeight: 700, fontSize: 14, cursor: 'pointer', boxShadow: '0 2px 8px rgba(22,163,74,0.25)' }}
+          >
+            <Plus size={16} /> Ghi chú
+          </button>
+        )}
       </div>
 
-      {/* Admin: Staff Filter Bar */}
-      {currentUser.role === 'admin' && (
-        <div className="px-4 py-2 flex gap-2 overflow-x-auto hide-scrollbar whitespace-nowrap bg-gray-50 border-b border-gray-100">
-          <button 
-            className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${selectedStaff === 'ALL' ? 'bg-primary text-white shadow-sm' : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-100'}`}
-            onClick={() => setSelectedStaff('ALL')}
-          >
-            Tất cả thẻ
-          </button>
-          {Array.from(new Set(notes.map(n => n.staff?.full_name).filter(Boolean))).map(name => (
-            <button 
-              key={name}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${selectedStaff === name ? 'bg-primary text-white shadow-sm' : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-100'}`}
-              onClick={() => setSelectedStaff(name)}
+      {/* ── Tab Switcher (non-admin only) ── */}
+      {currentUser.role !== 'admin' && (
+        <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid #e5e7eb', background: 'white' }}>
+          {[
+            { key: 'notes', label: '📋 Sổ Tay' },
+            { key: 'cong', label: '⏰ Bảng Công' },
+          ].map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => { setActiveNotesTab(tab.key); if (tab.key === 'cong') fetchEmpData(currentUser.id); }}
+              style={{ flex: 1, padding: '10px', border: 'none', background: 'none', fontSize: '0.88rem', fontWeight: 700, cursor: 'pointer', color: activeNotesTab === tab.key ? '#dc2626' : '#6b7280', borderBottom: activeNotesTab === tab.key ? '2px solid #dc2626' : '2px solid transparent', marginBottom: -2, transition: 'all 0.15s' }}
             >
-              {name}
+              {tab.label}
             </button>
           ))}
         </div>
       )}
 
-      {/* Analytics Row */}
-      {(() => {
-        const currentMonth = new Date().getMonth();
-        const currentYear = new Date().getFullYear();
-        
-        const filteredNotes = notes.filter(n => {
-           const d = new Date(n.created_at);
-           const isThisMonth = d.getMonth() === currentMonth && d.getFullYear() === currentYear;
-           const isStaffMatch = selectedStaff === 'ALL' || n.staff?.full_name === selectedStaff;
-           return isThisMonth && (currentUser.role !== 'admin' || isStaffMatch);
-        });
-        
-        const totalSpent = filteredNotes.reduce((acc, n) => acc + (n.amount || 0), 0);
-        const totalDebt = filteredNotes.reduce((acc, n) => acc + ((n.debt || 0) - (n.paid_debt || 0)), 0);
-        
-        return (
-          <div className="mx-4 mt-3 mb-2 p-4 rounded-xl shadow-sm border border-slate-200" style={{ background: 'linear-gradient(135deg, #f8fafc, #f1f5f9)' }}>
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5"><FileText size={16} className="text-primary"/> Thống kê Tháng {currentMonth + 1}/{currentYear}</h3>
-              {selectedStaff !== 'ALL' && currentUser.role === 'admin' && <span className="text-xs bg-slate-200 px-2 py-0.5 rounded-md text-slate-700 font-medium">{selectedStaff}</span>}
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-white p-3 rounded-lg shadow-sm border border-slate-100">
-                <div className="text-xs text-slate-500 mb-1 font-medium">Tổng thực chi</div>
-                <div className="font-bold text-green-600 text-lg leading-none">{formatMoney(totalSpent)}</div>
-              </div>
-              <div className="bg-white p-3 rounded-lg shadow-sm border border-red-50">
-                <div className="text-xs text-slate-500 mb-1 font-medium">Tổng nợ tồn</div>
-                <div className="font-bold text-red-600 text-lg leading-none">{formatMoney(totalDebt)}</div>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {/* ── Date Filter ── */}
+      <div style={{ background: '#f9fafb', borderBottom: '1px solid #e5e7eb', padding: '10px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: '#6b7280', flexShrink: 0 }}>Lọc:</span>
 
-      {/* Main Content Grid - Masonry */}
-      <div className="notes-content pt-2">
-        {notes.length === 0 ? (
-          <div className="empty-state text-center p-12 text-gray-400">
-            <CheckCircle size={48} className="mx-auto mb-4 opacity-50" />
-            <p>Chưa có ghi chú hoặc báo cáo nào.</p>
+        {/* Day dropdown */}
+        <select
+          value={filterDay}
+          onChange={e => setFilterDay(e.target.value)}
+          style={{ padding: '6px 8px', border: '1.5px solid', borderColor: filterDay ? '#2563eb' : '#d1d5db', borderRadius: 8, fontSize: 13, outline: 'none', background: filterDay ? '#eff6ff' : 'white', color: '#111827', cursor: 'pointer' }}
+        >
+          <option value="">Ngày</option>
+          {Array.from({ length: 31 }, (_, i) => i + 1).map(d => (
+            <option key={d} value={String(d)}>Ngày {d}</option>
+          ))}
+        </select>
+
+        {/* Month dropdown */}
+        <select
+          value={filterMonth}
+          onChange={e => setFilterMonth(e.target.value)}
+          style={{ padding: '6px 8px', border: '1.5px solid', borderColor: filterMonth ? '#2563eb' : '#d1d5db', borderRadius: 8, fontSize: 13, outline: 'none', background: filterMonth ? '#eff6ff' : 'white', color: '#111827', cursor: 'pointer' }}
+        >
+          <option value="">Tháng</option>
+          {Array.from({ length: 12 }, (_, i) => i + 1).map(m => (
+            <option key={m} value={String(m)}>Tháng {m}</option>
+          ))}
+        </select>
+
+        {/* Year: datalist + free input for last 10 years */}
+        <input
+          list="year-options"
+          placeholder="Năm"
+          value={filterYear}
+          onChange={e => setFilterYear(e.target.value)}
+          style={{ width: 82, padding: '6px 8px', border: '1.5px solid', borderColor: filterYear ? '#2563eb' : '#d1d5db', borderRadius: 8, fontSize: 13, outline: 'none', textAlign: 'center', background: filterYear ? '#eff6ff' : 'white' }}
+        />
+        <datalist id="year-options">
+          {Array.from({ length: 10 }, (_, i) => now.getFullYear() - i).map(y => (
+            <option key={y} value={String(y)} />
+          ))}
+        </datalist>
+
+        <button
+          onClick={() => { setFilterDay(''); setFilterMonth(String(now.getMonth() + 1)); setFilterYear(String(now.getFullYear())); }}
+          style={{ fontSize: 12, color: '#2563eb', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, padding: '4px 2px', whiteSpace: 'nowrap' }}
+        >
+          Tháng này
+        </button>
+        <button
+          onClick={() => { setFilterDay(''); setFilterMonth(''); setFilterYear(''); }}
+          style={{ fontSize: 12, color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, padding: '4px 2px' }}
+        >
+          Tất cả
+        </button>
+      </div>
+
+      {/* ══ BẢNG CÔNG (employee only) ══ */}
+      {activeNotesTab === 'cong' && currentUser.role !== 'admin' && (
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* Chấm công */}
+          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+            <div style={{ fontWeight: 800, fontSize: '1rem', marginBottom: 12 }}>⏰ Chấm công hôm nay</div>
+            {!todayAttendance ? (
+              <button onClick={handleClockIn} style={{ width: '100%', padding: '14px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer' }}>🟢 Bắt đầu ca làm</button>
+            ) : !todayAttendance.clock_out ? (
+              <div>
+                <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 10 }}>✅ Đã vào lúc <strong>{new Date(todayAttendance.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</strong></div>
+                <button onClick={handleClockOut} style={{ width: '100%', padding: '14px', background: '#dc2626', color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer' }}>🔴 Kết thúc ca</button>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '0.85rem', color: '#6b7280' }}>Vào: <strong>{new Date(todayAttendance.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</strong> → Ra: <strong>{new Date(todayAttendance.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</strong></div>
+                <div style={{ marginTop: 6, fontWeight: 700 }}>⏱ <span style={{ color: '#15803d' }}>{todayAttendance.work_hours}h</span>{todayAttendance.overtime_hours > 0 && <span style={{ color: '#f59e0b' }}> • Tăng ca: {todayAttendance.overtime_hours}h</span>}</div>
+                <div style={{ marginTop: 4, color: '#16a34a', fontWeight: 700 }}>✅ Đã hoàn thành ca hôm nay</div>
+              </div>
+            )}
+          </div>
+          {/* Ứng lương */}
+          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showAdvForm ? 12 : 0 }}>
+              <div style={{ fontWeight: 800 }}>💵 Xin Ứng Lương</div>
+              <button onClick={() => setShowAdvForm(p => !p)} style={{ fontSize: '0.8rem', background: showAdvForm ? '#f3f4f6' : '#111827', color: showAdvForm ? '#374151' : 'white', border: 'none', borderRadius: 8, padding: '5px 12px', fontWeight: 700, cursor: 'pointer' }}>{showAdvForm ? 'Huỷ' : '+ Tạo yêu cầu'}</button>
+            </div>
+            {showAdvForm && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <input type="text" inputMode="numeric" placeholder="Số tiền ứng (đ)" value={advanceForm.amount} onChange={e => { const r = e.target.value.replace(/\./g,'').replace(/\D/g,''); setAdvanceForm(p => ({ ...p, amount: r ? Number(r).toLocaleString('vi-VN') : '' })); }} style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
+                <textarea placeholder="Lý do cần ứng..." value={advanceForm.reason} onChange={e => setAdvanceForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} />
+                <button onClick={handleSubmitAdvance} style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer' }}>Gửi yêu cầu</button>
+              </div>
+            )}
+          </div>
+          {/* Báo nghỉ */}
+          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showAbsForm ? 12 : 0 }}>
+              <div style={{ fontWeight: 800 }}>🏖 Báo Nghỉ</div>
+              <button onClick={() => setShowAbsForm(p => !p)} style={{ fontSize: '0.8rem', background: showAbsForm ? '#f3f4f6' : '#111827', color: showAbsForm ? '#374151' : 'white', border: 'none', borderRadius: 8, padding: '5px 12px', fontWeight: 700, cursor: 'pointer' }}>{showAbsForm ? 'Huỷ' : '+ Báo nghỉ'}</button>
+            </div>
+            {showAbsForm && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <input type="number" min="0.5" max="30" step="0.5" placeholder="Số ngày nghỉ" value={absentForm.days} onChange={e => setAbsentForm(p => ({ ...p, days: e.target.value }))} style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
+                <textarea placeholder="Lý do nghỉ..." value={absentForm.reason} onChange={e => setAbsentForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} />
+                <button onClick={handleSubmitAbsent} style={{ background: '#f59e0b', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer' }}>Gửi báo nghỉ</button>
+              </div>
+            )}
+          </div>
+          {/* Lịch sử yêu cầu */}
+          {empRequests.length > 0 && (
+            <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+              <div style={{ fontWeight: 800, marginBottom: 10 }}>📄 Yêu cầu tháng {now.getMonth() + 1}</div>
+              {empRequests.map(r => (
+                <div key={r.id} style={{ padding: '10px 0', borderBottom: '1px solid #f3f4f6', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>{r.request_type === 'advance' ? `💵 Ứng ${Number(r.amount || 0).toLocaleString('vi-VN')}đ` : `🏖 Nghỉ ${r.days} ngày`}</div>
+                    <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{r.reason}</div>
+                    {r.admin_note && <div style={{ fontSize: '0.73rem', color: '#9ca3af', marginTop: 2 }}>💬 {r.admin_note}</div>}
+                  </div>
+                  <span style={{ flexShrink: 0, padding: '2px 8px', borderRadius: 5, fontSize: '0.72rem', fontWeight: 700, background: r.status === 'approved' ? '#dcfce7' : r.status === 'rejected' ? '#fee2e2' : '#fef9c3', color: r.status === 'approved' ? '#15803d' : r.status === 'rejected' ? '#dc2626' : '#92400e' }}>
+                    {r.status === 'pending' ? '⏳ Chờ' : r.status === 'approved' ? '✅ Duyệt' : '❌ Từ chối'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══ NOTES content ══ */}
+      {(currentUser.role === 'admin' || activeNotesTab === 'notes') && (<>
+
+      {/* ── Staff Filter (admin only) ── */}
+      {currentUser.role === 'admin' && (
+        <div style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '8px 16px', background: 'white', borderBottom: '1px solid #f3f4f6' }}>
+          {['ALL', ...Array.from(new Set(notes.map(n => n.staff?.full_name).filter(Boolean)))].map(name => (
+            <button
+              key={name}
+              onClick={() => setSelectedStaff(name)}
+              style={{ flexShrink: 0, padding: '5px 14px', borderRadius: 999, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: '1.5px solid', whiteSpace: 'nowrap',
+                background: selectedStaff === name ? '#dc2626' : 'white',
+                color: selectedStaff === name ? 'white' : '#374151',
+                borderColor: selectedStaff === name ? '#dc2626' : '#e5e7eb' }}
+            >
+              {name === 'ALL' ? 'Tất cả' : name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ── Analytics Card ── */}
+      <div style={{ margin: '12px 16px', borderRadius: 14, background: 'linear-gradient(135deg, #f8faff, #eef2ff)', border: '1px solid #e0e7ff', padding: '14px 16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <FileText size={15} style={{ color: '#4f46e5' }} />
+            <span style={{ fontWeight: 700, fontSize: 13, color: '#1e1b4b' }}>Thống kê · {filterLabel}</span>
+          </div>
+          {selectedStaff !== 'ALL' && currentUser.role === 'admin' && (
+            <span style={{ fontSize: 11, background: '#e0e7ff', color: '#4338ca', padding: '2px 8px', borderRadius: 6, fontWeight: 600 }}>{selectedStaff}</span>
+          )}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: totalOrigDebt > 0 ? '1fr 1fr 1fr' : '1fr 1fr', gap: 8 }}>
+          <div style={{ background: 'white', borderRadius: 10, padding: '10px 12px', border: '1px solid #e0e7ff' }}>
+            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4, fontWeight: 500 }}>💰 Tổng đã chi</div>
+            <div style={{ fontWeight: 800, color: '#16a34a', fontSize: 15, lineHeight: 1 }}>{formatMoney(totalSpent)}</div>
+          </div>
+          {totalOrigDebt > 0 && (
+            <div style={{ background: 'white', borderRadius: 10, padding: '10px 12px', border: '1px solid #fed7aa' }}>
+              <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4, fontWeight: 500 }}>📋 Tổng nợ ban đầu</div>
+              <div style={{ fontWeight: 800, color: '#92400e', fontSize: 15, lineHeight: 1 }}>{formatMoney(totalOrigDebt)}</div>
+            </div>
+          )}
+          <div style={{ background: totalDebt > 0 ? '#fff1f2' : 'white', borderRadius: 10, padding: '10px 12px', border: `1px solid ${totalDebt > 0 ? '#fca5a5' : '#bbf7d0'}` }}>
+            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4, fontWeight: 500 }}>{totalDebt > 0 ? '⚠️ Còn nợ' : '✅ Đã trả đủ'}</div>
+            <div style={{ fontWeight: 800, color: totalDebt > 0 ? '#dc2626' : '#16a34a', fontSize: 15, lineHeight: 1 }}>{formatMoney(totalDebt)}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Notes Grid ── */}
+      <div style={{ padding: '0 12px 24px' }}>
+        {filteredByDate.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '48px 16px', color: '#9ca3af' }}>
+            <CheckCircle size={40} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
+            <p style={{ fontSize: 14 }}>Không có ghi chú nào trong khoảng này.</p>
           </div>
         ) : (
           <div className="notes-masonry">
-            {notes.filter(n => currentUser.role !== 'admin' || selectedStaff === 'ALL' || n.staff?.full_name === selectedStaff).map(note => {
+            {filteredByDate.map(note => {
               const staffName = currentUser.role === 'admin' ? (note.staff?.full_name || 'Không rõ') : 'Báo cáo của bạn';
-              
-              // Resolve real debt
               const debtRemaining = (note.debt || 0) - (note.paid_debt || 0);
+              const hasDebt = debtRemaining > 0;
+              const debtCleared = note.paid_debt > 0 && debtRemaining === 0;
+              const hasTable = note.note_type === 'expense' && note.content?.includes('structured_expense');
 
-              let cardBgClass = 'bg-white';
-              if (debtRemaining > 0) cardBgClass = 'bg-red-50 border-red-200';
-              else if (note.paid_debt > 0 && debtRemaining === 0) cardBgClass = 'bg-[#f0fdf4] border-green-200'; // light green
+              const cardStyle = hasDebt
+                ? { background: '#fef2f2', border: '1.5px solid #fca5a5' }
+                : debtCleared
+                ? { background: '#f0fdf4', border: '1.5px solid #86efac' }
+                : { border: '1px solid #e5e7eb' };
+
+              const noteTypeMap = {
+                expense: { label: '🛒 Đi chợ / Chi tiền',       bg: '#fff7ed', color: '#ea580c', border: '#fed7aa' },
+                stock:   { label: '📦 Báo thiếu nguyên liệu',   bg: '#f0f9ff', color: '#0369a1', border: '#bae6fd' },
+                repair:  { label: '🔧 Yêu cầu sửa chữa',        bg: '#faf5ff', color: '#7c3aed', border: '#ddd6fe' },
+                other:   { label: '📝 Ghi chú khác',             bg: '#f9fafb', color: '#374151', border: '#d1d5db' },
+              };
+              const typeInfo = noteTypeMap[note.note_type] || noteTypeMap.other;
 
               return (
-                <div key={note.id} className={`note-card-keep ${cardBgClass} transition-shadow hover:shadow-md`} onClick={() => setViewingNote(note)}>
-                  <div className="keep-card-header">
-                    <div className="keep-author">{staffName}</div>
-                    <div className="keep-date text-[#0369a1] font-medium">{formatDate(note.created_at)}</div>
+                <div
+                  key={note.id}
+                  className={`note-card-keep${hasTable ? ' has-table' : ''}`}
+                  style={cardStyle}
+                  onClick={() => setViewingNote(note)}
+                >
+                  {/* Type label — flush top of card */}
+                  <div style={{ margin: '-16px -16px 0 -16px', padding: '3px 14px', background: typeInfo.bg, borderBottom: `1px solid ${typeInfo.border}`, borderRadius: '12px 12px 0 0', fontSize: 9.5, fontWeight: 600, color: typeInfo.color }}>
+                    {typeInfo.label}
                   </div>
-                  
-                  <div className="keep-body">
-                    {renderNoteContent(note.content)}
+
+                  {/* Card header */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: '#111827' }}>{staffName}</div>
+                      <div style={{ fontSize: 12, color: '#0369a1', marginTop: 2, fontWeight: 700 }}>{formatDate(note.created_at)}</div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                      {hasDebt && <span style={{ fontSize: 10, background: '#fee2e2', color: '#dc2626', border: '1px solid #fca5a5', borderRadius: 6, padding: '2px 6px', fontWeight: 700, flexShrink: 0 }}>Nợ</span>}
+                      {debtCleared && <span style={{ fontSize: 10, background: '#dcfce7', color: '#16a34a', border: '1px solid #86efac', borderRadius: 6, padding: '2px 6px', fontWeight: 700, flexShrink: 0 }}>✓ Xong</span>}
+                    </div>
                   </div>
-                  
+
+                  {/* Body */}
+                  {note.note_type !== 'expense' ? (
+                    /* Stock: always show preview, max 3 lines, tap hint if longer */
+                    (() => {
+                      const lines = (note.content || '').split('\n').filter(l => l.trim());
+                      const isLong = lines.length > 3;
+                      return (
+                        <>
+                          <div style={{
+                            fontSize: 12.5, color: '#0c4a6e', marginTop: 4, marginBottom: 2,
+                            whiteSpace: 'pre-wrap',
+                            display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden', lineHeight: 1.5,
+                          }}>
+                            {note.content}
+                          </div>
+                          {isLong && (
+                            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>👆 Bấm để xem chi tiết</div>
+                          )}
+                        </>
+                      );
+                    })()
+                  ) : (
+                    <>
+                      <div className="keep-body hide-on-mobile">
+                        {renderNoteContent(note.content)}
+                      </div>
+                      {/* Mobile: tap hint always shown for non-stock */}
+                      <div className="mobile-tap-hint">
+                        👆 Bấm để xem chi tiết
+                      </div>
+                    </>
+                  )}
+
+                  {/* Footer tags - always show debt info */}
                   {(note.amount > 0 || note.debt > 0) && (
-                    <div className="keep-footer">
-                      {note.amount > 0 && <span className="keep-tag bg-green-50 text-green-700 border-green-100 font-medium shadow-sm">Chi: {formatMoney(note.amount)}</span>}
-                      {debtRemaining > 0 && <span className="keep-tag bg-red-100 text-red-700 border-red-200 font-bold shadow-sm">Nợ: {formatMoney(debtRemaining)}</span>}
-                      {note.paid_debt > 0 && debtRemaining === 0 && <span className="keep-tag bg-green-100 text-green-700 border-green-200 font-bold shadow-sm">Đã trả nợ xanh</span>}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                      {(() => {
+                        const totalSpentOnNote = (note.amount || 0) + (note.paid_debt || 0);
+                        if (totalSpentOnNote <= 0) return null;
+                        return (
+                          <span className="keep-tag" style={{ background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0' }}>
+                            💰 Đã chi: {formatMoney(totalSpentOnNote)}
+                          </span>
+                        );
+                      })()}
+                      {hasDebt && (
+                        <span className="keep-tag" style={{ background: '#fee2e2', color: '#dc2626', border: '1px solid #fca5a5', fontWeight: 700 }}>⚠️ Còn nợ: {formatMoney(debtRemaining)}</span>
+                      )}
+                      {debtCleared && (
+                        <span className="keep-tag" style={{ background: '#dcfce7', color: '#16a34a', border: '1px solid #86efac', fontWeight: 700 }}>✅ Đã trả đủ</span>
+                      )}
                     </div>
                   )}
-                  
+
+                  {/* Delete button (admin) */}
                   {currentUser.role === 'admin' && (
-                    <button 
-                      className="btn-delete-keep" 
-                      onClick={(e) => { e.stopPropagation(); handleDeleteNote(note.id); }}
-                      title="Xoá ghi chú"
-                    >
+                    <button className="btn-delete-keep" onClick={e => { e.stopPropagation(); handleDeleteNote(note.id); }}>
                       <Trash2 size={14} />
                     </button>
                   )}
@@ -755,73 +1268,98 @@ export default function StaffNotesPage() {
         )}
       </div>
 
-      {/* View Note Modal */}
+      {/* ── View Note Modal ── */}
       {viewingNote && (
         <div className="modal-overlay" onClick={() => setViewingNote(null)}>
-          <div className="modal-content keep-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
-            <div className="modal-header border-b pb-3 mb-4">
+        <div className="modal-content keep-modal" onClick={e => e.stopPropagation()} style={{
+          maxWidth: '500px',
+          border: (() => {
+            const dr = (viewingNote.debt || 0) - (viewingNote.paid_debt || 0);
+            if (dr > 0) return '2px solid #fca5a5';
+            if ((viewingNote.paid_debt || 0) > 0 && dr <= 0) return '2px solid #86efac';
+            return undefined;
+          })()
+        }}>
+            <div className="modal-header" style={{ borderBottom: '1px solid #e5e7eb', paddingBottom: 12, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
-                <h3 className="text-xl font-bold text-gray-900">{currentUser.role === 'admin' ? (viewingNote.staff?.full_name || 'Không rõ') : 'Báo cáo của bạn'}</h3>
-                <div className="text-sm text-gray-500 mt-1">{formatDate(viewingNote.created_at)}</div>
+                <h3 style={{ fontWeight: 700, fontSize: 17, color: '#111827', margin: 0 }}>{currentUser.role === 'admin' ? (viewingNote.staff?.full_name || 'Không rõ') : 'Báo cáo của bạn'}</h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 13, color: '#6b7280' }}>{formatDate(viewingNote.created_at)}</span>
+                  {(() => {
+                    const tm = { expense: { label: '🛒 Đi chợ / Chi tiền', bg: '#fff7ed', color: '#ea580c', border: '#fed7aa' }, stock: { label: '📦 Báo thiếu nguyên liệu', bg: '#f0f9ff', color: '#0369a1', border: '#bae6fd' }, repair: { label: '🔧 Yêu cầu sửa chữa', bg: '#faf5ff', color: '#7c3aed', border: '#ddd6fe' }, other: { label: '📝 Ghi chú khác', bg: '#f9fafb', color: '#374151', border: '#d1d5db' } };
+                    const t = tm[viewingNote.note_type] || tm.other;
+                    return <span style={{ fontSize: 11, background: t.bg, color: t.color, border: `1px solid ${t.border}`, borderRadius: 6, padding: '2px 8px', fontWeight: 700 }}>{t.label}</span>;
+                  })()}
+                </div>
               </div>
-              <button className="btn-icon text-gray-400 hover:text-gray-700" onClick={() => setViewingNote(null)}>
+              <button style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 4 }} onClick={() => setViewingNote(null)}>
                 <XCircle size={24} />
               </button>
             </div>
-            
             <div className="modal-body">
-              <div className="keep-modal-content mb-6 p-4 bg-white rounded-xl shadow-sm border border-gray-100">
+              <div style={{ marginBottom: 20, padding: 16, background: 'white', borderRadius: 12, border: '1px solid #f3f4f6', overflowX: 'auto' }}>
                 {renderNoteContent(viewingNote.content)}
               </div>
-              
-              {(viewingNote.amount > 0 || viewingNote.debt > 0) && (
-                <div className="flex flex-col gap-2 p-4 bg-gray-50 rounded-lg mb-6">
-                  {viewingNote.amount > 0 && (
-                    <div className="flex justify-between font-medium">
-                      <span className="text-gray-600">Thực chi lúc đầu:</span>
-                      <span className="text-gray-800">{formatMoney(viewingNote.amount)}</span>
-                    </div>
-                  )}
-                  {viewingNote.debt > 0 && (
-                    <div className="flex justify-between font-medium pt-2 border-t border-gray-200 mt-2">
-                      <span className="text-gray-600">Còn nợ:</span>
-                      <span className="text-red-600 font-bold">{formatMoney((viewingNote.debt || 0) - (viewingNote.paid_debt || 0))}</span>
-                    </div>
-                  )}
-                  {viewingNote.paid_debt > 0 && (
-                    <div className="flex justify-between text-sm text-gray-500 mt-1">
-                      <span>(Đã trả nợ: {formatMoney(viewingNote.paid_debt)})</span>
-                    </div>
-                  )}
-                </div>
-              )}
-
+              {(viewingNote.amount > 0 || viewingNote.debt > 0) && (() => {
+                const vDebtRemain = Math.max(0, (viewingNote.debt || 0) - (viewingNote.paid_debt || 0));
+                const vHasDebt = vDebtRemain > 0;
+                const vCleared = (viewingNote.paid_debt || 0) > 0 && vDebtRemain === 0;
+                return (
+                  <div style={{
+                    display: 'flex', flexDirection: 'column', gap: 8, padding: 14, borderRadius: 10, marginBottom: 16,
+                    background: vHasDebt ? '#fef2f2' : vCleared ? '#f0fdf4' : '#f9fafb',
+                    border: `1.5px solid ${vHasDebt ? '#fca5a5' : vCleared ? '#86efac' : '#e5e7eb'}`
+                  }}>
+                    {viewingNote.amount > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 500 }}>
+                        <span style={{ color: '#6b7280' }}>Thực chi:</span>
+                        <span style={{ color: '#111827' }}>{formatMoney(viewingNote.amount)}</span>
+                      </div>
+                    )}
+                    {viewingNote.paid_debt > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 500 }}>
+                        <span style={{ color: '#6b7280' }}>Đã trả nợ:</span>
+                        <span style={{ color: '#16a34a' }}>{formatMoney(viewingNote.paid_debt)}</span>
+                      </div>
+                    )}
+                    {viewingNote.debt > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, paddingTop: 8, borderTop: `1px solid ${vHasDebt ? '#fca5a5' : '#86efac'}` }}>
+                        <span style={{ color: vHasDebt ? '#dc2626' : '#16a34a' }}>{vHasDebt ? '⚠️ Còn nợ:' : '✅ Đã trả đủ'}</span>
+                        <span style={{ color: vHasDebt ? '#dc2626' : '#16a34a' }}>{formatMoney(vDebtRemain)}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               {viewingNote.status === 'approved' && viewingNote.debt > (viewingNote.paid_debt || 0) && !payDebtNoteId && (
-                <div className="mb-6">
-                  <button 
-                    className="w-full py-3 bg-red-100 text-red-700 font-bold rounded-xl shadow-sm border border-red-200 hover:bg-red-200 transition-colors"
-                    onClick={() => setPayDebtNoteId(viewingNote.id)}
-                  >
-                    Báo cáo: Đã trả phần nợ này!
-                  </button>
-                </div>
+                <button
+                  style={{ width: '100%', padding: '12px', background: '#fff', border: '1.5px solid #fca5a5', borderRadius: 10, color: '#dc2626', fontWeight: 700, cursor: 'pointer', marginBottom: 16 }}
+                  onClick={() => setPayDebtNoteId(viewingNote.id)}
+                >
+                  Báo cáo: Đã trả phần nợ này!
+                </button>
               )}
-              
               {payDebtNoteId === viewingNote.id && (
-                <div className="mb-6 p-4 border border-red-200 bg-red-50 rounded-xl shadow-sm">
-                  <h5 className="font-bold text-red-800 text-sm mb-3">Nhập số tiền bạn vừa trả nợ:</h5>
-                  <div className="flex items-center gap-2">
-                    <input 
-                      type="number" 
-                      className="input flex-1 py-2 px-3 border-gray-300 rounded-lg outline-none" 
+                <div style={{ marginBottom: 16, padding: 14, border: '1.5px solid #fca5a5', background: '#fef2f2', borderRadius: 10 }}>
+                  <div style={{ fontWeight: 700, color: '#dc2626', fontSize: 13, marginBottom: 10 }}>Nhập số tiền vừa trả nợ:</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      type="number"
+                      style={{ flex: 1, padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, outline: 'none' }}
                       placeholder="VD: 50000"
                       value={payDebtAmount}
-                      onChange={(e) => setPayDebtAmount(e.target.value)}
+                      onChange={e => setPayDebtAmount(e.target.value)}
                       autoFocus
                     />
-                    <button className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg font-bold transition-colors shadow-sm" disabled={isLoading} onClick={() => handlePayDebt(viewingNote)}>Lưu Báo Cáo</button>
+                    <button
+                      style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 8, padding: '8px 16px', fontWeight: 700, cursor: 'pointer' }}
+                      disabled={isLoading}
+                      onClick={() => handlePayDebt(viewingNote)}
+                    >
+                      Lưu
+                    </button>
                   </div>
-                  <button className="text-xs text-gray-500 mt-3 hover:text-gray-800 font-medium" onClick={() => { setPayDebtNoteId(null); setPayDebtAmount(''); }}>Huỷ bỏ</button>
+                  <button style={{ fontSize: 12, color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', marginTop: 8 }} onClick={() => { setPayDebtNoteId(null); setPayDebtAmount(''); }}>Huỷ</button>
                 </div>
               )}
             </div>
@@ -829,192 +1367,116 @@ export default function StaffNotesPage() {
         </div>
       )}
 
-      {/* Add Note Modal */}
+      {/* ── Add Note Modal ── */}
       {showAddModal && (
         <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '450px' }}>
             <div className="modal-header">
               <h3>Tạo báo cáo / ghi chú mới</h3>
-              <button className="btn btn-icon btn-ghost" onClick={() => setShowAddModal(false)}>
-                <XCircle size={20} />
-              </button>
+              <button className="btn btn-icon btn-ghost" onClick={() => setShowAddModal(false)}><XCircle size={20} /></button>
             </div>
-            
             <div className="modal-body">
               <div className="form-group mb-4">
                 <label className="form-label">Loại báo cáo</label>
-                <select className="input" value={newNoteType} onChange={(e) => setNewNoteType(e.target.value)}>
+                <select className="input" value={newNoteType} onChange={e => setNewNoteType(e.target.value)}>
                   <option value="expense">Đi chợ / Chi tiền</option>
                   <option value="stock">Báo thiếu nguyên liệu</option>
                   <option value="repair">Yêu cầu sửa chữa</option>
                   <option value="other">Ghi chú khác</option>
                 </select>
               </div>
-
               {newNoteType === 'expense' ? (
                 <div className="expense-fields-container mb-4">
                   <label className="form-label mb-2 block">Chi tiết mua hàng</label>
-                  
-                  {/* Rows */}
                   <div className="flex flex-col gap-3">
                     {expenseItems.map((item, idx) => (
-                      <div key={idx} className="flex flex-col gap-2 pb-3 mb-2 border-b border-gray-100 last:border-0">
-                        
-                        {/* Row 1: Tên món + Giá + Ký */}
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-gray-400 font-bold hidden sm:inline-block">-</span>
-                          
-                          <input 
-                            type="text" 
-                            className="input flex-1 min-w-[120px] sm:min-w-[150px]" 
-                            placeholder={idx === expenseItems.length - 1 && !item.name ? "Nhập tên đồ..." : "Tên món"}
-                            value={item.name}
-                            onChange={(e) => updateExpenseItem(idx, 'name', e.target.value)}
-                            style={{ padding: '8px 12px' }}
-                          />
-                          
-                          <input 
-                            type="text" 
-                            className="input w-[80px] text-center" 
-                            placeholder="Giá"
-                            value={item.price}
-                            onChange={(e) => updateExpenseItem(idx, 'price', e.target.value)}
-                            onBlur={(e) => handleExpenseBlur(idx, 'price', e)}
-                            style={{ padding: '8px 12px' }}
-                          />
-                          
-                          <input 
-                            type="text" 
-                            className="input w-[80px] text-center" 
-                            placeholder="Ký/SL"
-                            value={item.qty}
-                            onChange={(e) => updateExpenseItem(idx, 'qty', e.target.value)}
-                            onBlur={(e) => handleExpenseBlur(idx, 'qty', e)}
-                            style={{ padding: '8px 12px' }}
-                          />
-                          
-                          {/* Desktop: Radio buttons inline */}
-                          <div className="hidden sm:flex items-center gap-3 px-2">
-                            <label className="flex items-center gap-1 cursor-pointer">
-                              <input 
-                                type="radio" 
-                                name={`status-desk-${idx}`} 
-                                checked={item.paymentStatus === 'full'} 
-                                onChange={() => updateExpenseItem(idx, 'paymentStatus', 'full')}
-                                className="w-4 h-4 text-primary"
-                              />
-                              <span className="text-sm font-medium">Đủ</span>
-                            </label>
-                            <label className="flex items-center gap-1 cursor-pointer">
-                              <input 
-                                type="radio" 
-                                name={`status-desk-${idx}`} 
-                                checked={item.paymentStatus === 'debt'} 
-                                onChange={() => updateExpenseItem(idx, 'paymentStatus', 'debt')}
-                                className="w-4 h-4 text-red-500"
-                              />
-                              <span className="text-sm font-medium text-red-600">Nợ</span>
-                            </label>
-                          </div>
-
+                      <div key={idx} className="expense-row">
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <input type="text" className="expense-input-clean" style={{ flex: 1, minWidth: 100 }}
+                            placeholder={idx === expenseItems.length - 1 && !item.name ? 'Nhập tên đồ...' : 'Tên món'}
+                            value={item.name} onChange={e => updateExpenseItem(idx, 'name', e.target.value)} />
+                          <input type="text" className="expense-input-clean" style={{ width: 72, textAlign: 'center' }}
+                            placeholder="Giá" value={item.price} onChange={e => updateExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleExpenseBlur(idx, 'price', e)} />
+                          <input type="text" className="expense-input-clean" style={{ width: 72, textAlign: 'center' }}
+                            placeholder="SL/Ký" value={item.qty} onChange={e => updateExpenseItem(idx, 'qty', e.target.value)} onBlur={e => handleExpenseBlur(idx, 'qty', e)} />
                           {expenseItems.length > 1 && idx < expenseItems.length - 1 && (
-                            <button 
-                              className="w-8 h-8 flex items-center justify-center rounded-md bg-gray-100 text-gray-500 hover:bg-red-100 hover:text-red-500 ml-auto transition-colors"
-                              onClick={() => removeExpenseItem(idx)}
-                              title="Xóa dòng"
-                            >
-                              <XCircle size={18} />
-                            </button>
+                            <button className="btn-remove-row" onClick={() => removeExpenseItem(idx)}><XCircle size={16} /></button>
                           )}
                         </div>
-
-                        {/* Row 2: Mobile Radio + Debt Note */}
-                        <div className="flex items-center gap-2 flex-wrap sm:ml-6 text-sm">
-                          
-                          {/* Mobile: Radio buttons */}
-                          <div className="sm:hidden flex items-center gap-4 py-1">
-                            <label className="flex items-center gap-1 cursor-pointer">
-                              <input 
-                                type="radio" 
-                                name={`status-mob-${idx}`} 
-                                checked={item.paymentStatus === 'full'} 
-                                onChange={() => updateExpenseItem(idx, 'paymentStatus', 'full')}
-                                className="w-4 h-4 text-primary"
-                              />
-                              <span className="font-medium">Đủ</span>
+                        {/* Live total per item */}
+                        {(() => {
+                          const p = parseVal(item.price);
+                          const q = parseVal(item.qty, true) || 1;
+                          const t = p * q;
+                          if (t <= 0) return null;
+                          const isDebtItem = item.paymentStatus === 'debt';
+                          return (
+                            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: isDebtItem ? '#dc2626' : '#15803d', marginTop: 3, paddingLeft: 2 }}>
+                              = {formatMoney(t)} {isDebtItem ? '🔴 (Nợ)' : '✓'}
+                            </div>
+                          );
+                        })()}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                          <div className="expense-status-wrapper" style={{ flexShrink: 0 }}>
+                            <label className={`status-label ${item.paymentStatus === 'full' ? 'checked-full' : ''}`}>
+                              <input type="radio" name={`s-${idx}`} checked={item.paymentStatus === 'full'} onChange={() => updateExpenseItem(idx, 'paymentStatus', 'full')} /> ✓ Đủ
                             </label>
-                            <label className="flex items-center gap-1 cursor-pointer">
-                              <input 
-                                type="radio" 
-                                name={`status-mob-${idx}`} 
-                                checked={item.paymentStatus === 'debt'} 
-                                onChange={() => updateExpenseItem(idx, 'paymentStatus', 'debt')}
-                                className="w-4 h-4 text-red-500"
-                              />
-                              <span className="font-medium text-red-600">Nợ</span>
+                            <label className={`status-label ${item.paymentStatus === 'debt' ? 'checked-debt' : ''}`}>
+                              <input type="radio" name={`s-${idx}`} checked={item.paymentStatus === 'debt'} onChange={() => updateExpenseItem(idx, 'paymentStatus', 'debt')} /> Nợ
                             </label>
                           </div>
-
-                          {/* Debt Note Field */}
-                          {item.paymentStatus === 'debt' && (
-                            <input 
-                              type="text" 
-                              className="input flex-1 min-w-[150px] border-red-200" 
-                              placeholder="Nợ của ai?"
-                              value={item.creditor}
-                              onChange={(e) => updateExpenseItem(idx, 'creditor', e.target.value)}
-                              style={{ padding: '6px 12px' }}
-                              autoFocus
-                            />
-                          )}
+                          {item.paymentStatus === 'debt' && (() => {
+                            const p = parseVal(item.price);
+                            const q = parseVal(item.qty, true) || 1;
+                            const cap = p * q;
+                            return (<>
+                              <input
+                                type="text" inputMode="numeric"
+                                className="expense-input-clean"
+                                style={{ width: 100, textAlign: 'right', flexShrink: 0 }}
+                                placeholder={cap > 0 ? cap.toLocaleString('vi-VN') : 'Số tiền nợ'}
+                                value={item.debtAmount || ''}
+                                onChange={e => {
+                                  const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
+                                  const num = Number(raw);
+                                  if (cap > 0 && num > cap) { updateExpenseItem(idx, 'debtAmount', cap.toLocaleString('vi-VN')); return; }
+                                  updateExpenseItem(idx, 'debtAmount', raw ? num.toLocaleString('vi-VN') : '');
+                                }}
+                              />
+                              <input type="text" className="expense-input-clean" style={{ flex: 1, minWidth: 70 }} placeholder="Nợ của ai?" value={item.creditor} onChange={e => updateExpenseItem(idx, 'creditor', e.target.value)} />
+                            </>);
+                          })()}
                         </div>
-
                       </div>
                     ))}
                   </div>
-
-                  {calculateTotals().paid > 0 || calculateTotals().debt > 0 ? (
-                    <div className="mt-4 p-4 bg-red-50 rounded-xl border border-red-100">
-                      <h4 className="font-bold text-red-800 mb-2">Tổng kết đi chợ:</h4>
-                      <div className="grid grid-cols-2 gap-2 text-sm">
-                        <div>Tổng tiền hàng: <strong>{formatMoney(calculateTotals().paid + calculateTotals().debt)}</strong></div>
-                        <div>Thực chi tạm: <strong className="text-green-600">{formatMoney(calculateTotals().paid)}</strong></div>
-                        <div>Tổng nợ: <strong className="text-red-600">{formatMoney(calculateTotals().debt)}</strong></div>
-                        {calculateTotals().creditors && (
-                          <div className="col-span-2 mt-1 pt-2 border-t border-red-200">
-                            Người đang thiếu Nợ: <strong className="text-red-600">{calculateTotals().creditors}</strong>
-                          </div>
-                        )}
+                  {(calculateTotals().paid > 0 || calculateTotals().debt > 0) && (
+                    <div style={{ marginTop: 12, padding: '10px 14px', background: '#fff7ed', borderRadius: 10, border: '1px solid #fed7aa', fontSize: 13 }}>
+                      <div style={{ fontWeight: 700, color: '#c2410c', marginBottom: 6 }}>Tổng kết:</div>
+                      <div style={{ display: 'flex', gap: 16 }}>
+                        <span>Thực chi: <strong style={{ color: '#16a34a' }}>{formatMoney(calculateTotals().paid)}</strong></span>
+                        <span>Nợ: <strong style={{ color: '#dc2626' }}>{formatMoney(calculateTotals().debt)}</strong></span>
                       </div>
                     </div>
-                  ) : (
-                    <p className="text-xs text-gray-400 mt-3 italic">* Dòng mới tự động hiện ra khi bạn nhập tên món.</p>
                   )}
                 </div>
               ) : (
                 <div className="form-group mb-4">
                   <label className="form-label">Chi tiết</label>
-                  <textarea 
-                    className="input" 
-                    rows="4" 
-                    placeholder="Nhập chi tiết cụ thể (vd: 1 ký mắm, xà bông...)"
-                    value={newNoteContent}
-                    onChange={handleContentChange}
-                    onKeyDown={handleContentKeyDown}
-                  ></textarea>
+                  <textarea className="input" rows="5" placeholder="Nhập chi tiết..." value={newNoteContent} onChange={handleContentChange} onKeyDown={handleContentKeyDown} />
                 </div>
               )}
             </div>
-            
-            <div className="modal-footer flex justify-end gap-3 p-4 border-t border-gray-100">
+            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '12px 16px', borderTop: '1px solid #f3f4f6' }}>
               <button className="btn btn-outline" onClick={() => setShowAddModal(false)}>Huỷ</button>
-              <button className="btn btn-primary px-6" onClick={submitNewNote} disabled={isLoading}>
-                {isLoading ? 'Đang gửi...' : 'Gửi đi'}
-              </button>
+              <button className="btn btn-primary" style={{ padding: '10px 24px' }} onClick={submitNewNote} disabled={isLoading}>{isLoading ? 'Đang gửi...' : 'Gửi đi'}</button>
             </div>
           </div>
         </div>
       )}
+
+      </>)}
+
     </div>
   );
 }

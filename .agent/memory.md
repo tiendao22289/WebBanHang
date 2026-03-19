@@ -52,6 +52,13 @@ src/
     - **Đăng nhập bằng SĐT + PIN**: Tự động lưu `localStorage` vĩnh viễn không cần đăng nhập lại.
     - **Phân loại**: Đi chợ (Nhập tiền mặt / Tiền thiếu nợ), Báo thiếu hàng, Sửa chữa.
     - **Phân quyền**: Admin xem được toàn bộ báo cáo, phân nhóm theo nhân viên, xoá báo cáo, phản hồi Đồng Ý / Từ Chối. Nhân viên chỉ xem báo cáo cá nhân, gõ chữ tự động gạch đầu dòng.
+    - **Debt tracking per-item**: Mỗi item trong báo cáo chi phí có thể ghi nợ một phần (debtAmount < total), theo dõi trả dần, lưu payment_logs trong JSON content.
+    - **Mobile card view**: Xem chi tiết báo cáo chi phí dạng card từng item trên mobile. Màu đỏ khi còn nợ, xanh khi đã trả đủ.
+    - **Toggle lịch sử trả nợ**: Icon 🕐 để ẩn/hiện lịch sử trong detail view.
+    - **Preview nội dung**: Các loại stock/repair/other hiện preview 3 dòng ngay trên card ngoài.
+    - **Nhãn loại báo cáo**: Label flush-top trên mỗi card với màu theo loại.
+    - **Format ngày**: dd/MM/yyyy HH:mm.
+    - **Tổng đã chi & tổng nợ**: Hiện ra ngoài card footer.
 
 ## Việc cần làm tiếp
 - [ ] Tối ưu hóa hiệu suất load ảnh (WebP).
@@ -66,3 +73,15 @@ src/
 - Bổ sung Cấu hình Tuỳ chọn Món ăn & Khẩu vị (Options Modal).
 - Thiết kế hệ thống Xác thực Staff (Auth Guard) và Báo cáo nội bộ (Staff Notes).
 - **Trạng thái**: Tất cả các workflow và yêu cầu tính năng đến hiện tại đều ổn định và hoàn tất.
+
+### 2026-03-19
+- **Notes page nâng cấp toàn diện** (`src/app/admin/notes/page.js` + `notes.css`):
+  - Debt tracking: `debtAmount` per-item, so sánh `debtBase` (không phải `itemTotal`) khi flip status
+  - Mobile detail view: từng item là 1 card riêng, màu đỏ/xanh theo `remaining`
+  - Form tạo mới: live total per item, debt amount input có format & cap
+  - Toggle 🕐 lịch sử trả nợ ẩn/hiện theo từng item (state `expandedHistory`)
+  - Card outer: nhãn loại flush-top, preview 3 dòng cho non-expense, format ngày dd/MM/yyyy HH:mm
+  - Bug fixes: `parseVal(debtAmount)` cần `.replace(/\./g, '')` vì Vi format dùng dấu chấm nghìn
+  - `debtBase` KHÔNG dùng `isDebt` flag (flag flip sau khi pay xong), dùng `item.debtAmount` trực tiếp
+  - DB: bảng `staff_notes` — `content` (JSON), `paid_debt` (tổng đã trả), không có bảng `notes` riêng
+- **Commit**: `feat(notes): enhance notes UI` → push master

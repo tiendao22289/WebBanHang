@@ -1,0 +1,290 @@
+.payroll-page {
+  padding: 20px;
+  max-width: 900px;
+  margin: 0 auto;
+  font-family: 'DM Sans', sans-serif;
+}
+
+/* Header */
+.payroll-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.payroll-title {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: #111827;
+}
+
+/* Tabs */
+.payroll-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.payroll-tab {
+  padding: 8px 18px;
+  border-radius: 10px;
+  border: 1.5px solid #e5e7eb;
+  background: white;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: #6b7280;
+  transition: all 0.15s;
+  position: relative;
+}
+.payroll-tab.active {
+  background: #111827;
+  color: white;
+  border-color: #111827;
+}
+.payroll-tab .badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: #dc2626;
+  color: white;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  font-size: 0.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+}
+
+/* Month selector */
+.month-selector {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.month-selector select {
+  padding: 8px 12px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: white;
+}
+
+/* Cards summary */
+.payroll-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.summary-card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.summary-card .label {
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+.summary-card .value {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #111827;
+}
+
+/* Staff payroll table */
+.payroll-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  font-size: 0.85rem;
+}
+.payroll-table th {
+  background: #f9fafb;
+  padding: 10px 14px;
+  text-align: left;
+  font-weight: 700;
+  color: #374151;
+  border-bottom: 1px solid #e5e7eb;
+}
+.payroll-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #f3f4f6;
+  color: #374151;
+}
+.payroll-table tr:last-child td { border-bottom: none; }
+.payroll-table tr:hover td { background: #f9fafb; }
+
+/* Request list */
+.request-list { display: flex; flex-direction: column; gap: 10px; }
+.request-card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.request-card.pending { border-left: 3px solid #f59e0b; }
+.request-card.approved { border-left: 3px solid #16a34a; }
+.request-card.rejected { border-left: 3px solid #dc2626; }
+
+.request-info .name { font-weight: 700; font-size: 0.9rem; }
+.request-info .meta { font-size: 0.78rem; color: #6b7280; margin-top: 2px; }
+.request-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+
+/* Buttons */
+.btn-primary {
+  padding: 8px 18px;
+  background: #111827;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.btn-primary:hover { opacity: 0.85; }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-success {
+  padding: 6px 14px;
+  background: #16a34a;
+  color: white;
+  border: none;
+  border-radius: 7px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-danger {
+  padding: 6px 14px;
+  background: #dc2626;
+  color: white;
+  border: none;
+  border-radius: 7px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-ghost {
+  padding: 6px 14px;
+  background: #f3f4f6;
+  color: #374151;
+  border: none;
+  border-radius: 7px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* Status badge */
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.status-badge.pending { background: #fef9c3; color: #92400e; }
+.status-badge.approved { background: #dcfce7; color: #15803d; }
+.status-badge.rejected { background: #fee2e2; color: #dc2626; }
+.status-badge.paid { background: #dcfce7; color: #15803d; }
+.status-badge.draft { background: #f3f4f6; color: #6b7280; }
+
+/* Form */
+.payroll-form {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 16px;
+}
+.payroll-form h3 { font-size: 1rem; font-weight: 700; margin-bottom: 14px; color: #111827; }
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.form-group label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 4px;
+}
+.form-group input, .form-group select, .form-group textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+.form-group textarea { resize: vertical; min-height: 60px; }
+
+/* Config staff list */
+.config-list { display: flex; flex-direction: column; gap: 10px; }
+.config-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px 16px;
+  flex-wrap: wrap;
+}
+.config-row .staff-name { font-weight: 700; min-width: 120px; }
+.config-row input {
+  padding: 6px 10px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 7px;
+  font-size: 0.85rem;
+  width: 120px;
+}
+
+/* Empty state */
+.empty-state {
+  text-align: center;
+  padding: 40px;
+  color: #9ca3af;
+  font-size: 0.9rem;
+}
+
+/* Attendance status */
+.clock-btn {
+  padding: 10px 22px;
+  border: none;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.clock-btn.clock-in { background: #16a34a; color: white; }
+.clock-btn.clock-out { background: #dc2626; color: white; }
+
+@media (max-width: 640px) {
+  .payroll-page { padding: 12px; }
+  .payroll-table { font-size: 0.78rem; }
+  .payroll-table th, .payroll-table td { padding: 8px 10px; }
+}

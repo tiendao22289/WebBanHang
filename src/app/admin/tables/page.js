@@ -82,6 +82,10 @@ export default function TablesPage() {
   const [editItemPrice, setEditItemPrice] = useState(null); // { orderId, itemId, value } — LEGACY, replaced by showPriceModal
   const [editingOrderItem, setEditingOrderItem] = useState(null); // { orderId, itemId } for editing options
   const [showPriceModal, setShowPriceModal] = useState(null); // { orderId, itemId, originalPrice }
+  // Takeaway
+  const [showTakeawayOrders, setShowTakeawayOrders] = useState(false);
+  const [takeawayOrders, setTakeawayOrders] = useState([]);
+  const [showShareSheet, setShowShareSheet] = useState(false);
   const [discountMode, setDiscountMode] = useState('VND'); // 'VND' | 'PCT'
   const [discountValue, setDiscountValue] = useState(0);
   const [customNewPrice, setCustomNewPrice] = useState(null); // null = use calculated
@@ -589,8 +593,28 @@ export default function TablesPage() {
     return orders[selectedTable.id] || [];
   }
 
-  const availableCount = tables.filter(t => t.status === 'available').length;
-  const occupiedCount = tables.filter(t => t.status === 'occupied').length;
+  const availableCount = tables.filter(t => t.status === 'available' && t.table_type !== 'takeaway').length;
+  const occupiedCount = tables.filter(t => t.status === 'occupied' && t.table_type !== 'takeaway').length;
+
+  const fetchTakeawayOrders = async () => {
+    const takeawayTable = tables.find(t => t.table_type === 'takeaway');
+    if (!takeawayTable) return;
+    const { data } = await supabase
+      .from('orders')
+      .select('*, order_items(*, menu_item:menu_items(name, price))')
+      .eq('table_id', takeawayTable.id)
+      .eq('kitchen_completed', false)
+      .in('status', ['pending', 'preparing'])
+      .order('created_at', { ascending: false });
+    // Wrap each order in the same shape the modal expects (orderIds array)
+    setTakeawayOrders((data || []).map(o => ({ ...o, orderIds: [o.id] })));
+  };
+
+  const completeKitchenOrder = async (orderIds) => {
+    const ids = Array.isArray(orderIds) ? orderIds : [orderIds];
+    await supabase.from('orders').update({ kitchen_completed: true, status: 'completed' }).in('id', ids);
+    setTakeawayOrders(prev => prev.filter(o => !o.orderIds?.some(id => ids.includes(id))));
+  };
 
   if (loading) {
     return (
@@ -614,7 +638,9 @@ export default function TablesPage() {
 
       {/* Helper: shared filtered tables + card data */}
       {(() => {
+        const takeawayTable = tables.find(t => t.table_type === 'takeaway');
         const filteredTables = tables.filter(t => {
+          if (t.table_type === 'takeaway') return false; // always shown as pinned card
           if (filterTab === 'OCCUPIED') return t.status === 'occupied';
           if (filterTab === 'EMPTY') return t.status !== 'occupied';
           return true;
@@ -686,6 +712,36 @@ export default function TablesPage() {
                   ))}
                 </div>
               </div>
+              {/* Takeaway pinned card */}
+              {takeawayTable && (
+                <div style={{ margin: '8px 8px 0', background: '#eff6ff', border: '2px solid #bfdbfe', borderRadius: 16, padding: '14px', gridColumn: '1 / -1' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                    <span style={{ fontSize: '1.8rem' }}>🛵</span>
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#1d4ed8' }}>
+                        {takeawayTable.table_name || 'Mang về'}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#3b82f6' }}>
+                        {takeawayOrders.length > 0 ? `${takeawayOrders.length} đơn đang chờ giao` : 'Chưa có đơn nào'}
+                      </div>
+                    </div>
+                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                      <button
+                        onClick={() => { fetchTakeawayOrders(); setShowTakeawayOrders(true); }}
+                        style={{ padding: '8px 14px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                      >
+                        <ShoppingBag size={14} /> Xem đơn
+                      </button>
+                      <button
+                        onClick={() => setShowQR(takeawayTable)}
+                        style={{ padding: '8px 12px', background: 'white', color: '#2563eb', border: '1.5px solid #bfdbfe', borderRadius: 8, fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
+                      >
+                        <QrCode size={14} /> QR
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
               {/* 2-col grid edge-to-edge */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, padding: '8px 8px 24px' }}>
                 {filteredTables.map(t => tableCard(t, false))}
@@ -1003,10 +1059,35 @@ export default function TablesPage() {
                     </div>
                     {/* Table grid */}
                     <div style={{ flex: 1, overflowY: 'auto', padding: 10, background: '#f8fafc' }}>
+                      {/* Takeaway pinned card — desktop */}
+                      {takeawayTable && (
+                        <div style={{ background: '#eff6ff', border: '2px solid #bfdbfe', borderRadius: 12, padding: '10px 14px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span style={{ fontSize: '1.5rem' }}>🛵</span>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 800, fontSize: '0.9rem', color: '#1d4ed8' }}>{takeawayTable.table_name || 'Mang về'}</div>
+                            <div style={{ fontSize: '0.72rem', color: '#3b82f6' }}>
+                              {takeawayOrders.length > 0 ? `${takeawayOrders.length} đơn đang chờ` : 'Chưa có đơn'}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => { fetchTakeawayOrders(); setShowTakeawayOrders(true); }}
+                            style={{ padding: '6px 12px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
+                          >
+                            <ShoppingBag size={13} /> Xem đơn
+                          </button>
+                          <button
+                            onClick={() => setShowQR(takeawayTable)}
+                            style={{ padding: '6px 10px', background: 'white', color: '#2563eb', border: '1.5px solid #bfdbfe', borderRadius: 8, fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
+                          >
+                            <QrCode size={13} /> QR
+                          </button>
+                        </div>
+                      )}
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8 }}>
                         {filteredTables.map(table => {
                           const isOccupied = table.status === 'occupied';
                           const isSelected = selectedTable?.id === table.id;
+                          const tableTotal = (orders[table.id] || []).reduce((s, o) => s + (o.total_amount || 0), 0);
                           return (
                             <div key={table.id}
                               onClick={() => { setSelectedTable(table); setDesktopView('menu'); if (!isOccupied && isMobile) setAddingToOrder('admin'); }}
@@ -1024,6 +1105,11 @@ export default function TablesPage() {
                                 <rect x="27" y="21" width="4" height="8" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'}/>
                               </svg>
                               <span style={{ fontSize: '0.72rem', fontWeight: 700, marginTop: 2, color: isSelected ? 'white' : isOccupied ? '#1d4ed8' : '#374151' }}>B{table.table_number}</span>
+                              {tableTotal > 0 && (
+                                <span style={{ fontSize: '0.6rem', fontWeight: 600, color: isSelected ? 'rgba(255,255,255,0.85)' : '#2563eb', marginTop: 1, whiteSpace: 'nowrap' }}>
+                                  {tableTotal >= 1000 ? (tableTotal / 1000).toFixed(0) + 'k' : tableTotal.toLocaleString('vi-VN')}đ
+                                </span>
+                              )}
                             </div>
                           );
                         })}
@@ -1061,7 +1147,7 @@ export default function TablesPage() {
         <div className="modal-overlay" onClick={() => setShowQR(null)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>QR Code - Bàn {showQR.table_number}</h3>
+              <h3>QR Code - {showQR.table_type === 'takeaway' ? (showQR.table_name || 'Mang về') : `Bàn ${showQR.table_number}`}</h3>
               <button className="btn btn-ghost btn-icon" onClick={() => setShowQR(null)}>
                 <X size={20} />
               </button>
@@ -1078,18 +1164,77 @@ export default function TablesPage() {
                 />
               </div>
               <p className="text-muted text-sm mt-4">
-                Quét mã QR này để đặt món tại Bàn {showQR.table_number}
+                {showQR.table_type === 'takeaway' ? 'Quét mã QR để đặt món Mang về' : `Quét mã QR này để đặt món tại Bàn ${showQR.table_number}`}
               </p>
-              <button
-                className="btn btn-primary mt-4"
-                onClick={() => downloadQR(showQR)}
-              >
-                <Download size={16} /> Tải QR Code
-              </button>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 16 }}>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => downloadQR(showQR)}
+                >
+                  <Download size={16} /> Tải QR
+                </button>
+                <button
+                  className="btn btn-outline"
+                  onClick={() => setShowShareSheet(true)}
+                >
+                  🔗 Chia sẻ
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* ── Custom Share Sheet ── */}
+      {showShareSheet && showQR && (() => {
+        const url = `${baseUrl}/order?table=${showQR.id}`;
+        const text = encodeURIComponent(`Quét mã để đặt món: ${url}`);
+        const encodedUrl = encodeURIComponent(url);
+        const shareOptions = [
+          { label: 'Zalo', emoji: '💬', href: `https://zalo.me/chat?appid=4445&url=${encodedUrl}`, bg: '#0068FF' },
+          { label: 'WhatsApp', emoji: '📱', href: `https://wa.me/?text=${text}`, bg: '#25D366' },
+          { label: 'Facebook', emoji: '📘', href: `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`, bg: '#1877F2' },
+          { label: 'Messenger', emoji: '💙', href: `fb-messenger://share/?link=${encodedUrl}`, bg: '#0084FF' },
+          { label: 'SMS', emoji: '✉️', href: `sms:?body=${text}`, bg: '#34C759' },
+        ];
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
+            onClick={() => setShowShareSheet(false)}>
+            <div style={{ background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 480, padding: '20px 20px 32px' }}
+              onClick={e => e.stopPropagation()}>
+              <div style={{ textAlign: 'center', marginBottom: 4 }}>
+                <div style={{ width: 36, height: 4, background: '#e5e7eb', borderRadius: 99, margin: '0 auto 16px' }} />
+                <div style={{ fontWeight: 700, fontSize: '1rem', color: '#111827', marginBottom: 4 }}>Chia sẻ mã QR</div>
+                <div style={{ fontSize: '0.8rem', color: '#6b7280', background: '#f3f4f6', borderRadius: 8, padding: '6px 12px', display: 'inline-block', wordBreak: 'break-all' }}>{url}</div>
+              </div>
+              {/* App icons row */}
+              <div style={{ display: 'flex', justifyContent: 'center', gap: 20, margin: '20px 0 16px' }}>
+                {shareOptions.map(opt => (
+                  <a key={opt.label} href={opt.href} target="_blank" rel="noopener noreferrer"
+                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, textDecoration: 'none' }}
+                    onClick={() => setShowShareSheet(false)}>
+                    <div style={{ width: 52, height: 52, borderRadius: 16, background: opt.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
+                      {opt.emoji}
+                    </div>
+                    <span style={{ fontSize: '0.72rem', color: '#374151', fontWeight: 500 }}>{opt.label}</span>
+                  </a>
+                ))}
+              </div>
+              {/* Copy link */}
+              <button
+                onClick={async () => {
+                  try { await navigator.clipboard.writeText(url); } catch { window.prompt('Sao chép:', url); }
+                  setShowShareSheet(false);
+                  alert('Đã sao chép link!');
+                }}
+                style={{ width: '100%', padding: '13px', border: '1.5px solid #e5e7eb', borderRadius: 12, background: 'white', fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+              >
+                📋 Sao chép link
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Table Detail Modal - mobile only; desktop shows inline in right panel */}
       {isMobile && selectedTable && !addingToOrder && (
@@ -1912,6 +2057,78 @@ export default function TablesPage() {
               <button className="btn-add-to-order" onClick={handleConfirmOptions}>
                 Thêm vào đơn • {formatPrice((customPrice ?? optionModalItem.price) * optionQuantity)}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Takeaway Orders Modal ── */}
+      {showTakeawayOrders && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 3500, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
+          onClick={() => setShowTakeawayOrders(false)}>
+          <div style={{ background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 640, maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+            onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div style={{ padding: '16px 20px 12px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: '1.4rem' }}>🛵</span>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: '1rem', color: '#1d4ed8' }}>Đơn Mang Về</div>
+                  <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>{takeawayOrders.length} đơn đang chờ</div>
+                </div>
+              </div>
+              <button onClick={() => setShowTakeawayOrders(false)}
+                style={{ width: 32, height: 32, borderRadius: '50%', border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280', fontSize: '1rem' }}>
+                ✕
+              </button>
+            </div>
+            {/* Orders list */}
+            <div style={{ overflowY: 'auto', flex: 1, padding: '12px 16px 24px' }}>
+              {takeawayOrders.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px 0', color: '#9ca3af' }}>
+                  <div style={{ fontSize: '2rem', marginBottom: 8 }}>✅</div>
+                  <div>Không có đơn nào đang chờ</div>
+                </div>
+              ) : takeawayOrders.map(order => (
+                <div key={order.orderIds?.join(',') || order.customer_phone} style={{ background: '#f8fafc', border: '1px solid #e0e7ff', borderRadius: 14, padding: '14px', marginBottom: 12 }}>
+                  {/* Customer info */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                    <div>
+                      <div style={{ fontWeight: 700, color: '#111827', fontSize: '0.95rem' }}>{order.customer_name}</div>
+                      <div style={{ fontSize: '0.8rem', color: '#6b7280' }}>📞 {order.customer_phone}</div>
+                      {order.delivery_address && (
+                        <div style={{ fontSize: '0.82rem', color: '#1d4ed8', marginTop: 4, background: '#eff6ff', borderRadius: 6, padding: '4px 8px', display: 'inline-block' }}>
+                          📍 {order.delivery_address}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
+                      {formatTime(order.created_at)}
+                      {order.orderIds?.length > 1 && <span style={{ marginLeft: 6, background: '#e0e7ff', color: '#3730a3', borderRadius: 4, padding: '1px 5px', fontSize: '0.7rem', fontWeight: 600 }}>{order.orderIds.length} lượt đặt</span>}
+                    </div>
+                  </div>
+                  {/* Items */}
+                  <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 8, marginBottom: 10 }}>
+                    {(order.order_items || []).map((item, idx) => (
+                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#374151', paddingBottom: 4 }}>
+                        <span>{item.menu_item?.name || 'Món đã xoá'} × {item.quantity}</span>
+                        <span style={{ fontWeight: 600 }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, paddingTop: 6, borderTop: '1px dashed #d1d5db', color: '#111827' }}>
+                      <span>Tổng cộng</span>
+                      <span style={{ color: '#1d4ed8' }}>{order.total_amount?.toLocaleString('vi-VN')}đ</span>
+                    </div>
+                  </div>
+                  {/* Complete button */}
+                  <button
+                    onClick={() => completeKitchenOrder(order.orderIds || [order.id])}
+                    style={{ width: '100%', padding: '10px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}
+                  >
+                    ✓ Đã hoàn thành — Đã giao đi
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         </div>

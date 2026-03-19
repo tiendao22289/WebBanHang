@@ -9,6 +9,7 @@ import {
   BarChart3,
   ChefHat,
   UsersRound,
+  Wallet,
 } from 'lucide-react';
 import './admin.css';
 
@@ -18,6 +19,7 @@ const navItems = [
   { href: '/admin/orders', label: 'Hoá đơn', icon: Receipt },
   { href: '/admin/customers', label: 'Khách hàng', icon: UsersRound },
   { href: '/admin/notes', label: 'Sổ tay', icon: ChefHat },
+  { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
   { href: '/admin/stats', label: 'Thống kê', icon: BarChart3 },
 ];
 
