@@ -1324,15 +1324,6 @@ export default function TablesPage() {
                     <div style={{ marginLeft: 'auto', color: '#3b82f6', fontSize: '1.1rem' }}>›</div>
                   </button>
 
-                  {/* Huỷ đơn */}
-                  <button onClick={doCancelOrder}
-                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#fff7f7', border: '1.5px solid #fecaca', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
-                    <span style={{ fontSize: '1.5rem' }}>🗑️</span>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#dc2626' }}>Huỷ đơn</div>
-                      <div style={{ fontSize: '0.75rem', color: '#ef4444' }}>Xoá tất cả đơn của bàn này</div>
-                    </div>
-                  </button>
                 </div>
               ) : (
                 /* ── Step 2: QR Transfer ── */
@@ -1814,6 +1805,38 @@ export default function TablesPage() {
                     >
                       <Receipt size={18} strokeWidth={1.8} />
                       Tạm tính
+                    </button>
+
+                    {/* Huỷ đơn — small red destructive button */}
+                    <button
+                      onClick={async () => {
+                        if (!window.confirm('Bạn có chắc muốn huỷ toàn bộ đơn của bàn này?')) return;
+                        await supabase.from('orders')
+                          .update({ status: 'cancelled' })
+                          .eq('table_id', selectedTable.id)
+                          .in('status', ['pending', 'preparing', 'completed']);
+                        await supabase.from('tables')
+                          .update({ status: 'available', occupied_at: null })
+                          .eq('id', selectedTable.id);
+                        setSelectedTable(null);
+                        fetchTables();
+                      }}
+                      style={{
+                        width: 64, minWidth: 64,
+                        padding: '6px 4px',
+                        border: '1.5px solid #fca5a5',
+                        borderRadius: 14,
+                        background: 'white',
+                        color: '#dc2626',
+                        cursor: 'pointer',
+                        display: 'flex', flexDirection: 'column',
+                        alignItems: 'center', justifyContent: 'center',
+                        gap: 2,
+                        fontSize: '0.72rem', fontWeight: 600,
+                      }}
+                    >
+                      <Trash2 size={18} strokeWidth={1.8} />
+                      Huỷ đơn
                     </button>
 
                     {/* In hoá đơn — outlined pill */}
