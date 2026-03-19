@@ -401,56 +401,103 @@ export default function PayrollPage() {
       {loading ? <div className="empty-state">Đang tải...</div> : (
         <>
           {/* === BẢNG LƯƠNG === */}
-          {activeTab === 'salary' && (
-            <div>
-              {/* Filter bar */}
-              <div style={{ padding: '8px 16px 0', display: 'flex', gap: 10, alignItems: 'center' }}>
-                <select
-                  value={salarySearch} onChange={e => setSalarySearch(e.target.value)}
-                  style={{ flex: 1, padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem', outline: 'none', background: 'white', cursor: 'pointer' }}
-                >
-                  <option value="">👥 Tất cả nhân viên</option>
-                  {staffList.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
-                </select>
-              </div>
-              <table className="payroll-table">
-                <thead>
-                  <tr>
-                    <th>Nhân viên</th>
-                    <th>Lương cơ bản</th>
-                    <th>Ngày công</th>
-                    <th>Tổng giờ làm</th>
-                    <th>Tăng ca</th>
-                    <th>Ứng lương</th>
-                    <th>Nghỉ</th>
-                    <th>Vi phạm</th>
-                    <th style={{ color: '#15803d' }}>Thực lĩnh</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {staffList
-                    .filter(s => !salarySearch || s.full_name.toLowerCase().includes(salarySearch.toLowerCase()))
-                    .map(s => {
+          {activeTab === 'salary' && (() => {
+            const filtered = staffList.filter(s => !salarySearch || s.full_name === salarySearch);
+            return (
+              <div>
+                {/* Filter bar */}
+                <div className="filter-bar">
+                  <select value={salarySearch} onChange={e => setSalarySearch(e.target.value)}>
+                    <option value="">👥 Tất cả nhân viên</option>
+                    {staffList.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
+                  </select>
+                </div>
+
+                {/* Mobile cards */}
+                <div className="mobile-cards">
+                  {filtered.length === 0 && <div className="empty-state">Chưa có nhân viên</div>}
+                  {filtered.map(s => {
                     const c = calcSalary(s.id);
                     return (
-                      <tr key={s.id}>
-                        <td data-label="Nhân viên"><div style={{ fontWeight: 700 }}>{s.full_name}</div><div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div></td>
-                        <td data-label="Lương cơ bản">{formatMoney(c.base)}</td>
-                        <td data-label="Ngày công"><strong>{c.workDays}</strong> ngày</td>
-                        <td data-label="Tổng giờ làm"><strong>{c.totalWorkH}h</strong></td>
-                        <td data-label="Tăng ca"><span style={{ color: '#15803d' }}>+{formatMoney(c.otAmt)}</span><span style={{ fontSize: '0.72rem', color: '#9ca3af', marginLeft: 4 }}>({c.otHours}h)</span></td>
-                        <td data-label="Ứng lương"><span style={{ color: '#dc2626' }}>-{formatMoney(c.advAmt)}</span></td>
-                        <td data-label="Nghỉ"><span style={{ color: '#dc2626' }}>-{formatMoney(c.absAmt)}</span><span style={{ fontSize: '0.72rem', color: '#9ca3af', marginLeft: 4 }}>({c.absDays} ngày)</span></td>
-                        <td data-label="Vi phạm"><span style={{ color: '#dc2626' }}>-{formatMoney(c.vioAmt)}</span></td>
-                        <td data-label="Thực lĩnh"><strong style={{ color: c.net >= 0 ? '#15803d' : '#dc2626', fontSize: '1rem' }}>{formatMoney(c.net)}</strong></td>
-                      </tr>
+                      <div key={s.id} className="salary-card">
+                        <div className="salary-card-header">
+                          <div>
+                            <div className="salary-card-name">{s.full_name}</div>
+                            <div className="salary-card-phone">{s.phone}</div>
+                          </div>
+                          <div className={`salary-card-net ${c.net < 0 ? 'negative' : ''}`}>{formatMoney(c.net)}</div>
+                        </div>
+                        <div className="salary-card-body">
+                          <div className="salary-card-row">
+                            <span className="salary-card-label">Lương cơ bản</span>
+                            <span className="salary-card-value">{formatMoney(c.base)}</span>
+                          </div>
+                          <div className="salary-card-row">
+                            <span className="salary-card-label">Ngày công</span>
+                            <span className="salary-card-value">{c.workDays} ngày</span>
+                          </div>
+                          <div className="salary-card-row">
+                            <span className="salary-card-label">Tổng giờ làm</span>
+                            <span className="salary-card-value">{c.totalWorkH}h</span>
+                          </div>
+                          <div className="salary-card-row">
+                            <span className="salary-card-label">Tăng ca</span>
+                            <span className="salary-card-value green">+{formatMoney(c.otAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({c.otHours}h)</small></span>
+                          </div>
+                          <div className="salary-card-row">
+                            <span className="salary-card-label">Ứng lương</span>
+                            <span className="salary-card-value red">-{formatMoney(c.advAmt)}</span>
+                          </div>
+                          <div className="salary-card-row">
+                            <span className="salary-card-label">Nghỉ</span>
+                            <span className="salary-card-value red">-{formatMoney(c.absAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({c.absDays}d)</small></span>
+                          </div>
+                          <div className="salary-card-row">
+                            <span className="salary-card-label">Vi phạm</span>
+                            <span className={`salary-card-value ${c.vioAmt > 0 ? 'red' : 'muted'}`}>{c.vioAmt > 0 ? `-${formatMoney(c.vioAmt)}` : '—'}</span>
+                          </div>
+                          <div className="salary-card-row">
+                            <span className="salary-card-label">Thực lĩnh</span>
+                            <span className={`salary-card-value ${c.net >= 0 ? 'green' : 'red'}`}>{formatMoney(c.net)}</span>
+                          </div>
+                        </div>
+                      </div>
                     );
                   })}
-                </tbody>
-              </table>
-              {staffList.length === 0 && <div className="empty-state">Chưa có nhân viên nào</div>}
-            </div>
-          )}
+                </div>
+
+                {/* Desktop table */}
+                <div className="desktop-table">
+                  <table className="payroll-table">
+                    <thead><tr>
+                      <th>Nhân viên</th><th>Lương CB</th><th>Ngày công</th><th>Giờ làm</th>
+                      <th>Tăng ca</th><th>Ứng lương</th><th>Nghỉ</th><th>Vi phạm</th>
+                      <th style={{color:'#16a34a'}}>Thực lĩnh</th>
+                    </tr></thead>
+                    <tbody>
+                      {filtered.map(s => {
+                        const c = calcSalary(s.id);
+                        return (
+                          <tr key={s.id}>
+                            <td><div style={{fontWeight:700}}>{s.full_name}</div><div style={{fontSize:'0.73rem',color:'#94a3b8'}}>{s.phone}</div></td>
+                            <td>{formatMoney(c.base)}</td>
+                            <td>{c.workDays} ngày</td>
+                            <td>{c.totalWorkH}h</td>
+                            <td><span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{c.otHours}h</div></td>
+                            <td><span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span></td>
+                            <td><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{c.absDays}d</div></td>
+                            <td>{c.vioAmt > 0 ? <span style={{color:'#ef4444'}}>-{formatMoney(c.vioAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}</td>
+                            <td><strong style={{color: c.net >= 0 ? '#16a34a' : '#ef4444', fontSize:'0.95rem'}}>{formatMoney(c.net)}</strong></td>
+                          </tr>
+                        );
+                      })}
+                      {filtered.length === 0 && <tr><td colSpan="9" style={{textAlign:'center',color:'#94a3b8',padding:24}}>Chưa có nhân viên</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* === YÊU CẦU === */}
           {activeTab === 'requests' && (
@@ -530,58 +577,94 @@ export default function PayrollPage() {
           )}
 
           {/* === CHẤM CÔNG === */}
-          {activeTab === 'attendance' && (
-            <div>
-              {/* Filter bar */}
-              <div style={{ padding: '8px 16px 0', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                <select
-                  value={attSearch} onChange={e => setAttSearch(e.target.value)}
-                  style={{ flex: 1, minWidth: 150, padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem', outline: 'none', background: 'white', cursor: 'pointer' }}
-                >
-                  <option value="">👥 Tất cả nhân viên</option>
-                  {staffList.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
-                </select>
-                <input
-                  type="date" value={attDateFilter} onChange={e => setAttDateFilter(e.target.value)}
-                  style={{ padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem', outline: 'none' }}
-                />
-                {(attSearch || attDateFilter) && (
-                  <button onClick={() => { setAttSearch(''); setAttDateFilter(''); }}
-                    style={{ fontSize: '0.8rem', color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer' }}>✕ Xoá lọc</button>
-                )}
+          {activeTab === 'attendance' && (() => {
+            const filtered = attendance.filter(a => {
+              const staff = staffList.find(s => s.id === a.staff_id);
+              const nameOk = !attSearch || (staff?.full_name || '') === attSearch;
+              const dateOk = !attDateFilter || a.date === attDateFilter;
+              return nameOk && dateOk;
+            });
+            return (
+              <div>
+                {/* Filter bar */}
+                <div className="filter-bar">
+                  <select value={attSearch} onChange={e => setAttSearch(e.target.value)}>
+                    <option value="">👥 Tất cả nhân viên</option>
+                    {staffList.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
+                  </select>
+                  <input type="date" value={attDateFilter} onChange={e => setAttDateFilter(e.target.value)} />
+                  {(attSearch || attDateFilter) && (
+                    <button onClick={() => { setAttSearch(''); setAttDateFilter(''); }}
+                      style={{ fontSize: '0.8rem', color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0 }}>✕ Xoá</button>
+                  )}
+                </div>
+
+                {filtered.length === 0
+                  ? <div className="empty-state">Không có dữ liệu chấm công tháng {selMonth}/{selYear}</div>
+                  : <>
+                      {/* Mobile cards */}
+                      <div className="mobile-cards">
+                        {filtered.map(a => {
+                          const staff = staffList.find(s => s.id === a.staff_id);
+                          const timeIn  = a.clock_in  ? new Date(a.clock_in).toLocaleTimeString('vi-VN',  { hour: '2-digit', minute: '2-digit' }) : '—';
+                          const timeOut = a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : null;
+                          return (
+                            <div key={a.id} className="att-card">
+                              <div className="att-card-header">
+                                <span className="att-card-name">{staff?.full_name || '—'}</span>
+                                <span className="att-card-date">{a.date}</span>
+                              </div>
+                              <div className="att-card-grid">
+                                <div className="att-card-item">
+                                  <span className="att-card-item-label">Vào</span>
+                                  <span className="att-card-item-value">{timeIn}</span>
+                                </div>
+                                <div className="att-card-item">
+                                  <span className="att-card-item-label">Ra</span>
+                                  <span className="att-card-item-value" style={!timeOut ? { color: '#f59e0b' } : {}}>{timeOut || 'Chưa ra'}</span>
+                                </div>
+                                <div className="att-card-item">
+                                  <span className="att-card-item-label">Giờ làm</span>
+                                  <span className="att-card-item-value">{a.work_hours ? `${a.work_hours}h` : '—'}</span>
+                                </div>
+                                <div className="att-card-item">
+                                  <span className="att-card-item-label">Tăng ca</span>
+                                  <span className="att-card-item-value" style={{ color: a.overtime_hours > 0 ? '#16a34a' : '#94a3b8' }}>
+                                    {a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Desktop table */}
+                      <div className="desktop-table">
+                        <table className="payroll-table">
+                          <thead><tr><th>Nhân viên</th><th>Ngày</th><th>Vào</th><th>Ra</th><th>Giờ làm</th><th>Tăng ca</th></tr></thead>
+                          <tbody>
+                            {filtered.map(a => {
+                              const staff = staffList.find(s => s.id === a.staff_id);
+                              return (
+                                <tr key={a.id}>
+                                  <td>{staff?.full_name || '—'}</td>
+                                  <td>{a.date}</td>
+                                  <td>{a.clock_in ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                                  <td>{a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : <span style={{ color: '#f59e0b' }}>Chưa ra</span>}</td>
+                                  <td>{a.work_hours ? `${a.work_hours}h` : '—'}</td>
+                                  <td style={{ color: '#16a34a', fontWeight: 600 }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                }
               </div>
-
-              {(() => {
-                const filtered = attendance.filter(a => {
-                  const staff = staffList.find(s => s.id === a.staff_id);
-                  const nameOk = !attSearch || (staff?.full_name || '') === attSearch;
-                  const dateOk = !attDateFilter || a.date === attDateFilter;
-                  return nameOk && dateOk;
-                });
-                return filtered.length === 0 ? <div className="empty-state">Không có dữ liệu chấm công tháng {selMonth}/{selYear}</div> : (
-                  <table className="payroll-table">
-                    <thead><tr><th>Nhân viên</th><th>Ngày</th><th>Vào</th><th>Ra</th><th>Giờ làm</th><th>Tăng ca</th></tr></thead>
-                    <tbody>
-                      {filtered.map(a => {
-                        const staff = staffList.find(s => s.id === a.staff_id);
-                        return (
-                          <tr key={a.id}>
-                            <td>{staff?.full_name || '—'}</td>
-                            <td>{a.date}</td>
-                            <td>{a.clock_in ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                            <td data-label="Ra">{a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : <span style={{ color: '#f59e0b' }}>Chưa ra</span>}</td>
-                            <td data-label="Giờ làm">{a.work_hours ? `${a.work_hours}h` : '—'}</td>
-                            <td data-label="Tăng ca" style={{ color: '#15803d', fontWeight: 600 }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                );
-              })()}
-
-            </div>
-          )}
+            );
+          })()}
 
           {/* === QR CHẤM CÔNG === */}
           {activeTab === 'qr' && (
