@@ -405,12 +405,13 @@ export default function PayrollPage() {
             <div>
               {/* Filter bar */}
               <div style={{ padding: '8px 16px 0', display: 'flex', gap: 10, alignItems: 'center' }}>
-                <input
-                  type="text" placeholder="🔍 Tìm theo tên nhân viên..."
+                <select
                   value={salarySearch} onChange={e => setSalarySearch(e.target.value)}
-                  style={{ flex: 1, padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem', outline: 'none' }}
-                />
-                {salarySearch && <button onClick={() => setSalarySearch('')} style={{ fontSize: '0.8rem', color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer' }}>✕ Xoá</button>}
+                  style={{ flex: 1, padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem', outline: 'none', background: 'white', cursor: 'pointer' }}
+                >
+                  <option value="">👥 Tất cả nhân viên</option>
+                  {staffList.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
+                </select>
               </div>
               <table className="payroll-table">
                 <thead>
@@ -533,11 +534,13 @@ export default function PayrollPage() {
             <div>
               {/* Filter bar */}
               <div style={{ padding: '8px 16px 0', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                <input
-                  type="text" placeholder="🔍 Tên nhân viên..."
+                <select
                   value={attSearch} onChange={e => setAttSearch(e.target.value)}
-                  style={{ flex: 1, minWidth: 150, padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem', outline: 'none' }}
-                />
+                  style={{ flex: 1, minWidth: 150, padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem', outline: 'none', background: 'white', cursor: 'pointer' }}
+                >
+                  <option value="">👥 Tất cả nhân viên</option>
+                  {staffList.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
+                </select>
                 <input
                   type="date" value={attDateFilter} onChange={e => setAttDateFilter(e.target.value)}
                   style={{ padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem', outline: 'none' }}
@@ -551,7 +554,7 @@ export default function PayrollPage() {
               {(() => {
                 const filtered = attendance.filter(a => {
                   const staff = staffList.find(s => s.id === a.staff_id);
-                  const nameOk = !attSearch || (staff?.full_name || '').toLowerCase().includes(attSearch.toLowerCase());
+                  const nameOk = !attSearch || (staff?.full_name || '') === attSearch;
                   const dateOk = !attDateFilter || a.date === attDateFilter;
                   return nameOk && dateOk;
                 });
