@@ -542,57 +542,54 @@ function OrderContent() {
         </div>
       )}
 
-      {/* ─── Top Bar ─── */}
+      {/* ─── Top Header (white, app-style) ─── */}
       <div className="co-topbar">
-        <div className="co-topbar-row">
-          <div className="co-search">
-            <Search size={16} />
+        {/* Restaurant name row */}
+        <div className="co-header-bar">
+          <span className="co-header-title">Nhà Hàng</span>
+          <div className="co-header-actions">
+            <button className="co-header-btn" onClick={() => { setShowOrdered(true); fetchPreviousOrders(); }}>•••</button>
+            <button className="co-header-btn" onClick={() => setShowInfoModal(true)}>✕</button>
+          </div>
+        </div>
+
+        {/* Table subtitle */}
+        <div className="co-table-info">
+          Bạn đang ngồi <strong>{isTakeaway ? 'Mang về' : `Bàn ${tableNumber ?? '...'}`}</strong>
+        </div>
+
+        {/* Filter row: category dropdown + search */}
+        <div className="co-filter-row">
+          <select
+            className="co-cat-dropdown"
+            value={activeCategory}
+            onChange={e => handleCatClick(e.target.value)}
+          >
+            <option value="all">Tất cả</option>
+            {categories.map(cat => (
+              <option key={cat.id} value={cat.id}>{cat.name}</option>
+            ))}
+          </select>
+          <div className="co-search-box">
+            <Search size={15} />
             <input
-              placeholder="Tìm món..."
+              placeholder="Tìm món"
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={e => setSearchTerm(e.target.value)}
             />
             {searchTerm && (
               <button className="co-search-clear" onClick={() => setSearchTerm('')}>
-                <X size={14} />
+                <X size={13} />
               </button>
             )}
           </div>
-          <button
-            className="co-topbar-btn"
-            onClick={() => { setShowOrdered(true); fetchPreviousOrders(); }}
-          >
-            <ShoppingBag size={16} />
-            <span>Đã gọi</span>
-          </button>
-        </div>
-
-        {/* Category Tabs */}
-        <div className="co-categories" ref={catTabsRef}>
-          <button
-            className={`co-cat-btn ${activeCategory === 'all' ? 'active' : ''}`}
-            onClick={() => handleCatClick('all')}
-          >
-            Tất cả
-          </button>
-          {categories.map(cat => (
-            <button
-              key={cat.id}
-              data-tab-id={cat.id}
-              className={`co-cat-btn ${activeCategory === cat.id ? 'active' : ''}`}
-              onClick={() => handleCatClick(cat.id)}
-            >
-              {cat.name}
-            </button>
-          ))}
         </div>
       </div>
 
       {/* ─── Menu Content ─── */}
       <div className="co-content">
-        {/* Item count + view toggle */}
+        {/* View toggle — right aligned */}
         <div className="co-content-header">
-          <span>Tất cả {filteredItems.length} món</span>
           <div className="co-view-toggle">
             <button className={viewMode === 'list' ? 'active' : ''} onClick={() => setViewMode('list')}>
               <List size={16} />
