@@ -969,6 +969,12 @@ export default function TablesPage() {
                 <button onClick={handlePrintInvoice} style={{ flex: 1, padding: '10px', border: '1.5px solid #e5e7eb', borderRadius: 8, background: 'white', color: '#374151', fontWeight: 600, cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
                   📄 In tạm tính
                 </button>
+                {/* Huỷ đơn — same as mobile, triggers cancelConfirm modal */}
+                <button
+                  onClick={() => { if (selectedTable) setCancelConfirm(selectedTable); }}
+                  style={{ flex: 1, padding: '10px', border: '1.5px solid #fca5a5', borderRadius: 8, background: '#fff7f7', color: '#dc2626', fontWeight: 700, cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                  🗑️ Huỷ đơn
+                </button>
                 <button
                   onClick={() => {
                     if (!selectedTable) return;
