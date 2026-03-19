@@ -2768,8 +2768,13 @@ export default function TablesPage() {
               <button
                 onClick={async () => {
                   const t = cancelConfirm;
+                  // Close ALL panels immediately — no stale UI
                   setCancelConfirm(null);
-                  setSelectedTable(null); // close panel immediately
+                  setSelectedTable(null);
+                  setAddingToOrder(null);
+                  setAddItemSearch('');
+                  setShowBillPreview(false);
+                  setPaymentModal(null);
                   await supabase.from('orders')
                     .update({ status: 'cancelled', payment_method: 'cancelled' })
                     .eq('table_id', t.id)
