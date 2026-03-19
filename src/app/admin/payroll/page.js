@@ -130,6 +130,11 @@ export default function PayrollPage() {
   const [editingPin, setEditingPin] = useState({}); // { staffId: newPin }
   const [accMsg, setAccMsg] = useState('');
 
+  // Search / filter state
+  const [salarySearch,  setSalarySearch]  = useState('');
+  const [attSearch,     setAttSearch]     = useState('');
+  const [attDateFilter, setAttDateFilter] = useState('');
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
     const [staffRes, cfgRes, reqRes, vioRes, attRes] = await Promise.all([
@@ -398,6 +403,15 @@ export default function PayrollPage() {
           {/* === BẢNG LƯƠNG === */}
           {activeTab === 'salary' && (
             <div>
+              {/* Filter bar */}
+              <div style={{ padding: '8px 16px 0', display: 'flex', gap: 10, alignItems: 'center' }}>
+                <input
+                  type="text" placeholder="🔍 Tìm theo tên nhân viên..."
+                  value={salarySearch} onChange={e => setSalarySearch(e.target.value)}
+                  style={{ flex: 1, padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem', outline: 'none' }}
+                />
+                {salarySearch && <button onClick={() => setSalarySearch('')} style={{ fontSize: '0.8rem', color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer' }}>✕ Xoá</button>}
+              </div>
               <table className="payroll-table">
                 <thead>
                   <tr>
@@ -413,7 +427,9 @@ export default function PayrollPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {staffList.map(s => {
+                  {staffList
+                    .filter(s => !salarySearch || s.full_name.toLowerCase().includes(salarySearch.toLowerCase()))
+                    .map(s => {
                     const c = calcSalary(s.id);
                     return (
                       <tr key={s.id}>
@@ -515,29 +531,52 @@ export default function PayrollPage() {
           {/* === CHẤM CÔNG === */}
           {activeTab === 'attendance' && (
             <div>
+              {/* Filter bar */}
+              <div style={{ padding: '8px 16px 0', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  type="text" placeholder="🔍 Tên nhân viên..."
+                  value={attSearch} onChange={e => setAttSearch(e.target.value)}
+                  style={{ flex: 1, minWidth: 150, padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem', outline: 'none' }}
+                />
+                <input
+                  type="date" value={attDateFilter} onChange={e => setAttDateFilter(e.target.value)}
+                  style={{ padding: '8px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem', outline: 'none' }}
+                />
+                {(attSearch || attDateFilter) && (
+                  <button onClick={() => { setAttSearch(''); setAttDateFilter(''); }}
+                    style={{ fontSize: '0.8rem', color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer' }}>✕ Xoá lọc</button>
+                )}
+              </div>
 
+              {(() => {
+                const filtered = attendance.filter(a => {
+                  const staff = staffList.find(s => s.id === a.staff_id);
+                  const nameOk = !attSearch || (staff?.full_name || '').toLowerCase().includes(attSearch.toLowerCase());
+                  const dateOk = !attDateFilter || a.date === attDateFilter;
+                  return nameOk && dateOk;
+                });
+                return filtered.length === 0 ? <div className="empty-state">Không có dữ liệu chấm công tháng {selMonth}/{selYear}</div> : (
+                  <table className="payroll-table">
+                    <thead><tr><th>Nhân viên</th><th>Ngày</th><th>Vào</th><th>Ra</th><th>Giờ làm</th><th>Tăng ca</th></tr></thead>
+                    <tbody>
+                      {filtered.map(a => {
+                        const staff = staffList.find(s => s.id === a.staff_id);
+                        return (
+                          <tr key={a.id}>
+                            <td>{staff?.full_name || '—'}</td>
+                            <td>{a.date}</td>
+                            <td>{a.clock_in ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                            <td>{a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : <span style={{ color: '#f59e0b' }}>Chưa ra</span>}</td>
+                            <td>{a.work_hours ? `${a.work_hours}h` : '—'}</td>
+                            <td style={{ color: '#15803d', fontWeight: 600 }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                );
+              })()}
 
-
-              {attendance.length === 0 ? <div className="empty-state">Không có dữ liệu chấm công tháng {selMonth}/{selYear}</div> : (
-                <table className="payroll-table">
-                  <thead><tr><th>Nhân viên</th><th>Ngày</th><th>Vào</th><th>Ra</th><th>Giờ làm</th><th>Tăng ca</th></tr></thead>
-                  <tbody>
-                    {attendance.map(a => {
-                      const staff = staffList.find(s => s.id === a.staff_id);
-                      return (
-                        <tr key={a.id}>
-                          <td>{staff?.full_name || '—'}</td>
-                          <td>{a.date}</td>
-                          <td>{a.clock_in ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                          <td>{a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : <span style={{ color: '#f59e0b' }}>Chưa ra</span>}</td>
-                          <td>{a.work_hours ? `${a.work_hours}h` : '—'}</td>
-                          <td style={{ color: '#15803d', fontWeight: 600 }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
             </div>
           )}
 
