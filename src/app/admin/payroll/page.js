@@ -152,9 +152,9 @@ export default function PayrollPage() {
     const orig = attendance.find(a => a.id === editingAtt.id);
     if (!orig) return;
 
-    // Build update fields
+    // Only clock_in, clock_out, note are editable (hours computed automatically)
     const updates = {};
-    const fields = ['clock_in', 'clock_out', 'work_hours', 'overtime_hours', 'note'];
+    const fields = ['clock_in', 'clock_out', 'note'];
     const logs = [];
     fields.forEach(f => {
       const oldVal = String(orig[f] ?? '');
@@ -167,7 +167,7 @@ export default function PayrollPage() {
 
     if (Object.keys(updates).length === 0) { setEditingAtt(null); return; }
 
-    await supabase.from('attendance_logs').update(updates).eq('id', orig.id);
+    await supabase.from('attendance_sessions').update(updates).eq('id', orig.id);
     if (logs.length) await supabase.from('attendance_edit_log').insert(logs);
 
     setEditingAtt(null);
@@ -680,7 +680,7 @@ export default function PayrollPage() {
                                   <div key={a.id} style={{ background: isEd ? '#eff6ff' : 'white', border: `1.5px solid ${isEd ? '#3b82f6' : '#e2e8f0'}`, borderRadius: 8, padding: '8px 10px', marginBottom: 6 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isEd ? 8 : 0 }}>
                                       <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{a.date}</span>
-                                      <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{tIn} → {tOut} · {a.work_hours || 0}h</span>
+                                       <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{tIn} → {tOut} · {a.clock_out ? `${Math.round(((new Date(a.clock_out) - new Date(a.clock_in)) / 3600000) * 10) / 10}h` : '0h'}</span>
                                       {!isEd
                                         ? <button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })} style={{ fontSize: '0.72rem', padding: '2px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 5, cursor: 'pointer' }}>✏️ Sửa</button>
                                         : <button onClick={() => setEditingAtt(null)} style={{ fontSize: '0.72rem', padding: '2px 8px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 5, cursor: 'pointer', color: '#dc2626' }}>✕ Huỷ</button>
@@ -692,12 +692,6 @@ export default function PayrollPage() {
                                           <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                             <span style={{ width: 65, fontSize: '0.76rem', fontWeight: 600, color: '#475569', flexShrink: 0 }}>{label}</span>
                                             <input type={type} value={editingAtt[key]||''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{ flex:1, padding:'4px 7px', border:'1.5px solid #cbd5e1', borderRadius:6, fontSize:'0.8rem' }}/>
-                                          </div>
-                                        ))}
-                                        {[{label:'Giờ làm',key:'work_hours'},{label:'Tăng ca',key:'overtime_hours'}].map(({label,key})=>(
-                                          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <span style={{ width: 65, fontSize: '0.76rem', fontWeight: 600, color: '#475569', flexShrink: 0 }}>{label}</span>
-                                            <input type="number" step="0.1" min="0" value={editingAtt[key]??''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{ width:75, padding:'4px 7px', border:'1.5px solid #cbd5e1', borderRadius:6, fontSize:'0.8rem' }}/>
                                           </div>
                                         ))}
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -763,8 +757,8 @@ export default function PayrollPage() {
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                                           <span style={{ fontWeight: 700, fontSize: '0.82rem', minWidth: 90 }}>{a.date}</span>
                                           <span style={{ fontSize: '0.8rem', color: '#64748b' }}>{tIn} → {tOut}</span>
-                                          <span style={{ fontSize: '0.8rem', color: '#16a34a', fontWeight: 600 }}>{a.work_hours||0}h làm</span>
-                                          <span style={{ fontSize: '0.8rem', color: '#f59e0b', fontWeight: 600 }}>{a.overtime_hours > 0 ? `+${a.overtime_hours}h TC` : ''}</span>
+                                          <span style={{ fontSize: '0.8rem', color: '#16a34a', fontWeight: 600 }}>{a.clock_out ? `${Math.round(((new Date(a.clock_out) - new Date(a.clock_in)) / 3600000) * 10) / 10}h làm` : 'Đang làm...'}</span>
+
                                           <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
                                             {!isEd
                                               ? <button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })} style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}>✏️ Sửa</button>
@@ -779,11 +773,7 @@ export default function PayrollPage() {
                                                 {label}<input type={type} value={editingAtt[key]||''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.8rem'}}/>
                                               </label>
                                             ))}
-                                            {[{label:'Giờ làm (h)',key:'work_hours'},{label:'Tăng ca (h)',key:'overtime_hours'}].map(({label,key})=>(
-                                              <label key={key} style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
-                                                {label}<input type="number" step="0.1" min="0" value={editingAtt[key]??''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.8rem',width:90}}/>
-                                              </label>
-                                            ))}
+
                                             <label style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
                                               Ghi chú<input type="text" value={editingAtt.note||''} placeholder="Lý do sửa..." onChange={e=>setEditingAtt(p=>({...p,note:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.8rem'}}/>
                                             </label>
