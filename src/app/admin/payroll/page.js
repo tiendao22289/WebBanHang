@@ -48,36 +48,44 @@ export default function PayrollPage() {
   }, []);
 
   // Staff self-service state
-  const [todayAtt,    setTodayAtt]    = useState(null);
-  const [empReqs,     setEmpReqs]     = useState([]);
-  const [showAdvForm, setShowAdvForm] = useState(false);
-  const [showAbsForm, setShowAbsForm] = useState(false);
-  const [advForm,     setAdvForm]     = useState({ amount: '', reason: '' });
-  const [absForm,     setAbsForm]     = useState({ days: '1', reason: '' });
+  const [todaySessions, setTodaySessions]  = useState([]);
+  const [empReqs,        setEmpReqs]        = useState([]);
+  const [showAdvForm,    setShowAdvForm]    = useState(false);
+  const [showAbsForm,    setShowAbsForm]    = useState(false);
+  const [advForm,        setAdvForm]        = useState({ amount: '', reason: '' });
+  const [absForm,        setAbsForm]        = useState({ days: '1', reason: '' });
+  const [myAllSessions,  setMyAllSessions]  = useState([]); // current month, for history
 
   const fetchStaffData = async (staffId) => {
     const today = new Date().toISOString().split('T')[0];
     const m = now.getMonth() + 1; const y = now.getFullYear();
-    const [attRes, reqRes] = await Promise.all([
-      supabase.from('attendance_logs').select('*').eq('staff_id', staffId).eq('date', today).maybeSingle(),
+    const mStart = `${y}-${fmt(m)}-01`;
+    const mEnd   = m === 12 ? `${y + 1}-01-01` : `${y}-${fmt(m + 1)}-01`;
+    const [todayRes, monthRes, reqRes] = await Promise.all([
+      supabase.from('attendance_sessions').select('*').eq('staff_id', staffId).eq('date', today).order('clock_in'),
+      supabase.from('attendance_sessions').select('*').eq('staff_id', staffId).gte('date', mStart).lt('date', mEnd).order('clock_in'),
       supabase.from('payroll_requests').select('*').eq('staff_id', staffId).eq('month', m).eq('year', y).order('created_at', { ascending: false }),
     ]);
-    setTodayAtt(attRes.data);
+    setTodaySessions(todayRes.data || []);
+    setMyAllSessions(monthRes.data || []);
     setEmpReqs(reqRes.data || []);
   };
 
-  const handleClockIn = async () => {
-    if (!currentUser) return;
-    await supabase.from('attendance_logs').insert({ staff_id: currentUser.id, clock_in: new Date().toISOString(), date: new Date().toISOString().split('T')[0] });
-    fetchStaffData(currentUser.id);
-  };
+  const sessionsWorkHStaff = (sessions) =>
+    Math.round(sessions.filter(s => s.clock_out).reduce((acc, s) => {
+      return acc + (new Date(s.clock_out) - new Date(s.clock_in)) / 3600000;
+    }, 0) * 10) / 10;
 
-  const handleClockOut = async () => {
-    if (!todayAtt) return;
-    const diffH = (new Date() - new Date(todayAtt.clock_in)) / 3600000;
-    const workH = Math.round(diffH * 10) / 10;
-    const otH   = Math.max(0, Math.round((diffH - 8) * 10) / 10);
-    await supabase.from('attendance_logs').update({ clock_out: new Date().toISOString(), work_hours: workH, overtime_hours: otH }).eq('id', todayAtt.id);
+  const handleClockAction = async () => {
+    if (!currentUser) return;
+    const today = new Date().toISOString().split('T')[0];
+    const { data: sessions } = await supabase.from('attendance_sessions').select('*').eq('staff_id', currentUser.id).eq('date', today).order('clock_in');
+    const openSession = (sessions || []).find(s => !s.clock_out);
+    if (openSession) {
+      await supabase.from('attendance_sessions').update({ clock_out: new Date().toISOString() }).eq('id', openSession.id);
+    } else {
+      await supabase.from('attendance_sessions').insert({ staff_id: currentUser.id, date: today, clock_in: new Date().toISOString() });
+    }
     fetchStaffData(currentUser.id);
   };
 
@@ -175,7 +183,7 @@ export default function PayrollPage() {
       supabase.from('payroll_config').select('*'),
       supabase.from('payroll_requests').select('*, staff(full_name,phone)').order('created_at', { ascending: false }),
       supabase.from('payroll_violations').select('*, staff(full_name)').eq('month', selMonth).eq('year', selYear),
-      supabase.from('attendance_logs').select('*').gte('date', `${selYear}-${fmt(selMonth)}-01`).lt('date', selMonth === 12 ? `${selYear + 1}-01-01` : `${selYear}-${fmt(selMonth + 1)}-01`),
+      supabase.from('attendance_sessions').select('*').gte('date', `${selYear}-${fmt(selMonth)}-01`).lt('date', selMonth === 12 ? `${selYear + 1}-01-01` : `${selYear}-${fmt(selMonth + 1)}-01`),
     ]);
     setStaffList(staffRes.data || []);
     const cfgMap = {};
@@ -193,27 +201,45 @@ export default function PayrollPage() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  // --- Salary calculation ---
+  // Helper: compute total work hours for a set of sessions (closed only)
+  const sessionsWorkH = (sessions) =>
+    sessions.filter(s => s.clock_out).reduce((acc, s) => {
+      const h = (new Date(s.clock_out) - new Date(s.clock_in)) / 3600000;
+      return acc + Math.round(h * 10) / 10;
+    }, 0);
+
+  // --- Salary calculation using attendance_sessions ---
   const calcSalary = (staffId) => {
     const cfg = configs[staffId];
     const base = cfg?.base_salary || 0;
     const otRate = cfg?.overtime_rate || 25000;
     const dailyRate = base > 0 ? Math.round(base / 26) : 0;
 
-    const logs = attendance.filter(a => a.staff_id === staffId);
-    const workDays  = logs.filter(a => a.clock_out).length;
-    const totalWorkH = Math.round(logs.reduce((s, a) => s + Number(a.work_hours || 0), 0) * 10) / 10;
-    const otHours   = Math.round(logs.reduce((s, a) => s + Number(a.overtime_hours || 0), 0) * 10) / 10;
+    // Group sessions by date
+    const staffSessions = attendance.filter(a => a.staff_id === staffId);
+    const byDate = {};
+    staffSessions.forEach(s => {
+      if (!byDate[s.date]) byDate[s.date] = [];
+      byDate[s.date].push(s);
+    });
+    const days = Object.values(byDate);
+    const workDays = days.filter(d => d.some(s => s.clock_out)).length;
+    let totalWorkH = 0, otHours = 0;
+    days.forEach(daySessions => {
+      const dayH = Math.round(sessionsWorkH(daySessions) * 10) / 10;
+      totalWorkH += dayH;
+      if (dayH > 8) otHours += Math.round((dayH - 8) * 10) / 10;
+    });
+    totalWorkH = Math.round(totalWorkH * 10) / 10;
+    otHours    = Math.round(otHours * 10) / 10;
     const otAmt = Math.round(otHours * otRate);
 
     const approved = requests.filter(r => r.staff_id === staffId && r.status === 'approved' && r.month === selMonth && r.year === selYear);
-    const advAmt = approved.filter(r => r.request_type === 'advance').reduce((s, r) => s + Number(r.amount || 0), 0);
+    const advAmt  = approved.filter(r => r.request_type === 'advance').reduce((s, r) => s + Number(r.amount || 0), 0);
     const absDays = approved.filter(r => r.request_type === 'absent').reduce((s, r) => s + Number(r.days || 0), 0);
-    const absAmt = Math.round(absDays * dailyRate);
-
-    const vioAmt = violations.filter(v => v.staff_id === staffId).reduce((s, v) => s + Number(v.amount || 0), 0);
-
-    const net = base + otAmt - advAmt - absAmt - vioAmt;
+    const absAmt  = Math.round(absDays * dailyRate);
+    const vioAmt  = violations.filter(v => v.staff_id === staffId).reduce((s, v) => s + Number(v.amount || 0), 0);
+    const net     = base + otAmt - advAmt - absAmt - vioAmt;
     return { base, workDays, totalWorkH, otHours, otAmt, advAmt, absDays, absAmt, vioAmt, net };
   };
 
@@ -297,35 +323,100 @@ export default function PayrollPage() {
 
         <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-          {/* Chấm công */}
-          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
-            <div style={{ fontWeight: 800, fontSize: '1rem', marginBottom: 12 }}>⏰ Chấm công hôm nay</div>
-            {!todayAtt ? (
-              <button onClick={handleClockIn} style={{ width: '100%', padding: '14px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer' }}>
-                🟢 Bắt đầu ca làm
-              </button>
-            ) : !todayAtt.clock_out ? (
-              <div>
-                <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 10 }}>
-                  ✅ Đã vào lúc <strong>{fmtTime(todayAtt.clock_in)}</strong>
+          {/* ⏰ Chấm công hôm nay — multi-session */}
+          {(() => {
+            const fmtTime = ts => ts ? new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
+            const openSession = todaySessions.find(s => !s.clock_out);
+            const isWorking   = !!openSession;
+            const totalToday  = sessionsWorkHStaff(todaySessions);
+            const closedCount = todaySessions.filter(s => s.clock_out).length;
+
+            // Group myAllSessions by date for history
+            const byDate = {};
+            myAllSessions.forEach(s => {
+              if (!byDate[s.date]) byDate[s.date] = [];
+              byDate[s.date].push(s);
+            });
+            const histDays = Object.entries(byDate).sort((a, b) => b[0].localeCompare(a[0]));
+
+            return (
+              <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, overflow: 'hidden' }}>
+                {/* Header */}
+                <div style={{ background: isWorking ? '#dcfce7' : '#f1f5f9', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ fontWeight: 800, fontSize: '0.97rem' }}>⏰ Chấm công hôm nay</div>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 600, color: isWorking ? '#15803d' : '#64748b' }}>
+                    {isWorking ? `🟢 Đang làm từ ${fmtTime(openSession.clock_in)}` : totalToday > 0 ? `✅ Đã làm ${totalToday}h` : '⚪ Chưa bắt đầu'}
+                  </div>
                 </div>
-                <button onClick={handleClockOut} style={{ width: '100%', padding: '14px', background: '#dc2626', color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer' }}>
-                  🔴 Kết thúc ca
-                </button>
+
+                <div style={{ padding: '14px 18px' }}>
+                  {/* Sessions list */}
+                  {todaySessions.length > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      {todaySessions.map((s, i) => {
+                        const dur = s.clock_out
+                          ? Math.round(((new Date(s.clock_out) - new Date(s.clock_in)) / 3600000) * 10) / 10
+                          : null;
+                        return (
+                          <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderBottom: i < todaySessions.length - 1 ? '1px solid #f1f5f9' : 'none', fontSize: '0.83rem' }}>
+                            <span style={{ width: 36, color: '#94a3b8', fontWeight: 600 }}>Ca {i + 1}</span>
+                            <span style={{ flex: 1, color: '#374151' }}>{fmtTime(s.clock_in)} → {s.clock_out ? fmtTime(s.clock_out) : <span style={{ color: '#f59e0b', fontWeight: 700 }}>Đang làm...</span>}</span>
+                            <span style={{ fontWeight: 700, color: '#16a34a' }}>{dur ? `${dur}h` : ''}</span>
+                          </div>
+                        );
+                      })}
+                      {closedCount > 0 && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, paddingTop: 6, borderTop: '1.5px solid #e2e8f0', fontSize: '0.83rem', fontWeight: 700 }}>
+                          <span>Tổng đã làm</span>
+                          <span style={{ color: '#0f172a' }}>{totalToday}h{totalToday > 8 ? ` (TC +${Math.round((totalToday - 8) * 10) / 10}h)` : ''}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Action button */}
+                  <button onClick={handleClockAction}
+                    style={{ width: '100%', padding: '13px', background: isWorking ? '#dc2626' : '#16a34a', color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer' }}>
+                    {isWorking ? '🔴 Kết thúc ca' : '🟢 Bắt đầu ca'}
+                  </button>
+                </div>
+
+                {/* Monthly history (read-only) */}
+                {histDays.length > 0 && (
+                  <details style={{ borderTop: '1px solid #e5e7eb' }}>
+                    <summary style={{ padding: '10px 18px', fontSize: '0.82rem', fontWeight: 700, color: '#64748b', cursor: 'pointer', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      📋 Lịch sử chấm công tháng {now.getMonth() + 1} ({histDays.length} ngày)
+                    </summary>
+                    <div style={{ padding: '0 18px 14px' }}>
+                      {histDays.map(([date, daySessions]) => {
+                        const dayH = sessionsWorkHStaff(daySessions);
+                        return (
+                          <div key={date} style={{ marginBottom: 10 }}>
+                            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>
+                              {new Date(date + 'T00:00:00').toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit' })}
+                              <span style={{ marginLeft: 8, color: '#16a34a' }}>· {dayH}h</span>
+                            </div>
+                            {daySessions.map((s, i) => {
+                              const dur = s.clock_out
+                                ? Math.round(((new Date(s.clock_out) - new Date(s.clock_in)) / 3600000) * 10) / 10
+                                : null;
+                              return (
+                                <div key={s.id} style={{ display: 'flex', gap: 8, fontSize: '0.78rem', color: '#475569', marginLeft: 8, marginBottom: 2 }}>
+                                  <span style={{ color: '#94a3b8' }}>Ca {i + 1}:</span>
+                                  <span>{fmtTime(s.clock_in)} → {s.clock_out ? fmtTime(s.clock_out) : '–'}</span>
+                                  {dur && <span style={{ color: '#16a34a', fontWeight: 600 }}>{dur}h</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </details>
+                )}
               </div>
-            ) : (
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '0.85rem', color: '#6b7280' }}>
-                  Vào: <strong>{fmtTime(todayAtt.clock_in)}</strong> → Ra: <strong>{fmtTime(todayAtt.clock_out)}</strong>
-                </div>
-                <div style={{ marginTop: 6, fontWeight: 700 }}>
-                  ⏱ <span style={{ color: '#15803d' }}>{todayAtt.work_hours}h làm việc</span>
-                  {todayAtt.overtime_hours > 0 && <span style={{ color: '#f59e0b' }}> • Tăng ca: {todayAtt.overtime_hours}h</span>}
-                </div>
-                <div style={{ marginTop: 4, color: '#16a34a', fontWeight: 700 }}>✅ Hoàn thành ca hôm nay</div>
-              </div>
-            )}
-          </div>
+            );
+          })()}
 
           {/* Ứng lương */}
           <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
