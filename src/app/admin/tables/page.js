@@ -2768,13 +2768,17 @@ export default function TablesPage() {
               <button
                 onClick={async () => {
                   const t = cancelConfirm;
-                  // Close ALL panels immediately — no stale UI
+                  // 1. Close ALL UI panels immediately
                   setCancelConfirm(null);
                   setSelectedTable(null);
                   setAddingToOrder(null);
                   setAddItemSearch('');
+                  setActiveMenuCategory('all');
                   setShowBillPreview(false);
                   setPaymentModal(null);
+                  // 2. Clear local orders for this table so no panel re-renders
+                  setOrders(prev => ({ ...prev, [t.id]: [] }));
+                  // 3. DB updates
                   await supabase.from('orders')
                     .update({ status: 'cancelled', payment_method: 'cancelled' })
                     .eq('table_id', t.id)
