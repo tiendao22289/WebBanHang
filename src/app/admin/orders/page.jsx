@@ -166,6 +166,34 @@ export default function OrdersPage() {
     );
   };
 
+  // ── Compact table styles ──
+  const th = { padding: '7px 6px', textAlign: 'left', fontSize: '0.72rem', fontWeight: 700, color: '#6b7280', whiteSpace: 'nowrap' };
+  const td = { padding: '7px 6px', verticalAlign: 'middle' };
+  const actionBtn = (color) => ({
+    padding: '3px 8px', background: color, color: 'white', border: 'none',
+    borderRadius: 6, cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700, whiteSpace: 'nowrap',
+  });
+
+  // Tiny status dot+label for table rows
+  const MiniStatusBadge = ({ status }) => {
+    const m = STATUS_META[status] || STATUS_META.pending;
+    const SHORT = { pending: 'Chờ', preparing: 'Làm', completed: 'Xong', paid: 'TT', cancelled: 'Huỷ' };
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: m.bg, color: m.color, borderRadius: 10, padding: '2px 6px', fontSize: '0.68rem', fontWeight: 700, whiteSpace: 'nowrap' }}>
+        {m.icon} {SHORT[status] || status}
+      </span>
+    );
+  };
+
+  // Tiny payment method badge
+  const MiniPayBadge = ({ method }) => {
+    if (!method) return null;
+    const MAP = { cash: { icon: '💵', label: 'TM' }, transfer: { icon: '📲', label: 'CK' }, cancelled: { icon: '🗑️', label: '' } };
+    const m = MAP[method];
+    if (!m) return null;
+    return <span style={{ fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{m.icon} {m.label}</span>;
+  };
+
   return (
     <div className="page-content">
       <div className="page-header">
@@ -219,47 +247,50 @@ export default function OrdersPage() {
         <div className="empty-state"><p>Đang tải...</p></div>
       ) : filteredOrders.length > 0 ? (
         <div className="card" style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-          <table className="data-table" style={{ minWidth: 680, whiteSpace: 'nowrap' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
             <thead>
-              <tr>
-                <th>Giờ tạo</th>
-                <th>Bàn</th>
-                <th>Khách</th>
-                <th>Món</th>
-                <th>Tiền</th>
-                <th>Trạng thái</th>
-                <th>Thanh toán</th>
-                <th></th>
+              <tr style={{ background: '#f8fafc', borderBottom: '1.5px solid #e2e8f0' }}>
+                <th style={th}>Giờ</th>
+                <th style={th}>Bàn</th>
+                <th style={th}>Món</th>
+                <th style={th}>Tiền</th>
+                <th style={th}>Trạng thái</th>
+                <th style={th}>TT</th>
+                <th style={th}></th>
               </tr>
             </thead>
             <tbody>
               {filteredOrders.map(order => (
-                <tr key={order.id} style={{ opacity: order.status === 'cancelled' ? 0.55 : 1 }}>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Clock size={13} style={{ color: '#9ca3af' }} />
+                <tr key={order.id}
+                  style={{ opacity: order.status === 'cancelled' ? 0.5 : 1, borderBottom: '1px solid #f3f4f6', cursor: 'pointer' }}
+                  onClick={() => setSelectedOrder(order)}
+                >
+                  <td style={td}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 3, color: '#6b7280', whiteSpace: 'nowrap' }}>
+                      <Clock size={11} />
                       {fmtTime(order.created_at)}
                     </div>
                   </td>
-                  <td><strong>{order.table?.table_number === 0 ? '🛵 Mang về' : `Bàn ${order.table?.table_number ?? '?'}`}</strong></td>
-                  <td>
-                    <div style={{ fontWeight: 600 }}>{order.customer_name}</div>
-                    <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{order.customer_phone}</div>
+                  <td style={td}>
+                    <strong style={{ fontSize: '0.8rem' }}>
+                      {order.table?.table_number === 0 ? '🛵' : `B${order.table?.table_number ?? '?'}`}
+                    </strong>
                   </td>
-                  <td>{order.order_items?.length || 0} món</td>
-                  <td><strong className="text-accent">{fmt(order.total_amount)}</strong></td>
-                  <td><StatusBadge status={order.status} /></td>
-                  <td><PaymentBadge method={order.payment_method} /></td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      <button className="btn btn-ghost btn-sm" onClick={() => setSelectedOrder(order)}>
-                        <Eye size={14} />
-                      </button>
+                  <td style={{ ...td, color: '#6b7280' }}>{order.order_items?.length || 0}</td>
+                  <td style={td}>
+                    <strong style={{ color: '#c53b3b', whiteSpace: 'nowrap' }}>{fmt(order.total_amount)}</strong>
+                  </td>
+                  <td style={td}><MiniStatusBadge status={order.status} /></td>
+                  <td style={td}><MiniPayBadge method={order.payment_method} /></td>
+                  <td style={{ ...td, padding: '6px 6px 6px 0' }} onClick={e => e.stopPropagation()}>
+                    <div style={{ display: 'flex', gap: 3 }}>
                       {order.status === 'pending' && (
-                        <button className="btn btn-sm btn-primary" onClick={() => updateStatus(order.id, 'preparing')}>Nhận</button>
+                        <button onClick={() => updateStatus(order.id, 'preparing')}
+                          style={actionBtn('#2563eb')}>Nhận</button>
                       )}
                       {order.status === 'preparing' && (
-                        <button className="btn btn-sm btn-success" onClick={() => updateStatus(order.id, 'completed')}>Xong</button>
+                        <button onClick={() => updateStatus(order.id, 'completed')}
+                          style={actionBtn('#16a34a')}>Xong</button>
                       )}
                     </div>
                   </td>
