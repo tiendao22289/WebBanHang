@@ -136,6 +136,36 @@ export default function PayrollPage() {
   const [attDateFilter, setAttDateFilter] = useState('');
   const [attDayFilter,  setAttDayFilter]  = useState('');
 
+  // Attendance edit state
+  const [editingAtt, setEditingAtt] = useState(null); // { id, staff_id, date, clock_in, clock_out, work_hours, overtime_hours, note }
+
+  const handleSaveAttEdit = async () => {
+    if (!editingAtt) return;
+    const orig = attendance.find(a => a.id === editingAtt.id);
+    if (!orig) return;
+
+    // Build update fields
+    const updates = {};
+    const fields = ['clock_in', 'clock_out', 'work_hours', 'overtime_hours', 'note'];
+    const logs = [];
+    fields.forEach(f => {
+      const oldVal = String(orig[f] ?? '');
+      const newVal = String(editingAtt[f] ?? '');
+      if (oldVal !== newVal) {
+        updates[f] = editingAtt[f] || null;
+        logs.push({ attendance_id: orig.id, staff_id: orig.staff_id, field_name: f, old_value: oldVal, new_value: newVal });
+      }
+    });
+
+    if (Object.keys(updates).length === 0) { setEditingAtt(null); return; }
+
+    await supabase.from('attendance_logs').update(updates).eq('id', orig.id);
+    if (logs.length) await supabase.from('attendance_edit_log').insert(logs);
+
+    setEditingAtt(null);
+    fetchAll();
+  };
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
     const [staffRes, cfgRes, reqRes, vioRes, attRes] = await Promise.all([
@@ -614,34 +644,70 @@ export default function PayrollPage() {
                       <div className="mobile-cards">
                         {filtered.map(a => {
                           const staff = staffList.find(s => s.id === a.staff_id);
+                          const isEditing = editingAtt?.id === a.id;
                           const timeIn  = a.clock_in  ? new Date(a.clock_in).toLocaleTimeString('vi-VN',  { hour: '2-digit', minute: '2-digit' }) : '—';
                           const timeOut = a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : null;
+                          // Convert timestamps to local datetime-local input format
+                          const toLocalDT = ts => ts ? new Date(new Date(ts) - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
+
                           return (
-                            <div key={a.id} className="att-card">
+                            <div key={a.id} className="att-card" style={{ borderColor: isEditing ? '#3b82f6' : undefined }}>
                               <div className="att-card-header">
                                 <span className="att-card-name">{staff?.full_name || '—'}</span>
-                                <span className="att-card-date">{a.date}</span>
-                              </div>
-                              <div className="att-card-grid">
-                                <div className="att-card-item">
-                                  <span className="att-card-item-label">Vào</span>
-                                  <span className="att-card-item-value">{timeIn}</span>
-                                </div>
-                                <div className="att-card-item">
-                                  <span className="att-card-item-label">Ra</span>
-                                  <span className="att-card-item-value" style={!timeOut ? { color: '#f59e0b' } : {}}>{timeOut || 'Chưa ra'}</span>
-                                </div>
-                                <div className="att-card-item">
-                                  <span className="att-card-item-label">Giờ làm</span>
-                                  <span className="att-card-item-value">{a.work_hours ? `${a.work_hours}h` : '—'}</span>
-                                </div>
-                                <div className="att-card-item">
-                                  <span className="att-card-item-label">Tăng ca</span>
-                                  <span className="att-card-item-value" style={{ color: a.overtime_hours > 0 ? '#16a34a' : '#94a3b8' }}>
-                                    {a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}
-                                  </span>
+                                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                  <span className="att-card-date">{a.date}</span>
+                                  {!isEditing
+                                    ? <button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })}
+                                        style={{ fontSize: '0.75rem', padding: '2px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#475569' }}>✏️ Sửa</button>
+                                    : <button onClick={() => setEditingAtt(null)}
+                                        style={{ fontSize: '0.75rem', padding: '2px 8px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, cursor: 'pointer', color: '#dc2626' }}>✕ Huỷ</button>
+                                  }
                                 </div>
                               </div>
+
+                              {isEditing ? (
+                                /* ── INLINE EDIT FORM ── */
+                                <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                  {[
+                                    { label: 'Giờ vào', key: 'clock_in',  type: 'datetime-local' },
+                                    { label: 'Giờ ra',  key: 'clock_out', type: 'datetime-local' },
+                                  ].map(({ label, key, type }) => (
+                                    <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                      <span style={{ width: 70, fontSize: '0.78rem', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>{label}</span>
+                                      <input type={type} value={editingAtt[key] || ''} onChange={e => setEditingAtt(p => ({ ...p, [key]: e.target.value }))}
+                                        style={{ flex: 1, padding: '5px 8px', border: '1.5px solid #cbd5e1', borderRadius: 7, fontSize: '0.82rem' }} />
+                                    </div>
+                                  ))}
+                                  {[
+                                    { label: 'Giờ làm', key: 'work_hours',     placeholder: 'h (vd: 8)' },
+                                    { label: 'Tăng ca',  key: 'overtime_hours', placeholder: 'h (vd: 2)' },
+                                  ].map(({ label, key, placeholder }) => (
+                                    <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                      <span style={{ width: 70, fontSize: '0.78rem', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>{label}</span>
+                                      <input type="number" step="0.1" min="0" value={editingAtt[key] ?? ''} placeholder={placeholder}
+                                        onChange={e => setEditingAtt(p => ({ ...p, [key]: e.target.value }))}
+                                        style={{ width: 80, padding: '5px 8px', border: '1.5px solid #cbd5e1', borderRadius: 7, fontSize: '0.82rem' }} />
+                                    </div>
+                                  ))}
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span style={{ width: 70, fontSize: '0.78rem', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>Ghi chú</span>
+                                    <input type="text" value={editingAtt.note || ''} placeholder="Lý do sửa..."
+                                      onChange={e => setEditingAtt(p => ({ ...p, note: e.target.value }))}
+                                      style={{ flex: 1, padding: '5px 8px', border: '1.5px solid #cbd5e1', borderRadius: 7, fontSize: '0.82rem' }} />
+                                  </div>
+                                  <button onClick={handleSaveAttEdit}
+                                    style={{ padding: '8px', background: '#0f172a', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}>
+                                    💾 Lưu thay đổi
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="att-card-grid">
+                                  <div className="att-card-item"><span className="att-card-item-label">Vào</span><span className="att-card-item-value">{timeIn}</span></div>
+                                  <div className="att-card-item"><span className="att-card-item-label">Ra</span><span className="att-card-item-value" style={!timeOut ? { color: '#f59e0b' } : {}}>{timeOut || 'Chưa ra'}</span></div>
+                                  <div className="att-card-item"><span className="att-card-item-label">Giờ làm</span><span className="att-card-item-value">{a.work_hours ? `${a.work_hours}h` : '—'}</span></div>
+                                  <div className="att-card-item"><span className="att-card-item-label">Tăng ca</span><span className="att-card-item-value" style={{ color: a.overtime_hours > 0 ? '#16a34a' : '#94a3b8' }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}</span></div>
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -650,11 +716,37 @@ export default function PayrollPage() {
                       {/* Desktop table */}
                       <div className="desktop-table">
                         <table className="payroll-table">
-                          <thead><tr><th>Nhân viên</th><th>Ngày</th><th>Vào</th><th>Ra</th><th>Giờ làm</th><th>Tăng ca</th></tr></thead>
+                          <thead><tr><th>Nhân viên</th><th>Ngày</th><th>Vào</th><th>Ra</th><th>Giờ làm</th><th>Tăng ca</th><th></th></tr></thead>
                           <tbody>
                             {filtered.map(a => {
                               const staff = staffList.find(s => s.id === a.staff_id);
-                              return (
+                              const isEditing = editingAtt?.id === a.id;
+                              const toLocalDT = ts => ts ? new Date(new Date(ts) - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
+                              return isEditing ? (
+                                <tr key={a.id} style={{ background: '#eff6ff' }}>
+                                  <td colSpan="7">
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, padding: '8px 4px' }}>
+                                      {[{label:'Giờ vào',key:'clock_in',type:'datetime-local'},{label:'Giờ ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
+                                        <label key={key} style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
+                                          {label}<input type={type} value={editingAtt[key]||''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.82rem'}}/>
+                                        </label>
+                                      ))}
+                                      {[{label:'Giờ làm',key:'work_hours'},{label:'Tăng ca (h)',key:'overtime_hours'}].map(({label,key})=>(
+                                        <label key={key} style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
+                                          {label}<input type="number" step="0.1" min="0" value={editingAtt[key]??''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.82rem',width:90}}/>
+                                        </label>
+                                      ))}
+                                      <label style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
+                                        Ghi chú<input type="text" value={editingAtt.note||''} placeholder="Lý do sửa..." onChange={e=>setEditingAtt(p=>({...p,note:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.82rem'}}/>
+                                      </label>
+                                    </div>
+                                    <div style={{display:'flex',gap:8,padding:'0 4px 8px'}}>
+                                      <button onClick={handleSaveAttEdit} style={{padding:'6px 16px',background:'#0f172a',color:'white',border:'none',borderRadius:7,fontWeight:700,fontSize:'0.82rem',cursor:'pointer'}}>💾 Lưu</button>
+                                      <button onClick={()=>setEditingAtt(null)} style={{padding:'6px 14px',background:'#f1f5f9',border:'1px solid #e2e8f0',borderRadius:7,fontWeight:600,fontSize:'0.82rem',cursor:'pointer'}}>Huỷ</button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ) : (
                                 <tr key={a.id}>
                                   <td>{staff?.full_name || '—'}</td>
                                   <td>{a.date}</td>
@@ -662,6 +754,9 @@ export default function PayrollPage() {
                                   <td>{a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : <span style={{ color: '#f59e0b' }}>Chưa ra</span>}</td>
                                   <td>{a.work_hours ? `${a.work_hours}h` : '—'}</td>
                                   <td style={{ color: '#16a34a', fontWeight: 600 }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}</td>
+                                  <td><button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })}
+                                    style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#475569' }}>✏️ Sửa</button>
+                                  </td>
                                 </tr>
                               );
                             })}
