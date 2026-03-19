@@ -434,15 +434,15 @@ export default function PayrollPage() {
                     const c = calcSalary(s.id);
                     return (
                       <tr key={s.id}>
-                        <td><div style={{ fontWeight: 700 }}>{s.full_name}</div><div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div></td>
-                        <td>{formatMoney(c.base)}</td>
-                        <td><strong>{c.workDays}</strong><div style={{ fontSize: '0.72rem', color: '#9ca3af' }}>ngày</div></td>
-                        <td><strong>{c.totalWorkH}h</strong></td>
-                        <td><span style={{ color: '#15803d' }}>+{formatMoney(c.otAmt)}</span><div style={{ fontSize: '0.72rem', color: '#9ca3af' }}>{c.otHours}h</div></td>
-                        <td><span style={{ color: '#dc2626' }}>-{formatMoney(c.advAmt)}</span></td>
-                        <td><span style={{ color: '#dc2626' }}>-{formatMoney(c.absAmt)}</span><div style={{ fontSize: '0.72rem', color: '#9ca3af' }}>{c.absDays} ngày</div></td>
-                        <td><span style={{ color: '#dc2626' }}>-{formatMoney(c.vioAmt)}</span></td>
-                        <td><strong style={{ color: c.net >= 0 ? '#15803d' : '#dc2626', fontSize: '1rem' }}>{formatMoney(c.net)}</strong></td>
+                        <td data-label="Nhân viên"><div style={{ fontWeight: 700 }}>{s.full_name}</div><div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div></td>
+                        <td data-label="Lương cơ bản">{formatMoney(c.base)}</td>
+                        <td data-label="Ngày công"><strong>{c.workDays}</strong> ngày</td>
+                        <td data-label="Tổng giờ làm"><strong>{c.totalWorkH}h</strong></td>
+                        <td data-label="Tăng ca"><span style={{ color: '#15803d' }}>+{formatMoney(c.otAmt)}</span><span style={{ fontSize: '0.72rem', color: '#9ca3af', marginLeft: 4 }}>({c.otHours}h)</span></td>
+                        <td data-label="Ứng lương"><span style={{ color: '#dc2626' }}>-{formatMoney(c.advAmt)}</span></td>
+                        <td data-label="Nghỉ"><span style={{ color: '#dc2626' }}>-{formatMoney(c.absAmt)}</span><span style={{ fontSize: '0.72rem', color: '#9ca3af', marginLeft: 4 }}>({c.absDays} ngày)</span></td>
+                        <td data-label="Vi phạm"><span style={{ color: '#dc2626' }}>-{formatMoney(c.vioAmt)}</span></td>
+                        <td data-label="Thực lĩnh"><strong style={{ color: c.net >= 0 ? '#15803d' : '#dc2626', fontSize: '1rem' }}>{formatMoney(c.net)}</strong></td>
                       </tr>
                     );
                   })}
@@ -569,9 +569,9 @@ export default function PayrollPage() {
                             <td>{staff?.full_name || '—'}</td>
                             <td>{a.date}</td>
                             <td>{a.clock_in ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                            <td>{a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : <span style={{ color: '#f59e0b' }}>Chưa ra</span>}</td>
-                            <td>{a.work_hours ? `${a.work_hours}h` : '—'}</td>
-                            <td style={{ color: '#15803d', fontWeight: 600 }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}</td>
+                            <td data-label="Ra">{a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : <span style={{ color: '#f59e0b' }}>Chưa ra</span>}</td>
+                            <td data-label="Giờ làm">{a.work_hours ? `${a.work_hours}h` : '—'}</td>
+                            <td data-label="Tăng ca" style={{ color: '#15803d', fontWeight: 600 }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}</td>
                           </tr>
                         );
                       })}
