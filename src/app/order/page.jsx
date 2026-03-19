@@ -548,7 +548,12 @@ function OrderContent() {
         <div className="co-header-bar">
           <span className="co-header-title">Nhà Hàng</span>
           <div className="co-header-actions">
-            <button className="co-header-btn" onClick={() => { setShowOrdered(true); fetchPreviousOrders(); }}>•••</button>
+            <button
+              className="co-history-btn"
+              onClick={() => { setShowOrdered(true); fetchPreviousOrders(); }}
+            >
+              📋 Đã gọi
+            </button>
             <button className="co-header-btn" onClick={() => setShowInfoModal(true)}>✕</button>
           </div>
         </div>

@@ -142,6 +142,27 @@
   font-weight: 700;
 }
 
+/* "Đã gọi" labeled pill button */
+.co-history-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  border: 1.5px solid #2563eb;
+  background: white;
+  color: #2563eb;
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.co-history-btn:active {
+  background: #eff6ff;
+}
+
 /* Table info subtitle */
 .co-table-info {
   text-align: center;
