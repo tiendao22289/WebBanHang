@@ -27,7 +27,7 @@ export default function OrdersPage() {
   const [orders, setOrders]               = useState([]);
   const [loading, setLoading]             = useState(true); // only true on first load
   const [selectedOrder, setSelectedOrder] = useState(null);
-  const [dateFilter, setDateFilter]       = useState(new Date().toISOString().split('T')[0]);
+  const [dateFilter, setDateFilter]       = useState(() => new Date().toLocaleDateString('en-CA')); // YYYY-MM-DD in local timezone
   const [statusFilter, setStatusFilter]   = useState('all');
   const [searchTerm, setSearchTerm]       = useState('');
 
@@ -175,16 +175,20 @@ export default function OrdersPage() {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="orders-filters">
-        <div className="filter-group">
-          <Calendar size={16} />
-          <input type="date" className="input" value={dateFilter}
-            onChange={e => setDateFilter(e.target.value)} />
+      {/* Filters — single compact horizontal row */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* Date */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'white', border: '1.5px solid #e2e8f0', borderRadius: 8, padding: '6px 10px', flex: '0 0 auto' }}>
+          <Calendar size={14} style={{ color: '#9ca3af', flexShrink: 0 }} />
+          <input type="date" value={dateFilter}
+            onChange={e => setDateFilter(e.target.value)}
+            style={{ border: 'none', outline: 'none', fontSize: '0.85rem', fontWeight: 600, color: '#374151', background: 'transparent', cursor: 'pointer', minWidth: 120 }} />
         </div>
-        <div className="filter-group">
-          <Filter size={16} />
-          <select className="select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+        {/* Status */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'white', border: '1.5px solid #e2e8f0', borderRadius: 8, padding: '6px 10px', flex: '0 0 auto' }}>
+          <Filter size={14} style={{ color: '#9ca3af', flexShrink: 0 }} />
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+            style={{ border: 'none', outline: 'none', fontSize: '0.85rem', fontWeight: 600, color: '#374151', background: 'transparent', cursor: 'pointer' }}>
             <option value="all">Tất cả</option>
             <option value="active">Đang xử lý</option>
             <option value="pending">Chờ xác nhận</option>
@@ -194,10 +198,11 @@ export default function OrdersPage() {
             <option value="cancelled">Đã huỷ</option>
           </select>
         </div>
-        <div className="filter-group">
-          <Search size={16} />
-          <input className="input" placeholder="Tìm tên, SĐT, bàn..."
-            value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+        {/* Search */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'white', border: '1.5px solid #e2e8f0', borderRadius: 8, padding: '6px 10px', flex: '1 1 140px', minWidth: 140 }}>
+          <Search size={14} style={{ color: '#9ca3af', flexShrink: 0 }} />
+          <input placeholder="Tìm tên, SĐT, bàn..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+            style={{ border: 'none', outline: 'none', fontSize: '0.85rem', background: 'transparent', width: '100%', color: '#374151' }} />
         </div>
       </div>
 
