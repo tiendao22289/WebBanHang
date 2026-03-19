@@ -57,6 +57,10 @@ export default function PayrollPage() {
   const [vForm, setVForm] = useState({ staff_id: '', amount: '', reason: '' });
   // Config edit state
   const [configEdits, setConfigEdits] = useState({});
+  // Account management
+  const [accForm, setAccForm] = useState({ full_name: '', phone: '', pin: '', role: 'staff' });
+  const [editingPin, setEditingPin] = useState({}); // { staffId: newPin }
+  const [accMsg, setAccMsg] = useState('');
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -140,6 +144,33 @@ export default function PayrollPage() {
     fetchAll();
   };
 
+  // --- Account management ---
+  const handleCreateAccount = async () => {
+    if (!accForm.full_name || !accForm.phone || !accForm.pin) return setAccMsg('Vui lòng điền đầy đủ!');
+    if (accForm.pin.length < 4) return setAccMsg('PIN cần ít nhất 4 ký tự!');
+    const { error } = await supabase.from('staff').insert({ full_name: accForm.full_name.trim(), phone: accForm.phone.trim(), pin: accForm.pin, role: accForm.role });
+    if (error) { setAccMsg(error.message.includes('unique') ? '⚠️ Số điện thoại đã tồn tại!' : error.message); return; }
+    setAccForm({ full_name: '', phone: '', pin: '', role: 'staff' });
+    setAccMsg('✅ Tạo tài khoản thành công!');
+    fetchAll();
+    setTimeout(() => setAccMsg(''), 3000);
+  };
+
+  const handleUpdatePin = async (staffId) => {
+    const newPin = editingPin[staffId];
+    if (!newPin || newPin.length < 4) return alert('PIN cần ít nhất 4 ký tự!');
+    await supabase.from('staff').update({ pin: newPin }).eq('id', staffId);
+    setEditingPin(p => ({ ...p, [staffId]: '' }));
+    fetchAll();
+    alert('Đã cập nhật PIN!');
+  };
+
+  const handleDeleteAccount = async (staffId, name) => {
+    if (!confirm(`Xoá tài khoản "${name}"? Hành động này không thể hoàn tác.`)) return;
+    await supabase.from('staff').delete().eq('id', staffId);
+    fetchAll();
+  };
+
   const months = Array.from({ length: 12 }, (_, i) => i + 1);
   const years = [2025, 2026, 2027];
 
@@ -167,6 +198,7 @@ export default function PayrollPage() {
           { key: 'violations', label: '⚠️ Vi phạm' },
           { key: 'attendance', label: '⏰ Chấm công' },
           { key: 'qr', label: '📱 QR Chấm công' },
+          { key: 'accounts', label: '👤 Tài khoản' },
           { key: 'config', label: '⚙️ Cấu hình' },
         ].map(tab => (
           <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)}>
@@ -340,6 +372,65 @@ export default function PayrollPage() {
                 <div style={{ marginTop: 4 }}>2️⃣ Nhân viên dùng điện thoại quét mã QR</div>
                 <div style={{ marginTop: 4 }}>3️⃣ Đăng nhập (nếu chưa) và bấm <strong>Xác nhận chấm công</strong></div>
                 <div style={{ marginTop: 4 }}>4️⃣ Mã tự làm mới mỗi 5 phút — không thể dùng mã cũ</div>
+              </div>
+            </div>
+          )}
+
+          {/* === TÀI KHOẢN === */}
+          {activeTab === 'accounts' && (
+            <div>
+              {/* Create form */}
+              <div className="payroll-form">
+                <h3>➕ Tạo tài khoản nhân viên mới</h3>
+                {accMsg && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: accMsg.startsWith('✅') ? '#dcfce7' : '#fee2e2', color: accMsg.startsWith('✅') ? '#15803d' : '#dc2626', fontSize: '0.85rem', fontWeight: 600 }}>{accMsg}</div>}
+                <div className="form-grid">
+                  <div className="form-group">
+                    <label>Họ và Tên</label>
+                    <input type="text" placeholder="Nguyễn Văn A" value={accForm.full_name} onChange={e => setAccForm(p => ({ ...p, full_name: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label>Số điện thoại</label>
+                    <input type="tel" placeholder="0909123456" value={accForm.phone} onChange={e => setAccForm(p => ({ ...p, phone: e.target.value }))} />
+                  </div>
+                  <div className="form-group">
+                    <label>Mã PIN (≥ 4 ký tự)</label>
+                    <input type="text" placeholder="1234" maxLength={8} value={accForm.pin} onChange={e => setAccForm(p => ({ ...p, pin: e.target.value.replace(/\D/g, '') }))} />
+                  </div>
+                  <div className="form-group">
+                    <label>Vai trò</label>
+                    <select value={accForm.role} onChange={e => setAccForm(p => ({ ...p, role: e.target.value }))}>
+                      <option value="staff">Nhân viên</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </div>
+                </div>
+                <button className="btn-primary" onClick={handleCreateAccount}>Tạo tài khoản</button>
+              </div>
+
+              {/* Staff list */}
+              <div className="config-list">
+                {staffList.map(s => (
+                  <div key={s.id} className="config-row" style={{ flexWrap: 'wrap', gap: 10 }}>
+                    <div style={{ minWidth: 140 }}>
+                      <div style={{ fontWeight: 700 }}>{s.full_name}</div>
+                      <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div>
+                      <span style={{ display: 'inline-block', marginTop: 4, fontSize: '0.7rem', fontWeight: 700, padding: '1px 7px', borderRadius: 4, background: s.role === 'admin' ? '#fef9c3' : '#f0f9ff', color: s.role === 'admin' ? '#92400e' : '#0369a1' }}>
+                        {s.role === 'admin' ? '👑 Admin' : '👤 NV'}
+                      </span>
+                    </div>
+                    <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 140 }}>
+                      <label>Đổi PIN mới</label>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <input type="text" inputMode="numeric" maxLength={8} placeholder="PIN mới..." value={editingPin[s.id] || ''}
+                          onChange={e => setEditingPin(p => ({ ...p, [s.id]: e.target.value.replace(/\D/g, '') }))}
+                          style={{ flex: 1 }} />
+                        <button className="btn-primary" style={{ padding: '6px 12px', marginTop: 0, whiteSpace: 'nowrap' }} onClick={() => handleUpdatePin(s.id)}>Lưu</button>
+                      </div>
+                    </div>
+                    <button className="btn-danger" style={{ marginTop: 18, alignSelf: 'flex-end' }} onClick={() => handleDeleteAccount(s.id, s.full_name)}>Xoá</button>
+                  </div>
+                ))}
+                {staffList.length === 0 && <div className="empty-state">Chưa có nhân viên nào</div>}
               </div>
             </div>
           )}
