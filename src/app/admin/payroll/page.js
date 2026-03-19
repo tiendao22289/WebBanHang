@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 import { QRCodeSVG } from 'qrcode.react';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users } from 'lucide-react';
@@ -30,6 +31,20 @@ export default function PayrollPage() {
   const [selYear, setSelYear] = useState(now.getFullYear());
   const [loading, setLoading] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
+  const router = useRouter();
+
+  // Guard: only admin can access payroll page
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('staffUser');
+      if (!saved) return; // no staff session, allow admin panel
+      const user = JSON.parse(saved);
+      if (user.role !== 'admin') {
+        // Non-admin staff → send them back to notes self-service
+        router.replace('/admin/notes');
+      }
+    } catch { /* ignore */ }
+  }, [router]);
 
   // QR state
   const [qrToken, setQrToken] = useState(getQRToken());

@@ -54,7 +54,8 @@ export default function StaffNotesPage() {
   const toggleHistory = (noteId, idx) => setExpandedHistory(prev => ({ ...prev, [`${noteId}-${idx}`]: !prev[`${noteId}-${idx}`] }));
 
   // Employee self-service — Bảng Công
-  const [activeNotesTab, setActiveNotesTab] = useState('notes'); // 'notes' | 'cong'
+  // Staff (non-admin) always land on 'cong'; admin defaults to 'notes'
+  const [activeNotesTab, setActiveNotesTab] = useState('cong');
   const [todayAttendance, setTodayAttendance] = useState(null); // today's log
   const [empRequests, setEmpRequests] = useState([]); // this month's requests
   const [empSalaryRec, setEmpSalaryRec] = useState(null);
@@ -162,6 +163,10 @@ export default function StaffNotesPage() {
         };
         localStorage.setItem('nhahang_staff_user', JSON.stringify(userToSave));
         setCurrentUser(userToSave);
+        // Non-admin staff land on Bảng Công — pre-load their data
+        if (data.role !== 'admin') {
+          fetchEmpData(data.id);
+        }
         
         // Update last login
         await supabase.from('staff').update({ last_login: new Date().toISOString() }).eq('id', data.id);
@@ -952,8 +957,8 @@ export default function StaffNotesPage() {
         )}
       </div>
 
-      {/* ── Tab Switcher (non-admin only) ── */}
-      {currentUser.role !== 'admin' && (
+      {/* ── Tab Switcher (admin only — staff always on Bảng Công) ── */}
+      {currentUser.role === 'admin' && (
         <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid #e5e7eb', background: 'white' }}>
           {[
             { key: 'notes', label: '📋 Sổ Tay' },
