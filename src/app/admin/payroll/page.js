@@ -425,6 +425,7 @@ export default function PayrollPage() {
         <>
           {/* === BẢNG LƯƠNG === */}
           {activeTab === 'salary' && (() => {
+            const isAdmin = currentUser?.role === 'admin';
             const filtered = staffList.filter(s => !salarySearch || s.full_name === salarySearch);
             return (
               <div>
@@ -490,6 +491,13 @@ export default function PayrollPage() {
                             <span className={`salary-card-value ${c.net >= 0 ? 'green' : 'red'}`}>{formatMoney(c.net)}</span>
                           </div>
                         </div>
+                        {isAdmin && (
+                          <button
+                            onClick={() => { setActiveTab('attendance'); setAttSearch(s.full_name); }}
+                            style={{ width: '100%', marginTop: 4, padding: '7px', background: '#f8fafc', border: '1px solid #e2e8f0', borderBottomLeftRadius: 12, borderBottomRightRadius: 12, fontSize: '0.8rem', fontWeight: 700, color: '#475569', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                            ✏️ Sửa chấm công
+                          </button>
+                        )}
                       </div>
                     );
                   })}
@@ -502,6 +510,7 @@ export default function PayrollPage() {
                       <th>Nhân viên</th><th>Lương CB</th><th>Ngày công</th><th>Giờ làm</th>
                       <th>Tăng ca</th><th>Ứng lương</th><th>Nghỉ</th><th>Vi phạm</th>
                       <th style={{color:'#16a34a'}}>Thực lĩnh</th>
+                      {isAdmin && <th></th>}
                     </tr></thead>
                     <tbody>
                       {filtered.map(s => {
@@ -517,10 +526,12 @@ export default function PayrollPage() {
                             <td><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{c.absDays}d</div></td>
                             <td>{c.vioAmt > 0 ? <span style={{color:'#ef4444'}}>-{formatMoney(c.vioAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}</td>
                             <td><strong style={{color: c.net >= 0 ? '#16a34a' : '#ef4444', fontSize:'0.95rem'}}>{formatMoney(c.net)}</strong></td>
+                            {isAdmin && <td><button onClick={() => { setActiveTab('attendance'); setAttSearch(s.full_name); }}
+                              style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#475569', whiteSpace: 'nowrap' }}>✏️ Sửa</button></td>}
                           </tr>
                         );
                       })}
-                      {filtered.length === 0 && <tr><td colSpan="9" style={{textAlign:'center',color:'#94a3b8',padding:24}}>Chưa có nhân viên</td></tr>}
+                      {filtered.length === 0 && <tr><td colSpan={isAdmin ? '10' : '9'} style={{textAlign:'center',color:'#94a3b8',padding:24}}>Chưa có nhân viên</td></tr>}
                     </tbody>
                   </table>
                 </div>
