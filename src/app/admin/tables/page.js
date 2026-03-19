@@ -95,6 +95,10 @@ export default function TablesPage() {
   const [desktopInlinePriceItem, setDesktopInlinePriceItem] = useState(null); // item.id being edited
   const [desktopInlinePriceVal, setDesktopInlinePriceVal] = useState(''); // temp price string
   const [confirmPayment, setConfirmPayment] = useState(null); // { table, totalAmount }
+  const [paymentModal, setPaymentModal]     = useState(null); // { table, total }
+  const [bankAccounts, setBankAccounts]     = useState([]);
+  const [qrAccount, setQrAccount]           = useState(null); // selected account for QR
+  const [showTransfer, setShowTransfer]     = useState(false); // QR sub-screen in payment modal
 
   const invoiceRef = useRef(null);
   const isFirstLoad = useRef(true);
@@ -281,6 +285,78 @@ export default function TablesPage() {
 
     setSelectedTable(null);
     fetchTables();
+  }
+
+  // ── Smart bank account rotation ──
+  async function openPaymentModal(table, total) {
+    // Fetch all active accounts ordered by sort_order
+    const { data: accounts } = await supabase
+      .from('bank_accounts')
+      .select('*')
+      .eq('is_active', true)
+      .order('sort_order');
+
+    if (!accounts || accounts.length === 0) {
+      setBankAccounts([]);
+      setQrAccount(null);
+      setPaymentModal({ table, total });
+      return;
+    }
+
+    // Fetch today's totals for all accounts
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: dailyTotals } = await supabase
+      .from('bank_daily_totals')
+      .select('account_id, total_amount')
+      .eq('date', today);
+
+    const totalsMap = {};
+    (dailyTotals || []).forEach(d => { totalsMap[d.account_id] = d.total_amount; });
+
+    // Pick the first account whose total_received + bill <= daily_limit + 10% buffer
+    // (allow up to 10% over limit to avoid awkward situations)
+    const accountsWithTotals = accounts.map(a => ({
+      ...a,
+      received_today: totalsMap[a.id] || 0,
+    }));
+
+    let chosen = null;
+    for (const acc of accountsWithTotals) {
+      const remaining = acc.daily_limit - acc.received_today;
+      // Allow overflow up to 10% of daily_limit (or switch to next)
+      if (remaining + acc.daily_limit * 0.1 >= total || remaining > 0) {
+        chosen = acc;
+        break;
+      }
+    }
+    // If all are full, use the last one as fallback
+    if (!chosen) chosen = accountsWithTotals[accountsWithTotals.length - 1];
+
+    setBankAccounts(accountsWithTotals);
+    setQrAccount(chosen);
+    setPaymentModal({ table, total });
+  }
+
+  async function recordBankPayment(accountId, amount) {
+    const today = new Date().toISOString().slice(0, 10);
+    // Upsert daily total (add to existing)
+    const { data: existing } = await supabase
+      .from('bank_daily_totals')
+      .select('id, total_amount')
+      .eq('account_id', accountId)
+      .eq('date', today)
+      .maybeSingle();
+
+    if (existing) {
+      await supabase
+        .from('bank_daily_totals')
+        .update({ total_amount: existing.total_amount + amount })
+        .eq('id', existing.id);
+    } else {
+      await supabase
+        .from('bank_daily_totals')
+        .insert({ account_id: accountId, date: today, total_amount: amount });
+    }
   }
 
   function downloadQR(table) {
@@ -1141,6 +1217,207 @@ export default function TablesPage() {
           </div>
         );
       })()}
+      {/* ══ PAYMENT MODAL ══ */}
+      {paymentModal && (() => {
+        const { table, total } = paymentModal;
+        const fmt = (n) => new Intl.NumberFormat('vi-VN').format(n) + 'đ';
+
+        const closeModal = () => { setPaymentModal(null); setQrAccount(null); setShowTransfer(false); };
+
+        const doCashPayment = async () => {
+          closeModal();
+          await completeTable(table.id);
+        };
+
+        const doTransferPayment = async () => {
+          if (qrAccount) await recordBankPayment(qrAccount.id, total);
+          closeModal();
+          await completeTable(table.id);
+        };
+
+        const doCancelOrder = async () => {
+          if (!window.confirm('Bạn có chắc muốn huỷ tất cả đơn của bàn này?')) return;
+          await supabase.from('orders')
+            .update({ status: 'cancelled' })
+            .eq('table_id', table.id)
+            .in('status', ['pending', 'preparing', 'completed']);
+          await supabase.from('tables')
+            .update({ status: 'available', occupied_at: null })
+            .eq('id', table.id);
+          closeModal();
+          setSelectedTable(null);
+          fetchTables();
+        };
+
+        // Vietcombank VietQR string: bank_id|account_number|amount|description
+        const buildVietQR = (acc) => {
+          if (!acc) return '';
+          const bankMap = {
+            'vietcombank': '970436', 'vcb': '970436',
+            'mb bank': '970422', 'mbbank': '970422',
+            'techcombank': '970407', 'tcb': '970407',
+            'agribank': '970405',
+            'vietinbank': '970415', 'ctg': '970415',
+            'bidv': '970418',
+            'acb': '970416',
+            'vpbank': '970432',
+            'tpbank': '970423',
+            'sacombank': '970403',
+          };
+          const bankKey = acc.bank_name.toLowerCase().replace(/\s+/g, '');
+          const bin = bankMap[bankKey] || bankMap[acc.bank_name.toLowerCase()] || '970436';
+          const desc = encodeURIComponent(`T1 B${table.table_number}`);
+          return `https://img.vietqr.io/image/${bin}-${acc.account_number}-compact2.png?amount=${total}&addInfo=${desc}&accountName=${encodeURIComponent(acc.account_name)}`;
+        };
+
+
+        return (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
+            onClick={closeModal}>
+            <div style={{ background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 480, padding: '20px 16px 28px', boxShadow: '0 -8px 40px rgba(0,0,0,0.18)' }}
+              onClick={e => e.stopPropagation()}>
+
+              {/* Header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>💳 Thanh toán</div>
+                  <div style={{ fontSize: '0.82rem', color: '#64748b' }}>Bàn {table.table_number}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Tổng cộng</div>
+                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#c53b3b' }}>{fmt(total)}</div>
+                </div>
+              </div>
+
+              {!showTransfer ? (
+                /* ── Step 1: Choose payment method ── */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {/* In hoá đơn */}
+                  <button onClick={() => { handlePrintInvoice(); }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#f8fafc', border: '1.5px solid #e2e8f0', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
+                    <span style={{ fontSize: '1.5rem' }}>🖨️</span>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#0f172a' }}>In hoá đơn</div>
+                      <div style={{ fontSize: '0.75rem', color: '#64748b' }}>In tạm tính trước khi thu tiền</div>
+                    </div>
+                  </button>
+
+                  {/* Tiền mặt */}
+                  <button onClick={doCashPayment}
+                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#f0fdf4', border: '1.5px solid #bbf7d0', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
+                    <span style={{ fontSize: '1.5rem' }}>💵</span>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#15803d' }}>Tiền mặt</div>
+                      <div style={{ fontSize: '0.75rem', color: '#16a34a' }}>Nhận tiền mặt — đóng bàn ngay</div>
+                    </div>
+                    <div style={{ marginLeft: 'auto', background: '#16a34a', color: 'white', borderRadius: 8, padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700 }}>Xác nhận</div>
+                  </button>
+
+                  {/* Chuyển khoản */}
+                  <button onClick={() => setShowTransfer(true)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#eff6ff', border: '1.5px solid #bfdbfe', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
+                    <span style={{ fontSize: '1.5rem' }}>📲</span>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1d4ed8' }}>Chuyển khoản</div>
+                      <div style={{ fontSize: '0.75rem', color: '#3b82f6' }}>Hiện mã QR cho khách quét</div>
+                    </div>
+                    <div style={{ marginLeft: 'auto', color: '#3b82f6', fontSize: '1.1rem' }}>›</div>
+                  </button>
+
+                  {/* Huỷ đơn */}
+                  <button onClick={doCancelOrder}
+                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#fff7f7', border: '1.5px solid #fecaca', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
+                    <span style={{ fontSize: '1.5rem' }}>🗑️</span>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#dc2626' }}>Huỷ đơn</div>
+                      <div style={{ fontSize: '0.75rem', color: '#ef4444' }}>Xoá tất cả đơn của bàn này</div>
+                    </div>
+                  </button>
+                </div>
+              ) : (
+                /* ── Step 2: QR Transfer ── */
+                <div>
+                  <button onClick={() => setShowTransfer(false)} style={{ background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, marginBottom: 10, padding: 0 }}>‹ Quay lại</button>
+
+                  {qrAccount ? (
+                    <>
+                      {/* VietQR image */}
+                      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+                        <img
+                          src={buildVietQR(qrAccount)}
+                          alt="QR chuyển khoản"
+                          style={{ width: 220, height: 220, borderRadius: 12, border: '2px solid #bfdbfe', objectFit: 'contain', background: 'white' }}
+                          onError={e => { e.target.style.display='none'; e.target.nextSibling.style.display='flex'; }}
+                        />
+                        <div style={{ width: 220, height: 220, display: 'none', alignItems: 'center', justifyContent: 'center', border: '2px solid #bfdbfe', borderRadius: 12, flexDirection: 'column', gap: 6 }}>
+                          <QRCodeSVG value={`${qrAccount.bank_name}|${qrAccount.account_number}|${total}`} size={180} level="H" includeMargin />
+                        </div>
+                      </div>
+
+                      {/* Account info */}
+                      <div style={{ background: '#f8fafc', borderRadius: 12, padding: '10px 14px', marginBottom: 10, fontSize: '0.85rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span style={{ color: '#64748b' }}>Ngân hàng</span>
+                          <span style={{ fontWeight: 700, color: '#0f172a' }}>{qrAccount.bank_name}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span style={{ color: '#64748b' }}>Số tài khoản</span>
+                          <span style={{ fontWeight: 700, color: '#0f172a', letterSpacing: 1 }}>{qrAccount.account_number}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span style={{ color: '#64748b' }}>Tên tài khoản</span>
+                          <span style={{ fontWeight: 700, color: '#0f172a' }}>{qrAccount.account_name}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span style={{ color: '#64748b' }}>Số tiền</span>
+                          <span style={{ fontWeight: 800, color: '#c53b3b', fontSize: '1rem' }}>{fmt(total)}</span>
+                        </div>
+                      </div>
+
+                      {/* Daily limit badge */}
+                      {(() => {
+                        const pct = Math.round((qrAccount.received_today / qrAccount.daily_limit) * 100);
+                        const remaining = qrAccount.daily_limit - qrAccount.received_today;
+                        return (
+                          <div style={{ fontSize: '0.73rem', color: '#64748b', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <div style={{ flex: 1, height: 4, background: '#e2e8f0', borderRadius: 2, overflow: 'hidden' }}>
+                              <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: pct > 90 ? '#f59e0b' : '#3b82f6', transition: 'width 0.3s' }} />
+                            </div>
+                            <span>Hạn mức: {fmt(Math.max(0, remaining))} còn lại</span>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Switch account (if multiple) */}
+                      {bankAccounts.length > 1 && (
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ fontSize: '0.73rem', color: '#64748b', marginBottom: 4 }}>Đổi tài khoản nhận:</div>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {bankAccounts.map(acc => (
+                              <button key={acc.id} onClick={() => setQrAccount(acc)}
+                                style={{ padding: '4px 10px', borderRadius: 8, border: `1.5px solid ${acc.id === qrAccount.id ? '#2563eb' : '#e2e8f0'}`, background: acc.id === qrAccount.id ? '#eff6ff' : 'white', cursor: 'pointer', fontSize: '0.75rem', fontWeight: acc.id === qrAccount.id ? 700 : 500, color: acc.id === qrAccount.id ? '#1d4ed8' : '#374151' }}>
+                                {acc.bank_name} · {acc.account_number.slice(-4)}
+                                {acc.received_today >= acc.daily_limit && <span style={{ marginLeft: 4, color: '#f59e0b' }}>⚠️</span>}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ textAlign: 'center', color: '#64748b', padding: 32 }}>Chưa cấu hình tài khoản ngân hàng</div>
+                  )}
+
+                  <button onClick={doTransferPayment}
+                    style={{ width: '100%', padding: '13px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 12, fontWeight: 800, fontSize: '1rem', cursor: 'pointer' }}>
+                    ✅ Xác nhận đã nhận tiền — Đóng bàn
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* QR Code Modal - uses table UUID in URL */}
       {showQR && (
@@ -1559,7 +1836,10 @@ export default function TablesPage() {
 
                     {/* Thanh toán — solid blue pill, widest */}
                     <button
-                      onClick={() => completeTable(selectedTable.id)}
+                      onClick={() => {
+                        const total = orders[selectedTable.id]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
+                        openPaymentModal(selectedTable, total);
+                      }}
                       style={{
                         flex: 2,
                         padding: '10px 12px',
