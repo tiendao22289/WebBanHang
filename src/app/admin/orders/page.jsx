@@ -196,11 +196,27 @@ export default function OrdersPage() {
 
   return (
     <div className="page-content">
-      <div className="page-header">
+      <div className="page-header" style={{ alignItems: 'flex-start' }}>
         <div>
           <h1 className="page-title">Hoá đơn</h1>
           <p className="page-subtitle">Tự động cập nhật theo thời gian thực</p>
         </div>
+        {/* Legend note */}
+        <details style={{ marginLeft: 'auto', fontSize: '0.72rem', lineHeight: 1.7, color: '#374151', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '6px 10px', cursor: 'pointer', minWidth: 140, flexShrink: 0 }}>
+          <summary style={{ fontWeight: 700, color: '#0f172a', listStyle: 'none', userSelect: 'none' }}>📖 Chú thích ▾</summary>
+          <div style={{ marginTop: 6, borderTop: '1px solid #e2e8f0', paddingTop: 6 }}>
+            <div style={{ fontWeight: 700, color: '#6b7280', marginBottom: 2 }}>Trạng thái</div>
+            <div>🟡 <b>Chờ</b> — chờ xác nhận</div>
+            <div>🔵 <b>Làm</b> — đang chế biến</div>
+            <div>🟢 <b>Xong</b> — đã hoàn thành</div>
+            <div>🟣 <b>TT</b> — đã thanh toán</div>
+            <div>🔴 <b>Huỷ</b> — đơn bị huỷ</div>
+            <div style={{ fontWeight: 700, color: '#6b7280', marginTop: 6, marginBottom: 2 }}>Thanh toán</div>
+            <div>💵 <b>TM</b> — tiền mặt</div>
+            <div>📲 <b>CK</b> — chuyển khoản</div>
+            <div>🗑️ — đơn huỷ</div>
+          </div>
+        </details>
       </div>
 
       {/* Filters — single compact horizontal row */}
