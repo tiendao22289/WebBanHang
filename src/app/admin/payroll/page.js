@@ -325,11 +325,30 @@ export default function PayrollPage() {
 
           {/* ⏰ Chấm công hôm nay — multi-session */}
           {(() => {
-            const fmtTime = ts => ts ? new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
+            const fmtTime = ts => ts ? new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
+            // Format duration from milliseconds → Vietnamese "X giờ Y phút Z giây"
+            const fmtDurMs = (ms) => {
+              if (!ms || ms < 0) return '0 giây';
+              const totalSec = Math.floor(ms / 1000);
+              const h   = Math.floor(totalSec / 3600);
+              const m   = Math.floor((totalSec % 3600) / 60);
+              const sec = totalSec % 60;
+              const parts = [];
+              if (h   > 0) parts.push(`${h} giờ`);
+              if (m   > 0) parts.push(`${m} phút`);
+              if (sec > 0 || parts.length === 0) parts.push(`${sec} giây`);
+              return parts.join(' ');
+            };
+            const fmtDurMin = (minutes) => fmtDurMs(minutes * 60000);
+
             const openSession = todaySessions.find(s => !s.clock_out);
             const isWorking   = !!openSession;
-            const totalToday  = sessionsWorkHStaff(todaySessions);
             const closedCount = todaySessions.filter(s => s.clock_out).length;
+
+            // Total work ms (closed sessions only)
+            const totalWorkMs = todaySessions.filter(s => s.clock_out).reduce((acc, s) =>
+              acc + (new Date(s.clock_out) - new Date(s.clock_in)), 0);
+            const totalWorkH = Math.round((totalWorkMs / 3600000) * 10) / 10;
 
             // Group myAllSessions by date for history
             const byDate = {};
@@ -339,89 +358,75 @@ export default function PayrollPage() {
             });
             const histDays = Object.entries(byDate).sort((a, b) => b[0].localeCompare(a[0]));
 
+            // Header status text
+            const headerStatus = isWorking
+              ? `🟢 Đang làm từ ${fmtTime(openSession.clock_in)}`
+              : totalWorkMs > 0
+                ? `✅ Đã làm ${fmtDurMs(totalWorkMs)}`
+                : '⚪ Chưa bắt đầu';
+
             return (
               <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, overflow: 'hidden' }}>
                 {/* Header */}
-                <div style={{ background: isWorking ? '#dcfce7' : '#f1f5f9', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ background: isWorking ? '#dcfce7' : '#f1f5f9', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                   <div style={{ fontWeight: 800, fontSize: '0.97rem' }}>⏰ Chấm công hôm nay</div>
-                  <div style={{ fontSize: '0.78rem', fontWeight: 600, color: isWorking ? '#15803d' : '#64748b' }}>
-                    {isWorking ? `🟢 Đang làm từ ${fmtTime(openSession.clock_in)}` : totalToday > 0 ? `✅ Đã làm ${totalToday}h` : '⚪ Chưa bắt đầu'}
-                  </div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: isWorking ? '#15803d' : '#64748b', textAlign: 'right' }}>{headerStatus}</div>
                 </div>
 
                 <div style={{ padding: '14px 18px' }}>
-                  {/* Sessions list */}
                   {todaySessions.length > 0 && (
                     <div style={{ marginBottom: 12 }}>
                       {todaySessions.map((s, i) => {
-                        const durMs = s.clock_out ? new Date(s.clock_out) - new Date(s.clock_in) : null;
-                        const durH  = durMs ? Math.round((durMs / 3600000) * 10) / 10 : null;
-                        const durMin = durMs ? Math.round(durMs / 60000) : null;
-
-                        // Break before this session (gap from previous session's clock_out)
+                        const durMs   = s.clock_out ? new Date(s.clock_out) - new Date(s.clock_in) : null;
                         const breakMs = i > 0 && todaySessions[i - 1].clock_out
-                          ? new Date(s.clock_in) - new Date(todaySessions[i - 1].clock_out)
-                          : null;
-                        const breakMin = breakMs ? Math.round(breakMs / 60000) : null;
+                          ? new Date(s.clock_in) - new Date(todaySessions[i - 1].clock_out) : null;
 
                         return (
                           <React.Fragment key={s.id}>
-                            {/* Break indicator between sessions */}
-                            {breakMin !== null && breakMin > 0 && (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0 3px 6px', fontSize: '0.75rem', color: '#94a3b8' }}>
+                            {/* Break indicator */}
+                            {breakMs !== null && breakMs > 0 && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0 3px 6px', fontSize: '0.73rem', color: '#94a3b8' }}>
                                 <div style={{ width: 2, height: 16, background: '#e2e8f0', borderRadius: 2 }}/>
-                                ☕ Ra ngoài {breakMin >= 60
-                                  ? `${Math.floor(breakMin / 60)}h${breakMin % 60 > 0 ? `${breakMin % 60}m` : ''}`
-                                  : `${breakMin} phút`}
+                                ☕ Ra ngoài {fmtDurMs(breakMs)}
                               </div>
                             )}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: i < todaySessions.length - 1 ? '1px solid #f1f5f9' : 'none', fontSize: '0.83rem' }}>
-                              <span style={{ minWidth: 36, color: '#94a3b8', fontWeight: 600, fontSize: '0.76rem' }}>Ca {i + 1}</span>
-                              <div style={{ flex: 1 }}>
-                                <div style={{ color: '#0f172a', fontWeight: 600 }}>
-                                  Vào {fmtTime(s.clock_in)}
-                                  {s.clock_out
-                                    ? <> → Ra {fmtTime(s.clock_out)}</>
-                                    : <span style={{ color: '#f59e0b', fontWeight: 700 }}> → Đang làm...</span>}
-                                </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: i < todaySessions.length - 1 ? '1px solid #f1f5f9' : 'none', fontSize: '0.83rem' }}>
+                              <span style={{ minWidth: 36, color: '#94a3b8', fontWeight: 700, fontSize: '0.74rem' }}>Ca {i + 1}</span>
+                              <div style={{ flex: 1, color: '#0f172a', fontWeight: 600 }}>
+                                Vào {fmtTime(s.clock_in)}
+                                {s.clock_out
+                                  ? <> → Ra {fmtTime(s.clock_out)}</>
+                                  : <span style={{ color: '#f59e0b', fontWeight: 700 }}> → Đang làm...</span>}
                               </div>
-                              <span style={{ fontWeight: 700, color: '#16a34a', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
-                                {durMin !== null
-                                  ? durMin >= 60
-                                    ? `${Math.floor(durMin / 60)}h${durMin % 60 > 0 ? `${durMin % 60}m` : ''}`
-                                    : `${durMin}m`
-                                  : ''}
+                              <span style={{ fontWeight: 700, color: durMs ? '#16a34a' : '#f59e0b', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>
+                                {durMs ? fmtDurMs(durMs) : '—'}
                               </span>
                             </div>
                           </React.Fragment>
                         );
                       })}
+
+                      {/* Summary row */}
                       {closedCount > 0 && (() => {
-                        // Total break time = sum of gaps between consecutive closed sessions
                         let totalBreakMs = 0;
                         for (let i = 1; i < todaySessions.length; i++) {
-                          const prev = todaySessions[i - 1];
-                          const curr = todaySessions[i];
-                          if (prev.clock_out) totalBreakMs += new Date(curr.clock_in) - new Date(prev.clock_out);
+                          if (todaySessions[i - 1].clock_out)
+                            totalBreakMs += new Date(todaySessions[i].clock_in) - new Date(todaySessions[i - 1].clock_out);
                         }
-                        const breakMin = Math.round(totalBreakMs / 60000);
+                        const otMs = totalWorkMs > 8 * 3600000 ? totalWorkMs - 8 * 3600000 : 0;
                         return (
                           <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1.5px solid #e2e8f0', fontSize: '0.82rem' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: '#0f172a', marginBottom: 2 }}>
-                              <span>⏱ Tổng làm việc</span>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: '#0f172a', marginBottom: 3 }}>
+                              <span>⏱ Tổng giờ làm việc</span>
                               <span style={{ color: '#16a34a' }}>
-                                {totalToday >= 1
-                                  ? `${Math.floor(totalToday)}h${Math.round((totalToday % 1) * 60) > 0 ? `${Math.round((totalToday % 1) * 60)}m` : ''}`
-                                  : `${Math.round(totalToday * 60)}m`}
-                                {totalToday > 8 ? ` (+${Math.round((totalToday - 8) * 10) / 10}h TC)` : ''}
+                                {fmtDurMs(totalWorkMs)}
+                                {otMs > 0 && <span style={{ color: '#f59e0b', fontWeight: 600 }}> (+{fmtDurMs(otMs)} tăng ca)</span>}
                               </span>
                             </div>
-                            {breakMin > 0 && (
+                            {totalBreakMs > 0 && (
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', fontSize: '0.78rem' }}>
-                                <span>☕ Tổng ra ngoài</span>
-                                <span>{breakMin >= 60
-                                  ? `${Math.floor(breakMin / 60)}h${breakMin % 60 > 0 ? `${breakMin % 60}m` : ''}`
-                                  : `${breakMin} phút`}</span>
+                                <span>☕ Tổng thời gian ra ngoài</span>
+                                <span>{fmtDurMs(totalBreakMs)}</span>
                               </div>
                             )}
                           </div>
@@ -445,22 +450,21 @@ export default function PayrollPage() {
                     </summary>
                     <div style={{ padding: '0 18px 14px' }}>
                       {histDays.map(([date, daySessions]) => {
-                        const dayH = sessionsWorkHStaff(daySessions);
+                        const dayMs = daySessions.filter(s => s.clock_out).reduce((a, s) =>
+                          a + (new Date(s.clock_out) - new Date(s.clock_in)), 0);
                         return (
                           <div key={date} style={{ marginBottom: 10 }}>
-                            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>
+                            <div style={{ fontSize: '0.79rem', fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>
                               {new Date(date + 'T00:00:00').toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit' })}
-                              <span style={{ marginLeft: 8, color: '#16a34a' }}>· {dayH}h</span>
+                              <span style={{ marginLeft: 8, color: '#16a34a', fontWeight: 600 }}>· {fmtDurMs(dayMs)}</span>
                             </div>
                             {daySessions.map((s, i) => {
-                              const dur = s.clock_out
-                                ? Math.round(((new Date(s.clock_out) - new Date(s.clock_in)) / 3600000) * 10) / 10
-                                : null;
+                              const durMs = s.clock_out ? new Date(s.clock_out) - new Date(s.clock_in) : null;
                               return (
                                 <div key={s.id} style={{ display: 'flex', gap: 8, fontSize: '0.78rem', color: '#475569', marginLeft: 8, marginBottom: 2 }}>
-                                  <span style={{ color: '#94a3b8' }}>Ca {i + 1}:</span>
-                                  <span>{fmtTime(s.clock_in)} → {s.clock_out ? fmtTime(s.clock_out) : '–'}</span>
-                                  {dur && <span style={{ color: '#16a34a', fontWeight: 600 }}>{dur}h</span>}
+                                  <span style={{ color: '#94a3b8', minWidth: 30 }}>Ca {i + 1}:</span>
+                                  <span>Vào {fmtTime(s.clock_in)} → {s.clock_out ? `Ra ${fmtTime(s.clock_out)}` : '–'}</span>
+                                  {durMs && <span style={{ color: '#16a34a', fontWeight: 600 }}>{fmtDurMs(durMs)}</span>}
                                 </div>
                               );
                             })}
@@ -473,6 +477,7 @@ export default function PayrollPage() {
               </div>
             );
           })()}
+
 
           {/* Ứng lương */}
           <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
