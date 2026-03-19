@@ -354,23 +354,79 @@ export default function PayrollPage() {
                   {todaySessions.length > 0 && (
                     <div style={{ marginBottom: 12 }}>
                       {todaySessions.map((s, i) => {
-                        const dur = s.clock_out
-                          ? Math.round(((new Date(s.clock_out) - new Date(s.clock_in)) / 3600000) * 10) / 10
+                        const durMs = s.clock_out ? new Date(s.clock_out) - new Date(s.clock_in) : null;
+                        const durH  = durMs ? Math.round((durMs / 3600000) * 10) / 10 : null;
+                        const durMin = durMs ? Math.round(durMs / 60000) : null;
+
+                        // Break before this session (gap from previous session's clock_out)
+                        const breakMs = i > 0 && todaySessions[i - 1].clock_out
+                          ? new Date(s.clock_in) - new Date(todaySessions[i - 1].clock_out)
                           : null;
+                        const breakMin = breakMs ? Math.round(breakMs / 60000) : null;
+
                         return (
-                          <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderBottom: i < todaySessions.length - 1 ? '1px solid #f1f5f9' : 'none', fontSize: '0.83rem' }}>
-                            <span style={{ width: 36, color: '#94a3b8', fontWeight: 600 }}>Ca {i + 1}</span>
-                            <span style={{ flex: 1, color: '#374151' }}>{fmtTime(s.clock_in)} → {s.clock_out ? fmtTime(s.clock_out) : <span style={{ color: '#f59e0b', fontWeight: 700 }}>Đang làm...</span>}</span>
-                            <span style={{ fontWeight: 700, color: '#16a34a' }}>{dur ? `${dur}h` : ''}</span>
-                          </div>
+                          <React.Fragment key={s.id}>
+                            {/* Break indicator between sessions */}
+                            {breakMin !== null && breakMin > 0 && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0 3px 6px', fontSize: '0.75rem', color: '#94a3b8' }}>
+                                <div style={{ width: 2, height: 16, background: '#e2e8f0', borderRadius: 2 }}/>
+                                ☕ Ra ngoài {breakMin >= 60
+                                  ? `${Math.floor(breakMin / 60)}h${breakMin % 60 > 0 ? `${breakMin % 60}m` : ''}`
+                                  : `${breakMin} phút`}
+                              </div>
+                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: i < todaySessions.length - 1 ? '1px solid #f1f5f9' : 'none', fontSize: '0.83rem' }}>
+                              <span style={{ minWidth: 36, color: '#94a3b8', fontWeight: 600, fontSize: '0.76rem' }}>Ca {i + 1}</span>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ color: '#0f172a', fontWeight: 600 }}>
+                                  Vào {fmtTime(s.clock_in)}
+                                  {s.clock_out
+                                    ? <> → Ra {fmtTime(s.clock_out)}</>
+                                    : <span style={{ color: '#f59e0b', fontWeight: 700 }}> → Đang làm...</span>}
+                                </div>
+                              </div>
+                              <span style={{ fontWeight: 700, color: '#16a34a', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                                {durMin !== null
+                                  ? durMin >= 60
+                                    ? `${Math.floor(durMin / 60)}h${durMin % 60 > 0 ? `${durMin % 60}m` : ''}`
+                                    : `${durMin}m`
+                                  : ''}
+                              </span>
+                            </div>
+                          </React.Fragment>
                         );
                       })}
-                      {closedCount > 0 && (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, paddingTop: 6, borderTop: '1.5px solid #e2e8f0', fontSize: '0.83rem', fontWeight: 700 }}>
-                          <span>Tổng đã làm</span>
-                          <span style={{ color: '#0f172a' }}>{totalToday}h{totalToday > 8 ? ` (TC +${Math.round((totalToday - 8) * 10) / 10}h)` : ''}</span>
-                        </div>
-                      )}
+                      {closedCount > 0 && (() => {
+                        // Total break time = sum of gaps between consecutive closed sessions
+                        let totalBreakMs = 0;
+                        for (let i = 1; i < todaySessions.length; i++) {
+                          const prev = todaySessions[i - 1];
+                          const curr = todaySessions[i];
+                          if (prev.clock_out) totalBreakMs += new Date(curr.clock_in) - new Date(prev.clock_out);
+                        }
+                        const breakMin = Math.round(totalBreakMs / 60000);
+                        return (
+                          <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1.5px solid #e2e8f0', fontSize: '0.82rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: '#0f172a', marginBottom: 2 }}>
+                              <span>⏱ Tổng làm việc</span>
+                              <span style={{ color: '#16a34a' }}>
+                                {totalToday >= 1
+                                  ? `${Math.floor(totalToday)}h${Math.round((totalToday % 1) * 60) > 0 ? `${Math.round((totalToday % 1) * 60)}m` : ''}`
+                                  : `${Math.round(totalToday * 60)}m`}
+                                {totalToday > 8 ? ` (+${Math.round((totalToday - 8) * 10) / 10}h TC)` : ''}
+                              </span>
+                            </div>
+                            {breakMin > 0 && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', fontSize: '0.78rem' }}>
+                                <span>☕ Tổng ra ngoài</span>
+                                <span>{breakMin >= 60
+                                  ? `${Math.floor(breakMin / 60)}h${breakMin % 60 > 0 ? `${breakMin % 60}m` : ''}`
+                                  : `${breakMin} phút`}</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
 
