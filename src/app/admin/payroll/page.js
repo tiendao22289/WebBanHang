@@ -134,6 +134,7 @@ export default function PayrollPage() {
   const [salarySearch,  setSalarySearch]  = useState('');
   const [attSearch,     setAttSearch]     = useState('');
   const [attDateFilter, setAttDateFilter] = useState('');
+  const [attDayFilter,  setAttDayFilter]  = useState('');
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -372,7 +373,7 @@ export default function PayrollPage() {
         <div className="payroll-title">💰 Tính Lương Nhân Viên</div>
       </div>
 
-      {/* Tabs + month selector inline */}
+      {/* Tabs */}
       <div className="payroll-tabs">
         {[
           { key: 'salary', label: '📊 Bảng Lương' },
@@ -388,15 +389,6 @@ export default function PayrollPage() {
             {tab.badge > 0 && <span className="badge">{tab.badge}</span>}
           </button>
         ))}
-        {/* Month / Year selectors pinned right */}
-        <div className="month-selector" style={{ marginLeft: 'auto', flexShrink: 0 }}>
-          <select value={selMonth} onChange={e => setSelMonth(Number(e.target.value))}>
-            {months.map(m => <option key={m} value={m}>Tháng {m}</option>)}
-          </select>
-          <select value={selYear} onChange={e => setSelYear(Number(e.target.value))}>
-            {years.map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
-        </div>
       </div>
 
       {loading ? <div className="empty-state">Đang tải...</div> : (
@@ -411,6 +403,12 @@ export default function PayrollPage() {
                   <select value={salarySearch} onChange={e => setSalarySearch(e.target.value)}>
                     <option value="">👥 Tất cả nhân viên</option>
                     {staffList.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
+                  </select>
+                  <select value={selMonth} onChange={e => setSelMonth(Number(e.target.value))}>
+                    {months.map(m => <option key={m} value={m}>Tháng {m}</option>)}
+                  </select>
+                  <select value={selYear} onChange={e => setSelYear(Number(e.target.value))}>
+                    {years.map(y => <option key={y} value={y}>{y}</option>)}
                   </select>
                 </div>
 
@@ -582,8 +580,8 @@ export default function PayrollPage() {
             const filtered = attendance.filter(a => {
               const staff = staffList.find(s => s.id === a.staff_id);
               const nameOk = !attSearch || (staff?.full_name || '') === attSearch;
-              const dateOk = !attDateFilter || a.date === attDateFilter;
-              return nameOk && dateOk;
+              const dayOk  = !attDayFilter || (a.date || '').slice(8, 10) === attDayFilter;
+              return nameOk && dayOk;
             });
             return (
               <div>
@@ -593,9 +591,18 @@ export default function PayrollPage() {
                     <option value="">👥 Tất cả nhân viên</option>
                     {staffList.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
                   </select>
-                  <input type="date" value={attDateFilter} onChange={e => setAttDateFilter(e.target.value)} />
-                  {(attSearch || attDateFilter) && (
-                    <button onClick={() => { setAttSearch(''); setAttDateFilter(''); }}
+                  <select value={attDayFilter} onChange={e => setAttDayFilter(e.target.value)}>
+                    <option value="">Ngày</option>
+                    {Array.from({length: 31}, (_, i) => i + 1).map(d => <option key={d} value={String(d).padStart(2,'0')}>{d}</option>)}
+                  </select>
+                  <select value={selMonth} onChange={e => setSelMonth(Number(e.target.value))}>
+                    {months.map(m => <option key={m} value={m}>Tháng {m}</option>)}
+                  </select>
+                  <select value={selYear} onChange={e => setSelYear(Number(e.target.value))}>
+                    {years.map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                  {(attSearch || attDayFilter) && (
+                    <button onClick={() => { setAttSearch(''); setAttDayFilter(''); }}
                       style={{ fontSize: '0.8rem', color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0 }}>✕ Xoá</button>
                   )}
                 </div>
