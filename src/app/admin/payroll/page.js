@@ -508,6 +508,44 @@ export default function PayrollPage() {
           {/* === CHẤM CÔNG === */}
           {activeTab === 'attendance' && (
             <div>
+              {/* Summary cards per employee */}
+              {staffList.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
+                  {staffList.map(s => {
+                    const logs = attendance.filter(a => a.staff_id === s.id);
+                    const days   = logs.filter(a => a.clock_out).length;
+                    const totalH = Math.round(logs.reduce((sum, a) => sum + Number(a.work_hours || 0), 0) * 10) / 10;
+                    const otH    = Math.round(logs.reduce((sum, a) => sum + Number(a.overtime_hours || 0), 0) * 10) / 10;
+                    const otRate = configs[s.id]?.overtime_rate || 25000;
+                    const otAmt  = Math.round(otH * otRate);
+                    if (logs.length === 0) return null;
+                    return (
+                      <div key={s.id} style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: '14px 18px', minWidth: 200, flex: '1 1 200px' }}>
+                        <div style={{ fontWeight: 800, marginBottom: 8, fontSize: '0.92rem' }}>{s.full_name}</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.83rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: '#6b7280' }}>Ngày công</span>
+                            <strong>{days} ngày</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: '#6b7280' }}>Tổng giờ làm</span>
+                            <strong>{totalH}h</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: '#6b7280' }}>Tăng ca</span>
+                            <strong style={{ color: '#15803d' }}>{otH}h</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #f3f4f6', paddingTop: 6, marginTop: 2 }}>
+                            <span style={{ color: '#6b7280' }}>Tiền tăng ca</span>
+                            <strong style={{ color: '#15803d' }}>+{formatMoney(otAmt)}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               {attendance.length === 0 ? <div className="empty-state">Không có dữ liệu chấm công tháng {selMonth}/{selYear}</div> : (
                 <table className="payroll-table">
                   <thead><tr><th>Nhân viên</th><th>Ngày</th><th>Vào</th><th>Ra</th><th>Giờ làm</th><th>Tăng ca</th></tr></thead>
