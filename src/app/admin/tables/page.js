@@ -2769,6 +2769,7 @@ export default function TablesPage() {
                 onClick={async () => {
                   const t = cancelConfirm;
                   setCancelConfirm(null);
+                  setSelectedTable(null); // close panel immediately
                   await supabase.from('orders')
                     .update({ status: 'cancelled', payment_method: 'cancelled' })
                     .eq('table_id', t.id)
@@ -2776,7 +2777,6 @@ export default function TablesPage() {
                   await supabase.from('tables')
                     .update({ status: 'available', occupied_at: null })
                     .eq('id', t.id);
-                  setSelectedTable(null);
                   fetchTables();
                 }}
                 style={{

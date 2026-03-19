@@ -272,7 +272,6 @@ export default function OrdersPage() {
                 <th style={th}>Tiền</th>
                 <th style={th}>Trạng thái</th>
                 <th style={th}>TT</th>
-                <th style={th}></th>
               </tr>
             </thead>
             <tbody>
@@ -298,18 +297,7 @@ export default function OrdersPage() {
                   </td>
                   <td style={td}><MiniStatusBadge status={order.status} /></td>
                   <td style={td}><MiniPayBadge method={order.payment_method} /></td>
-                  <td style={{ ...td, padding: '6px 6px 6px 0' }} onClick={e => e.stopPropagation()}>
-                    <div style={{ display: 'flex', gap: 3 }}>
-                      {order.status === 'pending' && (
-                        <button onClick={() => updateStatus(order.id, 'preparing')}
-                          style={actionBtn('#2563eb')}>Nhận</button>
-                      )}
-                      {order.status === 'preparing' && (
-                        <button onClick={() => updateStatus(order.id, 'completed')}
-                          style={actionBtn('#16a34a')}>Xong</button>
-                      )}
-                    </div>
-                  </td>
+
                 </tr>
               ))}
             </tbody>
@@ -377,17 +365,8 @@ export default function OrdersPage() {
                 <strong>{fmt(selectedOrder.total_amount)}</strong>
               </div>
             </div>
-            <div className="modal-footer">
-              {selectedOrder.status === 'pending' && (
-                <button className="btn btn-primary" onClick={() => updateStatus(selectedOrder.id, 'preparing')}>
-                  <ChefHat size={16} /> Bắt đầu làm
-                </button>
-              )}
-              {selectedOrder.status === 'preparing' && (
-                <button className="btn btn-success" onClick={() => updateStatus(selectedOrder.id, 'completed')}>
-                  <CheckCircle size={16} /> Hoàn thành
-                </button>
-              )}
+            <div className="modal-footer" style={{ justifyContent: 'flex-end' }}>
+              <button className="btn btn-ghost" onClick={() => setSelectedOrder(null)}>Đóng</button>
             </div>
           </div>
         </div>
