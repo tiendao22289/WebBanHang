@@ -47,6 +47,7 @@
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
   padding-bottom: 2px;
+  align-items: center;
 }
 .payroll-tabs::-webkit-scrollbar { display: none; }
 .payroll-tab {

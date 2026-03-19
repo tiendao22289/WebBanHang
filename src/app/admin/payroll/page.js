@@ -370,17 +370,9 @@ export default function PayrollPage() {
     <div className="payroll-page">
       <div className="payroll-header">
         <div className="payroll-title">💰 Tính Lương Nhân Viên</div>
-        <div className="month-selector">
-          <select value={selMonth} onChange={e => setSelMonth(Number(e.target.value))}>
-            {months.map(m => <option key={m} value={m}>Tháng {m}</option>)}
-          </select>
-          <select value={selYear} onChange={e => setSelYear(Number(e.target.value))}>
-            {years.map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
-        </div>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs + month selector inline */}
       <div className="payroll-tabs">
         {[
           { key: 'salary', label: '📊 Bảng Lương' },
@@ -396,6 +388,15 @@ export default function PayrollPage() {
             {tab.badge > 0 && <span className="badge">{tab.badge}</span>}
           </button>
         ))}
+        {/* Month / Year selectors pinned right */}
+        <div className="month-selector" style={{ marginLeft: 'auto', flexShrink: 0 }}>
+          <select value={selMonth} onChange={e => setSelMonth(Number(e.target.value))}>
+            {months.map(m => <option key={m} value={m}>Tháng {m}</option>)}
+          </select>
+          <select value={selYear} onChange={e => setSelYear(Number(e.target.value))}>
+            {years.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
       </div>
 
       {loading ? <div className="empty-state">Đang tải...</div> : (
