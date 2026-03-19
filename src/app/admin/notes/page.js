@@ -131,11 +131,15 @@ export default function StaffNotesPage() {
 
   // ── Authentication Logic ──
   useEffect(() => {
-    // Check for existing session
-    const savedUser = localStorage.getItem('nhahang_staff_user');
-    if (savedUser) {
-      setCurrentUser(JSON.parse(savedUser));
-    }
+    // Check for existing session (unified key set by admin layout)
+    try {
+      const saved = localStorage.getItem('staffUser') || localStorage.getItem('nhahang_staff_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        setCurrentUser(u);
+        if (u.role !== 'admin') fetchEmpData(u.id);
+      }
+    } catch {}
   }, []);
 
   const handleLogin = async (e) => {
@@ -161,7 +165,7 @@ export default function StaffNotesPage() {
           full_name: data.full_name,
           role: data.role
         };
-        localStorage.setItem('nhahang_staff_user', JSON.stringify(userToSave));
+        localStorage.setItem('staffUser', JSON.stringify(userToSave));
         setCurrentUser(userToSave);
         // Non-admin staff land on Bảng Công — pre-load their data
         if (data.role !== 'admin') {
@@ -234,6 +238,7 @@ export default function StaffNotesPage() {
   };
 
   const handleLogout = () => {
+    localStorage.removeItem('staffUser');
     localStorage.removeItem('nhahang_staff_user');
     setCurrentUser(null);
     setPhone('');
