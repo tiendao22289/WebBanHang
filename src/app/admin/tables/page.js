@@ -99,6 +99,7 @@ export default function TablesPage() {
   const [bankAccounts, setBankAccounts]     = useState([]);
   const [qrAccount, setQrAccount]           = useState(null); // selected account for QR
   const [showTransfer, setShowTransfer]     = useState(false); // QR sub-screen in payment modal
+  const [cancelConfirm, setCancelConfirm]   = useState(null); // tableId to cancel
 
   const invoiceRef = useRef(null);
   const isFirstLoad = useRef(true);
@@ -1809,18 +1810,7 @@ export default function TablesPage() {
 
                     {/* Huỷ đơn — small red destructive button */}
                     <button
-                      onClick={async () => {
-                        if (!window.confirm('Bạn có chắc muốn huỷ toàn bộ đơn của bàn này?')) return;
-                        await supabase.from('orders')
-                          .update({ status: 'cancelled', payment_method: 'cancelled' })
-                          .eq('table_id', selectedTable.id)
-                          .in('status', ['pending', 'preparing', 'completed']);
-                        await supabase.from('tables')
-                          .update({ status: 'available', occupied_at: null })
-                          .eq('id', selectedTable.id);
-                        setSelectedTable(null);
-                        fetchTables();
-                      }}
+                      onClick={() => setCancelConfirm(selectedTable)}
                       style={{
                         width: 64, minWidth: 64,
                         padding: '6px 4px',
@@ -2711,6 +2701,93 @@ export default function TablesPage() {
                 }}
                 style={{ flex: 2, padding: '10px', border: 'none', borderRadius: 8, background: '#2563eb', color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem' }}>
                 ✅ Xác nhận thanh toán
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ HUỶ ĐƠN CONFIRMATION MODAL ══ */}
+      {cancelConfirm && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 3000,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+          animation: 'fadeIn 0.15s ease',
+        }}
+          onClick={() => setCancelConfirm(null)}
+        >
+          <div style={{
+            background: 'white',
+            borderRadius: '24px 24px 0 0',
+            width: '100%', maxWidth: 420,
+            padding: '28px 20px 36px',
+            boxShadow: '0 -12px 48px rgba(220,38,38,0.15)',
+            animation: 'slideUp 0.2s ease',
+          }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Warning icon */}
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
+              <div style={{
+                width: 64, height: 64, borderRadius: '50%',
+                background: 'linear-gradient(135deg,#fee2e2,#fecaca)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '2rem', boxShadow: '0 4px 20px rgba(220,38,38,0.2)',
+              }}>🗑️</div>
+            </div>
+
+            {/* Title */}
+            <div style={{ textAlign: 'center', marginBottom: 8 }}>
+              <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#0f172a' }}>Huỷ toàn bộ đơn?</div>
+              <div style={{ fontSize: '0.85rem', color: '#6b7280', marginTop: 4 }}>
+                Bàn <strong>{cancelConfirm.table_number}</strong> — tất cả đơn chưa thanh toán sẽ bị huỷ
+              </div>
+            </div>
+
+            {/* Warning note */}
+            <div style={{
+              background: '#fef9c3', border: '1px solid #fde68a',
+              borderRadius: 10, padding: '10px 14px',
+              fontSize: '0.8rem', color: '#92400e', fontWeight: 500,
+              marginTop: 12, marginBottom: 20, textAlign: 'center',
+            }}>
+              ⚠️ Hành động này <strong>không thể hoàn tác</strong>. Bàn sẽ được trả về trạng thái trống.
+            </div>
+
+            {/* Action buttons */}
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setCancelConfirm(null)}
+                style={{
+                  flex: 1, padding: '13px', border: '1.5px solid #e2e8f0',
+                  borderRadius: 14, background: 'white', cursor: 'pointer',
+                  fontSize: '0.95rem', fontWeight: 700, color: '#374151',
+                }}>
+                Không, giữ lại
+              </button>
+              <button
+                onClick={async () => {
+                  const t = cancelConfirm;
+                  setCancelConfirm(null);
+                  await supabase.from('orders')
+                    .update({ status: 'cancelled', payment_method: 'cancelled' })
+                    .eq('table_id', t.id)
+                    .in('status', ['pending', 'preparing', 'completed']);
+                  await supabase.from('tables')
+                    .update({ status: 'available', occupied_at: null })
+                    .eq('id', t.id);
+                  setSelectedTable(null);
+                  fetchTables();
+                }}
+                style={{
+                  flex: 1, padding: '13px', border: 'none',
+                  borderRadius: 14,
+                  background: 'linear-gradient(135deg,#ef4444,#dc2626)',
+                  color: 'white', cursor: 'pointer',
+                  fontSize: '0.95rem', fontWeight: 800,
+                  boxShadow: '0 4px 16px rgba(220,38,38,0.35)',
+                }}>
+                Có, huỷ đơn
               </button>
             </div>
           </div>
