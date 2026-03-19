@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
   Search, Calendar, Eye, X, Clock, Filter,
@@ -24,12 +24,12 @@ const PAYMENT_META = {
 };
 
 export default function OrdersPage() {
-  const [orders, setOrders]           = useState([]);
-  const [loading, setLoading]         = useState(true);
+  const [orders, setOrders]               = useState([]);
+  const [loading, setLoading]             = useState(true); // only true on first load
   const [selectedOrder, setSelectedOrder] = useState(null);
-  const [dateFilter, setDateFilter]   = useState(new Date().toISOString().split('T')[0]);
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [searchTerm, setSearchTerm]   = useState('');
+  const [dateFilter, setDateFilter]       = useState(new Date().toISOString().split('T')[0]);
+  const [statusFilter, setStatusFilter]   = useState('all');
+  const [searchTerm, setSearchTerm]       = useState('');
 
   // Lock body scroll when modal open
   useEffect(() => {
@@ -43,8 +43,13 @@ export default function OrdersPage() {
     return () => document.body.classList.remove('modal-open');
   }, [selectedOrder]);
 
+  const firstFetchDone = useRef(false);
+
   const fetchOrders = useCallback(async () => {
-    setLoading(true);
+    // Only show loading spinner on very first fetch
+    const isFirst = !firstFetchDone.current;
+    if (isFirst) setLoading(true);
+
     let query = supabase
       .from('orders')
       .select(`
@@ -52,7 +57,7 @@ export default function OrdersPage() {
         table:tables(table_number, table_type, table_name),
         order_items (*, menu_item:menu_items(name, price))
       `)
-      .order('created_at', { ascending: false }); // newest first
+      .order('created_at', { ascending: false });
 
     if (dateFilter) {
       const start = new Date(dateFilter); start.setHours(0, 0, 0, 0);
@@ -69,37 +74,41 @@ export default function OrdersPage() {
     const { data } = await query;
     setOrders(data || []);
 
-    // Keep selected order in sync
+    // Keep selected order in sync (silent)
     if (selectedOrder) {
       const fresh = data?.find(o => o.id === selectedOrder.id);
       if (fresh) setSelectedOrder(fresh);
     }
-    setLoading(false);
+
+    if (isFirst) {
+      setLoading(false);
+      firstFetchDone.current = true;
+    }
   }, [dateFilter, statusFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Initial fetch + re-fetch on filter change
-  useEffect(() => { fetchOrders(); }, [fetchOrders]);
+  // Re-fetch (silent background) when filter changes — reset firstFetchDone so new filter shows loader briefly
+  useEffect(() => {
+    firstFetchDone.current = false;
+    fetchOrders();
+  }, [fetchOrders]);
 
-  // ── Realtime subscription ──
+  // ── Realtime subscription only — no polling ──
   useEffect(() => {
     const channel = supabase
       .channel('orders-realtime-' + Date.now())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
-        fetchOrders();
+        fetchOrders(); // silent update
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
         fetchOrders();
       })
       .subscribe();
 
-    // Fallback poll every 8s
-    const poll = setInterval(fetchOrders, 8000);
     const onVisible = () => { if (document.visibilityState === 'visible') fetchOrders(); };
     document.addEventListener('visibilitychange', onVisible);
 
     return () => {
       supabase.removeChannel(channel);
-      clearInterval(poll);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [fetchOrders]);
@@ -162,12 +171,8 @@ export default function OrdersPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Hoá đơn</h1>
-          <p className="page-subtitle">Lịch sử đơn hàng theo thời gian thực</p>
+          <p className="page-subtitle">Tự động cập nhật theo thời gian thực</p>
         </div>
-        <button onClick={fetchOrders}
-          style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600, color: '#374151', display: 'flex', alignItems: 'center', gap: 6 }}>
-          🔄 Tải lại
-        </button>
       </div>
 
       {/* Filters */}
