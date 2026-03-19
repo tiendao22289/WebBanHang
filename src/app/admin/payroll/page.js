@@ -162,7 +162,10 @@ export default function PayrollPage() {
     const otRate = cfg?.overtime_rate || 25000;
     const dailyRate = base > 0 ? Math.round(base / 26) : 0;
 
-    const otHours = attendance.filter(a => a.staff_id === staffId).reduce((s, a) => s + Number(a.overtime_hours || 0), 0);
+    const logs = attendance.filter(a => a.staff_id === staffId);
+    const workDays  = logs.filter(a => a.clock_out).length;
+    const totalWorkH = Math.round(logs.reduce((s, a) => s + Number(a.work_hours || 0), 0) * 10) / 10;
+    const otHours   = Math.round(logs.reduce((s, a) => s + Number(a.overtime_hours || 0), 0) * 10) / 10;
     const otAmt = Math.round(otHours * otRate);
 
     const approved = requests.filter(r => r.staff_id === staffId && r.status === 'approved' && r.month === selMonth && r.year === selYear);
@@ -173,7 +176,7 @@ export default function PayrollPage() {
     const vioAmt = violations.filter(v => v.staff_id === staffId).reduce((s, v) => s + Number(v.amount || 0), 0);
 
     const net = base + otAmt - advAmt - absAmt - vioAmt;
-    return { base, otHours, otAmt, advAmt, absDays, absAmt, vioAmt, net };
+    return { base, workDays, totalWorkH, otHours, otAmt, advAmt, absDays, absAmt, vioAmt, net };
   };
 
   // --- Approve / Reject request ---
@@ -400,6 +403,8 @@ export default function PayrollPage() {
                   <tr>
                     <th>Nhân viên</th>
                     <th>Lương cơ bản</th>
+                    <th>Ngày công</th>
+                    <th>Tổng giờ làm</th>
                     <th>Tăng ca</th>
                     <th>Ứng lương</th>
                     <th>Nghỉ</th>
@@ -414,6 +419,8 @@ export default function PayrollPage() {
                       <tr key={s.id}>
                         <td><div style={{ fontWeight: 700 }}>{s.full_name}</div><div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div></td>
                         <td>{formatMoney(c.base)}</td>
+                        <td><strong>{c.workDays}</strong><div style={{ fontSize: '0.72rem', color: '#9ca3af' }}>ngày</div></td>
+                        <td><strong>{c.totalWorkH}h</strong></td>
                         <td><span style={{ color: '#15803d' }}>+{formatMoney(c.otAmt)}</span><div style={{ fontSize: '0.72rem', color: '#9ca3af' }}>{c.otHours}h</div></td>
                         <td><span style={{ color: '#dc2626' }}>-{formatMoney(c.advAmt)}</span></td>
                         <td><span style={{ color: '#dc2626' }}>-{formatMoney(c.absAmt)}</span><div style={{ fontSize: '0.72rem', color: '#9ca3af' }}>{c.absDays} ngày</div></td>
