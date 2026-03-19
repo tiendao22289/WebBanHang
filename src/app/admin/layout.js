@@ -33,7 +33,7 @@ const ALL_NAV = [
 ];
 
 // Pages staff are allowed to visit
-const STAFF_ALLOWED_HREFS = ['/admin/tables', '/admin/orders', '/admin/notes'];
+const STAFF_ALLOWED_HREFS = ['/admin/tables', '/admin/orders', '/admin/payroll'];
 
 const STAFF_NAV = ALL_NAV.filter(n => STAFF_ALLOWED_HREFS.some(a => n.href.startsWith(a)));
 

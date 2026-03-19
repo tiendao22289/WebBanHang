@@ -31,20 +31,73 @@ export default function PayrollPage() {
   const [selYear, setSelYear] = useState(now.getFullYear());
   const [loading, setLoading] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
+  const [currentUser, setCurrentUser] = useState(null);
   const router = useRouter();
 
-  // Guard: only admin can access payroll page
+  // Read current user from localStorage (set by admin layout)
   useEffect(() => {
     try {
       const saved = localStorage.getItem('staffUser');
-      if (!saved) return; // no staff session, allow admin panel
-      const user = JSON.parse(saved);
-      if (user.role !== 'admin') {
-        // Non-admin staff → send them back to notes self-service
-        router.replace('/admin/notes');
+      if (saved) {
+        const u = JSON.parse(saved);
+        setCurrentUser(u);
+        if (u.role !== 'admin') fetchStaffData(u.id);
       }
-    } catch { /* ignore */ }
-  }, [router]);
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Staff self-service state
+  const [todayAtt,    setTodayAtt]    = useState(null);
+  const [empReqs,     setEmpReqs]     = useState([]);
+  const [showAdvForm, setShowAdvForm] = useState(false);
+  const [showAbsForm, setShowAbsForm] = useState(false);
+  const [advForm,     setAdvForm]     = useState({ amount: '', reason: '' });
+  const [absForm,     setAbsForm]     = useState({ days: '1', reason: '' });
+
+  const fetchStaffData = async (staffId) => {
+    const today = new Date().toISOString().split('T')[0];
+    const m = now.getMonth() + 1; const y = now.getFullYear();
+    const [attRes, reqRes] = await Promise.all([
+      supabase.from('attendance_logs').select('*').eq('staff_id', staffId).eq('date', today).maybeSingle(),
+      supabase.from('payroll_requests').select('*').eq('staff_id', staffId).eq('month', m).eq('year', y).order('created_at', { ascending: false }),
+    ]);
+    setTodayAtt(attRes.data);
+    setEmpReqs(reqRes.data || []);
+  };
+
+  const handleClockIn = async () => {
+    if (!currentUser) return;
+    await supabase.from('attendance_logs').insert({ staff_id: currentUser.id, clock_in: new Date().toISOString(), date: new Date().toISOString().split('T')[0] });
+    fetchStaffData(currentUser.id);
+  };
+
+  const handleClockOut = async () => {
+    if (!todayAtt) return;
+    const diffH = (new Date() - new Date(todayAtt.clock_in)) / 3600000;
+    const workH = Math.round(diffH * 10) / 10;
+    const otH   = Math.max(0, Math.round((diffH - 8) * 10) / 10);
+    await supabase.from('attendance_logs').update({ clock_out: new Date().toISOString(), work_hours: workH, overtime_hours: otH }).eq('id', todayAtt.id);
+    fetchStaffData(currentUser.id);
+  };
+
+  const handleSubmitAdvance = async () => {
+    if (!advForm.amount || !advForm.reason) return alert('Vui long dien day du!');
+    const m = now.getMonth() + 1; const y = now.getFullYear();
+    await supabase.from('payroll_requests').insert({ staff_id: currentUser.id, request_type: 'advance', amount: Number(advForm.amount.replace(/\./g, '')), reason: advForm.reason, month: m, year: y });
+    setAdvForm({ amount: '', reason: '' }); setShowAdvForm(false);
+    fetchStaffData(currentUser.id);
+    alert('Da gui yeu cau ung luong!');
+  };
+
+  const handleSubmitAbsent = async () => {
+    if (!absForm.reason) return alert('Vui long dien ly do!');
+    const m = now.getMonth() + 1; const y = now.getFullYear();
+    await supabase.from('payroll_requests').insert({ staff_id: currentUser.id, request_type: 'absent', days: Number(absForm.days), reason: absForm.reason, month: m, year: y });
+    setAbsForm({ days: '1', reason: '' }); setShowAbsForm(false);
+    fetchStaffData(currentUser.id);
+    alert('Da gui bao nghi!');
+  };
 
   // QR state
   const [qrToken, setQrToken] = useState(getQRToken());
@@ -191,6 +244,120 @@ export default function PayrollPage() {
 
   const requestTypeMap = { advance: { label: '💵 Ứng lương', color: '#92400e', bg: '#fef9c3' }, absent: { label: '🏖 Báo nghỉ', color: '#1e40af', bg: '#dbeafe' } };
 
+  // ── STAFF VIEW ──────────────────────────────────────────────────────────────
+  if (currentUser && currentUser.role !== 'admin') {
+    const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : null;
+    return (
+      <div className="payroll-page">
+        <div className="payroll-header">
+          <div className="payroll-title">💰 Tính Lương của tôi</div>
+          <div style={{ fontSize: '0.82rem', color: '#6b7280' }}>Tháng {now.getMonth() + 1}/{now.getFullYear()}</div>
+        </div>
+
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+          {/* Chấm công */}
+          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+            <div style={{ fontWeight: 800, fontSize: '1rem', marginBottom: 12 }}>⏰ Chấm công hôm nay</div>
+            {!todayAtt ? (
+              <button onClick={handleClockIn} style={{ width: '100%', padding: '14px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer' }}>
+                🟢 Bắt đầu ca làm
+              </button>
+            ) : !todayAtt.clock_out ? (
+              <div>
+                <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 10 }}>
+                  ✅ Đã vào lúc <strong>{fmtTime(todayAtt.clock_in)}</strong>
+                </div>
+                <button onClick={handleClockOut} style={{ width: '100%', padding: '14px', background: '#dc2626', color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer' }}>
+                  🔴 Kết thúc ca
+                </button>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '0.85rem', color: '#6b7280' }}>
+                  Vào: <strong>{fmtTime(todayAtt.clock_in)}</strong> → Ra: <strong>{fmtTime(todayAtt.clock_out)}</strong>
+                </div>
+                <div style={{ marginTop: 6, fontWeight: 700 }}>
+                  ⏱ <span style={{ color: '#15803d' }}>{todayAtt.work_hours}h làm việc</span>
+                  {todayAtt.overtime_hours > 0 && <span style={{ color: '#f59e0b' }}> • Tăng ca: {todayAtt.overtime_hours}h</span>}
+                </div>
+                <div style={{ marginTop: 4, color: '#16a34a', fontWeight: 700 }}>✅ Hoàn thành ca hôm nay</div>
+              </div>
+            )}
+          </div>
+
+          {/* Ứng lương */}
+          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showAdvForm ? 12 : 0 }}>
+              <div style={{ fontWeight: 800 }}>💵 Xin Ứng Lương</div>
+              <button onClick={() => setShowAdvForm(p => !p)} style={{ fontSize: '0.8rem', background: showAdvForm ? '#f3f4f6' : '#111827', color: showAdvForm ? '#374151' : 'white', border: 'none', borderRadius: 8, padding: '5px 12px', fontWeight: 700, cursor: 'pointer' }}>
+                {showAdvForm ? 'Huỷ' : '+ Tạo yêu cầu'}
+              </button>
+            </div>
+            {showAdvForm && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <input type="text" inputMode="numeric" placeholder="Số tiền ứng (đ)" value={advForm.amount}
+                  onChange={e => { const r = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setAdvForm(p => ({ ...p, amount: r ? Number(r).toLocaleString('vi-VN') : '' })); }}
+                  style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
+                <textarea placeholder="Lý do cần ứng..." value={advForm.reason} onChange={e => setAdvForm(p => ({ ...p, reason: e.target.value }))}
+                  style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} />
+                <button onClick={handleSubmitAdvance} style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer' }}>
+                  Gửi yêu cầu
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Báo nghỉ */}
+          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showAbsForm ? 12 : 0 }}>
+              <div style={{ fontWeight: 800 }}>🏖 Báo Nghỉ</div>
+              <button onClick={() => setShowAbsForm(p => !p)} style={{ fontSize: '0.8rem', background: showAbsForm ? '#f3f4f6' : '#111827', color: showAbsForm ? '#374151' : 'white', border: 'none', borderRadius: 8, padding: '5px 12px', fontWeight: 700, cursor: 'pointer' }}>
+                {showAbsForm ? 'Huỷ' : '+ Báo nghỉ'}
+              </button>
+            </div>
+            {showAbsForm && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <input type="number" min="0.5" max="30" step="0.5" placeholder="Số ngày nghỉ" value={absForm.days}
+                  onChange={e => setAbsForm(p => ({ ...p, days: e.target.value }))}
+                  style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
+                <textarea placeholder="Lý do nghỉ..." value={absForm.reason} onChange={e => setAbsForm(p => ({ ...p, reason: e.target.value }))}
+                  style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} />
+                <button onClick={handleSubmitAbsent} style={{ background: '#f59e0b', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer' }}>
+                  Gửi báo nghỉ
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Lịch sử yêu cầu tháng này */}
+          {empReqs.length > 0 && (
+            <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+              <div style={{ fontWeight: 800, marginBottom: 10 }}>📄 Yêu cầu tháng {now.getMonth() + 1}</div>
+              {empReqs.map(r => (
+                <div key={r.id} style={{ padding: '10px 0', borderBottom: '1px solid #f3f4f6', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>
+                      {r.request_type === 'advance' ? `💵 Ứng ${Number(r.amount || 0).toLocaleString('vi-VN')}đ` : `🏖 Nghỉ ${r.days} ngày`}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{r.reason}</div>
+                    {r.admin_note && <div style={{ fontSize: '0.73rem', color: '#9ca3af', marginTop: 2 }}>💬 {r.admin_note}</div>}
+                  </div>
+                  <span style={{ flexShrink: 0, padding: '2px 8px', borderRadius: 5, fontSize: '0.72rem', fontWeight: 700,
+                    background: r.status === 'approved' ? '#dcfce7' : r.status === 'rejected' ? '#fee2e2' : '#fef9c3',
+                    color: r.status === 'approved' ? '#15803d' : r.status === 'rejected' ? '#dc2626' : '#92400e' }}>
+                    {r.status === 'pending' ? '⏳ Chờ' : r.status === 'approved' ? '✅ Duyệt' : '❌ Từ chối'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── ADMIN VIEW ───────────────────────────────────────────────────────────────
   return (
     <div className="payroll-page">
       <div className="payroll-header">
