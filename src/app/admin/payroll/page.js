@@ -408,6 +408,11 @@ export default function PayrollPage() {
             <span>{currentUser.role === 'admin' ? '👑' : '👤'}</span>
             <span>{currentUser.full_name}</span>
             <span style={{ fontWeight: 400, opacity: 0.7 }}>· {currentUser.role === 'admin' ? 'Admin' : 'Nhân viên'}</span>
+            <button
+              onClick={() => { localStorage.removeItem('staffUser'); window.location.reload(); }}
+              title="Đăng xuất"
+              style={{ marginLeft: 4, background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1, padding: '2px 4px', borderRadius: 6, opacity: 0.6 }}
+            >🚪</button>
           </div>
         )}
       </div>
