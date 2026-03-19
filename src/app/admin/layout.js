@@ -14,6 +14,7 @@ import {
   Wallet,
   LogOut,
   Lock,
+  Settings,
 } from 'lucide-react';
 import './admin.css';
 
@@ -30,6 +31,7 @@ const ALL_NAV = [
   { href: '/admin/notes',     label: 'Sổ tay',      icon: ChefHat },
   { href: '/admin/payroll',   label: 'Tính Lương',  icon: Wallet },
   { href: '/admin/stats',     label: 'Thống kê',    icon: BarChart3 },
+  { href: '/admin/settings',  label: 'Cài đặt',     icon: Settings, adminOnly: true },
 ];
 
 // Pages staff are allowed to visit
