@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import { QRCodeSVG } from 'qrcode.react';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users } from 'lucide-react';
 import './payroll.css';
 
@@ -13,10 +14,15 @@ const now = new Date();
 const fmt = (n) => String(n).padStart(2, '0');
 const formatMoney = (v) => Number(v || 0).toLocaleString('vi-VN') + 'đ';
 
+// Returns token that changes every 5 minutes
+function getQRToken() { return String(Math.floor(Date.now() / (5 * 60 * 1000))); }
+// Seconds left in current 5-min window
+function secsLeft() { return 300 - (Math.floor(Date.now() / 1000) % 300); }
+
 export default function PayrollPage() {
   const [activeTab, setActiveTab] = useState('salary');
   const [staffList, setStaffList] = useState([]);
-  const [configs, setConfigs] = useState({});       // { staffId: { base_salary, overtime_rate, pay_day } }
+  const [configs, setConfigs] = useState({});
   const [requests, setRequests] = useState([]);
   const [violations, setViolations] = useState([]);
   const [attendance, setAttendance] = useState([]);
@@ -24,6 +30,28 @@ export default function PayrollPage() {
   const [selYear, setSelYear] = useState(now.getFullYear());
   const [loading, setLoading] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
+
+  // QR state
+  const [qrToken, setQrToken] = useState(getQRToken());
+  const [qrCountdown, setQrCountdown] = useState(secsLeft());
+  const [networkUrl, setNetworkUrl] = useState('');
+
+  useEffect(() => {
+    // Detect network URL for QR
+    const host = window.location.hostname;
+    const port = window.location.port;
+    setNetworkUrl(`http://${host}${port ? ':' + port : ''}/checkin?t=${qrToken}`);
+  }, [qrToken]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const secs = secsLeft();
+      setQrCountdown(secs);
+      const newToken = getQRToken();
+      if (newToken !== qrToken) setQrToken(newToken);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [qrToken]);
 
   // Violation form
   const [vForm, setVForm] = useState({ staff_id: '', amount: '', reason: '' });
@@ -134,10 +162,11 @@ export default function PayrollPage() {
       {/* Tabs */}
       <div className="payroll-tabs">
         {[
-          { key: 'salary', label: '📊 Bảng Lương', icon: null },
+          { key: 'salary', label: '📊 Bảng Lương' },
           { key: 'requests', label: '📋 Yêu cầu', badge: pendingCount },
           { key: 'violations', label: '⚠️ Vi phạm' },
           { key: 'attendance', label: '⏰ Chấm công' },
+          { key: 'qr', label: '📱 QR Chấm công' },
           { key: 'config', label: '⚙️ Cấu hình' },
         ].map(tab => (
           <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)}>
@@ -285,6 +314,33 @@ export default function PayrollPage() {
                   </tbody>
                 </table>
               )}
+            </div>
+          )}
+
+          {/* === QR CHẤM CÔNG === */}
+          {activeTab === 'qr' && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, padding: '20px 0' }}>
+              <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 16, padding: 24, textAlign: 'center', maxWidth: 340, width: '100%' }}>
+                <div style={{ fontWeight: 800, fontSize: '1rem', marginBottom: 4 }}>📱 QR Chấm công</div>
+                <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: 16 }}>Nhân viên quét mã để vào/ra ca</div>
+                <div style={{ display: 'inline-block', padding: 12, background: 'white', border: '2px solid #111827', borderRadius: 12 }}>
+                  <QRCodeSVG value={networkUrl || 'loading...'} size={200} level="M" />
+                </div>
+                <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: qrCountdown > 30 ? '#16a34a' : '#f59e0b', animation: 'pulse 1s infinite' }} />
+                  <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>Hết hạn sau: <strong style={{ color: qrCountdown > 30 ? '#15803d' : '#dc2626' }}>{qrCountdown}s</strong></span>
+                </div>
+                <div style={{ marginTop: 10, fontSize: '0.72rem', color: '#9ca3af', wordBreak: 'break-all', background: '#f9fafb', borderRadius: 8, padding: '6px 10px' }}>
+                  {networkUrl}
+                </div>
+              </div>
+              <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 12, padding: 16, maxWidth: 340, width: '100%', fontSize: '0.82rem', color: '#0369a1' }}>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>Hướng dẫn sử dụng:</div>
+                <div>1️⃣ Mở trang này trên máy tính / tablet tại nhà hàng</div>
+                <div style={{ marginTop: 4 }}>2️⃣ Nhân viên dùng điện thoại quét mã QR</div>
+                <div style={{ marginTop: 4 }}>3️⃣ Đăng nhập (nếu chưa) và bấm <strong>Xác nhận chấm công</strong></div>
+                <div style={{ marginTop: 4 }}>4️⃣ Mã tự làm mới mỗi 5 phút — không thể dùng mã cũ</div>
+              </div>
             </div>
           )}
 
