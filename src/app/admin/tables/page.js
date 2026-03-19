@@ -2774,18 +2774,9 @@ export default function TablesPage() {
               <button
                 onClick={async () => {
                   const t = cancelConfirm;
-                  setCancelConfirm(null); // close the modal immediately
 
-                  // 1. DB updates FIRST — before anything else so Realtime fires with correct state
-                  await supabase.from('orders')
-                    .update({ status: 'cancelled', payment_method: 'cancelled' })
-                    .eq('table_id', t.id)
-                    .in('status', ['pending', 'preparing', 'completed']);
-                  await supabase.from('tables')
-                    .update({ status: 'available', occupied_at: null })
-                    .eq('id', t.id);
-
-                  // 2. Clear ALL local UI state AFTER DB is committed
+                  // ─── 1. Close ALL panels INSTANTLY ───
+                  setCancelConfirm(null);
                   setSelectedTable(null);
                   setAddingToOrder(null);
                   setAddItemSearch('');
@@ -2794,7 +2785,14 @@ export default function TablesPage() {
                   setPaymentModal(null);
                   setOrders(prev => ({ ...prev, [t.id]: [] }));
 
-                  // 3. Refresh table list
+                  // ─── 2. DB updates in background (after UI is already gone) ───
+                  await supabase.from('orders')
+                    .update({ status: 'cancelled', payment_method: 'cancelled' })
+                    .eq('table_id', t.id)
+                    .in('status', ['pending', 'preparing', 'completed']);
+                  await supabase.from('tables')
+                    .update({ status: 'available', occupied_at: null })
+                    .eq('id', t.id);
                   fetchTables();
                 }}
                 style={{
