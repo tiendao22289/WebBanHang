@@ -45,6 +45,7 @@ function OrderContent() {
   const [orderSuccess, setOrderSuccess] = useState(false);
   const [userScrolling, setUserScrolling] = useState(false);
   const [orderCancelled, setOrderCancelled] = useState(false); // admin cancelled
+  const [orderPaid, setOrderPaid] = useState(null); // { total } khi admin thanh toán
 
   const catTabsRef = useRef(null);
   const sectionRefs = useRef({});
@@ -117,28 +118,37 @@ function OrderContent() {
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'tables',
         filter: `id=eq.${tableId}`,
-      }, (payload) => {
+      }, async (payload) => {
         if (payload.new?.status === 'available') {
-          // Admin reset the table → clear cart + session + show notification
+          // Query the customer's own order to distinguish paid vs cancelled
+          const savedOrderId = getSavedSession()?.orderId;
+          let isPaid = false;
+          if (savedOrderId) {
+            const { data: ord } = await supabase
+              .from('orders').select('status, total_amount').eq('id', savedOrderId).maybeSingle();
+            isPaid = ord?.status === 'paid';
+            if (isPaid) {
+              setOrderPaid({ total: ord.total_amount });
+            }
+          }
           setCart([]);
           setNotes({});
           setPreviousOrders([]);
           clearSession();
           setShowCart(false);
           setShowOrdered(false);
-          setOrderCancelled(true);
+          if (!isPaid) setOrderCancelled(true);
         }
       })
-      // Watch for orders being cancelled at this table
+      // Watch for orders being cancelled or paid at this table
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'orders',
         filter: `table_id=eq.${tableId}`,
       }, (payload) => {
+        const savedOrderId = getSavedSession()?.orderId;
+        const isMyOrder = savedOrderId && payload.new.id === savedOrderId;
         if (payload.new?.status === 'cancelled') {
-          // Check if this is the customer's own order
-          const savedOrderId = getSavedSession()?.orderId;
-          if (savedOrderId && payload.new.id === savedOrderId) {
-            // This customer's bill was cancelled → clear + show banner
+          if (isMyOrder) {
             setCart([]);
             setNotes({});
             setPreviousOrders([]);
@@ -147,9 +157,16 @@ function OrderContent() {
             setShowOrdered(false);
             setOrderCancelled(true);
           } else {
-            // Other customer's bill cancelled — just refresh list
             fetchPreviousOrders();
           }
+        } else if (payload.new?.status === 'paid' && isMyOrder) {
+          setOrderPaid({ total: payload.new.total_amount });
+          setCart([]);
+          setNotes({});
+          setPreviousOrders([]);
+          clearSession();
+          setShowCart(false);
+          setShowOrdered(false);
         }
       })
       .subscribe();
@@ -746,6 +763,31 @@ function OrderContent() {
       {orderSuccess && (
         <div className="co-success-toast">
           ✅ Đã gửi đơn hàng thành công!
+        </div>
+      )}
+
+      {/* ─── Order Paid Banner ─── */}
+      {orderPaid && (
+        <div className="co-cancelled-banner" style={{ background: 'linear-gradient(135deg,#052e16,#14532d)', borderColor: '#16a34a' }}>
+          <div className="co-cancelled-icon">✅</div>
+          <div className="co-cancelled-text">
+            <strong style={{ color: '#4ade80' }}>Thanh toán thành công!</strong>
+            <span style={{ color: '#86efac' }}>
+              Cảm ơn quý khách đã ủng hộ nhà hàng 🙏
+              {orderPaid.total > 0 && (
+                <b style={{ display: 'block', fontSize: '1.1rem', color: 'white', marginTop: 4 }}>
+                  {orderPaid.total.toLocaleString('vi-VN')} đ
+                </b>
+              )}
+            </span>
+          </div>
+          <button
+            className="co-cancelled-restart"
+            style={{ background: '#16a34a', borderColor: '#16a34a' }}
+            onClick={() => setOrderPaid(null)}
+          >
+            Đóng
+          </button>
         </div>
       )}
 
