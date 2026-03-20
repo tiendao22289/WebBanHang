@@ -315,7 +315,34 @@ function OrderContent() {
       return;
     }
 
-    // Session valid → skip modal
+    // Kiểm tra session còn hợp lệ không (còn bill đang chờ/làm)
+    const savedOrderId = saved?.orderId;
+    let hasActiveBill = false;
+    if (savedOrderId) {
+      const { data: ord } = await supabase
+        .from('orders').select('status').eq('id', savedOrderId).maybeSingle();
+      hasActiveBill = ord?.status === 'pending' || ord?.status === 'preparing';
+    } else if (saved?.customerPhone) {
+      // Fallback: tìm theo phone nếu chưa có orderId
+      const now2 = new Date();
+      const startOfDay2 = new Date(now2.getFullYear(), now2.getMonth(), now2.getDate()).toISOString();
+      const { data: activeOrds } = await supabase
+        .from('orders').select('id')
+        .eq('table_id', tableId).eq('customer_phone', saved.customerPhone)
+        .gte('created_at', startOfDay2)
+        .in('status', ['pending', 'preparing']);
+      hasActiveBill = (activeOrds?.length || 0) > 0;
+    }
+
+    if (!hasActiveBill) {
+      // Không còn bill active → clear session, show modal để đặt mới
+      clearSession();
+      setPreviousOrders([]);
+      setShowInfoModal(true);
+      return;
+    }
+
+    // Session + bill còn active → skip modal, fetch orders
     setShowInfoModal(false);
     fetchPreviousOrders(saved.customerPhone);
   }
