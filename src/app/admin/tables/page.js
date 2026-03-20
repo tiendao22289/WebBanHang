@@ -1522,21 +1522,7 @@ export default function TablesPage() {
                   <X size={20} />
                 </button>
               </div>
-              {/* Show first order info (customer name, time, status) */}
-              {orders[selectedTable.id]?.[0] && (() => {
-                const o = orders[selectedTable.id][0];
-                return (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.82rem', color: '#6b7280' }}>
-                    <span style={{ fontWeight: 600, color: '#374151' }}>{o.customer_name}</span>
-                    <span>·</span>
-                    <Clock size={12} />
-                    <span>{formatTime(o.created_at)}</span>
-                    <span className={`badge badge-${o.status}`} style={{ fontSize: '0.75rem', padding: '2px 8px' }}>
-                      {o.status === 'pending' ? 'Chờ' : o.status === 'preparing' ? 'Đang làm' : o.status === 'completed' ? 'Xong' : 'Đã TT'}
-                    </span>
-                  </div>
-                );
-              })()}
+
             </div>
             <div className="modal-body" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
 
@@ -1594,6 +1580,57 @@ export default function TablesPage() {
               {orders[selectedTable.id]?.length > 0 ? (
                 orders[selectedTable.id].map((order, idx) => (
                   <div key={order.id} className="order-detail-card">
+                    {/* Customer name header per bill */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 0 8px', borderBottom: '1px solid #f3f4f6', marginBottom: 4 }}>
+                      {orders[selectedTable.id].length > 1 && (
+                        <span style={{ fontSize: '0.7rem', background: '#2563eb', color: 'white', borderRadius: 10, padding: '1px 7px', fontWeight: 700 }}>
+                          #{idx + 1}
+                        </span>
+                      )}
+                      <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>
+                        👤 {order.customer_name}
+                      </span>
+                      {order.customer_phone && order.customer_phone !== 'Quản lý' && (
+                        <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>· {order.customer_phone}</span>
+                      )}
+                      {/* Status badge */}
+                      <span style={{
+                        fontSize: '0.68rem', fontWeight: 700, padding: '2px 7px', borderRadius: 20,
+                        background: order.status === 'pending' ? '#fef3c7' : order.status === 'preparing' ? '#dbeafe' : order.status === 'completed' ? '#dcfce7' : '#f3f4f6',
+                        color: order.status === 'pending' ? '#d97706' : order.status === 'preparing' ? '#2563eb' : order.status === 'completed' ? '#16a34a' : '#6b7280',
+                      }}>
+                        {order.status === 'pending' ? 'Chờ' : order.status === 'preparing' ? 'Đang làm' : order.status === 'completed' ? 'Xong' : order.status}
+                      </span>
+                      {/* Cancel this single bill */}
+                      <button
+                        onClick={async () => {
+                          const result = await Swal.fire({
+                            title: 'Huỷ bill?',
+                            html: `Huỷ bill của <b>${order.customer_name}</b>?`,
+                            icon: 'warning',
+                            showCancelButton: true,
+                            confirmButtonColor: '#dc2626',
+                            cancelButtonColor: '#6b7280',
+                            confirmButtonText: 'Huỷ bill',
+                            cancelButtonText: 'Không',
+                            reverseButtons: true,
+                          });
+                          if (!result.isConfirmed) return;
+                          await supabase.from('orders').update({ status: 'cancelled' }).eq('id', order.id);
+                          // If all orders at this table are now cancelled, reset the table
+                          const remaining = orders[selectedTable.id].filter(o => o.id !== order.id && o.status !== 'cancelled');
+                          if (remaining.length === 0) {
+                            await supabase.from('tables').update({ status: 'available', occupied_at: null }).eq('id', selectedTable.id);
+                            setSelectedTable(null);
+                          }
+                          fetchTables();
+                        }}
+                        title="Huỷ bill này"
+                        style={{ marginLeft: 'auto', background: '#fff1f2', border: '1.5px solid #fca5a5', borderRadius: 8, color: '#dc2626', cursor: 'pointer', padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0 }}
+                      >
+                        Huỷ bill
+                      </button>
+                    </div>
                     <div className="order-items-list">
                       {order.order_items?.map((item) => (
                         <div key={item.id} style={{

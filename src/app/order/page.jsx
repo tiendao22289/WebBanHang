@@ -58,12 +58,13 @@ function OrderContent() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
-  function saveSession(name, phone, address = '') {
+  function saveSession(name, phone, address = '', orderId = null) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       tableId,
       customerName: name,
       customerPhone: phone,
       deliveryAddress: address,
+      orderId,
       date: getTodayStr(),
     }));
   }
@@ -134,8 +135,21 @@ function OrderContent() {
         filter: `table_id=eq.${tableId}`,
       }, (payload) => {
         if (payload.new?.status === 'cancelled') {
-          // Refresh previous orders list so cancelled orders are excluded
-          fetchPreviousOrders();
+          // Check if this is the customer's own order
+          const savedOrderId = getSavedSession()?.orderId;
+          if (savedOrderId && payload.new.id === savedOrderId) {
+            // This customer's bill was cancelled → clear + show banner
+            setCart([]);
+            setNotes({});
+            setPreviousOrders([]);
+            clearSession();
+            setShowCart(false);
+            setShowOrdered(false);
+            setOrderCancelled(true);
+          } else {
+            // Other customer's bill cancelled — just refresh list
+            fetchPreviousOrders();
+          }
         }
       })
       .subscribe();
@@ -416,6 +430,8 @@ function OrderContent() {
       setShowCart(false);
       setOrderSuccess(true);
       setTimeout(() => setOrderSuccess(false), 3000);
+      // Save orderId to session so realtime can detect if THIS bill gets cancelled
+      saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim(), order.id);
       fetchPreviousOrders();
     } catch (err) {
       alert('Có lỗi xảy ra. Vui lòng thử lại.');
