@@ -129,6 +129,7 @@ function OrderContent() {
             isPaid = ord?.status === 'paid';
             if (isPaid) {
               setOrderPaid({ total: ord.total_amount });
+              setTimeout(() => setOrderPaid(null), 5000);
             }
           }
           setCart([]);
@@ -161,6 +162,7 @@ function OrderContent() {
           }
         } else if (payload.new?.status === 'paid' && isMyOrder) {
           setOrderPaid({ total: payload.new.total_amount });
+          setTimeout(() => setOrderPaid(null), 5000);
           setCart([]);
           setNotes({});
           setPreviousOrders([]);
