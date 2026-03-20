@@ -2090,10 +2090,10 @@ export default function TablesPage() {
             }}
           >
             {/* Top bar */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #f3f4f6' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', paddingTop: 'calc(env(safe-area-inset-top, 0px) + 16px)', borderBottom: '1px solid #f3f4f6' }}>
               <span style={{ fontWeight: 700, fontSize: '1rem', color: '#111827' }}>Thêm món — Bàn {selectedTable?.table_number}</span>
               <button
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4, marginTop: 8 }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4 }}
                 onClick={closeModal}
               >
                 <X size={22} />
