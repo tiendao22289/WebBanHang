@@ -50,6 +50,7 @@ function OrderContent() {
   const catTabsRef = useRef(null);
   const sectionRefs = useRef({});
   const scrollTimeout = useRef(null);
+  const justPaidRef = useRef(false); // track payment to avoid double-banner
 
   // ─── LocalStorage helpers ───
   const STORAGE_KEY = 'order_session';
@@ -120,7 +121,18 @@ function OrderContent() {
         filter: `id=eq.${tableId}`,
       }, async (payload) => {
         if (payload.new?.status === 'available') {
-          // Query the customer's own order to distinguish paid vs cancelled
+          // If order handler already flagged as paid, just cleanup — no cancelled banner
+          if (justPaidRef.current) {
+            justPaidRef.current = false;
+            setCart([]);
+            setNotes({});
+            setPreviousOrders([]);
+            clearSession();
+            setShowCart(false);
+            setShowOrdered(false);
+            return;
+          }
+          // Otherwise query to distinguish paid vs cancelled
           const savedOrderId = getSavedSession()?.orderId;
           let isPaid = false;
           if (savedOrderId) {
@@ -161,14 +173,11 @@ function OrderContent() {
             fetchPreviousOrders();
           }
         } else if (payload.new?.status === 'paid' && isMyOrder) {
+          // Flag as paid so table handler knows not to show cancelled banner
+          justPaidRef.current = true;
           setOrderPaid({ total: payload.new.total_amount });
           setTimeout(() => setOrderPaid(null), 5000);
-          setCart([]);
-          setNotes({});
-          setPreviousOrders([]);
-          clearSession();
-          setShowCart(false);
-          setShowOrdered(false);
+          // Don't clearSession here — let table handler do the cleanup
         }
       })
       .subscribe();
