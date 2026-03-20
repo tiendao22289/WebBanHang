@@ -672,3 +672,45 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
   from { transform: translate(-50%, -100%); opacity: 0; }
   to   { transform: translate(-50%, 0);     opacity: 1; }
 }
+
+/* ── Cancelled Order Banner ── */
+.co-cancelled-banner {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-width: 500px;
+  margin: 0 auto;
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  color: white;
+  padding: 16px 20px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 95;
+  animation: coSlideUp 0.3s ease;
+  box-shadow: 0 -4px 24px rgba(220, 38, 38, 0.35);
+}
+.co-cancelled-icon { font-size: 1.5rem; flex-shrink: 0; }
+.co-cancelled-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.co-cancelled-text strong { font-size: 0.95rem; font-weight: 800; }
+.co-cancelled-text span { font-size: 0.78rem; opacity: 0.9; }
+.co-cancelled-restart {
+  background: white;
+  color: #dc2626;
+  border: none;
+  border-radius: 20px;
+  padding: 8px 16px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}

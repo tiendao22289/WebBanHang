@@ -44,6 +44,7 @@ function OrderContent() {
   const [viewMode, setViewMode] = useState('list');
   const [orderSuccess, setOrderSuccess] = useState(false);
   const [userScrolling, setUserScrolling] = useState(false);
+  const [orderCancelled, setOrderCancelled] = useState(false); // admin cancelled
 
   const catTabsRef = useRef(null);
   const sectionRefs = useRef({});
@@ -104,6 +105,43 @@ function OrderContent() {
   useEffect(() => {
     initSession();
   }, []);
+
+  // ─── Realtime: detect when admin cancels order or resets table ───
+  useEffect(() => {
+    if (!tableId) return;
+
+    const channel = supabase
+      .channel(`order-page-${tableId}-${Date.now()}`)
+      // Watch for table status change (admin resets table → available)
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'tables',
+        filter: `id=eq.${tableId}`,
+      }, (payload) => {
+        if (payload.new?.status === 'available') {
+          // Admin reset the table → clear cart + session + show notification
+          setCart([]);
+          setNotes({});
+          setPreviousOrders([]);
+          clearSession();
+          setShowCart(false);
+          setShowOrdered(false);
+          setOrderCancelled(true);
+        }
+      })
+      // Watch for orders being cancelled at this table
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'orders',
+        filter: `table_id=eq.${tableId}`,
+      }, (payload) => {
+        if (payload.new?.status === 'cancelled') {
+          // Refresh previous orders list so cancelled orders are excluded
+          fetchPreviousOrders();
+        }
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [tableId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function initSession() {
     const isTW = await fetchMenu();
@@ -462,13 +500,16 @@ function OrderContent() {
     }
   }
 
-  if (!tableId) {
+  // Validate UUID format
+  const isValidUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
+  if (!tableId || !isValidUUID(tableId)) {
     return (
       <div className="co-page">
         <div className="co-error">
           <ChefHat size={48} />
           <h2>Quét mã QR để đặt món</h2>
-          <p>Vui lòng quét mã QR trên bàn ăn</p>
+          <p>Vui lòng quét mã QR trên bàn ăn để vào đúng trang đặt món.</p>
         </div>
       </div>
     );
@@ -689,6 +730,26 @@ function OrderContent() {
       {orderSuccess && (
         <div className="co-success-toast">
           ✅ Đã gửi đơn hàng thành công!
+        </div>
+      )}
+
+      {/* ─── Order Cancelled Banner ─── */}
+      {orderCancelled && (
+        <div className="co-cancelled-banner">
+          <div className="co-cancelled-icon">🗑️</div>
+          <div className="co-cancelled-text">
+            <strong>Đơn hàng đã bị hủy</strong>
+            <span>Nhà hàng đã hủy toàn bộ đơn của bàn này.</span>
+          </div>
+          <button
+            className="co-cancelled-restart"
+            onClick={() => {
+              setOrderCancelled(false);
+              setShowInfoModal(true);
+            }}
+          >
+            Đặt lại
+          </button>
         </div>
       )}
 

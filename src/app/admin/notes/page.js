@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { ChefHat, FileText, CheckCircle, XCircle, LogOut, Plus, Clock, Trash2, User, CornerDownRight } from 'lucide-react';
 import './notes.css';
@@ -63,6 +63,12 @@ export default function StaffNotesPage() {
   const [absentForm, setAbsentForm] = useState({ days: '1', reason: '' });
   const [showAdvForm, setShowAdvForm] = useState(false);
   const [showAbsForm, setShowAbsForm] = useState(false);
+  // FAB position (drag-and-drop)
+  const [fabPos, setFabPos] = useState(() => {
+    try { const s = JSON.parse(localStorage.getItem('noteFabPos')); if (s) return s; } catch {}
+    return { bottom: 80, right: 20 };
+  });
+  const fabDrag = useRef({ dragging: false, moved: false, startX: 0, startY: 0, origRight: 0, origBottom: 0 });
 
   const fetchEmpData = async (staffId) => {
     const today = new Date().toISOString().split('T')[0];
@@ -951,37 +957,13 @@ export default function StaffNotesPage() {
             <LogOut size={15} />
           </button>
         </div>
-        {/* Add button - only show on notes tab */}
-        {activeNotesTab === 'notes' && (
-          <button
-            onClick={() => setShowAddModal(true)}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#16a34a', color: 'white', border: 'none', borderRadius: 999, padding: '9px 18px', fontWeight: 700, fontSize: 14, cursor: 'pointer', boxShadow: '0 2px 8px rgba(22,163,74,0.25)' }}
-          >
-            <Plus size={16} /> Ghi chú
-          </button>
-        )}
+        {/* add button moved to FAB */}
       </div>
 
-      {/* ── Tab Switcher (admin only — staff always on Bảng Công) ── */}
-      {currentUser.role === 'admin' && (
-        <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid #e5e7eb', background: 'white' }}>
-          {[
-            { key: 'notes', label: '📋 Sổ Tay' },
-            { key: 'cong', label: '⏰ Bảng Công' },
-          ].map(tab => (
-            <button
-              key={tab.key}
-              onClick={() => { setActiveNotesTab(tab.key); if (tab.key === 'cong') fetchEmpData(currentUser.id); }}
-              style={{ flex: 1, padding: '10px', border: 'none', background: 'none', fontSize: '0.88rem', fontWeight: 700, cursor: 'pointer', color: activeNotesTab === tab.key ? '#dc2626' : '#6b7280', borderBottom: activeNotesTab === tab.key ? '2px solid #dc2626' : '2px solid transparent', marginBottom: -2, transition: 'all 0.15s' }}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      )}
 
       {/* ── Date Filter ── */}
-      <div style={{ background: '#f9fafb', borderBottom: '1px solid #e5e7eb', padding: '10px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ background: '#f9fafb', borderBottom: '1px solid #e5e7eb', padding: '10px 16px 8px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: '#6b7280', flexShrink: 0 }}>Lọc:</span>
 
         {/* Day dropdown */}
@@ -1034,6 +1016,25 @@ export default function StaffNotesPage() {
         >
           Tất cả
         </button>
+        </div>
+
+        {/* ── Staff Filter (admin only) — gộp trong date filter bar ── */}
+        {currentUser.role === 'admin' && (
+          <div style={{ display: 'flex', gap: 8, overflowX: 'auto', scrollbarWidth: 'none' }}>
+            {['ALL', ...Array.from(new Set(notes.map(n => n.staff?.full_name).filter(Boolean)))].map(name => (
+              <button
+                key={name}
+                onClick={() => setSelectedStaff(name)}
+                style={{ flexShrink: 0, padding: '4px 14px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: '1.5px solid', whiteSpace: 'nowrap',
+                  background: selectedStaff === name ? '#dc2626' : 'white',
+                  color: selectedStaff === name ? 'white' : '#374151',
+                  borderColor: selectedStaff === name ? '#dc2626' : '#e5e7eb' }}
+              >
+                {name === 'ALL' ? 'Tất cả' : name}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ══ BẢNG CÔNG (employee only) ══ */}
@@ -1109,23 +1110,7 @@ export default function StaffNotesPage() {
       {/* ══ NOTES content ══ */}
       {(currentUser.role === 'admin' || activeNotesTab === 'notes') && (<>
 
-      {/* ── Staff Filter (admin only) ── */}
-      {currentUser.role === 'admin' && (
-        <div style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '8px 16px', background: 'white', borderBottom: '1px solid #f3f4f6' }}>
-          {['ALL', ...Array.from(new Set(notes.map(n => n.staff?.full_name).filter(Boolean)))].map(name => (
-            <button
-              key={name}
-              onClick={() => setSelectedStaff(name)}
-              style={{ flexShrink: 0, padding: '5px 14px', borderRadius: 999, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: '1.5px solid', whiteSpace: 'nowrap',
-                background: selectedStaff === name ? '#dc2626' : 'white',
-                color: selectedStaff === name ? 'white' : '#374151',
-                borderColor: selectedStaff === name ? '#dc2626' : '#e5e7eb' }}
-            >
-              {name === 'ALL' ? 'Tất cả' : name}
-            </button>
-          ))}
-        </div>
-      )}
+
 
       {/* ── Analytics Card ── */}
       <div style={{ margin: '12px 16px', borderRadius: 14, background: 'linear-gradient(135deg, #f8faff, #eef2ff)', border: '1px solid #e0e7ff', padding: '14px 16px' }}>
@@ -1486,6 +1471,66 @@ export default function StaffNotesPage() {
       )}
 
       </>)}
+
+      {/* ── FAB: nút Ghi chú với kéo thả ── */}
+      {currentUser.role === 'admin' && (
+        <button
+          onPointerDown={e => {
+            e.preventDefault();
+            const d = fabDrag.current;
+            d.dragging = true; d.moved = false;
+            d.startX = e.clientX; d.startY = e.clientY;
+            d.origRight = fabPos.right; d.origBottom = fabPos.bottom;
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={e => {
+            const d = fabDrag.current;
+            if (!d.dragging) return;
+            const dx = e.clientX - d.startX;
+            const dy = e.clientY - d.startY;
+            if (Math.abs(dx) > 4 || Math.abs(dy) > 4) d.moved = true;
+            if (!d.moved) return;
+            const newRight = Math.max(8, Math.min(window.innerWidth - 64, d.origRight - dx));
+            const newBottom = Math.max(8, Math.min(window.innerHeight - 64, d.origBottom - dy));
+            setFabPos({ right: newRight, bottom: newBottom });
+          }}
+          onPointerUp={e => {
+            const d = fabDrag.current;
+            d.dragging = false;
+            if (!d.moved) {
+              setShowAddModal(true);
+            } else {
+              const pos = { right: fabPos.right, bottom: fabPos.bottom };
+              localStorage.setItem('noteFabPos', JSON.stringify(pos));
+            }
+            d.moved = false;
+          }}
+          style={{
+            position: 'fixed',
+            bottom: fabPos.bottom,
+            right: fabPos.right,
+            width: 56,
+            height: 56,
+            borderRadius: '50%',
+            background: 'linear-gradient(135deg, #16a34a, #15803d)',
+            color: 'white',
+            border: 'none',
+            boxShadow: '0 4px 20px rgba(22,163,74,0.45)',
+            cursor: 'grab',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 200,
+            fontSize: 28,
+            fontWeight: 300,
+            lineHeight: 1,
+            touchAction: 'none',
+            userSelect: 'none',
+          }}
+        >
+          +
+        </button>
+      )}
 
     </div>
   );
