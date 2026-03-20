@@ -13,6 +13,18 @@ function getExpectedToken() {
   return String(Math.floor(Date.now() / (5 * 60 * 1000)));
 }
 
+// Lấy ngày hiện tại theo giờ Việt Nam (+07:00) — tránh lỗi timezone sai ngày
+function getTodayVN() {
+  const now = new Date();
+  const vnOffset = 7 * 60; // +07:00
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+  const vnDate = new Date(utcMs + vnOffset * 60000);
+  const y = vnDate.getFullYear();
+  const m = String(vnDate.getMonth() + 1).padStart(2, '0');
+  const d = String(vnDate.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 // Sum hours of all closed sessions for today
 function sumHours(sessions) {
   return sessions.reduce((acc, s) => {
@@ -59,7 +71,7 @@ function CheckinContent() {
   // Load today's sessions when staff is known
   useEffect(() => {
     if (!staff) return;
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayVN();
     supabase.from('attendance_sessions')
       .select('*')
       .eq('staff_id', staff.id)
@@ -85,7 +97,7 @@ function CheckinContent() {
   const handleClockAction = async () => {
     if (!staff) return;
     setLoading(true);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayVN();
 
     // Fetch today's sessions fresh
     const { data: sessions } = await supabase

@@ -30,8 +30,12 @@ export default function SettingsPage() {
   }, []);
 
   async function fetchRestaurantLocation() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('settings').select('value').eq('key', 'restaurant_location').maybeSingle();
+    if (error) {
+      console.warn('settings table error:', error.message);
+      return;
+    }
     if (data?.value) {
       try {
         const { lat, lng, radius = 300 } = JSON.parse(data.value);
@@ -46,12 +50,22 @@ export default function SettingsPage() {
     const radius = parseInt(locForm.radius) || 300;
     if (isNaN(lat) || isNaN(lng)) { flash('Vui lòng nhập đúng tọa độ!', true); return; }
     setLocSaving(true);
-    await supabase.from('settings').upsert(
-      { key: 'restaurant_location', value: JSON.stringify({ lat, lng, radius }) },
+    // Try upsert first; if settings table doesn't have unique on key, fallback to delete+insert
+    const val = JSON.stringify({ lat, lng, radius });
+    const { error: upsertErr } = await supabase.from('settings').upsert(
+      { key: 'restaurant_location', value: val },
       { onConflict: 'key' }
     );
+    if (upsertErr) {
+      // Fallback: delete then insert
+      await supabase.from('settings').delete().eq('key', 'restaurant_location');
+      const { error: insertErr } = await supabase.from('settings').insert({ key: 'restaurant_location', value: val });
+      if (insertErr) { flash('Lỗi: ' + insertErr.message, true); setLocSaving(false); return; }
+    }
     setLocSaving(false);
     flash('Đã lưu vị trí nhà hàng!');
+    // Re-fetch to confirm saved
+    fetchRestaurantLocation();
   }
 
   function getCurrentLocation() {
