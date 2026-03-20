@@ -46,11 +46,13 @@ function OrderContent() {
   const [userScrolling, setUserScrolling] = useState(false);
   const [orderCancelled, setOrderCancelled] = useState(false); // admin cancelled
   const [orderPaid, setOrderPaid] = useState(null); // { total } khi admin thanh toán
+  const [locationWarning, setLocationWarning] = useState(false); // khách không ở nhà hàng
 
   const catTabsRef = useRef(null);
   const sectionRefs = useRef({});
   const scrollTimeout = useRef(null);
   const justPaidRef = useRef(false); // track payment to avoid double-banner
+  const locationRef = useRef(null); // { lat, lng, accuracy } — thu thập im lặng
 
   // ─── LocalStorage helpers ───
   const STORAGE_KEY = 'order_session';
@@ -107,7 +109,43 @@ function OrderContent() {
   // ─── Init: check localStorage session ───
   useEffect(() => {
     initSession();
+    // Thu thập GPS và kiểm tra khách có ở nhà hàng không
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          locationRef.current = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+          };
+          // Lấy tọa độ nhà hàng từ settings
+          const { data } = await supabase
+            .from('settings')
+            .select('value')
+            .eq('key', 'restaurant_location')
+            .maybeSingle();
+          if (data?.value) {
+            try {
+              const { lat: rLat, lng: rLng, radius = 300 } = JSON.parse(data.value);
+              const dist = getDistanceMeters(pos.coords.latitude, pos.coords.longitude, rLat, rLng);
+              if (dist > radius) setLocationWarning(true);
+            } catch {}
+          }
+        },
+        () => { /* từ chối — bỏ qua, không cản trở */ },
+        { timeout: 8000, maximumAge: 60000 }
+      );
+    }
   }, []);
+
+  // Tính khoảng cách giữa 2 tọa độ (Haversine, kết quả bằng mét)
+  function getDistanceMeters(lat1, lng1, lat2, lng2) {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLng/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  }
 
   // ─── Realtime: detect when admin cancels order or resets table ───
   useEffect(() => {
@@ -579,6 +617,18 @@ function OrderContent() {
               <p>Bàn {tableNumber || '...'}</p>
             </div>
             <div className="co-info-form">
+              {/* Location warning — chỉ hiện nếu khách ra ngoài phạm vi */}
+              {locationWarning && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  background: '#fff7ed', border: '1px solid #fed7aa',
+                  borderRadius: 10, padding: '8px 12px', marginBottom: 4,
+                  fontSize: '0.82rem', color: '#92400e',
+                }}>
+                  <span>⚠️</span>
+                  <span>Vị trí của bạn có vẻ không ở nhà hàng. Nếu đây là nhầm lẫn, hãy tiếp tục.</span>
+                </div>
+              )}
               <div className="co-field">
                 <User size={18} />
                 <input
