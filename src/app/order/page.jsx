@@ -344,17 +344,37 @@ function OrderContent() {
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
 
-    // 1. All active (pending/preparing) bills at this table today — any customer
-    const { data: activeBills } = await supabase
-      .from('orders')
-      .select(`*, order_items(*, menu_item:menu_items(name, price))`)
-      .eq('table_id', tableId)
-      .gte('created_at', startOfDay)
-      .lt('created_at', endOfDay)
-      .in('status', ['pending', 'preparing'])
-      .order('created_at', { ascending: false });
+    // Kiểm tra bản thân có bill đang active (pending/preparing) không
+    const savedOrderId = getSavedSession()?.orderId;
+    let hasMyActiveBill = false;
+    if (savedOrderId) {
+      const { data: myOrder } = await supabase
+        .from('orders').select('status').eq('id', savedOrderId).maybeSingle();
+      hasMyActiveBill = myOrder?.status === 'pending' || myOrder?.status === 'preparing';
+    } else if (phoneToUse) {
+      // Fallback: tìm theo phone nếu chưa có orderId
+      const { data: myOrders } = await supabase
+        .from('orders').select('id, status')
+        .eq('table_id', tableId).eq('customer_phone', phoneToUse)
+        .gte('created_at', startOfDay).lt('created_at', endOfDay)
+        .in('status', ['pending', 'preparing']);
+      hasMyActiveBill = (myOrders?.length || 0) > 0;
+    }
 
-    // 2. This customer's own completed/paid bills at this table today
+    let activeBills = [];
+    if (hasMyActiveBill) {
+      // Có bill đang chờ → xem được tất cả bills đang active ở bàn
+      const { data } = await supabase
+        .from('orders')
+        .select(`*, order_items(*, menu_item:menu_items(name, price))`)
+        .eq('table_id', tableId)
+        .gte('created_at', startOfDay).lt('created_at', endOfDay)
+        .in('status', ['pending', 'preparing'])
+        .order('created_at', { ascending: false });
+      activeBills = data || [];
+    }
+
+    // Luôn hiện bill hoàn thành của chính mình (theo phone)
     let myFinished = [];
     if (phoneToUse) {
       const { data } = await supabase
@@ -362,8 +382,7 @@ function OrderContent() {
         .select(`*, order_items(*, menu_item:menu_items(name, price))`)
         .eq('table_id', tableId)
         .eq('customer_phone', phoneToUse)
-        .gte('created_at', startOfDay)
-        .lt('created_at', endOfDay)
+        .gte('created_at', startOfDay).lt('created_at', endOfDay)
         .in('status', ['completed', 'paid'])
         .order('created_at', { ascending: false });
       myFinished = data || [];
@@ -372,11 +391,8 @@ function OrderContent() {
     // Merge & deduplicate
     const allIds = new Set();
     const merged = [];
-    [...(activeBills || []), ...myFinished].forEach(order => {
-      if (!allIds.has(order.id)) {
-        allIds.add(order.id);
-        merged.push(order);
-      }
+    [...activeBills, ...myFinished].forEach(order => {
+      if (!allIds.has(order.id)) { allIds.add(order.id); merged.push(order); }
     });
     setPreviousOrders(merged);
   }
