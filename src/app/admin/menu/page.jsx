@@ -22,7 +22,7 @@ export default function MenuPage() {
   const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [visibilityFilter, setVisibilityFilter] = useState('all'); // 'all' | 'visible' | 'hidden'
+  const [visibilityFilter, setVisibilityFilter] = useState('visible'); // 'all' | 'visible' | 'hidden'
 
   // Modal states
   const [showCatModal, setShowCatModal] = useState(false);
