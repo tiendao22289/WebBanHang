@@ -51,6 +51,13 @@ export default function StaffNotesPage() {
   const [payingItem, setPayingItem] = useState(null); // { noteId, idx }
   const [payItemInput, setPayItemInput] = useState('');
   const [expandedHistory, setExpandedHistory] = useState({}); // { 'noteId-idx': true }
+
+  // Edit Note State
+  const [editingNoteId, setEditingNoteId] = useState(null);
+  const [editNoteType, setEditNoteType] = useState('other');
+  const [editNoteContent, setEditNoteContent] = useState('');
+  const [editExpenseItems, setEditExpenseItems] = useState([]);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const toggleHistory = (noteId, idx) => setExpandedHistory(prev => ({ ...prev, [`${noteId}-${idx}`]: !prev[`${noteId}-${idx}`] }));
 
   // Employee self-service — Bảng Công
@@ -408,6 +415,105 @@ export default function StaffNotesPage() {
 
     if (error) {
       alert('Xoá thất bại!');
+    }
+  };
+
+  // ── Edit Note Logic ──
+  const openEditNote = (note) => {
+    setEditingNoteId(note.id);
+    setEditNoteType(note.note_type || 'other');
+    if (note.note_type === 'expense' && note.content?.includes('structured_expense')) {
+      try {
+        const data = JSON.parse(note.content);
+        setEditExpenseItems(data.items?.length ? data.items : [{ name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }]);
+        setEditNoteContent(data.note || '');
+      } catch {
+        setEditNoteContent(note.content || '');
+        setEditExpenseItems([{ name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }]);
+      }
+    } else {
+      setEditNoteContent(note.content || '');
+      setEditExpenseItems([{ name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }]);
+    }
+  };
+
+  const closeEditNote = () => {
+    setEditingNoteId(null);
+    setEditNoteContent('');
+    setEditExpenseItems([]);
+  };
+
+  const updateEditExpenseItem = (index, field, value) => {
+    const newItems = [...editExpenseItems];
+    newItems[index][field] = value;
+    if (index === newItems.length - 1 && value.trim() !== '' && field === 'name') {
+      newItems.push({ name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' });
+    }
+    setEditExpenseItems(newItems);
+  };
+
+  const handleEditExpenseBlur = (index, field, e) => {
+    const value = e.target.value.trim();
+    if (!value) return;
+    const newItems = [...editExpenseItems];
+    if (field === 'price' && /^\d+$/.test(value)) newItems[index][field] = value + 'k';
+    else if (field === 'qty' && /^\d+(\.\d+)?$/.test(value)) newItems[index][field] = value + ' ký';
+    setEditExpenseItems(newItems);
+  };
+
+  const removeEditExpenseItem = (index) => {
+    if (editExpenseItems.length > 1) setEditExpenseItems(editExpenseItems.filter((_, i) => i !== index));
+  };
+
+  const calculateEditTotals = () => {
+    let totalPaid = 0, totalDebt = 0;
+    editExpenseItems.forEach(item => {
+      const price = parseVal(item.price);
+      const qty = parseVal(item.qty, true) || 1;
+      const totalItemPrice = price * qty;
+      if (item.name && totalItemPrice > 0) {
+        if (item.paymentStatus === 'full') {
+          totalPaid += totalItemPrice;
+        } else if (item.paymentStatus === 'debt') {
+          const debtAmt = item.debtAmount ? parseVal(item.debtAmount.replace(/\./g, '')) : totalItemPrice;
+          const cappedDebt = Math.min(debtAmt, totalItemPrice);
+          totalDebt += cappedDebt;
+          totalPaid += totalItemPrice - cappedDebt;
+        }
+      }
+    });
+    return { paid: totalPaid, debt: totalDebt };
+  };
+
+  const submitEditNote = async (note) => {
+    let finalContent;
+    let paid = 0, debt = 0;
+    if (editNoteType === 'expense') {
+      const validItems = editExpenseItems.filter(i => i.name.trim() !== '');
+      if (validItems.length > 0) {
+        finalContent = JSON.stringify({ type: 'structured_expense', items: validItems, note: editNoteContent });
+        const totals = calculateEditTotals();
+        paid = totals.paid;
+        debt = totals.debt;
+      } else {
+        finalContent = editNoteContent.trim();
+      }
+    } else {
+      finalContent = editNoteContent.trim();
+    }
+    if (!finalContent) { alert('Vui lòng nhập nội dung!'); return; }
+    setIsSavingEdit(true);
+    const { error } = await supabase
+      .from('staff_notes')
+      .update({ note_type: editNoteType, content: finalContent, amount: paid || note.amount, debt: debt || note.debt })
+      .eq('id', note.id);
+    setIsSavingEdit(false);
+    if (!error) {
+      closeEditNote();
+      fetchNotes();
+      setViewingNote(prev => prev ? { ...prev, note_type: editNoteType, content: finalContent, amount: paid || note.amount, debt: debt || note.debt } : null);
+    } else {
+      alert('Lưu thất bại!');
     }
   };
 
@@ -1287,11 +1393,97 @@ export default function StaffNotesPage() {
                   })()}
                 </div>
               </div>
-              <button style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 4 }} onClick={() => setViewingNote(null)}>
-                <XCircle size={24} />
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {/* Edit button - only show if not already editing */}
+                {editingNoteId !== viewingNote.id && (
+                  <button
+                    title="Sửa ghi chú"
+                    onClick={() => openEditNote(viewingNote)}
+                    style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#2563eb', cursor: 'pointer', padding: '5px 10px', borderRadius: 8, fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}
+                  >
+                    ✏️ Sửa
+                  </button>
+                )}
+                <button style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 4 }} onClick={() => { setViewingNote(null); closeEditNote(); }}>
+                  <XCircle size={24} />
+                </button>
+              </div>
             </div>
             <div className="modal-body">
+              {/* ── Inline Edit Form ── */}
+              {editingNoteId === viewingNote.id && (
+                <div style={{ marginBottom: 16, padding: 16, background: '#f0f9ff', borderRadius: 12, border: '1.5px solid #bae6fd' }}>
+                  <div style={{ fontWeight: 700, color: '#0369a1', marginBottom: 12, fontSize: 14 }}>✏️ Chỉnh sửa ghi chú</div>
+                  {/* Note type selector */}
+                  <div style={{ marginBottom: 10 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Loại báo cáo</label>
+                    <select value={editNoteType} onChange={e => setEditNoteType(e.target.value)} style={{ width: '100%', padding: '8px 10px', border: '1.5px solid #d1d5db', borderRadius: 8, fontSize: 13, outline: 'none' }}>
+                      <option value="expense">Đi chợ / Chi tiền</option>
+                      <option value="stock">Báo thiếu nguyên liệu</option>
+                      <option value="repair">Yêu cầu sửa chữa</option>
+                      <option value="other">Ghi chú khác</option>
+                    </select>
+                  </div>
+                  {/* Content fields */}
+                  {editNoteType === 'expense' ? (
+                    <div>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Chi tiết mua hàng</label>
+                      {editExpenseItems.map((item, idx) => (
+                        <div key={idx} style={{ marginBottom: 8, padding: '8px 10px', background: 'white', borderRadius: 8, border: '1px solid #e5e7eb' }}>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
+                            <input type="text" placeholder="Tên món" value={item.name} onChange={e => updateEditExpenseItem(idx, 'name', e.target.value)}
+                              style={{ flex: 1, minWidth: 90, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }} />
+                            <input type="text" placeholder="Giá" value={item.price} onChange={e => updateEditExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleEditExpenseBlur(idx, 'price', e)}
+                              style={{ width: 68, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, textAlign: 'center' }} />
+                            <input type="text" placeholder="SL/Ký" value={item.qty} onChange={e => updateEditExpenseItem(idx, 'qty', e.target.value)} onBlur={e => handleEditExpenseBlur(idx, 'qty', e)}
+                              style={{ width: 68, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, textAlign: 'center' }} />
+                            {editExpenseItems.length > 1 && idx < editExpenseItems.length - 1 && (
+                              <button onClick={() => removeEditExpenseItem(idx)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 2 }}><XCircle size={16} /></button>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer' }}>
+                              <input type="radio" checked={item.paymentStatus === 'full'} onChange={() => updateEditExpenseItem(idx, 'paymentStatus', 'full')} /> ✓ Đủ
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer' }}>
+                              <input type="radio" checked={item.paymentStatus === 'debt'} onChange={() => updateEditExpenseItem(idx, 'paymentStatus', 'debt')} /> Nợ
+                            </label>
+                            {item.paymentStatus === 'debt' && (
+                              <input type="text" placeholder="Nợ của ai?" value={item.creditor || ''} onChange={e => updateEditExpenseItem(idx, 'creditor', e.target.value)}
+                                style={{ flex: 1, minWidth: 80, padding: '4px 7px', border: '1px solid #fca5a5', borderRadius: 6, fontSize: 12 }} />
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Ghi chú thêm</label>
+                        <textarea rows={2} value={editNoteContent} onChange={e => setEditNoteContent(e.target.value)}
+                          style={{ width: '100%', padding: '7px 10px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' }} />
+                      </div>
+                      {(calculateEditTotals().paid > 0 || calculateEditTotals().debt > 0) && (
+                        <div style={{ padding: '8px 12px', background: '#fff7ed', borderRadius: 8, border: '1px solid #fed7aa', fontSize: 12, marginBottom: 8 }}>
+                          Thực chi: <strong style={{ color: '#16a34a' }}>{formatMoney(calculateEditTotals().paid)}</strong>&nbsp;&nbsp;
+                          Nợ: <strong style={{ color: '#dc2626' }}>{formatMoney(calculateEditTotals().debt)}</strong>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ marginBottom: 8 }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Chi tiết</label>
+                      <textarea rows={5} value={editNoteContent} onChange={e => setEditNoteContent(e.target.value)}
+                        style={{ width: '100%', padding: '7px 10px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' }} />
+                    </div>
+                  )}
+                  {/* Save / Cancel */}
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
+                    <button onClick={closeEditNote} style={{ padding: '8px 16px', background: '#f3f4f6', color: '#374151', border: 'none', borderRadius: 8, fontWeight: 600, cursor: 'pointer', fontSize: 13 }}>Huỷ</button>
+                    <button onClick={() => submitEditNote(viewingNote)} disabled={isSavingEdit}
+                      style={{ padding: '8px 20px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer', fontSize: 13 }}>
+                      {isSavingEdit ? 'Đang lưu...' : '💾 Lưu thay đổi'}
+                    </button>
+                  </div>
+                </div>
+              )}
               <div style={{ marginBottom: 20, padding: 16, background: 'white', borderRadius: 12, border: '1px solid #f3f4f6', overflowX: 'auto' }}>
                 {renderNoteContent(viewingNote.content)}
               </div>
