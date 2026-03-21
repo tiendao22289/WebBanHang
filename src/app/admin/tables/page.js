@@ -1791,14 +1791,14 @@ export default function TablesPage() {
               )}
             </div>
 
-            {/* Floating FAB — fixed position (not inside scroll area) for cross-platform tap reliability */}
+            {/* Floating FAB — absolutely positioned on modal, not in scroll area */}
             {orders[selectedTable.id]?.length > 0 && (
               <button
                 onClick={() => setAddingToOrder('admin')}
                 style={{
-                  position: 'fixed',
-                  left: 16,
-                  bottom: 116,
+                  position: 'absolute',
+                  right: 16,
+                  bottom: 115,
                   width: 50, height: 50,
                   borderRadius: '50%',
                   background: '#2563eb',
@@ -1809,7 +1809,7 @@ export default function TablesPage() {
                   justifyContent: 'center',
                   cursor: 'pointer',
                   boxShadow: '0 4px 20px rgba(37,99,235,0.45)',
-                  zIndex: 9000,
+                  zIndex: 20,
                   touchAction: 'manipulation',
                 }}
               >
