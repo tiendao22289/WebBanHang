@@ -22,7 +22,7 @@ export default function MenuPage() {
   const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [visibilityFilter, setVisibilityFilter] = useState('visible'); // 'all' | 'visible' | 'hidden'
+  const [visibilityFilter, setVisibilityFilter] = useState('all'); // 'all' | 'visible' | 'hidden'
 
   // Modal states
   const [showCatModal, setShowCatModal] = useState(false);
@@ -203,14 +203,22 @@ export default function MenuPage() {
     return new Intl.NumberFormat('vi-VN').format(price) + 'đ';
   }
 
-  const filteredItems = menuItems.filter(i => {
+  // Base: category + search filter (before visibility filter)
+  const baseItems = menuItems.filter(i => {
     if (activeCategory && i.category_id !== activeCategory) return false;
-    if (visibilityFilter === 'visible' && !i.is_available) return false;
-    if (visibilityFilter === 'hidden' && i.is_available) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       return i.name?.toLowerCase().includes(q) || i.description?.toLowerCase().includes(q);
     }
+    return true;
+  });
+  const countAll = baseItems.length;
+  const countVisible = baseItems.filter(i => i.is_available).length;
+  const countHidden = baseItems.filter(i => !i.is_available).length;
+
+  const filteredItems = baseItems.filter(i => {
+    if (visibilityFilter === 'visible' && !i.is_available) return false;
+    if (visibilityFilter === 'hidden' && i.is_available) return false;
     return true;
   });
 
@@ -277,19 +285,21 @@ export default function MenuPage() {
             <button onClick={() => setSearchQuery('')} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '1rem', padding: 2 }}>×</button>
           )}
         </div>
-        {/* Visibility filter */}
+        {/* Visibility filter with counts */}
         <div style={{ display: 'flex', gap: 4, background: '#f3f4f6', borderRadius: 10, padding: 3, flexShrink: 0 }}>
-          {[{key:'all',label:'Tất cả'},{key:'visible',label:'👁 Đang hiện'},{key:'hidden',label:'🙈 Đã ẩn'}].map(f => (
+          {[
+            {key:'all', label:'Tất cả', count: countAll},
+            {key:'visible', label:'👁 Hiện', count: countVisible},
+            {key:'hidden', label:'🙈 Ẩn', count: countHidden}
+          ].map(f => (
             <button key={f.key} onClick={() => setVisibilityFilter(f.key)}
-              style={{ padding: '6px 14px', borderRadius: 8, border: 'none', fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer', transition: 'all 0.15s',
+              style={{ padding: '6px 12px', borderRadius: 8, border: 'none', fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer', transition: 'all 0.15s',
                 background: visibilityFilter === f.key ? '#2563eb' : 'transparent',
                 color: visibilityFilter === f.key ? 'white' : '#6b7280' }}>
-              {f.label}
+              {f.label} <span style={{ opacity: 0.8, fontWeight: 500 }}>({f.count})</span>
             </button>
           ))}
         </div>
-        {/* Count badge */}
-        <span style={{ fontSize: '0.8rem', color: '#9ca3af', flexShrink: 0 }}>{filteredItems.length} món</span>
       </div>
 
       <div className="menu-grid">
