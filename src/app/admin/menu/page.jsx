@@ -121,7 +121,13 @@ export default function MenuPage() {
   }
 
   async function saveItem() {
-    if (!itemForm.name.trim() || !itemForm.price) return;
+    if (!itemForm.name.trim()) return;
+
+    // Auto-compute base price = min of all non-null choice prices
+    const allChoicePrices = itemForm.options.flatMap(opt =>
+      (opt.prices || []).filter(p => p !== null && p !== '' && Number(p) > 0).map(Number)
+    );
+    const autoPrice = allChoicePrices.length > 0 ? Math.min(...allChoicePrices) : (parseInt(itemForm.price) || 0);
 
     // Clean up options (remove empty choices, remove options without names or choices)
     const cleanedOptions = itemForm.options
@@ -139,7 +145,7 @@ export default function MenuPage() {
       description: itemForm.description,
       image_url: itemForm.image_url,
       is_available: itemForm.is_available,
-      price: parseInt(itemForm.price),
+      price: autoPrice,
       category_id: itemForm.category_id || null,
       options: cleanedOptions,
     };
@@ -214,6 +220,17 @@ export default function MenuPage() {
 
   function formatPrice(price) {
     return new Intl.NumberFormat('vi-VN').format(price) + 'đ';
+  }
+
+  function getItemDisplayPrice(item) {
+    const allPrices = (item.options || []).flatMap(opt =>
+      (opt.prices || []).filter(p => p !== null && p > 0).map(Number)
+    );
+    if (allPrices.length > 0) {
+      return 'Từ ' + new Intl.NumberFormat('vi-VN').format(Math.min(...allPrices)) + 'đ';
+    }
+    if (item.price > 0) return new Intl.NumberFormat('vi-VN').format(item.price) + 'đ';
+    return 'Theo tuỳ chọn';
   }
 
   // Base: category + search filter (before visibility filter)
@@ -335,7 +352,7 @@ export default function MenuPage() {
                   <p className="menu-card-desc">{item.description}</p>
                 )}
                 <div className="menu-card-footer">
-                  <span className="menu-card-price">{formatPrice(item.price)}</span>
+                  <span className="menu-card-price">{getItemDisplayPrice(item)}</span>
                   <div className="flex gap-1">
                     <button
                       className="btn btn-ghost btn-sm"
@@ -411,10 +428,6 @@ export default function MenuPage() {
                 <textarea className="textarea" value={itemForm.description} onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })} placeholder="Mô tả ngắn về món ăn..." />
               </div>
               <div className="flex gap-4 mb-4">
-                <div className="form-group" style={{ flex: 1 }}>
-                  <label className="form-label">Giá (VNĐ)</label>
-                  <input className="input" type="number" value={itemForm.price} onChange={(e) => setItemForm({ ...itemForm, price: e.target.value })} placeholder="65000" />
-                </div>
                 <div className="form-group" style={{ flex: 1 }}>
                   <label className="form-label">Danh mục</label>
                   <select className="select" value={itemForm.category_id} onChange={(e) => setItemForm({ ...itemForm, category_id: e.target.value })}>
