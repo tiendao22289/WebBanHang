@@ -1829,29 +1829,31 @@ export default function StaffNotesPage() {
             d.dragging = true; d.moved = false;
             d.startX = e.clientX; d.startY = e.clientY;
             d.origRight = fabPos.right; d.origBottom = fabPos.bottom;
-            e.currentTarget.setPointerCapture(e.pointerId);
-          }}
-          onPointerMove={e => {
-            const d = fabDrag.current;
-            if (!d.dragging) return;
-            const dx = e.clientX - d.startX;
-            const dy = e.clientY - d.startY;
-            if (Math.abs(dx) > 8 || Math.abs(dy) > 8) d.moved = true;
-            if (!d.moved) return;
-            const newRight = Math.max(8, Math.min(window.innerWidth - 64, d.origRight - dx));
-            const newBottom = Math.max(8, Math.min(window.innerHeight - 64, d.origBottom - dy));
-            setFabPos({ right: newRight, bottom: newBottom });
-          }}
-          onPointerUp={e => {
-            const d = fabDrag.current;
-            d.dragging = false;
-            if (!d.moved) {
-              setShowAddModal(true);
-            } else {
-              const pos = { right: fabPos.right, bottom: fabPos.bottom };
-              localStorage.setItem('noteFabPos', JSON.stringify(pos));
-            }
-            d.moved = false;
+            // Use window listeners instead of setPointerCapture (setPointerCapture breaks Android click)
+            const pointerId = e.pointerId;
+            const handleMove = (me) => {
+              if (!d.dragging) return;
+              const dx = me.clientX - d.startX;
+              const dy = me.clientY - d.startY;
+              if (Math.abs(dx) > 8 || Math.abs(dy) > 8) d.moved = true;
+              if (!d.moved) return;
+              const newRight = Math.max(8, Math.min(window.innerWidth - 64, d.origRight - dx));
+              const newBottom = Math.max(8, Math.min(window.innerHeight - 64, d.origBottom - dy));
+              setFabPos({ right: newRight, bottom: newBottom });
+            };
+            const handleUp = () => {
+              d.dragging = false;
+              if (!d.moved) {
+                setShowAddModal(true);
+              } else {
+                localStorage.setItem('noteFabPos', JSON.stringify({ right: fabPos.right, bottom: fabPos.bottom }));
+              }
+              d.moved = false;
+              window.removeEventListener('pointermove', handleMove);
+              window.removeEventListener('pointerup', handleUp);
+            };
+            window.addEventListener('pointermove', handleMove);
+            window.addEventListener('pointerup', handleUp);
           }}
           style={{
             position: 'fixed',
