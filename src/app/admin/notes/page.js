@@ -26,7 +26,9 @@ export default function StaffNotesPage() {
   const [newNoteType, setNewNoteType] = useState('expense'); // 'expense' | 'stock' | 'repair' | 'other'
   const [newNoteContent, setNewNoteContent] = useState('');
   const [expenseItems, setExpenseItems] = useState([
-    { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '' }
+    { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+    { name: 'Tiền rau', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+    { name: 'Tiền gia vị', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }
   ]);
   const [newNoteAmount, setNewNoteAmount] = useState(0);
   const [newNoteDebt, setNewNoteDebt] = useState(0);
@@ -51,6 +53,7 @@ export default function StaffNotesPage() {
   const [payingItem, setPayingItem] = useState(null); // { noteId, idx }
   const [payItemInput, setPayItemInput] = useState('');
   const [expandedHistory, setExpandedHistory] = useState({}); // { 'noteId-idx': true }
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null); // noteId to confirm delete
 
   // Edit Note State
   const [editingNoteId, setEditingNoteId] = useState(null);
@@ -58,6 +61,8 @@ export default function StaffNotesPage() {
   const [editNoteContent, setEditNoteContent] = useState('');
   const [editExpenseItems, setEditExpenseItems] = useState([]);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editDebtAmount, setEditDebtAmount] = useState('');
+  const [editOriginalItems, setEditOriginalItems] = useState([]);
   const toggleHistory = (noteId, idx) => setExpandedHistory(prev => ({ ...prev, [`${noteId}-${idx}`]: !prev[`${noteId}-${idx}`] }));
 
   // Employee self-service — Bảng Công
@@ -68,6 +73,7 @@ export default function StaffNotesPage() {
   const [empSalaryRec, setEmpSalaryRec] = useState(null);
   const [advanceForm, setAdvanceForm] = useState({ amount: '', reason: '' });
   const [absentForm, setAbsentForm] = useState({ days: '1', reason: '' });
+  const [showHistory, setShowHistory] = useState(false);
   const [showAdvForm, setShowAdvForm] = useState(false);
   const [showAbsForm, setShowAbsForm] = useState(false);
   // FAB position (drag-and-drop)
@@ -76,6 +82,7 @@ export default function StaffNotesPage() {
     return { bottom: 80, right: 20 };
   });
   const fabDrag = useRef({ dragging: false, moved: false, startX: 0, startY: 0, origRight: 0, origBottom: 0 });
+  const editFormRef = useRef(null);
 
   const fetchEmpData = async (staffId) => {
     const today = new Date().toISOString().split('T')[0];
@@ -395,7 +402,11 @@ export default function StaffNotesPage() {
     if (!error) {
       setShowAddModal(false);
       setNewNoteContent('');
-      setExpenseItems([{ name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }]);
+      setExpenseItems([
+        { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+        { name: 'Tiền rau', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+        { name: 'Tiền gia vị', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }
+      ]);
       setNewNoteAmount(0);
       setNewNoteDebt(0);
       setNewNoteType('other');
@@ -405,16 +416,18 @@ export default function StaffNotesPage() {
     }
   };
 
-  const handleDeleteNote = async (noteId) => {
-    if (!confirm('Bạn có chắc chắn muốn xoá báo cáo này?')) return;
-    
-    const { error } = await supabase
-      .from('staff_notes')
-      .delete()
-      .eq('id', noteId);
+  const handleDeleteNote = (noteId) => {
+    setDeleteConfirmId(noteId);
+  };
 
-    if (error) {
-      alert('Xoá thất bại!');
+  const confirmDeleteNote = async () => {
+    const noteId = deleteConfirmId;
+    setDeleteConfirmId(null);
+    const { error } = await supabase.from('staff_notes').delete().eq('id', noteId);
+    if (error) alert('Xoá thất bại!');
+    else {
+      setNotes(prev => prev.filter(n => n.id !== noteId));
+      if (viewingNote?.id === noteId) setViewingNote(null);
     }
   };
 
@@ -425,29 +438,58 @@ export default function StaffNotesPage() {
     if (note.note_type === 'expense' && note.content?.includes('structured_expense')) {
       try {
         const data = JSON.parse(note.content);
-        setEditExpenseItems(data.items?.length ? data.items : [{ name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }]);
+        const items = (data.items?.length ? data.items : []).map((item, idx) => {
+          const stableId = item._id || `existing-${idx}-${Date.now()}`;
+          if (item.paymentStatus === 'debt' && !item.debtAmount) {
+            const p = parseVal(item.price);
+            const q = parseVal(item.qty, true) || 1;
+            const total = p * q;
+            return { ...item, _id: stableId, debtAmount: total > 0 ? total.toLocaleString('vi-VN') : '' };
+          }
+          return { ...item, _id: stableId };
+        });
+        // Append preset items if not already present
+        const presets = ['Tiền rau', 'Tiền gia vị'];
+        const existingNames = items.map(i => i.name.trim().toLowerCase());
+        const presetItems = presets
+          .filter(n => !existingNames.includes(n.toLowerCase()))
+          .map(n => ({ _id: `preset-${n}-${Date.now()}`, name: n, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }));
+        const allItems = [...items, ...presetItems];
+        const withEmpty = [...allItems, { _id: `new-${Date.now()}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }];
+        setEditOriginalItems(JSON.parse(JSON.stringify(allItems))); // deep copy tránh shared reference
+        setEditExpenseItems(withEmpty);
         setEditNoteContent(data.note || '');
       } catch {
         setEditNoteContent(note.content || '');
-        setEditExpenseItems([{ name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }]);
+        setEditOriginalItems([]);
+        setEditExpenseItems([{ _id: `new-${Date.now()}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }]);
       }
     } else {
       setEditNoteContent(note.content || '');
-      setEditExpenseItems([{ name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }]);
+      setEditOriginalItems([]);
+      setEditExpenseItems([{ _id: `new-${Date.now()}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }]);
     }
+    setEditDebtAmount(note.debt > 0 ? String(note.debt) : '');
+    // Auto scroll to edit form
+    setTimeout(() => {
+      editFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
   };
 
   const closeEditNote = () => {
     setEditingNoteId(null);
     setEditNoteContent('');
     setEditExpenseItems([]);
+    setEditOriginalItems([]);
+    setEditDebtAmount('');
   };
 
   const updateEditExpenseItem = (index, field, value) => {
-    const newItems = [...editExpenseItems];
-    newItems[index][field] = value;
+    const newItems = editExpenseItems.map((item, i) =>
+      i === index ? { ...item, [field]: value } : item
+    );
     if (index === newItems.length - 1 && value.trim() !== '' && field === 'name') {
-      newItems.push({ name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' });
+      newItems.push({ _id: `new-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' });
     }
     setEditExpenseItems(newItems);
   };
@@ -455,10 +497,12 @@ export default function StaffNotesPage() {
   const handleEditExpenseBlur = (index, field, e) => {
     const value = e.target.value.trim();
     if (!value) return;
-    const newItems = [...editExpenseItems];
-    if (field === 'price' && /^\d+$/.test(value)) newItems[index][field] = value + 'k';
-    else if (field === 'qty' && /^\d+(\.\d+)?$/.test(value)) newItems[index][field] = value + ' ký';
-    setEditExpenseItems(newItems);
+    let formatted = value;
+    if (field === 'price' && /^\d+$/.test(value)) formatted = value + 'k';
+    else if (field === 'qty' && /^\d+(\.\d+)?$/.test(value)) formatted = value + ' ký';
+    if (formatted !== value) {
+      setEditExpenseItems(prev => prev.map((item, i) => i === index ? { ...item, [field]: formatted } : item));
+    }
   };
 
   const removeEditExpenseItem = (index) => {
@@ -488,30 +532,102 @@ export default function StaffNotesPage() {
   const submitEditNote = async (note) => {
     let finalContent;
     let paid = 0, debt = 0;
-    if (editNoteType === 'expense') {
-      const validItems = editExpenseItems.filter(i => i.name.trim() !== '');
-      if (validItems.length > 0) {
-        finalContent = JSON.stringify({ type: 'structured_expense', items: validItems, note: editNoteContent });
-        const totals = calculateEditTotals();
-        paid = totals.paid;
-        debt = totals.debt;
-      } else {
+
+    const validItems = editNoteType === 'expense'
+      ? editExpenseItems.filter(i => i.name.trim() !== '')
+      : [];
+
+    // ── Generate history entry ──
+    const ts = new Date().toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
+    const editor = currentUser?.full_name || 'Không rõ';
+    const changeLines = [];
+
+    if (editNoteType === 'expense' && validItems.length > 0) {
+      // Compare against editOriginalItems (which have stable _ids assigned at edit-open time)
+      const oldItems = editOriginalItems;
+
+      // Detect changed vs new items using _id
+      validItems.forEach((newItem) => {
+        const oldItem = newItem._id ? oldItems.find(o => o._id === newItem._id) : null;
+        if (!oldItem) {
+          // No matching _id → brand new item
+          const p = parseVal(newItem.price); const q = parseVal(newItem.qty, true) || 1;
+          changeLines.push(`➕ Thêm mới: ${newItem.name}${newItem.price ? ' ' + newItem.price : ''}${newItem.qty ? ' × ' + newItem.qty : ''}${p * q > 0 ? ' = ' + formatMoney(p * q) : ''}${newItem.paymentStatus === 'debt' ? ' (Nợ)' : ''}`);
+        } else {
+          // Same _id → existing item, check for field changes
+          const diffs = [];
+          if (oldItem.name !== newItem.name) diffs.push(`tên "${oldItem.name}" → "${newItem.name}"`);
+          if (oldItem.price !== newItem.price) diffs.push(`giá ${oldItem.price || '—'} → ${newItem.price || '—'}`);
+          if (oldItem.qty !== newItem.qty) diffs.push(`SL ${oldItem.qty || '—'} → ${newItem.qty || '—'}`);
+          if (oldItem.paymentStatus !== newItem.paymentStatus) diffs.push(`trạng thái ${oldItem.paymentStatus === 'debt' ? 'Nợ' : 'Đủ'} → ${newItem.paymentStatus === 'debt' ? 'Nợ' : 'Đủ'}`);
+          if (newItem.paymentStatus === 'debt' && oldItem.debtAmount !== newItem.debtAmount && (oldItem.debtAmount || newItem.debtAmount))
+            diffs.push(`số nợ ${oldItem.debtAmount || '(toàn bộ)'} → ${newItem.debtAmount || '—'}`);
+          if (oldItem.creditor !== newItem.creditor && (oldItem.creditor || newItem.creditor)) diffs.push(`nợ của: ${newItem.creditor || '—'}`);
+          if (diffs.length > 0) changeLines.push(`✏️ Sửa ${newItem.name}: ${diffs.join(', ')}`);
+        }
+      });
+
+      // Detect removed items (_id có trong old nhưng không còn trong validItems)
+      oldItems.forEach(oldItem => {
+        const stillExists = oldItem._id ? validItems.find(n => n._id === oldItem._id) : true;
+        if (!stillExists) changeLines.push(`🗑️ Xóa: ${oldItem.name}`);
+      });
+
+      // Note text changed?
+      let oldNote = '';
+      try { oldNote = JSON.parse(note.content).note || ''; } catch {}
+      if (oldNote !== editNoteContent) changeLines.push(`📝 Ghi chú thêm: "${editNoteContent || '(xóa)'}"`);
+    } else {
+      // Non-expense
+      if (note.content !== editNoteContent.trim()) changeLines.push(`✏️ Sửa nội dung`);
+    }
+
+    const historyEntry = changeLines.length > 0
+      ? { ts, by: editor, changes: changeLines.join('\n') }
+      : { ts, by: editor, changes: '✏️ Cập nhật ghi chú' };
+
+    if (editNoteType === 'expense' && validItems.length > 0) {
+      let oldHistory = [];
+      try { oldHistory = JSON.parse(note.content).history || []; } catch {}
+      finalContent = JSON.stringify({
+        type: 'structured_expense',
+        items: validItems,
+        note: editNoteContent,
+        history: [...oldHistory, historyEntry]
+      });
+      const totals = calculateEditTotals();
+      paid = totals.paid;
+      debt = totals.debt;
+    } else {
+      // For non-structured, append history as text
+      let oldHistory = [];
+      try { oldHistory = JSON.parse(note.content).history || []; } catch {}
+      try {
+        const parsed = JSON.parse(note.content);
+        finalContent = JSON.stringify({ ...parsed, history: [...oldHistory, historyEntry], note: editNoteContent });
+      } catch {
         finalContent = editNoteContent.trim();
       }
-    } else {
-      finalContent = editNoteContent.trim();
     }
+
     if (!finalContent) { alert('Vui lòng nhập nội dung!'); return; }
+    const manualDebt = editDebtAmount ? Number(editDebtAmount.replace(/\./g, '')) : 0;
+    if (editNoteType !== 'expense' && manualDebt > 0) debt = manualDebt;
+    // For expense with valid items: use calculated debt (can be 0 = no debt)
+    // For non-expense: use manualDebt if provided, else keep original
+    const finalDebtToSave = (editNoteType === 'expense' && validItems.length > 0)
+      ? debt  // always use calculated (even 0)
+      : (manualDebt > 0 ? manualDebt : (note.debt || 0));
     setIsSavingEdit(true);
     const { error } = await supabase
       .from('staff_notes')
-      .update({ note_type: editNoteType, content: finalContent, amount: paid || note.amount, debt: debt || note.debt })
+      .update({ note_type: editNoteType, content: finalContent, amount: paid || note.amount, debt: finalDebtToSave })
       .eq('id', note.id);
     setIsSavingEdit(false);
     if (!error) {
       closeEditNote();
       fetchNotes();
-      setViewingNote(prev => prev ? { ...prev, note_type: editNoteType, content: finalContent, amount: paid || note.amount, debt: debt || note.debt } : null);
+      setViewingNote(prev => prev ? { ...prev, note_type: editNoteType, content: finalContent, amount: paid || note.amount, debt: finalDebtToSave } : null);
     } else {
       alert('Lưu thất bại!');
     }
@@ -547,26 +663,20 @@ export default function StaffNotesPage() {
   };
 
   const updateExpenseItem = (index, field, value) => {
-    const newItems = [...expenseItems];
-    let finalValue = value;
-    
-    // Auto-formatting for price and qty ONLY when losing focus/blur or specific conditions?
-    // Doing it onChange might interrupt typing.
-    // Given the prompt "ví dụ tôi viết 100 thì bạn thêm 100k v tôi viết 5 thì bạn viết 5 kg"
-    // We can auto-append when they type a space, or just let them type and we parse it.
-    // For a simple real-time approach, if they type numbers we can append it on blur. 
-    // Since we only have onChange right now, let's keep it simple: 
-    // We'll update the state directly, but maybe we can add a simple formatting check if they click out (blur).
-    // For now, let's just use the raw value.
-    
-    newItems[index][field] = finalValue;
-    
-    // If we're updating the last row and there's text, add a new empty row
-    if (index === newItems.length - 1 && finalValue.trim() !== '' && field === 'name') {
-      newItems.push({ name: '', price: '', qty: '', paymentStatus: 'full', creditor: '' });
-    }
-    
-    setExpenseItems(newItems);
+    setExpenseItems(prev => {
+      const wasEmpty = prev[index]?.name?.trim() === '';
+      const isPreset = prev[index]?.preset;
+      const newItems = prev.map((item, i) => i === index ? { ...item, [field]: value } : item);
+      // When typing a name into a non-preset empty item, insert ONE new empty row right after it
+      if (field === 'name' && wasEmpty && value.trim() !== '' && !isPreset) {
+        const next = prev[index + 1];
+        const alreadyHasEmptyAfter = next && !next.preset && next.name.trim() === '';
+        if (!alreadyHasEmptyAfter) {
+          newItems.splice(index + 1, 0, { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' });
+        }
+      }
+      return newItems;
+    });
   };
 
   const handleExpenseBlur = (index, field, e) => {
@@ -611,8 +721,11 @@ export default function StaffNotesPage() {
         data.items[itemIdx].paymentStatus = 'full';
       }
       // Append payment log to this item
-      const tsStr = new Date().toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
+      const tsStr = new Date().toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
       data.items[itemIdx].payment_logs = [...(item.payment_logs || []), { amount: payAmount, ts: tsStr }];
+      // Also log into shared history
+      const payEditor = currentUser?.full_name || 'Không rõ';
+      data.history = [...(data.history || []), { ts: tsStr, by: payEditor, changes: `💰 Trả nợ ${formatMoney(payAmount)} cho "${item.name}"` }];
       const newContent = JSON.stringify(data);
       const totalPaid = data.items.filter(i => i.name?.trim()).reduce((sum, i) => sum + (i.paid_amount || 0), 0);
       await supabase.from('staff_notes').update({ content: newContent, paid_debt: totalPaid }).eq('id', note.id);
@@ -904,6 +1017,32 @@ export default function StaffNotesPage() {
                 <span style={{ color: debtTotal > 0 ? '#dc2626' : '#15803d' }}>{formatMoney(grandTotal)}</span>
               </div>
             </div>
+
+            {/* ── Edit History ── */}
+            {data.history?.length > 0 && (
+              <div style={{ marginTop: 12, borderTop: '1px dashed #e5e7eb', paddingTop: 10 }}>
+                <button
+                  onClick={() => setShowHistory(v => !v)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 12, fontWeight: 700, color: '#6b7280' }}
+                >
+                  <span>{showHistory ? '▾' : '▸'}</span>
+                  <span style={{ textTransform: 'uppercase', letterSpacing: 0.5 }}>🕐 Lịch sử chỉnh sửa ({data.history.length})</span>
+                </button>
+                {showHistory && (
+                  <div style={{ marginTop: 8 }}>
+                    {data.history.map((h, hi) => (
+                      <div key={hi} style={{ marginBottom: 8, padding: '8px 10px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                          <span style={{ fontWeight: 700, color: '#1e40af' }}>👤 {h.by}</span>
+                          <span style={{ color: '#94a3b8', fontSize: 11 }}>🕐 {h.ts}</span>
+                        </div>
+                        <div style={{ color: '#374151', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{h.changes}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         );
       }
@@ -1381,8 +1520,8 @@ export default function StaffNotesPage() {
             return undefined;
           })()
         }}>
-            <div className="modal-header" style={{ borderBottom: '1px solid #e5e7eb', paddingBottom: 12, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
+            <div style={{ borderBottom: '1px solid #e5e7eb', paddingBottom: 12, marginBottom: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '14px 16px 12px', position: 'sticky', top: 0, background: 'white', zIndex: 10, borderRadius: '24px 24px 0 0' }}>
+              <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
                 <h3 style={{ fontWeight: 700, fontSize: 17, color: '#111827', margin: 0 }}>{currentUser.role === 'admin' ? (viewingNote.staff?.full_name || 'Không rõ') : 'Báo cáo của bạn'}</h3>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 13, color: '#6b7280' }}>{formatDate(viewingNote.created_at)}</span>
@@ -1412,7 +1551,7 @@ export default function StaffNotesPage() {
             <div className="modal-body">
               {/* ── Inline Edit Form ── */}
               {editingNoteId === viewingNote.id && (
-                <div style={{ marginBottom: 16, padding: 16, background: '#f0f9ff', borderRadius: 12, border: '1.5px solid #bae6fd' }}>
+                <div ref={editFormRef} style={{ marginBottom: 16, padding: 16, background: '#f0f9ff', borderRadius: 12, border: '1.5px solid #bae6fd' }}>
                   <div style={{ fontWeight: 700, color: '#0369a1', marginBottom: 12, fontSize: 14 }}>✏️ Chỉnh sửa ghi chú</div>
                   {/* Note type selector */}
                   <div style={{ marginBottom: 10 }}>
@@ -1433,6 +1572,7 @@ export default function StaffNotesPage() {
                           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
                             <input type="text" placeholder="Tên món" value={item.name} onChange={e => updateEditExpenseItem(idx, 'name', e.target.value)}
                               style={{ flex: 1, minWidth: 90, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }} />
+
                             <input type="text" placeholder="Giá" value={item.price} onChange={e => updateEditExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleEditExpenseBlur(idx, 'price', e)}
                               style={{ width: 68, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, textAlign: 'center' }} />
                             <input type="text" placeholder="SL/Ký" value={item.qty} onChange={e => updateEditExpenseItem(idx, 'qty', e.target.value)} onBlur={e => handleEditExpenseBlur(idx, 'qty', e)}
@@ -1446,12 +1586,33 @@ export default function StaffNotesPage() {
                               <input type="radio" checked={item.paymentStatus === 'full'} onChange={() => updateEditExpenseItem(idx, 'paymentStatus', 'full')} /> ✓ Đủ
                             </label>
                             <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer' }}>
-                              <input type="radio" checked={item.paymentStatus === 'debt'} onChange={() => updateEditExpenseItem(idx, 'paymentStatus', 'debt')} /> Nợ
+                              <input type="radio" checked={item.paymentStatus === 'debt'} onChange={() => {
+                                updateEditExpenseItem(idx, 'paymentStatus', 'debt');
+                                // Auto-fill debtAmount when switching to debt
+                                if (!item.debtAmount) {
+                                  const p = parseVal(item.price); const q = parseVal(item.qty, true) || 1;
+                                  const total = p * q;
+                                  if (total > 0) updateEditExpenseItem(idx, 'debtAmount', total.toLocaleString('vi-VN'));
+                                }
+                              }} /> Nợ
                             </label>
-                            {item.paymentStatus === 'debt' && (
+                            {item.paymentStatus === 'debt' && (<>
+                              <input
+                                type="text" inputMode="numeric"
+                                placeholder="Số tiền nợ"
+                                value={item.debtAmount || ''}
+                                onChange={e => {
+                                  const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
+                                  const p = parseVal(item.price); const q = parseVal(item.qty, true) || 1; const cap = p * q;
+                                  const num = Number(raw);
+                                  if (cap > 0 && num > cap) { updateEditExpenseItem(idx, 'debtAmount', cap.toLocaleString('vi-VN')); return; }
+                                  updateEditExpenseItem(idx, 'debtAmount', raw ? num.toLocaleString('vi-VN') : '');
+                                }}
+                                style={{ width: 90, padding: '4px 7px', border: '1.5px solid #fca5a5', borderRadius: 6, fontSize: 12, textAlign: 'right', color: '#dc2626', fontWeight: 700 }}
+                              />
                               <input type="text" placeholder="Nợ của ai?" value={item.creditor || ''} onChange={e => updateEditExpenseItem(idx, 'creditor', e.target.value)}
-                                style={{ flex: 1, minWidth: 80, padding: '4px 7px', border: '1px solid #fca5a5', borderRadius: 6, fontSize: 12 }} />
-                            )}
+                                style={{ flex: 1, minWidth: 70, padding: '4px 7px', border: '1px solid #fca5a5', borderRadius: 6, fontSize: 12 }} />
+                            </>)}
                           </div>
                         </div>
                       ))}
@@ -1518,37 +1679,7 @@ export default function StaffNotesPage() {
                   </div>
                 );
               })()}
-              {viewingNote.status === 'approved' && viewingNote.debt > (viewingNote.paid_debt || 0) && !payDebtNoteId && (
-                <button
-                  style={{ width: '100%', padding: '12px', background: '#fff', border: '1.5px solid #fca5a5', borderRadius: 10, color: '#dc2626', fontWeight: 700, cursor: 'pointer', marginBottom: 16 }}
-                  onClick={() => setPayDebtNoteId(viewingNote.id)}
-                >
-                  Báo cáo: Đã trả phần nợ này!
-                </button>
-              )}
-              {payDebtNoteId === viewingNote.id && (
-                <div style={{ marginBottom: 16, padding: 14, border: '1.5px solid #fca5a5', background: '#fef2f2', borderRadius: 10 }}>
-                  <div style={{ fontWeight: 700, color: '#dc2626', fontSize: 13, marginBottom: 10 }}>Nhập số tiền vừa trả nợ:</div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input
-                      type="number"
-                      style={{ flex: 1, padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, outline: 'none' }}
-                      placeholder="VD: 50000"
-                      value={payDebtAmount}
-                      onChange={e => setPayDebtAmount(e.target.value)}
-                      autoFocus
-                    />
-                    <button
-                      style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 8, padding: '8px 16px', fontWeight: 700, cursor: 'pointer' }}
-                      disabled={isLoading}
-                      onClick={() => handlePayDebt(viewingNote)}
-                    >
-                      Lưu
-                    </button>
-                  </div>
-                  <button style={{ fontSize: 12, color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', marginTop: 8 }} onClick={() => { setPayDebtNoteId(null); setPayDebtAmount(''); }}>Huỷ</button>
-                </div>
-              )}
+
             </div>
           </div>
         </div>
@@ -1664,11 +1795,36 @@ export default function StaffNotesPage() {
 
       </>)}
 
+      {/* ── Delete Confirm Modal ── */}
+      {deleteConfirmId && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)' }}
+          onClick={() => setDeleteConfirmId(null)}>
+          <div style={{ background: 'white', borderRadius: 20, padding: '32px 28px', maxWidth: 360, width: '100%', boxShadow: '0 25px 60px rgba(0,0,0,0.25)', textAlign: 'center' }}
+            onClick={e => e.stopPropagation()}>
+            {/* Icon */}
+            <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'linear-gradient(135deg,#fee2e2,#fecaca)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: 28 }}>🗑️</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: '#111827', marginBottom: 8 }}>Xoá ghi chú?</div>
+            <div style={{ fontSize: 14, color: '#6b7280', marginBottom: 28, lineHeight: 1.6 }}>
+              Hành động này <strong style={{ color: '#dc2626' }}>không thể hoàn tác</strong>.<br />Ghi chú sẽ bị xoá vĩnh viễn.
+            </div>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button onClick={() => setDeleteConfirmId(null)}
+                style={{ flex: 1, padding: '12px 0', borderRadius: 12, border: '1.5px solid #e5e7eb', background: 'white', color: '#374151', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}>
+                Huỷ bỏ
+              </button>
+              <button onClick={confirmDeleteNote}
+                style={{ flex: 1, padding: '12px 0', borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#ef4444,#dc2626)', color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer', boxShadow: '0 4px 14px rgba(220,38,38,0.35)' }}>
+                Xoá ngay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── FAB: nút Ghi chú với kéo thả ── */}
       {currentUser.role === 'admin' && (
         <button
           onPointerDown={e => {
-            e.preventDefault();
             const d = fabDrag.current;
             d.dragging = true; d.moved = false;
             d.startX = e.clientX; d.startY = e.clientY;
@@ -1680,7 +1836,7 @@ export default function StaffNotesPage() {
             if (!d.dragging) return;
             const dx = e.clientX - d.startX;
             const dy = e.clientY - d.startY;
-            if (Math.abs(dx) > 4 || Math.abs(dy) > 4) d.moved = true;
+            if (Math.abs(dx) > 8 || Math.abs(dy) > 8) d.moved = true;
             if (!d.moved) return;
             const newRight = Math.max(8, Math.min(window.innerWidth - 64, d.origRight - dx));
             const newBottom = Math.max(8, Math.min(window.innerHeight - 64, d.origBottom - dy));

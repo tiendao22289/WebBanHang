@@ -318,7 +318,15 @@ export default function PayrollPage() {
       <div className="payroll-page">
         <div className="payroll-header">
           <div className="payroll-title">💰 Tính Lương của tôi</div>
-          <div style={{ fontSize: '0.82rem', color: '#6b7280' }}>Tháng {now.getMonth() + 1}/{now.getFullYear()}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', background: '#dbeafe', borderRadius: 20, fontSize: '0.78rem', fontWeight: 700, color: '#1d4ed8', flexShrink: 0 }}>
+            <span>👤</span>
+            <span>{currentUser.full_name}</span>
+            <button
+              onClick={() => { localStorage.removeItem('staffUser'); window.location.reload(); }}
+              title="Đăng xuất"
+              style={{ marginLeft: 4, background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1, padding: '2px 4px', borderRadius: 6, opacity: 0.7 }}
+            >🚪</button>
+          </div>
         </div>
 
         <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
