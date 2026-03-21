@@ -59,9 +59,6 @@ export default function MenuPage() {
     ]);
     setCategories(cats || []);
     setMenuItems(items || []);
-    if (!activeCategory && cats?.length > 0) {
-      setActiveCategory(cats[0].id);
-    }
     setLoading(false);
   }
 
