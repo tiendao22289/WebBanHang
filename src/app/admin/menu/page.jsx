@@ -304,13 +304,6 @@ export default function MenuPage() {
                     <ImageIcon size={32} />
                   </div>
                 )}
-                <button
-                  className="menu-toggle-btn"
-                  onClick={() => toggleAvailable(item)}
-                  title={item.is_available ? 'Ẩn món' : 'Hiện món'}
-                >
-                  {item.is_available ? <Eye size={16} /> : <EyeOff size={16} />}
-                </button>
               </div>
               <div className="menu-card-body">
                 <div className="menu-card-cat">{item.category?.name || 'Chưa phân loại'}</div>
@@ -321,6 +314,14 @@ export default function MenuPage() {
                 <div className="menu-card-footer">
                   <span className="menu-card-price">{formatPrice(item.price)}</span>
                   <div className="flex gap-1">
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => toggleAvailable(item)}
+                      title={item.is_available ? 'Ẩn món' : 'Hiện món'}
+                      style={{ color: item.is_available ? '#2563eb' : '#9ca3af' }}
+                    >
+                      {item.is_available ? <Eye size={14} /> : <EyeOff size={14} />}
+                    </button>
                     <button className="btn btn-ghost btn-sm" onClick={() => openItemModal(item)}>
                       <Pencil size={14} />
                     </button>
