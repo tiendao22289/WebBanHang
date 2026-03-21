@@ -103,7 +103,10 @@ export default function MenuPage() {
         category_id: item.category_id || '',
         image_url: item.image_url || '',
         is_available: item.is_available,
-        options: item.options || [],
+        options: (item.options || []).map(opt => ({
+          ...opt,
+          prices: opt.prices || Array(opt.choices?.length || 0).fill(null),
+        })),
       });
     } else {
       setEditingItem(null);
@@ -122,9 +125,12 @@ export default function MenuPage() {
 
     // Clean up options (remove empty choices, remove options without names or choices)
     const cleanedOptions = itemForm.options
-      .map(opt => ({
+      .map((opt, oi) => ({
         name: opt.name.trim(),
-        choices: opt.choices.map(c => c.trim()).filter(c => c)
+        choices: opt.choices.map(c => c.trim()).filter(c => c),
+        prices: opt.choices
+          .map((c, ci) => c.trim() ? (opt.prices?.[ci] ?? null) : null)
+          .filter((_, ci) => opt.choices[ci]?.trim()),
       }))
       .filter(opt => opt.name && opt.choices.length > 0);
 
@@ -162,7 +168,7 @@ export default function MenuPage() {
   function addOption() {
     setItemForm(prev => ({
       ...prev,
-      options: [...prev.options, { name: '', choices: [''] }]
+      options: [...prev.options, { name: '', choices: [''], prices: [null] }]
     }));
   }
 
@@ -181,6 +187,8 @@ export default function MenuPage() {
   function addOptionChoice(optIndex) {
     const newOptions = [...itemForm.options];
     newOptions[optIndex].choices.push('');
+    if (!newOptions[optIndex].prices) newOptions[optIndex].prices = [];
+    newOptions[optIndex].prices.push(null);
     setItemForm({ ...itemForm, options: newOptions });
   }
 
@@ -190,9 +198,17 @@ export default function MenuPage() {
     setItemForm({ ...itemForm, options: newOptions });
   }
 
+  function updateChoicePrice(optIndex, choiceIndex, value) {
+    const newOptions = [...itemForm.options];
+    if (!newOptions[optIndex].prices) newOptions[optIndex].prices = [];
+    newOptions[optIndex].prices[choiceIndex] = value === '' ? null : Number(value);
+    setItemForm({ ...itemForm, options: newOptions });
+  }
+
   function removeOptionChoice(optIndex, choiceIndex) {
     const newOptions = [...itemForm.options];
     newOptions[optIndex].choices.splice(choiceIndex, 1);
+    if (newOptions[optIndex].prices) newOptions[optIndex].prices.splice(choiceIndex, 1);
     setItemForm({ ...itemForm, options: newOptions });
   }
 
@@ -417,46 +433,59 @@ export default function MenuPage() {
               </label>
 
               {/* Options Section */}
-              <div className="options-section" style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '1rem' }}>
+              <div className="options-section" style={{ borderTop: '1px solid #dbeafe', paddingTop: '1rem', marginTop: '1rem' }}>
                 <div className="flex justify-between items-center mb-3">
-                  <h4 style={{ margin: 0 }}>Tuỳ chọn món (Khẩu vị, Size...)</h4>
-                  <button className="btn btn-outline btn-sm" onClick={addOption}>
-                    <Plus size={14} /> Thêm tuỳ chọn
+                  <h4 style={{ margin: 0, color: '#111827' }}>Tuỳ chọn món (Khẩu vị, Size...)</h4>
+                  <button onClick={addOption} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', border: '1.5px solid #2563eb', borderRadius: 8, background: 'white', color: '#2563eb', fontWeight: 600, fontSize: '0.8rem', cursor: 'pointer' }}>
+                    <Plus size={13} /> Thêm tuỳ chọn
                   </button>
                 </div>
-                
+
                 {itemForm.options.map((opt, optIndex) => (
-                  <div key={optIndex} className="option-group" style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 'var(--radius-md)', marginBottom: '1rem' }}>
+                  <div key={optIndex} className="option-group" style={{ background: '#f8fafc', border: '1px solid #dbeafe', padding: '12px', borderRadius: 10, marginBottom: '10px' }}>
                     <div className="flex justify-between items-center mb-3 gap-2">
-                      <input 
-                        className="input" 
-                        value={opt.name} 
-                        onChange={(e) => updateOptionName(optIndex, e.target.value)} 
-                        placeholder="Tên tuỳ chọn (VD: Khẩu vị, Độ cay)" 
+                      <input
+                        className="input"
+                        value={opt.name}
+                        onChange={(e) => updateOptionName(optIndex, e.target.value)}
+                        placeholder="Tên tuỳ chọn (VD: Khẩu vị, Độ cay)"
                         style={{ flex: 1 }}
                       />
-                      <button className="btn btn-ghost btn-icon text-danger" onClick={() => removeOption(optIndex)} title="Xoá tuỳ chọn này">
+                      <button className="btn btn-ghost btn-icon" onClick={() => removeOption(optIndex)} title="Xoá tuỳ chọn này" style={{ color: '#dc2626' }}>
                         <Trash2 size={16} />
                       </button>
                     </div>
-                    
+
                     <div className="option-choices">
+                      {/* Header row */}
+                      <div style={{ display: 'flex', gap: 8, marginBottom: 4, paddingRight: 32 }}>
+                        <span style={{ flex: 2, fontSize: '0.72rem', color: '#6b7280', fontWeight: 600 }}>Tên lựa chọn</span>
+                        <span style={{ flex: 1, fontSize: '0.72rem', color: '#6b7280', fontWeight: 600 }}>Giá thêm (đ) - tuỳ chọn</span>
+                      </div>
                       {opt.choices.map((choice, choiceIndex) => (
                         <div key={choiceIndex} className="flex items-center gap-2 mb-2">
-                          <input 
-                            className="input input-sm" 
-                            value={choice} 
-                            onChange={(e) => updateOptionChoice(optIndex, choiceIndex, e.target.value)} 
-                            placeholder={`Lựa chọn ${choiceIndex + 1} (VD: Xào, Hấp)`} 
-                            style={{ flex: 1 }}
+                          <input
+                            className="input input-sm"
+                            value={choice}
+                            onChange={(e) => updateOptionChoice(optIndex, choiceIndex, e.target.value)}
+                            placeholder={`Lựa chọn ${choiceIndex + 1} (VD: Xào, Hấp)`}
+                            style={{ flex: 2 }}
                           />
-                          <button className="btn btn-ghost btn-icon btn-sm text-danger" onClick={() => removeOptionChoice(optIndex, choiceIndex)}>
+                          <input
+                            className="input input-sm"
+                            type="number"
+                            value={opt.prices?.[choiceIndex] ?? ''}
+                            onChange={(e) => updateChoicePrice(optIndex, choiceIndex, e.target.value)}
+                            placeholder="+ giá"
+                            style={{ flex: 1, borderColor: '#bfdbfe', background: '#eff6ff' }}
+                          />
+                          <button className="btn btn-ghost btn-icon btn-sm" onClick={() => removeOptionChoice(optIndex, choiceIndex)} style={{ color: '#9ca3af' }}>
                             <X size={14} />
                           </button>
                         </div>
                       ))}
-                      <button className="btn btn-ghost btn-sm mt-1" onClick={() => addOptionChoice(optIndex)}>
-                        <Plus size={14} /> Thêm lựa chọn
+                      <button className="btn btn-ghost btn-sm mt-1" onClick={() => addOptionChoice(optIndex)} style={{ color: '#2563eb', fontSize: '0.8rem' }}>
+                        <Plus size={13} /> Thêm lựa chọn
                       </button>
                     </div>
                   </div>
@@ -465,7 +494,9 @@ export default function MenuPage() {
             </div>
             <div className="modal-footer">
               <button className="btn btn-outline" onClick={() => setShowItemModal(false)}>Huỷ</button>
-              <button className="btn btn-primary" onClick={saveItem}>{editingItem ? 'Cập nhật' : 'Thêm món'}</button>
+              <button onClick={saveItem} style={{ padding: '10px 24px', background: '#111827', color: 'white', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: '0.95rem', cursor: 'pointer' }}>
+                {editingItem ? 'Cập nhật' : 'Thêm món'}
+              </button>
             </div>
           </div>
         </div>
