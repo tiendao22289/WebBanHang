@@ -473,7 +473,7 @@ export default function MenuPage() {
                       {/* Header row */}
                       <div style={{ display: 'flex', gap: 8, marginBottom: 4, paddingRight: 32 }}>
                         <span style={{ flex: 2, fontSize: '0.72rem', color: '#6b7280', fontWeight: 600 }}>Tên lựa chọn</span>
-                        <span style={{ flex: 1, fontSize: '0.72rem', color: '#6b7280', fontWeight: 600 }}>Giá thêm (đ) - tuỳ chọn</span>
+                        <span style={{ flex: 1, fontSize: '0.72rem', color: '#6b7280', fontWeight: 600 }}>Giá (đ)</span>
                       </div>
                       {opt.choices.map((choice, choiceIndex) => (
                         <div key={choiceIndex} className="flex items-center gap-2 mb-2">
@@ -489,7 +489,7 @@ export default function MenuPage() {
                             type="number"
                             value={opt.prices?.[choiceIndex] ?? ''}
                             onChange={(e) => updateChoicePrice(optIndex, choiceIndex, e.target.value)}
-                            placeholder="+ giá"
+                            placeholder="Giá (VD: 50000)"
                             style={{ flex: 1, borderColor: '#bfdbfe', background: '#eff6ff' }}
                           />
                           <button className="btn btn-ghost btn-icon btn-sm" onClick={() => removeOptionChoice(optIndex, choiceIndex)} style={{ color: '#9ca3af' }}>
