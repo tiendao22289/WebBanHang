@@ -479,16 +479,20 @@ export default function TablesPage() {
       setOptionModalItem(menuItem);
       // Pre-select the first choice for each option
       const initialOptions = {};
+      let initialPrice = null;
       menuItem.options.forEach(opt => {
         if (opt.choices && opt.choices.length > 0) {
           initialOptions[opt.name] = opt.choices[0];
+          if (initialPrice === null && opt.prices?.[0] != null && Number(opt.prices[0]) > 0) {
+            initialPrice = Number(opt.prices[0]);
+          }
         }
       });
       setSelectedOptions(initialOptions);
       setOptionQuantity(1);
       setOptionNote('');
       setEditingPrice(false);
-      setCustomPrice(null);
+      setCustomPrice(initialPrice);
       return;
     }
 
@@ -2355,15 +2359,22 @@ export default function TablesPage() {
                 <div key={idx}>
                   <div className="options-group-title">{opt.name}</div>
                   <div className="options-chip-container">
-                    {opt.choices.map((choice, cIdx) => (
-                      <button 
-                        key={cIdx}
-                        className={`options-chip ${selectedOptions[opt.name] === choice ? 'active' : ''}`}
-                        onClick={() => setSelectedOptions({ ...selectedOptions, [opt.name]: choice })}
-                      >
-                        {choice}
-                      </button>
-                    ))}
+                    {opt.choices.map((choice, cIdx) => {
+                      const choiceP = opt.prices?.[cIdx];
+                      const hasPrice = choiceP != null && Number(choiceP) > 0;
+                      return (
+                        <button
+                          key={cIdx}
+                          className={`options-chip ${selectedOptions[opt.name] === choice ? 'active' : ''}`}
+                          onClick={() => {
+                            setSelectedOptions({ ...selectedOptions, [opt.name]: choice });
+                            if (hasPrice) setCustomPrice(Number(choiceP));
+                          }}
+                        >
+                          {choice}{hasPrice ? <span style={{ fontSize: '0.72rem', opacity: 0.85, marginLeft: 4 }}>• {formatPrice(choiceP)}</span> : null}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               ))}

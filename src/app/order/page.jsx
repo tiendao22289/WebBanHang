@@ -47,6 +47,12 @@ function OrderContent() {
   const [orderCancelled, setOrderCancelled] = useState(false); // admin cancelled
   const [orderPaid, setOrderPaid] = useState(null); // { total } khi admin thanh toán
   const [locationWarning, setLocationWarning] = useState(false); // khách không ở nhà hàng
+  // Option selection modal for items with choices
+  const [optionModal, setOptionModal] = useState(null);
+  const [selectedOpts, setSelectedOpts] = useState({});
+  const [optionQty, setOptionQty] = useState(1);
+  const [optNote, setOptNote] = useState('');
+  const [choicePrice, setChoicePrice] = useState(null); // price from selected choice
 
   const catTabsRef = useRef(null);
   const sectionRefs = useRef({});
@@ -441,11 +447,51 @@ function OrderContent() {
   }
 
   function addToCart(item) {
+    // If item has configurable options, show selection modal
+    if (item.options && item.options.length > 0) {
+      setOptionModal(item);
+      const init = {};
+      let initPrice = null;
+      item.options.forEach(opt => {
+        if (opt.choices && opt.choices.length > 0) {
+          init[opt.name] = opt.choices[0];
+          if (initPrice === null && opt.prices?.[0] != null && Number(opt.prices[0]) > 0) {
+            initPrice = Number(opt.prices[0]);
+          }
+        }
+      });
+      setSelectedOpts(init);
+      setChoicePrice(initPrice);
+      setOptionQty(1);
+      setOptNote('');
+      return;
+    }
     setCart(prev => {
       const existing = prev.find(c => c.id === item.id);
       if (existing) return prev.map(c => c.id === item.id ? { ...c, quantity: c.quantity + 1 } : c);
       return [...prev, { ...item, quantity: 1 }];
     });
+  }
+
+  function confirmOptionAdd() {
+    if (!optionModal) return;
+    const price = choicePrice ?? optionModal.price;
+    const optionsArr = Object.keys(selectedOpts).map(k => ({ name: k, choice: selectedOpts[k] }));
+    const label = optionsArr.map(o => o.choice).join(', ');
+    const cartItem = {
+      ...optionModal,
+      price,
+      _optionKey: `${optionModal.id}-${label}-${optNote}`, // unique key for this variant
+      _options: optionsArr,
+      _note: optNote,
+      quantity: optionQty,
+    };
+    setCart(prev => {
+      const existing = prev.find(c => c._optionKey === cartItem._optionKey);
+      if (existing) return prev.map(c => c._optionKey === cartItem._optionKey ? { ...c, quantity: c.quantity + optionQty } : c);
+      return [...prev, cartItem];
+    });
+    setOptionModal(null);
   }
 
   function updateQuantity(itemId, delta) {
@@ -458,12 +504,13 @@ function OrderContent() {
     );
   }
 
-  function getCartQty(itemId) {
-    return cart.find(c => c.id === itemId)?.quantity || 0;
-  }
-
   const totalAmount = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
+
+  function getCartQty(itemId) {
+    // Sum all variants of this item in cart
+    return cart.filter(c => c.id === itemId).reduce((s, c) => s + c.quantity, 0);
+  }
 
   async function submitOrder() {
     if (cart.length === 0 || submitting) return;
@@ -525,7 +572,8 @@ function OrderContent() {
           menu_item_id: item.id,
           quantity: item.quantity,
           unit_price: item.price,
-          note: notes[item.id] || null,
+          item_options: item._options || [],
+          note: item._note || notes[item.id] || null,
         }))
       );
 
@@ -912,6 +960,73 @@ function OrderContent() {
           >
             Đặt lại
           </button>
+        </div>
+      )}
+
+      {/* ─── Option Selection Modal ─── */}
+      {optionModal && (
+        <div className="co-modal-overlay" onClick={() => setOptionModal(null)}>
+          <div className="co-sheet" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh' }}>
+            <div className="co-sheet-handle" />
+            <div className="co-sheet-header">
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>{optionModal.name}</div>
+                <div style={{ color: '#2563eb', fontWeight: 700, fontSize: '1rem', marginTop: 2 }}>
+                  {(choicePrice ?? optionModal.price).toLocaleString('vi-VN')}đ
+                </div>
+              </div>
+              <button onClick={() => setOptionModal(null)}><X size={20} /></button>
+            </div>
+            <div className="co-sheet-body">
+              {optionModal.options.map((opt, oi) => (
+                <div key={oi} style={{ marginBottom: 16 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#6b7280', marginBottom: 8 }}>{opt.name}</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {opt.choices.map((choice, ci) => {
+                      const p = opt.prices?.[ci];
+                      const hasP = p != null && Number(p) > 0;
+                      const active = selectedOpts[opt.name] === choice;
+                      return (
+                        <button key={ci} onClick={() => {
+                          setSelectedOpts({ ...selectedOpts, [opt.name]: choice });
+                          if (hasP) setChoicePrice(Number(p));
+                        }} style={{
+                          padding: '8px 14px', borderRadius: 100,
+                          border: active ? '2px solid #2563eb' : '1.5px solid #e5e7eb',
+                          background: active ? '#eff6ff' : 'white',
+                          color: active ? '#1d4ed8' : '#374151',
+                          fontWeight: active ? 700 : 500,
+                          fontSize: '0.9rem', cursor: 'pointer'
+                        }}>
+                          {choice}{hasP ? <span style={{ fontSize: '0.75rem', marginLeft: 4, color: active ? '#2563eb' : '#9ca3af' }}>{Number(p).toLocaleString('vi-VN')}đ</span> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 700, fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#6b7280', marginBottom: 8 }}>Ghi chú</div>
+                <input
+                  className="co-input"
+                  placeholder="Thêm ghi chú cho nhà bếp..."
+                  value={optNote}
+                  onChange={e => setOptNote(e.target.value)}
+                  style={{ borderRadius: 10, padding: '10px 14px' }}
+                />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 24, marginBottom: 8 }}>
+                <button onClick={() => setOptionQty(Math.max(1, optionQty - 1))} style={{ width: 36, height: 36, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={18} /></button>
+                <span style={{ fontWeight: 700, fontSize: '1.1rem', minWidth: 24, textAlign: 'center' }}>{optionQty}</span>
+                <button onClick={() => setOptionQty(optionQty + 1)} style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={18} /></button>
+              </div>
+            </div>
+            <div className="co-sheet-footer">
+              <button className="co-btn-submit" onClick={confirmOptionAdd}>
+                Thêm vào giỏ • {((choicePrice ?? optionModal.price) * optionQty).toLocaleString('vi-VN')}đ
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
