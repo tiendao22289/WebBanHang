@@ -1821,44 +1821,14 @@ export default function StaffNotesPage() {
         </div>
       )}
 
-      {/* ── FAB: nút Ghi chú với kéo thả ── */}
+      {/* ── FAB: nút Ghi chú cố định (không kéo thả) ── */}
       {currentUser.role === 'admin' && (
         <button
-          onPointerDown={e => {
-            const d = fabDrag.current;
-            d.dragging = true; d.moved = false;
-            d.startX = e.clientX; d.startY = e.clientY;
-            d.origRight = fabPos.right; d.origBottom = fabPos.bottom;
-            // Use window listeners instead of setPointerCapture (setPointerCapture breaks Android click)
-            const pointerId = e.pointerId;
-            const handleMove = (me) => {
-              if (!d.dragging) return;
-              const dx = me.clientX - d.startX;
-              const dy = me.clientY - d.startY;
-              if (Math.abs(dx) > 8 || Math.abs(dy) > 8) d.moved = true;
-              if (!d.moved) return;
-              const newRight = Math.max(8, Math.min(window.innerWidth - 64, d.origRight - dx));
-              const newBottom = Math.max(8, Math.min(window.innerHeight - 64, d.origBottom - dy));
-              setFabPos({ right: newRight, bottom: newBottom });
-            };
-            const handleUp = () => {
-              d.dragging = false;
-              if (!d.moved) {
-                setShowAddModal(true);
-              } else {
-                localStorage.setItem('noteFabPos', JSON.stringify({ right: fabPos.right, bottom: fabPos.bottom }));
-              }
-              d.moved = false;
-              window.removeEventListener('pointermove', handleMove);
-              window.removeEventListener('pointerup', handleUp);
-            };
-            window.addEventListener('pointermove', handleMove);
-            window.addEventListener('pointerup', handleUp);
-          }}
+          onClick={() => setShowAddModal(true)}
           style={{
             position: 'fixed',
-            bottom: fabPos.bottom,
-            right: fabPos.right,
+            bottom: 76,
+            right: 20,
             width: 56,
             height: 56,
             borderRadius: '50%',
@@ -1866,7 +1836,7 @@ export default function StaffNotesPage() {
             color: 'white',
             border: 'none',
             boxShadow: '0 4px 20px rgba(22,163,74,0.45)',
-            cursor: 'grab',
+            cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1874,8 +1844,7 @@ export default function StaffNotesPage() {
             fontSize: 28,
             fontWeight: 300,
             lineHeight: 1,
-            touchAction: 'none',
-            userSelect: 'none',
+            touchAction: 'manipulation',
           }}
         >
           +
