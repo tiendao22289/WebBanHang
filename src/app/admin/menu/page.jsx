@@ -228,17 +228,17 @@ export default function MenuPage() {
 
   return (
     <div className="page-content">
-      <div className="page-header">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'nowrap', gap: 8 }}>
         <div>
-          <h1 className="page-title">Thực đơn</h1>
-          <p className="page-subtitle">Quản lý danh mục và món ăn</p>
+          <h1 className="page-title" style={{ marginBottom: 2 }}>Thực đơn</h1>
+          <p className="page-subtitle" style={{ margin: 0, fontSize: '0.8rem' }}>Quản lý danh mục và món ăn</p>
         </div>
-        <div className="flex gap-3">
-          <button className="btn btn-outline" onClick={() => openCatModal()}>
-            <FolderOpen size={16} /> Thêm danh mục
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+          <button onClick={() => openCatModal()} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', background: 'white', color: '#374151', border: '1.5px solid #e5e7eb', borderRadius: 8, fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            <FolderOpen size={13} /> Thêm DM
           </button>
-          <button onClick={() => openItemModal()} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 20px', background: '#111827', color: 'white', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}>
-            <Plus size={18} /> Thêm món
+          <button onClick={() => openItemModal()} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px', background: '#111827', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            <Plus size={14} /> Thêm món
           </button>
         </div>
       </div>
