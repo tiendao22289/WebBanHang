@@ -21,6 +21,8 @@ export default function MenuPage() {
   const [menuItems, setMenuItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [visibilityFilter, setVisibilityFilter] = useState('all'); // 'all' | 'visible' | 'hidden'
 
   // Modal states
   const [showCatModal, setShowCatModal] = useState(false);
@@ -201,9 +203,16 @@ export default function MenuPage() {
     return new Intl.NumberFormat('vi-VN').format(price) + 'đ';
   }
 
-  const filteredItems = activeCategory
-    ? menuItems.filter(i => i.category_id === activeCategory)
-    : menuItems;
+  const filteredItems = menuItems.filter(i => {
+    if (activeCategory && i.category_id !== activeCategory) return false;
+    if (visibilityFilter === 'visible' && !i.is_available) return false;
+    if (visibilityFilter === 'hidden' && i.is_available) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      return i.name?.toLowerCase().includes(q) || i.description?.toLowerCase().includes(q);
+    }
+    return true;
+  });
 
   if (loading) {
     return <div className="page-content"><div className="empty-state"><p>Đang tải...</p></div></div>;
@@ -250,7 +259,39 @@ export default function MenuPage() {
         ))}
       </div>
 
-      {/* Menu Items Grid */}
+      {/* Search + Visibility Filter bar */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* Search input */}
+        <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+          <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', pointerEvents: 'none', fontSize: '1rem' }}>🔍</span>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Tìm món ăn..."
+            style={{ width: '100%', padding: '9px 36px 9px 36px', border: '1.5px solid #e5e7eb', borderRadius: 10, fontSize: '0.9rem', outline: 'none', boxSizing: 'border-box', background: 'white' }}
+            onFocus={e => e.target.style.borderColor = '#2563eb'}
+            onBlur={e => e.target.style.borderColor = '#e5e7eb'}
+          />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery('')} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '1rem', padding: 2 }}>×</button>
+          )}
+        </div>
+        {/* Visibility filter */}
+        <div style={{ display: 'flex', gap: 4, background: '#f3f4f6', borderRadius: 10, padding: 3, flexShrink: 0 }}>
+          {[{key:'all',label:'Tất cả'},{key:'visible',label:'👁 Đang hiện'},{key:'hidden',label:'🙈 Đã ẩn'}].map(f => (
+            <button key={f.key} onClick={() => setVisibilityFilter(f.key)}
+              style={{ padding: '6px 14px', borderRadius: 8, border: 'none', fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer', transition: 'all 0.15s',
+                background: visibilityFilter === f.key ? '#2563eb' : 'transparent',
+                color: visibilityFilter === f.key ? 'white' : '#6b7280' }}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+        {/* Count badge */}
+        <span style={{ fontSize: '0.8rem', color: '#9ca3af', flexShrink: 0 }}>{filteredItems.length} món</span>
+      </div>
+
       <div className="menu-grid">
         {filteredItems.length > 0 ? (
           filteredItems.map((item) => (
