@@ -229,7 +229,7 @@ export default function MenuPage() {
           <button className="btn btn-outline" onClick={() => openCatModal()}>
             <FolderOpen size={16} /> Thêm danh mục
           </button>
-          <button className="btn btn-primary" onClick={() => openItemModal()}>
+          <button onClick={() => openItemModal()} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 20px', background: '#111827', color: 'white', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}>
             <Plus size={18} /> Thêm món
           </button>
         </div>
