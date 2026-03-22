@@ -608,7 +608,11 @@ function OrderContent() {
       (opt.prices || []).filter(p => p != null && Number(p) > 0).map(Number)
     );
     if (allPrices.length > 0) {
-      return 'Từ ' + new Intl.NumberFormat('vi-VN').format(Math.min(...allPrices)) + 'đ';
+      const min = Math.min(...allPrices);
+      const max = Math.max(...allPrices);
+      const fmt = n => new Intl.NumberFormat('vi-VN').format(n) + 'đ';
+      if (min !== max) return `${fmt(min)} — ${fmt(max)}`;
+      return fmt(min);
     }
     return new Intl.NumberFormat('vi-VN').format(item.price) + 'đ';
   }
@@ -880,11 +884,22 @@ function OrderContent() {
                       <span className="co-item-price">{getItemDisplayPrice(item)}</span>
                     </div>
                     <div className="co-item-action">
-                      {qty > 0 ? (
+                      {item.options && item.options.length > 0 ? (
+                        /* Có options: luôn cho bấm + để chọn thêm variant */
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {qty > 0 && (
+                            <span className="co-qty-badge">{qty}</span>
+                          )}
+                          <button className="co-add-btn" onClick={() => addToCart(item)}>
+                            <Plus size={18} />
+                          </button>
+                        </div>
+                      ) : qty > 0 ? (
+                        /* Không options: nút +/- bình thường */
                         <div className="co-qty-control">
-                          <button onClick={() => updateQuantity(item.id, -1)}><Minus size={14} /></button>
+                          <button onClick={() => updateQuantity(item.id, -1, null)}><Minus size={14} /></button>
                           <span>{qty}</span>
-                          <button onClick={() => updateQuantity(item.id, 1)}><Plus size={14} /></button>
+                          <button onClick={() => updateQuantity(item.id, 1, null)}><Plus size={14} /></button>
                         </div>
                       ) : (
                         <button className="co-add-btn" onClick={() => addToCart(item)}>
@@ -905,11 +920,21 @@ function OrderContent() {
                     <span className="co-item-name">{item.name}</span>
                     <div className="co-card-bottom">
                       <span className="co-item-price">{getItemDisplayPrice(item)}</span>
-                      {qty > 0 ? (
+                      {item.options && item.options.length > 0 ? (
+                        /* Grid — có options */
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          {qty > 0 && (
+                            <span className="co-qty-badge co-qty-badge--sm">{qty}</span>
+                          )}
+                          <button className="co-add-btn small" onClick={() => addToCart(item)}>
+                            <Plus size={14} />
+                          </button>
+                        </div>
+                      ) : qty > 0 ? (
                         <div className="co-qty-control small">
-                          <button onClick={() => updateQuantity(item.id, -1)}><Minus size={12} /></button>
+                          <button onClick={() => updateQuantity(item.id, -1, null)}><Minus size={12} /></button>
                           <span>{qty}</span>
-                          <button onClick={() => updateQuantity(item.id, 1)}><Plus size={12} /></button>
+                          <button onClick={() => updateQuantity(item.id, 1, null)}><Plus size={12} /></button>
                         </div>
                       ) : (
                         <button className="co-add-btn small" onClick={() => addToCart(item)}>
@@ -1063,7 +1088,7 @@ function OrderContent() {
               <button onClick={() => setShowCart(false)}><X size={20} /></button>
             </div>
             <div className="co-sheet-body">
-              {cart.map((item, idx) => (
+              {[...cart].sort((a, b) => a.name.localeCompare(b.name, 'vi')).map((item, idx) => (
                 <div key={item._optionKey || item.id + '-' + idx} className="co-cart-item">
                   <div className="co-cart-item-info">
                     <strong>{item.name}</strong>
