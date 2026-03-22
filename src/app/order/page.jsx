@@ -525,6 +525,19 @@ function OrderContent() {
   const usedGiftSlots = giftCart.length;
   const availableGiftSlots = Math.max(0, giftCount - usedGiftSlots);
 
+  // Auto-trim giftCart if qualifyingQty drops (customer removed items)
+  const [giftLostToast, setGiftLostToast] = useState(false);
+  useEffect(() => {
+    setGiftCart(prev => {
+      if (prev.length > giftCount) {
+        setGiftLostToast(true);
+        setTimeout(() => setGiftLostToast(false), 4000);
+        return prev.slice(0, giftCount);
+      }
+      return prev;
+    });
+  }, [giftCount]);
+
   const totalAmount = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -1073,6 +1086,13 @@ function OrderContent() {
       {orderSuccess && (
         <div className="co-success-toast">
           ✅ Đã gửi đơn hàng thành công!
+        </div>
+      )}
+
+      {/* ─── Gift Lost Toast ─── */}
+      {giftLostToast && (
+        <div className="co-success-toast" style={{ background: '#92400e', borderColor: '#fbbf24' }}>
+          ⚠️ Bạn đã xóa bớt món — món tặng đã bị hủy do không đủ số lượng!
         </div>
       )}
 
