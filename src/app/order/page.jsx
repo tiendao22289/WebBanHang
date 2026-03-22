@@ -1062,16 +1062,24 @@ function OrderContent() {
                     <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{g.name}</div>
                     <div style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 600 }}>Miễn phí 🎁</div>
                   </div>
-                  <button
-                    disabled={availableGiftSlots === 0}
-                    onClick={() => {
-                      if (availableGiftSlots <= 0) return;
-                      setGiftCart(prev => [...prev, { id: g.id, name: g.name, price: 0, is_gift: true }]);
-                      if (availableGiftSlots - 1 === 0) setShowGiftModal(false);
-                    }}
-                    style={{ background: availableGiftSlots > 0 ? '#16a34a' : '#e2e8f0', color: availableGiftSlots > 0 ? 'white' : '#94a3b8', border: 'none', borderRadius: 8, padding: '6px 14px', fontWeight: 700, fontSize: '0.82rem', cursor: availableGiftSlots > 0 ? 'pointer' : 'not-allowed' }}>
-                    + Thêm
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {(() => { const addedQty = giftCart.filter(x => x.id === g.id).length; return addedQty > 0 ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <button onClick={() => setGiftCart(prev => { const idx = prev.findLastIndex(x => x.id === g.id); return idx >= 0 ? prev.filter((_, i) => i !== idx) : prev; })} style={{ width: 28, height: 28, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '1rem', color: '#374151' }}>−</button>
+                        <span style={{ fontWeight: 700, minWidth: 18, textAlign: 'center', fontSize: '0.95rem' }}>{addedQty}</span>
+                      </div>
+                    ) : null; })()}
+                    <button
+                      disabled={availableGiftSlots === 0}
+                      onClick={() => {
+                        if (availableGiftSlots <= 0) return;
+                        setGiftCart(prev => [...prev, { id: g.id, name: g.name, price: 0, is_gift: true }]);
+                        if (availableGiftSlots - 1 === 0) setShowGiftModal(false);
+                      }}
+                      style={{ background: availableGiftSlots > 0 ? '#16a34a' : '#e2e8f0', color: availableGiftSlots > 0 ? 'white' : '#94a3b8', border: 'none', borderRadius: 8, padding: '6px 14px', fontWeight: 700, fontSize: '0.82rem', cursor: availableGiftSlots > 0 ? 'pointer' : 'not-allowed' }}>
+                      + Thêm
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
