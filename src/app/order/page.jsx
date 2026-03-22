@@ -926,7 +926,7 @@ function OrderContent() {
                     <div className="co-item-info">
                       <span className="co-item-name">{item.name}</span>
                       {promoConfig.enabled && item.counts_for_promotion && (
-                        <span style={{ fontSize: '0.68rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 6px', fontWeight: 600, display: 'inline-block', marginTop: 2 }}>🎯 Tính vào KM</span>
+                        <span style={{ fontSize: '0.68rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 6px', fontWeight: 600, marginTop: 2, alignSelf: 'flex-start' }}>🎯 Tính vào KM</span>
                       )}
                       <span className="co-item-price">{getItemDisplayPrice(item)}</span>
                     </div>
