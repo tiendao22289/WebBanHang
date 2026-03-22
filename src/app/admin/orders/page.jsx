@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import {
   Search, Calendar, Eye, X, Clock, Filter,
   Receipt, CheckCircle, AlertCircle, ChefHat, Ban,
-  Banknote, Smartphone,
+  Banknote, Smartphone, Printer,
 } from 'lucide-react';
 import './orders.css';
 
@@ -30,6 +30,23 @@ export default function OrdersPage() {
   const [dateFilter, setDateFilter]       = useState(() => new Date().toLocaleDateString('en-CA')); // YYYY-MM-DD in local timezone
   const [statusFilter, setStatusFilter]   = useState('all');
   const [searchTerm, setSearchTerm]       = useState('');
+  const [printing, setPrinting]           = useState(false);
+  const [printMsg, setPrintMsg]           = useState('');
+
+  async function sendPrintJob(order) {
+    setPrinting(true);
+    setPrintMsg('');
+    try {
+      const { error } = await supabase.from('print_jobs').insert({ order_id: order.id, status: 'pending' });
+      if (error) throw error;
+      setPrintMsg('✅ Đã gửi lệnh in!');
+    } catch (e) {
+      setPrintMsg(`❌ Lỗi: ${e.message}`);
+    } finally {
+      setPrinting(false);
+      setTimeout(() => setPrintMsg(''), 4000);
+    }
+  }
 
   // Lock body scroll when modal open
   useEffect(() => {
@@ -370,8 +387,20 @@ export default function OrdersPage() {
                 <strong>{fmt(selectedOrder.total_amount)}</strong>
               </div>
             </div>
-            <div className="modal-footer" style={{ justifyContent: 'flex-end' }}>
-              <button className="btn btn-ghost" onClick={() => setSelectedOrder(null)}>Đóng</button>
+            <div className="modal-footer" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: '0.78rem', color: printMsg.startsWith('✅') ? '#16a34a' : '#dc2626' }}>{printMsg}</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => sendPrintJob(selectedOrder)}
+                  disabled={printing}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  <Printer size={16} />
+                  {printing ? 'Đang gửi...' : 'In hóa đơn'}
+                </button>
+                <button className="btn btn-ghost" onClick={() => { setSelectedOrder(null); setPrintMsg(''); }}>Đóng</button>
+              </div>
             </div>
           </div>
         </div>
