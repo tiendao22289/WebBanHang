@@ -494,10 +494,11 @@ function OrderContent() {
     setOptionModal(null);
   }
 
-  function updateQuantity(itemId, delta) {
+  function updateQuantity(itemId, delta, optionKey = null) {
     setCart(prev =>
       prev.map(c => {
-        if (c.id !== itemId) return c;
+        const match = optionKey ? c._optionKey === optionKey : (c.id === itemId && !c._optionKey);
+        if (!match) return c;
         const newQty = c.quantity + delta;
         return newQty <= 0 ? null : { ...c, quantity: newQty };
       }).filter(Boolean)
@@ -602,6 +603,25 @@ function OrderContent() {
     return new Intl.NumberFormat('vi-VN').format(price) + 'đ';
   }
 
+  function getItemDisplayPrice(item) {
+    const allPrices = (item.options || []).flatMap(opt =>
+      (opt.prices || []).filter(p => p != null && Number(p) > 0).map(Number)
+    );
+    if (allPrices.length > 0) {
+      return 'Từ ' + new Intl.NumberFormat('vi-VN').format(Math.min(...allPrices)) + 'đ';
+    }
+    return new Intl.NumberFormat('vi-VN').format(item.price) + 'đ';
+  }
+
+  // Lấy tất cả choices của item để hiển thị dạng tags
+  function getItemOptionTags(item) {
+    if (!item.options || item.options.length === 0) return [];
+    return item.options.map(opt => ({
+      name: opt.name,
+      choices: opt.choices || [],
+    }));
+  }
+
   // Filtered items
   const filteredItems = menuItems.filter(item => {
     const matchCategory = activeCategory === 'all' || item.category_id === activeCategory;
@@ -703,8 +723,8 @@ function OrderContent() {
         <div className="co-modal-overlay">
           <div className="co-info-modal">
             <div className="co-info-header">
-              <ChefHat size={32} />
-              <h2>Chào mừng đến Nhà Hàng</h2>
+              <ChefHat size={28} />
+              <h2>Ốc Bảo Khang</h2>
               <p>Bàn {tableNumber || '...'}</p>
             </div>
             <div className="co-info-form">
@@ -772,7 +792,10 @@ function OrderContent() {
       <div className="co-topbar">
         {/* Restaurant name row */}
         <div className="co-header-bar">
-          <span className="co-header-title">Nhà Hàng</span>
+          <div className="co-header-brand">
+            <span className="co-header-title">Ốc Bảo Khang</span>
+            <span className="co-header-contact">💬 0946.433.417 &nbsp;|&nbsp; 📞 0977.496.781</span>
+          </div>
           <div className="co-header-actions">
             <button
               className="co-history-btn"
@@ -854,7 +877,7 @@ function OrderContent() {
                     </div>
                     <div className="co-item-info">
                       <span className="co-item-name">{item.name}</span>
-                      <span className="co-item-price">{formatPrice(item.price)}</span>
+                      <span className="co-item-price">{getItemDisplayPrice(item)}</span>
                     </div>
                     <div className="co-item-action">
                       {qty > 0 ? (
@@ -881,7 +904,7 @@ function OrderContent() {
                     </div>
                     <span className="co-item-name">{item.name}</span>
                     <div className="co-card-bottom">
-                      <span className="co-item-price">{formatPrice(item.price)}</span>
+                      <span className="co-item-price">{getItemDisplayPrice(item)}</span>
                       {qty > 0 ? (
                         <div className="co-qty-control small">
                           <button onClick={() => updateQuantity(item.id, -1)}><Minus size={12} /></button>
@@ -1040,16 +1063,25 @@ function OrderContent() {
               <button onClick={() => setShowCart(false)}><X size={20} /></button>
             </div>
             <div className="co-sheet-body">
-              {cart.map(item => (
-                <div key={item.id} className="co-cart-item">
+              {cart.map((item, idx) => (
+                <div key={item._optionKey || item.id + '-' + idx} className="co-cart-item">
                   <div className="co-cart-item-info">
                     <strong>{item.name}</strong>
+                    {/* Hiển thị khẩu vị / options đã chọn */}
+                    {item._options && item._options.length > 0 && (
+                      <span className="co-cart-item-opts">
+                        {item._options.map(o => o.choice).join(' · ')}
+                      </span>
+                    )}
+                    {item._note && (
+                      <span className="co-cart-item-note">📝 {item._note}</span>
+                    )}
                     <span className="co-cart-item-price">{formatPrice(item.price)}</span>
                   </div>
                   <div className="co-qty-control">
-                    <button onClick={() => updateQuantity(item.id, -1)}><Minus size={14} /></button>
+                    <button onClick={() => updateQuantity(item._optionKey || item.id, -1, item._optionKey)}><Minus size={14} /></button>
                     <span>{item.quantity}</span>
-                    <button onClick={() => updateQuantity(item.id, 1)}><Plus size={14} /></button>
+                    <button onClick={() => updateQuantity(item._optionKey || item.id, 1, item._optionKey)}><Plus size={14} /></button>
                   </div>
                 </div>
               ))}
@@ -1099,7 +1131,18 @@ function OrderContent() {
                     </div>
                     {order.order_items?.map(oi => (
                       <div key={oi.id} className="co-prev-item">
-                        <span>{oi.quantity}x {oi.menu_item?.name || '—'}</span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <span>{oi.quantity}x {oi.menu_item?.name || '—'}</span>
+                          {/* Khẩu vị / options đã chọn */}
+                          {oi.item_options && oi.item_options.length > 0 && (
+                            <span className="co-prev-item-opts">
+                              {oi.item_options.map(o => o.choice).join(' · ')}
+                            </span>
+                          )}
+                          {oi.note && (
+                            <span className="co-prev-item-note">📝 {oi.note}</span>
+                          )}
+                        </div>
                         <span>{formatPrice(oi.unit_price * oi.quantity)}</span>
                       </div>
                     ))}

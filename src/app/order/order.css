@@ -119,9 +119,27 @@
 }
 .co-header-title {
   flex: 1;
-  font-size: 1.1rem;
-  font-weight: 700;
+  font-size: 1.05rem;
+  font-weight: 800;
   color: #111827;
+  line-height: 1.2;
+}
+
+/* Brand block: tên + liên hệ */
+.co-header-brand {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.co-header-contact {
+  font-size: 0.68rem;
+  color: #6b7280;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .co-header-actions {
   display: flex;
@@ -369,6 +387,59 @@
 
 .co-item-action { flex-shrink: 0; }
 
+/* ── Option Tags — hiển thị thuộc tính món ── */
+.co-item-opts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0;
+}
+.co-item-opts--grid {
+  padding: 0 8px 4px;
+  gap: 3px;
+}
+.co-opt-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.co-opt-tag {
+  display: inline-flex;
+  align-items: center;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+  border-radius: 20px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+.co-item-opts--grid .co-opt-tag {
+  font-size: 0.67rem;
+  padding: 1px 5px;
+  background: #f0fdf4;
+  color: #15803d;
+  border-color: #bbf7d0;
+}
+.co-opt-more {
+  font-size: 0.68rem;
+  color: #9ca3af;
+  font-weight: 500;
+}
+
+/* Nút CHỌN — cho món có options */
+.co-add-btn--opts {
+  background: linear-gradient(135deg, #7c3aed, #6d28d9);
+  box-shadow: 0 2px 8px rgba(109,40,217,0.35);
+  font-family: inherit;
+}
+
 /* ── ADD BUTTON ── */
 .co-add-btn {
   width: 36px;
@@ -560,6 +631,18 @@
 .co-cart-item-info strong { font-size: 0.9rem; }
 .co-cart-item-price { font-size: 0.8rem; color: #6b7280; }
 
+/* Khẩu vị đã chọn trong giỏ hàng */
+.co-cart-item-opts {
+  font-size: 0.78rem;
+  color: #2563eb;
+  font-weight: 600;
+}
+.co-cart-item-note {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  font-style: italic;
+}
+
 .co-cart-total {
   display: flex;
   justify-content: space-between;
@@ -625,6 +708,18 @@
   justify-content: space-between;
   font-size: 0.82rem;
   padding: 3px 0;
+  align-items: flex-start;
+}
+/* Khẩu vị / options đã chọn trong Đã gọi */
+.co-prev-item-opts {
+  font-size: 0.75rem;
+  color: #2563eb;
+  font-weight: 600;
+}
+.co-prev-item-note {
+  font-size: 0.73rem;
+  color: #9ca3af;
+  font-style: italic;
 }
 .co-prev-footer {
   display: flex;
