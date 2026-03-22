@@ -14,9 +14,9 @@
 | Database | Supabase (PostgreSQL + Realtime + Storage) |
 | QR Code | `qrcode.react` |
 | Charts | `recharts` |
-| Print | `react-to-print` |
+| Print | `react-to-print` (web preview) + **PrintAgent** (local service in vật lý) |
 | Icons | `lucide-react` |
-| Deploy | Vercel (dự kiến) |
+| Deploy | Vercel |
 
 ## Cấu trúc thư mục
 ```
@@ -85,3 +85,27 @@ src/
   - `debtBase` KHÔNG dùng `isDebt` flag (flag flip sau khi pay xong), dùng `item.debtAmount` trực tiếp
   - DB: bảng `staff_notes` — `content` (JSON), `paid_debt` (tổng đã trả), không có bảng `notes` riêng
 - **Commit**: `feat(notes): enhance notes UI` → push master
+
+## 🖨️ PrintAgent Service (Local Print)
+- **Source**: `E:\Workspace\PrintAgent\` (project riêng, không nằm trong WebBanHang)
+- **Memory riêng**: `E:\Workspace\PrintAgent\.agent\memory.md`
+- **⚠️ KHÔNG deploy lên Vercel** — chỉ chạy local trên máy tính tại nhà hàng. Duy nhất **WebBanHang** mới được deploy Vercel.
+- **Liên kết**: Web bấm "In hóa đơn" → insert vào bảng `print_jobs` (Supabase) → agent nhận qua Realtime → in ra máy in local
+- **Files quan trọng**:
+  - `index.js` — entry point, Realtime listener
+  - `printer.js` — logic in (thermal ESC/POS hoặc Windows)
+  - `formatter.js` — format text hóa đơn 32 ký tự
+  - `migration_print_jobs.sql` — SQL tạo bảng cần chạy trên Supabase
+
+## Ghi chú phiên làm việc
+### 2026-03-22
+- **Khuyến mại tặng món** (`counts_for_promotion`, `is_gift_item` menu_items; `is_gift` order_items):
+  - Progress bar sticky trên cart FAB đếm qualifying qty
+  - Gift modal với stacking: `Math.floor(qty / threshold)`
+  - Auto-trim giftCart + toast khi xóa bớt món
+  - Badge "🎯 Tính vào KM" trên từng món
+  - Admin menu: toggle bật/tắt + threshold config
+- **PrintAgent local service** tạo tại `E:\Workspace\PrintAgent\`
+  - Web: nút "🖨️ In hóa đơn" trong `/admin/orders` → insert `print_jobs`
+  - Agent chạy local: `node index.js`
+

@@ -104,6 +104,31 @@ export default function TablesPage() {
   const invoiceRef = useRef(null);
   const isFirstLoad = useRef(true);
   const [isMobile, setIsMobile] = useState(true);
+  const [printToast, setPrintToast] = useState(''); // '' | 'sending' | 'ok' | 'err'
+
+  // ─── Gửi lệnh in tới PrintAgent (qua bảng print_jobs) ───────────
+  const handlePrintInvoice = async () => {
+    if (!selectedTable) return;
+    const tableOrders = (orders[selectedTable.id] || [])
+      .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
+    if (tableOrders.length === 0) {
+      alert('Không có đơn hàng để in!');
+      return;
+    }
+    setPrintToast('sending');
+    try {
+      // Insert 1 job cho mỗi order (thường 1 bàn 1 order)
+      const inserts = tableOrders.map(o => ({ order_id: o.id, status: 'pending' }));
+      const { error } = await supabase.from('print_jobs').insert(inserts);
+      if (error) throw error;
+      setPrintToast('ok');
+    } catch (e) {
+      console.error('[Print]', e.message);
+      setPrintToast('err');
+    } finally {
+      setTimeout(() => setPrintToast(''), 3500);
+    }
+  };
 
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
@@ -2856,6 +2881,20 @@ export default function TablesPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {/* ─── Print Toast ─── */}
+      {printToast && (
+        <div style={{
+          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 9999, padding: '10px 20px', borderRadius: 100, fontWeight: 700,
+          fontSize: '0.9rem', whiteSpace: 'nowrap', boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+          background: printToast === 'ok' ? '#15803d' : printToast === 'err' ? '#dc2626' : '#2563eb',
+          color: 'white', display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          {printToast === 'sending' && '🖨️ Đang gửi lệnh in...'}
+          {printToast === 'ok'      && '✅ Đã gửi lệnh in thành công!'}
+          {printToast === 'err'     && '❌ Lỗi gửi lệnh in!'}
         </div>
       )}
     </div>
