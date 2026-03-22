@@ -192,9 +192,11 @@ export default function MenuPage() {
     };
 
     if (editingItem) {
-      await supabase.from('menu_items').update(data).eq('id', editingItem.id);
+      const { data: res, error } = await supabase.from('menu_items').update(data).eq('id', editingItem.id).select();
+      console.log('[saveItem] update result:', res, 'error:', error, 'payload:', data);
     } else {
-      await supabase.from('menu_items').insert(data);
+      const { data: res, error } = await supabase.from('menu_items').insert(data).select();
+      console.log('[saveItem] insert result:', res, 'error:', error);
     }
     setShowItemModal(false);
     fetchData();

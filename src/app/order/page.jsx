@@ -912,6 +912,9 @@ function OrderContent() {
                     </div>
                     <div className="co-item-info">
                       <span className="co-item-name">{item.name}</span>
+                      {promoConfig.enabled && item.counts_for_promotion && (
+                        <span style={{ fontSize: '0.68rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 6px', fontWeight: 600, display: 'inline-block', marginTop: 2 }}>🎯 Tính vào KM</span>
+                      )}
                       <span className="co-item-price">{getItemDisplayPrice(item)}</span>
                     </div>
                     <div className="co-item-action">
@@ -949,6 +952,9 @@ function OrderContent() {
                       )}
                     </div>
                     <span className="co-item-name">{item.name}</span>
+                    {promoConfig.enabled && item.counts_for_promotion && (
+                      <span style={{ fontSize: '0.65rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 5px', fontWeight: 600, display: 'block', marginBottom: 2 }}>🎯 Tính KM</span>
+                    )}
                     <div className="co-card-bottom">
                       <span className="co-item-price">{getItemDisplayPrice(item)}</span>
                       {item.options && item.options.length > 0 ? (
@@ -1214,6 +1220,23 @@ function OrderContent() {
                   </div>
                 </div>
               ))}
+              {/* Gift items in cart */}
+              {giftCart.length > 0 && (
+                <div style={{ borderTop: '1.5px dashed #86efac', marginTop: 8, paddingTop: 8 }}>
+                  <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#15803d', marginBottom: 6 }}>🎁 Món tặng miễn phí</div>
+                  {giftCart.map((g, idx) => (
+                    <div key={idx} className="co-cart-item" style={{ background: '#f0fdf4', borderRadius: 8, padding: '6px 10px', marginBottom: 4 }}>
+                      <div className="co-cart-item-info">
+                        <strong style={{ color: '#15803d' }}>{g.name}</strong>
+                        <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 700, marginTop: 2, display: 'block' }}>🎁 Miễn phí — 0đ</span>
+                      </div>
+                      <button onClick={() => setGiftCart(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 4 }}>
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="co-sheet-footer">
               <div className="co-cart-total">
