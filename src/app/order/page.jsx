@@ -47,6 +47,11 @@ function OrderContent() {
   const [orderCancelled, setOrderCancelled] = useState(false); // admin cancelled
   const [orderPaid, setOrderPaid] = useState(null); // { total } khi admin thanh toán
   const [locationWarning, setLocationWarning] = useState(false); // khách không ở nhà hàng
+  // Promotion
+  const [promoConfig, setPromoConfig] = useState({ enabled: false, threshold: 8 });
+  const [giftItems, setGiftItems] = useState([]); // is_gift_item items
+  const [giftCart, setGiftCart] = useState([]); // { id, name, price:0, is_gift:true }
+  const [showGiftModal, setShowGiftModal] = useState(false);
   // Option selection modal for items with choices
   const [optionModal, setOptionModal] = useState(null);
   const [selectedOpts, setSelectedOpts] = useState({});
@@ -366,8 +371,17 @@ function OrderContent() {
       setTableNumber(isTW ? (tableData.table_name || 'Mang về') : tableData.table_number);
       setIsTakeaway(isTW);
     }
+    // Load promotion config
+    const { data: settings } = await supabase.from('settings').select('key, value')
+      .in('key', ['promotion_enabled', 'promotion_threshold']);
+    if (settings) {
+      const map = Object.fromEntries(settings.map(r => [r.key, r.value]));
+      setPromoConfig({ enabled: map.promotion_enabled === 'true', threshold: parseInt(map.promotion_threshold) || 8 });
+    }
+    const { data: gifts } = await supabase.from('menu_items').select('id, name, price, image_url').eq('is_gift_item', true).eq('is_available', true);
+    setGiftItems(gifts || []);
     setLoading(false);
-    return isTW; // return so initSession can decide immediately
+    return isTW;
   }
 
   async function fetchPreviousOrders(phone = null) {
@@ -505,6 +519,12 @@ function OrderContent() {
     );
   }
 
+  // Promotion calculations
+  const qualifyingQty = cart.reduce((sum, item) => sum + (menuItems.find(m => m.id === item.id)?.counts_for_promotion ? item.quantity : 0), 0);
+  const giftCount = promoConfig.enabled ? Math.floor(qualifyingQty / promoConfig.threshold) : 0;
+  const usedGiftSlots = giftCart.length;
+  const availableGiftSlots = Math.max(0, giftCount - usedGiftSlots);
+
   const totalAmount = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -567,16 +587,26 @@ function OrderContent() {
 
       if (orderErr) throw orderErr;
 
-      await supabase.from('order_items').insert(
-        cart.map(item => ({
+      await supabase.from('order_items').insert([
+        ...cart.map(item => ({
           order_id: order.id,
           menu_item_id: item.id,
           quantity: item.quantity,
           unit_price: item.price,
           item_options: item._options || [],
           note: item._note || notes[item.id] || null,
-        }))
-      );
+          is_gift: false,
+        })),
+        ...giftCart.map(g => ({
+          order_id: order.id,
+          menu_item_id: g.id,
+          quantity: 1,
+          unit_price: 0,
+          item_options: [],
+          note: null,
+          is_gift: true,
+        })),
+      ]);
 
       await supabase
         .from('tables')
@@ -585,6 +615,7 @@ function OrderContent() {
 
       setCart([]);
       setNotes({});
+      setGiftCart([]);
       setShowCart(false);
       setOrderSuccess(true);
       setTimeout(() => setOrderSuccess(false), 3000);
@@ -950,12 +981,85 @@ function OrderContent() {
         ))}
       </div>
 
+      {/* ─── Promotion Progress Bar ─── */}
+      {promoConfig.enabled && totalItems > 0 && (
+        <div style={{ position: 'fixed', bottom: totalItems > 0 ? 72 : 12, left: 0, right: 0, zIndex: 49, padding: '0 12px', pointerEvents: 'none' }}>
+          <div style={{ background: 'white', border: '1.5px solid #fde68a', borderRadius: 12, padding: '8px 14px', boxShadow: '0 2px 12px rgba(0,0,0,0.12)', pointerEvents: 'all' }}>
+            {giftCount === 0 ? (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 600, color: '#92400e', marginBottom: 5 }}>
+                  <span>🎯 Tích {qualifyingQty}/{promoConfig.threshold} món tính KM</span>
+                  <span>Còn {promoConfig.threshold - qualifyingQty} món nữa để nhận quà 🎁</span>
+                </div>
+                <div style={{ height: 6, background: '#fef3c7', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ width: `${Math.min((qualifyingQty / promoConfig.threshold) * 100, 100)}%`, height: '100%', background: 'linear-gradient(90deg,#f59e0b,#d97706)', borderRadius: 3, transition: 'width 0.4s' }} />
+                </div>
+              </>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#15803d' }}>🎉 Được tặng {giftCount} món! {usedGiftSlots > 0 && `(${usedGiftSlots}/${giftCount} đã chọn)`}</span>
+                {availableGiftSlots > 0 && (
+                  <button onClick={() => setShowGiftModal(true)} style={{ pointerEvents: 'all', background: '#16a34a', color: 'white', border: 'none', borderRadius: 8, padding: '5px 12px', fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer' }}>
+                    🎁 Chọn quà ({availableGiftSlots})
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ─── Cart FAB ─── */}
       {totalItems > 0 && (
         <div className="co-cart-fab" onClick={() => setShowCart(true)}>
           <ShoppingBag size={20} />
-          <span>Giỏ hàng • {totalItems} món</span>
+          <span>Giỏ hàng • {totalItems + giftCart.length} món{giftCart.length > 0 && ` (${giftCart.length} 🎁)`}</span>
           <strong>{formatPrice(totalAmount)}</strong>
+        </div>
+      )}
+
+      {/* ─── Gift Item Modal ─── */}
+      {showGiftModal && (
+        <div className="co-modal-overlay" onClick={() => setShowGiftModal(false)}>
+          <div className="co-info-modal" style={{ maxHeight: '80vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+            <div className="co-info-header" style={{ paddingBottom: 12 }}>
+              <div style={{ fontSize: '2rem' }}>🎁</div>
+              <h2 style={{ fontSize: '1.1rem', margin: 0 }}>Chọn món tặng</h2>
+              <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: '#6b7280' }}>
+                Còn {availableGiftSlots} lượt chọn miễn phí
+              </p>
+            </div>
+            <div style={{ padding: '0 16px 16px' }}>
+              {giftItems.length === 0 ? (
+                <p style={{ textAlign: 'center', color: '#9ca3af', padding: 20 }}>Chưa có món tặng nào được cấu hình</p>
+              ) : giftItems.map(g => (
+                <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid #f3f4f6' }}>
+                  <div style={{ width: 48, height: 48, borderRadius: 8, background: '#f1f5f9', flexShrink: 0, overflow: 'hidden', position: 'relative' }}>
+                    {g.image_url
+                      ? <img src={g.image_url} alt={g.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem' }}>🍽️</div>}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{g.name}</div>
+                    <div style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 600 }}>Miễn phí 🎁</div>
+                  </div>
+                  <button
+                    disabled={availableGiftSlots === 0}
+                    onClick={() => {
+                      if (availableGiftSlots <= 0) return;
+                      setGiftCart(prev => [...prev, { id: g.id, name: g.name, price: 0, is_gift: true }]);
+                      if (availableGiftSlots - 1 === 0) setShowGiftModal(false);
+                    }}
+                    style={{ background: availableGiftSlots > 0 ? '#16a34a' : '#e2e8f0', color: availableGiftSlots > 0 ? 'white' : '#94a3b8', border: 'none', borderRadius: 8, padding: '6px 14px', fontWeight: 700, fontSize: '0.82rem', cursor: availableGiftSlots > 0 ? 'pointer' : 'not-allowed' }}>
+                    + Thêm
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: '0 16px 16px' }}>
+              <button onClick={() => setShowGiftModal(false)} style={{ width: '100%', padding: '11px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>Xong</button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1157,8 +1261,10 @@ function OrderContent() {
                     {order.order_items?.map(oi => (
                       <div key={oi.id} className="co-prev-item">
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                          <span>{oi.quantity}x {oi.menu_item?.name || '—'}</span>
-                          {/* Khẩu vị / options đã chọn */}
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            {oi.quantity}x {oi.menu_item?.name || '—'}
+                            {oi.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>🎁 Tặng</span>}
+                          </span>
                           {oi.item_options && oi.item_options.length > 0 && (
                             <span className="co-prev-item-opts">
                               {oi.item_options.map(o => o.choice).join(' · ')}
@@ -1168,7 +1274,9 @@ function OrderContent() {
                             <span className="co-prev-item-note">📝 {oi.note}</span>
                           )}
                         </div>
-                        <span>{formatPrice(oi.unit_price * oi.quantity)}</span>
+                        <span style={{ color: oi.is_gift ? '#16a34a' : undefined, fontWeight: oi.is_gift ? 700 : undefined }}>
+                          {oi.is_gift ? '0đ' : formatPrice(oi.unit_price * oi.quantity)}
+                        </span>
                       </div>
                     ))}
                     <div className="co-prev-footer">

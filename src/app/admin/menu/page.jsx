@@ -34,7 +34,13 @@ export default function MenuPage() {
   const [catForm, setCatForm] = useState({ name: '', sort_order: 0 });
   const [itemForm, setItemForm] = useState({
     name: '', description: '', price: '', category_id: '', image_url: '', is_available: true,
+    counts_for_promotion: false, is_gift_item: false,
   });
+
+  // Promotion config
+  const [promoConfig, setPromoConfig] = useState({ enabled: false, threshold: 8 });
+  const [showPromoModal, setShowPromoModal] = useState(false);
+  const [promoSaving, setPromoSaving] = useState(false);
 
   useEffect(() => {
     const isModalOpen = showCatModal || showItemModal;
@@ -50,7 +56,37 @@ export default function MenuPage() {
 
   useEffect(() => {
     fetchData();
+    fetchPromoConfig();
   }, []);
+
+  async function fetchPromoConfig() {
+    const { data } = await supabase.from('settings')
+      .select('key, value').in('key', ['promotion_enabled', 'promotion_threshold']);
+    if (data) {
+      const map = Object.fromEntries(data.map(r => [r.key, r.value]));
+      setPromoConfig({
+        enabled: map.promotion_enabled === 'true',
+        threshold: parseInt(map.promotion_threshold) || 8,
+      });
+    }
+  }
+
+  async function savePromoConfig() {
+    setPromoSaving(true);
+    // upsert both keys
+    for (const [key, value] of [
+      ['promotion_enabled', String(promoConfig.enabled)],
+      ['promotion_threshold', String(promoConfig.threshold)],
+    ]) {
+      const { error } = await supabase.from('settings').upsert({ key, value }, { onConflict: 'key' });
+      if (error) {
+        await supabase.from('settings').delete().eq('key', key);
+        await supabase.from('settings').insert({ key, value });
+      }
+    }
+    setPromoSaving(false);
+    setShowPromoModal(false);
+  }
 
   async function fetchData() {
     const [{ data: cats }, { data: items }] = await Promise.all([
@@ -103,6 +139,8 @@ export default function MenuPage() {
         category_id: item.category_id || '',
         image_url: item.image_url || '',
         is_available: item.is_available,
+        counts_for_promotion: item.counts_for_promotion || false,
+        is_gift_item: item.is_gift_item || false,
         options: (item.options || []).map(opt => ({
           ...opt,
           prices: opt.prices || Array(opt.choices?.length || 0).fill(null),
@@ -114,6 +152,7 @@ export default function MenuPage() {
         name: '', description: '', price: '',
         category_id: activeCategory || '',
         image_url: '', is_available: true,
+        counts_for_promotion: false, is_gift_item: false,
         options: [],
       });
     }
@@ -145,6 +184,8 @@ export default function MenuPage() {
       description: itemForm.description,
       image_url: itemForm.image_url,
       is_available: itemForm.is_available,
+      counts_for_promotion: itemForm.counts_for_promotion,
+      is_gift_item: itemForm.is_gift_item,
       price: autoPrice,
       category_id: itemForm.category_id || null,
       options: cleanedOptions,
@@ -264,6 +305,9 @@ export default function MenuPage() {
           <p className="page-subtitle" style={{ margin: 0, fontSize: '0.8rem' }}>Quản lý danh mục và món ăn</p>
         </div>
         <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+          <button onClick={() => setShowPromoModal(true)} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', background: promoConfig.enabled ? '#eff6ff' : 'white', color: promoConfig.enabled ? '#2563eb' : '#374151', border: `1.5px solid ${promoConfig.enabled ? '#bfdbfe' : '#e5e7eb'}`, borderRadius: 8, fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            🎁 {promoConfig.enabled ? `KM: ${promoConfig.threshold} món` : 'Khuyến mại'}
+          </button>
           <button onClick={() => openCatModal()} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', background: 'white', color: '#374151', border: '1.5px solid #e5e7eb', borderRadius: 8, fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
             <FolderOpen size={13} /> Thêm DM
           </button>
@@ -348,6 +392,12 @@ export default function MenuPage() {
               <div className="menu-card-body">
                 <div className="menu-card-cat">{item.category?.name || 'Chưa phân loại'}</div>
                 <h4 className="menu-card-name">{item.name}</h4>
+                {(item.counts_for_promotion || item.is_gift_item) && (
+                  <div style={{ display: 'flex', gap: 4, marginBottom: 4, flexWrap: 'wrap' }}>
+                    {item.counts_for_promotion && <span style={{ fontSize: '0.65rem', background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>🎯 Tính KM</span>}
+                    {item.is_gift_item && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>🎁 Món tặng</span>}
+                  </div>
+                )}
                 {item.description && (
                   <p className="menu-card-desc">{item.description}</p>
                 )}
@@ -445,6 +495,19 @@ export default function MenuPage() {
                 <span className="text-sm">Hiển thị trên thực đơn</span>
               </label>
 
+              {/* Promotion checkboxes */}
+              <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '10px 14px', marginBottom: 16 }}>
+                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#92400e', marginBottom: 8 }}>🎁 Khuyến mại</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 6 }}>
+                  <input type="checkbox" checked={itemForm.counts_for_promotion} onChange={e => setItemForm({ ...itemForm, counts_for_promotion: e.target.checked })} />
+                  <span style={{ fontSize: '0.82rem', color: '#374151' }}>🎯 Tính vào khuyến mại (đếm quantity)</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={itemForm.is_gift_item} onChange={e => setItemForm({ ...itemForm, is_gift_item: e.target.checked })} />
+                  <span style={{ fontSize: '0.82rem', color: '#374151' }}>🎁 Là món tặng (khách được chọn)</span>
+                </label>
+              </div>
+
               {/* Options Section */}
               <div className="options-section" style={{ borderTop: '1px solid #dbeafe', paddingTop: '1rem', marginTop: '1rem' }}>
                 <div className="flex justify-between items-center mb-3">
@@ -509,6 +572,43 @@ export default function MenuPage() {
               <button className="btn btn-outline" onClick={() => setShowItemModal(false)}>Huỷ</button>
               <button onClick={saveItem} style={{ padding: '10px 24px', background: '#111827', color: 'white', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: '0.95rem', cursor: 'pointer' }}>
                 {editingItem ? 'Cập nhật' : 'Thêm món'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Promotion Config Modal */}
+      {showPromoModal && (
+        <div className="modal-overlay" onClick={() => setShowPromoModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 400 }}>
+            <div className="modal-header">
+              <h3>🎁 Cấu hình khuyến mại</h3>
+              <button className="btn btn-ghost btn-icon" onClick={() => setShowPromoModal(false)}><X size={20} /></button>
+            </div>
+            <div className="modal-body">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 20 }}>
+                <div style={{ position: 'relative', width: 44, height: 24, background: promoConfig.enabled ? '#2563eb' : '#d1d5db', borderRadius: 12, cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0 }}
+                  onClick={() => setPromoConfig(p => ({ ...p, enabled: !p.enabled }))}>
+                  <div style={{ position: 'absolute', top: 2, left: promoConfig.enabled ? 22 : 2, width: 20, height: 20, background: 'white', borderRadius: '50%', transition: 'left 0.2s' }} />
+                </div>
+                <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>{promoConfig.enabled ? '✅ Đang bật' : '⏸ Đang tắt'}</span>
+              </label>
+              <div className="form-group">
+                <label className="form-label">Số món cần đặt để được tặng (threshold)</label>
+                <input className="input" type="number" min="1" value={promoConfig.threshold}
+                  onChange={e => setPromoConfig(p => ({ ...p, threshold: parseInt(e.target.value) || 8 }))}
+                  placeholder="VD: 8" />
+                <p style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 4 }}>
+                  Đặt {promoConfig.threshold} món tính KM → tặng 1 món · {promoConfig.threshold * 2} món → tặng 2 món (stacking)
+                </p>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => setShowPromoModal(false)}>Huỷ</button>
+              <button onClick={savePromoConfig} disabled={promoSaving}
+                style={{ padding: '10px 24px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', opacity: promoSaving ? 0.7 : 1 }}>
+                {promoSaving ? 'Đang lưu...' : '💾 Lưu cấu hình'}
               </button>
             </div>
           </div>

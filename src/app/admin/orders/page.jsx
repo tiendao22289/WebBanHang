@@ -353,9 +353,14 @@ export default function OrdersPage() {
                 {selectedOrder.order_items?.map(item => (
                   <div key={item.id} className="order-item-row">
                     <span className="item-qty">{item.quantity}x</span>
-                    <span className="item-name">{item.menu_item?.name || 'Món đã xoá'}</span>
+                    <span className="item-name">
+                      {item.menu_item?.name || 'Món đã xoá'}
+                      {item.is_gift && <span style={{ marginLeft: 4, fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>🎁 Tặng</span>}
+                    </span>
                     {item.note && <span className="item-note">({item.note})</span>}
-                    <span className="item-price">{fmt(item.unit_price * item.quantity)}</span>
+                    <span className="item-price" style={{ color: item.is_gift ? '#16a34a' : undefined, fontWeight: item.is_gift ? 700 : undefined }}>
+                      {item.is_gift ? '0đ' : fmt(item.unit_price * item.quantity)}
+                    </span>
                   </div>
                 ))}
               </div>
