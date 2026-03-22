@@ -1,5 +1,9 @@
 # 🧠 Project Memory - WebBanHang (Restaurant Ordering App)
 
+> ⚡ **QUAN TRỌNG**: Trước khi làm bất kỳ điều gì với dự án, hãy đọc file:
+> **`e:\Workspace\WebBanHang\introduction.md`**  
+> File này chứa toàn bộ kiến trúc, nghiệp vụ, DB schema, luồng hoạt động — giúp hiểu hệ thống ngay mà KHÔNG cần đọc lại source code.
+
 ## Thông tin dự án
 - **Tên**: Hệ thống đặt món nhà hàng qua QR Code
 - **Workspace**: `e:\Workspace\WebBanHang`

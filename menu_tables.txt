@@ -1,0 +1,125 @@
+========================================================================
+  BẢNG LIÊN QUAN TỚI CẤU HÌNH MÓN ĂN — Supabase (wglhqlrumieujmugpxel)
+========================================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. categories  (5 rows)
+   Danh mục món ăn
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  id          uuid           PK, gen_random_uuid()
+  name        text           Tên danh mục
+  sort_order  int4           Thứ tự hiển thị (default 0)
+  created_at  timestamptz
+
+  📌 Là cha của: menu_items (category_id), printer_categories (category_id)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. menu_items  (4 rows)
+   Món ăn — trung tâm cấu hình
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  id                   uuid     PK
+  category_id          uuid     FK → categories.id (nullable)
+  name                 text     Tên món
+  description          text     Mô tả (nullable)
+  price                int4     Giá gốc (default 0, tự tính từ options)
+  image_url            text     URL hình ảnh (nullable)
+  is_available         bool     Hiển thị trên thực đơn (default true)
+  counts_for_promotion bool     Tính vào khuyến mại (default false)
+  is_gift_item         bool     Là món tặng (default false)
+  options              jsonb    Tuỳ chọn món — cấu trúc:
+                                [
+                                  {
+                                    "name": "LOẠI",
+                                    "choices": ["Nướng Mắm", "Xào"],
+                                    "prices": [null, 50000],
+                                    "choiceCategories": ["uuid-cat", null]
+                                  },
+                                  ...
+                                ]
+  created_at           timestamptz
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. order_items  (686 rows)
+   Chi tiết đơn hàng — ghi lại lựa chọn của khách
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  id            uuid    PK
+  order_id      uuid    FK → orders.id
+  menu_item_id  uuid    FK → menu_items.id
+  quantity      int4    Số lượng (default 1)
+  unit_price    int4    Giá tại thời điểm order (default 0)
+  item_options  jsonb   Lựa chọn đã chọn: [{ name, choice }]
+  note          text    Ghi chú cho bếp (nullable)
+  is_gift       bool    Là món tặng miễn phí (default false)
+  created_at    timestamptz
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. printers  (2 rows)
+   Cấu hình máy in
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  id          uuid     PK
+  name        text     Tên máy in
+  target      text     (cashier / kitchen — legacy)
+  type        text     thermal | windows | file
+  interface   text     TCP IP hoặc tên máy (có thể trống với file)
+  is_active   bool     Đang hoạt động (default true)
+  is_default  bool     Máy in mặc định cho lệnh gộp (default false)
+  sort_order  int4     Thứ tự (default 0)
+  note        text     Ghi chú (nullable)
+  created_at  timestamptz
+  updated_at  timestamptz
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. printer_categories  (2 rows)
+   Gán danh mục → máy in (nhiều-nhiều)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  printer_id   uuid   PK, FK → printers.id
+  category_id  uuid   PK, FK → categories.id
+
+  📌 Quyết định máy nào in danh mục nào
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. settings  (3 rows)
+   Cấu hình hệ thống (key-value)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  key         text   PK (ví dụ: "promotion_config")
+  value       text   JSON string
+  updated_at  timestamptz
+
+  📌 Lưu promotion_config: { enabled, threshold }
+     Ảnh hưởng tới is_gift_item và counts_for_promotion
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. print_jobs  (43 rows)
+   Hàng đợi lệnh in — liên quan gián tiếp
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  id                  bigint   PK (auto-increment)
+  order_id            uuid     FK → orders.id (single order)
+  order_ids           uuid[]   Mảng order_id (job gộp bàn)
+  printer_id          uuid     FK → printers.id
+  filter_category_ids uuid[]   Danh mục được phép in (nullable = tất cả)
+  status              text     pending | printing | done | failed
+  printer_target      text     (legacy: cashier/kitchen)
+  error_message       text     (nullable)
+  created_at          timestamptz
+
+
+════════════════════════════════════════════════════
+  SƠ ĐỒ QUAN HỆ
+════════════════════════════════════════════════════
+
+  categories ──────────────┬──► menu_items
+                            └──► printer_categories ◄── printers
+                                                              │
+  menu_items ──► order_items ◄── orders                      │
+                     │                                        │
+                     └──────────────────────── print_jobs ───┘
+
+  settings (promotion_config) ──► ảnh hưởng logic khuyến mại
+
+========================================================================

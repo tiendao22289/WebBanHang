@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
+import { sendTableSummaryPrintJob } from '@/lib/print';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
 import Swal from 'sweetalert2';
@@ -106,30 +107,6 @@ export default function TablesPage() {
   const [isMobile, setIsMobile] = useState(true);
   const [printToast, setPrintToast] = useState(''); // '' | 'sending' | 'ok' | 'err'
 
-  // ─── Gửi lệnh in tới PrintAgent (qua bảng print_jobs) ───────────
-  const handlePrintInvoice = async () => {
-    if (!selectedTable) return;
-    const tableOrders = (orders[selectedTable.id] || [])
-      .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
-    if (tableOrders.length === 0) {
-      alert('Không có đơn hàng để in!');
-      return;
-    }
-    setPrintToast('sending');
-    try {
-      // Insert 1 job cho mỗi order (thường 1 bàn 1 order)
-      const inserts = tableOrders.map(o => ({ order_id: o.id, status: 'pending' }));
-      const { error } = await supabase.from('print_jobs').insert(inserts);
-      if (error) throw error;
-      setPrintToast('ok');
-    } catch (e) {
-      console.error('[Print]', e.message);
-      setPrintToast('err');
-    } finally {
-      setTimeout(() => setPrintToast(''), 3500);
-    }
-  };
-
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
   // Detect mobile vs desktop
@@ -156,7 +133,33 @@ export default function TablesPage() {
     };
   }, [selectedTable, showQR, showAddModal, optionModalItem]);
 
-  const handlePrintInvoice = useReactToPrint({ contentRef: invoiceRef });
+  // ─── Gửi lệnh in tới PrintAgent — gộp orders của bàn → 1 phiếu → máy mặc định ───
+  const handlePrintInvoice = async () => {
+    if (!selectedTable) return;
+    const tableOrders = (orders[selectedTable.id] || [])
+      .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
+    if (tableOrders.length === 0) { alert('Không có đơn hàng để in!'); return; }
+    setPrintToast('sending');
+    const orderIds = tableOrders.map(o => o.id);
+    const { success, error } = await sendTableSummaryPrintJob(supabase, orderIds);
+    setPrintToast(success ? 'ok' : 'err');
+    if (!success) alert(error || 'Lỗi khi gửi lệnh in!');
+    setTimeout(() => setPrintToast(''), 3500);
+  };
+
+  // ─── In phiếu tạm tính — cùng logic (gộp + máy mặc định) ──────────────────
+  const handlePrintTempBill = async () => {
+    if (!selectedTable) return;
+    const tableOrders = (orders[selectedTable.id] || [])
+      .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
+    if (tableOrders.length === 0) { alert('Không có đơn hàng để in!'); return; }
+    setPrintToast('sending');
+    const orderIds = tableOrders.map(o => o.id);
+    const { success, error } = await sendTableSummaryPrintJob(supabase, orderIds);
+    setPrintToast(success ? 'ok' : 'err');
+    if (!success) alert(error || 'Lỗi khi gửi lệnh in!');
+    setTimeout(() => setPrintToast(''), 3500);
+  };
 
   const fetchTables = useCallback(async () => {
     const [{ data: tablesData }, { data: menuData }, { data: catsData }] = await Promise.all([
@@ -1862,7 +1865,7 @@ export default function TablesPage() {
 
                     {/* Tạm tính — small square outlined, icon+text stacked */}
                     <button
-                      onClick={() => setShowBillPreview(true)}
+                      onClick={handlePrintTempBill}
                       style={{
                         width: 64, minWidth: 64,
                         padding: '6px 4px',

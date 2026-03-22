@@ -144,6 +144,7 @@ export default function MenuPage() {
         options: (item.options || []).map(opt => ({
           ...opt,
           prices: opt.prices || Array(opt.choices?.length || 0).fill(null),
+          choiceCategories: opt.choiceCategories || Array(opt.choices?.length || 0).fill(''),
         })),
       });
     } else {
@@ -153,7 +154,15 @@ export default function MenuPage() {
         category_id: activeCategory || '',
         image_url: '', is_available: true,
         counts_for_promotion: false, is_gift_item: false,
-        options: [],
+        options: [
+          { name: 'LOẠI', choices: [''], prices: [50000], choiceCategories: [''] },
+          {
+            name: 'KHẨU VỊ',
+            choices: ['Bình Thường', 'Làm Cay', 'Không Cay', 'Xào Mặn', 'Xào Ngọt', 'Ít ớt', 'Cay vừa'],
+            prices: [null, null, null, null, null, null, null],
+            choiceCategories: ['', '', '', '', '', '', ''],
+          },
+        ],
       });
     }
     setShowItemModal(true);
@@ -170,11 +179,14 @@ export default function MenuPage() {
 
     // Clean up options (remove empty choices, remove options without names or choices)
     const cleanedOptions = itemForm.options
-      .map((opt, oi) => ({
+      .map((opt) => ({
         name: opt.name.trim(),
         choices: opt.choices.map(c => c.trim()).filter(c => c),
         prices: opt.choices
           .map((c, ci) => c.trim() ? (opt.prices?.[ci] ?? null) : null)
+          .filter((_, ci) => opt.choices[ci]?.trim()),
+        choiceCategories: opt.choices
+          .map((c, ci) => c.trim() ? (opt.choiceCategories?.[ci] ?? '') : null)
           .filter((_, ci) => opt.choices[ci]?.trim()),
       }))
       .filter(opt => opt.name && opt.choices.length > 0);
@@ -217,7 +229,7 @@ export default function MenuPage() {
   function addOption() {
     setItemForm(prev => ({
       ...prev,
-      options: [...prev.options, { name: '', choices: [''], prices: [null] }]
+      options: [...prev.options, { name: '', choices: [''], prices: [null], choiceCategories: [''] }]
     }));
   }
 
@@ -237,7 +249,9 @@ export default function MenuPage() {
     const newOptions = [...itemForm.options];
     newOptions[optIndex].choices.push('');
     if (!newOptions[optIndex].prices) newOptions[optIndex].prices = [];
-    newOptions[optIndex].prices.push(null);
+    newOptions[optIndex].prices.push(50000);
+    if (!newOptions[optIndex].choiceCategories) newOptions[optIndex].choiceCategories = [];
+    newOptions[optIndex].choiceCategories.push('');
     setItemForm({ ...itemForm, options: newOptions });
   }
 
@@ -258,6 +272,14 @@ export default function MenuPage() {
     const newOptions = [...itemForm.options];
     newOptions[optIndex].choices.splice(choiceIndex, 1);
     if (newOptions[optIndex].prices) newOptions[optIndex].prices.splice(choiceIndex, 1);
+    if (newOptions[optIndex].choiceCategories) newOptions[optIndex].choiceCategories.splice(choiceIndex, 1);
+    setItemForm({ ...itemForm, options: newOptions });
+  }
+
+  function updateChoiceCategory(optIndex, choiceIndex, categoryId) {
+    const newOptions = [...itemForm.options];
+    if (!newOptions[optIndex].choiceCategories) newOptions[optIndex].choiceCategories = [];
+    newOptions[optIndex].choiceCategories[choiceIndex] = categoryId;
     setItemForm({ ...itemForm, options: newOptions });
   }
 
@@ -479,15 +501,6 @@ export default function MenuPage() {
                 <label className="form-label">Mô tả</label>
                 <textarea className="textarea" value={itemForm.description} onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })} placeholder="Mô tả ngắn về món ăn..." />
               </div>
-              <div className="flex gap-4 mb-4">
-                <div className="form-group" style={{ flex: 1 }}>
-                  <label className="form-label">Danh mục</label>
-                  <select className="select" value={itemForm.category_id} onChange={(e) => setItemForm({ ...itemForm, category_id: e.target.value })}>
-                    <option value="">Chọn danh mục</option>
-                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
-                </div>
-              </div>
               <div className="form-group mb-4">
                 <label className="form-label">URL hình ảnh</label>
                 <input className="input" value={itemForm.image_url} onChange={(e) => setItemForm({ ...itemForm, image_url: e.target.value })} placeholder="https://..." />
@@ -510,6 +523,7 @@ export default function MenuPage() {
                 </label>
               </div>
 
+              {/* Danh mục của món — giữ trước phần tuỳ chọn */}
               {/* Options Section */}
               <div className="options-section" style={{ borderTop: '1px solid #dbeafe', paddingTop: '1rem', marginTop: '1rem' }}>
                 <div className="flex justify-between items-center mb-3">
@@ -520,53 +534,89 @@ export default function MenuPage() {
                 </div>
 
                 {itemForm.options.map((opt, optIndex) => (
-                  <div key={optIndex} className="option-group" style={{ background: '#f8fafc', border: '1px solid #dbeafe', padding: '12px', borderRadius: 10, marginBottom: '10px' }}>
-                    <div className="flex justify-between items-center mb-3 gap-2">
-                      <input
-                        className="input"
-                        value={opt.name}
-                        onChange={(e) => updateOptionName(optIndex, e.target.value)}
-                        placeholder="Tên tuỳ chọn (VD: Khẩu vị, Độ cay)"
-                        style={{ flex: 1 }}
-                      />
-                      <button className="btn btn-ghost btn-icon" onClick={() => removeOption(optIndex)} title="Xoá tuỳ chọn này" style={{ color: '#dc2626' }}>
-                        <Trash2 size={16} />
-                      </button>
+                <div
+                  key={optIndex}
+                  style={{
+                    background: '#fff',
+                    border: '1.5px solid #e2e8f0',
+                    borderLeft: '4px solid #6366f1',
+                    borderRadius: 12,
+                    marginBottom: 12,
+                    overflow: 'hidden',
+                  }}
+                >
+                  {/* Header: option name + delete */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: '#f8faff', borderBottom: '1px solid #e2e8f0' }}>
+                    <input
+                      className="input"
+                      value={opt.name}
+                      onChange={(e) => updateOptionName(optIndex, e.target.value)}
+                      placeholder="Tên nhóm tuỳ chọn (VD: Khẩu vị, Loại)"
+                      style={{ flex: 1, fontSize: '0.9rem', fontWeight: 700, border: 'none', background: 'transparent', boxShadow: 'none', padding: '2px 4px', color: '#1e1b4b' }}
+                    />
+                    <button
+                      onClick={() => removeOption(optIndex)}
+                      title="Xoá nhóm này"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', opacity: 0.7, padding: 4, display: 'flex', alignItems: 'center' }}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+
+                  {/* Choice rows */}
+                  <div style={{ padding: '10px 12px' }}>
+                    {/* Column headers */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1.6fr 28px', gap: 6, marginBottom: 6 }}>
+                      <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tên lựa chọn</span>
+                      <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Giá (đ)</span>
+                      <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Danh mục in</span>
+                      <span />
                     </div>
 
-                    <div className="option-choices">
-                      {/* Header row */}
-                      <div style={{ display: 'flex', gap: 8, marginBottom: 4, paddingRight: 32 }}>
-                        <span style={{ flex: 2, fontSize: '0.72rem', color: '#6b7280', fontWeight: 600 }}>Tên lựa chọn</span>
-                        <span style={{ flex: 1, fontSize: '0.72rem', color: '#6b7280', fontWeight: 600 }}>Giá (đ)</span>
+                    {opt.choices.map((choice, choiceIndex) => (
+                      <div key={choiceIndex} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1.6fr 28px', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                        <input
+                          className="input input-sm"
+                          value={choice}
+                          onChange={(e) => updateOptionChoice(optIndex, choiceIndex, e.target.value)}
+                          placeholder={`Xào, Hấp, Luộc...`}
+                          style={{ minWidth: 0 }}
+                        />
+                        <input
+                          className="input input-sm"
+                          type="number"
+                          value={opt.prices?.[choiceIndex] ?? ''}
+                          onChange={(e) => updateChoicePrice(optIndex, choiceIndex, e.target.value)}
+                          placeholder="0"
+                          style={{ minWidth: 0, borderColor: '#c7d2fe', background: '#eef2ff', textAlign: 'right' }}
+                        />
+                        <select
+                          value={opt.choiceCategories?.[choiceIndex] ?? ''}
+                          onChange={(e) => updateChoiceCategory(optIndex, choiceIndex, e.target.value)}
+                          style={{ minWidth: 0, fontSize: '0.78rem', padding: '5px 6px', border: '1px solid #bbf7d0', borderRadius: 8, background: '#f0fdf4', color: '#166534', cursor: 'pointer', outline: 'none' }}
+                        >
+                          <option value="">--</option>
+                          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                        <button
+                          onClick={() => removeOptionChoice(optIndex, choiceIndex)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#cbd5e1', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                          onMouseEnter={e => e.currentTarget.style.color = '#ef4444'}
+                          onMouseLeave={e => e.currentTarget.style.color = '#cbd5e1'}
+                        >
+                          <X size={13} />
+                        </button>
                       </div>
-                      {opt.choices.map((choice, choiceIndex) => (
-                        <div key={choiceIndex} className="flex items-center gap-2 mb-2">
-                          <input
-                            className="input input-sm"
-                            value={choice}
-                            onChange={(e) => updateOptionChoice(optIndex, choiceIndex, e.target.value)}
-                            placeholder={`Lựa chọn ${choiceIndex + 1} (VD: Xào, Hấp)`}
-                            style={{ flex: 2 }}
-                          />
-                          <input
-                            className="input input-sm"
-                            type="number"
-                            value={opt.prices?.[choiceIndex] ?? ''}
-                            onChange={(e) => updateChoicePrice(optIndex, choiceIndex, e.target.value)}
-                            placeholder="Giá (VD: 50000)"
-                            style={{ flex: 1, borderColor: '#bfdbfe', background: '#eff6ff' }}
-                          />
-                          <button className="btn btn-ghost btn-icon btn-sm" onClick={() => removeOptionChoice(optIndex, choiceIndex)} style={{ color: '#9ca3af' }}>
-                            <X size={14} />
-                          </button>
-                        </div>
-                      ))}
-                      <button className="btn btn-ghost btn-sm mt-1" onClick={() => addOptionChoice(optIndex)} style={{ color: '#2563eb', fontSize: '0.8rem' }}>
-                        <Plus size={13} /> Thêm lựa chọn
-                      </button>
-                    </div>
+                    ))}
+
+                    <button
+                      onClick={() => addOptionChoice(optIndex)}
+                      style={{ marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.78rem', color: '#6366f1', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
+                    >
+                      <Plus size={12} /> Thêm lựa chọn
+                    </button>
                   </div>
+                </div>
                 ))}
               </div>
             </div>

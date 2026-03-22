@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
+import { sendPrintJob } from '@/lib/print';
 import {
   Search,
   Plus,
@@ -489,7 +490,7 @@ function OrderContent() {
 
   function confirmOptionAdd() {
     if (!optionModal) return;
-    const price = choicePrice ?? optionModal.price;
+    const price = computeModalPrice(optionModal.options, selectedOpts);
     const optionsArr = Object.keys(selectedOpts).map(k => ({ name: k, choice: selectedOpts[k] }));
     const label = optionsArr.map(o => o.choice).join(', ');
     const cartItem = {
@@ -626,6 +627,9 @@ function OrderContent() {
         .update({ status: 'occupied', occupied_at: new Date().toISOString() })
         .eq('id', tableId);
 
+      // Gửi lệnh in tự động khi khách đặt món
+      await sendPrintJob(supabase, order.id);
+
       setCart([]);
       setNotes({});
       setGiftCart([]);
@@ -644,7 +648,7 @@ function OrderContent() {
   }
 
   function formatPrice(price) {
-    return new Intl.NumberFormat('vi-VN').format(price) + 'đ';
+    return new Intl.NumberFormat('vi-VN').format(price || 0) + 'đ';
   }
 
   function getItemDisplayPrice(item) {
@@ -658,7 +662,20 @@ function OrderContent() {
       if (min !== max) return `${fmt(min)} — ${fmt(max)}`;
       return fmt(min);
     }
-    return new Intl.NumberFormat('vi-VN').format(item.price) + 'đ';
+    return new Intl.NumberFormat('vi-VN').format(item.price || 0) + 'đ';
+  }
+
+  // Tính tổng giá từ tất cả lựa chọn đang được chọn trong option modal
+  function computeModalPrice(options, opts) {
+    let total = 0;
+    (options || []).forEach(opt => {
+      const ci = opt.choices?.indexOf(opts[opt.name]);
+      if (ci >= 0) {
+        const p = opt.prices?.[ci];
+        if (p != null && Number(p) > 0) total += Number(p);
+      }
+    });
+    return total; // 0 nếu không có option nào có giá
   }
 
   // Lấy tất cả choices của item để hiển thị dạng tags
@@ -925,6 +942,9 @@ function OrderContent() {
                     </div>
                     <div className="co-item-info">
                       <span className="co-item-name">{item.name}</span>
+                      {item.description ? (
+                        <span style={{ fontSize: '0.72rem', color: '#ea580c', lineHeight: 1.3, marginTop: 1, display: 'block' }}>{item.description}</span>
+                      ) : null}
                       {promoConfig.enabled && item.counts_for_promotion && (
                         <span style={{ fontSize: '0.68rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 6px', fontWeight: 600, marginTop: 2, alignSelf: 'flex-start' }}>🎯 Tính vào KM</span>
                       )}
@@ -965,6 +985,9 @@ function OrderContent() {
                       )}
                     </div>
                     <span className="co-item-name">{item.name}</span>
+                    {item.description ? (
+                      <span style={{ fontSize: '0.7rem', color: '#ea580c', lineHeight: 1.3, marginTop: 1, display: 'block', padding: '0 4px' }}>{item.description}</span>
+                    ) : null}
                     {promoConfig.enabled && item.counts_for_promotion && (
                       <span style={{ fontSize: '0.65rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 5px', fontWeight: 600, display: 'block', marginBottom: 2 }}>🎯 Tính KM</span>
                     )}
@@ -1157,8 +1180,11 @@ function OrderContent() {
             <div className="co-sheet-header">
               <div>
                 <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>{optionModal.name}</div>
+                {optionModal.description ? (
+                  <div style={{ fontSize: '0.78rem', color: '#ea580c', marginTop: 2, lineHeight: 1.4 }}>{optionModal.description}</div>
+                ) : null}
                 <div style={{ color: '#2563eb', fontWeight: 700, fontSize: '1rem', marginTop: 2 }}>
-                  {(choicePrice ?? optionModal.price).toLocaleString('vi-VN')}đ
+                  {computeModalPrice(optionModal.options, selectedOpts).toLocaleString('vi-VN')}đ
                 </div>
               </div>
               <button onClick={() => setOptionModal(null)}><X size={20} /></button>
@@ -1170,7 +1196,8 @@ function OrderContent() {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     {opt.choices.map((choice, ci) => {
                       const p = opt.prices?.[ci];
-                      const hasP = p != null && Number(p) > 0;
+                      const displayPrice = p != null ? Number(p) : 0;
+                      const hasCat = !!(opt.choiceCategories?.[ci]);
                       const active = selectedOpts[opt.name] === choice;
                       return (
                         <button key={ci} onClick={() => {
@@ -1184,7 +1211,7 @@ function OrderContent() {
                           fontWeight: active ? 700 : 500,
                           fontSize: '0.9rem', cursor: 'pointer'
                         }}>
-                          {choice}{hasP ? <span style={{ fontSize: '0.75rem', marginLeft: 4, color: active ? '#2563eb' : '#9ca3af' }}>{Number(p).toLocaleString('vi-VN')}đ</span> : null}
+                          {choice}{hasCat ? <span style={{ fontSize: '0.75rem', marginLeft: 4, color: active ? '#2563eb' : '#9ca3af' }}>{displayPrice.toLocaleString('vi-VN')}đ</span> : null}
                         </button>
                       );
                     })}
@@ -1209,7 +1236,7 @@ function OrderContent() {
             </div>
             <div className="co-sheet-footer">
               <button className="co-btn-submit" onClick={confirmOptionAdd}>
-                Thêm vào giỏ • {((choicePrice ?? optionModal.price) * optionQty).toLocaleString('vi-VN')}đ
+                Thêm vào giỏ • {(computeModalPrice(optionModal.options, selectedOpts) * optionQty).toLocaleString('vi-VN')}đ
               </button>
             </div>
           </div>

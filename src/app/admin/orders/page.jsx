@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
+import { sendPrintJob } from '@/lib/print';
 import {
   Search, Calendar, Eye, X, Clock, Filter,
   Receipt, CheckCircle, AlertCircle, ChefHat, Ban,
@@ -33,19 +34,13 @@ export default function OrdersPage() {
   const [printing, setPrinting]           = useState(false);
   const [printMsg, setPrintMsg]           = useState('');
 
-  async function sendPrintJob(order) {
+  async function handlePrint(order) {
     setPrinting(true);
     setPrintMsg('');
-    try {
-      const { error } = await supabase.from('print_jobs').insert({ order_id: order.id, status: 'pending' });
-      if (error) throw error;
-      setPrintMsg('✅ Đã gửi lệnh in!');
-    } catch (e) {
-      setPrintMsg(`❌ Lỗi: ${e.message}`);
-    } finally {
-      setPrinting(false);
-      setTimeout(() => setPrintMsg(''), 4000);
-    }
+    const { success, error } = await sendPrintJob(supabase, order.id);
+    setPrintMsg(success ? '✅ Đã gửi lệnh in!' : `❌ Lỗi: ${error}`);
+    setPrinting(false);
+    setTimeout(() => setPrintMsg(''), 4000);
   }
 
   // Lock body scroll when modal open
@@ -392,7 +387,7 @@ export default function OrdersPage() {
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   className="btn btn-secondary"
-                  onClick={() => sendPrintJob(selectedOrder)}
+                  onClick={() => handlePrint(selectedOrder)}
                   disabled={printing}
                   style={{ display: 'flex', alignItems: 'center', gap: 6 }}
                 >
