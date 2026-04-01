@@ -32,6 +32,7 @@ export default function StaffNotesPage() {
   ]);
   const [newNoteAmount, setNewNoteAmount] = useState(0);
   const [newNoteDebt, setNewNoteDebt] = useState(0);
+  const [newNoteInputAmount, setNewNoteInputAmount] = useState(''); // Tiền chủ giao trước khi đi chợ
   
   // Modal / Review States
   const [viewingNote, setViewingNote] = useState(null);
@@ -317,7 +318,8 @@ export default function StaffNotesPage() {
     return JSON.stringify({
       type: 'structured_expense',
       items: validItems,
-      note: newNoteContent
+      note: newNoteContent,
+      input_amount: newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0,
     });
   };
 
@@ -409,6 +411,7 @@ export default function StaffNotesPage() {
       ]);
       setNewNoteAmount(0);
       setNewNoteDebt(0);
+      setNewNoteInputAmount('');
       setNewNoteType('other');
       fetchNotes(currentUser); // Refresh list
     } else {
@@ -1016,6 +1019,29 @@ export default function StaffNotesPage() {
                 <span>Tổng cộng</span>
                 <span style={{ color: debtTotal > 0 ? '#dc2626' : '#15803d' }}>{formatMoney(grandTotal)}</span>
               </div>
+              {data.input_amount > 0 && (() => {
+                const balance = data.input_amount - paidTotal;
+                return (
+                  <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 10, background: balance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1.5px solid ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginBottom: 4 }}>
+                      <span style={{ color: '#6b7280' }}>💵 Tiền được giao:</span>
+                      <strong style={{ color: '#1d4ed8' }}>{formatMoney(data.input_amount)}</strong>
+                    </div>
+                    {debtTotal > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginBottom: 4 }}>
+                        <span style={{ color: '#dc2626' }}>📋 Nợ người bán:</span>
+                        <strong style={{ color: '#dc2626' }}>{formatMoney(debtTotal)}</strong>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.92rem', fontWeight: 800, paddingTop: 4, borderTop: `1px dashed ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
+                      <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>
+                        {balance >= 0 ? '✅ Còn thừa (trả lại chủ):' : '⚠️ Còn thiếu (bỏ thêm):'}
+                      </span>
+                      <strong style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>{formatMoney(Math.abs(balance))}</strong>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* ── Edit History ── */}
@@ -1652,6 +1678,9 @@ export default function StaffNotesPage() {
                 const vDebtRemain = Math.max(0, (viewingNote.debt || 0) - (viewingNote.paid_debt || 0));
                 const vHasDebt = vDebtRemain > 0;
                 const vCleared = (viewingNote.paid_debt || 0) > 0 && vDebtRemain === 0;
+                let vInputAmt = 0;
+                try { const d = JSON.parse(viewingNote.content); if (d.input_amount > 0) vInputAmt = d.input_amount; } catch {}
+                const vBalance = vInputAmt > 0 ? vInputAmt - (viewingNote.amount || 0) : null;
                 return (
                   <div style={{
                     display: 'flex', flexDirection: 'column', gap: 8, padding: 14, borderRadius: 10, marginBottom: 16,
@@ -1660,13 +1689,19 @@ export default function StaffNotesPage() {
                   }}>
                     {viewingNote.amount > 0 && (
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 500 }}>
-                        <span style={{ color: '#6b7280' }}>Thực chi:</span>
+                        <span style={{ color: '#6b7280' }}>💸 Thực chi (tiền túi):</span>
                         <span style={{ color: '#111827' }}>{formatMoney(viewingNote.amount)}</span>
+                      </div>
+                    )}
+                    {viewingNote.debt > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 500 }}>
+                        <span style={{ color: '#dc2626' }}>📋 Nợ người bán:</span>
+                        <span style={{ color: '#dc2626' }}>{formatMoney(viewingNote.debt)}</span>
                       </div>
                     )}
                     {viewingNote.paid_debt > 0 && (
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 500 }}>
-                        <span style={{ color: '#6b7280' }}>Đã trả nợ:</span>
+                        <span style={{ color: '#6b7280' }}>✅ Đã trả nợ:</span>
                         <span style={{ color: '#16a34a' }}>{formatMoney(viewingNote.paid_debt)}</span>
                       </div>
                     )}
@@ -1675,6 +1710,21 @@ export default function StaffNotesPage() {
                         <span style={{ color: vHasDebt ? '#dc2626' : '#16a34a' }}>{vHasDebt ? '⚠️ Còn nợ:' : '✅ Đã trả đủ'}</span>
                         <span style={{ color: vHasDebt ? '#dc2626' : '#16a34a' }}>{formatMoney(vDebtRemain)}</span>
                       </div>
+                    )}
+                    {vBalance !== null && (
+                      <>
+                        <div style={{ height: 1, background: '#e5e7eb', margin: '2px 0' }} />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 500 }}>
+                          <span style={{ color: '#1d4ed8' }}>💵 Tiền được giao:</span>
+                          <span style={{ color: '#1d4ed8' }}>{formatMoney(vInputAmt)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, padding: '7px 10px', borderRadius: 8, background: vBalance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1px solid ${vBalance >= 0 ? '#86efac' : '#fca5a5'}` }}>
+                          <span style={{ color: vBalance >= 0 ? '#15803d' : '#dc2626' }}>
+                            {vBalance >= 0 ? '✅ Còn thừa (trả lại chủ):' : '⚠️ Còn thiếu (bỏ thêm):'}
+                          </span>
+                          <span style={{ color: vBalance >= 0 ? '#15803d' : '#dc2626' }}>{formatMoney(Math.abs(vBalance))}</span>
+                        </div>
+                      </>
                     )}
                   </div>
                 );
@@ -1768,15 +1818,69 @@ export default function StaffNotesPage() {
                       </div>
                     ))}
                   </div>
-                  {(calculateTotals().paid > 0 || calculateTotals().debt > 0) && (
-                    <div style={{ marginTop: 12, padding: '10px 14px', background: '#fff7ed', borderRadius: 10, border: '1px solid #fed7aa', fontSize: 13 }}>
-                      <div style={{ fontWeight: 700, color: '#c2410c', marginBottom: 6 }}>Tổng kết:</div>
-                      <div style={{ display: 'flex', gap: 16 }}>
-                        <span>Thực chi: <strong style={{ color: '#16a34a' }}>{formatMoney(calculateTotals().paid)}</strong></span>
-                        <span>Nợ: <strong style={{ color: '#dc2626' }}>{formatMoney(calculateTotals().debt)}</strong></span>
+                  {/* ── Tiền Đầu vào ── */}
+                  <div style={{ marginTop: 12, padding: '10px 14px', background: '#eff6ff', borderRadius: 10, border: '1.5px solid #bfdbfe' }}>
+                    <label style={{ fontSize: 12, fontWeight: 700, color: '#1d4ed8', display: 'block', marginBottom: 6 }}>
+                      💵 Tiền Đầu vào
+                      <span style={{ fontWeight: 400, color: '#6b7280', marginLeft: 4, fontSize: 11 }}>(tiền chủ giao trước khi đi chợ)</span>
+                    </label>
+                    <input
+                      type="text" inputMode="numeric"
+                      placeholder="Nhập số tiền được giao... (VD: 500k)"
+                      value={newNoteInputAmount}
+                      onChange={e => {
+                        const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
+                        setNewNoteInputAmount(raw ? Number(raw).toLocaleString('vi-VN') : '');
+                      }}
+                      style={{ width: '100%', padding: '8px 12px', border: '1.5px solid #93c5fd', borderRadius: 8, fontSize: 14, fontWeight: 700, color: '#1d4ed8', boxSizing: 'border-box', outline: 'none', background: 'white' }}
+                    />
+                  </div>
+                  {/* ── Tổng kết mở rộng ── */}
+                  {(calculateTotals().paid > 0 || calculateTotals().debt > 0 || (newNoteInputAmount && Number(newNoteInputAmount.replace(/\./g, '')) > 0)) && (() => {
+                    const { paid: thucChi, debt: tienNo } = calculateTotals();
+                    const tongMua = thucChi + tienNo;
+                    const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
+                    const balance = inputAmt > 0 ? inputAmt - thucChi : null;
+                    return (
+                      <div style={{ marginTop: 10, padding: '12px 14px', background: '#fff7ed', borderRadius: 10, border: '1px solid #fed7aa', fontSize: 13 }}>
+                        <div style={{ fontWeight: 700, color: '#c2410c', marginBottom: 8 }}>📊 Tổng kết chuyến chợ</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                          {tongMua > 0 && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span style={{ color: '#6b7280' }}>🛒 Tổng mua hàng:</span>
+                              <strong>{formatMoney(tongMua)}</strong>
+                            </div>
+                          )}
+                          {tienNo > 0 && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span style={{ color: '#dc2626' }}>📋 Nợ người bán:</span>
+                              <strong style={{ color: '#dc2626' }}>- {formatMoney(tienNo)}</strong>
+                            </div>
+                          )}
+                          {thucChi > 0 && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 5, borderTop: '1px dashed #fed7aa' }}>
+                              <span style={{ color: '#6b7280' }}>💸 Thực chi (tiền túi ra):</span>
+                              <strong style={{ color: '#c2410c' }}>{formatMoney(thucChi)}</strong>
+                            </div>
+                          )}
+                          {balance !== null && (
+                            <>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 5, borderTop: '1px solid #fed7aa' }}>
+                                <span style={{ color: '#1d4ed8' }}>💵 Tiền được giao:</span>
+                                <strong style={{ color: '#1d4ed8' }}>{formatMoney(inputAmt)}</strong>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 10px', borderRadius: 8, marginTop: 4, fontWeight: 800, background: balance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1.5px solid ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
+                                <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>
+                                  {balance >= 0 ? '✅ Còn thừa — trả lại chủ:' : '⚠️ Còn thiếu — nhân viên bỏ thêm:'}
+                                </span>
+                                <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>{formatMoney(Math.abs(balance))}</span>
+                              </div>
+                            </>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="form-group mb-4">
