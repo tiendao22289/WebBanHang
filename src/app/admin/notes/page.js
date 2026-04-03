@@ -67,6 +67,7 @@ export default function StaffNotesPage() {
   const [editExpenseItems, setEditExpenseItems] = useState([]);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editDebtAmount, setEditDebtAmount] = useState('');
+  const [editInputAmount, setEditInputAmount] = useState(''); // Tiền được giao (sửa)
   const [editOriginalItems, setEditOriginalItems] = useState([]);
   const toggleHistory = (noteId, idx) => setExpandedHistory(prev => ({ ...prev, [`${noteId}-${idx}`]: !prev[`${noteId}-${idx}`] }));
 
@@ -578,6 +579,13 @@ export default function StaffNotesPage() {
       setEditExpenseItems([{ _id: `new-${Date.now()}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }]);
     }
     setEditDebtAmount(note.debt > 0 ? String(note.debt) : '');
+    // Load input_amount từ content JSON
+    try {
+      const parsed = JSON.parse(note.content);
+      setEditInputAmount(parsed.input_amount > 0 ? parsed.input_amount.toLocaleString('vi-VN') : '');
+    } catch {
+      setEditInputAmount('');
+    }
     // Auto scroll to edit form
     setTimeout(() => {
       editFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -590,6 +598,7 @@ export default function StaffNotesPage() {
     setEditExpenseItems([]);
     setEditOriginalItems([]);
     setEditDebtAmount('');
+    setEditInputAmount('');
   };
 
   const updateEditExpenseItem = (index, field, value) => {
@@ -695,12 +704,14 @@ export default function StaffNotesPage() {
       : { ts, by: editor, changes: '✏️ Cập nhật ghi chú' };
 
     if (editNoteType === 'expense' && validItems.length > 0) {
+      const editInputAmtNum = editInputAmount ? Number(editInputAmount.replace(/\./g, '')) : 0;
       let oldHistory = [];
       try { oldHistory = JSON.parse(note.content).history || []; } catch {}
       finalContent = JSON.stringify({
         type: 'structured_expense',
         items: validItems,
         note: editNoteContent,
+        input_amount: editInputAmtNum > 0 ? editInputAmtNum : undefined,
         history: [...oldHistory, historyEntry]
       });
       const totals = calculateEditTotals();
@@ -1818,12 +1829,40 @@ export default function StaffNotesPage() {
                         <textarea rows={2} value={editNoteContent} onChange={e => setEditNoteContent(e.target.value)}
                           style={{ width: '100%', padding: '7px 10px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' }} />
                       </div>
-                      {(calculateEditTotals().paid > 0 || calculateEditTotals().debt > 0) && (
-                        <div style={{ padding: '8px 12px', background: '#fff7ed', borderRadius: 8, border: '1px solid #fed7aa', fontSize: 12, marginBottom: 8 }}>
-                          Thực chi: <strong style={{ color: '#16a34a' }}>{formatMoney(calculateEditTotals().paid)}</strong>&nbsp;&nbsp;
-                          Nợ: <strong style={{ color: '#dc2626' }}>{formatMoney(calculateEditTotals().debt)}</strong>
-                        </div>
-                      )}
+                      {/* Tiền được giao */}
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 12, fontWeight: 600, color: '#1d4ed8', display: 'block', marginBottom: 4 }}>💵 Tiền được giao (tiền chủ giao trước)</label>
+                        <input
+                          type="text" inputMode="numeric"
+                          placeholder="Nhập số tiền được giao..."
+                          value={editInputAmount}
+                          onChange={e => {
+                            const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
+                            setEditInputAmount(raw ? Number(raw).toLocaleString('vi-VN') : '');
+                          }}
+                          style={{ width: '100%', padding: '7px 10px', border: '1.5px solid #93c5fd', borderRadius: 8, fontSize: 13, fontWeight: 700, color: '#1d4ed8', boxSizing: 'border-box', outline: 'none', background: 'white' }}
+                        />
+                      </div>
+                      {/* Tổng kết chi tiêu khi edit */}
+                      {(() => {
+                        const { paid: ePaid, debt: eDebt } = calculateEditTotals();
+                        const eInputAmt = editInputAmount ? Number(editInputAmount.replace(/\./g, '')) : 0;
+                        const eBalance = eInputAmt > 0 ? eInputAmt - ePaid : null;
+                        if (ePaid === 0 && eDebt === 0 && eInputAmt === 0) return null;
+                        return (
+                          <div style={{ padding: '8px 12px', background: '#fff7ed', borderRadius: 8, border: '1px solid #fed7aa', fontSize: 12, marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            {ePaid > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>💸 Thực chi:</span><strong style={{ color: '#16a34a' }}>{formatMoney(ePaid)}</strong></div>}
+                            {eDebt > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>📋 Nợ:</span><strong style={{ color: '#dc2626' }}>{formatMoney(eDebt)}</strong></div>}
+                            {eInputAmt > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>💵 Tiền được giao:</span><strong style={{ color: '#1d4ed8' }}>{formatMoney(eInputAmt)}</strong></div>}
+                            {eBalance !== null && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, padding: '5px 8px', borderRadius: 6, marginTop: 2, background: eBalance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1px solid ${eBalance >= 0 ? '#86efac' : '#fca5a5'}` }}>
+                                <span style={{ color: eBalance >= 0 ? '#15803d' : '#dc2626' }}>{eBalance >= 0 ? '✅ Còn thừa — trả lại chủ:' : '⚠️ Còn thiếu:'}</span>
+                                <span style={{ color: eBalance >= 0 ? '#15803d' : '#dc2626' }}>{formatMoney(Math.abs(eBalance))}</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   ) : (
                     <div style={{ marginBottom: 8 }}>
