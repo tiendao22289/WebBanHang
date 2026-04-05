@@ -1567,28 +1567,23 @@ export default function StaffNotesPage() {
             <span style={{ fontSize: 10, background: '#e0e7ff', color: '#4338ca', padding: '2px 7px', borderRadius: 6, fontWeight: 600 }}>{selectedStaff}</span>
           )}
         </div>
-        {/* Horizontal scrollable tiles */}
-        <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }}>
+        {/* Evenly distributed tiles */}
+        <div style={{ display: 'flex', gap: 8 }}>
           {totalInputAmount > 0 && (
-            <div style={{ flexShrink: 0, background: '#f0f9ff', borderRadius: 9, padding: '7px 12px', border: '1px solid #bae6fd', textAlign: 'center', minWidth: 90 }}>
+            <div style={{ flex: 1, background: '#f0f9ff', borderRadius: 9, padding: '8px 10px', border: '1px solid #bae6fd', textAlign: 'center', minWidth: 0 }}>
               <div style={{ fontSize: 10, color: '#0369a1', fontWeight: 500, marginBottom: 2 }}>💵 Chủ đưa</div>
-              <div style={{ fontWeight: 800, color: '#0369a1', fontSize: 13, whiteSpace: 'nowrap' }}>{formatMoney(totalInputAmount)}</div>
+              <div style={{ fontWeight: 800, color: '#0369a1', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(totalInputAmount)}</div>
             </div>
           )}
-          <div style={{ flexShrink: 0, background: 'white', borderRadius: 9, padding: '7px 12px', border: '1px solid #e0e7ff', textAlign: 'center', minWidth: 90 }}>
+          <div style={{ flex: 1, background: 'white', borderRadius: 9, padding: '8px 10px', border: '1px solid #e0e7ff', textAlign: 'center', minWidth: 0 }}>
             <div style={{ fontSize: 10, color: '#374151', fontWeight: 500, marginBottom: 2 }}>🛒 Đã chi</div>
-            <div style={{ fontWeight: 800, color: '#16a34a', fontSize: 13, whiteSpace: 'nowrap' }}>{formatMoney(totalSpent)}</div>
+            <div style={{ fontWeight: 800, color: '#16a34a', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(totalSpent)}</div>
             {totalPaidDebtAll > 0 && <div style={{ fontSize: 9, color: '#7c3aed', marginTop: 1 }}>+{formatMoney(totalPaidDebtAll).replace('₫','đ')} nợ</div>}
           </div>
-          {totalReturnAmount > 0 && (
-            <div style={{ flexShrink: 0, background: '#f0fdf4', borderRadius: 9, padding: '7px 12px', border: '1px solid #86efac', textAlign: 'center', minWidth: 90 }}>
-              <div style={{ fontSize: 10, color: '#15803d', fontWeight: 500, marginBottom: 2 }}>↩️ Trả lại</div>
-              <div style={{ fontWeight: 800, color: '#15803d', fontSize: 13, whiteSpace: 'nowrap' }}>{formatMoney(totalReturnAmount)}</div>
-            </div>
-          )}
-          <div style={{ flexShrink: 0, background: totalDebt > 0 ? '#fff1f2' : '#f0fdf4', borderRadius: 9, padding: '7px 12px', border: `1px solid ${totalDebt > 0 ? '#fca5a5' : '#86efac'}`, textAlign: 'center', minWidth: 90 }}>
+
+          <div style={{ flex: 1, background: totalDebt > 0 ? '#fff1f2' : '#f0fdf4', borderRadius: 9, padding: '8px 10px', border: `1px solid ${totalDebt > 0 ? '#fca5a5' : '#86efac'}`, textAlign: 'center', minWidth: 0 }}>
             <div style={{ fontSize: 10, color: totalDebt > 0 ? '#dc2626' : '#15803d', fontWeight: 500, marginBottom: 2 }}>{totalDebt > 0 ? '⚠️ Còn nợ' : '✅ Hết nợ'}</div>
-            <div style={{ fontWeight: 800, color: totalDebt > 0 ? '#dc2626' : '#15803d', fontSize: 13, whiteSpace: 'nowrap' }}>{formatMoney(totalDebt)}</div>
+            <div style={{ fontWeight: 800, color: totalDebt > 0 ? '#dc2626' : '#15803d', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(totalDebt)}</div>
           </div>
         </div>
       </div>

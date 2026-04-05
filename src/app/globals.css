@@ -753,3 +753,8 @@ img {
   border: 2px solid white;
   animation: pulse 2s infinite;
 }
+
+@keyframes co-gift-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}

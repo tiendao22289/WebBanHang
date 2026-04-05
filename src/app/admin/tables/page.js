@@ -206,7 +206,11 @@ export default function TablesPage() {
       }
     }
     setMenuItems(menuData || []);
-    setCategories(catsData || []);
+    const finalCats = catsData || [];
+    if (menuData?.some(i => !i.category_id)) {
+      finalCats.push({ id: null, name: 'Chưa phân loại' });
+    }
+    setCategories(finalCats);
     setLoading(false);
   }, []);
 
@@ -1691,8 +1695,9 @@ export default function TablesPage() {
                           <div style={{ flex: 1, minWidth: 0 }}>
                             {/* Row 1: Name + delete button */}
                             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 4 }}>
-                              <span style={{ fontSize: '0.97rem', fontWeight: 600, color: '#111827', lineHeight: 1.3 }}>
+                              <span style={{ fontSize: '0.97rem', fontWeight: 600, color: '#111827', lineHeight: 1.3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                 {item.menu_item?.name || 'Món đã xoá'}
+                                {item.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700, lineHeight: 1 }}>🎁 Món Tặng</span>}
                               </span>
                               <button
                                 title="Xóa món"
@@ -1708,13 +1713,15 @@ export default function TablesPage() {
                             </div>
 
                             {/* Row 2: Option/khẩu vị + edit button */}
-                            {item.item_options?.length > 0 && (() => {
+                            {(() => {
                               const fullItem = menuItems.find(m => m.id === item.menu_item_id);
                               const hasOptions = fullItem?.options?.length > 0;
+                              if (!hasOptions && !(item.item_options?.length > 0)) return null;
+
                               const openEdit = () => {
                                 if (!hasOptions) return;
                                 const current = {};
-                                item.item_options.forEach(o => { current[o.name] = o.choice; });
+                                (item.item_options || []).forEach(o => { current[o.name] = o.choice; });
                                 setSelectedOptions(current);
                                 setOptionQuantity(item.quantity);
                                 setOptionNote(item.note || '');
@@ -1725,13 +1732,15 @@ export default function TablesPage() {
                               };
                               return (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                                  <span style={{ fontSize: '0.82rem', color: '#9ca3af', fontStyle: 'italic' }}>
-                                    {item.item_options.map(o => o.choice).join(', ')}
-                                  </span>
+                                  {item.item_options?.length > 0 && (
+                                    <span style={{ fontSize: '0.82rem', color: '#9ca3af', fontStyle: 'italic' }}>
+                                      {item.item_options.map(o => o.choice).join(', ')}
+                                    </span>
+                                  )}
                                   {hasOptions && (
                                     <button
                                       onClick={openEdit}
-                                      title="Đổi khẩu vị"
+                                      title={item.item_options?.length > 0 ? "Đổi khẩu vị" : "Chọn loại"}
                                       style={{
                                         background: '#eff6ff', border: '1px solid #bfdbfe',
                                         borderRadius: 5, padding: '1px 6px',
@@ -1741,7 +1750,7 @@ export default function TablesPage() {
                                         whiteSpace: 'nowrap', flexShrink: 0
                                       }}
                                     >
-                                      ✏️ Đổi
+                                      ✏️ {item.item_options?.length > 0 ? 'Đổi' : 'Chọn loại'}
                                     </button>
                                   )}
                                 </div>
@@ -2099,17 +2108,32 @@ export default function TablesPage() {
         const orderItems = activeOrder?.order_items || [];
         const totalCartItems = orderItems.reduce((sum, oi) => sum + oi.quantity, 0);
 
+        const getItemCategories = (item) => {
+          let itemCats = item.category_id ? [item.category_id] : [];
+          if (item.options) {
+            item.options.forEach(opt => {
+              if (opt.choiceCategories) {
+                opt.choiceCategories.forEach(c => {
+                  if (c && !itemCats.includes(c)) itemCats.push(c);
+                });
+              }
+            });
+          }
+          return itemCats.length > 0 ? itemCats : [null];
+        };
+
         const filteredItems = menuItems.filter(item => {
-          const matchesCat = activeMenuCategory === 'all' || item.category_id === activeMenuCategory;
+          const itemCats = getItemCategories(item);
+          const matchesCat = activeMenuCategory === 'all' || itemCats.includes(activeMenuCategory);
           const matchesSearch = item.name.toLowerCase().includes(addItemSearch.toLowerCase());
           return matchesCat && matchesSearch;
         });
 
-        // Group filtered items by category
+        // Group filtered items by category (map them correctly to categories)
         const grouped = categories
           .map(cat => ({
             ...cat,
-            items: filteredItems.filter(item => item.category_id === cat.id)
+            items: filteredItems.filter(item => getItemCategories(item).includes(cat.id))
           }))
           .filter(cat => cat.items.length > 0);
 
@@ -2389,7 +2413,7 @@ export default function TablesPage() {
                   <div className="options-chip-container">
                     {opt.choices.map((choice, cIdx) => {
                       const choiceP = opt.prices?.[cIdx];
-                      const hasPrice = choiceP != null && Number(choiceP) > 0;
+                      const hasPrice = choiceP !== null && choiceP !== '';
                       return (
                         <button
                           key={cIdx}
@@ -2399,7 +2423,7 @@ export default function TablesPage() {
                             if (hasPrice) setCustomPrice(Number(choiceP));
                           }}
                         >
-                          {choice}{hasPrice ? <span style={{ fontSize: '0.72rem', opacity: 0.85, marginLeft: 4 }}>• {formatPrice(choiceP)}</span> : null}
+                          {choice}{hasPrice ? <span style={{ fontSize: '0.72rem', opacity: 0.85, marginLeft: 4 }}>• {formatPrice(Number(choiceP))}</span> : null}
                         </button>
                       );
                     })}

@@ -88,13 +88,32 @@ export default function MenuPage() {
     setShowPromoModal(false);
   }
 
+  const getItemCategories = (item) => {
+    let cats = item.category_id ? [item.category_id] : [];
+    if (item.options) {
+      item.options.forEach(opt => {
+        if (opt.choiceCategories) {
+          opt.choiceCategories.forEach(c => {
+            if (c && !cats.includes(c)) cats.push(c);
+          });
+        }
+      });
+    }
+    return cats.length > 0 ? cats : [null];
+  };
+
   async function fetchData() {
     const [{ data: cats }, { data: items }] = await Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
       supabase.from('menu_items').select('*, category:categories(name)').order('created_at'),
     ]);
-    setCategories(cats || []);
-    setMenuItems(items || []);
+    const fetchedItems = items || [];
+    const finalCats = cats || [];
+    if (fetchedItems.some(i => getItemCategories(i).includes(null))) {
+      finalCats.push({ id: null, name: 'Chưa phân loại' });
+    }
+    setCategories(finalCats);
+    setMenuItems(fetchedItems);
     setLoading(false);
   }
 
@@ -171,12 +190,6 @@ export default function MenuPage() {
   async function saveItem() {
     if (!itemForm.name.trim()) return;
 
-    // Auto-compute base price = min of all non-null choice prices
-    const allChoicePrices = itemForm.options.flatMap(opt =>
-      (opt.prices || []).filter(p => p !== null && p !== '' && Number(p) > 0).map(Number)
-    );
-    const autoPrice = allChoicePrices.length > 0 ? Math.min(...allChoicePrices) : (parseInt(itemForm.price) || 0);
-
     // Clean up options (remove empty choices, remove options without names or choices)
     const cleanedOptions = itemForm.options
       .map((opt) => ({
@@ -198,7 +211,7 @@ export default function MenuPage() {
       is_available: itemForm.is_available,
       counts_for_promotion: itemForm.counts_for_promotion,
       is_gift_item: itemForm.is_gift_item,
-      price: autoPrice,
+      price: parseInt(itemForm.price) || 0,
       category_id: itemForm.category_id || null,
       options: cleanedOptions,
     };
@@ -294,13 +307,13 @@ export default function MenuPage() {
     if (allPrices.length > 0) {
       return 'Từ ' + new Intl.NumberFormat('vi-VN').format(Math.min(...allPrices)) + 'đ';
     }
-    if (item.price > 0) return new Intl.NumberFormat('vi-VN').format(item.price) + 'đ';
-    return 'Theo tuỳ chọn';
+    return new Intl.NumberFormat('vi-VN').format(item.price || 0) + 'đ';
   }
 
   // Base: category + search filter (before visibility filter)
   const baseItems = menuItems.filter(i => {
-    if (activeCategory && i.category_id !== activeCategory) return false;
+    const itemCats = getItemCategories(i);
+    if (activeCategory !== null && !itemCats.includes(activeCategory)) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       return i.name?.toLowerCase().includes(q) || i.description?.toLowerCase().includes(q);
@@ -316,6 +329,7 @@ export default function MenuPage() {
     if (visibilityFilter === 'hidden' && i.is_available) return false;
     return true;
   });
+
 
   if (loading) {
     return <div className="page-content"><div className="empty-state"><p>Đang tải...</p></div></div>;
@@ -355,11 +369,15 @@ export default function MenuPage() {
               className={`category-tab ${activeCategory === cat.id ? 'active' : ''}`}
               onClick={() => setActiveCategory(cat.id)}
             >
-              {cat.name} ({menuItems.filter(i => i.category_id === cat.id).length})
+              {cat.name} ({menuItems.filter(i => getItemCategories(i).includes(cat.id)).length})
             </button>
             <div className="category-tab-actions">
-              <button className="btn-tiny" onClick={() => openCatModal(cat)}><Pencil size={12} /></button>
-              <button className="btn-tiny" onClick={() => deleteCat(cat.id)}><Trash2 size={12} /></button>
+              {cat.id !== null && (
+                <>
+                  <button className="btn-tiny" onClick={() => openCatModal(cat)}><Pencil size={12} /></button>
+                  <button className="btn-tiny" onClick={() => deleteCat(cat.id)}><Trash2 size={12} /></button>
+                </>
+              )}
             </div>
           </div>
         ))}
@@ -414,11 +432,16 @@ export default function MenuPage() {
                 )}
               </div>
               <div className="menu-card-body">
-                <div className="menu-card-cat">{item.category?.name || 'Chưa phân loại'}</div>
-                <h4 className="menu-card-name">{item.name}</h4>
+                <div className="menu-card-cat" style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                  {getItemCategories(item).map((catId, idx) => {
+                    const cName = categories.find(c => c.id === catId)?.name || 'Chưa phân loại';
+                    return <span key={idx} style={{ background: '#f3f4f6', padding: '2px 6px', borderRadius: '4px', fontSize: '0.65rem' }}>{cName}</span>;
+                  })}
+                </div>
+                <h4 className="menu-card-name" style={{ marginTop: '0.3rem' }}>{item.name}</h4>
                 {(item.counts_for_promotion || item.is_gift_item) && (
                   <div style={{ display: 'flex', gap: 4, marginBottom: 4, flexWrap: 'wrap' }}>
-                    {item.counts_for_promotion && <span style={{ fontSize: '0.65rem', background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>🎯 Tính KM</span>}
+                    {item.counts_for_promotion && <span style={{ fontSize: '0.65rem', background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>🎯 Được Tính vào Khuyến Mãi</span>}
                     {item.is_gift_item && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>🎁 Món tặng</span>}
                   </div>
                 )}
@@ -498,6 +521,10 @@ export default function MenuPage() {
                 <input className="input" value={itemForm.name} onChange={(e) => setItemForm({ ...itemForm, name: e.target.value })} placeholder="VD: Phở bò tái nạm" autoFocus />
               </div>
               <div className="form-group mb-4">
+                <label className="form-label">Giá bán (đ)</label>
+                <input className="input" type="number" value={itemForm.price} onChange={(e) => setItemForm({ ...itemForm, price: e.target.value })} placeholder="0" />
+              </div>
+              <div className="form-group mb-4">
                 <label className="form-label">Mô tả</label>
                 <textarea className="textarea" value={itemForm.description} onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })} placeholder="Mô tả ngắn về món ăn..." />
               </div>
@@ -566,7 +593,7 @@ export default function MenuPage() {
                   {/* Choice rows */}
                   <div style={{ padding: '10px 12px' }}>
                     {/* Column headers */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1.6fr 28px', gap: 6, marginBottom: 6 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 26px', gap: 6, marginBottom: 6 }}>
                       <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tên lựa chọn</span>
                       <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Giá (đ)</span>
                       <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Danh mục in</span>
@@ -574,7 +601,7 @@ export default function MenuPage() {
                     </div>
 
                     {opt.choices.map((choice, choiceIndex) => (
-                      <div key={choiceIndex} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1.6fr 28px', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                      <div key={choiceIndex} style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 26px', gap: 6, marginBottom: 6, alignItems: 'center' }}>
                         <input
                           className="input input-sm"
                           value={choice}
@@ -588,7 +615,7 @@ export default function MenuPage() {
                           value={opt.prices?.[choiceIndex] ?? ''}
                           onChange={(e) => updateChoicePrice(optIndex, choiceIndex, e.target.value)}
                           placeholder="0"
-                          style={{ minWidth: 0, borderColor: '#c7d2fe', background: '#eef2ff', textAlign: 'right' }}
+                          style={{ minWidth: 0, borderColor: '#c7d2fe', background: '#eef2ff', textAlign: 'right', fontSize: '0.85rem', padding: '5px 6px' }}
                         />
                         <select
                           value={opt.choiceCategories?.[choiceIndex] ?? ''}

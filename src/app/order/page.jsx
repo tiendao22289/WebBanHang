@@ -55,6 +55,7 @@ function OrderContent() {
   const [showGiftModal, setShowGiftModal] = useState(false);
   // Option selection modal for items with choices
   const [optionModal, setOptionModal] = useState(null);
+  const [isGiftMode, setIsGiftMode] = useState(false);
   const [selectedOpts, setSelectedOpts] = useState({});
   const [optionQty, setOptionQty] = useState(1);
   const [optNote, setOptNote] = useState('');
@@ -235,6 +236,15 @@ function OrderContent() {
     return () => { supabase.removeChannel(channel); };
   }, [tableId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (orderCancelled) {
+      const timer = setTimeout(() => {
+        setOrderCancelled(false);
+      }, 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [orderCancelled]);
+
   async function initSession() {
     const isTW = await fetchMenu();
     if (!tableId) return;
@@ -365,7 +375,11 @@ function OrderContent() {
       supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).order('created_at'),
       tableId ? supabase.from('tables').select('table_number, status, table_type, table_name').eq('id', tableId).single() : { data: null },
     ]);
-    setCategories(cats || []);
+    const finalCats = cats || [];
+    if (items?.some(i => !i.category_id)) {
+      finalCats.push({ id: null, name: 'Chưa phân loại' });
+    }
+    setCategories(finalCats);
     setMenuItems(items || []);
     const isTW = tableData?.table_type === 'takeaway';
     if (tableData) {
@@ -379,7 +393,7 @@ function OrderContent() {
       const map = Object.fromEntries(settings.map(r => [r.key, r.value]));
       setPromoConfig({ enabled: map.promotion_enabled === 'true', threshold: parseInt(map.promotion_threshold) || 8 });
     }
-    const { data: gifts } = await supabase.from('menu_items').select('id, name, price, image_url').eq('is_gift_item', true).eq('is_available', true);
+    const { data: gifts } = await supabase.from('menu_items').select('id, name, price, image_url, options').eq('is_gift_item', true).eq('is_available', true);
     setGiftItems(gifts || []);
     setLoading(false);
     return isTW;
@@ -464,6 +478,7 @@ function OrderContent() {
   function addToCart(item) {
     // If item has configurable options, show selection modal
     if (item.options && item.options.length > 0) {
+      setIsGiftMode(false);
       setOptionModal(item);
       const init = {};
       let initPrice = null;
@@ -490,9 +505,33 @@ function OrderContent() {
 
   function confirmOptionAdd() {
     if (!optionModal) return;
-    const price = computeModalPrice(optionModal.options, selectedOpts);
     const optionsArr = Object.keys(selectedOpts).map(k => ({ name: k, choice: selectedOpts[k] }));
     const label = optionsArr.map(o => o.choice).join(', ');
+
+    if (isGiftMode) {
+      if (optionQty > availableGiftSlots) {
+        alert(`Bạn chỉ còn ${availableGiftSlots} lượt chọn miễn phí!`);
+        return;
+      }
+      const newGifts = [];
+      for (let i = 0; i < optionQty; i++) {
+        newGifts.push({
+          id: optionModal.id,
+          name: optionModal.name,
+          price: 0,
+          is_gift: true,
+          _options: optionsArr,
+          _note: optNote
+        });
+      }
+      setGiftCart(prev => [...prev, ...newGifts]);
+      setOptionModal(null);
+      setIsGiftMode(false);
+      if (availableGiftSlots - optionQty <= 0) setShowGiftModal(false);
+      return;
+    }
+
+    const price = computeModalPrice(optionModal.price, optionModal.options, selectedOpts);
     const cartItem = {
       ...optionModal,
       price,
@@ -547,42 +586,71 @@ function OrderContent() {
     return cart.filter(c => c.id === itemId).reduce((s, c) => s + c.quantity, 0);
   }
 
+  // Nhắc khách gửi đơn bằng giọng nói AI (Ưu tiên Chrome Text-to-Speech)
+  useEffect(() => {
+    // Lấy danh sách giọng đọc (Chrome tải bất đồng bộ)
+    let voices = window.speechSynthesis.getVoices();
+    window.speechSynthesis.onvoiceschanged = () => {
+      voices = window.speechSynthesis.getVoices();
+    };
+
+    if (cart.length > 0 && !showCart) {
+      const timer = setTimeout(() => {
+        try {
+          const msg = new SpeechSynthesisUtterance('Bạn hãy mở giỏ hàng và gửi đơn đi cho bếp nếu đã chọn món xong nhé!');
+          msg.lang = 'vi-VN';
+          
+          // Ép cứng Chrome dùng giọng Tiếng Việt
+          const viVoice = voices.find(v => v.lang === 'vi-VN' || v.lang === 'vi_VN' || v.name.includes('Vietnamese') || v.name.includes('Tiếng Việt'));
+          if (viVoice) {
+            msg.voice = viVoice;
+          }
+          
+          window.speechSynthesis.speak(msg);
+        } catch(e) {}
+      }, 12000); // Đợi 12s sau lần tương tác cuối mới nhắc
+      return () => clearTimeout(timer);
+    }
+  }, [cart, showCart]);
+
   async function submitOrder() {
     if (cart.length === 0 || submitting) return;
     setSubmitting(true);
 
     try {
       let customerId = null;
-      const { data: existingCustomer } = await supabase
-        .from('customers')
-        .select('id, total_spent, visit_count')
-        .eq('phone', customerPhone.trim())
-        .single();
-
-      if (existingCustomer) {
-        customerId = existingCustomer.id;
-        await supabase
+      if (customerPhone.trim()) {
+        const { data: existingCustomer } = await supabase
           .from('customers')
-          .update({
-            name: customerName.trim(),
-            total_spent: (existingCustomer.total_spent || 0) + totalAmount,
-            visit_count: (existingCustomer.visit_count || 0) + 1,
-            last_visit_at: new Date().toISOString(),
-          })
-          .eq('id', customerId);
-      } else {
-        const { data: newCustomer } = await supabase
-          .from('customers')
-          .insert({
-            name: customerName.trim(),
-            phone: customerPhone.trim(),
-            total_spent: totalAmount,
-            visit_count: 1,
-            last_visit_at: new Date().toISOString(),
-          })
-          .select('id')
+          .select('id, total_spent, visit_count, name')
+          .eq('phone', customerPhone.trim())
           .single();
-        customerId = newCustomer?.id;
+
+        if (existingCustomer) {
+          customerId = existingCustomer.id;
+          await supabase
+            .from('customers')
+            .update({
+              name: customerName.trim() || existingCustomer.name,
+              total_spent: (existingCustomer.total_spent || 0) + totalAmount,
+              visit_count: (existingCustomer.visit_count || 0) + 1,
+              last_visit_at: new Date().toISOString(),
+            })
+            .eq('id', customerId);
+        } else {
+          const { data: newCustomer } = await supabase
+            .from('customers')
+            .insert({
+              name: customerName.trim() || 'Khách mới',
+              phone: customerPhone.trim(),
+              total_spent: totalAmount,
+              visit_count: 1,
+              last_visit_at: new Date().toISOString(),
+            })
+            .select('id')
+            .single();
+          customerId = newCustomer?.id;
+        }
       }
 
       const { data: order, error: orderErr } = await supabase
@@ -590,8 +658,8 @@ function OrderContent() {
         .insert({
           table_id: tableId,
           customer_id: customerId,
-          customer_name: customerName.trim(),
-          customer_phone: customerPhone.trim(),
+          customer_name: customerName.trim() || 'Khách ẩn danh',
+          customer_phone: customerPhone.trim() || null,
           status: 'pending',
           total_amount: totalAmount,
           ...(isTakeaway && deliveryAddress.trim() ? { delivery_address: deliveryAddress.trim() } : {}),
@@ -616,8 +684,8 @@ function OrderContent() {
           menu_item_id: g.id,
           quantity: 1,
           unit_price: 0,
-          item_options: [],
-          note: null,
+          item_options: g._options || [],
+          note: g._note || null,
           is_gift: true,
         })),
       ]);
@@ -666,16 +734,20 @@ function OrderContent() {
   }
 
   // Tính tổng giá từ tất cả lựa chọn đang được chọn trong option modal
-  function computeModalPrice(options, opts) {
-    let total = 0;
+  function computeModalPrice(basePrice, options, opts) {
+    let hasExplicitOptionPrice = false;
+    let sum = 0;
     (options || []).forEach(opt => {
       const ci = opt.choices?.indexOf(opts[opt.name]);
       if (ci >= 0) {
         const p = opt.prices?.[ci];
-        if (p != null && Number(p) > 0) total += Number(p);
+        if (p !== null && p !== '') {
+          sum += Number(p);
+          hasExplicitOptionPrice = true;
+        }
       }
     });
-    return total; // 0 nếu không có option nào có giá
+    return hasExplicitOptionPrice ? sum : Number(basePrice || 0);
   }
 
   // Lấy tất cả choices của item để hiển thị dạng tags
@@ -687,9 +759,24 @@ function OrderContent() {
     }));
   }
 
+  const getItemCategories = (item) => {
+    let cats = item.category_id ? [item.category_id] : [];
+    if (item.options) {
+      item.options.forEach(opt => {
+        if (opt.choiceCategories) {
+          opt.choiceCategories.forEach(c => {
+            if (c && !cats.includes(c)) cats.push(c);
+          });
+        }
+      });
+    }
+    return cats.length > 0 ? cats : [null];
+  };
+
   // Filtered items
   const filteredItems = menuItems.filter(item => {
-    const matchCategory = activeCategory === 'all' || item.category_id === activeCategory;
+    const itemCats = getItemCategories(item);
+    const matchCategory = activeCategory === 'all' || itemCats.includes(activeCategory);
     const matchSearch = !searchTerm || item.name.toLowerCase().includes(searchTerm.toLowerCase());
     return matchCategory && matchSearch;
   });
@@ -698,13 +785,23 @@ function OrderContent() {
   const groupedItems = [];
   const catIdMap = {};
   filteredItems.forEach(item => {
-    const catName = item.category?.name || 'Khác';
-    const catId = item.category_id || 'other';
-    if (!catIdMap[catId]) {
-      catIdMap[catId] = { catId, catName, items: [] };
-      groupedItems.push(catIdMap[catId]);
-    }
-    catIdMap[catId].items.push(item);
+    const itemCats = getItemCategories(item);
+    itemCats.forEach(catId => {
+      // If we are filtering by a specific category, only show it in that category section
+      if (activeCategory !== 'all' && catId !== activeCategory) return;
+      
+      const catObj = categories.find(c => c.id === catId);
+      const catName = catObj?.name ? catObj.name : 'Chưa phân loại';
+      const actualCatId = catId || 'other';
+      if (!catIdMap[actualCatId]) {
+        catIdMap[actualCatId] = { catId: actualCatId, catName, items: [] };
+        groupedItems.push(catIdMap[actualCatId]);
+      }
+      // Deduplicate if somehow the same item is pushed twice to same category
+      if (!catIdMap[actualCatId].items.some(i => i.id === item.id)) {
+        catIdMap[actualCatId].items.push(item);
+      }
+    });
   });
 
   // Scroll spy: observe which category section is in viewport
@@ -783,14 +880,24 @@ function OrderContent() {
 
   return (
     <div className="co-page">
+      <style>{`
+        @keyframes bounce-pointer {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(6px); }
+        }
+      `}</style>
       {/* Customer Info Modal */}
       {showInfoModal && (
         <div className="co-modal-overlay">
           <div className="co-info-modal">
-            <div className="co-info-header">
-              <ChefHat size={28} />
-              <h2>Ốc Bảo Khang</h2>
-              <p>Bàn {tableNumber || '...'}</p>
+            <div className="co-info-header" style={{ paddingBottom: '16px' }}>
+              <h2 style={{ fontSize: '2.2rem', fontWeight: 800, color: '#111827', margin: 0, lineHeight: 1.2 }}>Bàn {tableNumber || '...'}</h2>
+              <p style={{ fontSize: '0.85rem', color: '#15803d', fontWeight: 600, margin: '8px 0 0 0', padding: '4px 12px', background: '#dcfce7', borderRadius: '20px', display: 'inline-block' }}>
+                🎁 Nhập thông tin để tích điểm Nhận Quà
+              </p>
+              <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '6px 0 0 0', fontStyle: 'italic' }}>
+                (Có thể thao tác Bỏ qua ngay ở dưới nếu quý khách thấy phiền)
+              </p>
             </div>
             <div className="co-info-form">
               {/* Location warning — chỉ hiện nếu khách ra ngoài phạm vi */}
@@ -837,17 +944,31 @@ function OrderContent() {
                   />
                 </div>
               )}
-              <button
-                className="co-btn-start"
-                disabled={!customerName.trim() || !customerPhone.trim() || (isTakeaway && !deliveryAddress.trim())}
-                onClick={() => {
-                  saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim());
-                  setShowInfoModal(false);
-                  fetchPreviousOrders();
-                }}
-              >
-                {isTakeaway ? '🛵 Đặt món Mang về' : 'Xem thực đơn'}
-              </button>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+                <button
+                  className="co-btn-start"
+                  style={{ flex: 1, background: '#f3f4f6', color: '#4b5563', border: '1.5px solid #e5e7eb' }}
+                  onClick={() => {
+                    saveSession('', '', '');
+                    setShowInfoModal(false);
+                    fetchPreviousOrders();
+                  }}
+                >
+                  Bỏ qua
+                </button>
+                <button
+                  className="co-btn-start"
+                  style={{ flex: 2 }}
+                  disabled={isTakeaway && !deliveryAddress.trim()}
+                  onClick={() => {
+                    saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim());
+                    setShowInfoModal(false);
+                    fetchPreviousOrders();
+                  }}
+                >
+                  {isTakeaway ? '🛵 Đặt món Mang về' : 'Xem thực đơn'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -946,7 +1067,7 @@ function OrderContent() {
                         <span style={{ fontSize: '0.72rem', color: '#ea580c', lineHeight: 1.3, marginTop: 1, display: 'block' }}>{item.description}</span>
                       ) : null}
                       {promoConfig.enabled && item.counts_for_promotion && (
-                        <span style={{ fontSize: '0.68rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 6px', fontWeight: 600, marginTop: 2, alignSelf: 'flex-start' }}>🎯 Tính vào KM</span>
+                        <span style={{ fontSize: '0.68rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 6px', fontWeight: 600, marginTop: 2, alignSelf: 'flex-start' }}>🎯 Được Tính vào Khuyến Mãi</span>
                       )}
                       <span className="co-item-price">{getItemDisplayPrice(item)}</span>
                     </div>
@@ -989,7 +1110,7 @@ function OrderContent() {
                       <span style={{ fontSize: '0.7rem', color: '#ea580c', lineHeight: 1.3, marginTop: 1, display: 'block', padding: '0 4px' }}>{item.description}</span>
                     ) : null}
                     {promoConfig.enabled && item.counts_for_promotion && (
-                      <span style={{ fontSize: '0.65rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 5px', fontWeight: 600, display: 'block', marginBottom: 2 }}>🎯 Tính KM</span>
+                      <span style={{ fontSize: '0.65rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 5px', fontWeight: 600, display: 'block', marginBottom: 2 }}>🎯 Được Tính vào Khuyến Mãi</span>
                     )}
                     <div className="co-card-bottom">
                       <span className="co-item-price">{getItemDisplayPrice(item)}</span>
@@ -1025,35 +1146,46 @@ function OrderContent() {
 
       {/* ─── Promotion Progress Bar ─── */}
       {promoConfig.enabled && totalItems > 0 && (
-        <div style={{ position: 'fixed', bottom: totalItems > 0 ? 72 : 12, left: 0, right: 0, zIndex: 49, padding: '0 12px', pointerEvents: 'none' }}>
-          <div style={{ background: 'white', border: '1.5px solid #fde68a', borderRadius: 12, padding: '8px 14px', boxShadow: '0 2px 12px rgba(0,0,0,0.12)', pointerEvents: 'all' }}>
-            {giftCount === 0 ? (
-              <>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 600, color: '#92400e', marginBottom: 5 }}>
-                  <span>🎯 Tích {qualifyingQty}/{promoConfig.threshold} món tính KM</span>
-                  <span>Còn {promoConfig.threshold - qualifyingQty} món nữa để nhận quà 🎁</span>
-                </div>
-                <div style={{ height: 6, background: '#fef3c7', borderRadius: 3, overflow: 'hidden' }}>
-                  <div style={{ width: `${Math.min((qualifyingQty / promoConfig.threshold) * 100, 100)}%`, height: '100%', background: 'linear-gradient(90deg,#f59e0b,#d97706)', borderRadius: 3, transition: 'width 0.4s' }} />
-                </div>
-              </>
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#15803d' }}>🎉 Được tặng {giftCount} món! {usedGiftSlots > 0 && `(${usedGiftSlots}/${giftCount} đã chọn)`}</span>
-                {availableGiftSlots > 0 && (
-                  <button onClick={() => setShowGiftModal(true)} style={{ pointerEvents: 'all', background: '#16a34a', color: 'white', border: 'none', borderRadius: 8, padding: '5px 12px', fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer' }}>
-                    🎁 Chọn quà ({availableGiftSlots})
-                  </button>
-                )}
+        <div style={{ position: 'fixed', bottom: totalItems > 0 ? 76 : 16, left: 0, right: 0, zIndex: 49, padding: '0 16px', pointerEvents: 'none' }}>
+          {giftCount === 0 ? (
+            <div style={{ background: 'white', border: '1.5px solid #fde68a', borderRadius: 14, padding: '10px 16px', boxShadow: '0 4px 16px rgba(0,0,0,0.12)', pointerEvents: 'all' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 700, color: '#92400e', marginBottom: 6 }}>
+                <span>🎯 Tích {qualifyingQty}/{promoConfig.threshold} món</span>
+                <span>Còn {promoConfig.threshold - qualifyingQty} món nữa để nhận quà 🎁</span>
               </div>
-            )}
-          </div>
+              <div style={{ height: 8, background: '#fef3c7', borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min((qualifyingQty / promoConfig.threshold) * 100, 100)}%`, height: '100%', background: 'linear-gradient(90deg,#f59e0b,#d97706)', borderRadius: 4, transition: 'width 0.4s ease-out' }} />
+              </div>
+            </div>
+          ) : (
+            <div style={{ background: 'linear-gradient(135deg, #dcfce7, #bbf7d0)', border: '2px solid #4ade80', borderRadius: 16, padding: '14px 18px', boxShadow: '0 6px 20px rgba(22, 163, 74, 0.25)', pointerEvents: 'all', display: 'flex', alignItems: 'center', justifyContent: 'space-between', transform: 'translateY(-2px)' }}>
+              <span style={{ fontSize: '1.05rem', fontWeight: 800, color: '#166534', display: 'flex', alignItems: 'center', gap: 6 }}>
+                🎉 Được tặng {giftCount} món! 
+                {usedGiftSlots > 0 && <span style={{fontSize: '0.8rem', fontWeight: 600, color: '#15803d', opacity: 0.9}}>({usedGiftSlots}/{giftCount})</span>}
+              </span>
+              {availableGiftSlots > 0 && (
+                <button 
+                  onClick={() => setShowGiftModal(true)} 
+                  style={{ pointerEvents: 'all', background: '#16a34a', color: 'white', border: 'none', borderRadius: 10, padding: '8px 16px', fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer', boxShadow: '0 2px 8px rgba(22,163,74,0.4)', display: 'flex', alignItems: 'center', gap: 6, animation: 'co-gift-pulse 2s infinite' }}
+                >
+                  🎁 Chọn quà ({availableGiftSlots})
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
       {/* ─── Cart FAB ─── */}
       {totalItems > 0 && (
-        <div className="co-cart-fab" onClick={() => setShowCart(true)}>
+        <div className="co-cart-fab" onClick={() => setShowCart(true)} style={{ animation: !showCart ? 'co-gift-pulse 2.5s infinite' : 'none' }}>
+          {!showCart && (
+            <div style={{ position: 'absolute', top: '-46px', left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+              <div style={{ background: '#ea580c', color: 'white', padding: '6px 16px', borderRadius: '24px', fontSize: '0.85rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 4px 12px rgba(234, 88, 12, 0.4)', animation: 'bounce-pointer 1.2s infinite', whiteSpace: 'nowrap' }}>
+                👇 Mở Giỏ Hàng để Gửi món nhé!
+              </div>
+            </div>
+          )}
           <ShoppingBag size={20} />
           <span>Giỏ hàng • {totalItems + giftCart.length} món{giftCart.length > 0 && ` (${giftCart.length} 🎁)`}</span>
           <strong>{formatPrice(totalAmount)}</strong>
@@ -1096,8 +1228,20 @@ function OrderContent() {
                       disabled={availableGiftSlots === 0}
                       onClick={() => {
                         if (availableGiftSlots <= 0) return;
-                        setGiftCart(prev => [...prev, { id: g.id, name: g.name, price: 0, is_gift: true }]);
-                        if (availableGiftSlots - 1 === 0) setShowGiftModal(false);
+                        if (g.options && g.options.length > 0) {
+                          setIsGiftMode(true);
+                          setOptionModal(g);
+                          const init = {};
+                          g.options.forEach(opt => {
+                            if (opt.choices && opt.choices.length > 0) init[opt.name] = opt.choices[0];
+                          });
+                          setSelectedOpts(init);
+                          setOptionQty(1);
+                          setOptNote('');
+                        } else {
+                          setGiftCart(prev => [...prev, { id: g.id, name: g.name, price: 0, is_gift: true }]);
+                          if (availableGiftSlots - 1 === 0) setShowGiftModal(false);
+                        }
                       }}
                       style={{ background: availableGiftSlots > 0 ? '#16a34a' : '#e2e8f0', color: availableGiftSlots > 0 ? 'white' : '#94a3b8', border: 'none', borderRadius: 8, padding: '6px 14px', fontWeight: 700, fontSize: '0.82rem', cursor: availableGiftSlots > 0 ? 'pointer' : 'not-allowed' }}>
                       + Thêm
@@ -1179,12 +1323,14 @@ function OrderContent() {
             <div className="co-sheet-handle" />
             <div className="co-sheet-header">
               <div>
-                <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>{optionModal.name}</div>
+                <div style={{ fontWeight: 700, fontSize: '1.05rem', display: 'flex', alignItems: 'center' }}>
+                  {optionModal.name} {isGiftMode && <span style={{fontSize: '0.75rem', color: '#16a34a', background: '#dcfce7', padding: '2px 6px', borderRadius: 4, marginLeft: 8}}>🎁 Món Tặng</span>}
+                </div>
                 {optionModal.description ? (
                   <div style={{ fontSize: '0.78rem', color: '#ea580c', marginTop: 2, lineHeight: 1.4 }}>{optionModal.description}</div>
                 ) : null}
-                <div style={{ color: '#2563eb', fontWeight: 700, fontSize: '1rem', marginTop: 2 }}>
-                  {computeModalPrice(optionModal.options, selectedOpts).toLocaleString('vi-VN')}đ
+                <div style={{ color: isGiftMode ? '#16a34a' : '#2563eb', fontWeight: 700, fontSize: '1rem', marginTop: 2 }}>
+                  {isGiftMode ? 'Miễn phí — 0đ' : `${computeModalPrice(optionModal.price, optionModal.options, selectedOpts).toLocaleString('vi-VN')}đ`}
                 </div>
               </div>
               <button onClick={() => setOptionModal(null)}><X size={20} /></button>
@@ -1196,13 +1342,13 @@ function OrderContent() {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     {opt.choices.map((choice, ci) => {
                       const p = opt.prices?.[ci];
-                      const displayPrice = p != null ? Number(p) : 0;
-                      const hasCat = !!(opt.choiceCategories?.[ci]);
+                      const hasPrice = p !== null && p !== '';
+                      const displayPrice = hasPrice ? Number(p) : 0;
                       const active = selectedOpts[opt.name] === choice;
                       return (
                         <button key={ci} onClick={() => {
                           setSelectedOpts({ ...selectedOpts, [opt.name]: choice });
-                          if (hasP) setChoicePrice(Number(p));
+                          if (hasPrice) setChoicePrice(Number(p));
                         }} style={{
                           padding: '8px 14px', borderRadius: 100,
                           border: active ? '2px solid #2563eb' : '1.5px solid #e5e7eb',
@@ -1211,7 +1357,7 @@ function OrderContent() {
                           fontWeight: active ? 700 : 500,
                           fontSize: '0.9rem', cursor: 'pointer'
                         }}>
-                          {choice}{hasCat ? <span style={{ fontSize: '0.75rem', marginLeft: 4, color: active ? '#2563eb' : '#9ca3af' }}>{displayPrice.toLocaleString('vi-VN')}đ</span> : null}
+                          {choice}{hasPrice ? <span style={{ fontSize: '0.75rem', marginLeft: 4, color: active ? '#2563eb' : '#9ca3af' }}>{displayPrice.toLocaleString('vi-VN')}đ</span> : null}
                         </button>
                       );
                     })}
@@ -1235,8 +1381,8 @@ function OrderContent() {
               </div>
             </div>
             <div className="co-sheet-footer">
-              <button className="co-btn-submit" onClick={confirmOptionAdd}>
-                Thêm vào giỏ • {(computeModalPrice(optionModal.options, selectedOpts) * optionQty).toLocaleString('vi-VN')}đ
+              <button className="co-btn-submit" onClick={confirmOptionAdd} style={isGiftMode ? { background: '#16a34a' } : {}}>
+                {isGiftMode ? 'Thêm món tặng • 0đ' : `Thêm vào giỏ • ${(computeModalPrice(optionModal.price, optionModal.options, selectedOpts) * optionQty).toLocaleString('vi-VN')}đ`}
               </button>
             </div>
           </div>
@@ -1283,6 +1429,14 @@ function OrderContent() {
                     <div key={idx} className="co-cart-item" style={{ background: '#f0fdf4', borderRadius: 8, padding: '6px 10px', marginBottom: 4 }}>
                       <div className="co-cart-item-info">
                         <strong style={{ color: '#15803d' }}>{g.name}</strong>
+                        {g._options && g._options.length > 0 && (
+                          <span className="co-cart-item-opts" style={{ color: '#16a34a', opacity: 0.9 }}>
+                            {g._options.map(o => o.choice).join(' · ')}
+                          </span>
+                        )}
+                        {g._note && (
+                          <span className="co-cart-item-note" style={{ color: '#15803d', opacity: 0.9 }}>📝 {g._note}</span>
+                        )}
                         <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 700, marginTop: 2, display: 'block' }}>🎁 Miễn phí — 0đ</span>
                       </div>
                       <button onClick={() => setGiftCart(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 4 }}>
@@ -1293,15 +1447,25 @@ function OrderContent() {
                 </div>
               )}
             </div>
-            <div className="co-sheet-footer">
+            <div className="co-sheet-footer" style={{ position: 'relative' }}>
               <div className="co-cart-total">
                 <span>Tổng cộng</span>
                 <strong>{formatPrice(totalAmount)}</strong>
               </div>
+
+              {cart.length > 0 && !submitting && (
+                <div style={{ position: 'absolute', top: '-38px', left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none', zIndex: 10 }}>
+                  <div style={{ background: '#ea580c', color: 'white', padding: '6px 16px', borderRadius: '24px', fontSize: '0.85rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 4px 12px rgba(234, 88, 12, 0.4)', animation: 'bounce-pointer 1.2s infinite' }}>
+                    👇 Nhớ bấm Gửi đơn để bếp làm nhé!
+                  </div>
+                </div>
+              )}
+
               <button
                 className="co-btn-submit"
                 onClick={submitOrder}
                 disabled={submitting}
+                style={{ position: 'relative', zIndex: 1, boxShadow: cart.length > 0 ? '0 4px 15px rgba(37, 99, 235, 0.35)' : 'none', animation: cart.length > 0 ? 'co-gift-pulse 2.5s infinite' : 'none' }}
               >
                 <Send size={18} />
                 {submitting ? 'Đang gửi...' : 'Gửi đơn hàng'}
@@ -1341,7 +1505,7 @@ function OrderContent() {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                           <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                             {oi.quantity}x {oi.menu_item?.name || '—'}
-                            {oi.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>🎁 Tặng</span>}
+                            {oi.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>🎁 Món Tặng</span>}
                           </span>
                           {oi.item_options && oi.item_options.length > 0 && (
                             <span className="co-prev-item-opts">
