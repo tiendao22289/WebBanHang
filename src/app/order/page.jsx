@@ -85,25 +85,33 @@ function OrderContent() {
   }
 
   function saveSession(name, phone, address = '', orderId = null) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      tableId: urlTableId,
-      customerName: name,
-      customerPhone: phone,
-      deliveryAddress: address,
-      orderId,
-      date: getTodayStr(),
-    }));
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        tableId: urlTableId,
+        customerName: name,
+        customerPhone: phone,
+        deliveryAddress: address,
+        orderId,
+        date: getTodayStr(),
+      }));
+    } catch (error) {
+      console.warn('LocalStorage error:', error);
+    }
   }
 
   function clearSession() {
     // Keep name/phone/address for reuse, only clear table-specific data
     const saved = getSavedSession();
     if (saved) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        customerName: saved.customerName,
-        customerPhone: saved.customerPhone,
-        deliveryAddress: saved.deliveryAddress,
-      }));
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          customerName: saved.customerName,
+          customerPhone: saved.customerPhone,
+          deliveryAddress: saved.deliveryAddress,
+        }));
+      } catch (error) {
+        console.warn('LocalStorage error:', error);
+      }
     }
   }
 
@@ -342,12 +350,14 @@ function OrderContent() {
 
     // Different table → update tableId, show modal for new bill
     if (saved?.tableId && saved.tableId !== urlTableId) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        customerName: saved.customerName || '',
-        customerPhone: saved.customerPhone || '',
-        tableId: urlTableId,
-        date: getTodayStr(),
-      }));
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          customerName: saved.customerName || '',
+          customerPhone: saved.customerPhone || '',
+          tableId: urlTableId,
+          date: getTodayStr(),
+        }));
+      } catch (err) {}
       setPreviousOrders([]);
       setShowInfoModal(true);
       return;
