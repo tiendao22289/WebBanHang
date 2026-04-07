@@ -1,4 +1,6 @@
 'use client';
+import { removeVietnameseTones } from '@/lib/utils';
+
 
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
@@ -18,12 +20,15 @@ import {
   Clock,
   List,
   Grid3X3,
+  RotateCcw,
 } from 'lucide-react';
+import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './order.css';
 
 function OrderContent() {
   const searchParams = useSearchParams();
-  const tableId = searchParams.get('table');
+  const urlTableId = searchParams.get('table');
+  const [activeTableId, setActiveTableId] = useState(urlTableId);
 
   const [tableNumber, setTableNumber] = useState(null);
   const [isTakeaway, setIsTakeaway] = useState(false);
@@ -53,8 +58,12 @@ function OrderContent() {
   const [giftItems, setGiftItems] = useState([]); // is_gift_item items
   const [giftCart, setGiftCart] = useState([]); // { id, name, price:0, is_gift:true }
   const [showGiftModal, setShowGiftModal] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showPromoPopup, setShowPromoPopup] = useState(false);
+
   // Option selection modal for items with choices
   const [optionModal, setOptionModal] = useState(null);
+  const [currentOrderId, setCurrentOrderId] = useState(null);
   const [isGiftMode, setIsGiftMode] = useState(false);
   const [selectedOpts, setSelectedOpts] = useState({});
   const [optionQty, setOptionQty] = useState(1);
@@ -77,7 +86,7 @@ function OrderContent() {
 
   function saveSession(name, phone, address = '', orderId = null) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      tableId,
+      tableId: urlTableId,
       customerName: name,
       customerPhone: phone,
       deliveryAddress: address,
@@ -119,9 +128,21 @@ function OrderContent() {
     return () => document.body.classList.remove('modal-open');
   }, [showInfoModal, showCart, showOrdered]);
 
+  // Cập nhật trạng thái đơn/in bill tự động mỗi 3 giây khi khách xem "Món đã gọi"
+  useEffect(() => {
+    if (!showOrdered) return;
+    const interval = setInterval(() => {
+      fetchPreviousOrders();
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [showOrdered, customerPhone]);
+
   // ─── Init: check localStorage session ───
   useEffect(() => {
     initSession();
+    const saved = getSavedSession();
+    if (saved?.orderId) setCurrentOrderId(saved.orderId);
+    
     // Thu thập GPS và kiểm tra khách có ở nhà hàng không
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -162,14 +183,14 @@ function OrderContent() {
 
   // ─── Realtime: detect when admin cancels order or resets table ───
   useEffect(() => {
-    if (!tableId) return;
+    if (!activeTableId) return;
 
     const channel = supabase
-      .channel(`order-page-${tableId}-${Date.now()}`)
+      .channel(`order-page-${activeTableId}-${Date.now()}`)
       // Watch for table status change (admin resets table → available)
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'tables',
-        filter: `id=eq.${tableId}`,
+        filter: `id=eq.${activeTableId}`,
       }, async (payload) => {
         if (payload.new?.status === 'available') {
           // If order handler already flagged as paid, just cleanup — no cancelled banner
@@ -204,10 +225,27 @@ function OrderContent() {
           if (!isPaid) setOrderCancelled(true);
         }
       })
+      // Watch for print_jobs changes — cập nhật trực tiếp state và re-fetch
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'print_jobs' }, (payload) => {
+         const updatedJob = payload.new;
+         // Cập nhật trực tiếp vào previousOrders state (không cần re-fetch)
+         setPreviousOrders(prev => prev.map(order => {
+           const jobs = order.print_jobs || [];
+           const jobIdx = jobs.findIndex(j => j.id === updatedJob.id);
+           if (jobIdx === -1) return order;
+           const newJobs = jobs.map(j => j.id === updatedJob.id ? { ...j, status: updatedJob.status, error_message: updatedJob.error_message } : j);
+           return { ...order, print_jobs: newJobs };
+         }));
+         // Đồng thời re-fetch để đảm bảo dữ liệu chính xác
+         try {
+           const saved = getSavedSession();
+           fetchPreviousOrders(saved?.customerPhone || '');
+         } catch(e) { fetchPreviousOrders(); }
+      })
       // Watch for orders being cancelled or paid at this table
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'orders',
-        filter: `table_id=eq.${tableId}`,
+        filter: `table_id=eq.${activeTableId}`,
       }, (payload) => {
         const savedOrderId = getSavedSession()?.orderId;
         const isMyOrder = savedOrderId && payload.new.id === savedOrderId;
@@ -234,7 +272,7 @@ function OrderContent() {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [tableId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeTableId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (orderCancelled) {
@@ -247,7 +285,7 @@ function OrderContent() {
 
   async function initSession() {
     const isTW = await fetchMenu();
-    if (!tableId) return;
+    if (!activeTableId) return;
 
     const saved = getSavedSession();
 
@@ -264,7 +302,7 @@ function OrderContent() {
         const { data: activeOrders } = await supabase
           .from('orders')
           .select('*, order_items(*, menu_item:menu_items(name, price))')
-          .eq('table_id', tableId)
+          .eq('table_id', activeTableId)
           .eq('customer_phone', savedPhone)
           .eq('kitchen_completed', false)
           .in('status', ['pending', 'preparing'])
@@ -303,11 +341,11 @@ function OrderContent() {
     }
 
     // Different table → update tableId, show modal for new bill
-    if (saved?.tableId && saved.tableId !== tableId) {
+    if (saved?.tableId && saved.tableId !== urlTableId) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         customerName: saved.customerName || '',
         customerPhone: saved.customerPhone || '',
-        tableId,
+        tableId: urlTableId,
         date: getTodayStr(),
       }));
       setPreviousOrders([]);
@@ -327,7 +365,7 @@ function OrderContent() {
     const { data: tableData } = await supabase
       .from('tables')
       .select('status')
-      .eq('id', tableId)
+      .eq('id', activeTableId)
       .single();
 
     if (tableData?.status !== 'occupied') {
@@ -350,7 +388,7 @@ function OrderContent() {
       const startOfDay2 = new Date(now2.getFullYear(), now2.getMonth(), now2.getDate()).toISOString();
       const { data: activeOrds } = await supabase
         .from('orders').select('id')
-        .eq('table_id', tableId).eq('customer_phone', saved.customerPhone)
+        .eq('table_id', activeTableId).eq('customer_phone', saved.customerPhone)
         .gte('created_at', startOfDay2)
         .in('status', ['pending', 'preparing']);
       hasActiveBill = (activeOrds?.length || 0) > 0;
@@ -373,7 +411,7 @@ function OrderContent() {
     const [{ data: cats }, { data: items }, { data: tableData }] = await Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
       supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).order('created_at'),
-      tableId ? supabase.from('tables').select('table_number, status, table_type, table_name').eq('id', tableId).single() : { data: null },
+      activeTableId ? supabase.from('tables').select('table_number, status, table_type, table_name').eq('id', activeTableId).single() : { data: null },
     ]);
     const finalCats = cats || [];
     if (items?.some(i => !i.category_id)) {
@@ -385,6 +423,9 @@ function OrderContent() {
     if (tableData) {
       setTableNumber(isTW ? (tableData.table_name || 'Mang về') : tableData.table_number);
       setIsTakeaway(isTW);
+      if (tableData.merged_with) {
+        setActiveTableId(tableData.merged_with);
+      }
     }
     // Load promotion config
     const { data: settings } = await supabase.from('settings').select('key, value')
@@ -401,62 +442,64 @@ function OrderContent() {
 
   async function fetchPreviousOrders(phone = null) {
     const phoneToUse = (phone || customerPhone || '').trim();
-    if (!tableId) return;
+    if (!activeTableId) return;
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
 
-    // Kiểm tra bản thân có bill đang active (pending/preparing) không
+    // Kiểm tra xem bản thân có đang ở bàn này không (có orderId hoặc phone match)
     const savedOrderId = getSavedSession()?.orderId;
-    let hasMyActiveBill = false;
+    let hasMySession = false;
     if (savedOrderId) {
       const { data: myOrder } = await supabase
         .from('orders').select('status').eq('id', savedOrderId).maybeSingle();
-      hasMyActiveBill = myOrder?.status === 'pending' || myOrder?.status === 'preparing';
+      hasMySession = myOrder?.status === 'pending' || myOrder?.status === 'preparing';
     } else if (phoneToUse) {
-      // Fallback: tìm theo phone nếu chưa có orderId
       const { data: myOrders } = await supabase
         .from('orders').select('id, status')
-        .eq('table_id', tableId).eq('customer_phone', phoneToUse)
+        .eq('table_id', activeTableId).eq('customer_phone', phoneToUse)
         .gte('created_at', startOfDay).lt('created_at', endOfDay)
         .in('status', ['pending', 'preparing']);
-      hasMyActiveBill = (myOrders?.length || 0) > 0;
+      hasMySession = (myOrders?.length || 0) > 0;
     }
 
-    let activeBills = [];
-    if (hasMyActiveBill) {
-      // Có bill đang chờ → xem được tất cả bills đang active ở bàn
-      const { data } = await supabase
+    // Nếu có session tại bàn → lấy TẤT CẢ bills của bàn hôm nay
+    // (kể cả admin order, người khác order, bill đã merge)
+    if (hasMySession) {
+      const { data: allTableBills } = await supabase
         .from('orders')
-        .select(`*, order_items(*, menu_item:menu_items(name, price))`)
-        .eq('table_id', tableId)
+        .select(`*, order_items(*, menu_item:menu_items(name, price)), print_jobs(id, status, error_message)`)
+        .eq('table_id', activeTableId)
         .gte('created_at', startOfDay).lt('created_at', endOfDay)
-        .in('status', ['pending', 'preparing'])
+        .in('status', ['pending', 'preparing', 'merged', 'completed'])
         .order('created_at', { ascending: false });
-      activeBills = data || [];
+
+      setPreviousOrders(allTableBills || []);
+      return;
     }
 
-    // Luôn hiện bill hoàn thành của chính mình (theo phone)
+    // Không còn session active → chỉ hiện của chính mình (bill đã hoàn thành)
     let myFinished = [];
     if (phoneToUse) {
       const { data } = await supabase
         .from('orders')
-        .select(`*, order_items(*, menu_item:menu_items(name, price))`)
-        .eq('table_id', tableId)
+        .select(`*, order_items(*, menu_item:menu_items(name, price)), print_jobs(id, status, error_message)`)
+        .eq('table_id', activeTableId)
         .eq('customer_phone', phoneToUse)
         .gte('created_at', startOfDay).lt('created_at', endOfDay)
-        .in('status', ['completed', 'paid'])
+        .in('status', ['completed', 'paid', 'merged'])
         .order('created_at', { ascending: false });
+      myFinished = data || [];
+    } else if (savedOrderId) {
+      // Fallback: lấy theo savedOrderId
+      const { data } = await supabase
+        .from('orders')
+        .select(`*, order_items(*, menu_item:menu_items(name, price)), print_jobs(id, status, error_message)`)
+        .eq('id', savedOrderId);
       myFinished = data || [];
     }
 
-    // Merge & deduplicate
-    const allIds = new Set();
-    const merged = [];
-    [...activeBills, ...myFinished].forEach(order => {
-      if (!allIds.has(order.id)) { allIds.add(order.id); merged.push(order); }
-    });
-    setPreviousOrders(merged);
+    setPreviousOrders(myFinished);
   }
 
   function reorderBill(order) {
@@ -656,10 +699,10 @@ function OrderContent() {
       const { data: order, error: orderErr } = await supabase
         .from('orders')
         .insert({
-          table_id: tableId,
+          table_id: activeTableId,
           customer_id: customerId,
           customer_name: customerName.trim() || 'Khách ẩn danh',
-          customer_phone: customerPhone.trim() || null,
+          customer_phone: customerPhone.trim() || '',
           status: 'pending',
           total_amount: totalAmount,
           ...(isTakeaway && deliveryAddress.trim() ? { delivery_address: deliveryAddress.trim() } : {}),
@@ -693,7 +736,7 @@ function OrderContent() {
       await supabase
         .from('tables')
         .update({ status: 'occupied', occupied_at: new Date().toISOString() })
-        .eq('id', tableId);
+        .eq('id', activeTableId);
 
       // Gửi lệnh in tự động khi khách đặt món
       await sendPrintJob(supabase, order.id);
@@ -706,6 +749,7 @@ function OrderContent() {
       setTimeout(() => setOrderSuccess(false), 3000);
       // Save orderId to session so realtime can detect if THIS bill gets cancelled
       saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim(), order.id);
+      setCurrentOrderId(order.id);
       fetchPreviousOrders();
     } catch (err) {
       alert('Có lỗi xảy ra. Vui lòng thử lại.');
@@ -777,7 +821,7 @@ function OrderContent() {
   const filteredItems = menuItems.filter(item => {
     const itemCats = getItemCategories(item);
     const matchCategory = activeCategory === 'all' || itemCats.includes(activeCategory);
-    const matchSearch = !searchTerm || item.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchSearch = !searchTerm || removeVietnameseTones(item.name).includes(removeVietnameseTones(searchTerm));
     return matchCategory && matchSearch;
   });
 
@@ -858,7 +902,7 @@ function OrderContent() {
   // Validate UUID format
   const isValidUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 
-  if (!tableId || !isValidUUID(tableId)) {
+  if (!urlTableId || !isValidUUID(urlTableId)) {
     return (
       <div className="co-page">
         <div className="co-error">
@@ -879,11 +923,27 @@ function OrderContent() {
   }
 
   return (
-    <div className="co-page">
+    <>
+      <PrintErrorAlert 
+        customerOrderId={currentOrderId} 
+        customerOrderIds={previousOrders.map(o => o.id)}
+        onRecovered={() => {
+          const saved = getSavedSession();
+          fetchPreviousOrders(saved?.customerPhone || '');
+        }}
+      />
+      <div className="co-page">
       <style>{`
         @keyframes bounce-pointer {
           0%, 100% { transform: translateY(0); }
           50% { transform: translateY(6px); }
+        }
+        @keyframes promo-pop {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.04); }
+        }
+        @keyframes promo-shine {
+          to { background-position: -200% center; }
         }
       `}</style>
       {/* Customer Info Modal */}
@@ -951,6 +1011,7 @@ function OrderContent() {
                   onClick={() => {
                     saveSession('', '', '');
                     setShowInfoModal(false);
+                    setShowPromoPopup(true);
                     fetchPreviousOrders();
                   }}
                 >
@@ -963,6 +1024,7 @@ function OrderContent() {
                   onClick={() => {
                     saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim());
                     setShowInfoModal(false);
+                    setShowPromoPopup(true);
                     fetchPreviousOrders();
                   }}
                 >
@@ -974,34 +1036,85 @@ function OrderContent() {
         </div>
       )}
 
-      {/* ─── Top Header (white, app-style) ─── */}
+      {/* ─── Promo Popup Modal ─── */}
+      {showPromoPopup && (
+        <div className="co-modal-overlay" style={{ zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="co-info-modal" style={{ borderRadius: '24px', padding: '32px 24px', margin: '0 20px', animation: 'coSlideUp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)', maxWidth: '360px', position: 'relative', overflow: 'hidden', background: 'linear-gradient(180deg, #ffffff 0%, #fff7ed 100%)' }} onClick={e => e.stopPropagation()}>
+            {/* Background elements */}
+            <div style={{ position: 'absolute', top: -30, left: -30, fontSize: '6rem', opacity: 0.1, transform: 'rotate(-15deg)' }}>🔥</div>
+            <div style={{ position: 'absolute', bottom: -20, right: -20, fontSize: '5rem', opacity: 0.1, transform: 'rotate(15deg)' }}>🎁</div>
+
+            <div style={{ position: 'relative', zIndex: 2, textAlign: 'center' }}>
+              <div style={{ fontSize: '3.5rem', marginBottom: '8px', animation: 'promo-pop 2s infinite ease-in-out' }}>🎁</div>
+              <h2 style={{ fontSize: '1.8rem', fontWeight: 900, color: '#ea580c', margin: '0 0 16px', lineHeight: 1.2, textTransform: 'uppercase' }}>Tin Vui!</h2>
+              
+              <div style={{
+                fontSize: '1.1rem', color: '#ffffff', fontWeight: 900, margin: '0 auto 24px', padding: '12px 20px',
+                background: 'linear-gradient(90deg, #ef4444, #f59e0b, #ef4444)', backgroundSize: '200% auto',
+                borderRadius: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '100%',
+                animation: 'promo-pop 1.5s infinite ease-in-out, promo-shine 3s linear infinite', 
+                boxShadow: '0 6px 20px rgba(239, 68, 68, 0.4)' 
+              }}>
+                KHUYẾN MÃI 8 MÓN TẶNG 1 MÓN
+              </div>
+
+              <p style={{ color: '#4b5563', fontSize: '0.95rem', fontWeight: 600, lineHeight: 1.5, margin: '0 0 24px' }}>
+                Cứ mỗi 8 món được đặt, bạn sẽ được tự do chọn 1 món quà ngẫu nhiên từ nhà hàng! Chúc bạn dùng bữa ngon miệng nha.
+              </p>
+
+              <button 
+                onClick={() => setShowPromoPopup(false)}
+                style={{ 
+                  width: '100%', padding: '14px', background: '#3b82f6', color: 'white', 
+                  border: 'none', borderRadius: '16px', fontSize: '1.05rem', fontWeight: 800, 
+                  cursor: 'pointer', boxShadow: '0 4px 14px rgba(59, 130, 246, 0.3)',
+                  transition: 'background 0.2s'
+                }}
+              >
+                Đặt món ngay!
+              </button>
+            </div>
+            
+            <button
+               onClick={() => setShowPromoPopup(false)}
+               style={{ position: 'absolute', top: 12, right: 12, width: 32, height: 32, background: 'rgba(0,0,0,0.05)', borderRadius: '50%', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 10 }}
+            >
+              <X size={18} color="#6b7280" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Top Header (compact) ─── */}
       <div className="co-topbar">
         {/* Restaurant name row */}
-        <div className="co-header-bar">
+        <div className="co-header-bar" style={{ padding: '8px 12px 4px', gap: 6 }}>
           <div className="co-header-brand">
-            <span className="co-header-title">Ốc Bảo Khang</span>
-            <span className="co-header-contact">💬 0946.433.417 &nbsp;|&nbsp; 📞 0977.496.781</span>
+            <span className="co-header-title" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '1.2rem' }}>
+              Ốc Bảo Khang
+              <span style={{ fontSize: '0.75rem', background: '#eff6ff', color: '#2563eb', padding: '2px 8px', borderRadius: '12px', fontWeight: '900', border: '1px solid #bfdbfe' }}>
+                {isTakeaway ? 'Mang về' : `Bàn ${tableNumber ?? '...'}`}
+              </span>
+            </span>
+            <span className="co-header-contact" style={{ fontSize: '0.65rem' }}>💬 0946.433.417 &nbsp;|&nbsp; 📞 0977.496.781</span>
           </div>
-          <div className="co-header-actions">
+          <div className="co-header-actions" style={{ gap: 4 }}>
             <button
               className="co-history-btn"
+              style={{ padding: '5px 10px', fontSize: '0.75rem' }}
               onClick={() => { setShowOrdered(true); fetchPreviousOrders(); }}
             >
               📋 Đã gọi
             </button>
-            <button className="co-header-btn" onClick={() => setShowInfoModal(true)}>✕</button>
+            <button className="co-header-btn" style={{ width: 30, height: 30 }} onClick={() => setShowInfoModal(true)}>✕</button>
           </div>
         </div>
 
-        {/* Table subtitle */}
-        <div className="co-table-info">
-          Bạn đang ngồi <strong>{isTakeaway ? 'Mang về' : `Bàn ${tableNumber ?? '...'}`}</strong>
-        </div>
-
         {/* Filter row: category dropdown + search */}
-        <div className="co-filter-row">
+        <div className="co-filter-row" style={{ padding: '4px 12px 8px', gap: 6 }}>
           <select
             className="co-cat-dropdown"
+            style={{ padding: '7px 10px', fontSize: '0.8rem' }}
             value={activeCategory}
             onChange={e => handleCatClick(e.target.value)}
           >
@@ -1010,10 +1123,11 @@ function OrderContent() {
               <option key={cat.id} value={cat.id}>{cat.name}</option>
             ))}
           </select>
-          <div className="co-search-box">
-            <Search size={15} />
+          <div className="co-search-box" style={{ padding: '7px 10px' }}>
+            <Search size={14} />
             <input
               placeholder="Tìm món"
+              style={{ fontSize: '0.8rem' }}
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
             />
@@ -1028,18 +1142,6 @@ function OrderContent() {
 
       {/* ─── Menu Content ─── */}
       <div className="co-content">
-        {/* View toggle — right aligned */}
-        <div className="co-content-header">
-          <div className="co-view-toggle">
-            <button className={viewMode === 'list' ? 'active' : ''} onClick={() => setViewMode('list')}>
-              <List size={16} />
-            </button>
-            <button className={viewMode === 'grid' ? 'active' : ''} onClick={() => setViewMode('grid')}>
-              <Grid3X3 size={16} />
-            </button>
-          </div>
-        </div>
-
         {/* Menu Items */}
         {groupedItems.map(({ catId, catName, items }) => (
           <div
@@ -1146,29 +1248,40 @@ function OrderContent() {
 
       {/* ─── Promotion Progress Bar ─── */}
       {promoConfig.enabled && totalItems > 0 && (
-        <div style={{ position: 'fixed', bottom: totalItems > 0 ? 76 : 16, left: 0, right: 0, zIndex: 49, padding: '0 16px', pointerEvents: 'none' }}>
+        <div style={{ position: 'fixed', bottom: totalItems > 0 ? 76 : 16, left: 0, right: 0, zIndex: 49, padding: '0 16px', pointerEvents: 'none', transition: 'bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1)' }}>
           {giftCount === 0 ? (
-            <div style={{ background: 'white', border: '1.5px solid #fde68a', borderRadius: 14, padding: '10px 16px', boxShadow: '0 4px 16px rgba(0,0,0,0.12)', pointerEvents: 'all' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 700, color: '#92400e', marginBottom: 6 }}>
-                <span>🎯 Tích {qualifyingQty}/{promoConfig.threshold} món</span>
-                <span>Còn {promoConfig.threshold - qualifyingQty} món nữa để nhận quà 🎁</span>
+            <div style={{ background: 'rgba(255, 255, 255, 0.95)', backdropFilter: 'blur(10px)', border: '1px solid #fde68a', borderRadius: 20, padding: '14px 18px', boxShadow: '0 8px 32px rgba(245, 158, 11, 0.15)', pointerEvents: 'all' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 700, color: '#b45309', marginBottom: 10 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ background: '#fef3c7', padding: '2px 6px', borderRadius: 6, fontSize: '0.8rem' }}>🚀</span>
+                  Đã chọn {qualifyingQty}/{promoConfig.threshold} món
+                </span>
+                <span>Thêm {promoConfig.threshold - qualifyingQty} món để nhận quà 🎁</span>
               </div>
-              <div style={{ height: 8, background: '#fef3c7', borderRadius: 4, overflow: 'hidden' }}>
-                <div style={{ width: `${Math.min((qualifyingQty / promoConfig.threshold) * 100, 100)}%`, height: '100%', background: 'linear-gradient(90deg,#f59e0b,#d97706)', borderRadius: 4, transition: 'width 0.4s ease-out' }} />
+              <div style={{ height: 10, background: '#fef3c7', borderRadius: 6, overflow: 'hidden', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.05)' }}>
+                <div style={{ width: `${Math.min((qualifyingQty / promoConfig.threshold) * 100, 100)}%`, height: '100%', background: 'linear-gradient(90deg, #f59e0b, #ea580c)', borderRadius: 6, transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }} />
               </div>
             </div>
           ) : (
-            <div style={{ background: 'linear-gradient(135deg, #dcfce7, #bbf7d0)', border: '2px solid #4ade80', borderRadius: 16, padding: '14px 18px', boxShadow: '0 6px 20px rgba(22, 163, 74, 0.25)', pointerEvents: 'all', display: 'flex', alignItems: 'center', justifyContent: 'space-between', transform: 'translateY(-2px)' }}>
-              <span style={{ fontSize: '1.05rem', fontWeight: 800, color: '#166534', display: 'flex', alignItems: 'center', gap: 6 }}>
-                🎉 Được tặng {giftCount} món! 
-                {usedGiftSlots > 0 && <span style={{fontSize: '0.8rem', fontWeight: 600, color: '#15803d', opacity: 0.9}}>({usedGiftSlots}/{giftCount})</span>}
-              </span>
+            <div style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)', border: '1px solid #334155', borderRadius: 24, padding: '12px 14px 12px 18px', boxShadow: '0 12px 32px rgba(0, 0, 0, 0.3)', pointerEvents: 'all', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ background: 'linear-gradient(135deg, #f59e0b, #ea580c)', borderRadius: '50%', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.25rem', boxShadow: '0 4px 12px rgba(234, 88, 12, 0.4)', flexShrink: 0 }}>
+                  🎁
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span style={{ fontSize: '1rem', fontWeight: 800, color: '#f8fafc', letterSpacing: '0.2px' }}>Quà tặng mở khóa!</span>
+                  <span style={{ fontSize: '0.78rem', fontWeight: 500, color: '#94a3b8' }}>
+                    Được chọn {giftCount} món
+                    {usedGiftSlots > 0 && <span style={{ color: '#f59e0b', marginLeft: 4 }}>({usedGiftSlots}/{giftCount})</span>}
+                  </span>
+                </div>
+              </div>
               {availableGiftSlots > 0 && (
                 <button 
                   onClick={() => setShowGiftModal(true)} 
-                  style={{ pointerEvents: 'all', background: '#16a34a', color: 'white', border: 'none', borderRadius: 10, padding: '8px 16px', fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer', boxShadow: '0 2px 8px rgba(22,163,74,0.4)', display: 'flex', alignItems: 'center', gap: 6, animation: 'co-gift-pulse 2s infinite' }}
+                  style={{ flexShrink: 0, pointerEvents: 'all', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: '1px solid #34d399', borderRadius: 20, padding: '8px 16px', fontWeight: 800, fontSize: '0.85rem', cursor: 'pointer', boxShadow: '0 4px 14px rgba(16,185,129,0.4)', textTransform: 'uppercase', letterSpacing: '0.5px', animation: 'co-gift-pulse 2s infinite' }}
                 >
-                  🎁 Chọn quà ({availableGiftSlots})
+                  Chọn Quà ({availableGiftSlots})
                 </button>
               )}
             </div>
@@ -1177,20 +1290,120 @@ function OrderContent() {
       )}
 
       {/* ─── Cart FAB ─── */}
+      <style>{`
+        @keyframes co-cart-shimmer {
+          0% { left: -100%; opacity: 0; }
+          15% { opacity: 0.8; }
+          30% { left: 100%; opacity: 0; }
+          100% { left: 100%; opacity: 0; }
+        }
+        @keyframes co-cart-attention {
+          0%, 100% { transform: translateY(0) rotate(0); }
+          5% { transform: translateY(-5px) rotate(-8deg); }
+          10% { transform: translateY(0) rotate(6deg); }
+          15% { transform: translateY(-2px) rotate(-4deg); }
+          20% { transform: translateY(0) rotate(0); }
+        }
+      `}</style>
+      
+      {/* ─── Cart FAB (Split Design) ─── */}
       {totalItems > 0 && (
-        <div className="co-cart-fab" onClick={() => setShowCart(true)} style={{ animation: !showCart ? 'co-gift-pulse 2.5s infinite' : 'none' }}>
-          {!showCart && (
-            <div style={{ position: 'absolute', top: '-46px', left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
-              <div style={{ background: '#ea580c', color: 'white', padding: '6px 16px', borderRadius: '24px', fontSize: '0.85rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 4px 12px rgba(234, 88, 12, 0.4)', animation: 'bounce-pointer 1.2s infinite', whiteSpace: 'nowrap' }}>
-                👇 Mở Giỏ Hàng để Gửi món nhé!
+        <div style={{ 
+          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 90, 
+          maxWidth: 500, margin: '0 auto', 
+          padding: '12px 16px', paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))',
+          display: 'flex', gap: 12, pointerEvents: 'none', alignItems: 'stretch'
+        }}>
+          {/* Nút Chọn Lại */}
+          <button 
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowResetConfirm(true);
+            }}
+            style={{ 
+              pointerEvents: 'auto', flexShrink: 0,
+              background: 'white', color: '#ef4444', 
+              border: '2px solid #ef4444', borderRadius: '16px', 
+              padding: '0 14px',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, 
+              cursor: 'pointer', boxShadow: '0 4px 14px rgba(239, 68, 68, 0.15)', transition: 'transform 0.1s'
+            }}
+          >
+            <RotateCcw size={18} strokeWidth={2.5} />
+            <span style={{ fontSize: '0.7rem', fontWeight: 900 }}>CHỌN LẠI</span>
+          </button>
+
+          {/* Nút Giỏ Hàng */}
+          <button 
+            onClick={() => setShowCart(true)}
+            style={{ 
+              pointerEvents: 'auto', flex: 1, minWidth: 0,
+              background: !showCart ? 'linear-gradient(135deg, #3b82f6, #2563eb)' : '#2563eb',
+              boxShadow: !showCart ? '0 6px 20px rgba(37, 99, 235, 0.45)' : '0 4px 14px rgba(37, 99, 235, 0.3)',
+              overflow: 'hidden', position: 'relative',
+              borderRadius: '16px', border: 'none', color: 'white', padding: '12px 16px',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, cursor: 'pointer'
+            }}
+          >
+            {!showCart && (
+              <div style={{
+                position: 'absolute', top: 0, left: 0, width: '60%', height: '100%',
+                background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent)',
+                transform: 'skewX(-20deg)', animation: 'co-cart-shimmer 3s infinite', pointerEvents: 'none'
+              }} />
+            )}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, position: 'relative', zIndex: 2, minWidth: 0 }}>
+              <div style={{ position: 'relative', animation: !showCart ? 'co-cart-attention 3s infinite 0.2s' : 'none' }}>
+                <ShoppingBag size={24} style={{ flexShrink: 0 }} />
+                {!showCart && <span style={{ position: 'absolute', top: -4, right: -4, width: 10, height: 10, background: '#fef3c7', borderRadius: '50%', boxShadow: '0 0 0 2px #2563eb' }} />}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
+                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '0.95rem', fontWeight: 800 }}>
+                  {(!showCart && (totalItems + giftCart.length) > 0) ? 'BẤM ĐỂ GỬI MÓN!' : 'Giỏ hàng'}
+                </span>
+                {!showCart && <span style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.9 }}>{totalItems + giftCart.length} món • Gửi ngay</span>}
               </div>
             </div>
-          )}
-          <ShoppingBag size={20} />
-          <span>Giỏ hàng • {totalItems + giftCart.length} món{giftCart.length > 0 && ` (${giftCart.length} 🎁)`}</span>
-          <strong>{formatPrice(totalAmount)}</strong>
+            
+            <strong style={{ position: 'relative', zIndex: 2, fontSize: '1.05rem', fontWeight: 900, flexShrink: 0 }}>{formatPrice(totalAmount)}</strong>
+          </button>
         </div>
       )}
+
+      {/* ─── Reset Confirm Modal ─── */}
+      {showResetConfirm && (
+        <div className="co-modal-overlay" onClick={() => setShowResetConfirm(false)} style={{ zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="co-info-modal" style={{ borderRadius: '24px', padding: '24px', margin: '0 20px', animation: 'coSlideUp 0.3s ease', maxWidth: '340px' }} onClick={e => e.stopPropagation()}>
+            <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: '#fee2e2', color: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                <RotateCcw size={32} strokeWidth={2.5} />
+              </div>
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 900, color: '#111827', margin: '0 0 8px' }}>Chọn lại từ đầu?</h3>
+              <p style={{ color: '#6b7280', fontSize: '0.9rem', fontWeight: 600, lineHeight: 1.5, margin: 0 }}>Toàn bộ món ăn và quà tặng đã chọn sẽ bị xóa. Bạn có chắc chắn muốn bắt đầu lại?</p>
+            </div>
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button 
+                onClick={() => setShowResetConfirm(false)}
+                style={{ flex: 1, padding: '14px', background: '#f3f4f6', color: '#4b5563', border: 'none', borderRadius: '16px', fontSize: '0.95rem', fontWeight: 800, cursor: 'pointer' }}
+              >
+                Giữ lại
+              </button>
+              <button 
+                onClick={() => {
+                  setCart([]);
+                  setGiftCart([]);
+                  setShowResetConfirm(false);
+                }}
+                style={{ flex: 1, padding: '14px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '16px', fontSize: '0.95rem', fontWeight: 800, cursor: 'pointer', boxShadow: '0 4px 12px rgba(239, 68, 68, 0.3)' }}
+              >
+                Đồng ý xóa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {/* ─── Gift Item Modal ─── */}
       {showGiftModal && (
@@ -1492,13 +1705,47 @@ function OrderContent() {
                       <div className="co-prev-time">
                         <Clock size={14} />
                         {new Date(order.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
-                        {order.customer_name && <span className="co-prev-name">• {order.customer_name}</span>}
+                        <span className="co-prev-name">
+                          • {order.customer_name || 'Admin'}
+                          {order.status === 'merged' && <span style={{ fontSize: '0.65rem', background: '#ede9fe', color: '#7c3aed', borderRadius: 4, padding: '0 4px', marginLeft: 4, fontWeight: 700 }}>Đã gộp</span>}
+                        </span>
                       </div>
-                      <span className={`co-status co-status-${order.status}`}>
-                        {order.status === 'pending' ? 'Chờ xác nhận' :
-                         order.status === 'preparing' ? 'Đang làm' :
-                         order.status === 'completed' ? 'Hoàn thành' : 'Đã thanh toán'}
-                      </span>
+                      {(() => {
+                        let text = "";
+                        let statusClass = `co-status-${order.status}`;
+                        let customStyle = {};
+
+                        if (order.status === 'pending') {
+                          const pJobs = order.print_jobs || [];
+                          const failed = pJobs.find(j => j.status === 'failed');
+                          const done = pJobs.find(j => j.status === 'done');
+                          
+                          if (failed) {
+                            text = "Bếp chưa nhận Bill! Gọi NV duyệt";
+                            statusClass = "co-status-failed";
+                            customStyle = { background: '#fef2f2', color: '#b91c1c', border: '1px solid #fca5a5' };
+                          } else if (done) {
+                            text = "Bếp đã nhận Bill";
+                            statusClass = "co-status-preparing";
+                            customStyle = { background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0' };
+                          } else {
+                            text = "Đang gửi bill vào bếp...";
+                            statusClass = "co-status-pending";
+                          }
+                        } else if (order.status === 'merged') {
+                          text = 'Đã gộp vào bill chính';
+                          customStyle = { background: '#f5f3ff', color: '#7c3aed', border: '1px solid #c4b5fd' };
+                        } else {
+                          text = order.status === 'preparing' ? 'Đang làm' :
+                                 order.status === 'completed' ? 'Hoàn thành' : 'Đã thanh toán';
+                        }
+                        
+                        return (
+                          <span className={`co-status ${statusClass}`} style={customStyle}>
+                            {text}
+                          </span>
+                        );
+                      })()}
                     </div>
                     {order.order_items?.map(oi => (
                       <div key={oi.id} className="co-prev-item">
@@ -1544,6 +1791,7 @@ function OrderContent() {
         </div>
       )}
     </div>
+    </>
   );
 }
 

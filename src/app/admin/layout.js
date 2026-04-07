@@ -16,6 +16,7 @@ import {
   Lock,
   Settings,
 } from 'lucide-react';
+import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './admin.css';
 
 const supabase = createClient(
@@ -227,6 +228,7 @@ export default function AdminLayout({ children }) {
       <main className="admin-main">
         {children}
       </main>
+      <PrintErrorAlert isAdmin={true} />
     </div>
   );
 }

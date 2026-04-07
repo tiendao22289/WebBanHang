@@ -1,4 +1,6 @@
 'use client';
+import { removeVietnameseTones } from '@/lib/utils';
+
 
 import { useState, useEffect } from 'react';
 import Image from 'next/image';
@@ -315,8 +317,8 @@ export default function MenuPage() {
     const itemCats = getItemCategories(i);
     if (activeCategory !== null && !itemCats.includes(activeCategory)) return false;
     if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase();
-      return i.name?.toLowerCase().includes(q) || i.description?.toLowerCase().includes(q);
+      const q = removeVietnameseTones(searchQuery);
+      return removeVietnameseTones(i.name).includes(q) || removeVietnameseTones(i.description).includes(q);
     }
     return true;
   });

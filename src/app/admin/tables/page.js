@@ -1,4 +1,6 @@
 'use client';
+import { removeVietnameseTones } from '@/lib/utils';
+
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Image from 'next/image';
@@ -136,9 +138,24 @@ export default function TablesPage() {
   // ─── Gửi lệnh in tới PrintAgent — gộp orders của bàn → 1 phiếu → máy mặc định ───
   const handlePrintInvoice = async () => {
     if (!selectedTable) return;
-    const tableOrders = (orders[selectedTable.id] || [])
+    const tableOrders = (orders[selectedTable.merged_with || selectedTable.id] || [])
       .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
     if (tableOrders.length === 0) { alert('Không có đơn hàng để in!'); return; }
+
+    const total = tableOrders.reduce((s, o) => s + (o.total_amount || 0), 0);
+    const { isConfirmed } = await Swal.fire({
+      title: '🖨️ In hoá đơn?',
+      html: `In hoá đơn bàn <b>${selectedTable.table_number}</b>?<br/><span style="color:#c53b3b;font-weight:700;font-size:1.05rem">Tổng: ${new Intl.NumberFormat('vi-VN').format(total)}đ</span>`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonColor: '#2563eb',
+      cancelButtonColor: '#6b7280',
+      confirmButtonText: '🖨️ In ngay',
+      cancelButtonText: 'Huỷ',
+      reverseButtons: true,
+    });
+    if (!isConfirmed) return;
+
     setPrintToast('sending');
     const orderIds = tableOrders.map(o => o.id);
     const { success, error } = await sendTableSummaryPrintJob(supabase, orderIds);
@@ -150,9 +167,24 @@ export default function TablesPage() {
   // ─── In phiếu tạm tính — cùng logic (gộp + máy mặc định) ──────────────────
   const handlePrintTempBill = async () => {
     if (!selectedTable) return;
-    const tableOrders = (orders[selectedTable.id] || [])
+    const tableOrders = (orders[selectedTable.merged_with || selectedTable.id] || [])
       .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
     if (tableOrders.length === 0) { alert('Không có đơn hàng để in!'); return; }
+
+    const total = tableOrders.reduce((s, o) => s + (o.total_amount || 0), 0);
+    const { isConfirmed } = await Swal.fire({
+      title: '🧾 In tạm tính?',
+      html: `In phiếu tạm tính bàn <b>${selectedTable.table_number}</b>?<br/><span style="color:#c53b3b;font-weight:700;font-size:1.05rem">Tổng tạm: ${new Intl.NumberFormat('vi-VN').format(total)}đ</span>`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonColor: '#2563eb',
+      cancelButtonColor: '#6b7280',
+      confirmButtonText: '🖨️ In ngay',
+      cancelButtonText: 'Huỷ',
+      reverseButtons: true,
+    });
+    if (!isConfirmed) return;
+
     setPrintToast('sending');
     const orderIds = tableOrders.map(o => o.id);
     const { success, error } = await sendTableSummaryPrintJob(supabase, orderIds);
@@ -182,7 +214,8 @@ export default function TablesPage() {
               order_items (
                 *,
                 menu_item:menu_items (name, price, image_url)
-              )
+              ),
+              print_jobs (id, status)
             `)
             .in('table_id', allTableIds)
             .in('status', ['pending', 'preparing'])
@@ -480,8 +513,35 @@ export default function TablesPage() {
     fetchTables();
   }
 
-  async function updateOrderItemOptions(orderId, itemId, newOptions, note) {
-    await supabase.from('order_items').update({ item_options: newOptions, note: note || '' }).eq('id', itemId);
+  async function updateOrderItemOptions(orderId, itemId, newOptions, note, newPrice = null, newQty = null) {
+    const updatePayload = { item_options: newOptions, note: note || '' };
+    // Cập nhật giá nếu có
+    if (newPrice != null && newPrice > 0) {
+      updatePayload.unit_price = newPrice;
+    }
+    // Cập nhật số lượng nếu có thay đổi
+    if (newQty != null && newQty > 0) {
+      updatePayload.quantity = newQty;
+    }
+    await supabase.from('order_items').update(updatePayload).eq('id', itemId);
+
+    // Tính lại tổng tiền — query sau khi update để lấy giá trị mới nhất
+    const { data: allItems } = await supabase
+      .from('order_items').select('id, unit_price, quantity').eq('order_id', orderId);
+
+    // Nếu DB chưa reflect kịp, tự override item vừa update trong mảng
+    const finalItems = (allItems || []).map(i => {
+      if (i.id === itemId) {
+        return {
+          unit_price: newPrice != null && newPrice > 0 ? newPrice : i.unit_price,
+          quantity: newQty != null && newQty > 0 ? newQty : i.quantity,
+        };
+      }
+      return i;
+    });
+    const newTotal = finalItems.reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+
     setEditingOrderItem(null);
     setOptionModalItem(null);
     setSelectedOptions({});
@@ -490,8 +550,8 @@ export default function TablesPage() {
   }
 
   const decreaseItemFromMenu = async (menuItemId) => {
-    const activeOrder = selectedTable && orders[selectedTable.id] 
-      ? (orders[selectedTable.id].find(o => o.customer_name === 'Admin') || orders[selectedTable.id][0])
+    const activeOrder = selectedTable && orders[selectedTable.merged_with || selectedTable.id] 
+      ? (orders[selectedTable.merged_with || selectedTable.id].find(o => o.customer_name === 'Admin') || orders[selectedTable.merged_with || selectedTable.id][0])
       : null;
       
     if (!activeOrder) return;
@@ -534,7 +594,7 @@ export default function TablesPage() {
       const { data: adminOrder } = await supabase
         .from('orders')
         .select('id')
-        .eq('table_id', selectedTable.id)
+        .eq('table_id', selectedTable.merged_with || selectedTable.id)
         .eq('customer_name', 'Admin')
         .in('status', ['pending', 'preparing', 'completed'])
         .maybeSingle();
@@ -545,7 +605,7 @@ export default function TablesPage() {
         const { data: newOrder, error } = await supabase
           .from('orders')
           .insert({
-            table_id: selectedTable.id,
+            table_id: selectedTable.merged_with || selectedTable.id,
             customer_name: 'Admin',
             customer_phone: 'Quản lý',
             status: 'pending',
@@ -629,64 +689,187 @@ export default function TablesPage() {
     const itemWithPrice = customPrice != null
       ? { ...optionModalItem, price: customPrice }
       : optionModalItem;
+    // Lưu customPrice trước khi clear state
+    const finalPrice = customPrice;
     setEditingPrice(false);
     setCustomPrice(null);
 
     if (editingOrderItem) {
-      // UPDATE existing order item's options
-      updateOrderItemOptions(editingOrderItem.orderId, editingOrderItem.itemId, optionsData, optionNote);
+      // UPDATE existing order item's options — cập nhật cả giá và số lượng
+      updateOrderItemOptions(editingOrderItem.orderId, editingOrderItem.itemId, optionsData, optionNote, finalPrice, optionQuantity);
     } else {
       addItemToOrder('admin', itemWithPrice, optionsData, optionQuantity, optionNote);
     }
   }
 
-  async function mergeBills() {
+  async function handleMergeTable() {
     if (!selectedTable) return;
-    const tableBills = orders[selectedTable.id] || [];
-    if (tableBills.length <= 1) {
-      alert('Không có đủ bill để gộp!');
+    
+    // Tìm các bàn khác để gộp vào
+    const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
+    
+    if (otherTables.length === 0) {
+      Swal.fire('Thoát', 'Không có bàn nào khác để gộp!', 'info');
       return;
     }
 
-    if (!confirm(`Bạn có chắc muốn gộp ${tableBills.length} bill của bàn ${selectedTable.table_number} thành 1 bill duy nhất?`)) return;
+    const inputOptions = {};
+    otherTables.forEach(t => {
+      inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Đang có khách)' : '(Trống)'}`;
+    });
+
+    const { value: targetTableId } = await Swal.fire({
+      title: 'Gộp bàn',
+      input: 'select',
+      inputOptions,
+      inputPlaceholder: 'Chọn bàn muốn chuyển tất cả bill tới',
+      showCancelButton: true,
+      confirmButtonColor: '#9333ea',
+      cancelButtonColor: '#6b7280',
+      confirmButtonText: 'Gộp chung',
+      cancelButtonText: 'Huỷ',
+      reverseButtons: true,
+      inputValidator: (value) => {
+        if (!value) return 'Vui lòng chọn một bàn!';
+      }
+    });
+
+    if (targetTableId) {
+      // Get all current orders of this table
+      const currentOrders = orders[selectedTable.merged_with || selectedTable.id] || [];
+      if (currentOrders.length === 0) {
+         Swal.fire('Lỗi', 'Bàn này đang không có bill nào', 'error');
+         return;
+      }
+      
+      const orderIds = currentOrders.map(o => o.id);
+      
+      // Update table_id of all these orders to targetTableId
+      const { error } = await supabase
+        .from('orders')
+        .update({ table_id: targetTableId })
+        .in('id', orderIds);
+        
+      if (error) {
+        Swal.fire('Lỗi', error.message, 'error');
+        return;
+      }
+      
+      // Mark the target table as occupied
+      await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
+
+      // The current table becomes available
+      await supabase.from('tables').update({ status: 'available', occupied_at: null }).eq('id', selectedTable.id);
+      
+      fetchTables();
+      setSelectedTable(null); // Đóng modal
+      
+      Swal.fire({
+        title: 'Thành công',
+        text: 'Đã gộp tất cả bill sang bàn mới!',
+        icon: 'success',
+        toast: true,
+        position: 'top-end',
+        showConfirmButton: false,
+        timer: 2000
+      });
+    }
+  }
+
+  async function mergeBills() {
+    if (!selectedTable) return;
+    const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
+    if (tableBills.length <= 1) {
+      Swal.fire('Lỗi', 'Không có đủ bill để gộp!', 'error');
+      return;
+    }
+
+    const { isConfirmed } = await Swal.fire({
+      title: 'Gộp bill?',
+      html: `Bạn có chắc muốn gộp <b>${tableBills.length} bill</b> của bàn <b>${selectedTable.table_number}</b> thành 1 bill duy nhất?`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonColor: '#7c3aed',
+      cancelButtonColor: '#6b7280',
+      confirmButtonText: 'Gộp ngay',
+      cancelButtonText: 'Huỷ',
+      reverseButtons: true
+    });
+
+    if (!isConfirmed) return;
 
     // Use the oldest bill as the main one
     const sortedBills = [...tableBills].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     const mainBill = sortedBills[0];
-    const otherBills = sortedBills.slice(1);
-    const otherIds = otherBills.map(b => b.id);
+    const allBillIds = sortedBills.map(b => b.id);
+    const otherIds = allBillIds.filter(id => id !== mainBill.id);
 
-    // 1. Move all items to the main bill
-    // We update order_id for all items in the other bills
-    const { error: moveError } = await supabase
+    // Fetch all items from all bills
+    const { data: allItems, error: fetchErr } = await supabase
       .from('order_items')
-      .update({ order_id: mainBill.id })
-      .in('order_id', otherIds);
+      .select('*')
+      .in('order_id', allBillIds);
 
-    if (moveError) {
-      alert('Lỗi khi chuyển món ăn: ' + moveError.message);
+    if (fetchErr) {
+      Swal.fire('Lỗi', 'Lỗi khi lấy dữ liệu món ăn: ' + fetchErr.message, 'error');
       return;
     }
 
-    // 2. Delete the empty orders
-    await supabase.from('orders').delete().in('id', otherIds);
+    // Group items
+    const groupedMap = {};
+    allItems.forEach(item => {
+      // Create a unique key based on menu_item_id, options, unit_price and note
+      const optsString = item.item_options ? JSON.stringify(item.item_options) : '[]';
+      const key = `${item.menu_item_id}_${item.unit_price}_${optsString}_${item.note || ''}`;
+      
+      if (!groupedMap[key]) {
+        groupedMap[key] = {
+          order_id: mainBill.id,
+          menu_item_id: item.menu_item_id,
+          quantity: 0,
+          unit_price: item.unit_price,
+          item_options: item.item_options,
+          note: item.note,
+          is_gift: item.is_gift
+        };
+      }
+      groupedMap[key].quantity += item.quantity;
+    });
 
-    // 3. Recalculate main bill total
-    const { data: allItems } = await supabase
-      .from('order_items')
-      .select('unit_price, quantity')
-      .eq('order_id', mainBill.id);
+    const newItems = Object.values(groupedMap);
     
-    // Group items of same ID if needed? 
-    // Actually, SQL allows multiple rows of same menu_item_id. 
-    // For simplicity, we just recalculate total. 
-    // Optional: Merge duplicate item rows? -> For now just update total.
+    // Calculate new total
+    const newTotal = newItems.reduce((s, i) => s + i.unit_price * i.quantity, 0);
+
+    // Delete all existing items from all these bills
+    await supabase.from('order_items').delete().in('order_id', allBillIds);
     
-    const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    // Insert grouped items into main bill
+    if (newItems.length > 0) {
+      await supabase.from('order_items').insert(newItems);
+    }
+
+    // Thay vì xóa, đánh dấu các bill phụ là 'merged' để giữ lịch sử cho khách
+    // và ghi nhận merged_into để biết chúng đã được gộp vào bill nào
+    if (otherIds.length > 0) {
+      await supabase.from('orders')
+        .update({ status: 'merged', merged_into: mainBill.id })
+        .in('id', otherIds);
+    }
+
+    // Update main bill total
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', mainBill.id);
 
     fetchTables();
-    alert('Đã gộp đơn thành công!');
+    Swal.fire({
+      title: 'Thành công',
+      text: 'Đã gộp đơn và dồn các món giống nhau!',
+      icon: 'success',
+      toast: true,
+      position: 'top-end',
+      showConfirmButton: false,
+      timer: 2000
+    });
   }
 
   function formatPrice(price) {
@@ -703,7 +886,7 @@ export default function TablesPage() {
   // Get the table object for printing invoice
   function getSelectedTableOrders() {
     if (!selectedTable) return [];
-    return orders[selectedTable.id] || [];
+    return orders[selectedTable.merged_with || selectedTable.id] || [];
   }
 
   const availableCount = tables.filter(t => t.status === 'available' && t.table_type !== 'takeaway').length;
@@ -760,10 +943,11 @@ export default function TablesPage() {
         });
 
         const tableCard = (table, compact = false) => {
-          const tableBills = orders[table.id] || [];
+          const tableBills = orders[table.merged_with || table.id] || [];
           const isOccupied = table.status === 'occupied';
           const totalAmount = tableBills.reduce((s, o) => s + (o.total_amount || 0), 0);
           const guestCount = tableBills.length;
+          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => pj.status === 'failed'));
           let timeElapsed = '';
           if (isOccupied && table.occupied_at) {
             const diffMs = Date.now() - new Date(table.occupied_at).getTime();
@@ -787,8 +971,15 @@ export default function TablesPage() {
                 position: 'relative', transition: 'transform 0.1s, box-shadow 0.1s',
               }}
             >
-              <div style={{ fontSize: compact ? '1rem' : '1.2rem', fontWeight: 800, color: isOccupied ? '#1d4ed8' : '#1f2937' }}>
-                B{table.table_number}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ fontSize: compact ? '1rem' : '1.2rem', fontWeight: 800, color: isOccupied ? '#1d4ed8' : '#1f2937' }}>
+                  B{table.table_number}
+                </div>
+                {hasPrintError && (
+                  <div style={{ background: '#fef2f2', color: '#dc2626', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #fecaca' }}>
+                    <Printer size={14} strokeWidth={2} />
+                  </div>
+                )}
               </div>
               {isOccupied ? (
                 <div style={{ marginTop: 6 }}>
@@ -879,7 +1070,7 @@ export default function TablesPage() {
               <p style={{ fontSize: '0.9rem' }}>Chọn bàn để xem đơn hàng</p>
             </div>
           );
-          const tableBills = orders[selectedTable.id] || [];
+          const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
           // ── Collect ALL items from ALL orders (same as mobile) ──
           const allOrderItems = tableBills.flatMap(order =>
             (order.order_items || []).map(item => ({ ...item, _orderId: order.id }))
@@ -997,6 +1188,17 @@ export default function TablesPage() {
                 <span style={{ fontSize: '0.85rem', color: '#374151' }}>Tổng tiền đ:</span>
                 <span style={{ fontSize: '1rem', fontWeight: 800, color: '#1d4ed8' }}>{totalAmount.toLocaleString('vi-VN')}</span>
               </div>
+              
+              {/* Nút Gộp Bill Desktop */}
+              {tableBills.length > 1 && (
+                <div style={{ padding: '8px 12px', borderTop: '1px solid #e5e7eb', background: '#f8fafc', flexShrink: 0 }}>
+                  <button
+                    onClick={mergeBills}
+                    style={{ flex: 1, width: '100%', padding: '10px', border: '1.5px dashed #8b5cf6', borderRadius: 8, background: '#f5f3ff', color: '#7c3aed', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                    🔗 Gộp tất cả {tableBills.length} bill lại thành 1
+                  </button>
+                </div>
+              )}
               {/* Action buttons */}
               <div style={{ display: 'flex', gap: 8, padding: '10px 12px', borderTop: '1px solid #e5e7eb', background: 'white', flexShrink: 0 }}>
                 <button style={{ flex: 1, padding: '10px', border: '1.5px solid #2563eb', borderRadius: 8, background: 'white', color: '#2563eb', fontWeight: 600, cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
@@ -1004,6 +1206,12 @@ export default function TablesPage() {
                 </button>
                 <button onClick={handlePrintInvoice} style={{ flex: 1, padding: '10px', border: '1.5px solid #e5e7eb', borderRadius: 8, background: 'white', color: '#374151', fontWeight: 600, cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
                   📄 In tạm tính
+                </button>
+                <button
+                  onClick={handleMergeTable}
+                  title="Chuyển tất cả bill sang bàn khác"
+                  style={{ flex: 1, padding: '10px', border: '1.5px solid #d8b4fe', borderRadius: 8, background: '#fdf4ff', color: '#9333ea', fontWeight: 700, cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                  <Users size={16} strokeWidth={2} /> Gộp bàn
                 </button>
                 {/* Huỷ đơn — same as mobile, triggers cancelConfirm modal */}
                 <button
@@ -1206,14 +1414,21 @@ export default function TablesPage() {
                         {filteredTables.map(table => {
                           const isOccupied = table.status === 'occupied';
                           const isSelected = selectedTable?.id === table.id;
-                          const tableTotal = (orders[table.id] || []).reduce((s, o) => s + (o.total_amount || 0), 0);
+                          const tableTotal = (orders[table.merged_with || table.id] || []).reduce((s, o) => s + (o.total_amount || 0), 0);
+                          const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(pj => pj.status === 'failed'));
                           return (
                             <div key={table.id}
                               onClick={() => { setSelectedTable(table); setDesktopView('menu'); if (!isOccupied && isMobile) setAddingToOrder('admin'); }}
                               style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', padding: '8px 4px 6px', borderRadius: 8, cursor: 'pointer', minHeight: 72, transition: 'all 0.12s',
                                 background: isSelected ? '#2563eb' : isOccupied ? '#dbeafe' : 'white',
-                                border: '1.5px solid ' + (isSelected ? '#2563eb' : isOccupied ? '#93c5fd' : '#e5e7eb') }}
+                                border: '1.5px solid ' + (isSelected ? '#2563eb' : isOccupied ? '#93c5fd' : '#e5e7eb'),
+                                position: 'relative' }}
                             >
+                              {hasPrintError && (
+                                <div style={{ position: 'absolute', top: -5, right: -5, background: '#ef4444', color: 'white', borderRadius: '50%', padding: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.2)', zIndex: 10 }}>
+                                  <Printer size={11} strokeWidth={2.5} />
+                                </div>
+                              )}
                               <svg width="38" height="30" viewBox="0 0 38 30" fill="none">
                                 <rect x="4" y="9" width="30" height="12" rx="3"
                                   fill={isSelected ? 'rgba(255,255,255,0.25)' : '#dbeafe'}
@@ -1588,6 +1803,17 @@ export default function TablesPage() {
                               <tr key={item.id}>
                                 <td>
                                   {item.menu_item?.name || 'Món đã xoá'}
+                                  {item.item_options?.length > 0 && (() => {
+                                    const loai = item.item_options.find(o => o.name?.toLowerCase() === 'loại' && o.choice?.toLowerCase() !== 'bình thường');
+                                    const others = item.item_options.filter(o => o.name?.toLowerCase() !== 'loại' && o.choice?.toLowerCase() !== 'bình thường');
+                                    if (!loai && others.length === 0) return null;
+                                    return (
+                                      <div style={{ fontSize: '0.75rem', color: '#555', marginTop: '2px' }}>
+                                        {loai && <div>{loai.choice}</div>}
+                                        {others.length > 0 && <div style={{ fontStyle: 'italic' }}>{others.map(o => o.choice).join(', ')}</div>}
+                                      </div>
+                                    );
+                                  })()}
                                   {item.note && <div style={{ fontSize: '0.75rem', fontStyle: 'italic' }}>* {item.note}</div>}
                                 </td>
                                 <td>{item.quantity}</td>
@@ -1613,12 +1839,12 @@ export default function TablesPage() {
               </div>
 
               {/* On-screen bills display */}
-              {orders[selectedTable.id]?.length > 0 ? (
-                orders[selectedTable.id].map((order, idx) => (
+              {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 ? (
+                orders[selectedTable.merged_with || selectedTable.id].map((order, idx) => (
                   <div key={order.id} className="order-detail-card">
                     {/* Customer name header per bill */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 0 8px', borderBottom: '1px solid #f3f4f6', marginBottom: 4 }}>
-                      {orders[selectedTable.id].length > 1 && (
+                      {orders[selectedTable.merged_with || selectedTable.id].length > 1 && (
                         <span style={{ fontSize: '0.7rem', background: '#2563eb', color: 'white', borderRadius: 10, padding: '1px 7px', fontWeight: 700 }}>
                           #{idx + 1}
                         </span>
@@ -1638,34 +1864,100 @@ export default function TablesPage() {
                         {order.status === 'pending' ? 'Chờ' : order.status === 'preparing' ? 'Đang làm' : order.status === 'completed' ? 'Xong' : order.status}
                       </span>
                       {/* Cancel this single bill */}
-                      <button
-                        onClick={async () => {
-                          const result = await Swal.fire({
-                            title: 'Huỷ bill?',
-                            html: `Huỷ bill của <b>${order.customer_name}</b>?`,
-                            icon: 'warning',
-                            showCancelButton: true,
-                            confirmButtonColor: '#dc2626',
-                            cancelButtonColor: '#6b7280',
-                            confirmButtonText: 'Huỷ bill',
-                            cancelButtonText: 'Không',
-                            reverseButtons: true,
-                          });
-                          if (!result.isConfirmed) return;
-                          await supabase.from('orders').update({ status: 'cancelled' }).eq('id', order.id);
-                          // If all orders at this table are now cancelled, reset the table
-                          const remaining = orders[selectedTable.id].filter(o => o.id !== order.id && o.status !== 'cancelled');
-                          if (remaining.length === 0) {
-                            await supabase.from('tables').update({ status: 'available', occupied_at: null }).eq('id', selectedTable.id);
-                            setSelectedTable(null);
-                          }
-                          fetchTables();
-                        }}
-                        title="Huỷ bill này"
-                        style={{ marginLeft: 'auto', background: '#fff1f2', border: '1.5px solid #fca5a5', borderRadius: 8, color: '#dc2626', cursor: 'pointer', padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0 }}
-                      >
-                        Huỷ bill
-                      </button>
+                      <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexShrink: 0 }}>
+                        <button
+                          onClick={async () => {
+                            const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
+                            if (otherTables.length === 0) {
+                              Swal.fire('Lỗi', 'Không có bàn nào khác để chuyển!', 'error');
+                              return;
+                            }
+                            
+                            const inputOptions = {};
+                            otherTables.forEach(t => {
+                              inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Đang có khách)' : '(Trống)'}`;
+                            });
+
+                            const { value: targetTableId } = await Swal.fire({
+                              title: 'Chuyển bàn',
+                              input: 'select',
+                              inputOptions,
+                              inputPlaceholder: 'Chọn bàn muốn chuyển đến',
+                              showCancelButton: true,
+                              confirmButtonColor: '#2563eb',
+                              cancelButtonColor: '#6b7280',
+                              confirmButtonText: 'Chuyển',
+                              cancelButtonText: 'Huỷ',
+                              reverseButtons: true,
+                              inputValidator: (value) => {
+                                if (!value) return 'Vui lòng chọn một bàn!';
+                              }
+                            });
+
+                            if (targetTableId) {
+                              const { error } = await supabase.from('orders').update({ table_id: targetTableId }).eq('id', order.id);
+                              if (error) {
+                                Swal.fire('Lỗi', error.message, 'error');
+                                return;
+                              }
+                              
+                              const targetTable = otherTables.find(t => t.id === targetTableId);
+                              if (targetTable && targetTable.status === 'available') {
+                                await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
+                              }
+
+                              const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== order.id && o.status !== 'cancelled');
+                              if (remaining.length === 0) {
+                                await supabase.from('tables').update({ status: 'available', occupied_at: null }).eq('id', selectedTable.id);
+                                setSelectedTable(null);
+                              }
+                              fetchTables();
+                              Swal.fire({
+                                title: 'Thành công',
+                                text: 'Đã chuyển bàn!',
+                                icon: 'success',
+                                toast: true,
+                                position: 'top-end',
+                                showConfirmButton: false,
+                                timer: 2000
+                              });
+                            }
+                          }}
+                          title="Chuyển bill này sang bàn khác"
+                          style={{ background: '#e0e7ff', border: '1.5px solid #a5b4fc', borderRadius: 8, color: '#4f46e5', cursor: 'pointer', padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap' }}
+                        >
+                          Chuyển bàn
+                        </button>
+
+                        <button
+                          onClick={async () => {
+                            const result = await Swal.fire({
+                              title: 'Huỷ bill?',
+                              html: `Huỷ bill của <b>${order.customer_name}</b>?`,
+                              icon: 'warning',
+                              showCancelButton: true,
+                              confirmButtonColor: '#dc2626',
+                              cancelButtonColor: '#6b7280',
+                              confirmButtonText: 'Huỷ bill',
+                              cancelButtonText: 'Không',
+                              reverseButtons: true,
+                            });
+                            if (!result.isConfirmed) return;
+                            await supabase.from('orders').update({ status: 'cancelled' }).eq('id', order.id);
+                            // If all orders at this table are now cancelled, reset the table
+                            const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== order.id && o.status !== 'cancelled');
+                            if (remaining.length === 0) {
+                              await supabase.from('tables').update({ status: 'available', occupied_at: null }).eq('id', selectedTable.id);
+                              setSelectedTable(null);
+                            }
+                            fetchTables();
+                          }}
+                          title="Huỷ bill này"
+                          style={{ background: '#fff1f2', border: '1.5px solid #fca5a5', borderRadius: 8, color: '#dc2626', cursor: 'pointer', padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap' }}
+                        >
+                          Huỷ bill
+                        </button>
+                      </div>
                     </div>
                     <div className="order-items-list">
                       {order.order_items?.map((item) => (
@@ -1712,11 +2004,15 @@ export default function TablesPage() {
                               </button>
                             </div>
 
-                            {/* Row 2: Option/khẩu vị + edit button */}
                             {(() => {
                               const fullItem = menuItems.find(m => m.id === item.menu_item_id);
                               const hasOptions = fullItem?.options?.length > 0;
-                              if (!hasOptions && !(item.item_options?.length > 0)) return null;
+                              
+                              const loaiOption = (item.item_options || []).find(o => o.name?.toLowerCase() === 'loại' && o.choice?.toLowerCase() !== 'bình thường');
+                              const otherOptions = (item.item_options || []).filter(o => o.name?.toLowerCase() !== 'loại' && o.choice?.toLowerCase() !== 'bình thường');
+                              const hasValidOptions = loaiOption || otherOptions.length > 0;
+
+                              if (!hasOptions && !hasValidOptions) return null;
 
                               const openEdit = () => {
                                 if (!hasOptions) return;
@@ -1731,11 +2027,20 @@ export default function TablesPage() {
                                 setCustomPrice(null);
                               };
                               return (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                                  {item.item_options?.length > 0 && (
-                                    <span style={{ fontSize: '0.82rem', color: '#9ca3af', fontStyle: 'italic' }}>
-                                      {item.item_options.map(o => o.choice).join(', ')}
-                                    </span>
+                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 4 }}>
+                                  {hasValidOptions && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                      {loaiOption && (
+                                        <span style={{ fontSize: '0.85rem', color: '#6b7280', fontWeight: 500 }}>
+                                          {loaiOption.choice}
+                                        </span>
+                                      )}
+                                      {otherOptions.length > 0 && (
+                                        <span style={{ fontSize: '0.82rem', color: '#9ca3af', fontStyle: 'italic' }}>
+                                          {otherOptions.map(o => o.choice).join(', ')}
+                                        </span>
+                                      )}
+                                    </div>
                                   )}
                                   {hasOptions && (
                                     <button
@@ -1747,7 +2052,8 @@ export default function TablesPage() {
                                         cursor: 'pointer', color: '#2563eb',
                                         fontSize: '0.72rem', fontWeight: 600,
                                         display: 'flex', alignItems: 'center', gap: 3,
-                                        whiteSpace: 'nowrap', flexShrink: 0
+                                        whiteSpace: 'nowrap', flexShrink: 0,
+                                        marginTop: hasValidOptions ? 0 : 2
                                       }}
                                     >
                                       ✏️ {item.item_options?.length > 0 ? 'Đổi' : 'Chọn loại'}
@@ -1767,8 +2073,15 @@ export default function TablesPage() {
                               {/* Editable price */}
                               {/* Normal price display + edit button */}
                               <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                                <span style={{ fontSize: '1rem', fontWeight: 700, color: '#111827' }}>
-                                  {formatPrice(item.unit_price * item.quantity).replace('đ', '')}
+                                <span style={{ fontSize: '0.92rem', fontWeight: 700, color: '#111827', display: 'flex', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
+                                  <span style={{ color: '#6b7280', fontWeight: 500, fontSize: '0.82rem' }}>
+                                    {formatPrice(item.unit_price).replace('đ', '')}
+                                  </span>
+                                  <span style={{ color: '#9ca3af', fontSize: '0.78rem' }}>×{item.quantity}</span>
+                                  <span style={{ color: '#9ca3af', fontSize: '0.78rem' }}>=</span>
+                                  <span style={{ color: '#c53b3b', fontWeight: 800 }}>
+                                    {formatPrice(item.unit_price * item.quantity).replace('đ', '')}
+                                  </span>
                                 </span>
                                 <button
                                   onClick={() => {
@@ -1833,7 +2146,7 @@ export default function TablesPage() {
             </div>
 
             {/* Floating FAB — absolutely positioned on modal, not in scroll area */}
-            {orders[selectedTable.id]?.length > 0 && (
+            {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (
               <button
                 onClick={() => setAddingToOrder('admin')}
                 style={{
@@ -1859,8 +2172,8 @@ export default function TablesPage() {
             )}
             <div className="modal-footer" style={{ padding: '8px 12px', gap: 6, flexDirection: 'column', alignItems: 'stretch' }}>
                 {/* Total summary row */}
-                {orders[selectedTable.id]?.length > 0 && (() => {
-                  const total = orders[selectedTable.id].reduce((s, o) => s + (o.total_amount || 0), 0);
+                {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (() => {
+                  const total = orders[selectedTable.merged_with || selectedTable.id].reduce((s, o) => s + (o.total_amount || 0), 0);
                   return (
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid #f3f4f6' }}>
                       <span style={{ fontSize: '0.88rem', color: '#6b7280', fontWeight: 500 }}>Tổng cộng:</span>
@@ -1868,92 +2181,81 @@ export default function TablesPage() {
                     </div>
                   );
                 })()}
-                {/* Action buttons row — styled like reference image */}
-                {orders[selectedTable.id]?.length > 0 && (
-                  <div style={{ display: 'flex', gap: 8, width: '100%', alignItems: 'stretch' }}>
 
-                    {/* Tạm tính — small square outlined, icon+text stacked */}
-                    <button
-                      onClick={handlePrintTempBill}
-                      style={{
-                        width: 64, minWidth: 64,
-                        padding: '6px 4px',
-                        border: '1.5px solid #2563eb',
-                        borderRadius: 14,
-                        background: 'white',
-                        color: '#2563eb',
-                        cursor: 'pointer',
-                        display: 'flex', flexDirection: 'column',
-                        alignItems: 'center', justifyContent: 'center',
-                        gap: 2,
-                        fontSize: '0.72rem', fontWeight: 600,
-                      }}
-                    >
-                      <Receipt size={18} strokeWidth={1.8} />
-                      Tạm tính
-                    </button>
+                {/* Nút Gộp Bill Mobile — REMOVED standalone row, moved into action row below */}
 
-                    {/* Huỷ đơn — small red destructive button */}
-                    <button
-                      onClick={() => setCancelConfirm(selectedTable)}
-                      style={{
-                        width: 64, minWidth: 64,
-                        padding: '6px 4px',
-                        border: '1.5px solid #fca5a5',
-                        borderRadius: 14,
-                        background: 'white',
-                        color: '#dc2626',
-                        cursor: 'pointer',
-                        display: 'flex', flexDirection: 'column',
-                        alignItems: 'center', justifyContent: 'center',
-                        gap: 2,
-                        fontSize: '0.72rem', fontWeight: 600,
-                      }}
-                    >
-                      <Trash2 size={18} strokeWidth={1.8} />
-                      Huỷ đơn
-                    </button>
+                {/* Action buttons row — all in one row */}
+                {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (() => {
+                  const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
+                  const smallBtnStyle = {
+                    width: 54, minWidth: 54,
+                    padding: '5px 2px',
+                    borderRadius: 12,
+                    background: 'white',
+                    cursor: 'pointer',
+                    display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center',
+                    gap: 2,
+                    fontSize: '0.65rem', fontWeight: 600,
+                  };
+                  return (
+                    <div style={{ display: 'flex', gap: 5, width: '100%', alignItems: 'stretch' }}>
 
-                    {/* In hoá đơn — outlined pill */}
-                    <button
-                      onClick={handlePrintInvoice}
-                      style={{
-                        flex: 1,
-                        padding: '10px 8px',
-                        border: '1.5px solid #2563eb',
-                        borderRadius: 100,
-                        background: 'white',
-                        color: '#2563eb',
-                        cursor: 'pointer',
-                        fontSize: '0.9rem', fontWeight: 600,
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      In hoá đơn
-                    </button>
+                      {/* Tạm tính */}
+                      <button onClick={handlePrintTempBill} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
+                        <Receipt size={16} strokeWidth={1.8} />
+                        Tạm tính
+                      </button>
 
-                    {/* Thanh toán — solid blue pill, widest */}
-                    <button
-                      onClick={() => {
-                        const total = orders[selectedTable.id]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
-                        openPaymentModal(selectedTable, total);
-                      }}
-                      style={{
-                        flex: 2,
-                        padding: '10px 12px',
-                        border: 'none',
-                        borderRadius: 100,
-                        background: '#2563eb',
-                        color: 'white',
-                        cursor: 'pointer',
-                        fontSize: '0.95rem', fontWeight: 700,
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      Thanh toán
-                    </button>
-                  </div>
-                )}
+                      {/* Gộp bàn */}
+                      <button onClick={handleMergeTable} style={{ ...smallBtnStyle, border: '1.5px solid #d8b4fe', color: '#9333ea' }}>
+                        <Users size={16} strokeWidth={1.8} />
+                        Gộp bàn
+                      </button>
+
+                      {/* Gộp bill — chỉ hiện khi có > 1 bill */}
+                      {tableBills.length > 1 && (
+                        <button onClick={mergeBills} style={{ ...smallBtnStyle, border: '1.5px dashed #8b5cf6', color: '#7c3aed', background: '#faf5ff' }}>
+                          🔗
+                          <span style={{ fontSize: '0.6rem', lineHeight: 1.1, textAlign: 'center' }}>Gộp bill</span>
+                        </button>
+                      )}
+
+                      {/* Huỷ đơn */}
+                      <button onClick={() => setCancelConfirm(selectedTable)} style={{ ...smallBtnStyle, border: '1.5px solid #fca5a5', color: '#dc2626' }}>
+                        <Trash2 size={16} strokeWidth={1.8} />
+                        Huỷ đơn
+                      </button>
+
+                      {/* In hoá đơn — compact */}
+                      <button onClick={handlePrintInvoice} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
+                        <Printer size={16} strokeWidth={1.8} />
+                        In HĐ
+                      </button>
+
+                      {/* Thanh toán — solid blue pill, widest */}
+                      <button
+                        onClick={() => {
+                          const total = orders[selectedTable.merged_with || selectedTable.id]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
+                          openPaymentModal(selectedTable, total);
+                        }}
+                        style={{
+                          flex: 2,
+                          padding: '8px 10px',
+                          border: 'none',
+                          borderRadius: 100,
+                          background: '#2563eb',
+                          color: 'white',
+                          cursor: 'pointer',
+                          fontSize: '0.9rem', fontWeight: 700,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        Thanh toán
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
           </div>
         </div>
@@ -2097,13 +2399,13 @@ export default function TablesPage() {
         const closeModal = () => {
           setAddingToOrder(null);
           setAddItemSearch('');
-          if (selectedTable && (!orders[selectedTable.id] || orders[selectedTable.id].length === 0)) {
+          if (selectedTable && (!orders[selectedTable.merged_with || selectedTable.id] || orders[selectedTable.merged_with || selectedTable.id].length === 0)) {
             setSelectedTable(null);
           }
         };
 
-        const activeOrder = selectedTable && orders[selectedTable.id]
-          ? (orders[selectedTable.id].find(o => o.customer_name === 'Admin') || orders[selectedTable.id][0])
+        const activeOrder = selectedTable && orders[selectedTable.merged_with || selectedTable.id]
+          ? (orders[selectedTable.merged_with || selectedTable.id].find(o => o.customer_name === 'Admin') || orders[selectedTable.merged_with || selectedTable.id][0])
           : null;
         const orderItems = activeOrder?.order_items || [];
         const totalCartItems = orderItems.reduce((sum, oi) => sum + oi.quantity, 0);
@@ -2125,7 +2427,7 @@ export default function TablesPage() {
         const filteredItems = menuItems.filter(item => {
           const itemCats = getItemCategories(item);
           const matchesCat = activeMenuCategory === 'all' || itemCats.includes(activeMenuCategory);
-          const matchesSearch = item.name.toLowerCase().includes(addItemSearch.toLowerCase());
+          const matchesSearch = removeVietnameseTones(item.name).includes(removeVietnameseTones(addItemSearch));
           return matchesCat && matchesSearch;
         });
 
@@ -2569,7 +2871,7 @@ export default function TablesPage() {
       )}
       {/* Full-screen Bill Preview Modal */}
       {showBillPreview && selectedTable && (() => {
-        const tableBills = orders[selectedTable.id] || [];
+        const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
         const allItems = tableBills.flatMap(b => b.order_items || []);
         const grandTotal = tableBills.reduce((s, b) => s + b.total_amount, 0);
         const now = new Date();
@@ -2765,7 +3067,7 @@ export default function TablesPage() {
             </div>
             {/* Item list */}
             <div style={{ padding: '12px 20px', maxHeight: 260, overflowY: 'auto' }}>
-              {(orders[confirmPayment.table.id] || []).flatMap(o => o.order_items || []).map((item, idx) => (
+              {(orders[confirmPayment.table.merged_with || confirmPayment.table.id] || []).flatMap(o => o.order_items || []).map((item, idx) => (
                 <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f3f4f6' }}>
                   <div>
                     <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#111827' }}>{item.menu_item?.name || item.name}</span>
