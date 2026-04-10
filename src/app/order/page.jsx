@@ -21,6 +21,7 @@ import {
   List,
   Grid3X3,
   RotateCcw,
+  Check,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './order.css';
@@ -193,46 +194,46 @@ function OrderContent() {
   useEffect(() => {
     if (!activeTableId) return;
 
+    const handleTableReset = async (payload) => {
+      // Bàn về available = đã thanh toán hoặc huỷ
+      if (payload.new?.status !== 'available') return;
+      if (justPaidRef.current) {
+        justPaidRef.current = false;
+        setCart([]);
+        setNotes({});
+        setPreviousOrders([]);
+        clearSession();
+        setShowCart(false);
+        setShowOrdered(false);
+        return;
+      }
+      const savedOrderId = getSavedSession()?.orderId;
+      let isPaid = false;
+      if (savedOrderId) {
+        const { data: ord } = await supabase
+          .from('orders').select('status, total_amount').eq('id', savedOrderId).maybeSingle();
+        isPaid = ord?.status === 'paid';
+        if (isPaid) {
+          setOrderPaid({ total: ord.total_amount });
+          setTimeout(() => setOrderPaid(null), 5000);
+        }
+      }
+      setCart([]);
+      setNotes({});
+      setPreviousOrders([]);
+      clearSession();
+      setShowCart(false);
+      setShowOrdered(false);
+      if (!isPaid) setOrderCancelled(true);
+    };
+
     const channel = supabase
       .channel(`order-page-${activeTableId}-${Date.now()}`)
-      // Watch for table status change (admin resets table → available)
+      // Watch for table status change on HOST table
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'tables',
         filter: `id=eq.${activeTableId}`,
-      }, async (payload) => {
-        if (payload.new?.status === 'available') {
-          // If order handler already flagged as paid, just cleanup — no cancelled banner
-          if (justPaidRef.current) {
-            justPaidRef.current = false;
-            setCart([]);
-            setNotes({});
-            setPreviousOrders([]);
-            clearSession();
-            setShowCart(false);
-            setShowOrdered(false);
-            return;
-          }
-          // Otherwise query to distinguish paid vs cancelled
-          const savedOrderId = getSavedSession()?.orderId;
-          let isPaid = false;
-          if (savedOrderId) {
-            const { data: ord } = await supabase
-              .from('orders').select('status, total_amount').eq('id', savedOrderId).maybeSingle();
-            isPaid = ord?.status === 'paid';
-            if (isPaid) {
-              setOrderPaid({ total: ord.total_amount });
-              setTimeout(() => setOrderPaid(null), 5000);
-            }
-          }
-          setCart([]);
-          setNotes({});
-          setPreviousOrders([]);
-          clearSession();
-          setShowCart(false);
-          setShowOrdered(false);
-          if (!isPaid) setOrderCancelled(true);
-        }
-      })
+      }, handleTableReset)
       // Watch for print_jobs changes — cập nhật trực tiếp state và re-fetch
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'print_jobs' }, (payload) => {
          const updatedJob = payload.new;
@@ -279,7 +280,23 @@ function OrderContent() {
       })
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    // Nếu khách đang ở bàn satellite (urlTableId khác hostId), cũng cần watch bàn satellite
+    // để khi admin thanh toán/reset thì khách nhận được tín hiệu reset
+    let satelliteChannel = null;
+    if (urlTableId && urlTableId !== activeTableId) {
+      satelliteChannel = supabase
+        .channel(`order-satellite-${urlTableId}-${Date.now()}`)
+        .on('postgres_changes', {
+          event: 'UPDATE', schema: 'public', table: 'tables',
+          filter: `id=eq.${urlTableId}`,
+        }, handleTableReset)
+        .subscribe();
+    }
+
+    return () => {
+      supabase.removeChannel(channel);
+      if (satelliteChannel) supabase.removeChannel(satelliteChannel);
+    };
   }, [activeTableId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -835,28 +852,36 @@ function OrderContent() {
     return matchCategory && matchSearch;
   });
 
-  // Group by category for display (include catId for scroll spy)
+  // Group by category for display
   const groupedItems = [];
-  const catIdMap = {};
-  filteredItems.forEach(item => {
-    const itemCats = getItemCategories(item);
-    itemCats.forEach(catId => {
-      // If we are filtering by a specific category, only show it in that category section
-      if (activeCategory !== 'all' && catId !== activeCategory) return;
-      
-      const catObj = categories.find(c => c.id === catId);
-      const catName = catObj?.name ? catObj.name : 'Chưa phân loại';
-      const actualCatId = catId || 'other';
-      if (!catIdMap[actualCatId]) {
-        catIdMap[actualCatId] = { catId: actualCatId, catName, items: [] };
-        groupedItems.push(catIdMap[actualCatId]);
-      }
-      // Deduplicate if somehow the same item is pushed twice to same category
-      if (!catIdMap[actualCatId].items.some(i => i.id === item.id)) {
-        catIdMap[actualCatId].items.push(item);
-      }
+  if (activeCategory === 'all') {
+    // Flat list without grouping to prevent duplication of multi-category items
+    groupedItems.push({
+      catId: 'all',
+      catName: searchTerm ? 'Kết quả tìm kiếm' : 'Tất cả món ăn',
+      items: filteredItems,
     });
-  });
+  } else {
+    const catIdMap = {};
+    filteredItems.forEach(item => {
+      const itemCats = getItemCategories(item);
+      itemCats.forEach(catId => {
+        if (catId !== activeCategory) return; // only group the active category
+        
+        const catObj = categories.find(c => c.id === catId);
+        const catName = catObj?.name ? catObj.name : 'Chưa phân loại';
+        const actualCatId = catId || 'other';
+        if (!catIdMap[actualCatId]) {
+          catIdMap[actualCatId] = { catId: actualCatId, catName, items: [] };
+          groupedItems.push(catIdMap[actualCatId]);
+        }
+        // Deduplicate
+        if (!catIdMap[actualCatId].items.some(i => i.id === item.id)) {
+          catIdMap[actualCatId].items.push(item);
+        }
+      });
+    });
+  }
 
   // Scroll spy: observe which category section is in viewport
   useEffect(() => {
@@ -891,21 +916,9 @@ function OrderContent() {
   }, [activeCategory, userScrolling, groupedItems.length]);
 
   function handleCatClick(catId) {
-    if (catId === 'all') {
-      setActiveCategory('all');
-      return;
-    }
-    // If already in 'all' mode, scroll to section
-    if (activeCategory === 'all') {
-      setUserScrolling(true);
-      const el = sectionRefs.current[catId];
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-      clearTimeout(scrollTimeout.current);
-      scrollTimeout.current = setTimeout(() => setUserScrolling(false), 800);
-    } else {
-      setActiveCategory(catId);
+    setActiveCategory(catId);
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }
 
@@ -1098,17 +1111,23 @@ function OrderContent() {
       {/* ─── Top Header (compact) ─── */}
       <div className="co-topbar">
         {/* Restaurant name row */}
-        <div className="co-header-bar" style={{ padding: '8px 12px 4px', gap: 6 }}>
-          <div className="co-header-brand">
-            <span className="co-header-title" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '1.2rem' }}>
+        <div className="co-header-bar" style={{ padding: '8px 12px 4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          {/* Logo & Contact */}
+          <div className="co-header-brand" style={{ flex: 1, minWidth: 0, paddingRight: 5 }}>
+            <span className="co-header-title" style={{ display: 'block', fontSize: '1.2rem', fontWeight: 800, color: '#1d4ed8' }}>
               Ốc Bảo Khang
-              <span style={{ fontSize: '0.75rem', background: '#eff6ff', color: '#2563eb', padding: '2px 8px', borderRadius: '12px', fontWeight: '900', border: '1px solid #bfdbfe' }}>
-                {isTakeaway ? 'Mang về' : `Bàn ${tableNumber ?? '...'}`}
-              </span>
             </span>
-            <span className="co-header-contact" style={{ fontSize: '0.65rem' }}>💬 0946.433.417 &nbsp;|&nbsp; 📞 0977.496.781</span>
+            <span className="co-header-contact" style={{ display: 'block', fontSize: '0.65rem', marginTop: 2, color: '#4b5563', whiteSpace: 'nowrap', overflow: 'visible' }}>💬 0946.433.417 | 📞 0977.496.781</span>
           </div>
-          <div className="co-header-actions" style={{ gap: 4 }}>
+
+          {/* Table Badge */}
+          <div style={{ display: 'flex', alignItems: 'center', marginRight: '10px' }}>
+             <span style={{ fontSize: '0.95rem', background: '#eff6ff', color: '#2563eb', padding: '4px 12px', borderRadius: '20px', fontWeight: '900', border: '1.5px solid #bfdbfe', whiteSpace: 'nowrap' }}>
+                {isTakeaway ? 'Mang về' : `Bàn ${tableNumber ?? '...'}`}
+             </span>
+          </div>
+
+          <div className="co-header-actions" style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
             <button
               className="co-history-btn"
               style={{ padding: '5px 10px', fontSize: '0.75rem' }}
@@ -1165,7 +1184,7 @@ function OrderContent() {
               {items.map(item => {
                 const qty = getCartQty(item.id);
                 return viewMode === 'list' ? (
-                  <div key={item.id} className="co-item-row">
+                  <div key={item.id} className="co-item-row" onClick={() => addToCart(item)} style={{ cursor: 'pointer' }}>
                     <div className="co-item-img" style={{ position: 'relative' }}>
                       {item.image_url ? (
                         <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 100px, 150px" style={{ objectFit: 'cover' }} />
@@ -1190,26 +1209,26 @@ function OrderContent() {
                           {qty > 0 && (
                             <span className="co-qty-badge">{qty}</span>
                           )}
-                          <button className="co-add-btn" onClick={() => addToCart(item)}>
+                          <button className="co-add-btn" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
                             <Plus size={18} />
                           </button>
                         </div>
                       ) : qty > 0 ? (
                         /* Không options: nút +/- bình thường */
-                        <div className="co-qty-control">
+                        <div className="co-qty-control" onClick={(e) => e.stopPropagation()}>
                           <button onClick={() => updateQuantity(item.id, -1, null)}><Minus size={14} /></button>
                           <span>{qty}</span>
                           <button onClick={() => updateQuantity(item.id, 1, null)}><Plus size={14} /></button>
                         </div>
                       ) : (
-                        <button className="co-add-btn" onClick={() => addToCart(item)}>
+                        <button className="co-add-btn" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
                           <Plus size={18} />
                         </button>
                       )}
                     </div>
                   </div>
                 ) : (
-                  <div key={item.id} className="co-item-card">
+                  <div key={item.id} className="co-item-card" onClick={() => addToCart(item)} style={{ cursor: 'pointer' }}>
                     <div className="co-card-img" style={{ position: 'relative' }}>
                       {item.image_url ? (
                         <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 50vw, 33vw" style={{ objectFit: 'cover' }} />
@@ -1232,18 +1251,18 @@ function OrderContent() {
                           {qty > 0 && (
                             <span className="co-qty-badge co-qty-badge--sm">{qty}</span>
                           )}
-                          <button className="co-add-btn small" onClick={() => addToCart(item)}>
+                          <button className="co-add-btn small" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
                             <Plus size={14} />
                           </button>
                         </div>
                       ) : qty > 0 ? (
-                        <div className="co-qty-control small">
+                        <div className="co-qty-control small" onClick={(e) => e.stopPropagation()}>
                           <button onClick={() => updateQuantity(item.id, -1, null)}><Minus size={12} /></button>
                           <span>{qty}</span>
                           <button onClick={() => updateQuantity(item.id, 1, null)}><Plus size={12} /></button>
                         </div>
                       ) : (
-                        <button className="co-add-btn small" onClick={() => addToCart(item)}>
+                        <button className="co-add-btn small" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
                           <Plus size={14} />
                         </button>
                       )}
@@ -1560,9 +1579,9 @@ function OrderContent() {
             </div>
             <div className="co-sheet-body">
               {optionModal.options.map((opt, oi) => (
-                <div key={oi} style={{ marginBottom: 16 }}>
-                  <div style={{ fontWeight: 700, fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#6b7280', marginBottom: 8 }}>{opt.name}</div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <div key={oi} style={{ marginBottom: 12 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#6b7280', marginBottom: 6 }}>{opt.name}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     {opt.choices.map((choice, ci) => {
                       const p = opt.prices?.[ci];
                       const hasPrice = p !== null && p !== '';
@@ -1573,14 +1592,36 @@ function OrderContent() {
                           setSelectedOpts({ ...selectedOpts, [opt.name]: choice });
                           if (hasPrice) setChoicePrice(Number(p));
                         }} style={{
-                          padding: '8px 14px', borderRadius: 100,
-                          border: active ? '2px solid #2563eb' : '1.5px solid #e5e7eb',
-                          background: active ? '#eff6ff' : 'white',
-                          color: active ? '#1d4ed8' : '#374151',
+                          padding: '4px 4px', 
+                          border: 'none',
+                          background: 'transparent',
+                          color: active ? '#1d4ed8' : '#4b5563',
                           fontWeight: active ? 700 : 500,
-                          fontSize: '0.9rem', cursor: 'pointer'
+                          fontSize: '0.8rem', cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', gap: '8px',
+                          transition: 'all 0.2s ease',
+                          textAlign: 'left',
+                          width: '100%'
                         }}>
-                          {choice}{hasPrice ? <span style={{ fontSize: '0.75rem', marginLeft: 4, color: active ? '#2563eb' : '#9ca3af' }}>{displayPrice.toLocaleString('vi-VN')}đ</span> : null}
+                          {/* Radio circle */}
+                          <div style={{
+                            width: 14, height: 14, borderRadius: '50%', flexShrink: 0,
+                            border: active ? '3.5px solid #2563eb' : '1px solid #d1d5db',
+                            background: 'white',
+                            transition: 'all 0.2s ease'
+                          }} />
+                          
+                          <span style={{ flex: 1, lineHeight: 1.25 }}>{choice}</span>
+                          
+                          {hasPrice ? (
+                            <span style={{ 
+                              fontSize: '0.7rem', 
+                              color: active ? '#1e40af' : '#6b7280',
+                              fontWeight: 700
+                            }}>
+                              +{displayPrice.toLocaleString('vi-VN')}đ
+                            </span>
+                          ) : null}
                         </button>
                       );
                     })}

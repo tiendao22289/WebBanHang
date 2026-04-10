@@ -103,6 +103,9 @@ export default function TablesPage() {
   const [qrAccount, setQrAccount]           = useState(null); // selected account for QR
   const [showTransfer, setShowTransfer]     = useState(false); // QR sub-screen in payment modal
   const [cancelConfirm, setCancelConfirm]   = useState(null); // tableId to cancel
+  const [showTableHistory, setShowTableHistory] = useState(null); // table object
+  const [tableHistoryData, setTableHistoryData] = useState([]);
+  const [tableHistoryLoading, setTableHistoryLoading] = useState(false);
 
   const invoiceRef = useRef(null);
   const isFirstLoad = useRef(true);
@@ -337,17 +340,22 @@ export default function TablesPage() {
     fetchTables();
   }
 
-  async function completeTable(tableId, paymentMethod = 'cash') {
+  async function completeTable(tableObj, paymentMethod = 'cash') {
+    // Support both tableId (legacy) and tableObj
+    const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
+    const hostId = table.merged_with || table.id;
+
     await supabase
       .from('orders')
       .update({ status: 'paid', payment_method: paymentMethod })
-      .eq('table_id', tableId)
+      .eq('table_id', hostId)
       .in('status', ['pending', 'preparing', 'completed']);
 
+    // Reset toàn bộ nhóm bàn gộp
     await supabase
       .from('tables')
-      .update({ status: 'available', occupied_at: null })
-      .eq('id', tableId);
+      .update({ status: 'available', occupied_at: null, merged_with: null })
+      .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
 
     setSelectedTable(null);
     fetchTables();
@@ -704,76 +712,119 @@ export default function TablesPage() {
 
   async function handleMergeTable() {
     if (!selectedTable) return;
-    
-    // Tìm các bàn khác để gộp vào
-    const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
-    
+    const hostId = selectedTable.merged_with || selectedTable.id;
+
+    const otherTables = tables.filter(t =>
+      t.id !== selectedTable.id && t.table_type !== 'takeaway'
+    );
+
     if (otherTables.length === 0) {
-      Swal.fire('Thoát', 'Không có bàn nào khác để gộp!', 'info');
+      Swal.fire('Thông báo', 'Không có bàn nào khác để gộp!', 'info');
       return;
     }
 
-    const inputOptions = {};
-    otherTables.forEach(t => {
-      inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Đang có khách)' : '(Trống)'}`;
-    });
+    const checkboxHtml = `
+      <div style="text-align:left;margin-top:4px;">
+        <p style="font-size:0.82rem;color:#6b7280;margin:0 0 10px">
+          Tích chọn các bàn muốn gộp chung với <b style="color:#9333ea">Bàn ${selectedTable.table_number}</b>:
+        </p>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:260px;overflow-y:auto;padding:2px;">
+          ${otherTables.map(t => {
+            const occupied = t.status === 'occupied';
+            const merged = !!t.merged_with;
+            const border = merged ? '#a78bfa' : occupied ? '#93c5fd' : '#e5e7eb';
+            const bg = merged ? '#f5f3ff' : occupied ? '#eff6ff' : '#fff';
+            const color = merged ? '#7c3aed' : occupied ? '#1d4ed8' : '#374151';
+            const sub = merged ? '🔗 Đang gộp' : occupied ? 'Có khách' : 'Trống';
+            return `
+              <label for="mcb-${t.id}" style="
+                display:flex;flex-direction:column;align-items:center;justify-content:center;
+                gap:4px;padding:10px 6px;border-radius:10px;cursor:pointer;
+                border:2px solid ${border};background:${bg};
+                transition:all 0.15s;position:relative;
+              ">
+                <input type="checkbox" id="mcb-${t.id}" value="${t.id}"
+                  style="position:absolute;top:6px;right:6px;width:16px;height:16px;accent-color:#9333ea;cursor:pointer;"/>
+                <span style="font-size:1.1rem;">🪑</span>
+                <span style="font-weight:700;font-size:0.92rem;color:${color}">B${t.table_number}</span>
+                <span style="font-size:0.62rem;color:#9ca3af;">${sub}</span>
+              </label>
+            `;
+          }).join('')}
+        </div>
+      </div>`;
 
-    const { value: targetTableId } = await Swal.fire({
-      title: 'Gộp bàn',
-      input: 'select',
-      inputOptions,
-      inputPlaceholder: 'Chọn bàn muốn chuyển tất cả bill tới',
+    const { value: selectedIds } = await Swal.fire({
+      title: '🔗 Gộp bàn',
+      html: checkboxHtml,
       showCancelButton: true,
       confirmButtonColor: '#9333ea',
       cancelButtonColor: '#6b7280',
       confirmButtonText: 'Gộp chung',
       cancelButtonText: 'Huỷ',
       reverseButtons: true,
-      inputValidator: (value) => {
-        if (!value) return 'Vui lòng chọn một bàn!';
+      width: 420,
+      preConfirm: () => {
+        const checked = [...document.querySelectorAll('[id^="mcb-"]:checked')].map(cb => cb.value);
+        if (checked.length === 0) {
+          Swal.showValidationMessage('Vui lòng chọn ít nhất 1 bàn!');
+          return false;
+        }
+        return checked;
       }
     });
 
-    if (targetTableId) {
-      // Get all current orders of this table
-      const currentOrders = orders[selectedTable.merged_with || selectedTable.id] || [];
-      if (currentOrders.length === 0) {
-         Swal.fire('Lỗi', 'Bàn này đang không có bill nào', 'error');
-         return;
-      }
-      
-      const orderIds = currentOrders.map(o => o.id);
-      
-      // Update table_id of all these orders to targetTableId
-      const { error } = await supabase
-        .from('orders')
-        .update({ table_id: targetTableId })
-        .in('id', orderIds);
-        
-      if (error) {
-        Swal.fire('Lỗi', error.message, 'error');
-        return;
-      }
-      
-      // Mark the target table as occupied
-      await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
+    if (!selectedIds || selectedIds.length === 0) return;
 
-      // The current table becomes available
-      await supabase.from('tables').update({ status: 'available', occupied_at: null }).eq('id', selectedTable.id);
-      
-      fetchTables();
-      setSelectedTable(null); // Đóng modal
-      
-      Swal.fire({
-        title: 'Thành công',
-        text: 'Đã gộp tất cả bill sang bàn mới!',
-        icon: 'success',
-        toast: true,
-        position: 'top-end',
-        showConfirmButton: false,
-        timer: 2000
-      });
+    for (const sid of selectedIds) {
+      const targetTable = tables.find(t => t.id === sid);
+      if (!targetTable) continue;
+      const targetHostId = targetTable.merged_with || targetTable.id;
+      if (targetHostId !== hostId) {
+        const targetOrders = orders[targetHostId] || [];
+        if (targetOrders.length > 0) {
+          await supabase.from('orders')
+            .update({ table_id: hostId })
+            .in('id', targetOrders.map(o => o.id));
+        }
+      }
+      await supabase.from('tables')
+        .update({ status: 'occupied', merged_with: hostId, occupied_at: new Date().toISOString() })
+        .eq('id', sid);
     }
+
+    await supabase.from('tables')
+      .update({ status: 'occupied', occupied_at: new Date().toISOString() })
+      .eq('id', hostId);
+
+    fetchTables();
+    setSelectedTable(null);
+
+    const names = selectedIds.map(sid => {
+      const t = tables.find(t => t.id === sid);
+      return `B${t?.table_number}`;
+    }).join(', ');
+    Swal.fire({
+      title: '🔗 Đã gộp bàn!',
+      text: `Bàn ${selectedTable.table_number} đã gộp chung với: ${names}`,
+      icon: 'success', toast: true, position: 'top-end',
+      showConfirmButton: false, timer: 3000
+    });
+  }
+
+  async function handleUnmergeTable() {
+    if (!selectedTable || !selectedTable.merged_with) return;
+    await supabase.from('tables')
+      .update({ status: 'available', merged_with: null, occupied_at: null })
+      .eq('id', selectedTable.id);
+    fetchTables();
+    setSelectedTable(null);
+    Swal.fire({
+      title: 'Đã tách bàn!',
+      text: `Bàn ${selectedTable.table_number} đã tách ra độc lập.`,
+      icon: 'success', toast: true, position: 'top-end',
+      showConfirmButton: false, timer: 2000
+    });
   }
 
   async function mergeBills() {
@@ -942,9 +993,27 @@ export default function TablesPage() {
           return true;
         });
 
+        // ── Bảng màu nhóm bàn gộp ──
+        const GROUP_PALETTES = [
+          { bg: '#fff7ed', border: '#fb923c', text: '#c2410c', sub: '#ea580c', badge: '#ea580c' },
+          { bg: '#f0fdf4', border: '#4ade80', text: '#15803d', sub: '#16a34a', badge: '#16a34a' },
+          { bg: '#fef3c7', border: '#fbbf24', text: '#b45309', sub: '#d97706', badge: '#d97706' },
+          { bg: '#fce7f3', border: '#f472b6', text: '#be185d', sub: '#db2777', badge: '#db2777' },
+          { bg: '#ecfdf5', border: '#34d399', text: '#065f46', sub: '#059669', badge: '#059669' },
+          { bg: '#fff1f2', border: '#fb7185', text: '#be123c', sub: '#e11d48', badge: '#e11d48' },
+          { bg: '#f0f9ff', border: '#38bdf8', text: '#0369a1', sub: '#0284c7', badge: '#0284c7' },
+        ];
+        const mergedHostIds = [...new Set(filteredTables.filter(t => t.merged_with).map(t => t.merged_with))];
+        const groupColorMap = {};
+        mergedHostIds.forEach((hid, idx) => { groupColorMap[hid] = GROUP_PALETTES[idx % GROUP_PALETTES.length]; });
+
         const tableCard = (table, compact = false) => {
           const tableBills = orders[table.merged_with || table.id] || [];
           const isOccupied = table.status === 'occupied';
+          const isMergedSatellite = !!table.merged_with;
+          const isHost = !isMergedSatellite && !!groupColorMap[table.id];
+          const hostIdCard = table.merged_with || table.id;
+          const groupColor = groupColorMap[hostIdCard] || null;
           const totalAmount = tableBills.reduce((s, o) => s + (o.total_amount || 0), 0);
           const guestCount = tableBills.length;
           const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => pj.status === 'failed'));
@@ -955,49 +1024,84 @@ export default function TablesPage() {
             const m = Math.floor((diffMs % 3600000) / 60000);
             timeElapsed = h > 0 ? `${h}g ${m}p` : `${m}p`;
           }
+          const hostTableCard = isMergedSatellite ? tables.find(t => t.id === table.merged_with) : null;
+
+          const openHistory = async (e) => {
+            e.stopPropagation();
+            setShowTableHistory(table);
+            setTableHistoryLoading(true);
+            setTableHistoryData([]);
+            const since = new Date(Date.now() - 8 * 3600 * 1000).toISOString();
+            const hId = table.merged_with || table.id;
+            const { data } = await supabase
+              .from('orders')
+              .select('*, order_items(*, menu_item:menu_items(name))')
+              .eq('table_id', hId)
+              .in('status', ['paid', 'cancelled'])
+              .gte('created_at', since)
+              .order('created_at', { ascending: false });
+            setTableHistoryData(data || []);
+            setTableHistoryLoading(false);
+          };
+
           return (
             <div
               key={table.id}
               onClick={() => { setSelectedTable(table); if (!isOccupied) setAddingToOrder('admin'); }}
               style={{
-                background: isOccupied ? '#dbeafe' : 'white',
-                border: isOccupied ? '1.5px solid #93c5fd' : '1.5px solid #e5e7eb',
+                background: groupColor ? groupColor.bg : isOccupied ? '#dbeafe' : 'white',
+                border: `2px solid ${groupColor ? groupColor.border : isOccupied ? '#93c5fd' : '#e5e7eb'}`,
                 borderRadius: compact ? 12 : 16,
                 padding: compact ? '12px 12px 10px' : '14px 14px 12px',
                 cursor: 'pointer',
-                minHeight: compact ? 90 : 110,
+                minHeight: compact ? 80 : 90,
                 display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
-                boxShadow: isOccupied ? '0 2px 8px rgba(37,99,235,0.10)' : '0 1px 4px rgba(0,0,0,0.06)',
+                boxShadow: groupColor ? `0 2px 10px ${groupColor.border}40` : isOccupied ? '0 2px 8px rgba(37,99,235,0.10)' : '0 1px 4px rgba(0,0,0,0.06)',
                 position: 'relative', transition: 'transform 0.1s, box-shadow 0.1s',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ fontSize: compact ? '1rem' : '1.2rem', fontWeight: 800, color: isOccupied ? '#1d4ed8' : '#1f2937' }}>
+              {isMergedSatellite && groupColor && (
+                <div style={{ position: 'absolute', top: -10, left: '50%', transform: 'translateX(-50%)', background: groupColor.badge, color: 'white', borderRadius: 100, padding: '2px 8px', fontSize: '0.6rem', fontWeight: 700, whiteSpace: 'nowrap', zIndex: 10 }}>
+                  🔗 B{hostTableCard?.table_number}
+                </div>
+              )}
+              {isHost && groupColor && (
+                <div style={{ position: 'absolute', top: -10, left: '50%', transform: 'translateX(-50%)', background: groupColor.badge, color: 'white', borderRadius: 100, padding: '2px 8px', fontSize: '0.6rem', fontWeight: 700, whiteSpace: 'nowrap', zIndex: 10 }}>
+                  👑 Host
+                </div>
+              )}
+              {/* History button - top right */}
+              <div onClick={openHistory} style={{ position: 'absolute', top: 6, right: 6, opacity: 0.55 }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={groupColor ? groupColor.border : isOccupied ? '#3b82f6' : '#9ca3af'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: 18 }}>
+                <div style={{ fontSize: compact ? '1rem' : '1.1rem', fontWeight: 800, color: groupColor ? groupColor.text : isOccupied ? '#1d4ed8' : '#1f2937' }}>
                   B{table.table_number}
                 </div>
                 {hasPrintError && (
                   <div style={{ background: '#fef2f2', color: '#dc2626', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #fecaca' }}>
-                    <Printer size={14} strokeWidth={2} />
+                    <Printer size={12} strokeWidth={2} />
                   </div>
                 )}
               </div>
               {isOccupied ? (
                 <div style={{ marginTop: 6 }}>
-                  <div style={{ fontSize: '0.75rem', color: '#3b82f6', fontWeight: 500, marginBottom: 2 }}>
+                  <div style={{ fontSize: '0.7rem', color: groupColor ? groupColor.sub : '#3b82f6', fontWeight: 500, marginBottom: 2 }}>
                     {timeElapsed} • {guestCount} khách
                   </div>
-                  <div style={{ fontSize: compact ? '0.88rem' : '0.95rem', fontWeight: 700, color: '#1d4ed8' }}>
+                  <div style={{ fontSize: compact ? '0.82rem' : '0.88rem', fontWeight: 700, color: groupColor ? groupColor.text : '#1d4ed8' }}>
                     {totalAmount.toLocaleString('vi-VN')}đ
                   </div>
                 </div>
               ) : <div />}
               <div style={{ position: 'absolute', bottom: 6, right: 6 }}
                 onClick={e => { e.stopPropagation(); setShowQR(table); }}>
-                <QrCode size={13} style={{ color: isOccupied ? '#93c5fd' : '#d1d5db' }} />
+                <QrCode size={12} style={{ color: groupColor ? groupColor.border : isOccupied ? '#93c5fd' : '#d1d5db' }} />
               </div>
             </div>
           );
         };
+
 
         if (isMobile) {
           // ── Mobile: KiotViet fullscreen 2-col ──
@@ -1046,8 +1150,8 @@ export default function TablesPage() {
                   </div>
                 </div>
               )}
-              {/* 2-col grid edge-to-edge */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, padding: '8px 8px 24px' }}>
+              {/* 3-col grid edge-to-edge */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, padding: '8px 8px 24px' }}>
                 {filteredTables.map(t => tableCard(t, false))}
                 <div onClick={() => setShowAddModal(true)} style={{
                   border: '1.5px dashed #d1d5db', borderRadius: 16, minHeight: 110,
@@ -3138,22 +3242,14 @@ export default function TablesPage() {
           >
             {/* Warning icon */}
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
-              <div style={{
-                width: 64, height: 64, borderRadius: '50%',
-                background: 'linear-gradient(135deg,#fee2e2,#fecaca)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: '2rem', boxShadow: '0 4px 20px rgba(220,38,38,0.2)',
-              }}>🗑️</div>
+              <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'linear-gradient(135deg,#fee2e2,#fecaca)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem', boxShadow: '0 4px 20px rgba(220,38,38,0.2)' }}>🗑️</div>
             </div>
-
-            {/* Title */}
             <div style={{ textAlign: 'center', marginBottom: 8 }}>
               <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#0f172a' }}>Huỷ toàn bộ đơn?</div>
               <div style={{ fontSize: '0.85rem', color: '#6b7280', marginTop: 4 }}>
                 Bàn <strong>{cancelConfirm.table_number}</strong> — tất cả đơn chưa thanh toán sẽ bị huỷ
               </div>
             </div>
-
             {/* Warning note */}
             <div style={{
               background: '#fef9c3', border: '1px solid #fde68a',
@@ -3212,6 +3308,72 @@ export default function TablesPage() {
           </div>
         </div>
       )}
+      {/* ══ LỊCH SỬ BÀN 8H ══ */}
+      {showTableHistory && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 3100, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={() => setShowTableHistory(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '80dvh', background: 'white', borderRadius: '20px 20px 0 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #f3f4f6', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 800, fontSize: '1rem', color: '#1f2937' }}>🕐 Lịch sử Bàn {showTableHistory.table_number}</div>
+                <div style={{ fontSize: '0.72rem', color: '#9ca3af', marginTop: 1 }}>8 tiếng gần nhất</div>
+              </div>
+              <button onClick={() => setShowTableHistory(null)} style={{ background: '#f3f4f6', border: 'none', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1, padding: '10px 14px 20px' }}>
+              {tableHistoryLoading ? (
+                <div style={{ textAlign: 'center', padding: '30px 0', color: '#9ca3af', fontSize: '0.85rem' }}>Đang tải...</div>
+              ) : tableHistoryData.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '30px 0', color: '#d1d5db', fontSize: '0.85rem' }}>
+                  <div style={{ fontSize: '2rem', marginBottom: 6 }}>📭</div>Không có lịch sử trong 8 tiếng qua
+                </div>
+              ) : tableHistoryData.map(order => {
+                const isPaid = order.status === 'paid';
+                const tTime = new Date(order.updated_at || order.created_at);
+                const timeStr = tTime.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+                return (
+                  <div key={order.id} style={{ borderBottom: '1px solid #f3f4f6', paddingBottom: 10, marginBottom: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                      <span style={{ fontSize: '0.68rem', color: '#9ca3af' }}>{timeStr}</span>
+                      <span style={{ fontSize: '0.68rem', fontWeight: 600, color: '#6b7280' }}>•</span>
+                      <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#374151' }}>{order.customer_name || 'Khách'}</span>
+                      <span style={{ marginLeft: 'auto', fontSize: '0.62rem', fontWeight: 700, borderRadius: 100, padding: '2px 8px', background: isPaid ? '#dcfce7' : '#fee2e2', color: isPaid ? '#16a34a' : '#dc2626' }}>
+                        {isPaid ? '✓ Đã TT' : '✗ Đã huỷ'}
+                      </span>
+                    </div>
+                    {(order.order_items || []).slice(0, 4).map(item => (
+                      <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#6b7280', paddingLeft: 4, marginBottom: 2 }}>
+                        <span>{item.quantity}x {item.menu_item?.name || item.item_name}</span>
+                        <span style={{ fontWeight: 600 }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
+                      </div>
+                    ))}
+                    {(order.order_items || []).length > 4 && <div style={{ fontSize: '0.68rem', color: '#9ca3af', paddingLeft: 4 }}>...+{order.order_items.length - 4} món khác</div>}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, paddingTop: 4, borderTop: '1px dashed #f3f4f6' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: '0.72rem', color: '#9ca3af' }}>Tổng</span>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 800, color: isPaid ? '#16a34a' : '#dc2626' }}>{(order.total_amount || 0).toLocaleString('vi-VN')}đ</span>
+                      </div>
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          const btn = e.currentTarget;
+                          const orig = btn.textContent;
+                          btn.textContent = '⏳'; btn.disabled = true;
+                          const { success } = await sendTableSummaryPrintJob(supabase, [order.id]);
+                          btn.textContent = success ? '✓ Gửii' : '✗ Lỗi';
+                          setTimeout(() => { if (btn) { btn.textContent = orig; btn.disabled = false; } }, 2000);
+                        }}
+                        style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, color: '#0284c7', fontSize: '0.7rem', fontWeight: 700, padding: '4px 10px', cursor: 'pointer' }}>
+                        🖨️ In lại
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── Print Toast ─── */}
       {printToast && (
         <div style={{
