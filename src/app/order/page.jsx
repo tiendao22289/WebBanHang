@@ -658,34 +658,7 @@ function OrderContent() {
     return cart.filter(c => c.id === itemId).reduce((s, c) => s + c.quantity, 0);
   }
 
-  // Nhắc khách gửi đơn bằng giọng nói AI (Ưu tiên Chrome Text-to-Speech)
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
 
-    // Lấy danh sách giọng đọc (Chrome tải bất đồng bộ)
-    let voices = window.speechSynthesis.getVoices();
-    window.speechSynthesis.onvoiceschanged = () => {
-       voices = window.speechSynthesis.getVoices();
-    };
-
-    if (cart.length > 0 && !showCart) {
-      const timer = setTimeout(() => {
-        try {
-          const msg = new SpeechSynthesisUtterance('Bạn hãy mở giỏ hàng và gửi đơn đi cho bếp nếu đã chọn món xong nhé!');
-          msg.lang = 'vi-VN';
-          
-          // Ép cứng Chrome dùng giọng Tiếng Việt
-          const viVoice = voices.find(v => v.lang === 'vi-VN' || v.lang === 'vi_VN' || v.name.includes('Vietnamese') || v.name.includes('Tiếng Việt'));
-          if (viVoice) {
-            msg.voice = viVoice;
-          }
-          
-          window.speechSynthesis.speak(msg);
-        } catch(e) {}
-      }, 12000); // Đợi 12s sau lần tương tác cuối mới nhắc
-      return () => clearTimeout(timer);
-    }
-  }, [cart, showCart]);
 
   async function submitOrder() {
     if (cart.length === 0 || submitting) return;
