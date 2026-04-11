@@ -792,9 +792,9 @@ function OrderContent() {
         alert(`Bạn chỉ còn ${availableGiftSlots} lượt chọn miễn phí!`);
         return;
       }
-      const newGifts = [];
+      const giftItems = [];
       for (let i = 0; i < optionQty; i++) {
-        newGifts.push({
+        giftItems.push({
           id: optionModal.id,
           name: optionModal.name,
           price: 0,
@@ -803,10 +803,11 @@ function OrderContent() {
           _note: optNote
         });
       }
-      setGiftCart(prev => [...prev, ...newGifts]);
       setOptionModal(null);
       setIsGiftMode(false);
-      if (availableGiftSlots - optionQty <= 0) setShowGiftModal(false);
+      setShowGiftModal(false);
+      // Gửi thẳng vào DB ngay
+      submitGiftDirectly(giftItems);
       return;
     }
 
@@ -1019,9 +1020,9 @@ function OrderContent() {
     }
   }
 
-  // Gửi chỉ món tặng vào đơn hiện tại (khi cart rỗng — khách đã gửi rồi, admin thêm đủ món)
-  async function submitGiftOnly() {
-    if (giftCart.length === 0 || submitting) return;
+  // Gửi món tặng thẳng vào DB (không cần bước xác nhận thêm)
+  async function submitGiftDirectly(giftsToSend) {
+    if (!giftsToSend || giftsToSend.length === 0) return;
     const savedSess = getSavedSession();
     let targetOrderId = savedSess?.orderId || currentOrderId;
     if (!targetOrderId) {
@@ -1029,13 +1030,13 @@ function OrderContent() {
       targetOrderId = activeOrder?.id;
     }
     if (!targetOrderId) {
-      alert('Không tìm thấy đơn hàng. Vui lòng gửi món ăn trước rồi chọn quà.');
+      // Thêm vào giftCart local (sẽ gửi cùng đơn tiếp theo)
+      setGiftCart(prev => [...prev, ...giftsToSend]);
       return;
     }
-    setSubmitting(true);
     try {
       await supabase.from('order_items').insert(
-        giftCart.map(g => ({
+        giftsToSend.map(g => ({
           order_id: targetOrderId,
           menu_item_id: g.id,
           quantity: 1,
@@ -1045,16 +1046,13 @@ function OrderContent() {
           is_gift: true,
         }))
       );
-      setGiftCart([]);
-      setShowGiftModal(false);
       setOrderSuccess(true);
       setTimeout(() => setOrderSuccess(false), 3000);
       fetchPreviousOrders();
     } catch (err) {
-      alert('Có lỗi khi gửi món tặng. Vui lòng thử lại.');
-      console.error(err);
-    } finally {
-      setSubmitting(false);
+      // Fallback: thêm vào local giftCart
+      setGiftCart(prev => [...prev, ...giftsToSend]);
+      console.error('submitGiftDirectly error:', err);
     }
   }
 
@@ -1723,8 +1721,9 @@ function OrderContent() {
                           setOptionQty(1);
                           setOptNote('');
                         } else {
-                          setGiftCart(prev => [...prev, { id: g.id, name: g.name, price: 0, is_gift: true }]);
-                          if (availableGiftSlots - 1 === 0) setShowGiftModal(false);
+                          // Gửi thẳng vào DB, không cần qua giftCart
+                          submitGiftDirectly([{ id: g.id, name: g.name, price: 0, is_gift: true }]);
+                          setShowGiftModal(false);
                         }
                       }}
                       style={{ background: availableGiftSlots > 0 ? '#16a34a' : '#e2e8f0', color: availableGiftSlots > 0 ? 'white' : '#94a3b8', border: 'none', borderRadius: 8, padding: '6px 14px', fontWeight: 700, fontSize: '0.82rem', cursor: availableGiftSlots > 0 ? 'pointer' : 'not-allowed' }}>
@@ -1735,18 +1734,8 @@ function OrderContent() {
               ))}
             </div>
             <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {/* Chỉ hiện nút xác nhận khi đã chọn đủ lượt quà VÀ cart rỗng (đã gửi trước) */}
-              {giftCart.length > 0 && cart.length === 0 && availableGiftSlots === 0 && (
-                <button
-                  onClick={submitGiftOnly}
-                  disabled={submitting}
-                  style={{ width: '100%', padding: '12px', background: 'linear-gradient(135deg, #22c55e, #16a34a)', border: 'none', borderRadius: 10, fontWeight: 700, cursor: 'pointer', color: 'white', fontSize: '0.95rem' }}
-                >
-                  {submitting ? 'Đang gửi...' : `🎁 Xác nhận nhận quà (${giftCart.length} món)`}
-                </button>
-              )}
               <button onClick={() => setShowGiftModal(false)} style={{ width: '100%', padding: '11px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>
-                {giftCart.length > 0 && cart.length > 0 ? 'Xong — quà sẽ gửi cùng đơn' : 'Đóng'}
+                Đóng
               </button>
             </div>
           </div>
