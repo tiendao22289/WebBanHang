@@ -63,7 +63,8 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
     if (!dragRef.current.isDragging) return;
     dragRef.current.isDragging = false;
     if (!dragRef.current.hasMoved) {
-      if (giftCount > 0 && onOpenGift) {
+      // Chỉ mở gift modal khi còn lượt chọn; ngược lại hiện preview
+      if (availableGiftSlots > 0 && onOpenGift) {
         onOpenGift();
       } else {
         setShowPreview(true);
