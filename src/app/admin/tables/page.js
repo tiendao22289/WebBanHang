@@ -307,11 +307,16 @@ export default function TablesPage() {
           .update({ status: 'paid' })
           .in('table_id', expiredIds)
           .in('status', ['pending', 'preparing', 'completed']);
-        // Reset tables
+        // Reset tables — xóa cả merged_with để bàn không còn bị đánh dấu màu cam
         await supabase
           .from('tables')
-          .update({ status: 'available', occupied_at: null })
+          .update({ status: 'available', occupied_at: null, merged_with: null })
           .in('id', expiredIds);
+        // Cũng release các satellite tables tham chiếu đến host đã expire
+        await supabase
+          .from('tables')
+          .update({ status: 'available', occupied_at: null, merged_with: null })
+          .in('merged_with', expiredIds);
         fetchTables();
       }
     }, 60000); // Check every 60 seconds
@@ -1599,13 +1604,16 @@ export default function TablesPage() {
 
         const doCancelOrder = async () => {
           if (!window.confirm('Bạn có chắc muốn huỷ tất cả đơn của bàn này?')) return;
+          const hostId = table.merged_with || table.id;
+          // Hủy tất cả đơn của host (kể cả đơn từ bàn satellite đã được chuyển sang)
           await supabase.from('orders')
             .update({ status: 'cancelled', payment_method: 'cancelled' })
-            .eq('table_id', table.id)
+            .eq('table_id', hostId)
             .in('status', ['pending', 'preparing', 'completed']);
+          // Reset toàn bộ nhóm gộp (host + all satellites)
           await supabase.from('tables')
-            .update({ status: 'available', occupied_at: null })
-            .eq('id', table.id);
+            .update({ status: 'available', occupied_at: null, merged_with: null })
+            .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
           closeModal();
           setSelectedTable(null);
           fetchTables();
@@ -2012,7 +2020,9 @@ export default function TablesPage() {
 
                               const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== order.id && o.status !== 'cancelled');
                               if (remaining.length === 0) {
-                                await supabase.from('tables').update({ status: 'available', occupied_at: null }).eq('id', selectedTable.id);
+                                // Reset toàn bộ nhóm gộp
+                                const hId = selectedTable.merged_with || selectedTable.id;
+                                await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
                                 setSelectedTable(null);
                               }
                               fetchTables();
@@ -2051,7 +2061,9 @@ export default function TablesPage() {
                             // If all orders at this table are now cancelled, reset the table
                             const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== order.id && o.status !== 'cancelled');
                             if (remaining.length === 0) {
-                              await supabase.from('tables').update({ status: 'available', occupied_at: null }).eq('id', selectedTable.id);
+                              // Reset toàn bộ nhóm gộp
+                              const hId = selectedTable.merged_with || selectedTable.id;
+                              await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
                               setSelectedTable(null);
                             }
                             fetchTables();
@@ -2541,7 +2553,7 @@ export default function TablesPage() {
             ...cat,
             items: filteredItems.filter(item => getItemCategories(item).includes(cat.id))
           }))
-          .filter(cat => cat.items.length > 0);
+          .filter(cat => cat.items.length > 0 && (activeMenuCategory === 'all' || cat.id === activeMenuCategory));
 
         return (
           <div
@@ -2552,56 +2564,56 @@ export default function TablesPage() {
               overflow: 'hidden'
             }}
           >
-            {/* Top bar */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', paddingTop: 'calc(env(safe-area-inset-top, 0px) + 16px)', borderBottom: '1px solid #f3f4f6' }}>
-              <span style={{ fontWeight: 700, fontSize: '1rem', color: '#111827' }}>Thêm món — Bàn {selectedTable?.table_number}</span>
+            {/* Top bar & Search combined */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', paddingTop: 'calc(env(safe-area-inset-top, 0px) + 12px)', borderBottom: '1px solid #f3f4f6' }}>
+              <span style={{ fontWeight: 900, fontSize: '1.25rem', color: '#2563eb', whiteSpace: 'nowrap' }}>Bàn {selectedTable?.table_number}</span>
+              
+              <div style={{ position: 'relative', flex: 1 }}>
+                <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
+                <input
+                  placeholder="Tìm món ăn..."
+                  value={addItemSearch}
+                  onChange={e => setAddItemSearch(e.target.value)}
+                  style={{
+                    width: '100%', padding: '8px 28px 8px 34px',
+                    borderRadius: 20, border: '1px solid #e5e7eb',
+                    background: '#f9fafb', fontSize: '0.88rem', outline: 'none'
+                  }}
+                />
+                {addItemSearch && (
+                  <button
+                    onClick={() => setAddItemSearch('')}
+                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 2, display: 'flex' }}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
               <button
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4 }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4, flexShrink: 0, display: 'flex' }}
                 onClick={closeModal}
               >
-                <X size={22} />
+                <X size={24} />
               </button>
             </div>
 
-            {/* Search */}
-            <div style={{ position: 'relative', padding: '8px 16px', borderBottom: '1px solid #f3f4f6' }}>
-              <Search size={16} style={{ position: 'absolute', left: 28, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
-              <input
-                placeholder="Tìm món ăn..."
-                value={addItemSearch}
-                onChange={e => setAddItemSearch(e.target.value)}
-                style={{
-                  width: '100%', padding: '9px 32px 9px 38px',
-                  borderRadius: 24, border: '1px solid #e5e7eb',
-                  background: '#f9fafb', fontSize: '0.9rem', outline: 'none'
-                }}
-              />
-              {addItemSearch && (
-                <button
-                  onClick={() => setAddItemSearch('')}
-                  style={{ position: 'absolute', right: 28, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af' }}
-                >
-                  <X size={14} />
-                </button>
-              )}
-            </div>
-
             {/* Category pills */}
-            <div style={{ display: 'flex', gap: 8, padding: '10px 16px', overflowX: 'auto', flexShrink: 0, borderBottom: '1px solid #f3f4f6' }}>
+            <div style={{ display: 'flex', gap: 6, padding: '6px 12px', overflowX: 'auto', flexShrink: 0, borderBottom: '1px solid #f3f4f6' }}>
               {[{ id: 'all', name: 'Tất cả' }, ...categories].map(cat => (
                 <button
                   key={cat.id}
                   onClick={() => setActiveMenuCategory(cat.id)}
                   style={{
                     flexShrink: 0,
-                    padding: '7px 18px',
+                    padding: '5px 14px',
                     borderRadius: 24,
                     border: '1.5px solid',
                     borderColor: activeMenuCategory === cat.id ? '#2563eb' : '#e5e7eb',
                     background: activeMenuCategory === cat.id ? '#2563eb' : 'white',
                     color: activeMenuCategory === cat.id ? 'white' : '#374151',
                     fontWeight: activeMenuCategory === cat.id ? 700 : 500,
-                    fontSize: '0.88rem',
+                    fontSize: '0.8rem',
                     cursor: 'pointer',
                     whiteSpace: 'nowrap',
                   }}
@@ -2613,94 +2625,118 @@ export default function TablesPage() {
 
             {/* Item list */}
             <div style={{ flex: 1, overflowY: 'auto', background: '#fafafa', paddingBottom: totalCartItems > 0 ? 90 : 16 }}>
-              {grouped.length === 0 && (
+              {filteredItems.length === 0 && (
                 <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>Không tìm thấy món ăn nào</div>
               )}
-              {grouped.map(cat => (
-                <div key={cat.id}>
-                  <div style={{ padding: '12px 16px 4px', fontSize: '0.9rem', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                    {cat.name} ({cat.items.length})
-                  </div>
-                  {cat.items.map(item => {
-                    const itemsInOrder = orderItems.filter(oi => oi.menu_item_id === item.id);
-                    const qty = itemsInOrder.reduce((s, oi) => s + oi.quantity, 0);
 
-                    return (
-                      <div
-                        key={item.id}
-                        onClick={() => addItemToOrder('admin', item)}
-                        style={{
-                          display: 'flex', alignItems: 'center',
-                          padding: '12px 16px',
-                          background: 'white',
-                          borderBottom: '1px solid #f3f4f6',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        {/* Thumbnail */}
-                        <div style={{
-                          width: 64, height: 64, borderRadius: 12,
-                          overflow: 'hidden', flexShrink: 0,
-                          background: '#eff6ff',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          position: 'relative'
-                        }}>
-                          {item.image_url
-                            ? <Image src={item.image_url} alt={item.name} fill sizes="64px" style={{ objectFit: 'cover' }} />
-                            : <ChefHat size={24} style={{ color: '#93c5fd' }} />}
-                        </div>
-
-                        {/* Info */}
-                        <div style={{ flex: 1, marginLeft: 12, paddingRight: 8 }}>
-                          <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#111827', marginBottom: 4, lineHeight: 1.3 }}>{item.name}</div>
-                          <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#6b7280' }}>{formatPrice(item.price)}</div>
-                        </div>
-
-                        {/* Qty controls */}
-                        {qty > 0 ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }} onClick={e => e.stopPropagation()}>
-                            <button
-                              onClick={() => decreaseItemFromMenu(item.id)}
-                              style={{
-                                width: 30, height: 30, borderRadius: '50%',
-                                border: '1.5px solid #d1d5db', background: 'white',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                cursor: 'pointer', color: '#374151'
-                              }}
-                            >
-                              <Minus size={15} strokeWidth={2.5} />
-                            </button>
-                            <span style={{ width: 20, textAlign: 'center', fontWeight: 700, fontSize: '1rem', color: '#111827' }}>{qty}</span>
-                            <button
-                              onClick={() => addItemToOrder('admin', item)}
-                              style={{
-                                width: 30, height: 30, borderRadius: '50%',
-                                border: '1.5px solid #d1d5db', background: 'white',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                cursor: 'pointer', color: '#374151'
-                              }}
-                            >
-                              <Plus size={15} strokeWidth={2.5} />
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={e => { e.stopPropagation(); addItemToOrder('admin', item); }}
-                            style={{
-                              width: 32, height: 32, borderRadius: '50%',
-                              background: 'white', border: '1.5px solid #d1d5db',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              cursor: 'pointer', flexShrink: 0, color: '#374151'
-                            }}
-                          >
-                            <Plus size={18} strokeWidth={2} />
-                          </button>
-                        )}
+              {activeMenuCategory === 'all' ? (
+                /* ── Tất cả: flat list, không header nhóm ── */
+                filteredItems.map(item => {
+                  const itemsInOrder = orderItems.filter(oi => oi.menu_item_id === item.id);
+                  const qty = itemsInOrder.reduce((s, oi) => s + oi.quantity, 0);
+                  return (
+                    <div
+                      key={item.id}
+                      onClick={() => addItemToOrder('admin', item)}
+                      style={{
+                        display: 'flex', alignItems: 'center',
+                        padding: '7px 12px',
+                        background: 'white',
+                        borderBottom: '1px solid #f3f4f6',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <div style={{
+                        width: 44, height: 44, borderRadius: 8,
+                        overflow: 'hidden', flexShrink: 0,
+                        background: '#eff6ff',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        position: 'relative'
+                      }}>
+                        {item.image_url
+                          ? <Image src={item.image_url} alt={item.name} fill sizes="44px" style={{ objectFit: 'cover' }} />
+                          : <ChefHat size={20} style={{ color: '#93c5fd' }} />}
                       </div>
-                    );
-                  })}
-                </div>
-              ))}
+                      <div style={{ flex: 1, marginLeft: 10, paddingRight: 6 }}>
+                        <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#111827', marginBottom: 1, lineHeight: 1.25 }}>{item.name}</div>
+                        <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#6b7280' }}>{formatPrice(item.price)}</div>
+                      </div>
+                      {qty > 0 ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={e => e.stopPropagation()}>
+                          <button onClick={() => decreaseItemFromMenu(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                            <Minus size={13} strokeWidth={2.5} />
+                          </button>
+                          <span style={{ width: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{qty}</span>
+                          <button onClick={() => addItemToOrder('admin', item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                            <Plus size={13} strokeWidth={2.5} />
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={e => { e.stopPropagation(); addItemToOrder('admin', item); }} style={{ width: 28, height: 28, borderRadius: '50%', background: 'white', border: '1.5px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#374151' }}>
+                          <Plus size={15} strokeWidth={2} />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                /* ── Category cụ thể: hiển thị theo nhóm có header ── */
+                grouped.map(cat => (
+                  <div key={cat.id}>
+                    <div style={{ padding: '8px 16px 2px', fontSize: '0.72rem', fontWeight: 800, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      {cat.name} ({cat.items.length})
+                    </div>
+                    {cat.items.map(item => {
+                      const itemsInOrder = orderItems.filter(oi => oi.menu_item_id === item.id);
+                      const qty = itemsInOrder.reduce((s, oi) => s + oi.quantity, 0);
+                      return (
+                        <div
+                          key={item.id}
+                          onClick={() => addItemToOrder('admin', item)}
+                          style={{
+                            display: 'flex', alignItems: 'center',
+                            padding: '7px 12px',
+                            background: 'white',
+                            borderBottom: '1px solid #f3f4f6',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <div style={{
+                            width: 44, height: 44, borderRadius: 8,
+                            overflow: 'hidden', flexShrink: 0,
+                            background: '#eff6ff',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            position: 'relative'
+                          }}>
+                            {item.image_url
+                              ? <Image src={item.image_url} alt={item.name} fill sizes="44px" style={{ objectFit: 'cover' }} />
+                              : <ChefHat size={20} style={{ color: '#93c5fd' }} />}
+                          </div>
+                          <div style={{ flex: 1, marginLeft: 10, paddingRight: 6 }}>
+                            <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#111827', marginBottom: 1, lineHeight: 1.25 }}>{item.name}</div>
+                            <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#6b7280' }}>{formatPrice(item.price)}</div>
+                          </div>
+                          {qty > 0 ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={e => e.stopPropagation()}>
+                              <button onClick={() => decreaseItemFromMenu(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                                <Minus size={13} strokeWidth={2.5} />
+                              </button>
+                              <span style={{ width: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{qty}</span>
+                              <button onClick={() => addItemToOrder('admin', item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                                <Plus size={13} strokeWidth={2.5} />
+                              </button>
+                            </div>
+                          ) : (
+                            <button onClick={e => { e.stopPropagation(); addItemToOrder('admin', item); }} style={{ width: 28, height: 28, borderRadius: '50%', background: 'white', border: '1.5px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#374151' }}>
+                              <Plus size={15} strokeWidth={2} />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))
+              )}
             </div>
 
             {/* Floating cart bar */}
@@ -2814,23 +2850,43 @@ export default function TablesPage() {
               </div>
 
               {optionModalItem.options && optionModalItem.options.map((opt, idx) => (
-                <div key={idx}>
+                <div key={idx} style={{ marginBottom: 8, marginTop: idx === 0 ? 0 : 4 }}>
                   <div className="options-group-title">{opt.name}</div>
-                  <div className="options-chip-container">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginTop: 6 }}>
                     {opt.choices.map((choice, cIdx) => {
                       const choiceP = opt.prices?.[cIdx];
-                      const hasPrice = choiceP !== null && choiceP !== '';
+                      const hasPrice = choiceP !== null && choiceP !== '' && Number(choiceP) > 0;
+                      const isSelected = selectedOptions[opt.name] === choice;
                       return (
-                        <button
+                        <label
                           key={cIdx}
-                          className={`options-chip ${selectedOptions[opt.name] === choice ? 'active' : ''}`}
                           onClick={() => {
                             setSelectedOptions({ ...selectedOptions, [opt.name]: choice });
                             if (hasPrice) setCustomPrice(Number(choiceP));
                           }}
+                          style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            padding: '7px 4px', cursor: 'pointer',
+                            borderBottom: cIdx < opt.choices.length - 1 ? '1px solid #f3f4f6' : 'none',
+                          }}
                         >
-                          {choice}{hasPrice ? <span style={{ fontSize: '0.72rem', opacity: 0.85, marginLeft: 4 }}>• {formatPrice(Number(choiceP))}</span> : null}
-                        </button>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div style={{
+                              width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+                              border: isSelected ? '5px solid #2563eb' : '1.5px solid #d1d5db',
+                              background: 'white', transition: 'all 0.15s',
+                            }} />
+                            <span style={{
+                              fontSize: '0.88rem', fontWeight: isSelected ? 700 : 500,
+                              color: isSelected ? '#1d4ed8' : '#374151',
+                            }}>{choice}</span>
+                          </div>
+                          {hasPrice ? (
+                            <span style={{ fontSize: '0.78rem', color: '#6b7280', fontWeight: 500 }}>
+                              +{formatPrice(Number(choiceP))}
+                            </span>
+                          ) : null}
+                        </label>
                       );
                     })}
                   </div>
@@ -3285,13 +3341,16 @@ export default function TablesPage() {
                   setOrders(prev => ({ ...prev, [t.id]: [] }));
 
                   // ─── 2. DB updates in background (after UI is already gone) ───
+                  const hostId = t.merged_with || t.id;
+                  // Hủy tất cả đơn của host (kể cả đơn từ bàn satellite đã được chuyển sang)
                   await supabase.from('orders')
                     .update({ status: 'cancelled', payment_method: 'cancelled' })
-                    .eq('table_id', t.id)
+                    .eq('table_id', hostId)
                     .in('status', ['pending', 'preparing', 'completed']);
+                  // Reset toàn bộ nhóm gộp (host + all satellites)
                   await supabase.from('tables')
-                    .update({ status: 'available', occupied_at: null })
-                    .eq('id', t.id);
+                    .update({ status: 'available', occupied_at: null, merged_with: null })
+                    .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
                   fetchTables();
                 }}
                 style={{

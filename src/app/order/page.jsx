@@ -660,10 +660,12 @@ function OrderContent() {
 
   // Nhắc khách gửi đơn bằng giọng nói AI (Ưu tiên Chrome Text-to-Speech)
   useEffect(() => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+
     // Lấy danh sách giọng đọc (Chrome tải bất đồng bộ)
     let voices = window.speechSynthesis.getVoices();
     window.speechSynthesis.onvoiceschanged = () => {
-      voices = window.speechSynthesis.getVoices();
+       voices = window.speechSynthesis.getVoices();
     };
 
     if (cart.length > 0 && !showCart) {
@@ -1581,9 +1583,15 @@ function OrderContent() {
             </div>
             <div className="co-sheet-body">
               {optionModal.options.map((opt, oi) => (
-                <div key={oi} style={{ marginBottom: 12 }}>
-                  <div style={{ fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#6b7280', marginBottom: 6 }}>{opt.name}</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div key={oi} style={{ marginBottom: 10, marginTop: oi === 0 ? 0 : 4 }}>
+                  <div style={{
+                    fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
+                    letterSpacing: '0.06em', color: '#1d4ed8',
+                    background: '#eff6ff', borderLeft: '3px solid #2563eb',
+                    padding: '3px 8px', borderRadius: '5px',
+                    display: 'inline-block', marginBottom: 6
+                  }}>{opt.name}</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0px' }}>
                     {opt.choices.map((choice, ci) => {
                       const p = opt.prices?.[ci];
                       const hasPrice = p !== null && p !== '';
@@ -1594,30 +1602,31 @@ function OrderContent() {
                           setSelectedOpts({ ...selectedOpts, [opt.name]: choice });
                           if (hasPrice) setChoicePrice(Number(p));
                         }} style={{
-                          padding: '4px 4px', 
+                          padding: '6px 4px', 
                           border: 'none',
                           background: 'transparent',
                           color: active ? '#1d4ed8' : '#4b5563',
                           fontWeight: active ? 700 : 500,
-                          fontSize: '0.8rem', cursor: 'pointer',
+                          fontSize: '0.85rem', cursor: 'pointer',
                           display: 'flex', alignItems: 'center', gap: '8px',
                           transition: 'all 0.2s ease',
                           textAlign: 'left',
-                          width: '100%'
+                          width: '100%',
+                          borderBottom: ci < opt.choices.length - 1 ? '1px solid #f3f4f6' : 'none',
                         }}>
                           {/* Radio circle */}
                           <div style={{
-                            width: 14, height: 14, borderRadius: '50%', flexShrink: 0,
-                            border: active ? '3.5px solid #2563eb' : '1px solid #d1d5db',
+                            width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
+                            border: active ? '4.5px solid #2563eb' : '1.5px solid #d1d5db',
                             background: 'white',
                             transition: 'all 0.2s ease'
                           }} />
                           
                           <span style={{ flex: 1, lineHeight: 1.25 }}>{choice}</span>
                           
-                          {hasPrice ? (
+                          {hasPrice && Number(p) > 0 ? (
                             <span style={{ 
-                              fontSize: '0.7rem', 
+                              fontSize: '0.72rem', 
                               color: active ? '#1e40af' : '#6b7280',
                               fontWeight: 700
                             }}>
@@ -1630,8 +1639,14 @@ function OrderContent() {
                   </div>
                 </div>
               ))}
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontWeight: 700, fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#6b7280', marginBottom: 8 }}>Ghi chú</div>
+              <div style={{ marginBottom: 16, marginTop: 4 }}>
+                <div style={{
+                  fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
+                  letterSpacing: '0.06em', color: '#1d4ed8',
+                  background: '#eff6ff', borderLeft: '3px solid #2563eb',
+                  padding: '3px 8px', borderRadius: '5px',
+                  display: 'inline-block', marginBottom: 8
+                }}>Ghi chú</div>
                 <input
                   className="co-input"
                   placeholder="Thêm ghi chú cho nhà bếp..."
