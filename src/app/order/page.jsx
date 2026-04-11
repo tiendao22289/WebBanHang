@@ -1735,8 +1735,8 @@ function OrderContent() {
               ))}
             </div>
             <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {/* Nếu cart rỗng (đã gửi trước) → gửi quà thẳng vào DB */}
-              {giftCart.length > 0 && cart.length === 0 && (
+              {/* Chỉ hiện nút xác nhận khi đã chọn đủ lượt quà VÀ cart rỗng (đã gửi trước) */}
+              {giftCart.length > 0 && cart.length === 0 && availableGiftSlots === 0 && (
                 <button
                   onClick={submitGiftOnly}
                   disabled={submitting}
