@@ -1005,6 +1005,45 @@ function OrderContent() {
     }
   }
 
+  // Gửi chỉ món tặng vào đơn hiện tại (khi cart rỗng — khách đã gửi rồi, admin thêm đủ món)
+  async function submitGiftOnly() {
+    if (giftCart.length === 0 || submitting) return;
+    const savedSess = getSavedSession();
+    let targetOrderId = savedSess?.orderId || currentOrderId;
+    if (!targetOrderId) {
+      const activeOrder = (previousOrders || []).find(o => o.status === 'pending' || o.status === 'preparing');
+      targetOrderId = activeOrder?.id;
+    }
+    if (!targetOrderId) {
+      alert('Không tìm thấy đơn hàng. Vui lòng gửi món ăn trước rồi chọn quà.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await supabase.from('order_items').insert(
+        giftCart.map(g => ({
+          order_id: targetOrderId,
+          menu_item_id: g.id,
+          quantity: 1,
+          unit_price: 0,
+          item_options: g._options || [],
+          note: g._note || null,
+          is_gift: true,
+        }))
+      );
+      setGiftCart([]);
+      setShowGiftModal(false);
+      setOrderSuccess(true);
+      setTimeout(() => setOrderSuccess(false), 3000);
+      fetchPreviousOrders();
+    } catch (err) {
+      alert('Có lỗi khi gửi món tặng. Vui lòng thử lại.');
+      console.error(err);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   function formatPrice(price) {
     return new Intl.NumberFormat('vi-VN').format(price || 0) + 'đ';
   }
@@ -1681,8 +1720,20 @@ function OrderContent() {
                 </div>
               ))}
             </div>
-            <div style={{ padding: '0 16px 16px' }}>
-              <button onClick={() => setShowGiftModal(false)} style={{ width: '100%', padding: '11px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>Xong</button>
+            <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {/* Nếu cart rỗng (đã gửi trước) → gửi quà thẳng vào DB */}
+              {giftCart.length > 0 && cart.length === 0 && (
+                <button
+                  onClick={submitGiftOnly}
+                  disabled={submitting}
+                  style={{ width: '100%', padding: '12px', background: 'linear-gradient(135deg, #22c55e, #16a34a)', border: 'none', borderRadius: 10, fontWeight: 700, cursor: 'pointer', color: 'white', fontSize: '0.95rem' }}
+                >
+                  {submitting ? 'Đang gửi...' : `🎁 Xác nhận nhận quà (${giftCart.length} món)`}
+                </button>
+              )}
+              <button onClick={() => setShowGiftModal(false)} style={{ width: '100%', padding: '11px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>
+                {giftCart.length > 0 && cart.length > 0 ? 'Xong — quà sẽ gửi cùng đơn' : 'Đóng'}
+              </button>
             </div>
           </div>
         </div>
