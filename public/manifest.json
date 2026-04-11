@@ -1,14 +1,16 @@
 {
-  "name": "Quản lý nhà hàng",
-  "short_name": "Nhà Hàng",
-  "description": "Hệ thống quản lý bàn và đặt món",
-  "start_url": "/admin/tables",
+  "name": "Nhà Hàng - Gọi Món",
+  "short_name": "Gọi Món",
+  "description": "Quét QR để gọi món ngay tại bàn",
+  "start_url": "/order",
   "scope": "/",
-  "display": "standalone",
-  "orientation": "any",
-  "background_color": "#1e3a8a",
-  "theme_color": "#2563eb",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
   "categories": ["food", "productivity"],
+  "lang": "vi",
   "icons": [
     {
       "src": "/icon-192.png",
@@ -21,6 +23,13 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Gọi Món",
+      "url": "/order",
+      "description": "Mở trang gọi món"
     }
   ]
 }
