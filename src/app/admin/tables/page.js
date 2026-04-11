@@ -467,6 +467,64 @@ export default function TablesPage() {
     setConfirmDelete({ orderId, itemId, itemName });
   }
 
+  async function syncOrderPromotions(orderId) {
+    try {
+      const { data: settings } = await supabase.from('settings').select('key, value').in('key', ['promotion_enabled', 'promotion_threshold']);
+      const promoConfig = { enabled: false, threshold: 8 };
+      if (settings) {
+        const map = Object.fromEntries(settings.map(r => [r.key, r.value]));
+        promoConfig.enabled = map.promotion_enabled === 'true';
+        promoConfig.threshold = parseInt(map.promotion_threshold) || 8;
+      }
+      if (!promoConfig.enabled) return;
+
+      const { data: items } = await supabase
+        .from('order_items')
+        .select(`
+          id, quantity, is_gift, created_at,
+          menu_items ( id, counts_for_promotion )
+        `)
+        .eq('order_id', orderId);
+        
+      if (!items) return;
+
+      let qualifyingQty = 0;
+      let giftItems = [];
+      
+      for (const item of items) {
+        if (item.is_gift) {
+          giftItems.push(item);
+        } else if (item.menu_items?.counts_for_promotion) {
+          qualifyingQty += item.quantity;
+        }
+      }
+      
+      const maxGifts = Math.floor(qualifyingQty / promoConfig.threshold);
+      let totalGifts = giftItems.reduce((acc, g) => acc + g.quantity, 0);
+      let excessGifts = totalGifts - maxGifts;
+      
+      if (excessGifts > 0) {
+        giftItems.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        for (const gift of giftItems) {
+          if (excessGifts <= 0) break;
+          if (gift.quantity <= excessGifts) {
+             await supabase.from('order_items').delete().eq('id', gift.id);
+             excessGifts -= gift.quantity;
+          } else {
+             await supabase.from('order_items').update({ quantity: gift.quantity - excessGifts }).eq('id', gift.id);
+             excessGifts = 0;
+          }
+        }
+        // Recalculate order total mostly to be safe
+        const { data: remaining } = await supabase.from('order_items').select('unit_price, quantity').eq('order_id', orderId);
+        const newTotal = (remaining || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+        await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+      }
+    } catch (err) {
+      console.error('Error syncing order promotions:', err);
+    }
+  }
+
   async function performDeleteItem(orderId, itemId) {
     setConfirmDelete(null);
     // Delete the order item
@@ -484,6 +542,8 @@ export default function TablesPage() {
       .eq('order_id', orderId);
     const newTotal = (remaining || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+    
+    await syncOrderPromotions(orderId);
     fetchTables();
   }
 
@@ -507,6 +567,7 @@ export default function TablesPage() {
     const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
     
+    await syncOrderPromotions(orderId);
     fetchTables();
   }
 
