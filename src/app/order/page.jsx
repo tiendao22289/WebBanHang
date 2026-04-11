@@ -26,7 +26,8 @@ import {
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './order.css';
 
-const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGiftSlots, onOpenGift }) => {
+const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGiftSlots, onOpenGift, giftItems = [], promoEnabled }) => {
+  const [showPreview, setShowPreview] = useState(false);
   const [pos, setPos] = useState({ x: -100, y: -100 });
   const dragRef = useRef({ isDragging: false, startX: 0, startY: 0, initialX: 0, initialY: 0, hasMoved: false });
 
@@ -61,8 +62,12 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
   const handleTouchEnd = () => {
     if (!dragRef.current.isDragging) return;
     dragRef.current.isDragging = false;
-    if (!dragRef.current.hasMoved && onOpenGift) {
-      onOpenGift();
+    if (!dragRef.current.hasMoved) {
+      if (giftCount > 0 && onOpenGift) {
+        onOpenGift();
+      } else {
+        setShowPreview(true);
+      }
     } else {
       setPos(p => ({ ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 80 : 15 }));
     }
@@ -71,46 +76,146 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
   if (pos.x === -100) return null;
 
   const hasGift = giftCount > 0;
+  const progress = Math.min((qualifyingQty / threshold) * 100, 100);
 
   return (
-    <div
-      style={{
-        position: 'fixed', left: pos.x, top: pos.y, zIndex: 100, touchAction: 'none',
-        transition: dragRef.current.isDragging ? 'none' : 'left 0.3s ease-out',
-        cursor: 'grab'
-      }}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-      onMouseDown={handleTouchStart}
-      onMouseMove={handleTouchMove}
-      onMouseUp={handleTouchEnd}
-      onMouseLeave={(e) => { if (dragRef.current.isDragging) handleTouchEnd(); }}
-    >
-      <div style={{
-        width: 60, height: 60, borderRadius: '50%',
-        background: hasGift ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'linear-gradient(135deg, #dcfce7, #bbf7d0)',
-        boxShadow: hasGift ? '0 8px 24px rgba(34,197,94,0.6)' : '0 8px 20px rgba(34,197,94,0.4)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: '1.8rem', border: hasGift ? '3px solid white' : '3px solid #86efac',
-        animation: hasGift ? 'co-gift-pulse 2s infinite' : 'co-float 3s infinite ease-in-out'
-      }}>
-        🎁
+    <>
+      {/* Bubble nổi */}
+      <div
+        style={{
+          position: 'fixed', left: pos.x, top: pos.y, zIndex: 100, touchAction: 'none',
+          transition: dragRef.current.isDragging ? 'none' : 'left 0.3s ease-out',
+          cursor: 'grab'
+        }}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onMouseDown={handleTouchStart}
+        onMouseMove={handleTouchMove}
+        onMouseUp={handleTouchEnd}
+        onMouseLeave={() => { if (dragRef.current.isDragging) handleTouchEnd(); }}
+      >
+        {/* Vòng tiến trình */}
+        <svg width="70" height="70" style={{ position: 'absolute', top: -5, left: -5, transform: 'rotate(-90deg)', pointerEvents: 'none' }}>
+          <circle cx="35" cy="35" r="30" fill="none" stroke="#dcfce7" strokeWidth="4"/>
+          <circle cx="35" cy="35" r="30" fill="none" stroke="#22c55e" strokeWidth="4"
+            strokeDasharray={`${2 * Math.PI * 30}`}
+            strokeDashoffset={`${2 * Math.PI * 30 * (1 - progress / 100)}`}
+            strokeLinecap="round"
+            style={{ transition: 'stroke-dashoffset 0.5s ease' }}
+          />
+        </svg>
+
+        <div style={{
+          width: 60, height: 60, borderRadius: '50%',
+          background: hasGift ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'linear-gradient(135deg, #f0fdf4, #dcfce7)',
+          boxShadow: hasGift ? '0 8px 24px rgba(34,197,94,0.6)' : '0 4px 16px rgba(34,197,94,0.3)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: '1.7rem', border: hasGift ? '2px solid white' : '2px solid #86efac',
+          animation: hasGift ? 'co-gift-pulse 2s infinite' : 'co-float 3s infinite ease-in-out'
+        }}>
+          🎁
+        </div>
+
+        <div style={{
+          position: 'absolute', top: -6, right: -12,
+          background: hasGift ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #22c55e, #16a34a)',
+          color: 'white',
+          borderRadius: 20, padding: '3px 7px',
+          fontSize: '0.72rem', fontWeight: 900,
+          boxShadow: '0 3px 8px rgba(0,0,0,0.2)',
+          pointerEvents: 'none', whiteSpace: 'nowrap',
+          border: '2px solid white'
+        }}>
+          {hasGift ? (availableGiftSlots > 0 ? `🎉 ${availableGiftSlots} Quà!` : '✅ Đã nhận') : `${qualifyingQty}/${threshold}`}
+        </div>
       </div>
-      
-      <div style={{
-        position: 'absolute', top: -5, right: -10,
-        background: hasGift ? '#eab308' : 'white',
-        color: hasGift ? 'white' : '#15803d',
-        border: hasGift ? '2px solid white' : '2px solid #86efac',
-        borderRadius: 20, padding: '4px 8px',
-        fontSize: '0.75rem', fontWeight: 900,
-        boxShadow: '0 4px 10px rgba(0,0,0,0.15)',
-        pointerEvents: 'none', whiteSpace: 'nowrap'
-      }}>
-        {hasGift ? (availableGiftSlots > 0 ? `${availableGiftSlots} Quà Mới!` : 'Đã nhận') : `${qualifyingQty}/${threshold}`}
-      </div>
-    </div>
+
+      {/* Modal xem trước món tặng */}
+      {showPreview && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200,
+            background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(4px)',
+            display: 'flex', alignItems: 'flex-end', justifyContent: 'center'
+          }}
+          onClick={() => setShowPreview(false)}
+        >
+          <div
+            style={{
+              background: 'white', borderRadius: '24px 24px 0 0',
+              padding: '24px 20px 40px', width: '100%', maxWidth: 480,
+              boxShadow: '0 -8px 40px rgba(0,0,0,0.2)',
+              animation: 'slideUpSheet 0.3s cubic-bezier(0.32,0.72,0,1)'
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Handle bar */}
+            <div style={{ width: 40, height: 4, background: '#e5e7eb', borderRadius: 4, margin: '0 auto 20px' }} />
+
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+              <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'linear-gradient(135deg, #22c55e, #16a34a)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.6rem', flexShrink: 0 }}>🎁</div>
+              <div>
+                <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#111827' }}>Khuyến Mãi Hôm Nay</div>
+                <div style={{ fontSize: '0.82rem', color: '#6b7280' }}>Chọn đủ <b style={{color:'#16a34a'}}>{threshold} món</b> được tặng miễn phí!</div>
+              </div>
+            </div>
+
+            {/* Progress */}
+            <div style={{ background: '#f0fdf4', borderRadius: 12, padding: '12px 14px', marginBottom: 20 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', fontWeight: 700, color: '#15803d', marginBottom: 8 }}>
+                <span>Tiến trình của bạn</span>
+                <span>{qualifyingQty}/{threshold} món</span>
+              </div>
+              <div style={{ height: 8, background: '#dcfce7', borderRadius: 6, overflow: 'hidden' }}>
+                <div style={{ width: `${progress}%`, height: '100%', background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 6, transition: 'width 0.5s ease' }} />
+              </div>
+              {qualifyingQty < threshold && (
+                <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 6 }}>Thêm <b style={{color:'#dc2626'}}>{threshold - qualifyingQty} món</b> nữa để nhận quà!</div>
+              )}
+            </div>
+
+            {/* Danh sách món tặng */}
+            <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#374151', marginBottom: 12 }}>🎀 Danh sách món được tặng:</div>
+            {giftItems.length === 0 ? (
+              <div style={{ textAlign: 'center', color: '#9ca3af', padding: '20px 0' }}>Chưa có món tặng hôm nay</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 280, overflowY: 'auto' }}>
+                {giftItems.map(item => (
+                  <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 12, background: '#f9fafb', borderRadius: 12, padding: '10px 12px', border: '1px solid #e5e7eb' }}>
+                    <div style={{ width: 46, height: 46, borderRadius: 10, overflow: 'hidden', flexShrink: 0, background: '#e5e7eb' }}>
+                      {item.image_url
+                        ? <img src={item.image_url} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem' }}>🍽️</div>
+                      }
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: '0.92rem', fontWeight: 700, color: '#111827' }}>{item.name}</div>
+                      <div style={{ fontSize: '0.78rem', color: '#22c55e', fontWeight: 600 }}>Miễn phí 🎁</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button
+              onClick={() => setShowPreview(false)}
+              style={{ marginTop: 20, width: '100%', background: 'linear-gradient(135deg, #22c55e, #16a34a)', color: 'white', border: 'none', borderRadius: 14, padding: '14px', fontSize: '1rem', fontWeight: 700, cursor: 'pointer' }}
+            >
+              Đặt món ngay!
+            </button>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes slideUpSheet {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
+        }
+      `}</style>
+    </>
   );
 };
 function OrderContent() {
@@ -1339,21 +1444,16 @@ function OrderContent() {
         ))}
       </div>
 
-      {/* ─── Draggable Promotion Bubble ─── */}
-      {promoConfig.enabled && totalItems > 0 && (
+      {/* ─── Draggable Promotion Bubble (luôn hiện khi promo bật) ─── */}
+      {promoConfig.enabled && (
         <DraggablePromoBubble
           qualifyingQty={qualifyingQty}
           threshold={promoConfig.threshold}
           giftCount={giftCount}
           availableGiftSlots={availableGiftSlots}
-          onOpenGift={() => {
-            if (giftCount > 0) {
-              setShowGiftModal(true);
-            } else {
-              // Có báo hiệu gì đó nếu chưa đủ điều kiện nhận quà
-              const msg = new Audio(); // optional play sound or show basic alert
-            }
-          }}
+          giftItems={giftItems}
+          promoEnabled={promoConfig.enabled}
+          onOpenGift={() => setShowGiftModal(true)}
         />
       )}
 
