@@ -1256,8 +1256,8 @@ function OrderContent() {
       {promoConfig.enabled && totalItems > 0 && (
         <div style={{ position: 'fixed', bottom: totalItems > 0 ? 76 : 16, left: 0, right: 0, zIndex: 49, padding: '0 16px', pointerEvents: 'none', transition: 'bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1)' }}>
           {giftCount === 0 ? (
-            <div style={{ background: 'rgba(255, 255, 255, 0.95)', backdropFilter: 'blur(10px)', border: '1px solid #bbf7d0', borderRadius: 20, padding: '14px 18px', boxShadow: '0 8px 32px rgba(34, 197, 94, 0.15)', pointerEvents: 'all' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 700, color: '#15803d', marginBottom: 10 }}>
+            <div style={{ background: 'transparent', border: 'none', padding: '0 4px 6px 4px', pointerEvents: 'all' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 700, color: '#15803d', marginBottom: 10, textShadow: '0 1px 3px rgba(255,255,255,0.9)' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ background: '#dcfce7', padding: '2px 6px', borderRadius: 6, fontSize: '0.8rem' }}>🚀</span>
                   Đã chọn {qualifyingQty}/{promoConfig.threshold} món
@@ -1330,13 +1330,13 @@ function OrderContent() {
               pointerEvents: 'auto', flexShrink: 0,
               background: 'white', color: '#ef4444', 
               border: '2px solid #ef4444', borderRadius: '16px', 
-              padding: '0 14px',
+              padding: '0 8px',
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, 
               cursor: 'pointer', boxShadow: '0 4px 14px rgba(239, 68, 68, 0.15)', transition: 'transform 0.1s'
             }}
           >
             <RotateCcw size={18} strokeWidth={2.5} />
-            <span style={{ fontSize: '0.7rem', fontWeight: 900 }}>CHỌN LẠI</span>
+            <span style={{ fontSize: '0.65rem', fontWeight: 900 }}>CHỌN LẠI</span>
           </button>
 
           {/* Nút Giỏ Hàng */}
