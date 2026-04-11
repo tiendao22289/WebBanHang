@@ -743,7 +743,47 @@ export default function TablesPage() {
       
     const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
-    
+
+    // ── Kiểm tra unlock khuyến mãi và thông báo cho khách ──
+    try {
+      const { data: settingsRows } = await supabase.from('settings').select('key, value').in('key', ['promotion_enabled', 'promotion_threshold']);
+      const cfg = { enabled: false, threshold: 8 };
+      if (settingsRows) {
+        const m = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
+        cfg.enabled = m.promotion_enabled === 'true';
+        cfg.threshold = parseInt(m.promotion_threshold) || 8;
+      }
+      if (cfg.enabled) {
+        // Lấy order thuộc bàn này
+        const { data: orderRow } = await supabase.from('orders').select('table_id').eq('id', targetOrderId).maybeSingle();
+        if (orderRow?.table_id) {
+          // Lấy toàn bộ order_items của bàn hôm nay
+          const now = new Date();
+          const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+          const { data: tableOrders } = await supabase
+            .from('orders')
+            .select(`id, order_items( id, quantity, is_gift, menu_items(counts_for_promotion) )`)
+            .eq('table_id', orderRow.table_id)
+            .gte('created_at', startOfDay)
+            .in('status', ['pending', 'preparing', 'completed']);
+
+          let totalQualifying = 0;
+          let totalGifts = 0;
+          for (const ord of (tableOrders || [])) {
+            for (const it of (ord.order_items || [])) {
+              if (it.is_gift) { totalGifts += it.quantity; }
+              else if (it.menu_items?.counts_for_promotion) { totalQualifying += it.quantity; }
+            }
+          }
+          const maxGifts = Math.floor(totalQualifying / cfg.threshold);
+          const newUnlockedCount = maxGifts; // tổng gift đc hưởng
+          
+          // Ghi vào tables.promo_gift_unlocked → Realtime sẽ notify khách
+          await supabase.from('tables').update({ promo_gift_unlocked: newUnlockedCount }).eq('id', orderRow.table_id);
+        }
+      }
+    } catch (e) { console.error('promo unlock check error:', e); }
+
     // Reset option modal state if it was open
     setOptionModalItem(null);
     setSelectedOptions({});

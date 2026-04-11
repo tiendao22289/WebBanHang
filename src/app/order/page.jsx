@@ -839,10 +839,45 @@ function OrderContent() {
   }
 
   // Promotion calculations
-  const qualifyingQty = cart.reduce((sum, item) => sum + (menuItems.find(m => m.id === item.id)?.counts_for_promotion ? item.quantity : 0), 0);
+  // qualifyingQty từ local cart (chưa gửi)
+  const localQualifyingQty = cart.reduce((sum, item) => sum + (menuItems.find(m => m.id === item.id)?.counts_for_promotion ? item.quantity : 0), 0);
+  // qualifyingQty từ các đơn đã gửi (tính từ previousOrders)
+  const submittedQualifyingQty = (previousOrders || []).reduce((sum, order) => {
+    return sum + (order.order_items || []).reduce((s, oi) => {
+      if (oi.is_gift) return s;
+      const menuItem = menuItems.find(m => m.id === oi.menu_item_id);
+      return s + (menuItem?.counts_for_promotion ? (oi.quantity || 0) : 0);
+    }, 0);
+  }, 0);
+  const qualifyingQty = localQualifyingQty + submittedQualifyingQty;
   const giftCount = promoConfig.enabled ? Math.floor(qualifyingQty / promoConfig.threshold) : 0;
   const usedGiftSlots = giftCart.length;
   const availableGiftSlots = Math.max(0, giftCount - usedGiftSlots);
+
+  // ── Lắng nghe promo_gift_unlocked từ server (Admin thêm món) ──
+  const [serverGiftUnlocked, setServerGiftUnlocked] = useState(0);
+  const [adminUnlockToast, setAdminUnlockToast] = useState(false);
+  const prevGiftCountRef = useRef(0);
+
+  // Khi giftCount tăng lên (kể cả từ server push) → mở modal + toast
+  useEffect(() => {
+    if (!promoConfig.enabled) return;
+    if (giftCount > prevGiftCountRef.current && prevGiftCountRef.current >= 0) {
+      // Có gift mới mở khóa
+      if (prevGiftCountRef.current > 0 || giftCount > 0) {
+        // Chỉ thông báo nếu user đã gửi món (không phải lần đầu set state)
+        if (submittedQualifyingQty > 0 || localQualifyingQty > 0) {
+          setAdminUnlockToast(true);
+          setTimeout(() => setAdminUnlockToast(false), 6000);
+          // Tự mở modal nếu có gift available và chưa mở
+          if (availableGiftSlots > 0) {
+            setTimeout(() => setShowGiftModal(true), 800);
+          }
+        }
+      }
+    }
+    prevGiftCountRef.current = giftCount;
+  }, [giftCount]);
 
   // Auto-trim giftCart if qualifyingQty drops (customer removed items)
   const [giftLostToast, setGiftLostToast] = useState(false);
@@ -1664,6 +1699,22 @@ function OrderContent() {
       {giftLostToast && (
         <div className="co-success-toast" style={{ background: '#92400e', borderColor: '#fbbf24' }}>
           ⚠️ Bạn đã xóa bớt món — món tặng đã bị hủy do không đủ số lượng!
+        </div>
+      )}
+
+      {/* ─── Admin Unlock Toast (Admin thêm món → khách đủ điều kiện nhận quà) ─── */}
+      {adminUnlockToast && (
+        <div
+          className="co-success-toast"
+          style={{
+            background: 'linear-gradient(135deg, #15803d, #166534)',
+            borderColor: '#4ade80',
+            cursor: 'pointer',
+            animation: 'co-cart-bounce 0.4s ease'
+          }}
+          onClick={() => { setAdminUnlockToast(false); setShowGiftModal(true); }}
+        >
+          🎁 <b>Chúc mừng!</b> Bạn đã đủ điều kiện nhận món tặng miễn phí! Nhấn vào đây để chọn quà →
         </div>
       )}
 
