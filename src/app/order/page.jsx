@@ -277,6 +277,7 @@ function OrderContent() {
 
   // Option selection modal for items with choices
   const [optionModal, setOptionModal] = useState(null);
+  const [modalError, setModalError] = useState('');
   const [currentOrderId, setCurrentOrderId] = useState(null);
   const [isGiftMode, setIsGiftMode] = useState(false);
   const [selectedOpts, setSelectedOpts] = useState({});
@@ -787,6 +788,7 @@ function OrderContent() {
     if (item.options && item.options.length > 0) {
       setIsGiftMode(false);
       setOptionModal(item);
+      setModalError('');
       const init = {};
       let initPrice = null;
       item.options.forEach(opt => {
@@ -817,9 +819,10 @@ function OrderContent() {
 
     if (isGiftMode) {
       if (optionQty > availableGiftSlots) {
-        alert(`Bạn chỉ còn ${availableGiftSlots} lượt chọn miễn phí!`);
+        setModalError(`Bạn chỉ còn ${availableGiftSlots} lượt chọn miễn phí!`);
         return;
       }
+      setModalError('');
       const giftItems = [];
       for (let i = 0; i < optionQty; i++) {
         giftItems.push({
@@ -1741,6 +1744,7 @@ function OrderContent() {
                         if (g.options && g.options.length > 0) {
                           setIsGiftMode(true);
                           setOptionModal(g);
+                          setModalError('');
                           const init = {};
                           g.options.forEach(opt => {
                             if (opt.choices && opt.choices.length > 0) init[opt.name] = opt.choices[0];
@@ -1938,10 +1942,15 @@ function OrderContent() {
                   style={{ borderRadius: 10, padding: '10px 14px' }}
                 />
               </div>
+              {modalError && (
+                <div style={{ color: '#dc2626', fontSize: '0.85rem', textAlign: 'center', marginBottom: 12, fontWeight: 500, background: '#fef2f2', padding: '6px', borderRadius: '8px' }}>
+                  {modalError}
+                </div>
+              )}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 24, marginBottom: 8 }}>
-                <button onClick={() => setOptionQty(Math.max(1, optionQty - 1))} style={{ width: 36, height: 36, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={18} /></button>
+                <button onClick={() => { setOptionQty(Math.max(1, optionQty - 1)); setModalError(''); }} style={{ width: 36, height: 36, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={18} /></button>
                 <span style={{ fontWeight: 700, fontSize: '1.1rem', minWidth: 24, textAlign: 'center' }}>{optionQty}</span>
-                <button onClick={() => setOptionQty(optionQty + 1)} style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={18} /></button>
+                <button onClick={() => { setOptionQty(optionQty + 1); setModalError(''); }} style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={18} /></button>
               </div>
             </div>
             <div className="co-sheet-footer">
