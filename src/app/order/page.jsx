@@ -97,8 +97,8 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
       >
         {/* Vòng tiến trình */}
         <svg width="70" height="70" style={{ position: 'absolute', top: -5, left: -5, transform: 'rotate(-90deg)', pointerEvents: 'none' }}>
-          <circle cx="35" cy="35" r="30" fill="none" stroke="#dcfce7" strokeWidth="4"/>
-          <circle cx="35" cy="35" r="30" fill="none" stroke="#22c55e" strokeWidth="4"
+          <circle cx="35" cy="35" r="30" fill="none" stroke="#fecaca" strokeWidth="4"/>
+          <circle cx="35" cy="35" r="30" fill="none" stroke={hasGift ? '#f59e0b' : '#ef4444'} strokeWidth="4"
             strokeDasharray={`${2 * Math.PI * 30}`}
             strokeDashoffset={`${2 * Math.PI * 30 * (1 - progress / 100)}`}
             strokeLinecap="round"
@@ -108,26 +108,41 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
 
         <div style={{
           width: 60, height: 60, borderRadius: '50%',
-          background: hasGift ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'linear-gradient(135deg, #f0fdf4, #dcfce7)',
-          boxShadow: hasGift ? '0 8px 24px rgba(34,197,94,0.6)' : '0 4px 16px rgba(34,197,94,0.3)',
+          background: hasGift ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #ef4444, #dc2626)',
+          boxShadow: hasGift ? '0 8px 24px rgba(245,158,11,0.6)' : '0 8px 24px rgba(239,68,68,0.55)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '1.7rem', border: hasGift ? '2px solid white' : '2px solid #86efac',
+          fontSize: '1.7rem', border: '3px solid white',
           animation: hasGift ? 'co-gift-pulse 2s infinite' : 'co-float 3s infinite ease-in-out'
         }}>
           🎁
         </div>
 
+        {/* Badge số */}
         <div style={{
           position: 'absolute', top: -6, right: -12,
-          background: hasGift ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #22c55e, #16a34a)',
+          background: hasGift ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'linear-gradient(135deg, #dc2626, #b91c1c)',
           color: 'white',
           borderRadius: 20, padding: '3px 7px',
           fontSize: '0.72rem', fontWeight: 900,
-          boxShadow: '0 3px 8px rgba(0,0,0,0.2)',
+          boxShadow: '0 3px 8px rgba(0,0,0,0.25)',
           pointerEvents: 'none', whiteSpace: 'nowrap',
           border: '2px solid white'
         }}>
           {hasGift ? (availableGiftSlots > 0 ? `🎉 ${availableGiftSlots} Quà!` : '✅ Đã nhận') : `${qualifyingQty}/${threshold}`}
+        </div>
+
+        {/* Chữ Khuyến Mãi phía dưới */}
+        <div style={{
+          position: 'absolute', bottom: -20, left: '50%', transform: 'translateX(-50%)',
+          background: hasGift ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #ef4444, #dc2626)',
+          color: 'white', borderRadius: 8, padding: '2px 8px',
+          fontSize: '0.65rem', fontWeight: 900, whiteSpace: 'nowrap',
+          boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+          border: '1.5px solid white',
+          pointerEvents: 'none',
+          letterSpacing: '0.03em'
+        }}>
+          KHUYẾN MÃI
         </div>
       </div>
 
