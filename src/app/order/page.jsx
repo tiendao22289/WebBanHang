@@ -851,7 +851,11 @@ function OrderContent() {
   }, 0);
   const qualifyingQty = localQualifyingQty + submittedQualifyingQty;
   const giftCount = promoConfig.enabled ? Math.floor(qualifyingQty / promoConfig.threshold) : 0;
-  const usedGiftSlots = giftCart.length;
+  // usedGiftSlots = gifts đã gửi vào DB (trong previousOrders) + gifts trong local giftCart chưa gửi
+  const submittedGiftSlots = (previousOrders || []).reduce((sum, order) => {
+    return sum + (order.order_items || []).reduce((s, oi) => s + (oi.is_gift ? (oi.quantity || 1) : 0), 0);
+  }, 0);
+  const usedGiftSlots = submittedGiftSlots + giftCart.length;
   const availableGiftSlots = Math.max(0, giftCount - usedGiftSlots);
 
   // ── Lắng nghe promo_gift_unlocked từ server (Admin thêm món) ──
