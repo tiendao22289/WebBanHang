@@ -3167,64 +3167,73 @@ export default function TablesPage() {
         const now = new Date();
         const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
         const dateStr = now.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        const totalQty = allItems.reduce((s, i) => s + i.quantity, 0);
 
         return (
           <div
             style={{
               position: 'fixed', inset: 0, zIndex: 2000,
-              background: 'white',
+              background: '#f8fafc',
               display: 'flex', flexDirection: 'column',
               fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
             }}
             onClick={e => e.stopPropagation()}
           >
             {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 20px', borderBottom: '1px solid #f3f4f6' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: 'white', borderBottom: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
               <button
                 onClick={() => setShowBillPreview(false)}
                 style={{
-                  width: 36, height: 36, borderRadius: '50%',
+                  width: 32, height: 32, borderRadius: '50%',
                   border: '1.5px solid #e5e7eb', background: 'white',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  cursor: 'pointer', color: '#374151', fontSize: '1.1rem', flexShrink: 0
+                  cursor: 'pointer', color: '#6b7280', fontSize: '0.9rem', flexShrink: 0
                 }}
               >✕</button>
-              <span style={{ fontSize: '1.1rem', fontWeight: 700, color: '#111827' }}>
-                Xem tạm tính
-              </span>
-              <span style={{ width: 1, height: 18, background: '#d1d5db', flexShrink: 0 }} />
+              <span style={{ fontSize: '1rem', fontWeight: 700, color: '#111827', flex: 1 }}>Phiếu tạm tính</span>
               <span style={{
-                fontSize: '0.95rem', fontWeight: 700, color: '#2563eb',
-                background: '#eff6ff', borderRadius: 8, padding: '3px 10px',
+                fontSize: '0.82rem', fontWeight: 700, color: '#2563eb',
+                background: '#eff6ff', borderRadius: 20, padding: '3px 12px',
               }}>
                 Bàn {selectedTable.table_number}
               </span>
             </div>
 
+            {/* Timestamp */}
+            <div style={{ padding: '6px 16px 4px', fontSize: '0.75rem', color: '#9ca3af', textAlign: 'center' }}>
+              {timeStr} · {dateStr}
+            </div>
+
             {/* Items list */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px' }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '4px 12px 8px' }}>
               {allItems.map((item, idx) => {
-                const optionText = item.item_options?.map(o => o.choice).join(', ') || item.note || '';
+                const optionText = item.item_options?.map(o => o.choice).join(' · ') || item.note || '';
                 const subtotal = item.unit_price * item.quantity;
                 return (
-                  <div key={idx} style={{ paddingTop: 16, paddingBottom: 14, borderBottom: '1px solid #f0f0f0' }}>
-                    {/* Row 1: Name · option(orange) */}
-                    <div style={{ fontSize: '1rem', fontWeight: 600, color: '#111827', marginBottom: 2 }}>
-                      {item.menu_item?.name || 'Món đã xoá'}
+                  <div key={idx} style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '9px 12px', marginBottom: 5,
+                    background: 'white', borderRadius: 10,
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                    gap: 8,
+                  }}>
+                    {/* Left: name + option */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {item.menu_item?.name || 'Món đã xoá'}
+                      </div>
                       {optionText && (
-                        <span style={{ fontWeight: 400, color: '#f59e0b' }}> · {optionText}</span>
+                        <div style={{ fontSize: '0.75rem', color: '#f59e0b', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {optionText}
+                        </div>
                       )}
                     </div>
-                    {/* Row 2: khẩu vị gray italic */}
-                    {optionText && (
-                      <div style={{ fontSize: '0.85rem', color: '#9ca3af', marginBottom: 6 }}>{optionText}</div>
-                    )}
-                    {/* Row 3: unit_price × qty (left) | subtotal (right) */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.95rem', color: '#374151' }}>
+                    {/* Right: qty × price = subtotal */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                      <span style={{ fontSize: '0.78rem', color: '#9ca3af' }}>
                         {item.unit_price.toLocaleString('vi-VN')} × {item.quantity}
                       </span>
-                      <span style={{ fontSize: '0.95rem', fontWeight: 500, color: '#111827' }}>
+                      <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#111827', minWidth: 60, textAlign: 'right' }}>
                         {subtotal.toLocaleString('vi-VN')}
                       </span>
                     </div>
@@ -3233,52 +3242,37 @@ export default function TablesPage() {
               })}
             </div>
 
-            {/* Gray summary section */}
-            <div style={{ background: '#f8f8f8', padding: '0 20px', borderTop: '8px solid #f0f0f0' }}>
-              {/* Tổng tiền hàng */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0', borderBottom: '1px solid #e5e5e5' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: '0.85rem', color: '#374151' }}>Tổng tiền hàng</span>
-                  <span style={{ fontSize: '0.72rem', background: '#e5e7eb', color: '#6b7280', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>
-                    {allItems.reduce((s, i) => s + i.quantity, 0)}
+            {/* Summary section */}
+            <div style={{ background: 'white', borderTop: '1px solid #e5e7eb', padding: '10px 16px 6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0' }}>
+                <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>
+                  Tổng cộng
+                  <span style={{ fontSize: '0.72rem', background: '#f3f4f6', color: '#6b7280', borderRadius: 4, padding: '1px 5px', fontWeight: 600, marginLeft: 6 }}>
+                    {totalQty} món
                   </span>
-                </div>
-                <span style={{ fontSize: '0.85rem', color: '#111827', fontWeight: 500 }}>
-                  {grandTotal.toLocaleString('vi-VN')}
                 </span>
+                <span style={{ fontSize: '0.82rem', color: '#374151', fontWeight: 500 }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
               </div>
-              {/* Giảm giá */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0', borderBottom: '1px solid #e5e5e5' }}>
-                <span style={{ fontSize: '0.85rem', color: '#374151' }}>Giảm giá (0%)</span>
-                <span style={{ fontSize: '0.85rem', color: '#111827' }}>0</span>
-              </div>
-              {/* Thu khác */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0', borderBottom: '1px solid #e5e5e5' }}>
-                <span style={{ fontSize: '0.85rem', color: '#374151' }}>Thu khác</span>
-                <span style={{ fontSize: '0.85rem', color: '#111827' }}>0</span>
-              </div>
-              {/* Khách cần trả */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0' }}>
-                <span style={{ fontSize: '0.92rem', fontWeight: 700, color: '#111827' }}>Khách cần trả</span>
-                <span style={{ fontSize: '0.92rem', fontWeight: 700, color: '#111827' }}>
-                  {grandTotal.toLocaleString('vi-VN')}
-                </span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0 6px', borderTop: '1px dashed #e5e7eb', marginTop: 4 }}>
+                <span style={{ fontSize: '0.95rem', fontWeight: 700, color: '#111827' }}>Khách cần trả</span>
+                <span style={{ fontSize: '1.1rem', fontWeight: 800, color: '#2563eb' }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
               </div>
             </div>
 
-            {/* Blue print button */}
-            <div style={{ padding: '12px 20px 20px', background: 'white' }}>
+            {/* Print button */}
+            <div style={{ padding: '10px 16px 16px', background: 'white' }}>
               <button
                 onClick={handlePrintInvoice}
                 style={{
-                  width: '100%', padding: '16px 0',
+                  width: '100%', padding: '13px 0',
                   borderRadius: 100, border: 'none',
-                  background: '#2563eb', color: 'white',
-                  fontSize: '1rem', fontWeight: 700,
-                  cursor: 'pointer',
+                  background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white',
+                  fontSize: '0.95rem', fontWeight: 700,
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  boxShadow: '0 4px 12px rgba(37,99,235,0.35)',
                 }}
               >
-                In phiếu tạm tính
+                🖨️ In phiếu tạm tính
               </button>
             </div>
           </div>
