@@ -1256,22 +1256,22 @@ function OrderContent() {
       {promoConfig.enabled && totalItems > 0 && (
         <div style={{ position: 'fixed', bottom: totalItems > 0 ? 76 : 16, left: 0, right: 0, zIndex: 49, padding: '0 16px', pointerEvents: 'none', transition: 'bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1)' }}>
           {giftCount === 0 ? (
-            <div style={{ background: 'rgba(255, 255, 255, 0.95)', backdropFilter: 'blur(10px)', border: '1px solid #fde68a', borderRadius: 20, padding: '14px 18px', boxShadow: '0 8px 32px rgba(245, 158, 11, 0.15)', pointerEvents: 'all' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 700, color: '#b45309', marginBottom: 10 }}>
+            <div style={{ background: 'rgba(255, 255, 255, 0.95)', backdropFilter: 'blur(10px)', border: '1px solid #bbf7d0', borderRadius: 20, padding: '14px 18px', boxShadow: '0 8px 32px rgba(34, 197, 94, 0.15)', pointerEvents: 'all' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 700, color: '#15803d', marginBottom: 10 }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ background: '#fef3c7', padding: '2px 6px', borderRadius: 6, fontSize: '0.8rem' }}>🚀</span>
+                  <span style={{ background: '#dcfce7', padding: '2px 6px', borderRadius: 6, fontSize: '0.8rem' }}>🚀</span>
                   Đã chọn {qualifyingQty}/{promoConfig.threshold} món
                 </span>
                 <span>Thêm {promoConfig.threshold - qualifyingQty} món để nhận quà 🎁</span>
               </div>
-              <div style={{ height: 10, background: '#fef3c7', borderRadius: 6, overflow: 'hidden', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.05)' }}>
-                <div style={{ width: `${Math.min((qualifyingQty / promoConfig.threshold) * 100, 100)}%`, height: '100%', background: 'linear-gradient(90deg, #f59e0b, #ea580c)', borderRadius: 6, transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }} />
+              <div style={{ height: 10, background: '#dcfce7', borderRadius: 6, overflow: 'hidden', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.05)' }}>
+                <div style={{ width: `${Math.min((qualifyingQty / promoConfig.threshold) * 100, 100)}%`, height: '100%', background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 6, transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }} />
               </div>
             </div>
           ) : (
             <div style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)', border: '1px solid #334155', borderRadius: 24, padding: '12px 14px 12px 18px', boxShadow: '0 12px 32px rgba(0, 0, 0, 0.3)', pointerEvents: 'all', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ background: 'linear-gradient(135deg, #f59e0b, #ea580c)', borderRadius: '50%', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.25rem', boxShadow: '0 4px 12px rgba(234, 88, 12, 0.4)', flexShrink: 0 }}>
+                <div style={{ background: 'linear-gradient(135deg, #22c55e, #15803d)', borderRadius: '50%', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.25rem', boxShadow: '0 4px 12px rgba(34, 197, 94, 0.3)', flexShrink: 0 }}>
                   🎁
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
