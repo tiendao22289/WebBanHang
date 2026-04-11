@@ -2442,7 +2442,7 @@ export default function TablesPage() {
                     <div style={{ display: 'flex', gap: 5, width: '100%', alignItems: 'stretch' }}>
 
                       {/* Tạm tính */}
-                      <button onClick={handlePrintTempBill} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
+                      <button onClick={() => setShowBillPreview(true)} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
                         <Receipt size={16} strokeWidth={1.8} />
                         Tạm tính
                       </button>
@@ -2465,6 +2465,12 @@ export default function TablesPage() {
                       <button onClick={() => setCancelConfirm(selectedTable)} style={{ ...smallBtnStyle, border: '1.5px solid #fca5a5', color: '#dc2626' }}>
                         <Trash2 size={16} strokeWidth={1.8} />
                         Huỷ đơn
+                      </button>
+
+                      {/* Tạm tính */}
+                      <button onClick={() => setShowBillPreview(true)} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
+                        <Receipt size={16} strokeWidth={1.8} />
+                        Tạm tính
                       </button>
 
                       {/* In hoá đơn — compact */}
