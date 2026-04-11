@@ -857,25 +857,35 @@ function OrderContent() {
   // ── Lắng nghe promo_gift_unlocked từ server (Admin thêm món) ──
   const [serverGiftUnlocked, setServerGiftUnlocked] = useState(0);
   const [adminUnlockToast, setAdminUnlockToast] = useState(false);
-  const prevGiftCountRef = useRef(0);
+  const prevGiftCountRef = useRef(-1); // -1 = chưa khởi tạo
 
-  // Khi giftCount tăng lên (kể cả từ server push) → mở modal + toast
+  // Khi giftCount thay đổi
   useEffect(() => {
     if (!promoConfig.enabled) return;
-    if (giftCount > prevGiftCountRef.current && prevGiftCountRef.current >= 0) {
-      // Có gift mới mở khóa
-      if (prevGiftCountRef.current > 0 || giftCount > 0) {
-        // Chỉ thông báo nếu user đã gửi món (không phải lần đầu set state)
-        if (submittedQualifyingQty > 0 || localQualifyingQty > 0) {
-          setAdminUnlockToast(true);
-          setTimeout(() => setAdminUnlockToast(false), 6000);
-          // Tự mở modal nếu có gift available và chưa mở
-          if (availableGiftSlots > 0) {
-            setTimeout(() => setShowGiftModal(true), 800);
-          }
-        }
+
+    const prev = prevGiftCountRef.current;
+
+    // Bỏ qua lần mount đầu tiên (prev === -1)
+    if (prev === -1) {
+      prevGiftCountRef.current = giftCount;
+      return;
+    }
+
+    if (giftCount > prev) {
+      // Tăng: mở khóa gift mới → thông báo + mở modal
+      setAdminUnlockToast(true);
+      setTimeout(() => setAdminUnlockToast(false), 6000);
+      if (availableGiftSlots > 0) {
+        setTimeout(() => setShowGiftModal(true), 800);
+      }
+    } else if (giftCount < prev) {
+      // Giảm: đóng toast và modal nếu đang mở
+      setAdminUnlockToast(false);
+      if (giftCount === 0) {
+        setShowGiftModal(false);
       }
     }
+
     prevGiftCountRef.current = giftCount;
   }, [giftCount]);
 

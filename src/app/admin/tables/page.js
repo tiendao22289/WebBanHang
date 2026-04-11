@@ -467,7 +467,8 @@ export default function TablesPage() {
     setConfirmDelete({ orderId, itemId, itemName });
   }
 
-  async function syncOrderPromotions(orderId) {
+  // Sync khuyến mãi trên TOÀN BỘ đơn của bàn (không chỉ 1 order)
+  async function syncTablePromotions(tableId) {
     try {
       const { data: settings } = await supabase.from('settings').select('key, value').in('key', ['promotion_enabled', 'promotion_threshold']);
       const promoConfig = { enabled: false, threshold: 8 };
@@ -478,50 +479,72 @@ export default function TablesPage() {
       }
       if (!promoConfig.enabled) return;
 
-      const { data: items } = await supabase
-        .from('order_items')
-        .select(`
-          id, quantity, is_gift, created_at,
-          menu_items ( id, counts_for_promotion )
-        `)
-        .eq('order_id', orderId);
-        
-      if (!items) return;
+      const now = new Date();
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+
+      // Lấy tất cả orders + items của bàn hôm nay
+      const { data: tableOrders } = await supabase
+        .from('orders')
+        .select(`id, order_items( id, quantity, is_gift, created_at, menu_items( id, counts_for_promotion ) )`)
+        .eq('table_id', tableId)
+        .gte('created_at', startOfDay)
+        .in('status', ['pending', 'preparing', 'completed']);
+
+      if (!tableOrders) return;
 
       let qualifyingQty = 0;
-      let giftItems = [];
-      
-      for (const item of items) {
-        if (item.is_gift) {
-          giftItems.push(item);
-        } else if (item.menu_items?.counts_for_promotion) {
-          qualifyingQty += item.quantity;
-        }
-      }
-      
-      const maxGifts = Math.floor(qualifyingQty / promoConfig.threshold);
-      let totalGifts = giftItems.reduce((acc, g) => acc + g.quantity, 0);
-      let excessGifts = totalGifts - maxGifts;
-      
-      if (excessGifts > 0) {
-        giftItems.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-        for (const gift of giftItems) {
-          if (excessGifts <= 0) break;
-          if (gift.quantity <= excessGifts) {
-             await supabase.from('order_items').delete().eq('id', gift.id);
-             excessGifts -= gift.quantity;
-          } else {
-             await supabase.from('order_items').update({ quantity: gift.quantity - excessGifts }).eq('id', gift.id);
-             excessGifts = 0;
+      let allGiftItems = [];
+
+      for (const ord of tableOrders) {
+        for (const it of (ord.order_items || [])) {
+          if (it.is_gift) {
+            allGiftItems.push(it);
+          } else if (it.menu_items?.counts_for_promotion) {
+            qualifyingQty += it.quantity;
           }
         }
-        // Recalculate order total mostly to be safe
-        const { data: remaining } = await supabase.from('order_items').select('unit_price, quantity').eq('order_id', orderId);
-        const newTotal = (remaining || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
-        await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
       }
+
+      const maxGifts = Math.floor(qualifyingQty / promoConfig.threshold);
+      let totalGifts = allGiftItems.reduce((acc, g) => acc + g.quantity, 0);
+      let excessGifts = totalGifts - maxGifts;
+
+      if (excessGifts > 0) {
+        // Xoá gift dư thừa (ưu tiên xoá mới nhất)
+        allGiftItems.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        for (const gift of allGiftItems) {
+          if (excessGifts <= 0) break;
+          if (gift.quantity <= excessGifts) {
+            await supabase.from('order_items').delete().eq('id', gift.id);
+            excessGifts -= gift.quantity;
+          } else {
+            await supabase.from('order_items').update({ quantity: gift.quantity - excessGifts }).eq('id', gift.id);
+            excessGifts = 0;
+          }
+        }
+        // Recalc totals cho từng order có gift bị xoá
+        for (const ord of tableOrders) {
+          const { data: remaining } = await supabase.from('order_items').select('unit_price, quantity').eq('order_id', ord.id);
+          const newTotal = (remaining || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+          await supabase.from('orders').update({ total_amount: newTotal }).eq('id', ord.id);
+        }
+      }
+
+      // Cập nhật promo_gift_unlocked trên bàn → Realtime thông báo cho khách
+      await supabase.from('tables').update({ promo_gift_unlocked: maxGifts }).eq('id', tableId);
+
     } catch (err) {
-      console.error('Error syncing order promotions:', err);
+      console.error('Error syncing table promotions:', err);
+    }
+  }
+
+  // Helper: lấy tableId từ orderId rồi gọi syncTablePromotions
+  async function syncOrderPromotions(orderId) {
+    try {
+      const { data: orderRow } = await supabase.from('orders').select('table_id').eq('id', orderId).maybeSingle();
+      if (orderRow?.table_id) await syncTablePromotions(orderRow.table_id);
+    } catch (err) {
+      console.error('syncOrderPromotions error:', err);
     }
   }
 
