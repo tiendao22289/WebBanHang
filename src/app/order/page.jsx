@@ -404,9 +404,18 @@ function OrderContent() {
   useEffect(() => {
     if (!activeTableId) return;
 
-    const handleTableReset = async (payload) => {
-      // Bàn về available = đã thanh toán hoặc huỷ
-      if (payload.new?.status !== 'available') return;
+    const handleTableUpdate = async (payload) => {
+      const newData = payload.new || {};
+      const oldData = payload.old || {};
+
+      // Case 1: promo_gift_unlocked thay đổi → re-fetch để cập nhật danh sách quà
+      if (newData.promo_gift_unlocked !== undefined && newData.promo_gift_unlocked !== oldData.promo_gift_unlocked) {
+        fetchPreviousOrders();
+        // Notification logic sẽ được xử lý bởi useEffect giftCount bên dưới
+      }
+
+      // Case 2: Bàn trở về available = đã thanh toán hoặc admin huỷ
+      if (newData.status !== 'available') return;
       if (justPaidRef.current) {
         justPaidRef.current = false;
         setCart([]);
@@ -437,13 +446,16 @@ function OrderContent() {
       if (!isPaid) setOrderCancelled(true);
     };
 
+    // Alias for satellite channel
+    const handleTableReset = handleTableUpdate;
+
     const channel = supabase
       .channel(`order-page-${activeTableId}-${Date.now()}`)
-      // Watch for table status change on HOST table
+      // Watch for table status change on HOST table (kể cả promo_gift_unlocked)
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'tables',
         filter: `id=eq.${activeTableId}`,
-      }, handleTableReset)
+      }, handleTableUpdate)
       // Watch for print_jobs changes — cập nhật trực tiếp state và re-fetch
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'print_jobs' }, (payload) => {
          const updatedJob = payload.new;
@@ -481,12 +493,23 @@ function OrderContent() {
             fetchPreviousOrders();
           }
         } else if (payload.new?.status === 'paid' && isMyOrder) {
-          // Flag as paid so table handler knows not to show cancelled banner
           justPaidRef.current = true;
           setOrderPaid({ total: payload.new.total_amount });
           setTimeout(() => setOrderPaid(null), 5000);
-          // Don't clearSession here — let table handler do the cleanup
+        } else {
+          // Bất kỳ thay đổi nào khác (tổng tiền, status) → re-fetch
+          fetchPreviousOrders();
         }
+      })
+      // ─── Lắng nghe order_items thay đổi (admin thêm/xoá/sửa món) ───
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'order_items' }, () => {
+        fetchPreviousOrders();
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'order_items' }, () => {
+        fetchPreviousOrders();
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'order_items' }, () => {
+        fetchPreviousOrders();
       })
       .subscribe();
 
