@@ -26,6 +26,93 @@ import {
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './order.css';
 
+const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGiftSlots, onOpenGift }) => {
+  const [pos, setPos] = useState({ x: -100, y: -100 });
+  const dragRef = useRef({ isDragging: false, startX: 0, startY: 0, initialX: 0, initialY: 0, hasMoved: false });
+
+  useEffect(() => {
+    setPos({ x: window.innerWidth - 80, y: window.innerHeight - 240 });
+  }, []);
+
+  const handleTouchStart = (e) => {
+    dragRef.current.isDragging = true;
+    dragRef.current.hasMoved = false;
+    dragRef.current.startX = e.touches ? e.touches[0].clientX : e.clientX;
+    dragRef.current.startY = e.touches ? e.touches[0].clientY : e.clientY;
+    dragRef.current.initialX = pos.x;
+    dragRef.current.initialY = pos.y;
+  };
+
+  const handleTouchMove = (e) => {
+    if (!dragRef.current.isDragging) return;
+    const currentX = e.touches ? e.touches[0].clientX : e.clientX;
+    const currentY = e.touches ? e.touches[0].clientY : e.clientY;
+    const dx = currentX - dragRef.current.startX;
+    const dy = currentY - dragRef.current.startY;
+    
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) dragRef.current.hasMoved = true;
+    
+    setPos({ 
+      x: Math.min(Math.max(0, dragRef.current.initialX + dx), window.innerWidth - 75), 
+      y: Math.min(Math.max(0, dragRef.current.initialY + dy), window.innerHeight - 75) 
+    });
+  };
+
+  const handleTouchEnd = () => {
+    if (!dragRef.current.isDragging) return;
+    dragRef.current.isDragging = false;
+    if (!dragRef.current.hasMoved && onOpenGift) {
+      onOpenGift();
+    } else {
+      setPos(p => ({ ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 80 : 15 }));
+    }
+  };
+
+  if (pos.x === -100) return null;
+
+  const hasGift = giftCount > 0;
+
+  return (
+    <div
+      style={{
+        position: 'fixed', left: pos.x, top: pos.y, zIndex: 100, touchAction: 'none',
+        transition: dragRef.current.isDragging ? 'none' : 'left 0.3s ease-out',
+        cursor: 'grab'
+      }}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onMouseDown={handleTouchStart}
+      onMouseMove={handleTouchMove}
+      onMouseUp={handleTouchEnd}
+      onMouseLeave={(e) => { if (dragRef.current.isDragging) handleTouchEnd(); }}
+    >
+      <div style={{
+        width: 60, height: 60, borderRadius: '50%',
+        background: hasGift ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'linear-gradient(135deg, #dcfce7, #bbf7d0)',
+        boxShadow: hasGift ? '0 8px 24px rgba(34,197,94,0.6)' : '0 8px 20px rgba(34,197,94,0.4)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: '1.8rem', border: hasGift ? '3px solid white' : '3px solid #86efac',
+        animation: hasGift ? 'co-gift-pulse 2s infinite' : 'co-float 3s infinite ease-in-out'
+      }}>
+        🎁
+      </div>
+      
+      <div style={{
+        position: 'absolute', top: -5, right: -10,
+        background: hasGift ? '#eab308' : 'white',
+        color: hasGift ? 'white' : '#15803d',
+        border: hasGift ? '2px solid white' : '2px solid #86efac',
+        borderRadius: 20, padding: '4px 8px',
+        fontSize: '0.75rem', fontWeight: 900,
+        boxShadow: '0 4px 10px rgba(0,0,0,0.15)',
+        pointerEvents: 'none', whiteSpace: 'nowrap'
+      }}>
+        {hasGift ? (availableGiftSlots > 0 ? `${availableGiftSlots} Quà Mới!` : 'Đã nhận') : `${qualifyingQty}/${threshold}`}
+      </div>
+    </div>
+  );
+};
 function OrderContent() {
   const searchParams = useSearchParams();
   const urlTableId = searchParams.get('table');
@@ -1252,47 +1339,22 @@ function OrderContent() {
         ))}
       </div>
 
-      {/* ─── Promotion Progress Bar ─── */}
+      {/* ─── Draggable Promotion Bubble ─── */}
       {promoConfig.enabled && totalItems > 0 && (
-        <div style={{ position: 'fixed', bottom: totalItems > 0 ? 76 : 16, left: 0, right: 0, zIndex: 49, padding: '0 16px', pointerEvents: 'none', transition: 'bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1)' }}>
-          {giftCount === 0 ? (
-            <div style={{ background: 'transparent', border: 'none', padding: '0 4px 6px 4px', pointerEvents: 'all' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', fontWeight: 700, color: '#15803d', marginBottom: 10, textShadow: '0 1px 3px rgba(255,255,255,0.9)' }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ background: '#dcfce7', padding: '2px 6px', borderRadius: 6, fontSize: '0.8rem' }}>🚀</span>
-                  Đã chọn {qualifyingQty}/{promoConfig.threshold} món
-                </span>
-                <span>Thêm {promoConfig.threshold - qualifyingQty} món để nhận quà 🎁</span>
-              </div>
-              <div style={{ height: 10, background: '#dcfce7', borderRadius: 6, overflow: 'hidden', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.05)' }}>
-                <div style={{ width: `${Math.min((qualifyingQty / promoConfig.threshold) * 100, 100)}%`, height: '100%', background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 6, transition: 'width 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }} />
-              </div>
-            </div>
-          ) : (
-            <div style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)', border: '1px solid #334155', borderRadius: 24, padding: '12px 14px 12px 18px', boxShadow: '0 12px 32px rgba(0, 0, 0, 0.3)', pointerEvents: 'all', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ background: 'linear-gradient(135deg, #22c55e, #15803d)', borderRadius: '50%', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.25rem', boxShadow: '0 4px 12px rgba(34, 197, 94, 0.3)', flexShrink: 0 }}>
-                  🎁
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontSize: '1rem', fontWeight: 800, color: '#f8fafc', letterSpacing: '0.2px' }}>Quà tặng mở khóa!</span>
-                  <span style={{ fontSize: '0.78rem', fontWeight: 500, color: '#94a3b8' }}>
-                    Được chọn {giftCount} món
-                    {usedGiftSlots > 0 && <span style={{ color: '#f59e0b', marginLeft: 4 }}>({usedGiftSlots}/{giftCount})</span>}
-                  </span>
-                </div>
-              </div>
-              {availableGiftSlots > 0 && (
-                <button 
-                  onClick={() => setShowGiftModal(true)} 
-                  style={{ flexShrink: 0, pointerEvents: 'all', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: '1px solid #34d399', borderRadius: 20, padding: '8px 16px', fontWeight: 800, fontSize: '0.85rem', cursor: 'pointer', boxShadow: '0 4px 14px rgba(16,185,129,0.4)', textTransform: 'uppercase', letterSpacing: '0.5px', animation: 'co-gift-pulse 2s infinite' }}
-                >
-                  Chọn Quà ({availableGiftSlots})
-                </button>
-              )}
-            </div>
-          )}
-        </div>
+        <DraggablePromoBubble
+          qualifyingQty={qualifyingQty}
+          threshold={promoConfig.threshold}
+          giftCount={giftCount}
+          availableGiftSlots={availableGiftSlots}
+          onOpenGift={() => {
+            if (giftCount > 0) {
+              setShowGiftModal(true);
+            } else {
+              // Có báo hiệu gì đó nếu chưa đủ điều kiện nhận quà
+              const msg = new Audio(); // optional play sound or show basic alert
+            }
+          }}
+        />
       )}
 
       {/* ─── Cart FAB ─── */}
