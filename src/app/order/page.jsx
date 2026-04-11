@@ -243,6 +243,9 @@ function OrderContent() {
   const [isTakeaway, setIsTakeaway] = useState(false);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
+  const customerPhoneRef = useRef(customerPhone);
+  useEffect(() => { customerPhoneRef.current = customerPhone; }, [customerPhone]);
+
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [showInfoModal, setShowInfoModal] = useState(true);
   const [categories, setCategories] = useState([]);
@@ -256,6 +259,8 @@ function OrderContent() {
   const [showCart, setShowCart] = useState(false);
   const [showOrdered, setShowOrdered] = useState(false);
   const [previousOrders, setPreviousOrders] = useState([]);
+  const previousOrdersRef = useRef(previousOrders);
+  useEffect(() => { previousOrdersRef.current = previousOrders; }, [previousOrders]);
   const [viewMode, setViewMode] = useState('list');
   const [orderSuccess, setOrderSuccess] = useState(false);
   const [userScrolling, setUserScrolling] = useState(false);
@@ -502,14 +507,13 @@ function OrderContent() {
         }
       })
       // ─── Lắng nghe order_items thay đổi (admin thêm/xoá/sửa món) ───
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'order_items' }, () => {
-        fetchPreviousOrders();
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'order_items' }, () => {
-        fetchPreviousOrders();
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'order_items' }, () => {
-        fetchPreviousOrders();
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, (payload) => {
+        const orderId = payload.new?.order_id || payload.old?.order_id;
+        if (!orderId) return;
+        // Chỉ re-fetch nếu item thuộc về một trong các order hiện tại của mình
+        if (previousOrdersRef.current.some(o => o.id === orderId)) {
+          fetchPreviousOrders();
+        }
       })
       .subscribe();
 
@@ -701,7 +705,7 @@ function OrderContent() {
   }
 
   async function fetchPreviousOrders(phone = null) {
-    const phoneToUse = (phone || customerPhone || '').trim();
+    const phoneToUse = (phone || customerPhoneRef.current || '').trim();
     if (!activeTableId) return;
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
