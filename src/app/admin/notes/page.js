@@ -1723,33 +1723,40 @@ export default function StaffNotesPage() {
             return undefined;
           })()
         }}>
-            <div style={{ borderBottom: '1px solid #e5e7eb', paddingBottom: 12, marginBottom: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '14px 16px 12px', position: 'sticky', top: 0, background: 'white', zIndex: 10, borderRadius: '24px 24px 0 0' }}>
-              <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
-                <h3 style={{ fontWeight: 700, fontSize: 17, color: '#111827', margin: 0 }}>{currentUser.role === 'admin' ? (viewingNote.staff?.full_name || 'Không rõ') : 'Báo cáo của bạn'}</h3>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 13, color: '#6b7280' }}>{formatDate(viewingNote.created_at)}</span>
-                  {(() => {
-                    const tm = { expense: { label: '🛒 Đi chợ / Chi tiền', bg: '#fff7ed', color: '#ea580c', border: '#fed7aa' }, stock: { label: '📦 Báo thiếu nguyên liệu', bg: '#f0f9ff', color: '#0369a1', border: '#bae6fd' }, repair: { label: '🔧 Yêu cầu sửa chữa', bg: '#faf5ff', color: '#7c3aed', border: '#ddd6fe' }, other: { label: '📝 Ghi chú khác', bg: '#f9fafb', color: '#374151', border: '#d1d5db' } };
-                    const t = tm[viewingNote.note_type] || tm.other;
-                    return <span style={{ fontSize: 11, background: t.bg, color: t.color, border: `1px solid ${t.border}`, borderRadius: 6, padding: '2px 8px', fontWeight: 700 }}>{t.label}</span>;
-                  })()}
+            <div style={{ borderBottom: '1px solid #e5e7eb', padding: '12px 14px 10px', position: 'sticky', top: 0, background: 'white', zIndex: 10 }}>
+              {/* Row 1: Name + buttons (nút không bao giờ bị đẩy ra ngoài) */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <h3 style={{ fontWeight: 700, fontSize: 16, color: '#111827', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {currentUser.role === 'admin' ? (viewingNote.staff?.full_name || 'Không rõ') : 'Báo cáo của bạn'}
+                  </h3>
+                  <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{formatDate(viewingNote.created_at)}</div>
+                </div>
+                {/* Buttons — always visible, flexShrink:0 đảm bảo không bị đẩy */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                  {editingNoteId !== viewingNote.id && (
+                    <button
+                      title="Sửa ghi chú"
+                      onClick={() => openEditNote(viewingNote)}
+                      style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#2563eb', cursor: 'pointer', padding: '6px 12px', borderRadius: 8, fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, minHeight: 36 }}
+                    >
+                      ✏️ Sửa
+                    </button>
+                  )}
+                  <button
+                    style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 6, flexShrink: 0, display: 'flex', alignItems: 'center', minHeight: 36, minWidth: 36 }}
+                    onClick={() => { setViewingNote(null); closeEditNote(); }}
+                  >
+                    <XCircle size={24} />
+                  </button>
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                {/* Edit button - only show if not already editing */}
-                {editingNoteId !== viewingNote.id && (
-                  <button
-                    title="Sửa ghi chú"
-                    onClick={() => openEditNote(viewingNote)}
-                    style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#2563eb', cursor: 'pointer', padding: '5px 10px', borderRadius: 8, fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}
-                  >
-                    ✏️ Sửa
-                  </button>
-                )}
-                <button style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 4 }} onClick={() => { setViewingNote(null); closeEditNote(); }}>
-                  <XCircle size={24} />
-                </button>
-              </div>
+              {/* Row 2: type tag */}
+              {(() => {
+                const tm = { expense: { label: '🛒 Đi chợ / Chi tiền', bg: '#fff7ed', color: '#ea580c', border: '#fed7aa' }, stock: { label: '📦 Báo thiếu nguyên liệu', bg: '#f0f9ff', color: '#0369a1', border: '#bae6fd' }, repair: { label: '🔧 Yêu cầu sửa chữa', bg: '#faf5ff', color: '#7c3aed', border: '#ddd6fe' }, other: { label: '📝 Ghi chú khác', bg: '#f9fafb', color: '#374151', border: '#d1d5db' } };
+                const t = tm[viewingNote.note_type] || tm.other;
+                return <div style={{ marginTop: 6 }}><span style={{ fontSize: 11, background: t.bg, color: t.color, border: `1px solid ${t.border}`, borderRadius: 6, padding: '2px 8px', fontWeight: 700, display: 'inline-block' }}>{t.label}</span></div>;
+              })()}
             </div>
             <div className="modal-body">
               {/* ── Inline Edit Form ── */}

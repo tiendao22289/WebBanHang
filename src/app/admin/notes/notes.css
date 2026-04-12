@@ -5,10 +5,13 @@
 .notes-container {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  min-height: 100vh;
+  min-height: 100dvh;
   background: var(--color-bg);
   position: relative;
+  overflow-x: hidden;
 }
+
 
 /* ── Login Overlay ── */
 .login-overlay {
@@ -426,6 +429,26 @@
 .keep-modal .modal-body {
   max-height: 70vh;
   overflow-y: auto;
+}
+
+/* ── Mobile: keep-modal fullscreen adjustments ── */
+@media (max-width: 768px) {
+  /* When modal-content is full-screen (padding-top = safe area), 
+     the sticky header inside .keep-modal needs top = 0 (offset from modal-content padding) */
+  .keep-modal .modal-body {
+    max-height: unset;
+    flex: 1;
+    overflow-y: auto;
+    /* Add bottom safe area padding so content isn't hidden behind home indicator */
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+
+  /* The view-note modal header: sticky at top=0 of the padded modal-content */
+  .keep-modal [style*="position: sticky"] {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 10;
+  }
 }
 
 .keep-modal-content {
