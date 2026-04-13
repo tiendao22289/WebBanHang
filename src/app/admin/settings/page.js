@@ -219,8 +219,8 @@ export default function SettingsPage() {
     const QRCode = (await import('qrcode')).default;
     const url = `${window.location.origin}/cua-hang?table=${tb.id}`;
     const canvas = document.createElement('canvas');
-    canvas.width = 600;
-    canvas.height = 780;
+    canvas.width = 1000;
+    canvas.height = 1400;
     const ctx = canvas.getContext('2d');
     
     // Nền trắng
@@ -228,26 +228,26 @@ export default function SettingsPage() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
     // Generate QR
-    const qrDataUrl = await QRCode.toDataURL(url, { width: 480, margin: 1 });
+    const qrDataUrl = await QRCode.toDataURL(url, { width: 800, margin: 1 });
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
-        // Căn giữa QR: (600 - 480) / 2 = 60. Đẩy sát lên trên y=40
-        ctx.drawImage(img, 60, 40, 480, 480);
+        // Căn giữa QR: (1000 - 800) / 2 = 100. Đẩy sát lên trên y=80
+        ctx.drawImage(img, 100, 80, 800, 800);
         
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         
-        // Vẽ Tên bàn
+        // Vẽ Tên bàn (với chữ B + Số, màu đỏ)
         const namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khác');
-        ctx.font = '900 100px sans-serif';
-        ctx.fillStyle = '#111827';
-        ctx.fillText(`BÀN ${namePart}`, 300, 600);
+        ctx.font = '900 360px sans-serif'; // Tăng size x5
+        ctx.fillStyle = '#ef4444'; // Màu đỏ nổi bật
+        ctx.fillText(`B ${namePart}`, 500, 1140);
         
-        // Dòng phụ to lên x2 (từ 24 lên 48)
-        ctx.font = '700 48px sans-serif';
+        // Dòng phụ ở dưới cùng
+        ctx.font = '700 55px sans-serif';
         ctx.fillStyle = '#6b7280';
-        ctx.fillText('Quét mã để gọi món ngay', 300, 700);
+        ctx.fillText('Quét mã để gọi món ngay', 500, 1330);
         
         resolve(canvas.toDataURL('image/png'));
       };
