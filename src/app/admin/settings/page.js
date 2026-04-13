@@ -27,6 +27,7 @@ export default function SettingsPage() {
   // QR Download
   const [downloadingQR, setDownloadingQR] = useState(false);
   const [qrProgress, setQrProgress] = useState('');
+  const [previewQR, setPreviewQR] = useState(null);
 
   // Printer management
   const EMPTY_PRINTER = { name: '', target: 'cashier', type: 'thermal', interface: '', sort_order: '0', note: '', is_default: false, is_bill_printer: false };
@@ -214,12 +215,46 @@ export default function SettingsPage() {
     fetchPrinters();
   }
 
+  async function generateQRCanvasBase64(tb) {
+    const QRCode = (await import('qrcode')).default;
+    const url = `${window.location.origin}/cua-hang?table=${tb.id}`;
+    const canvas = document.createElement('canvas');
+    canvas.width = 600;
+    canvas.height = 800;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#dc2626';
+    ctx.fillRect(0, 0, 600, 100);
+    ctx.font = 'bold 44px sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('ỐC BẢO KHANG', 300, 50);
+    const qrDataUrl = await QRCode.toDataURL(url, { width: 480, margin: 1 });
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        ctx.drawImage(img, 60, 120, 480, 480);
+        const namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khác');
+        ctx.font = '900 90px sans-serif';
+        ctx.fillStyle = '#111827';
+        ctx.fillText(`BÀN ${namePart}`, 300, 680);
+        ctx.font = '600 24px sans-serif';
+        ctx.fillStyle = '#6b7280';
+        ctx.fillText('Quét mã để gọi món ngay', 300, 750);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = reject;
+      img.src = qrDataUrl;
+    });
+  }
+
   async function downloadAllQRs() {
     setDownloadingQR(true);
     setQrProgress('Đang tải danh sách bàn...');
     try {
       const JSZip = (await import('jszip')).default;
-      const QRCode = (await import('qrcode')).default;
 
       const { data: allTables, error: tErr } = await supabase
         .from('tables')
@@ -234,13 +269,7 @@ export default function SettingsPage() {
         const tb = allTables[i];
         setQrProgress(`Đang tạo QR bàn ${tb.table_number || tb.table_name || tb.id}... (${i + 1}/${allTables.length})`);
         
-        const url = `${window.location.origin}/cua-hang?table=${tb.id}`;
-        const dataUrl = await QRCode.toDataURL(url, {
-          width: 800,
-          margin: 2,
-          color: { dark: '#000000', light: '#ffffff' }
-        });
-        
+        const dataUrl = await generateQRCanvasBase64(tb);
         const base64Data = dataUrl.replace(/^data:image\/png;base64,/, "");
         let namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khac');
         const fileName = `Ban_${namePart}.png`.replace(/[^a-zA-Z0-9_.-]/g, '_');
@@ -705,7 +734,7 @@ export default function SettingsPage() {
         <p style={{ margin: '0 0 14px', fontSize: '0.8rem', color: '#64748b' }}>
           Tải hệ thống thẻ QR của tất cả các bàn ăn hiện có về máy tính, để in và dán lên bàn.
         </p>
-        <div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <button onClick={downloadAllQRs} disabled={downloadingQR}
             style={{ padding: '10px 20px', background: '#1e293b', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8, opacity: downloadingQR ? 0.7 : 1 }}>
             {downloadingQR ? (
@@ -716,11 +745,34 @@ export default function SettingsPage() {
                 {qrProgress || 'Đang tạo ZIP...'}
               </>
             ) : (
-              '📦 Tải tất cả mã QR về (File ZIP)'
+              '📦 Tải tất cả mã QR về (ZIP)'
             )}
+          </button>
+          
+          <button onClick={async () => {
+             const dataUrl = await generateQRCanvasBase64({ table_number: 1, id: 'preview-id-1234' });
+             setPreviewQR(dataUrl);
+          }}
+            style={{ padding: '10px 20px', background: '#f8fafc', color: '#0f172a', border: '1.5px solid #cbd5e1', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            👁️ Xem mẫu trước
           </button>
         </div>
       </div>
+
+      {/* ── Modal Xem mẫu QR ── */}
+      {previewQR && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 99999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(15,23,42,0.85)', backdropFilter: 'blur(3px)' }}>
+          <div style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 460, margin: 20, padding: 24, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: '0 0 16px', color: '#0f172a' }}>Mẫu QR dán bàn tính tiền</h3>
+            <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden', padding: 10, background: '#f8fafc' }}>
+               <img src={previewQR} alt="QR Preview" style={{ width: '100%', maxWidth: 350, height: 'auto', display: 'block', borderRadius: 6, border: '1px solid #e2e8f0' }} />
+            </div>
+            <button onClick={() => setPreviewQR(null)} style={{ marginTop: 20, padding: '10px 24px', background: '#ef4444', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', width: '100%' }}>
+              Đóng
+            </button>
+          </div>
+        </div>
+      )}
 
     </div>
   );
