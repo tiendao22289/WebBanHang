@@ -220,7 +220,7 @@ export default function SettingsPage() {
     const url = `${window.location.origin}/cua-hang?table=${tb.id}`;
     const canvas = document.createElement('canvas');
     canvas.width = 1000;
-    canvas.height = 1400;
+    canvas.height = 1550;
     const ctx = canvas.getContext('2d');
     
     // Nền trắng
@@ -232,22 +232,28 @@ export default function SettingsPage() {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
-        // Căn giữa QR: (1000 - 800) / 2 = 100. Đẩy sát lên trên y=80
-        ctx.drawImage(img, 100, 80, 800, 800);
-        
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         
+        // Vẽ Thông tin Wi-Fi (Top)
+        ctx.font = '700 55px sans-serif';
+        ctx.fillStyle = '#0284c7'; // Màu xanh da trời đậm
+        ctx.fillText('WiFi : Ốc Bảo Khang', 500, 70);
+        ctx.fillText('MK : baokhang2018', 500, 140);
+        
+        // Căn giữa QR: (1000 - 800) / 2 = 100. Đẩy xuống y=200 để nhường chỗ
+        ctx.drawImage(img, 100, 200, 800, 800);
+        
         // Vẽ Tên bàn (với chữ B + Số, màu đỏ)
         const namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khác');
-        ctx.font = '900 360px sans-serif'; // Tăng size x5
-        ctx.fillStyle = '#ef4444'; // Màu đỏ nổi bật
-        ctx.fillText(`B ${namePart}`, 500, 1140);
+        ctx.font = '900 360px sans-serif'; 
+        ctx.fillStyle = '#ef4444'; 
+        ctx.fillText(`B ${namePart}`, 500, 1260); // Đẩy xuống y=1260
         
         // Dòng phụ ở dưới cùng
         ctx.font = '700 55px sans-serif';
         ctx.fillStyle = '#6b7280';
-        ctx.fillText('Quét mã để gọi món ngay', 500, 1330);
+        ctx.fillText('Quét mã để gọi món ngay', 500, 1460); // Đẩy xuống y=1460
         
         resolve(canvas.toDataURL('image/png'));
       };
