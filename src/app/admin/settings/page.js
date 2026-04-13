@@ -25,7 +25,7 @@ export default function SettingsPage() {
   const [locGetting, setLocGetting] = useState(false);
 
   // Printer management
-  const EMPTY_PRINTER = { name: '', type: 'thermal', interface: '', sort_order: '0', note: '', is_default: false };
+  const EMPTY_PRINTER = { name: '', target: 'cashier', type: 'thermal', interface: '', sort_order: '0', note: '', is_default: false, is_bill_printer: false };
   const [printers, setPrinters]             = useState([]);
   const [categories, setCategories]         = useState([]);
   const [printerForm, setPrinterForm]       = useState(EMPTY_PRINTER);
@@ -103,7 +103,7 @@ export default function SettingsPage() {
     const [{ data: printersData }, { data: catData }] = await Promise.all([
       supabase
         .from('printers')
-        .select('id, name, type, interface, is_active, is_default, sort_order, note')
+        .select('id, name, target, type, interface, is_active, is_default, is_bill_printer, sort_order, note')
         .order('sort_order'),
       supabase
         .from('printer_categories')
@@ -139,7 +139,7 @@ export default function SettingsPage() {
   }
 
   function startEditPrinter(p) {
-    setPrinterForm({ name: p.name, type: p.type, interface: p.interface, sort_order: String(p.sort_order), note: p.note || '', is_default: p.is_default || false });
+    setPrinterForm({ name: p.name, target: p.target || 'cashier', type: p.type, interface: p.interface, sort_order: String(p.sort_order), note: p.note || '', is_default: p.is_default || false, is_bill_printer: p.is_bill_printer || false });
     setPrinterCategoryIds((p.printer_categories || []).map(pc => pc.category_id));
     setPrinterEditId(p.id);
     setShowPrinterForm(true);
@@ -157,11 +157,13 @@ export default function SettingsPage() {
     setPrinterSaving(true);
     const payload = {
       name: printerForm.name.trim(),
+      target: printerForm.target || 'cashier',
       type: printerForm.type,
       interface: printerForm.interface.trim(),
       sort_order: parseInt(printerForm.sort_order) || 0,
       note: printerForm.note.trim() || null,
       is_default: printerForm.is_default,
+      is_bill_printer: printerForm.is_bill_printer || false,
       updated_at: new Date().toISOString(),
     };
     let printerId = printerEditId;
@@ -177,6 +179,11 @@ export default function SettingsPage() {
       savedOk = true;
     }
     if (savedOk && printerId) {
+      // Đảm bảo chỉ có 1 máy in được làm máy in Bill
+      if (payload.is_bill_printer) {
+        await supabase.from('printers').update({ is_bill_printer: false }).neq('id', printerId);
+      }
+
       // Lưu lại printer_categories: xóa cũ rồi insert mới
       await supabase.from('printer_categories').delete().eq('printer_id', printerId);
       if (printerCategoryIds.length > 0) {
@@ -503,12 +510,21 @@ export default function SettingsPage() {
                 </span>
               </div>
               {/* is_default */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', gridColumn: '1 / -1' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0 0 0', gridColumn: '1 / -1' }}>
                 <input type="checkbox" id="cb_is_default" checked={printerForm.is_default}
                   onChange={e => setPrinterForm(p => ({ ...p, is_default: e.target.checked }))}
                   style={{ width: 16, height: 16, accentColor: '#7c3aed', cursor: 'pointer' }} />
                 <label htmlFor="cb_is_default" style={{ fontSize: '0.82rem', fontWeight: 600, color: '#5b21b6', cursor: 'pointer' }}>
                   ⭐ Máy in mặc định (nhận món chưa phân loại)
+                </label>
+              </div>
+              {/* is_bill_printer */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 0 6px 0', gridColumn: '1 / -1' }}>
+                <input type="checkbox" id="cb_is_bill_printer" checked={printerForm.is_bill_printer}
+                  onChange={e => setPrinterForm(p => ({ ...p, is_bill_printer: e.target.checked }))}
+                  style={{ width: 16, height: 16, accentColor: '#7c3aed', cursor: 'pointer' }} />
+                <label htmlFor="cb_is_bill_printer" style={{ fontSize: '0.82rem', fontWeight: 600, color: '#059669', cursor: 'pointer' }}>
+                  🧾 Máy in Bill (Hoá đơn tính tiền)
                 </label>
               </div>
               {/* Category multi-select */}
@@ -576,6 +592,7 @@ export default function SettingsPage() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#0f172a' }}>{p.name}</span>
                     {p.is_default && <span style={{ fontSize: '0.68rem', padding: '1px 7px', borderRadius: 5, fontWeight: 700, background: '#fef3c7', color: '#92400e' }}>⭐ Mặc định</span>}
+                    {p.is_bill_printer && <span style={{ fontSize: '0.68rem', padding: '1px 7px', borderRadius: 5, fontWeight: 700, background: '#d1fae5', color: '#065f46' }}>🧾 Bill</span>}
                     <span style={{ fontSize: '0.68rem', padding: '1px 7px', borderRadius: 5, fontWeight: 600,
                       background: p.is_active ? '#ede9fe' : '#f1f5f9',
                       color: p.is_active ? '#5b21b6' : '#94a3b8' }}>

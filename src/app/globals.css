@@ -759,3 +759,6 @@ img {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.05); }
 }
+
+/* Fix SweetAlert z-index underneath custom modals */
+.swal2-container { z-index: 99999 !important; }

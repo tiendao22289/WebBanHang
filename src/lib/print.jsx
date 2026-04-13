@@ -29,7 +29,7 @@ export async function sendSmartPrintJobs(supabase, orderId) {
     // 1. Fetch order_items kèm category_id của menu_item
     const { data: items, error: itemsErr } = await supabase
       .from('order_items')
-      .select('id, menu_item:menu_items(id, category_id)')
+      .select('id, item_options, menu_item:menu_items(id, category_id, options)')
       .eq('order_id', orderId);
 
     if (itemsErr) throw new Error('Không lấy được order_items: ' + itemsErr.message);
@@ -65,9 +65,24 @@ export async function sendSmartPrintJobs(supabase, orderId) {
     const printerCategoryMap = {}; // { [printer_id]: { printer, categoryIds: Set } }
 
     for (const item of items) {
-      const categoryId = item.menu_item?.category_id;
-      const assignedPrinter = categoryId
-        ? (categoryToPrinter[categoryId] || defaultPrinter)
+      let resolvedCategoryId = item.menu_item?.category_id;
+
+      // Tính categoryId động nếu có
+      if (item.item_options && Array.isArray(item.item_options)) {
+        const menuOptions = item.menu_item?.options || [];
+        for (const opt of item.item_options) {
+          const mo = menuOptions.find(o => o.name === opt.name);
+          if (mo && Array.isArray(mo.choiceCategories) && Array.isArray(mo.choices)) {
+            const idx = mo.choices.indexOf(opt.choice);
+            if (idx >= 0 && mo.choiceCategories[idx]) {
+              resolvedCategoryId = mo.choiceCategories[idx];
+            }
+          }
+        }
+      }
+
+      const assignedPrinter = resolvedCategoryId
+        ? (categoryToPrinter[resolvedCategoryId] || defaultPrinter)
         : defaultPrinter;
 
       if (!assignedPrinter) {
@@ -78,8 +93,8 @@ export async function sendSmartPrintJobs(supabase, orderId) {
       if (!printerCategoryMap[assignedPrinter.id]) {
         printerCategoryMap[assignedPrinter.id] = { printer: assignedPrinter, categoryIds: new Set() };
       }
-      if (categoryId) {
-        printerCategoryMap[assignedPrinter.id].categoryIds.add(categoryId);
+      if (resolvedCategoryId) {
+        printerCategoryMap[assignedPrinter.id].categoryIds.add(resolvedCategoryId);
       }
     }
 
@@ -148,11 +163,11 @@ export async function sendTableSummaryPrintJob(supabase, orderIds) {
   if (!orderIds || orderIds.length === 0) return { success: true };
 
   try {
-    // 1. Tìm máy in mặc định (is_default = true, is_active = true)
+    // 1. Tìm máy in Bill (is_bill_printer = true, is_active = true)
     const { data: printers, error: printerErr } = await supabase
       .from('printers')
       .select('id, name')
-      .eq('is_default', true)
+      .eq('is_bill_printer', true)
       .eq('is_active', true)
       .limit(1);
 
@@ -160,7 +175,7 @@ export async function sendTableSummaryPrintJob(supabase, orderIds) {
 
     const defaultPrinter = printers?.[0];
     if (!defaultPrinter) {
-      return { success: false, error: 'Chưa cấu hình máy in mặc định (is_default = true).' };
+      return { success: false, error: 'Chưa cấu hình Máy in Bill (is_bill_printer = true).' };
     }
 
     // 2. Insert 1 print_job với order_ids[] (flag để PrintAgent biết cần gộp)

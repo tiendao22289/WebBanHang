@@ -35,7 +35,7 @@ import './tables.css';
 function playNotificationSound() {
   try {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    
+
     // Play two tones (ding-dong)
     [0, 0.2].forEach((delay, i) => {
       const oscillator = audioCtx.createOscillator();
@@ -71,7 +71,7 @@ export default function TablesPage() {
   const [activeMenuCategory, setActiveMenuCategory] = useState('all');
   const [addItemSearch, setAddItemSearch] = useState('');
   const [addedItemAlert, setAddedItemAlert] = useState(null);
-  
+
   // States for Item Options
   const [optionModalItem, setOptionModalItem] = useState(null);
   const [selectedOptions, setSelectedOptions] = useState({});
@@ -98,11 +98,11 @@ export default function TablesPage() {
   const [desktopInlinePriceItem, setDesktopInlinePriceItem] = useState(null); // item.id being edited
   const [desktopInlinePriceVal, setDesktopInlinePriceVal] = useState(''); // temp price string
   const [confirmPayment, setConfirmPayment] = useState(null); // { table, totalAmount }
-  const [paymentModal, setPaymentModal]     = useState(null); // { table, total }
-  const [bankAccounts, setBankAccounts]     = useState([]);
-  const [qrAccount, setQrAccount]           = useState(null); // selected account for QR
-  const [showTransfer, setShowTransfer]     = useState(false); // QR sub-screen in payment modal
-  const [cancelConfirm, setCancelConfirm]   = useState(null); // tableId to cancel
+  const [paymentModal, setPaymentModal] = useState(null); // { table, total }
+  const [bankAccounts, setBankAccounts] = useState([]);
+  const [qrAccount, setQrAccount] = useState(null); // selected account for QR
+  const [showTransfer, setShowTransfer] = useState(false); // QR sub-screen in payment modal
+  const [cancelConfirm, setCancelConfirm] = useState(null); // tableId to cancel
   const [showTableHistory, setShowTableHistory] = useState(null); // table object
   const [tableHistoryData, setTableHistoryData] = useState([]);
   const [tableHistoryLoading, setTableHistoryLoading] = useState(false);
@@ -565,7 +565,7 @@ export default function TablesPage() {
       .eq('order_id', orderId);
     const newTotal = (remaining || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
-    
+
     await syncOrderPromotions(orderId);
     fetchTables();
   }
@@ -575,13 +575,13 @@ export default function TablesPage() {
     if (newQuantity <= 0) {
       return removeItemFromOrder(orderId, itemId);
     }
-    
+
     // Update quantity
     await supabase
       .from('order_items')
       .update({ quantity: newQuantity })
       .eq('id', itemId);
-      
+
     // Recalculate order total
     const { data: allItems } = await supabase
       .from('order_items')
@@ -589,7 +589,7 @@ export default function TablesPage() {
       .eq('order_id', orderId);
     const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
-    
+
     await syncOrderPromotions(orderId);
     fetchTables();
   }
@@ -647,15 +647,15 @@ export default function TablesPage() {
   }
 
   const decreaseItemFromMenu = async (menuItemId) => {
-    const activeOrder = selectedTable && orders[selectedTable.merged_with || selectedTable.id] 
+    const activeOrder = selectedTable && orders[selectedTable.merged_with || selectedTable.id]
       ? (orders[selectedTable.merged_with || selectedTable.id].find(o => o.customer_name === 'Admin') || orders[selectedTable.merged_with || selectedTable.id][0])
       : null;
-      
+
     if (!activeOrder) return;
-    
+
     const existingItems = activeOrder.order_items?.filter(oi => oi.menu_item_id === menuItemId) || [];
     if (existingItems.length === 0) return;
-    
+
     // Pick the last added item variant directly to decrement
     const existing = existingItems[existingItems.length - 1];
     await updateItemQuantity(activeOrder.id, existing.id, existing.quantity, -1);
@@ -710,10 +710,10 @@ export default function TablesPage() {
           })
           .select()
           .single();
-        
+
         if (error || !newOrder) return;
         targetOrderId = newOrder.id;
-        
+
         if (selectedTable.status === 'available') {
           await supabase
             .from('tables')
@@ -763,7 +763,7 @@ export default function TablesPage() {
       .from('order_items')
       .select('unit_price, quantity')
       .eq('order_id', targetOrderId);
-      
+
     const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
 
@@ -800,7 +800,7 @@ export default function TablesPage() {
           }
           const maxGifts = Math.floor(totalQualifying / cfg.threshold);
           const newUnlockedCount = maxGifts; // tổng gift đc hưởng
-          
+
           // Ghi vào tables.promo_gift_unlocked → Realtime sẽ notify khách
           await supabase.from('tables').update({ promo_gift_unlocked: newUnlockedCount }).eq('id', orderRow.table_id);
         }
@@ -859,13 +859,13 @@ export default function TablesPage() {
         </p>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:260px;overflow-y:auto;padding:2px;">
           ${otherTables.map(t => {
-            const occupied = t.status === 'occupied';
-            const merged = !!t.merged_with;
-            const border = merged ? '#a78bfa' : occupied ? '#93c5fd' : '#e5e7eb';
-            const bg = merged ? '#f5f3ff' : occupied ? '#eff6ff' : '#fff';
-            const color = merged ? '#7c3aed' : occupied ? '#1d4ed8' : '#374151';
-            const sub = merged ? '🔗 Đang gộp' : occupied ? 'Có khách' : 'Trống';
-            return `
+      const occupied = t.status === 'occupied';
+      const merged = !!t.merged_with;
+      const border = merged ? '#a78bfa' : occupied ? '#93c5fd' : '#e5e7eb';
+      const bg = merged ? '#f5f3ff' : occupied ? '#eff6ff' : '#fff';
+      const color = merged ? '#7c3aed' : occupied ? '#1d4ed8' : '#374151';
+      const sub = merged ? '🔗 Đang gộp' : occupied ? 'Có khách' : 'Trống';
+      return `
               <label for="mcb-${t.id}" style="
                 display:flex;flex-direction:column;align-items:center;justify-content:center;
                 gap:4px;padding:10px 6px;border-radius:10px;cursor:pointer;
@@ -879,7 +879,7 @@ export default function TablesPage() {
                 <span style="font-size:0.62rem;color:#9ca3af;">${sub}</span>
               </label>
             `;
-          }).join('')}
+    }).join('')}
         </div>
       </div>`;
 
@@ -1001,7 +1001,7 @@ export default function TablesPage() {
       // Create a unique key based on menu_item_id, options, unit_price and note
       const optsString = item.item_options ? JSON.stringify(item.item_options) : '[]';
       const key = `${item.menu_item_id}_${item.unit_price}_${optsString}_${item.note || ''}`;
-      
+
       if (!groupedMap[key]) {
         groupedMap[key] = {
           order_id: mainBill.id,
@@ -1017,13 +1017,13 @@ export default function TablesPage() {
     });
 
     const newItems = Object.values(groupedMap);
-    
+
     // Calculate new total
     const newTotal = newItems.reduce((s, i) => s + i.unit_price * i.quantity, 0);
 
     // Delete all existing items from all these bills
     await supabase.from('order_items').delete().in('order_id', allBillIds);
-    
+
     // Insert grouped items into main bill
     if (newItems.length > 0) {
       await supabase.from('order_items').insert(newItems);
@@ -1201,7 +1201,7 @@ export default function TablesPage() {
               )}
               {/* History button - top right */}
               <div onClick={openHistory} style={{ position: 'absolute', top: 6, right: 6, opacity: 0.55 }}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={groupColor ? groupColor.border : isOccupied ? '#3b82f6' : '#9ca3af'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={groupColor ? groupColor.border : isOccupied ? '#3b82f6' : '#9ca3af'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: 18 }}>
                 <div style={{ fontSize: compact ? '1rem' : '1.1rem', fontWeight: 800, color: groupColor ? groupColor.text : isOccupied ? '#1d4ed8' : '#1f2937' }}>
@@ -1299,7 +1299,7 @@ export default function TablesPage() {
         const desktopOrderDetail = () => {
           if (!selectedTable) return (
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af', flexDirection: 'column', gap: 10 }}>
-              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.3"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M6 7V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/><line x1="12" y1="12" x2="12" y2="12"/></svg>
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.3"><rect x="3" y="7" width="18" height="10" rx="2" /><path d="M6 7V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2" /><line x1="12" y1="12" x2="12" y2="12" /></svg>
               <p style={{ fontSize: '0.9rem' }}>Chọn bàn để xem đơn hàng</p>
             </div>
           );
@@ -1421,7 +1421,7 @@ export default function TablesPage() {
                 <span style={{ fontSize: '0.85rem', color: '#374151' }}>Tổng tiền đ:</span>
                 <span style={{ fontSize: '1rem', fontWeight: 800, color: '#1d4ed8' }}>{totalAmount.toLocaleString('vi-VN')}</span>
               </div>
-              
+
               {/* Nút Gộp Bill Desktop */}
               {tableBills.length > 1 && (
                 <div style={{ padding: '8px 12px', borderTop: '1px solid #e5e7eb', background: '#f8fafc', flexShrink: 0 }}>
@@ -1548,9 +1548,11 @@ export default function TablesPage() {
                     <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid #e5e7eb', overflowX: 'auto', flexShrink: 0, background: 'white' }}>
                       {[{ id: 'all', name: 'Tất cả' }, ...categories].map(cat => (
                         <button key={cat.id} onClick={() => setDesktopMenuCat(cat.id)}
-                          style={{ padding: '8px 14px', border: 'none', background: 'none', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: '0.82rem', fontWeight: desktopMenuCat === cat.id ? 700 : 400,
+                          style={{
+                            padding: '8px 14px', border: 'none', background: 'none', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: '0.82rem', fontWeight: desktopMenuCat === cat.id ? 700 : 400,
                             color: desktopMenuCat === cat.id ? '#2563eb' : '#374151',
-                            borderBottom: desktopMenuCat === cat.id ? '2.5px solid #2563eb' : '2.5px solid transparent' }}
+                            borderBottom: desktopMenuCat === cat.id ? '2.5px solid #2563eb' : '2.5px solid transparent'
+                          }}
                         >{cat.name}</button>
                       ))}
                     </div>
@@ -1652,10 +1654,12 @@ export default function TablesPage() {
                           return (
                             <div key={table.id}
                               onClick={() => { setSelectedTable(table); setDesktopView('menu'); if (!isOccupied && isMobile) setAddingToOrder('admin'); }}
-                              style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', padding: '8px 4px 6px', borderRadius: 8, cursor: 'pointer', minHeight: 72, transition: 'all 0.12s',
+                              style={{
+                                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', padding: '8px 4px 6px', borderRadius: 8, cursor: 'pointer', minHeight: 72, transition: 'all 0.12s',
                                 background: isSelected ? '#2563eb' : isOccupied ? '#dbeafe' : 'white',
                                 border: '1.5px solid ' + (isSelected ? '#2563eb' : isOccupied ? '#93c5fd' : '#e5e7eb'),
-                                position: 'relative' }}
+                                position: 'relative'
+                              }}
                             >
                               {hasPrintError && (
                                 <div style={{ position: 'absolute', top: -5, right: -5, background: '#ef4444', color: 'white', borderRadius: '50%', padding: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.2)', zIndex: 10 }}>
@@ -1665,11 +1669,11 @@ export default function TablesPage() {
                               <svg width="38" height="30" viewBox="0 0 38 30" fill="none">
                                 <rect x="4" y="9" width="30" height="12" rx="3"
                                   fill={isSelected ? 'rgba(255,255,255,0.25)' : '#dbeafe'}
-                                  stroke={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'} strokeWidth="1.5"/>
-                                <rect x="7" y="1" width="4" height="9" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'}/>
-                                <rect x="27" y="1" width="4" height="9" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'}/>
-                                <rect x="7" y="21" width="4" height="8" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'}/>
-                                <rect x="27" y="21" width="4" height="8" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'}/>
+                                  stroke={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'} strokeWidth="1.5" />
+                                <rect x="7" y="1" width="4" height="9" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'} />
+                                <rect x="27" y="1" width="4" height="9" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'} />
+                                <rect x="7" y="21" width="4" height="8" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'} />
+                                <rect x="27" y="21" width="4" height="8" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'} />
                               </svg>
                               <span style={{ fontSize: '0.72rem', fontWeight: 700, marginTop: 2, color: isSelected ? 'white' : isOccupied ? '#1d4ed8' : '#374151' }}>B{table.table_number}</span>
                               {tableTotal > 0 && (
@@ -1786,16 +1790,6 @@ export default function TablesPage() {
               {!showTransfer ? (
                 /* ── Step 1: Choose payment method ── */
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {/* In hoá đơn */}
-                  <button onClick={() => { handlePrintInvoice(); }}
-                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#f8fafc', border: '1.5px solid #e2e8f0', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
-                    <span style={{ fontSize: '1.5rem' }}>🖨️</span>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#0f172a' }}>In hoá đơn</div>
-                      <div style={{ fontSize: '0.75rem', color: '#64748b' }}>In tạm tính trước khi thu tiền</div>
-                    </div>
-                  </button>
-
                   {/* Tiền mặt */}
                   <button onClick={doCashPayment}
                     style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#f0fdf4', border: '1.5px solid #bbf7d0', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
@@ -1832,7 +1826,7 @@ export default function TablesPage() {
                           src={buildVietQR(qrAccount)}
                           alt="QR chuyển khoản"
                           style={{ width: 220, height: 220, borderRadius: 12, border: '2px solid #bfdbfe', objectFit: 'contain', background: 'white' }}
-                          onError={e => { e.target.style.display='none'; e.target.nextSibling.style.display='flex'; }}
+                          onError={e => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
                         />
                         <div style={{ width: 220, height: 220, display: 'none', alignItems: 'center', justifyContent: 'center', border: '2px solid #bfdbfe', borderRadius: 12, flexDirection: 'column', gap: 6 }}>
                           <QRCodeSVG value={`${qrAccount.bank_name}|${qrAccount.account_number}|${total}`} size={180} level="H" includeMargin />
@@ -2108,7 +2102,7 @@ export default function TablesPage() {
                               Swal.fire('Lỗi', 'Không có bàn nào khác để chuyển!', 'error');
                               return;
                             }
-                            
+
                             const inputOptions = {};
                             otherTables.forEach(t => {
                               inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Đang có khách)' : '(Trống)'}`;
@@ -2136,7 +2130,7 @@ export default function TablesPage() {
                                 Swal.fire('Lỗi', error.message, 'error');
                                 return;
                               }
-                              
+
                               const targetTable = otherTables.find(t => t.id === targetTableId);
                               if (targetTable && targetTable.status === 'available') {
                                 await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
@@ -2247,7 +2241,7 @@ export default function TablesPage() {
                             {(() => {
                               const fullItem = menuItems.find(m => m.id === item.menu_item_id);
                               const hasOptions = fullItem?.options?.length > 0;
-                              
+
                               const loaiOption = (item.item_options || []).find(o => o.name?.toLowerCase() === 'loại' && o.choice?.toLowerCase() !== 'bình thường');
                               const otherOptions = (item.item_options || []).filter(o => o.name?.toLowerCase() !== 'loại' && o.choice?.toLowerCase() !== 'bình thường');
                               const hasValidOptions = loaiOption || otherOptions.length > 0;
@@ -2334,8 +2328,8 @@ export default function TablesPage() {
                                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#d1d5db', padding: 2, display: 'flex', alignItems: 'center' }}
                                 >
                                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                                   </svg>
                                 </button>
                               </div>
@@ -2411,98 +2405,92 @@ export default function TablesPage() {
               </button>
             )}
             <div className="modal-footer" style={{ padding: '8px 12px', gap: 6, flexDirection: 'column', alignItems: 'stretch' }}>
-                {/* Total summary row */}
-                {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (() => {
-                  const total = orders[selectedTable.merged_with || selectedTable.id].reduce((s, o) => s + (o.total_amount || 0), 0);
-                  return (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid #f3f4f6' }}>
-                      <span style={{ fontSize: '0.88rem', color: '#6b7280', fontWeight: 500 }}>Tổng cộng:</span>
-                      <span style={{ fontSize: '1.05rem', fontWeight: 800, color: '#c53b3b' }}>{formatPrice(total)}</span>
-                    </div>
-                  );
-                })()}
+              {/* Total summary row */}
+              {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (() => {
+                const total = orders[selectedTable.merged_with || selectedTable.id].reduce((s, o) => s + (o.total_amount || 0), 0);
+                return (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid #f3f4f6' }}>
+                    <span style={{ fontSize: '0.88rem', color: '#6b7280', fontWeight: 500 }}>Tổng cộng:</span>
+                    <span style={{ fontSize: '1.05rem', fontWeight: 800, color: '#c53b3b' }}>{formatPrice(total)}</span>
+                  </div>
+                );
+              })()}
 
-                {/* Nút Gộp Bill Mobile — REMOVED standalone row, moved into action row below */}
+              {/* Nút Gộp Bill Mobile — REMOVED standalone row, moved into action row below */}
 
-                {/* Action buttons row — all in one row */}
-                {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (() => {
-                  const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
-                  const smallBtnStyle = {
-                    width: 54, minWidth: 54,
-                    padding: '5px 2px',
-                    borderRadius: 12,
-                    background: 'white',
-                    cursor: 'pointer',
-                    display: 'flex', flexDirection: 'column',
-                    alignItems: 'center', justifyContent: 'center',
-                    gap: 2,
-                    fontSize: '0.65rem', fontWeight: 600,
-                  };
-                  return (
-                    <div style={{ display: 'flex', gap: 5, width: '100%', alignItems: 'stretch' }}>
+              {/* Action buttons row — all in one row */}
+              {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (() => {
+                const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
+                const smallBtnStyle = {
+                  width: 54, minWidth: 54,
+                  padding: '5px 2px',
+                  borderRadius: 12,
+                  background: 'white',
+                  cursor: 'pointer',
+                  display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center',
+                  gap: 2,
+                  fontSize: '0.65rem', fontWeight: 600,
+                };
+                return (
+                  <div style={{ display: 'flex', gap: 5, width: '100%', alignItems: 'stretch' }}>
 
-                      {/* Tạm tính */}
-                      <button onClick={() => setShowBillPreview(true)} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
-                        <Receipt size={16} strokeWidth={1.8} />
-                        Tạm tính
+                    {/* Tạm tính */}
+                    <button onClick={() => setShowBillPreview(true)} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
+                      <Receipt size={16} strokeWidth={1.8} />
+                      Tạm tính
+                    </button>
+
+                    {/* Gộp bàn */}
+                    <button onClick={handleMergeTable} style={{ ...smallBtnStyle, border: '1.5px solid #d8b4fe', color: '#9333ea' }}>
+                      <Users size={16} strokeWidth={1.8} />
+                      Gộp bàn
+                    </button>
+
+                    {/* Gộp bill — chỉ hiện khi có > 1 bill */}
+                    {tableBills.length > 1 && (
+                      <button onClick={mergeBills} style={{ ...smallBtnStyle, border: '1.5px dashed #8b5cf6', color: '#7c3aed', background: '#faf5ff' }}>
+                        🔗
+                        <span style={{ fontSize: '0.6rem', lineHeight: 1.1, textAlign: 'center' }}>Gộp bill</span>
                       </button>
+                    )}
 
-                      {/* Gộp bàn */}
-                      <button onClick={handleMergeTable} style={{ ...smallBtnStyle, border: '1.5px solid #d8b4fe', color: '#9333ea' }}>
-                        <Users size={16} strokeWidth={1.8} />
-                        Gộp bàn
-                      </button>
+                    {/* Huỷ đơn */}
+                    <button onClick={() => setCancelConfirm(selectedTable)} style={{ ...smallBtnStyle, border: '1.5px solid #fca5a5', color: '#dc2626' }}>
+                      <Trash2 size={16} strokeWidth={1.8} />
+                      Huỷ đơn
+                    </button>
 
-                      {/* Gộp bill — chỉ hiện khi có > 1 bill */}
-                      {tableBills.length > 1 && (
-                        <button onClick={mergeBills} style={{ ...smallBtnStyle, border: '1.5px dashed #8b5cf6', color: '#7c3aed', background: '#faf5ff' }}>
-                          🔗
-                          <span style={{ fontSize: '0.6rem', lineHeight: 1.1, textAlign: 'center' }}>Gộp bill</span>
-                        </button>
-                      )}
+                    {/* In hoá đơn — compact */}
+                    <button onClick={handlePrintInvoice} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
+                      <Printer size={16} strokeWidth={1.8} />
+                      In HĐ
+                    </button>
 
-                      {/* Huỷ đơn */}
-                      <button onClick={() => setCancelConfirm(selectedTable)} style={{ ...smallBtnStyle, border: '1.5px solid #fca5a5', color: '#dc2626' }}>
-                        <Trash2 size={16} strokeWidth={1.8} />
-                        Huỷ đơn
-                      </button>
-
-                      {/* Tạm tính */}
-                      <button onClick={() => setShowBillPreview(true)} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
-                        <Receipt size={16} strokeWidth={1.8} />
-                        Tạm tính
-                      </button>
-
-                      {/* In hoá đơn — compact */}
-                      <button onClick={handlePrintInvoice} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
-                        <Printer size={16} strokeWidth={1.8} />
-                        In HĐ
-                      </button>
-
-                      {/* Thanh toán — solid blue pill, widest */}
-                      <button
-                        onClick={() => {
-                          const total = orders[selectedTable.merged_with || selectedTable.id]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
-                          openPaymentModal(selectedTable, total);
-                        }}
-                        style={{
-                          flex: 2,
-                          padding: '8px 10px',
-                          border: 'none',
-                          borderRadius: 100,
-                          background: '#2563eb',
-                          color: 'white',
-                          cursor: 'pointer',
-                          fontSize: '0.9rem', fontWeight: 700,
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        Thanh toán
-                      </button>
-                    </div>
-                  );
-                })()}
-              </div>
+                    {/* Thanh toán — solid blue pill, widest */}
+                    <button
+                      onClick={() => {
+                        const total = orders[selectedTable.merged_with || selectedTable.id]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
+                        openPaymentModal(selectedTable, total);
+                      }}
+                      style={{
+                        flex: 2,
+                        padding: '8px 10px',
+                        border: 'none',
+                        borderRadius: 100,
+                        background: '#2563eb',
+                        color: 'white',
+                        cursor: 'pointer',
+                        fontSize: '0.9rem', fontWeight: 700,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      Thanh toán
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         </div>
       )}
@@ -2588,7 +2576,7 @@ export default function TablesPage() {
                       placeholder="0"
                       value={discountValue || ''}
                       onChange={e => {
-                        const v = Number(e.target.value.replace(/\D/g,'')) || 0;
+                        const v = Number(e.target.value.replace(/\D/g, '')) || 0;
                         setDiscountValue(v);
                         // recalculate and clear customNewPrice so Giá mới reflects calculation
                         setCustomNewPrice(null);
@@ -2610,7 +2598,7 @@ export default function TablesPage() {
                     inputMode="numeric"
                     pattern="[0-9]*"
                     value={customNewPrice != null ? customNewPrice : newPrice}
-                    onChange={e => setCustomNewPrice(Number(e.target.value.replace(/\D/g,'')) || 0)}
+                    onChange={e => setCustomNewPrice(Number(e.target.value.replace(/\D/g, '')) || 0)}
                     style={{
                       width: '100%', boxSizing: 'border-box',
                       background: '#f9fafb', borderRadius: 12, padding: '14px 16px',
@@ -2697,7 +2685,7 @@ export default function TablesPage() {
             {/* Top bar & Search combined */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', paddingTop: 'calc(env(safe-area-inset-top, 0px) + 12px)', borderBottom: '1px solid #f3f4f6' }}>
               <span style={{ fontWeight: 900, fontSize: '1.25rem', color: '#2563eb', whiteSpace: 'nowrap' }}>Bàn {selectedTable?.table_number}</span>
-              
+
               <div style={{ position: 'relative', flex: 1 }}>
                 <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
                 <input
@@ -2927,7 +2915,7 @@ export default function TablesPage() {
                 <X size={20} />
               </button>
             </div>
-            
+
             <div className="options-modal-body">
               <div className="options-item-info">
                 {optionModalItem.image_url ? (
@@ -2948,7 +2936,7 @@ export default function TablesPage() {
                           pattern="[0-9]*"
                           autoFocus
                           value={customPrice ?? optionModalItem.price}
-                          onChange={e => setCustomPrice(Number(e.target.value.replace(/\D/g,'')))}
+                          onChange={e => setCustomPrice(Number(e.target.value.replace(/\D/g, '')))}
                           style={{
                             width: 100, padding: '5px 10px', borderRadius: 8,
                             border: '1.5px solid #2563eb', fontSize: '16px',
@@ -2969,8 +2957,8 @@ export default function TablesPage() {
                           style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 2, display: 'flex', alignItems: 'center' }}
                         >
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                           </svg>
                         </button>
                       </>
@@ -3025,9 +3013,9 @@ export default function TablesPage() {
 
               <div>
                 <div className="options-group-title">Ghi chú</div>
-                <input 
-                  type="text" 
-                  className="options-note-input" 
+                <input
+                  type="text"
+                  className="options-note-input"
                   placeholder="Thêm ghi chú cho nhà bếp..."
                   value={optionNote}
                   onChange={(e) => setOptionNote(e.target.value)}
@@ -3044,7 +3032,7 @@ export default function TablesPage() {
                 </button>
               </div>
             </div>
-            
+
             <div className="options-bottom-bar">
               <button className="btn-add-to-order" onClick={handleConfirmOptions}>
                 Thêm vào đơn • {formatPrice((customPrice ?? optionModalItem.price) * optionQuantity)}
@@ -3162,11 +3150,32 @@ export default function TablesPage() {
       {/* Full-screen Bill Preview Modal */}
       {showBillPreview && selectedTable && (() => {
         const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
-        const allItems = tableBills.flatMap(b => b.order_items || []);
+        const rawItems = tableBills.flatMap(b => b.order_items || []);
         const grandTotal = tableBills.reduce((s, b) => s + b.total_amount, 0);
         const now = new Date();
         const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
         const dateStr = now.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+        // Gộp các món giống nhau (cùng tên + options + giá + gift)
+        const mergedMap = new Map();
+        for (const item of rawItems) {
+          const name = item.menu_item?.name || '?';
+          const optionsKey = (item.item_options || [])
+            .map(o => `${o.name}:${o.choice}`)
+            .sort()
+            .join('|');
+          const key = `${name}__${optionsKey}__${item.unit_price}__${item.is_gift ? 'gift' : ''}`;
+          if (mergedMap.has(key)) {
+            const existing = mergedMap.get(key);
+            existing.quantity += item.quantity || 1;
+          } else {
+            mergedMap.set(key, { ...item, quantity: item.quantity || 1 });
+          }
+        }
+        // Sắp xếp theo alphabet
+        const allItems = [...mergedMap.values()].sort((a, b) =>
+          (a.menu_item?.name || '').localeCompare(b.menu_item?.name || '', 'vi')
+        );
         const totalQty = allItems.reduce((s, i) => s + i.quantity, 0);
 
         return (
@@ -3567,8 +3576,8 @@ export default function TablesPage() {
           color: 'white', display: 'flex', alignItems: 'center', gap: 8,
         }}>
           {printToast === 'sending' && '🖨️ Đang gửi lệnh in...'}
-          {printToast === 'ok'      && '✅ Đã gửi lệnh in thành công!'}
-          {printToast === 'err'     && '❌ Lỗi gửi lệnh in!'}
+          {printToast === 'ok' && '✅ Đã gửi lệnh in thành công!'}
+          {printToast === 'err' && '❌ Lỗi gửi lệnh in!'}
         </div>
       )}
     </div>
