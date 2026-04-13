@@ -217,7 +217,7 @@ export default function SettingsPage() {
 
   async function generateQRCanvasBase64(tb) {
     const QRCode = (await import('qrcode')).default;
-    const url = `${window.location.origin}/cua-hang?table=${tb.id}`;
+    const url = `${window.location.origin}/order?table=${tb.id}`;
     const canvas = document.createElement('canvas');
     canvas.width = 1000;
     canvas.height = 1550;
