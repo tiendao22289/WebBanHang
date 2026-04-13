@@ -279,6 +279,7 @@ function OrderContent() {
   const [optionModal, setOptionModal] = useState(null);
   const [modalError, setModalError] = useState('');
   const [currentOrderId, setCurrentOrderId] = useState(null);
+  const [movedMessage, setMovedMessage] = useState(null);
   const [isGiftMode, setIsGiftMode] = useState(false);
   const [selectedOpts, setSelectedOpts] = useState({});
   const [optionQty, setOptionQty] = useState(1);
@@ -489,12 +490,22 @@ function OrderContent() {
         // Xử lý CHUYỂN BÀN (Nếu order của khách bị đổi sang bàn khác)
         if (isMyOrder && payload.new.table_id && payload.new.table_id !== activeTableId) {
           const newTid = payload.new.table_id;
-          const sess = getSavedSession();
-          if (sess) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...sess, tableId: newTid }));
-          }
-          // Redirect ngay lập tức sang bàn mới
-          window.location.href = `?t=${newTid}`;
+          
+          // Lấy table_number của bàn mới
+          supabase.from('tables').select('table_number').eq('id', newTid).single().then(({ data }) => {
+            if (data?.table_number) {
+              setMovedMessage(`Bill của bạn đã được chuyển qua bàn ${data.table_number}.\nBạn hãy quét mã lại bàn mới để order thêm món nhé.\n\nChân thành cảm ơn quý khách.`);
+            } else {
+              setMovedMessage(`Bill của bạn đã được chuyển qua bàn khác.\nBạn hãy quét mã lại bàn mới để order thêm món nhé.\n\nChân thành cảm ơn quý khách.`);
+            }
+          });
+          
+          // Clear session cục bộ để không load lại bill cũ
+          clearSession();
+          setPreviousOrders([]);
+          setShowCart(false);
+          setShowOrdered(false);
+          
           return;
         }
 
@@ -1240,6 +1251,18 @@ function OrderContent() {
 
   // Validate UUID format
   const isValidUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
+  if (movedMessage) {
+    return (
+      <div className="co-page">
+        <div className="co-error" style={{ textAlign: 'center', padding: '0 20px' }}>
+          <ChefHat size={56} style={{ marginBottom: 20, color: '#f59e0b', opacity: 0.8 }} />
+          <h2 style={{ fontSize: '1.25rem', color: '#b45309', marginBottom: 12, lineHeight: 1.4 }}>Đã chuyển bàn</h2>
+          <p style={{ whiteSpace: 'pre-line', lineHeight: 1.6, fontSize: '0.95rem', color: '#4b5563' }}>{movedMessage}</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!urlTableId || !isValidUUID(urlTableId)) {
     return (
