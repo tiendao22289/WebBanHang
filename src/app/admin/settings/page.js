@@ -24,6 +24,10 @@ export default function SettingsPage() {
   const [locSaving, setLocSaving]   = useState(false);
   const [locGetting, setLocGetting] = useState(false);
 
+  // QR Download
+  const [downloadingQR, setDownloadingQR] = useState(false);
+  const [qrProgress, setQrProgress] = useState('');
+
   // Printer management
   const EMPTY_PRINTER = { name: '', target: 'cashier', type: 'thermal', interface: '', sort_order: '0', note: '', is_default: false, is_bill_printer: false };
   const [printers, setPrinters]             = useState([]);
@@ -208,6 +212,59 @@ export default function SettingsPage() {
     await supabase.from('printers').delete().eq('id', p.id);
     flash('Đã xoá máy in.');
     fetchPrinters();
+  }
+
+  async function downloadAllQRs() {
+    setDownloadingQR(true);
+    setQrProgress('Đang tải danh sách bàn...');
+    try {
+      const JSZip = (await import('jszip')).default;
+      const QRCode = (await import('qrcode')).default;
+
+      const { data: allTables, error: tErr } = await supabase
+        .from('tables')
+        .select('id, table_number, table_name')
+        .order('table_number');
+      if (tErr) throw tErr;
+
+      const zip = new JSZip();
+      const folder = zip.folder("Ma_QR_Ban");
+
+      for (let i = 0; i < allTables.length; i++) {
+        const tb = allTables[i];
+        setQrProgress(`Đang tạo QR bàn ${tb.table_number || tb.table_name || tb.id}... (${i + 1}/${allTables.length})`);
+        
+        const url = `${window.location.origin}/cua-hang?table=${tb.id}`;
+        const dataUrl = await QRCode.toDataURL(url, {
+          width: 800,
+          margin: 2,
+          color: { dark: '#000000', light: '#ffffff' }
+        });
+        
+        const base64Data = dataUrl.replace(/^data:image\/png;base64,/, "");
+        let namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khac');
+        const fileName = `Ban_${namePart}.png`.replace(/[^a-zA-Z0-9_.-]/g, '_');
+        folder.file(fileName, base64Data, { base64: true });
+      }
+
+      setQrProgress('Đang nén file ZIP...');
+      const content = await zip.generateAsync({ type: 'blob' });
+      const blobUrl = URL.createObjectURL(content);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `Ma_QR_Tat_Ca_Cac_Ban.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      flash('Tải mã QR thành công!');
+    } catch (err) {
+      console.error(err);
+      flash('❌ Tải mã QR thất bại: ' + err.message, true);
+    } finally {
+      setDownloadingQR(false);
+      setQrProgress('');
+    }
   }
 
   async function fetchAccounts() {
@@ -641,6 +698,30 @@ export default function SettingsPage() {
           💡 PrintAgent tự reload khi bạn thay đổi — không cần khởi động lại. Interface thermal: <code>tcp://IP:9100</code>
         </div>
       </div>
+
+      {/* ── Utilities: QR Download ── */}
+      <div style={{ marginTop: 28, background: 'white', border: '1.5px solid #cbd5e1', borderRadius: 14, padding: '18px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.03)' }}>
+        <div style={{ fontWeight: 800, fontSize: '1rem', color: '#334155', marginBottom: 4 }}>📎 Tiện ích mở rộng</div>
+        <p style={{ margin: '0 0 14px', fontSize: '0.8rem', color: '#64748b' }}>
+          Tải hệ thống thẻ QR của tất cả các bàn ăn hiện có về máy tính, để in và dán lên bàn.
+        </p>
+        <div>
+          <button onClick={downloadAllQRs} disabled={downloadingQR}
+            style={{ padding: '10px 20px', background: '#1e293b', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8, opacity: downloadingQR ? 0.7 : 1 }}>
+            {downloadingQR ? (
+              <>
+                <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12a9 9 0 11-6.219-8.56"></path>
+                </svg>
+                {qrProgress || 'Đang tạo ZIP...'}
+              </>
+            ) : (
+              '📦 Tải tất cả mã QR về (File ZIP)'
+            )}
+          </button>
+        </div>
+      </div>
+
     </div>
   );
 }
