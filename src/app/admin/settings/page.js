@@ -244,11 +244,18 @@ export default function SettingsPage() {
         // Căn giữa QR: (1000 - 800) / 2 = 100. Đẩy xuống y=200 để nhường chỗ
         ctx.drawImage(img, 100, 200, 800, 800);
         
-        // Vẽ Tên bàn (với chữ B + Số, màu đỏ)
-        const namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khác');
-        ctx.font = '900 360px sans-serif'; 
+        // Vẽ Tên bàn (với chữ B + Số, hoặc MANG VỀ)
+        let displayText = '';
+        if (tb.table_number === 0 || tb.table_type === 'takeaway' || (tb.table_name && String(tb.table_name).toLowerCase().includes('mang về'))) {
+          displayText = 'MANG VỀ';
+          ctx.font = '900 180px sans-serif'; // Giảm size vì chữ dài
+        } else {
+          const namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khác');
+          displayText = `B ${namePart}`;
+          ctx.font = '900 360px sans-serif'; 
+        }
         ctx.fillStyle = '#ef4444'; 
-        ctx.fillText(`B ${namePart}`, 500, 1260); // Đẩy xuống y=1260
+        ctx.fillText(displayText, 500, 1260);
         
         // Dòng phụ ở dưới cùng
         ctx.font = '700 55px sans-serif';
@@ -284,6 +291,9 @@ export default function SettingsPage() {
         const dataUrl = await generateQRCanvasBase64(tb);
         const base64Data = dataUrl.replace(/^data:image\/png;base64,/, "");
         let namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khac');
+        if (tb.table_number === 0 || tb.table_type === 'takeaway' || (tb.table_name && String(tb.table_name).toLowerCase().includes('mang về'))) {
+            namePart = 'Mang_Ve';
+        }
         const fileName = `Ban_${namePart}.png`.replace(/[^a-zA-Z0-9_.-]/g, '_');
         folder.file(fileName, base64Data, { base64: true });
       }
