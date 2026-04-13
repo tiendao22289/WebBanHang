@@ -479,32 +479,47 @@ function OrderContent() {
            fetchPreviousOrders(saved?.customerPhone || '');
          } catch(e) { fetchPreviousOrders(); }
       })
-      // Watch for orders being cancelled or paid at this table
+      // Watch for orders being updated (including table transfers)
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'orders',
-        filter: `table_id=eq.${activeTableId}`,
       }, (payload) => {
         const savedOrderId = getSavedSession()?.orderId;
         const isMyOrder = savedOrderId && payload.new.id === savedOrderId;
-        if (payload.new?.status === 'cancelled') {
-          if (isMyOrder) {
-            setCart([]);
-            setNotes({});
-            setPreviousOrders([]);
-            clearSession();
-            setShowCart(false);
-            setShowOrdered(false);
-            setOrderCancelled(true);
+
+        // Xử lý CHUYỂN BÀN (Nếu order của khách bị đổi sang bàn khác)
+        if (isMyOrder && payload.new.table_id && payload.new.table_id !== activeTableId) {
+          const newTid = payload.new.table_id;
+          const sess = getSavedSession();
+          if (sess) {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...sess, tableId: newTid }));
+          }
+          // Redirect ngay lập tức sang bàn mới
+          window.location.href = `?t=${newTid}`;
+          return;
+        }
+
+        // Nếu không phải chuyển bàn, chỉ xử lý sự kiện của bàn hiện tại hoặc order của mình
+        if (payload.new.table_id === activeTableId || isMyOrder) {
+          if (payload.new?.status === 'cancelled') {
+            if (isMyOrder) {
+              setCart([]);
+              setNotes({});
+              setPreviousOrders([]);
+              clearSession();
+              setShowCart(false);
+              setShowOrdered(false);
+              setOrderCancelled(true);
+            } else {
+              fetchPreviousOrders();
+            }
+          } else if (payload.new?.status === 'paid' && isMyOrder) {
+            justPaidRef.current = true;
+            setOrderPaid({ total: payload.new.total_amount });
+            setTimeout(() => setOrderPaid(null), 5000);
           } else {
+            // Bất kỳ thay đổi nào khác (tổng tiền, status) → re-fetch
             fetchPreviousOrders();
           }
-        } else if (payload.new?.status === 'paid' && isMyOrder) {
-          justPaidRef.current = true;
-          setOrderPaid({ total: payload.new.total_amount });
-          setTimeout(() => setOrderPaid(null), 5000);
-        } else {
-          // Bất kỳ thay đổi nào khác (tổng tiền, status) → re-fetch
-          fetchPreviousOrders();
         }
       })
       // ─── Lắng nghe order_items thay đổi (admin thêm/xoá/sửa món) ───

@@ -1056,6 +1056,23 @@ export default function TablesPage() {
     return new Intl.NumberFormat('vi-VN').format(price) + 'đ';
   }
 
+  function getItemDisplayPrice(item) {
+    if (item.price > 0) return formatPrice(item.price);
+    let minP = null;
+    if (item.options && Array.isArray(item.options)) {
+      for (const opt of item.options) {
+        if (opt.choices && opt.choices.length > 0 && opt.prices) {
+          const validPrices = opt.prices.map(Number).filter(p => !isNaN(p) && p > 0);
+          if (validPrices.length > 0) {
+            const currentMin = Math.min(...validPrices);
+            if (minP === null || currentMin < minP) minP = currentMin;
+          }
+        }
+      }
+    }
+    return minP !== null ? `Từ ${formatPrice(minP)}` : formatPrice(0);
+  }
+
   function formatTime(dateStr) {
     return new Date(dateStr).toLocaleTimeString('vi-VN', {
       hour: '2-digit',
@@ -2777,7 +2794,7 @@ export default function TablesPage() {
                       </div>
                       <div style={{ flex: 1, marginLeft: 10, paddingRight: 6 }}>
                         <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#111827', marginBottom: 1, lineHeight: 1.25 }}>{item.name}</div>
-                        <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#6b7280' }}>{formatPrice(item.price)}</div>
+                        <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#6b7280' }}>{getItemDisplayPrice(item)}</div>
                       </div>
                       {qty > 0 ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={e => e.stopPropagation()}>
@@ -2832,7 +2849,7 @@ export default function TablesPage() {
                           </div>
                           <div style={{ flex: 1, marginLeft: 10, paddingRight: 6 }}>
                             <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#111827', marginBottom: 1, lineHeight: 1.25 }}>{item.name}</div>
-                            <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#6b7280' }}>{formatPrice(item.price)}</div>
+                            <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#6b7280' }}>{getItemDisplayPrice(item)}</div>
                           </div>
                           {qty > 0 ? (
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={e => e.stopPropagation()}>
