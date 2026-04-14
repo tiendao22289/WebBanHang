@@ -378,8 +378,8 @@ html, body { background: #ffffff !important; }
 }
 
 .co-item-img {
-  width: 56px;
-  height: 50px;
+  width: 80px;
+  height: 72px;
   border-radius: 8px;
   overflow: hidden;
   flex-shrink: 0;

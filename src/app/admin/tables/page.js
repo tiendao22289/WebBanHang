@@ -5,6 +5,7 @@ import { removeVietnameseTones } from '@/lib/utils';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
+import { getActiveAccount, buildQrUrl } from '@/lib/bankAccount';
 import { sendTableSummaryPrintJob } from '@/lib/print';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
@@ -106,6 +107,8 @@ export default function TablesPage() {
   const [showTableHistory, setShowTableHistory] = useState(null); // table object
   const [tableHistoryData, setTableHistoryData] = useState([]);
   const [tableHistoryLoading, setTableHistoryLoading] = useState(false);
+  const [transactionCode, setTransactionCode] = useState(null);
+  const [paymentCountdown, setPaymentCountdown] = useState(0);
 
   const invoiceRef = useRef(null);
   const isFirstLoad = useRef(true);
@@ -250,6 +253,57 @@ export default function TablesPage() {
     setLoading(false);
   }, []);
 
+  // Payment Countdown Timer
+  useEffect(() => {
+    if (showTransfer && transactionCode && paymentCountdown > 0) {
+      const timer = setInterval(() => {
+        setPaymentCountdown(prev => prev - 1);
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [showTransfer, transactionCode, paymentCountdown]);
+
+  // Realtime subscription for auto-confirm payment
+  useEffect(() => {
+    if (showTransfer && transactionCode) {
+      const channel = supabase
+        .channel(`payment_tx_${transactionCode}`)
+        .on('postgres_changes', { 
+          event: 'UPDATE', 
+          schema: 'public', 
+          table: 'payment_transactions', 
+          filter: `transaction_code=eq.${transactionCode}` 
+        }, (payload) => {
+           if (payload.new && payload.new.status === 'completed') {
+             // Success
+             Swal.fire({
+                title: 'Thành công',
+                text: 'Hệ thống đã nhận được thanh toán!',
+                icon: 'success',
+                timer: 2000,
+                showConfirmButton: false,
+                position: 'top-end',
+                toast: true
+             });
+             setPaymentModal(null);
+             setQrAccount(null);
+             setShowTransfer(false);
+             setTransactionCode(null);
+             setPaymentCountdown(0);
+             setSelectedTable(null);
+             setConfirmPayment(null);
+             setDesktopView('tables');
+             fetchTables();
+           }
+        })
+        .subscribe();
+      
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    }
+  }, [showTransfer, transactionCode, fetchTables]);
+
   useEffect(() => {
     fetchTables();
 
@@ -366,53 +420,32 @@ export default function TablesPage() {
     fetchTables();
   }
 
-  // ── Smart bank account rotation ──
+  // ── Smart bank account rotation (strict: no buffer) ──
   async function openPaymentModal(table, total) {
-    // Fetch all active accounts ordered by sort_order
-    const { data: accounts } = await supabase
-      .from('bank_accounts')
-      .select('*')
-      .eq('is_active', true)
-      .order('sort_order');
-
-    if (!accounts || accounts.length === 0) {
-      setBankAccounts([]);
-      setQrAccount(null);
-      setPaymentModal({ table, total });
-      return;
+    const { account, overLimit } = await getActiveAccount();
+    const finalAcc = account ? { ...account, overLimit } : null;
+    setQrAccount(finalAcc);
+    
+    // Auto-generate transaction code for mobile workflow
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    
+    const tableBills = orders[table.merged_with || table.id] || [];
+    const orderIdsStr = tableBills.map(o => o.id).join(',');
+    
+    if (orderIdsStr) {
+      await supabase.from('payment_transactions').insert({
+        transaction_code: code,
+        order_ids: orderIdsStr,
+        account_id: finalAcc?.id || null,
+        total_amount: total
+      });
     }
+    setTransactionCode(code);
+    setShowTransfer(true);
+    setPaymentCountdown(300);
 
-    // Fetch today's totals for all accounts
-    const today = new Date().toISOString().slice(0, 10);
-    const { data: dailyTotals } = await supabase
-      .from('bank_daily_totals')
-      .select('account_id, total_amount')
-      .eq('date', today);
-
-    const totalsMap = {};
-    (dailyTotals || []).forEach(d => { totalsMap[d.account_id] = d.total_amount; });
-
-    // Pick the first account whose total_received + bill <= daily_limit + 10% buffer
-    // (allow up to 10% over limit to avoid awkward situations)
-    const accountsWithTotals = accounts.map(a => ({
-      ...a,
-      received_today: totalsMap[a.id] || 0,
-    }));
-
-    let chosen = null;
-    for (const acc of accountsWithTotals) {
-      const remaining = acc.daily_limit - acc.received_today;
-      // Allow overflow up to 10% of daily_limit (or switch to next)
-      if (remaining + acc.daily_limit * 0.1 >= total || remaining > 0) {
-        chosen = acc;
-        break;
-      }
-    }
-    // If all are full, use the last one as fallback
-    if (!chosen) chosen = accountsWithTotals[accountsWithTotals.length - 1];
-
-    setBankAccounts(accountsWithTotals);
-    setQrAccount(chosen);
     setPaymentModal({ table, total });
   }
 
@@ -1062,7 +1095,7 @@ export default function TablesPage() {
     if (item.options && Array.isArray(item.options)) {
       for (const opt of item.options) {
         if (opt.choices && opt.choices.length > 0 && opt.prices) {
-          const validPrices = opt.prices.map(Number).filter(p => !isNaN(p) && p > 0);
+          const validPrices = opt.prices.map(p => p != null && String(p).trim() !== '' ? Number(p) : NaN).filter(p => !isNaN(p) && p >= 0);
           if (validPrices.length > 0) {
             const currentMin = Math.min(...validPrices);
             if (minP === null || currentMin < minP) minP = currentMin;
@@ -1734,7 +1767,7 @@ export default function TablesPage() {
         const { table, total } = paymentModal;
         const fmt = (n) => new Intl.NumberFormat('vi-VN').format(n) + 'đ';
 
-        const closeModal = () => { setPaymentModal(null); setQrAccount(null); setShowTransfer(false); };
+        const closeModal = () => { setPaymentModal(null); setQrAccount(null); setShowTransfer(false); setTransactionCode(null); setPaymentCountdown(0); };
 
         const doCashPayment = async () => {
           closeModal();
@@ -1781,8 +1814,32 @@ export default function TablesPage() {
           };
           const bankKey = acc.bank_name.toLowerCase().replace(/\s+/g, '');
           const bin = bankMap[bankKey] || bankMap[acc.bank_name.toLowerCase()] || '970436';
-          const desc = encodeURIComponent(`T1 B${table.table_number}`);
+          const desc = encodeURIComponent(transactionCode || `T1 B${table.table_number}`);
           return `https://img.vietqr.io/image/${bin}-${acc.account_number}-compact2.png?amount=${total}&addInfo=${desc}&accountName=${encodeURIComponent(acc.account_name)}`;
+        };
+
+        const handleTransferClick = async () => {
+          // Chỉ sinh mã nếu chưa có
+          if (!transactionCode) {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+            let code = '';
+            for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+            
+            const tableBills = orders[table.merged_with || table.id] || [];
+            const orderIdsStr = tableBills.map(o => o.id).join(',');
+            
+            if (orderIdsStr) {
+              await supabase.from('payment_transactions').insert({
+                transaction_code: code,
+                order_ids: orderIdsStr,
+                account_id: qrAccount?.id || null,
+                total_amount: total
+              });
+            }
+            setTransactionCode(code);
+          }
+          setShowTransfer(true);
+          setPaymentCountdown(300);
         };
 
 
@@ -1819,7 +1876,7 @@ export default function TablesPage() {
                   </button>
 
                   {/* Chuyển khoản */}
-                  <button onClick={() => setShowTransfer(true)}
+                  <button onClick={handleTransferClick}
                     style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#eff6ff', border: '1.5px solid #bfdbfe', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
                     <span style={{ fontSize: '1.5rem' }}>📲</span>
                     <div>
@@ -1904,10 +1961,16 @@ export default function TablesPage() {
                     <div style={{ textAlign: 'center', color: '#64748b', padding: 32 }}>Chưa cấu hình tài khoản ngân hàng</div>
                   )}
 
-                  <button onClick={doTransferPayment}
-                    style={{ width: '100%', padding: '13px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 12, fontWeight: 800, fontSize: '1rem', cursor: 'pointer' }}>
-                    ✅ Xác nhận đã nhận tiền — Đóng bàn
-                  </button>
+                  {paymentCountdown > 0 ? (
+                    <div style={{ width: '100%', padding: '13px', background: '#f8fafc', color: '#64748b', border: '1.5px dashed #cbd5e1', borderRadius: 12, fontWeight: 700, fontSize: '0.95rem', textAlign: 'center' }}>
+                      ⏳ Đang chờ xác nhận tự động... ({Math.floor(paymentCountdown / 60)}:{String(paymentCountdown % 60).padStart(2, '0')})
+                    </div>
+                  ) : (
+                    <button onClick={doTransferPayment}
+                      style={{ width: '100%', padding: '13px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 12, fontWeight: 800, fontSize: '1rem', cursor: 'pointer' }}>
+                      ✅ Xác nhận thủ công đã nhận tiền
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -2488,7 +2551,7 @@ export default function TablesPage() {
                     <button
                       onClick={() => {
                         const total = orders[selectedTable.merged_with || selectedTable.id]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
-                        openPaymentModal(selectedTable, total);
+                        setConfirmPayment({ table: selectedTable, totalAmount: total });
                       }}
                       style={{
                         flex: 2,
@@ -3361,66 +3424,169 @@ export default function TablesPage() {
           </div>
         </div>
       )}
-      {/* ── Custom Payment Confirmation Modal ── */}
+      {/* ── Custom Payment Confirmation Modal (Redesigned) ── */}
       {confirmPayment && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
           onClick={() => setConfirmPayment(null)}>
-          <div style={{ background: 'white', borderRadius: 16, boxShadow: '0 20px 60px rgba(0,0,0,0.2)', minWidth: 340, maxWidth: 420, width: '100%', overflow: 'hidden' }}
+          <div style={{ background: 'white', borderRadius: '24px 24px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,0.15)', width: '100%', maxWidth: 640, padding: '24px 20px calc(24px + env(safe-area-inset-bottom))' }}
             onClick={e => e.stopPropagation()}>
+
             {/* Header */}
-            <div style={{ background: '#2563eb', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: '1.4rem' }}>💵</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
               <div>
-                <div style={{ color: 'white', fontWeight: 700, fontSize: '1rem' }}>Thanh toán</div>
-                <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.82rem' }}>Bàn B{confirmPayment.table.table_number}</div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#111827', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  💳 Thanh toán
+                </div>
+                <div style={{ fontSize: '0.95rem', color: '#6b7280', marginTop: 4 }}>
+                  Bàn {confirmPayment.table.table_number}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '0.9rem', color: '#6b7280', fontWeight: 500 }}>Tổng cộng</div>
+                <div style={{ fontSize: '1.65rem', fontWeight: 800, color: '#dc2626', lineHeight: 1.1 }}>
+                  {confirmPayment.totalAmount.toLocaleString('vi-VN')}đ
+                </div>
               </div>
             </div>
-            {/* Item list */}
-            <div style={{ padding: '12px 20px', maxHeight: 260, overflowY: 'auto' }}>
-              {(orders[confirmPayment.table.merged_with || confirmPayment.table.id] || []).flatMap(o => o.order_items || []).map((item, idx) => (
-                <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f3f4f6' }}>
-                  <div>
-                    <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#111827' }}>{item.menu_item?.name || item.name}</span>
-                    <span style={{ fontSize: '0.75rem', color: '#9ca3af', marginLeft: 6 }}>x{item.quantity}</span>
-                  </div>
-                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#374151' }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
-                </div>
-              ))}
-            </div>
-            {/* Total */}
-            <div style={{ padding: '10px 20px', background: '#f8fafc', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '2px solid #e5e7eb' }}>
-              <span style={{ fontWeight: 700, color: '#374151' }}>Tổng cộng</span>
-              <span style={{ fontWeight: 800, fontSize: '1.1rem', color: '#1d4ed8' }}>{confirmPayment.totalAmount.toLocaleString('vi-VN')}đ</span>
-            </div>
+
             {/* Buttons */}
-            <div style={{ display: 'flex', gap: 10, padding: '14px 20px' }}>
-              <button onClick={() => setConfirmPayment(null)}
-                style={{ flex: 1, padding: '10px', border: '1.5px solid #e5e7eb', borderRadius: 8, background: 'white', color: '#6b7280', fontWeight: 600, cursor: 'pointer', fontSize: '0.9rem' }}>
-                Hủy
-              </button>
-              <button
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+              {/* Tiền mặt Button */}
+              <div
                 onClick={async () => {
-                  await completeTable(confirmPayment.table.id);
+                  await completeTable(confirmPayment.table, 'cash');
                   setConfirmPayment(null);
                   setSelectedTable(null);
                   setDesktopView('tables');
                   Swal.fire({
                     icon: 'success',
-                    title: '✅ Thanh toán thành công!',
-                    html: `<span style="font-size:1rem">Bàn <b>B${confirmPayment.table.table_number}</b> — Tổng: <b style="color:#ffffff;font-size:1.1rem">${confirmPayment.totalAmount.toLocaleString('vi-VN')}đ</b></span>`,
-                    timer: 3000,
-                    timerProgressBar: true,
-                    showConfirmButton: false,
-                    position: 'top-end',
-                    toast: true,
-                    background: '#16a34a',
-                    color: '#ffffff',
-                    iconColor: '#ffffff',
+                    title: '✅ Thanh toán tiền mặt!',
+                    html: `<span style="font-size:1rem">Bàn <b>B${confirmPayment.table.table_number}</b> — <b style="color:#fff;font-size:1.1rem">${confirmPayment.totalAmount.toLocaleString('vi-VN')}đ</b></span>`,
+                    timer: 3000, timerProgressBar: true, showConfirmButton: false,
+                    position: 'top-end', toast: true, background: '#16a34a', color: '#fff', iconColor: '#fff',
                   });
                 }}
-                style={{ flex: 2, padding: '10px', border: 'none', borderRadius: 8, background: '#2563eb', color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem' }}>
-                ✅ Xác nhận thanh toán
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '16px', background: '#f0fdf4', border: '1.5px solid #bbf7d0',
+                  borderRadius: 16, cursor: 'pointer', transition: 'all 0.15s'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ fontSize: '1.8rem' }}>💵</div>
+                  <div>
+                    <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#16a34a' }}>Tiền mặt</div>
+                    <div style={{ fontSize: '0.8rem', color: '#15803d', marginTop: 2, fontWeight: 500 }}>Nhận tiền mặt — đóng bàn ngay</div>
+                  </div>
+                </div>
+                <div style={{ background: '#16a34a', color: 'white', padding: '6px 14px', borderRadius: 8, fontSize: '0.9rem', fontWeight: 700 }}>
+                  Xác nhận
+                </div>
+              </div>
+
+              {/* Chuyển khoản Button */}
+              <div
+                onClick={() => openPaymentModal(confirmPayment.table, confirmPayment.totalAmount)}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '16px', background: '#eff6ff', border: '1.5px solid #bfdbfe',
+                  borderRadius: 16, cursor: 'pointer', transition: 'all 0.15s'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ fontSize: '1.8rem' }}>📲</div>
+                  <div>
+                    <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#2563eb' }}>Chuyển khoản</div>
+                    <div style={{ fontSize: '0.8rem', color: '#1d4ed8', marginTop: 2, fontWeight: 500 }}>Hiện mã QR cho khách quét</div>
+                  </div>
+                </div>
+                <div style={{ color: '#2563eb', fontSize: '1.2rem', fontWeight: 800, paddingRight: 4 }}>
+                  ›
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── QR Transfer Payment Modal ── */}
+      {paymentModal && qrAccount && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => { setPaymentModal(null); setConfirmPayment(null); }}>
+          <div style={{ background: 'white', borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.2)', width: '100%', maxWidth: 380, overflow: 'hidden' }}
+            onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div style={{ background: qrAccount.overLimit ? '#dc2626' : '#2563eb', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ color: 'white', fontWeight: 800, fontSize: '1rem' }}>📲 Chuyển khoản</div>
+                <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.8rem' }}>Bàn B{paymentModal.table.table_number} · {paymentModal.total.toLocaleString('vi-VN')}đ</div>
+              </div>
+              <button onClick={() => { setPaymentModal(null); }}
+                style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '50%', width: 32, height: 32, color: 'white', cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+            </div>
+
+            {/* QR + account info */}
+            <div style={{ padding: '16px 18px' }}>
+              <div style={{ border: `2px solid ${qrAccount.overLimit ? '#ef4444' : '#bfdbfe'}`, borderRadius: 16, padding: '24px 16px', background: qrAccount.overLimit ? '#fff7f7' : '#f0f9ff', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+
+                {/* QR Code (Large, on top) */}
+                <div style={{ padding: 12, background: 'white', borderRadius: 16, border: `1.5px solid ${qrAccount.overLimit ? '#fca5a5' : '#bfdbfe'}`, marginBottom: 16 }}>
+                  <img
+                    src={buildQrUrl(qrAccount, paymentModal.total, transactionCode || `Thanh toan B${paymentModal.table.table_number}`)}
+                    alt="QR"
+                    style={{ width: 260, height: 260, display: 'block', objectFit: 'contain', aspectRatio: '1/1' }}
+                  />
+                </div>
+
+                {/* Account Details (Below) */}
+                <div style={{ width: '100%' }}>
+                  <div style={{ fontWeight: 800, fontSize: '1.2rem', color: '#0f172a' }}>{qrAccount.bank_name}</div>
+                  <div style={{ fontSize: '1.4rem', letterSpacing: 2, fontWeight: 800, color: qrAccount.overLimit ? '#dc2626' : '#1d4ed8', marginTop: 4 }}>{qrAccount.account_number}</div>
+                  <div style={{ fontSize: '0.9rem', color: '#475569', marginTop: 4, textTransform: 'uppercase', fontWeight: 600 }}>{qrAccount.account_name}</div>
+
+                  <div style={{ background: 'white', borderRadius: 12, padding: '10px', marginTop: 12, border: '1px dashed #cbd5e1' }}>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 2 }}>Số tiền cần thanh toán</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#0f172a' }}>{paymentModal.total.toLocaleString('vi-VN')}đ</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Confirm button */}
+            <div style={{ padding: '0 18px 18px', display: 'flex', gap: 10 }}>
+              <button onClick={() => { setPaymentModal(null); setConfirmPayment(null); setTransactionCode(null); setPaymentCountdown(0); }}
+                style={{ flex: 1, padding: '12px', border: '1.5px solid #e5e7eb', borderRadius: 12, background: 'white', color: '#6b7280', fontWeight: 600, cursor: 'pointer', fontSize: '0.9rem' }}>
+                Quay lại
               </button>
+              {paymentCountdown > 0 ? (
+                <div style={{ flex: 2, padding: '12px', background: '#eff6ff', color: '#1d4ed8', border: '1.5px dashed #bfdbfe', borderRadius: 12, fontWeight: 700, fontSize: '0.9rem', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  ⏳ Chờ xác nhận... ({Math.floor(paymentCountdown / 60)}:{String(paymentCountdown % 60).padStart(2, '0')})
+                </div>
+              ) : (
+                <button
+                  onClick={async () => {
+                    await recordBankPayment(qrAccount.id, paymentModal.total);
+                    await completeTable(paymentModal.table, 'transfer');
+                    setPaymentModal(null);
+                    setConfirmPayment(null);
+                    setTransactionCode(null);
+                    setPaymentCountdown(0);
+                    setSelectedTable(null);
+                    setDesktopView('tables');
+                    Swal.fire({
+                      icon: 'success',
+                      title: '✅ Chuyển khoản thành công!',
+                      html: `<span style="font-size:1rem">Bàn <b>B${paymentModal.table.table_number}</b> — <b style="color:#fff;font-size:1.1rem">${paymentModal.total.toLocaleString('vi-VN')}đ</b></span>`,
+                      timer: 3000, timerProgressBar: true, showConfirmButton: false,
+                      position: 'top-end', toast: true, background: '#1d4ed8', color: '#fff', iconColor: '#fff',
+                    });
+                  }}
+                  style={{ flex: 2, padding: '12px', border: 'none', borderRadius: 12, background: '#2563eb', color: 'white', fontWeight: 800, cursor: 'pointer', fontSize: '0.95rem' }}>
+                  ✅ Đã nhận tiền
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
+import { getActiveAccount } from '@/lib/bankAccount';
 
 const BANKS = [
   'Vietcombank', 'MB Bank', 'Techcombank', 'Agribank', 'Vietinbank',
@@ -8,20 +9,23 @@ const BANKS = [
   'VIB', 'SHB', 'MSB', 'SeABank', 'BaoViet Bank', 'Khác',
 ];
 
-const EMPTY_FORM = { account_name: '', bank_name: 'Vietcombank', account_number: '', daily_limit: '5000000', sort_order: '0' };
+const EMPTY_FORM = { account_name: '', bank_name: 'Vietcombank', account_number: '', daily_limit: '5000000', sort_order: '0', is_visible: false };
 
 export default function SettingsPage() {
-  const [accounts, setAccounts]   = useState([]);
-  const [loading, setLoading]     = useState(true);
-  const [form, setForm]           = useState(EMPTY_FORM);
-  const [editId, setEditId]       = useState(null);
-  const [showForm, setShowForm]   = useState(false);
-  const [saving, setSaving]       = useState(false);
-  const [msg, setMsg]             = useState('');
+  const [accounts, setAccounts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [editId, setEditId] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [formContext, setFormContext] = useState('inside');
+  const [showSecretModal, setShowSecretModal] = useState(false);
+  const [secretAccounts, setSecretAccounts] = useState([]);
 
   // Restaurant location
-  const [locForm, setLocForm]       = useState({ lat: '', lng: '', radius: '300' });
-  const [locSaving, setLocSaving]   = useState(false);
+  const [locForm, setLocForm] = useState({ lat: '', lng: '', radius: '300' });
+  const [locSaving, setLocSaving] = useState(false);
   const [locGetting, setLocGetting] = useState(false);
 
   // QR Download
@@ -31,13 +35,13 @@ export default function SettingsPage() {
 
   // Printer management
   const EMPTY_PRINTER = { name: '', target: 'cashier', type: 'thermal', interface: '', sort_order: '0', note: '', is_default: false, is_bill_printer: false };
-  const [printers, setPrinters]             = useState([]);
-  const [categories, setCategories]         = useState([]);
-  const [printerForm, setPrinterForm]       = useState(EMPTY_PRINTER);
+  const [printers, setPrinters] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [printerForm, setPrinterForm] = useState(EMPTY_PRINTER);
   const [printerCategoryIds, setPrinterCategoryIds] = useState([]); // selected category ids
-  const [printerEditId, setPrinterEditId]   = useState(null);
+  const [printerEditId, setPrinterEditId] = useState(null);
   const [showPrinterForm, setShowPrinterForm] = useState(false);
-  const [printerSaving, setPrinterSaving]   = useState(false);
+  const [printerSaving, setPrinterSaving] = useState(false);
 
   useEffect(() => {
     fetchAccounts();
@@ -57,7 +61,7 @@ export default function SettingsPage() {
       try {
         const { lat, lng, radius = 300 } = JSON.parse(data.value);
         setLocForm({ lat: String(lat), lng: String(lng), radius: String(radius) });
-      } catch {}
+      } catch { }
     }
   }
 
@@ -222,11 +226,11 @@ export default function SettingsPage() {
     canvas.width = 1000;
     canvas.height = 1550;
     const ctx = canvas.getContext('2d');
-    
+
     // Nền trắng
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
+
     // Generate QR
     const qrDataUrl = await QRCode.toDataURL(url, { width: 800, margin: 1 });
     return new Promise((resolve, reject) => {
@@ -234,16 +238,16 @@ export default function SettingsPage() {
       img.onload = () => {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        
+
         // Vẽ Thông tin Wi-Fi (Top)
         ctx.font = '700 55px sans-serif';
         ctx.fillStyle = '#0284c7'; // Màu xanh da trời đậm
         ctx.fillText('WiFi : Ốc Bảo Khang', 500, 70);
         ctx.fillText('MK : baokhang2018', 500, 140);
-        
+
         // Căn giữa QR: (1000 - 800) / 2 = 100. Đẩy xuống y=200 để nhường chỗ
         ctx.drawImage(img, 100, 200, 800, 800);
-        
+
         // Vẽ Tên bàn (với chữ B + Số, hoặc MANG VỀ)
         let displayText = '';
         if (tb.table_number === 0 || tb.table_type === 'takeaway' || (tb.table_name && String(tb.table_name).toLowerCase().includes('mang về'))) {
@@ -252,16 +256,16 @@ export default function SettingsPage() {
         } else {
           const namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khác');
           displayText = `B ${namePart}`;
-          ctx.font = '900 360px sans-serif'; 
+          ctx.font = '900 360px sans-serif';
         }
-        ctx.fillStyle = '#ef4444'; 
+        ctx.fillStyle = '#ef4444';
         ctx.fillText(displayText, 500, 1260);
-        
+
         // Dòng phụ ở dưới cùng
         ctx.font = '700 55px sans-serif';
         ctx.fillStyle = '#6b7280';
         ctx.fillText('Quét mã để gọi món ngay', 500, 1460); // Đẩy xuống y=1460
-        
+
         resolve(canvas.toDataURL('image/png'));
       };
       img.onerror = reject;
@@ -287,12 +291,12 @@ export default function SettingsPage() {
       for (let i = 0; i < allTables.length; i++) {
         const tb = allTables[i];
         setQrProgress(`Đang tạo QR bàn ${tb.table_number || tb.table_name || tb.id}... (${i + 1}/${allTables.length})`);
-        
+
         const dataUrl = await generateQRCanvasBase64(tb);
         const base64Data = dataUrl.replace(/^data:image\/png;base64,/, "");
         let namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khac');
         if (tb.table_number === 0 || tb.table_type === 'takeaway' || (tb.table_name && String(tb.table_name).toLowerCase().includes('mang về'))) {
-            namePart = 'Mang_Ve';
+          namePart = 'Mang_Ve';
         }
         const fileName = `Ban_${namePart}.png`.replace(/[^a-zA-Z0-9_.-]/g, '_');
         folder.file(fileName, base64Data, { base64: true });
@@ -318,13 +322,23 @@ export default function SettingsPage() {
     }
   }
 
+  async function fetchSecretAccounts() {
+    const { data } = await supabase
+      .from('bank_accounts')
+      .select('*, bank_daily_totals(date, total_amount)')
+      .order('sort_order');
+    setSecretAccounts(data || []);
+  }
+
   async function fetchAccounts() {
     setLoading(true);
     const { data } = await supabase
       .from('bank_accounts')
       .select('*, bank_daily_totals(date, total_amount)')
+      .eq('is_visible', true)
       .order('sort_order');
     setAccounts(data || []);
+    fetchSecretAccounts();
     setLoading(false);
   }
 
@@ -334,20 +348,23 @@ export default function SettingsPage() {
   }
 
   function startAdd() {
-    setForm({ ...EMPTY_FORM, sort_order: String((accounts.length + 1) * 10) });
+    setForm({ ...EMPTY_FORM, sort_order: String((secretAccounts.length + 1) * 10) });
     setEditId(null);
+    setFormContext('inside');
     setShowForm(true);
   }
 
-  function startEdit(acc) {
+  function startEdit(acc, ctx = 'inside') {
     setForm({
-      account_name:   acc.account_name,
-      bank_name:      acc.bank_name,
+      account_name: acc.account_name,
+      bank_name: acc.bank_name,
       account_number: acc.account_number,
-      daily_limit:    String(acc.daily_limit),
-      sort_order:     String(acc.sort_order),
+      daily_limit: String(acc.daily_limit),
+      sort_order: String(acc.sort_order),
+      is_visible: acc.is_visible || false,
     });
     setEditId(acc.id);
+    setFormContext(ctx);
     setShowForm(true);
   }
 
@@ -359,11 +376,12 @@ export default function SettingsPage() {
     }
     setSaving(true);
     const payload = {
-      account_name:   form.account_name.trim(),
-      bank_name:      form.bank_name,
+      account_name: form.account_name.trim(),
+      bank_name: form.bank_name,
       account_number: form.account_number.trim(),
-      daily_limit:    parseInt(form.daily_limit) || 5000000,
-      sort_order:     parseInt(form.sort_order)  || 0,
+      daily_limit: parseInt(form.daily_limit) || 5000000,
+      sort_order: parseInt(form.sort_order) || 0,
+      is_visible: form.is_visible,
     };
     if (editId) {
       const { error } = await supabase.from('bank_accounts').update(payload).eq('id', editId);
@@ -406,10 +424,7 @@ export default function SettingsPage() {
           <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: '#0f172a' }}>⚙️ Cài đặt</h1>
           <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: '#64748b' }}>Quản lý tài khoản ngân hàng nhận thanh toán QR</p>
         </div>
-        <button onClick={startAdd}
-          style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: 10, padding: '9px 16px', fontWeight: 700, fontSize: '0.88rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
-          + Thêm tài khoản
-        </button>
+        <div style={{ width: 44 }}></div>
       </div>
 
       {/* Flash */}
@@ -421,54 +436,65 @@ export default function SettingsPage() {
 
       {/* Add/Edit form */}
       {showForm && (
-        <div style={{ background: 'white', border: '2px solid #bfdbfe', borderRadius: 14, padding: '18px 16px', marginBottom: 20, boxShadow: '0 4px 20px rgba(37,99,235,0.08)' }}>
-          <div style={{ fontWeight: 800, fontSize: '1rem', color: '#1d4ed8', marginBottom: 14 }}>
-            {editId ? '✏️ Chỉnh sửa tài khoản' : '➕ Thêm tài khoản mới'}
-          </div>
-          <form onSubmit={handleSave} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Ngân hàng *</label>
-              <select value={form.bank_name} onChange={e => setForm(p => ({ ...p, bank_name: e.target.value }))}
-                style={{ padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem', background: 'white' }}>
-                {BANKS.map(b => <option key={b}>{b}</option>)}
-              </select>
+        <div style={{ position: 'fixed', inset: 0, zIndex: 999999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(3px)' }}>
+          <div style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 500, padding: 24, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)' }}>
+            <div style={{ fontWeight: 800, fontSize: '1.2rem', color: '#1d4ed8', marginBottom: 14 }}>
+              {editId ? '✏️ Chỉnh sửa tài khoản' : '➕ Thêm tài khoản mới'}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Số tài khoản *</label>
-              <input value={form.account_number} onChange={e => setForm(p => ({ ...p, account_number: e.target.value }))}
-                placeholder="vd: 1234567890" inputMode="numeric"
-                style={{ padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem' }} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, gridColumn: '1 / -1' }}>
-              <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Tên chủ tài khoản *</label>
-              <input value={form.account_name} onChange={e => setForm(p => ({ ...p, account_name: e.target.value }))}
-                placeholder="vd: NGUYEN VAN A"
-                style={{ padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem' }} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Hạn mức / ngày (VND)</label>
-              <input type="number" min="0" step="100000" value={form.daily_limit} onChange={e => setForm(p => ({ ...p, daily_limit: e.target.value }))}
-                style={{ padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem' }} />
-              <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>Tự chuyển tài khoản khi đạt hạn mức</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Thứ tự ưu tiên</label>
-              <input type="number" min="0" value={form.sort_order} onChange={e => setForm(p => ({ ...p, sort_order: e.target.value }))}
-                style={{ padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem' }} />
-              <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>Số nhỏ = ưu tiên dùng trước</span>
-            </div>
-            <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
-              <button type="button" onClick={() => setShowForm(false)}
-                style={{ padding: '9px 18px', border: '1.5px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', background: 'white', fontWeight: 600, fontSize: '0.85rem', color: '#374151' }}>
-                Huỷ
-              </button>
-              <button type="submit" disabled={saving}
-                style={{ padding: '9px 20px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: '0.88rem', opacity: saving ? 0.7 : 1 }}>
-                {saving ? 'Đang lưu...' : '💾 Lưu'}
-              </button>
-            </div>
-          </form>
-        </div>
+            <form onSubmit={handleSave} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Ngân hàng *</label>
+                <select value={form.bank_name} onChange={e => setForm(p => ({ ...p, bank_name: e.target.value }))}
+                  style={{ padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem', background: 'white' }}>
+                  {BANKS.map(b => <option key={b}>{b}</option>)}
+                </select>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Số tài khoản *</label>
+                <input value={form.account_number} onChange={e => setForm(p => ({ ...p, account_number: e.target.value }))}
+                  placeholder="vd: 1234567890" inputMode="numeric"
+                  style={{ padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem' }} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5, gridColumn: '1 / -1' }}>
+                <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Tên chủ tài khoản *</label>
+                <input value={form.account_name} onChange={e => setForm(p => ({ ...p, account_name: e.target.value }))}
+                  placeholder="vd: NGUYEN VAN A"
+                  style={{ padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem' }} />
+              </div>
+
+              {formContext !== 'outside' && (
+                <>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Hạn mức / ngày (VND)</label>
+                    <input type="number" min="0" step="100000" value={form.daily_limit} onChange={e => setForm(p => ({ ...p, daily_limit: e.target.value }))}
+                      style={{ padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem' }} />
+                    <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>Tự chuyển tài khoản khi đạt hạn mức</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569' }}>Thứ tự ưu tiên</label>
+                    <input type="number" min="0" value={form.sort_order} onChange={e => setForm(p => ({ ...p, sort_order: e.target.value }))}
+                      style={{ padding: '9px 12px', border: '1.5px solid #e2e8f0', borderRadius: 8, fontSize: '0.88rem' }} />
+                    <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>Số nhỏ = ưu tiên dùng trước</span>
+                  </div>
+                </>
+              )}
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, gridColumn: '1 / -1', marginTop: 4 }}>
+                <input type="checkbox" id="cb_is_visible" checked={form.is_visible} onChange={e => setForm(p => ({ ...p, is_visible: e.target.checked }))} style={{ width: 16, height: 16, accentColor: '#2563eb', cursor: 'pointer' }} />
+                <label htmlFor="cb_is_visible" style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155', cursor: 'pointer' }}>Hiển thị</label>
+              </div>
+              <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
+                <button type="button" onClick={() => setShowForm(false)}
+                  style={{ padding: '9px 18px', border: '1.5px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', background: 'white', fontWeight: 600, fontSize: '0.85rem', color: '#374151' }}>
+                  Huỷ
+                </button>
+                <button type="submit" disabled={saving}
+                  style={{ padding: '9px 20px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontWeight: 700, fontSize: '0.88rem', opacity: saving ? 0.7 : 1 }}>
+                  {saving ? 'Đang lưu...' : '💾 Lưu'}
+                </button>
+              </div>
+            </form>
+          </div></div>
       )}
 
       {/* Account list */}
@@ -482,10 +508,10 @@ export default function SettingsPage() {
             <div style={{ fontSize: '0.82rem', marginTop: 4 }}>Nhấn "Thêm tài khoản" để cấu hình QR thanh toán</div>
           </div>
         ) : accounts.map((acc, idx) => {
-          const today     = todayTotal(acc);
-          const pct       = Math.min(Math.round((today / acc.daily_limit) * 100), 100);
+          const today = todayTotal(acc);
+          const pct = Math.min(Math.round((today / acc.daily_limit) * 100), 100);
           const remaining = Math.max(0, acc.daily_limit - today);
-          const isFull    = today >= acc.daily_limit;
+          const isFull = today >= acc.daily_limit;
           return (
             <div key={acc.id} style={{
               background: 'white', border: `1.5px solid ${acc.is_active ? '#bfdbfe' : '#e2e8f0'}`,
@@ -501,23 +527,13 @@ export default function SettingsPage() {
                     <span style={{ fontSize: '0.72rem', background: acc.is_active ? '#dbeafe' : '#f1f5f9', color: acc.is_active ? '#1d4ed8' : '#94a3b8', borderRadius: 6, padding: '2px 8px', fontWeight: 600 }}>
                       {acc.is_active ? `#${idx + 1} Đang dùng` : 'Đã tắt'}
                     </span>
-                    {isFull && acc.is_active && <span style={{ fontSize: '0.72rem', background: '#fef9c3', color: '#92400e', borderRadius: 6, padding: '2px 8px', fontWeight: 600 }}>⚠️ Đầy hạn mức</span>}
                   </div>
                   <div style={{ fontSize: '0.82rem', color: '#64748b', marginTop: 2 }}>
                     {acc.bank_name} · <span style={{ letterSpacing: 1, fontWeight: 600, color: '#374151' }}>{acc.account_number}</span>
                   </div>
-                  <div style={{ marginTop: 8 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#94a3b8', marginBottom: 4 }}>
-                      <span>Hôm nay: <strong style={{ color: '#0f172a' }}>{fmt(today)}đ</strong></span>
-                      <span>Còn lại: <strong style={{ color: isFull ? '#f59e0b' : '#16a34a' }}>{fmt(remaining)}đ</strong> / {fmt(acc.daily_limit)}đ</span>
-                    </div>
-                    <div style={{ height: 5, background: '#e2e8f0', borderRadius: 3, overflow: 'hidden' }}>
-                      <div style={{ width: `${pct}%`, height: '100%', background: pct >= 100 ? '#f59e0b' : pct > 80 ? '#f97316' : '#2563eb', borderRadius: 3, transition: 'width 0.4s' }} />
-                    </div>
-                  </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
-                  <button onClick={() => startEdit(acc)} style={{ padding: '5px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 7, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, color: '#374151' }}>✏️ Sửa</button>
+                  <button onClick={() => startEdit(acc, 'outside')} style={{ padding: '5px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 7, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, color: '#374151' }}>✏️ Sửa</button>
                   <button onClick={() => toggleActive(acc)} style={{ padding: '5px 12px', background: acc.is_active ? '#fef9c3' : '#f0fdf4', border: `1px solid ${acc.is_active ? '#fde68a' : '#bbf7d0'}`, borderRadius: 7, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, color: acc.is_active ? '#92400e' : '#15803d' }}>
                     {acc.is_active ? '⏸ Tắt' : '▶ Bật'}
                   </button>
@@ -529,10 +545,7 @@ export default function SettingsPage() {
         })}
       </div>
 
-      {/* Info note */}
-      <div style={{ marginTop: 20, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: '12px 16px', fontSize: '0.78rem', color: '#64748b' }}>
-        <strong style={{ color: '#0f172a' }}>💡 Cách hoạt động:</strong> Khi thanh toán chuyển khoản, hệ thống tự chọn tài khoản có thứ tự ưu tiên nhỏ nhất mà chưa đạt hạn mức ngày.
-      </div>
+
 
       {/* ── Restaurant Location ── */}
       <div style={{ marginTop: 28, background: 'white', border: '1.5px solid #d1fae5', borderRadius: 14, padding: '18px 16px', boxShadow: '0 2px 10px rgba(16,185,129,0.07)' }}>
@@ -701,9 +714,11 @@ export default function SettingsPage() {
                     <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#0f172a' }}>{p.name}</span>
                     {p.is_default && <span style={{ fontSize: '0.68rem', padding: '1px 7px', borderRadius: 5, fontWeight: 700, background: '#fef3c7', color: '#92400e' }}>⭐ Mặc định</span>}
                     {p.is_bill_printer && <span style={{ fontSize: '0.68rem', padding: '1px 7px', borderRadius: 5, fontWeight: 700, background: '#d1fae5', color: '#065f46' }}>🧾 Bill</span>}
-                    <span style={{ fontSize: '0.68rem', padding: '1px 7px', borderRadius: 5, fontWeight: 600,
+                    <span style={{
+                      fontSize: '0.68rem', padding: '1px 7px', borderRadius: 5, fontWeight: 600,
                       background: p.is_active ? '#ede9fe' : '#f1f5f9',
-                      color: p.is_active ? '#5b21b6' : '#94a3b8' }}>
+                      color: p.is_active ? '#5b21b6' : '#94a3b8'
+                    }}>
                       {p.is_active ? '● active' : '○ off'}
                     </span>
                     <span style={{ fontSize: '0.68rem', padding: '1px 7px', borderRadius: 5, background: '#f1f5f9', color: '#64748b', fontWeight: 600 }}>
@@ -752,7 +767,9 @@ export default function SettingsPage() {
 
       {/* ── Utilities: QR Download ── */}
       <div style={{ marginTop: 28, background: 'white', border: '1.5px solid #cbd5e1', borderRadius: 14, padding: '18px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.03)' }}>
-        <div style={{ fontWeight: 800, fontSize: '1rem', color: '#334155', marginBottom: 4 }}>📎 Tiện ích mở rộng</div>
+        <div style={{ fontWeight: 800, fontSize: '1rem', color: '#334155', marginBottom: 4 }}>
+          📎 Tiện ích mở <span onClick={() => setShowSecretModal(true)} style={{ cursor: 'pointer' }}>rộng</span>
+        </div>
         <p style={{ margin: '0 0 14px', fontSize: '0.8rem', color: '#64748b' }}>
           Tải hệ thống thẻ QR của tất cả các bàn ăn hiện có về máy tính, để in và dán lên bàn.
         </p>
@@ -770,10 +787,10 @@ export default function SettingsPage() {
               '📦 Tải tất cả mã QR về (ZIP)'
             )}
           </button>
-          
+
           <button onClick={async () => {
-             const dataUrl = await generateQRCanvasBase64({ table_number: 1, id: 'preview-id-1234' });
-             setPreviewQR(dataUrl);
+            const dataUrl = await generateQRCanvasBase64({ table_number: 1, id: 'preview-id-1234' });
+            setPreviewQR(dataUrl);
           }}
             style={{ padding: '10px 20px', background: '#f8fafc', color: '#0f172a', border: '1.5px solid #cbd5e1', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             👁️ Xem mẫu trước
@@ -787,11 +804,75 @@ export default function SettingsPage() {
           <div style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 460, margin: 20, padding: 24, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: '0 0 16px', color: '#0f172a' }}>Mẫu QR dán bàn tính tiền</h3>
             <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden', padding: 10, background: '#f8fafc' }}>
-               <img src={previewQR} alt="QR Preview" style={{ width: '100%', maxWidth: 350, height: 'auto', display: 'block', borderRadius: 6, border: '1px solid #e2e8f0' }} />
+              <img src={previewQR} alt="QR Preview" style={{ width: '100%', maxWidth: 350, height: 'auto', display: 'block', borderRadius: 6, border: '1px solid #e2e8f0' }} />
             </div>
             <button onClick={() => setPreviewQR(null)} style={{ marginTop: 20, padding: '10px 24px', background: '#ef4444', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer', width: '100%' }}>
               Đóng
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Secret Modal */}
+      {showSecretModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 999998, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(15,23,42,0.85)', backdropFilter: 'blur(3px)' }}>
+          <div style={{ background: '#f8fafc', borderRadius: 16, width: '100%', maxWidth: 700, maxHeight: '90vh', overflowY: 'auto', margin: 20, padding: 24, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 800, margin: 0, color: '#0f172a' }}>🕵️ Quản lý tất cả tài khoản</h3>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={startAdd} style={{ padding: '8px 16px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}>+ Thêm mới</button>
+                <button onClick={() => setShowSecretModal(false)} style={{ padding: '8px 16px', background: '#ef4444', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}>Đóng</button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {secretAccounts.map((acc, idx) => {
+                const today = todayTotal(acc);
+                const pct = Math.min(Math.round((today / acc.daily_limit) * 100), 100);
+                const remaining = Math.max(0, acc.daily_limit - today);
+                const isFull = today >= acc.daily_limit;
+                return (
+                  <div key={acc.id} style={{
+                    background: 'white', border: `1.5px solid ${acc.is_active ? '#bfdbfe' : '#e2e8f0'}`,
+                    borderRadius: 14, padding: '14px 16px',
+                    opacity: acc.is_active ? 1 : 0.55,
+                    boxShadow: acc.is_active ? '0 2px 10px rgba(37,99,235,0.07)' : 'none',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                      <div style={{ minWidth: 44, height: 44, background: acc.is_active ? '#eff6ff' : '#f1f5f9', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem' }}>🏦</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 800, fontSize: '0.95rem', color: '#0f172a' }}>{acc.account_name}</span>
+                          <span style={{ fontSize: '0.72rem', background: acc.is_active ? '#dbeafe' : '#f1f5f9', color: acc.is_active ? '#1d4ed8' : '#94a3b8', borderRadius: 6, padding: '2px 8px', fontWeight: 600 }}>
+                            {acc.is_active ? `#${idx + 1} Đang dùng` : 'Đã tắt'}
+                          </span>
+                          {isFull && acc.is_active && <span style={{ fontSize: '0.72rem', background: '#fef9c3', color: '#92400e', borderRadius: 6, padding: '2px 8px', fontWeight: 600 }}>⚠️ Đầy hạn mức</span>}
+                        </div>
+                        <div style={{ fontSize: '0.82rem', color: '#64748b', marginTop: 2 }}>
+                          {acc.bank_name} · <span style={{ letterSpacing: 1, fontWeight: 600, color: '#374151' }}>{acc.account_number}</span>
+                        </div>
+                        <div style={{ marginTop: 8 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#94a3b8', marginBottom: 4 }}>
+                            <span>Hôm nay: <strong style={{ color: '#0f172a' }}>{fmt(today)}đ</strong></span>
+                            <span>Còn lại: <strong style={{ color: isFull ? '#f59e0b' : '#16a34a' }}>{fmt(remaining)}đ</strong> / {fmt(acc.daily_limit)}đ</span>
+                          </div>
+                          <div style={{ height: 5, background: '#e2e8f0', borderRadius: 3, overflow: 'hidden' }}>
+                            <div style={{ width: `${pct}%`, height: '100%', background: pct >= 100 ? '#f59e0b' : pct > 80 ? '#f97316' : '#2563eb', borderRadius: 3, transition: 'width 0.4s' }} />
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+                        <button onClick={() => startEdit(acc)} style={{ padding: '5px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 7, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, color: '#374151' }}>✏️ Sửa</button>
+                        <button onClick={() => toggleActive(acc)} style={{ padding: '5px 12px', background: acc.is_active ? '#fef9c3' : '#f0fdf4', border: `1px solid ${acc.is_active ? '#fde68a' : '#bbf7d0'}`, borderRadius: 7, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, color: acc.is_active ? '#92400e' : '#15803d' }}>
+                          {acc.is_active ? '⏸ Tắt' : '▶ Bật'}
+                        </button>
+                        <button onClick={() => deleteAccount(acc)} style={{ padding: '5px 12px', background: '#fff7f7', border: '1px solid #fecaca', borderRadius: 7, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, color: '#dc2626' }}>🗑 Xoá</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}

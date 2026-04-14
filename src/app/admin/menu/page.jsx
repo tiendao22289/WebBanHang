@@ -304,7 +304,7 @@ export default function MenuPage() {
 
   function getItemDisplayPrice(item) {
     const allPrices = (item.options || []).flatMap(opt =>
-      (opt.prices || []).filter(p => p !== null && p > 0).map(Number)
+      (opt.prices || []).filter(p => p != null && String(p).trim() !== '').map(Number)
     );
     if (allPrices.length > 0) {
       return 'Từ ' + new Intl.NumberFormat('vi-VN').format(Math.min(...allPrices)) + 'đ';

@@ -29,72 +29,148 @@ import './order.css';
 const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGiftSlots, onOpenGift, giftItems = [], promoEnabled }) => {
   const [showPreview, setShowPreview] = useState(false);
   const [pos, setPos] = useState({ x: -100, y: -100 });
+  const posRef = useRef({ x: -100, y: -100 });
   const dragRef = useRef({ isDragging: false, startX: 0, startY: 0, initialX: 0, initialY: 0, hasMoved: false });
+  const bubbleRef = useRef(null);
+  const [initialized, setInitialized] = useState(false);
 
+  // B\u01b0\u1edbc 1: kh\u1edfi t\u1ea1o v\u1ecb tr\u00ed
   useEffect(() => {
-    setPos({ x: window.innerWidth - 80, y: window.innerHeight - 240 });
+    const initPos = { x: window.innerWidth - 80, y: window.innerHeight - 240 };
+    posRef.current = initPos;
+    setPos(initPos);
+    setInitialized(true);
   }, []);
 
-  const handleTouchStart = (e) => {
-    dragRef.current.isDragging = true;
-    dragRef.current.hasMoved = false;
-    dragRef.current.startX = e.touches ? e.touches[0].clientX : e.clientX;
-    dragRef.current.startY = e.touches ? e.touches[0].clientY : e.clientY;
-    dragRef.current.initialX = pos.x;
-    dragRef.current.initialY = pos.y;
-  };
+  // B\u01b0\u1edbc 2: g\u1eafn touch listener tr\u1ef1c ti\u1ebfp tr\u00ean element (passive:false \u0111\u1ec3 c\u00f3 th\u1ec3 preventDefault)
+  // Element lu\u00f4n mount (dng visibility) n\u00ean bubbleRef lu\u00f4n h\u1ee3p l\u1ec7
+  useEffect(() => {
+    const el = bubbleRef.current;
+    if (!el) return;
 
-  const handleTouchMove = (e) => {
-    if (!dragRef.current.isDragging) return;
-    const currentX = e.touches ? e.touches[0].clientX : e.clientX;
-    const currentY = e.touches ? e.touches[0].clientY : e.clientY;
-    const dx = currentX - dragRef.current.startX;
-    const dy = currentY - dragRef.current.startY;
-    
-    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) dragRef.current.hasMoved = true;
-    
-    setPos({ 
-      x: Math.min(Math.max(0, dragRef.current.initialX + dx), window.innerWidth - 75), 
-      y: Math.min(Math.max(0, dragRef.current.initialY + dy), window.innerHeight - 75) 
-    });
-  };
+    const onTouchStart = (e) => {
+      if (e.touches.length !== 1) return;
+      dragRef.current.isDragging = true;
+      dragRef.current.hasMoved = false;
+      dragRef.current.startX = e.touches[0].clientX;
+      dragRef.current.startY = e.touches[0].clientY;
+      dragRef.current.initialX = posRef.current.x;
+      dragRef.current.initialY = posRef.current.y;
+    };
 
-  const handleTouchEnd = () => {
-    if (!dragRef.current.isDragging) return;
-    dragRef.current.isDragging = false;
-    if (!dragRef.current.hasMoved) {
-      // Chỉ mở gift modal khi còn lượt chọn; ngược lại hiện preview
-      if (availableGiftSlots > 0 && onOpenGift) {
-        onOpenGift();
-      } else {
-        setShowPreview(true);
+    const onTouchMove = (e) => {
+      if (!dragRef.current.isDragging || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - dragRef.current.startX;
+      const dy = e.touches[0].clientY - dragRef.current.startY;
+      // Ch\u1ec9 preventDefault KHI \u0111\u00e3 x\u00e1c nh\u1eadn l\u00e0 drag (> 8px)
+      // \u2192 N\u1ebfu kh\u00f4ng v\u01b0\u1ee3t ng\u01b0\u1ee1ng, kh\u00f4ng g\u1ecdi preventDefault \u2192 browser v\u1eabn fire synthetic click sau touchend
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+        dragRef.current.hasMoved = true;
+        e.preventDefault();
+        const newPos = {
+          x: Math.min(Math.max(0, dragRef.current.initialX + dx), window.innerWidth - 75),
+          y: Math.min(Math.max(0, dragRef.current.initialY + dy), window.innerHeight - 75),
+        };
+        posRef.current = newPos;
+        setPos(newPos);
       }
+    };
+
+    const onTouchEnd = () => {
+      if (!dragRef.current.isDragging) return;
+      dragRef.current.isDragging = false;
+      if (dragRef.current.hasMoved) {
+        // Drag k\u1ebft th\u00fac \u2192 snap sang c\u1ea1nh g\u1ea7n nh\u1ea5t
+        setPos(p => {
+          const newPos = { ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 80 : 15 };
+          posRef.current = newPos;
+          return newPos;
+        });
+      }
+      // N\u1ebfu kh\u00f4ng di chuy\u1ec3n (tap): \u0111\u1ec3 browser t\u1ef1 fire synthetic click \u2192 onClick x\u1eed l\u00fd
+    };
+
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+    };
+  }, []); // empty deps \u2014 element lu\u00f4n mount n\u00ean ch\u1ec9 c\u1ea7n g\u1eafn 1 l\u1ea7n
+
+  // TAP handler: d\u00f9ng onClick \u2014 ho\u1ea1t \u0111\u1ed9ng tr\u00ean c\u1ea3 PC l\u1eabn Android 1 ng\u00f3n
+  // Browser t\u1ef1 fire synthetic click sau touchend khi kh\u00f4ng c\u00f3 preventDefault
+  const handleTap = () => {
+    if (dragRef.current.hasMoved) {
+      dragRef.current.hasMoved = false; // reset sau drag-end click
+      return;
+    }
+    if (availableGiftSlots > 0 && onOpenGift) {
+      onOpenGift();
     } else {
-      setPos(p => ({ ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 80 : 15 }));
+      setShowPreview(true);
     }
   };
 
-  if (pos.x === -100) return null;
+  // Mouse drag handlers (PC)
+  const handleMouseDown = (e) => {
+    if (e.button !== 0) return;
+    dragRef.current.isDragging = true;
+    dragRef.current.hasMoved = false;
+    dragRef.current.startX = e.clientX;
+    dragRef.current.startY = e.clientY;
+    dragRef.current.initialX = posRef.current.x;
+    dragRef.current.initialY = posRef.current.y;
+  };
+  const handleMouseMove = (e) => {
+    if (!dragRef.current.isDragging) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) dragRef.current.hasMoved = true;
+    if (!dragRef.current.hasMoved) return;
+    const newPos = {
+      x: Math.min(Math.max(0, dragRef.current.initialX + dx), window.innerWidth - 75),
+      y: Math.min(Math.max(0, dragRef.current.initialY + dy), window.innerHeight - 75),
+    };
+    posRef.current = newPos;
+    setPos(newPos);
+  };
+  const handleMouseUp = () => {
+    if (!dragRef.current.isDragging) return;
+    dragRef.current.isDragging = false;
+    if (dragRef.current.hasMoved) {
+      setPos(p => {
+        const newPos = { ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 80 : 15 };
+        posRef.current = newPos;
+        return newPos;
+      });
+    }
+  };
 
   const hasGift = giftCount > 0;
   const progress = Math.min((qualifyingQty / threshold) * 100, 100);
 
   return (
     <>
-      {/* Bubble nổi */}
+      {/* Bubble n\u1ed5i \u2014 lu\u00f4n mount (visibility:hidden) \u0111\u1ec3 bubbleRef/addEventListener lu\u00f4n h\u1ee3p l\u1ec7 */}
       <div
+        ref={bubbleRef}
         style={{
-          position: 'fixed', left: pos.x, top: pos.y, zIndex: 100, touchAction: 'none',
+          position: 'fixed', left: pos.x, top: pos.y, zIndex: 100,
+          touchAction: 'none',
           transition: dragRef.current.isDragging ? 'none' : 'left 0.3s ease-out',
-          cursor: 'grab'
+          cursor: 'grab',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          visibility: initialized ? 'visible' : 'hidden',
         }}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        onMouseDown={handleTouchStart}
-        onMouseMove={handleTouchMove}
-        onMouseUp={handleTouchEnd}
-        onMouseLeave={() => { if (dragRef.current.isDragging) handleTouchEnd(); }}
+        onClick={handleTap}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => { if (dragRef.current.isDragging) handleMouseUp(); }}
       >
         {/* Vòng tiến trình */}
         <svg width="70" height="70" style={{ position: 'absolute', top: -5, left: -5, transform: 'rotate(-90deg)', pointerEvents: 'none' }}>
@@ -818,9 +894,10 @@ function OrderContent() {
       const init = {};
       let initPrice = null;
       item.options.forEach(opt => {
+        const isMulti = opt.name.toLowerCase().includes('khẩu vị') || opt.name.toLowerCase().includes('thêm') || opt.name.toLowerCase().includes('topping');
         if (opt.choices && opt.choices.length > 0) {
-          init[opt.name] = opt.choices[0];
-          if (initPrice === null && opt.prices?.[0] != null && Number(opt.prices[0]) > 0) {
+          init[opt.name] = isMulti ? [] : opt.choices[0];
+          if (!isMulti && initPrice === null && opt.prices?.[0] != null && Number(opt.prices[0]) > 0) {
             initPrice = Number(opt.prices[0]);
           }
         }
@@ -840,7 +917,14 @@ function OrderContent() {
 
   function confirmOptionAdd() {
     if (!optionModal) return;
-    const optionsArr = Object.keys(selectedOpts).map(k => ({ name: k, choice: selectedOpts[k] }));
+    const optionsArr = Object.keys(selectedOpts).map(k => {
+      let choiceValue = selectedOpts[k];
+      if (Array.isArray(choiceValue)) {
+        if (choiceValue.length === 0) return null;
+        choiceValue = choiceValue.join(', ');
+      }
+      return { name: k, choice: choiceValue };
+    }).filter(o => o && o.choice !== '');
     const label = optionsArr.map(o => o.choice).join(', ');
 
     if (isGiftMode) {
@@ -1119,7 +1203,7 @@ function OrderContent() {
 
   function getItemDisplayPrice(item) {
     const allPrices = (item.options || []).flatMap(opt =>
-      (opt.prices || []).filter(p => p != null && Number(p) > 0).map(Number)
+      (opt.prices || []).filter(p => p != null && String(p).trim() !== '').map(Number)
     );
     if (allPrices.length > 0) {
       const min = Math.min(...allPrices);
@@ -1136,12 +1220,26 @@ function OrderContent() {
     let hasExplicitOptionPrice = false;
     let sum = 0;
     (options || []).forEach(opt => {
-      const ci = opt.choices?.indexOf(opts[opt.name]);
-      if (ci >= 0) {
-        const p = opt.prices?.[ci];
-        if (p !== null && p !== '') {
-          sum += Number(p);
-          hasExplicitOptionPrice = true;
+      const selected = opts[opt.name];
+      if (Array.isArray(selected)) {
+        selected.forEach(selItem => {
+          const ci = opt.choices?.indexOf(selItem);
+          if (ci >= 0) {
+            const p = opt.prices?.[ci];
+            if (p !== null && p !== '') {
+              sum += Number(p);
+              hasExplicitOptionPrice = true;
+            }
+          }
+        });
+      } else {
+        const ci = opt.choices?.indexOf(selected);
+        if (ci >= 0) {
+          const p = opt.prices?.[ci];
+          if (p !== null && p !== '') {
+            sum += Number(p);
+            hasExplicitOptionPrice = true;
+          }
         }
       }
     });
@@ -1921,11 +2019,21 @@ function OrderContent() {
                       const p = opt.prices?.[ci];
                       const hasPrice = p !== null && p !== '';
                       const displayPrice = hasPrice ? Number(p) : 0;
-                      const active = selectedOpts[opt.name] === choice;
+                      const isMulti = opt.name.toLowerCase().includes('khẩu vị') || opt.name.toLowerCase().includes('thêm') || opt.name.toLowerCase().includes('topping');
+                      const active = isMulti ? (selectedOpts[opt.name] || []).includes(choice) : selectedOpts[opt.name] === choice;
                       return (
                         <button key={ci} onClick={() => {
-                          setSelectedOpts({ ...selectedOpts, [opt.name]: choice });
-                          if (hasPrice) setChoicePrice(Number(p));
+                          if (isMulti) {
+                            const currentArr = selectedOpts[opt.name] || [];
+                            if (currentArr.includes(choice)) {
+                              setSelectedOpts({ ...selectedOpts, [opt.name]: currentArr.filter(c => c !== choice) });
+                            } else {
+                              setSelectedOpts({ ...selectedOpts, [opt.name]: [...currentArr, choice] });
+                            }
+                          } else {
+                            setSelectedOpts({ ...selectedOpts, [opt.name]: choice });
+                            if (hasPrice) setChoicePrice(Number(p));
+                          }
                         }} style={{
                           padding: '6px 4px', 
                           border: 'none',
@@ -1939,13 +2047,16 @@ function OrderContent() {
                           width: '100%',
                           borderBottom: ci < opt.choices.length - 1 ? '1px solid #f3f4f6' : 'none',
                         }}>
-                          {/* Radio circle */}
+                          {/* Radio/Check circle */}
                           <div style={{
-                            width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
+                            width: 16, height: 16, borderRadius: isMulti ? '4px' : '50%', flexShrink: 0,
                             border: active ? '4.5px solid #2563eb' : '1.5px solid #d1d5db',
-                            background: 'white',
+                            background: (active && isMulti) ? '#2563eb' : 'white',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
                             transition: 'all 0.2s ease'
-                          }} />
+                          }}>
+                             {active && isMulti && <span style={{ color: 'white', fontSize: '10px', fontWeight: 'bold' }}>✓</span>}
+                          </div>
                           
                           <span style={{ flex: 1, lineHeight: 1.25 }}>{choice}</span>
                           
