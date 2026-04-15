@@ -1484,8 +1484,26 @@ export default function TablesPage() {
               )}
               {/* Action buttons */}
               <div style={{ display: 'flex', gap: 8, padding: '10px 12px', borderTop: '1px solid #e5e7eb', background: 'white', flexShrink: 0 }}>
-                <button style={{ flex: 1, padding: '10px', border: '1.5px solid #2563eb', borderRadius: 8, background: 'white', color: '#2563eb', fontWeight: 600, cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
-                  🔔 Thông báo
+                <button
+                  onClick={async () => {
+                    if (!selectedTable) return;
+                    setShowTableHistory(selectedTable);
+                    setTableHistoryLoading(true);
+                    setTableHistoryData([]);
+                    const since = new Date(Date.now() - 8 * 3600 * 1000).toISOString();
+                    const hId = selectedTable.merged_with || selectedTable.id;
+                    const { data } = await supabase
+                      .from('orders')
+                      .select('*, order_items(*, menu_item:menu_items(name))')
+                      .eq('table_id', hId)
+                      .in('status', ['paid', 'cancelled'])
+                      .gte('created_at', since)
+                      .order('created_at', { ascending: false });
+                    setTableHistoryData(data || []);
+                    setTableHistoryLoading(false);
+                  }}
+                  style={{ flex: 1, padding: '10px', border: '1.5px solid #2563eb', borderRadius: 8, background: '#eff6ff', color: '#1d4ed8', fontWeight: 600, cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                  🕐 Lịch sử
                 </button>
                 <button onClick={handlePrintInvoice} style={{ flex: 1, padding: '10px', border: '1.5px solid #e5e7eb', borderRadius: 8, background: 'white', color: '#374151', fontWeight: 600, cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
                   📄 In tạm tính
