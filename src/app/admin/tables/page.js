@@ -1542,46 +1542,7 @@ export default function TablesPage() {
                     <button onClick={() => setDesktopSearch('')} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', padding: '0 10px', fontSize: '1rem' }}>×</button>
                   )}
                 </div>
-                {/* Search results dropdown */}
-                {desktopSearch.trim() && (() => {
-                  const q = desktopSearch.trim().toLowerCase();
-                  const results = menuItems.filter(m => m.name?.toLowerCase().includes(q)).slice(0, 8);
-                  return results.length > 0 ? (
-                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,0.18)', zIndex: 1000, marginTop: 4, overflow: 'hidden' }}>
-                      {results.map(item => (
-                        <div
-                          key={item.id}
-                          onClick={() => {
-                            setOptionModalItem(item);
-                            setSelectedOptions({});
-                            setOptionQuantity(1);
-                            setOptionNote('');
-                            setEditingPrice(false);
-                            setCustomPrice(null);
-                            setDesktopSearch('');
-                          }}
-                          style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid #f3f4f6', transition: 'background 0.1s' }}
-                          onMouseEnter={e => e.currentTarget.style.background = '#f0f9ff'}
-                          onMouseLeave={e => e.currentTarget.style.background = 'white'}
-                        >
-                          <div style={{ width: 36, height: 36, background: '#dbeafe', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                            <ChefHat size={18} style={{ color: '#2563eb' }} />
-                          </div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</div>
-                            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-                              {item.category?.name || ''} • Giá: <span style={{ color: '#2563eb', fontWeight: 600 }}>{item.price?.toLocaleString('vi-VN')}đ</span>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,0.18)', zIndex: 1000, marginTop: 4, padding: '14px', textAlign: 'center', color: '#9ca3af', fontSize: '0.85rem' }}>
-                      Không tìm thấy món nào
-                    </div>
-                  );
-                })()}
+                {/* Search dropdown logic removed to filter grid natively */}
               </div>
               <div style={{ width: 8 }} />
               <button onClick={() => setShowAddModal(true)} style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: 6, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '1.1rem', fontWeight: 700 }}>+</button>
@@ -1595,7 +1556,7 @@ export default function TablesPage() {
                   /* ── Menu Grid View ── */
                   <>
                     {/* Category tabs */}
-                    <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid #e5e7eb', overflowX: 'auto', flexShrink: 0, background: 'white' }}>
+                    <div style={{ paddingLeft: '8px', display: 'flex', gap: 0, borderBottom: '1px solid #e5e7eb', overflowX: 'auto', flexShrink: 0, background: 'white' }}>
                       {[{ id: 'all', name: 'Tất cả' }, ...categories].map(cat => (
                         <button key={cat.id} onClick={() => setDesktopMenuCat(cat.id)}
                           style={{
@@ -1611,6 +1572,13 @@ export default function TablesPage() {
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8 }}>
                         {menuItems
                           .filter(m => {
+                            const searchStr = desktopSearch.trim();
+                            if (searchStr) {
+                              const matchName = removeVietnameseTones(m.name).includes(removeVietnameseTones(searchStr));
+                              const catName = m.category?.name || categories.find(c => c.id === m.category_id)?.name || '';
+                              const matchCat = removeVietnameseTones(catName).includes(removeVietnameseTones(searchStr));
+                              if (!matchName && !matchCat) return false;
+                            }
                             if (desktopMenuCat === 'all') return true;
                             let itemCats = m.category_id ? [m.category_id] : [];
                             if (m.options) {
