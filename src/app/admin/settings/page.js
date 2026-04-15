@@ -239,14 +239,14 @@ export default function SettingsPage() {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        // Vẽ Thông tin Wi-Fi (Top)
-        ctx.font = '700 65px sans-serif'; // Chỉnh lớn hơn 1 tí
-        ctx.fillStyle = '#1e3a8a'; // Màu Xanh biển Đậm đen
-        ctx.fillText('WiFi: Ốc Bảo Khang', 500, 70);
-        ctx.fillText('MK: baokhang2018', 500, 150);
+        // Vẽ Thông tin Wi-Fi (Top) — font x1.5 (65 → 98px)
+        ctx.font = '700 98px sans-serif';
+        ctx.fillStyle = '#1e3a8a';
+        ctx.fillText('Wifi: Ốc Bảo Khang', 500, 85);
+        ctx.fillText('MK : baokhang2018', 500, 195);
 
-        // Căn giữa QR: (1000 - 800) / 2 = 100. Đẩy xuống y=210 để nhường chỗ
-        ctx.drawImage(img, 100, 210, 800, 800);
+        // QR code — đẩy xuống thêm cho WiFi text lớn hơn
+        ctx.drawImage(img, 100, 270, 800, 800);
 
         // Vẽ Tên bàn (với chữ B + Số, hoặc MANG VỀ)
         let displayText = '';
@@ -255,24 +255,24 @@ export default function SettingsPage() {
           ctx.font = '900 200px sans-serif';
         } else {
           const namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khác');
-          displayText = `B${namePart}`; // Xóa khoảng trắng
-          ctx.font = '900 520px sans-serif'; // Chỉnh lớn và dài hơn
+          displayText = `B${namePart}`;
+          ctx.font = '900 500px sans-serif';
         }
         ctx.fillStyle = '#ef4444';
-        
+
         ctx.save();
-        ctx.translate(500, 1280);
-        // Kéo dài chữ theo chiều dọc một chút (1.1x) để tạo cảm giác "chữ dài hơn"
-        if (displayText !== 'MANG VỀ') ctx.scale(0.95, 1.15); 
+        ctx.translate(500, 1330);
+        if (displayText !== 'MANG VỀ') ctx.scale(0.95, 1.15);
         ctx.fillText(displayText, 0, 0);
         ctx.restore();
 
         // Dòng phụ ở dưới cùng
-        ctx.font = '700 90px sans-serif'; // Lớn hơn gần x2 (cũ 55)
-        ctx.fillStyle = '#0c4a6e'; // Xanh da trời đậm đen
-        ctx.fillText('Quét mã để gọi món', 500, 1560); // Đẩy xuống một chút
+        ctx.font = '700 90px sans-serif';
+        ctx.fillStyle = '#0c4a6e';
+        ctx.fillText('Quét mã để gọi món', 500, 1580);
 
-        resolve(canvas.toDataURL('image/png'));
+        // Xuất JPEG (chất lượng 94%)
+        resolve(canvas.toDataURL('image/jpeg', 0.94));
       };
       img.onerror = reject;
       img.src = qrDataUrl;
@@ -283,7 +283,7 @@ export default function SettingsPage() {
     setDownloadingQR(true);
     setQrProgress('Đang tải danh sách bàn...');
     try {
-      const { jsPDF } = await import('jspdf');
+      const JSZip = (await import('jszip')).default;
 
       const { data: allTables, error: tErr } = await supabase
         .from('tables')
@@ -291,52 +291,35 @@ export default function SettingsPage() {
         .order('table_number');
       if (tErr) throw tErr;
 
-      const doc = new jsPDF({
-        orientation: 'p',
-        unit: 'mm',
-        format: 'a4'
-      });
-
-      // Bố cục khổ A4 (210 x 297 mm)
-      const cols = 3;
-      const rows = 3;
-      const cellW = 55;
-      const cellH = 55 * 1.65; // ~90.75 mm (tỉ lệ 1000x1650)
-      const spacing = 5; // KHoảng cách giữa các thẻ 5mm
-      const marginX = (210 - (cols * cellW + (cols - 1) * spacing)) / 2;
-      const marginY = (297 - (rows * cellH + (rows - 1) * spacing)) / 2;
+      const zip = new JSZip();
+      const folder = zip.folder('QR_Cac_Ban');
 
       for (let i = 0; i < allTables.length; i++) {
         const tb = allTables[i];
-        setQrProgress(`Đang ghép ${tb.table_number || tb.table_name || 'Bàn'}... (${i + 1}/${allTables.length})`);
+        const label = tb.table_number !== null && tb.table_number !== undefined
+          ? `B${tb.table_number}`
+          : (tb.table_name || `Ban_${i + 1}`);
+        setQrProgress(`Đang tạo ${label}... (${i + 1}/${allTables.length})`);
 
         const dataUrl = await generateQRCanvasBase64(tb);
-        
-        const pageIndex = Math.floor(i / (cols * rows));
-        const indexOnPage = i % (cols * rows);
-        const r = Math.floor(indexOnPage / cols);
-        const c = indexOnPage % cols;
-        
-        if (i > 0 && indexOnPage === 0) {
-           doc.addPage();
-        }
-        
-        const x = marginX + c * (cellW + spacing);
-        const y = marginY + r * (cellH + spacing);
-
-        doc.addImage(dataUrl, 'PNG', x, y, cellW, cellH, '', 'FAST');
-        // Kẻ khung mờ để dễ lấy kéo cắt
-        doc.setDrawColor(220);
-        doc.setLineWidth(0.3);
-        doc.rect(x, y, cellW, cellH);
+        // Bỏ phần header "data:image/jpeg;base64,"
+        const base64 = dataUrl.split(',')[1];
+        folder.file(`QR_${label}.jpg`, base64, { base64: true });
       }
 
-      setQrProgress('Đang lưu file PDF...');
-      doc.save(`Bang_Ma_QR_Cac_Ban.pdf`);
-      flash('Đã tạo thành công 1 File chứa tất cả mã QR để in!');
+      setQrProgress('Đang nén file ZIP...');
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'QR_Tat_Ca_Cac_Ban.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+
+      flash(`Đã xuất ${allTables.length} file JPG trong 1 file ZIP!`);
     } catch (err) {
       console.error(err);
-      flash('❌ Tạo PDF thất bại: ' + err.message, true);
+      flash('❌ Xuất JPG thất bại: ' + err.message, true);
     } finally {
       setDownloadingQR(false);
       setQrProgress('');
@@ -805,7 +788,7 @@ export default function SettingsPage() {
                 {qrProgress || 'Đang tạo bảng...'}
               </>
             ) : (
-              '📄 Ghép tất cả thành 1 file in (PDF)'
+              '📦 Tải tất cả QR (JPG × từng bàn)'
             )}
           </button>
 
