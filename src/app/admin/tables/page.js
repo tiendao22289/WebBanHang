@@ -1610,7 +1610,20 @@ export default function TablesPage() {
                     <div style={{ flex: 1, overflowY: 'auto', padding: '10px', background: '#f8fafc' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8 }}>
                         {menuItems
-                          .filter(m => desktopMenuCat === 'all' || m.category?.id === desktopMenuCat || m.category_id === desktopMenuCat)
+                          .filter(m => {
+                            if (desktopMenuCat === 'all') return true;
+                            let itemCats = m.category_id ? [m.category_id] : [];
+                            if (m.options) {
+                              m.options.forEach(opt => {
+                                if (opt.choiceCategories) {
+                                  opt.choiceCategories.forEach(c => {
+                                    if (c && !itemCats.includes(c)) itemCats.push(c);
+                                  });
+                                }
+                              });
+                            }
+                            return itemCats.includes(desktopMenuCat);
+                          })
                           .map(item => (
                             <div key={item.id}
                               onClick={() => {
