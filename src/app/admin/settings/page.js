@@ -224,7 +224,7 @@ export default function SettingsPage() {
     const url = `${window.location.origin}/order?table=${tb.id}`;
     const canvas = document.createElement('canvas');
     canvas.width = 1000;
-    canvas.height = 1550;
+    canvas.height = 1650;
     const ctx = canvas.getContext('2d');
 
     // Nền trắng
@@ -240,31 +240,37 @@ export default function SettingsPage() {
         ctx.textBaseline = 'middle';
 
         // Vẽ Thông tin Wi-Fi (Top)
-        ctx.font = '700 55px sans-serif';
-        ctx.fillStyle = '#0284c7'; // Màu xanh da trời đậm
-        ctx.fillText('WiFi : Ốc Bảo Khang', 500, 70);
-        ctx.fillText('MK : baokhang2018', 500, 140);
+        ctx.font = '700 65px sans-serif'; // Chỉnh lớn hơn 1 tí
+        ctx.fillStyle = '#1e3a8a'; // Màu Xanh biển Đậm đen
+        ctx.fillText('WiFi: Ốc Bảo Khang', 500, 70);
+        ctx.fillText('MK: baokhang2018', 500, 150);
 
-        // Căn giữa QR: (1000 - 800) / 2 = 100. Đẩy xuống y=200 để nhường chỗ
-        ctx.drawImage(img, 100, 200, 800, 800);
+        // Căn giữa QR: (1000 - 800) / 2 = 100. Đẩy xuống y=210 để nhường chỗ
+        ctx.drawImage(img, 100, 210, 800, 800);
 
         // Vẽ Tên bàn (với chữ B + Số, hoặc MANG VỀ)
         let displayText = '';
         if (tb.table_number === 0 || tb.table_type === 'takeaway' || (tb.table_name && String(tb.table_name).toLowerCase().includes('mang về'))) {
           displayText = 'MANG VỀ';
-          ctx.font = '900 180px sans-serif'; // Giảm size vì chữ dài
+          ctx.font = '900 200px sans-serif';
         } else {
           const namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khác');
-          displayText = `B ${namePart}`;
-          ctx.font = '900 360px sans-serif';
+          displayText = `B${namePart}`; // Xóa khoảng trắng
+          ctx.font = '900 520px sans-serif'; // Chỉnh lớn và dài hơn
         }
         ctx.fillStyle = '#ef4444';
-        ctx.fillText(displayText, 500, 1260);
+        
+        ctx.save();
+        ctx.translate(500, 1280);
+        // Kéo dài chữ theo chiều dọc một chút (1.1x) để tạo cảm giác "chữ dài hơn"
+        if (displayText !== 'MANG VỀ') ctx.scale(0.95, 1.15); 
+        ctx.fillText(displayText, 0, 0);
+        ctx.restore();
 
         // Dòng phụ ở dưới cùng
-        ctx.font = '700 55px sans-serif';
-        ctx.fillStyle = '#6b7280';
-        ctx.fillText('Quét mã để gọi món ngay', 500, 1460); // Đẩy xuống y=1460
+        ctx.font = '700 90px sans-serif'; // Lớn hơn gần x2 (cũ 55)
+        ctx.fillStyle = '#0c4a6e'; // Xanh da trời đậm đen
+        ctx.fillText('Quét mã để gọi món', 500, 1560); // Đẩy xuống một chút
 
         resolve(canvas.toDataURL('image/png'));
       };
@@ -277,7 +283,7 @@ export default function SettingsPage() {
     setDownloadingQR(true);
     setQrProgress('Đang tải danh sách bàn...');
     try {
-      const JSZip = (await import('jszip')).default;
+      const { jsPDF } = await import('jspdf');
 
       const { data: allTables, error: tErr } = await supabase
         .from('tables')
@@ -285,37 +291,52 @@ export default function SettingsPage() {
         .order('table_number');
       if (tErr) throw tErr;
 
-      const zip = new JSZip();
-      const folder = zip.folder("Ma_QR_Ban");
+      const doc = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      // Bố cục khổ A4 (210 x 297 mm)
+      const cols = 3;
+      const rows = 3;
+      const cellW = 55;
+      const cellH = 55 * 1.65; // ~90.75 mm (tỉ lệ 1000x1650)
+      const spacing = 5; // KHoảng cách giữa các thẻ 5mm
+      const marginX = (210 - (cols * cellW + (cols - 1) * spacing)) / 2;
+      const marginY = (297 - (rows * cellH + (rows - 1) * spacing)) / 2;
 
       for (let i = 0; i < allTables.length; i++) {
         const tb = allTables[i];
-        setQrProgress(`Đang tạo QR bàn ${tb.table_number || tb.table_name || tb.id}... (${i + 1}/${allTables.length})`);
+        setQrProgress(`Đang ghép ${tb.table_number || tb.table_name || 'Bàn'}... (${i + 1}/${allTables.length})`);
 
         const dataUrl = await generateQRCanvasBase64(tb);
-        const base64Data = dataUrl.replace(/^data:image\/png;base64,/, "");
-        let namePart = (tb.table_number !== null && tb.table_number !== undefined) ? tb.table_number : (tb.table_name || 'Khac');
-        if (tb.table_number === 0 || tb.table_type === 'takeaway' || (tb.table_name && String(tb.table_name).toLowerCase().includes('mang về'))) {
-          namePart = 'Mang_Ve';
+        
+        const pageIndex = Math.floor(i / (cols * rows));
+        const indexOnPage = i % (cols * rows);
+        const r = Math.floor(indexOnPage / cols);
+        const c = indexOnPage % cols;
+        
+        if (i > 0 && indexOnPage === 0) {
+           doc.addPage();
         }
-        const fileName = `Ban_${namePart}.png`.replace(/[^a-zA-Z0-9_.-]/g, '_');
-        folder.file(fileName, base64Data, { base64: true });
+        
+        const x = marginX + c * (cellW + spacing);
+        const y = marginY + r * (cellH + spacing);
+
+        doc.addImage(dataUrl, 'PNG', x, y, cellW, cellH, '', 'FAST');
+        // Kẻ khung mờ để dễ lấy kéo cắt
+        doc.setDrawColor(220);
+        doc.setLineWidth(0.3);
+        doc.rect(x, y, cellW, cellH);
       }
 
-      setQrProgress('Đang nén file ZIP...');
-      const content = await zip.generateAsync({ type: 'blob' });
-      const blobUrl = URL.createObjectURL(content);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = `Ma_QR_Tat_Ca_Cac_Ban.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(blobUrl);
-      flash('Tải mã QR thành công!');
+      setQrProgress('Đang lưu file PDF...');
+      doc.save(`Bang_Ma_QR_Cac_Ban.pdf`);
+      flash('Đã tạo thành công 1 File chứa tất cả mã QR để in!');
     } catch (err) {
       console.error(err);
-      flash('❌ Tải mã QR thất bại: ' + err.message, true);
+      flash('❌ Tạo PDF thất bại: ' + err.message, true);
     } finally {
       setDownloadingQR(false);
       setQrProgress('');
@@ -768,23 +789,23 @@ export default function SettingsPage() {
       {/* ── Utilities: QR Download ── */}
       <div style={{ marginTop: 28, background: 'white', border: '1.5px solid #cbd5e1', borderRadius: 14, padding: '18px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.03)' }}>
         <div style={{ fontWeight: 800, fontSize: '1rem', color: '#334155', marginBottom: 4 }}>
-          📎 Tiện ích mở <span onClick={() => setShowSecretModal(true)} style={{ cursor: 'pointer' }}>rộng</span>
+          📎 Tiện ích in ấn hàng loạt
         </div>
         <p style={{ margin: '0 0 14px', fontSize: '0.8rem', color: '#64748b' }}>
-          Tải hệ thống thẻ QR của tất cả các bàn ăn hiện có về máy tính, để in và dán lên bàn.
+          Hệ thống sẽ tự động ghép tất cả mã QR của các bàn thành 1 file lớn (A4), giúp bạn dễ dàng in ra và dán hàng loạt.
         </p>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <button onClick={downloadAllQRs} disabled={downloadingQR}
-            style={{ padding: '10px 20px', background: '#1e293b', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8, opacity: downloadingQR ? 0.7 : 1 }}>
+            style={{ padding: '10px 20px', background: '#0284c7', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 8, opacity: downloadingQR ? 0.7 : 1 }}>
             {downloadingQR ? (
               <>
                 <svg className="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 12a9 9 0 11-6.219-8.56"></path>
                 </svg>
-                {qrProgress || 'Đang tạo ZIP...'}
+                {qrProgress || 'Đang tạo bảng...'}
               </>
             ) : (
-              '📦 Tải tất cả mã QR về (ZIP)'
+              '📄 Ghép tất cả thành 1 file in (PDF)'
             )}
           </button>
 
@@ -797,6 +818,8 @@ export default function SettingsPage() {
           </button>
         </div>
       </div>
+
+ 
 
       {/* ── Modal Xem mẫu QR ── */}
       {previewQR && (
