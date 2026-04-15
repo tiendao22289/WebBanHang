@@ -1606,9 +1606,9 @@ export default function TablesPage() {
                         >{cat.name}</button>
                       ))}
                     </div>
-                    {/* Menu grid 5 columns */}
+                    {/* Menu grid 7 columns */}
                     <div style={{ flex: 1, overflowY: 'auto', padding: '10px', background: '#f8fafc' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8 }}>
                         {menuItems
                           .filter(m => desktopMenuCat === 'all' || m.category?.id === desktopMenuCat || m.category_id === desktopMenuCat)
                           .map(item => (
