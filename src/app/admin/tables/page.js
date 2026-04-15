@@ -1628,9 +1628,9 @@ export default function TablesPage() {
                               {/* Image or placeholder */}
                               <div style={{ position: 'relative' }}>
                                 {item.image_url ? (
-                                  <img src={item.image_url} alt={item.name} style={{ width: '100%', height: 72, objectFit: 'cover', display: 'block' }} />
+                                  <img src={item.image_url} alt={item.name} style={{ width: '100%', aspectRatio: '1/1', objectFit: 'cover', display: 'block' }} />
                                 ) : (
-                                  <div style={{ width: '100%', height: 72, background: '#dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  <div style={{ width: '100%', aspectRatio: '1/1', background: '#dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                     <ChefHat size={28} style={{ color: '#93c5fd' }} />
                                   </div>
                                 )}
