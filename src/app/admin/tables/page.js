@@ -1796,11 +1796,33 @@ export default function TablesPage() {
                                 position: 'relative', gap: 8,
                               }}
                             >
-                              {/* Status dot */}
-                              <div style={{
-                                position: 'absolute', top: 8, right: 8, width: 8, height: 8, borderRadius: '50%',
-                                background: isOccupied ? '#22c55e' : '#d1d5db',
-                              }} />
+                              {/* History button - top right */}
+                              <div
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  setShowTableHistory(table);
+                                  setTableHistoryLoading(true);
+                                  setTableHistoryData([]);
+                                  const since = new Date(Date.now() - 8 * 3600 * 1000).toISOString();
+                                  const hId = table.merged_with || table.id;
+                                  const { data } = await supabase
+                                    .from('orders')
+                                    .select('*, order_items(*, menu_item:menu_items(name))')
+                                    .eq('table_id', hId)
+                                    .in('status', ['paid', 'cancelled'])
+                                    .gte('created_at', since)
+                                    .order('created_at', { ascending: false });
+                                  setTableHistoryData(data || []);
+                                  setTableHistoryLoading(false);
+                                }}
+                                style={{ position: 'absolute', top: 6, right: 6, opacity: 0.6, cursor: 'pointer', zIndex: 5, padding: 4 }}
+                                title="Lịch sử bàn 8H"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={isSelected ? 'rgba(255,255,255,0.7)' : isMergedGroup ? '#a855f7' : isOccupied ? '#3b82f6' : '#9ca3af'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <circle cx="12" cy="12" r="10" />
+                                  <polyline points="12 6 12 12 16 14" />
+                                </svg>
+                              </div>
                               {/* Print error badge */}
                               {hasPrintError && (
                                 <div style={{ position: 'absolute', top: -5, right: -5, background: '#ef4444', color: 'white', borderRadius: '50%', padding: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.2)', zIndex: 10 }}>
