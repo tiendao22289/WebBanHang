@@ -1590,7 +1590,7 @@ export default function TablesPage() {
             {/* 2-pane content */}
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
               {/* LEFT: Table browser or Menu view */}
-              <div style={{ width: desktopView === 'tables' ? '65%' : '60%', display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderRight: '1px solid #e2e8f0', overflow: 'hidden', transition: 'width 0.25s ease' }}>
+              <div style={{ width: desktopView === 'tables' ? '100%' : '60%', display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderRight: desktopView === 'menu' ? '1px solid #e2e8f0' : 'none', overflow: 'hidden', transition: 'width 0.25s ease' }}>
                 {desktopView === 'menu' ? (
                   /* ── Menu Grid View ── */
                   <>
@@ -1792,10 +1792,12 @@ export default function TablesPage() {
                 )}
               </div>
 
-              {/* RIGHT: Order detail */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'white', overflow: 'hidden', minWidth: 0 }}>
-                {desktopOrderDetail()}
-              </div>
+              {/* RIGHT: Order detail — only show when table selected / menu view */}
+              {desktopView === 'menu' && (
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'white', overflow: 'hidden', minWidth: 0 }}>
+                  {desktopOrderDetail()}
+                </div>
+              )}
             </div>
           </div>
         );
