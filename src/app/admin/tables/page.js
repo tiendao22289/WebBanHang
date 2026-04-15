@@ -1695,7 +1695,7 @@ export default function TablesPage() {
                           </button>
                         </div>
                       )}
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: 12 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 14 }}>
                         {filteredTables.map(table => {
                           const isOccupied = table.status === 'occupied';
                           const isSelected = selectedTable?.id === table.id;
@@ -1709,7 +1709,7 @@ export default function TablesPage() {
                               onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 4px 16px rgba(37,99,235,0.35)' : isOccupied ? '0 2px 8px rgba(37,99,235,0.12)' : '0 1px 4px rgba(0,0,0,0.06)'; }}
                               style={{
                                 display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                                padding: '14px 8px 12px', borderRadius: 14, cursor: 'pointer', minHeight: 100,
+                                padding: '14px 8px 12px', borderRadius: 14, cursor: 'pointer', minHeight: 115,
                                 background: isSelected
                                   ? 'linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%)'
                                   : isOccupied
