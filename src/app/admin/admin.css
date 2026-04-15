@@ -5,18 +5,18 @@
   /* Design Tokens Overrides for Admin */
   --color-primary: #DC2626;
   --color-primary-dark: #B91C1C;
-  --color-primary-light: #FEE2E2;
-  --color-primary-bg: #FEF2F2;
+  --color-primary-light: #e5e7eb;
+  --color-primary-bg: #fafafa;
   --color-accent: #CA8A04;
   --color-accent-dark: #A16207;
-  --color-bg: #FFFBFB;
-  --color-text: #450A0A;
+  --color-bg: #f8fafc;
+  --color-text: #111827;
   --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-display: 'DM Sans', sans-serif;
   --radius-lg: 1.25rem;
   --radius-xl: 1.5rem;
-  --shadow-md: 0 10px 25px -5px rgba(220, 38, 38, 0.08), 0 8px 10px -6px rgba(220, 38, 38, 0.08);
-  
+  --shadow-md: 0 10px 25px -5px rgba(0,0,0,0.06), 0 4px 8px -4px rgba(0,0,0,0.04);
+
   font-family: var(--font-body);
   color: var(--color-text);
 }
