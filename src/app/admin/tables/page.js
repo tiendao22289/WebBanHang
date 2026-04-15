@@ -1518,37 +1518,68 @@ export default function TablesPage() {
         return (
           <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', margin: '-2rem', marginTop: '-2rem' }}>
             {/* Blue top nav bar */}
-            <div style={{ background: '#1e3a8a', display: 'flex', alignItems: 'center', gap: 4, padding: '8px 12px', flexShrink: 0 }}>
-              {[{ label: 'Phòng bàn', view: 'tables' }, { label: 'Thực đơn', view: 'menu' }].map((tab) => (
-                <button key={tab.label}
-                  onClick={() => setDesktopView(tab.view)}
-                  style={{ background: desktopView === tab.view ? 'rgba(255,255,255,0.22)' : 'transparent', color: 'white', border: 'none', padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: '0.88rem', fontWeight: desktopView === tab.view ? 700 : 400, display: 'flex', alignItems: 'center', gap: 5 }}
-                >{tab.label}</button>
-              ))}
+            <div style={{ background: '#0b2149', display: 'flex', alignItems: 'flex-end', gap: 15, padding: '8px 12px 0 12px', flexShrink: 0 }}>
               
-              <div style={{ flex: 1 }} />
-              
-              <div style={{ position: 'relative', width: '100%', maxWidth: 400 }}>
-                <div style={{ background: 'rgba(255,255,255,0.15)', borderRadius: 8, padding: '0', display: 'flex', alignItems: 'center', gap: 8, color: 'white', border: desktopSearch ? '1.5px solid rgba(255,255,255,0.4)' : '1.5px solid transparent' }}>
-                  <Search size={13} style={{ opacity: 0.7, marginLeft: 12, flexShrink: 0 }} />
-                  <input
-                    type="text"
-                    value={desktopSearch}
-                    onChange={e => setDesktopSearch(e.target.value)}
-                    placeholder="Tìm món..."
-                    style={{
-                      flex: 1, background: 'transparent', border: 'none', outline: 'none',
-                      color: 'white', fontSize: '0.85rem', padding: '7px 12px 7px 0',
-                    }}
-                  />
-                  {desktopSearch && (
-                    <button onClick={() => setDesktopSearch('')} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', padding: '0 10px', fontSize: '1rem' }}>×</button>
-                  )}
-                </div>
-                {/* Search dropdown logic removed to filter grid natively */}
+              {/* Folder Tabs */}
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4 }}>
+                {[{ label: 'Phòng bàn', view: 'tables', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg> }, { label: 'Thực đơn', view: 'menu', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg> }].map((tab) => {
+                  const isActive = desktopView === tab.view;
+                  // For seamless blending, use white. However, table background is f1f5f9. We use a dynamic colour or just white.
+                  const activeBg = tab.view === 'menu' ? 'white' : '#f1f5f9';
+                  
+                  return (
+                    <button key={tab.label}
+                      onClick={() => setDesktopView(tab.view)}
+                      style={{
+                        background: isActive ? activeBg : '#0284c7',
+                        color: isActive ? '#0f172a' : 'white',
+                        border: 'none',
+                        padding: isActive ? '10px 20px 12px 20px' : '9px 20px 10px 20px',
+                        borderRadius: '16px 16px 0 0',
+                        cursor: 'pointer',
+                        fontSize: '0.92rem',
+                        fontWeight: isActive ? 600 : 500,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        boxShadow: isActive ? '0 -2px 10px rgba(0,0,0,0.05)' : 'none',
+                        position: 'relative',
+                        zIndex: isActive ? 10 : 1,
+                        transition: 'all 0.2s',
+                      }}
+                    >
+                      {tab.icon}
+                      {tab.label}
+                    </button>
+                  );
+                })}
               </div>
-              <div style={{ width: 8 }} />
-              <button onClick={() => setShowAddModal(true)} style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: 6, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '1.1rem', fontWeight: 700 }}>+</button>
+              
+              {/* Search Bar & Actions */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 10, flex: 1 }}>
+                <div style={{ position: 'relative', width: '100%', maxWidth: 350 }}>
+                  <div style={{ background: '#0284c7', borderRadius: 20, padding: '0', display: 'flex', alignItems: 'center', gap: 8, color: 'white', border: desktopSearch ? '1.5px solid rgba(255,255,255,0.6)' : '1.5px solid transparent' }}>
+                    <Search size={15} style={{ opacity: 0.8, marginLeft: 14, flexShrink: 0 }} />
+                    <input
+                      type="text"
+                      value={desktopSearch}
+                      onChange={e => setDesktopSearch(e.target.value)}
+                      placeholder="Tìm món (F3)"
+                      style={{
+                        flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                        color: 'white', fontSize: '0.88rem', padding: '8px 12px 8px 0',
+                      }}
+                    />
+                    {desktopSearch && (
+                      <button onClick={() => setDesktopSearch('')} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', padding: '0 10px', fontSize: '1.2rem' }}>×</button>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Plus Button */}
+                <button onClick={() => setShowAddModal(true)} style={{ background: '#0284c7', color: 'white', border: 'none', borderRadius: '50%', width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '1.4rem', fontWeight: 500, flexShrink: 0, transition: 'all 0.1s' }} onMouseOver={e=>e.target.style.background='#0369a1'} onMouseOut={e=>e.target.style.background='#0284c7'}>+</button>
+              </div>
+
             </div>
 
             {/* 2-pane content */}
