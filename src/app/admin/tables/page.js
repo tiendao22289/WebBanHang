@@ -1651,12 +1651,21 @@ export default function TablesPage() {
                                   Swal.fire('Chú ý', 'Vui lòng chọn một Phòng/Bàn hoặc Hoá đơn trước khi gọi món!', 'warning');
                                   return;
                                 }
-                                setOptionModalItem(item);
-                                setSelectedOptions({});
-                                setOptionQuantity(1);
-                                setOptionNote('');
-                                setEditingPrice(false);
-                                setCustomPrice(null);
+                                // Bỏ qua OptionModal nếu món không có tuỳ chọn (thêm tức thì cho mượt)
+                                if (!item.options || item.options.length === 0) {
+                                  addItemToOrder('admin', item, [], 1, '');
+                                  return;
+                                }
+
+                                // Trì hoãn nhẹ để giải phóng luồng UI, chống lag khi render Modal
+                                setTimeout(() => {
+                                  setOptionModalItem(item);
+                                  setSelectedOptions({});
+                                  setOptionQuantity(1);
+                                  setOptionNote('');
+                                  setEditingPrice(false);
+                                  setCustomPrice(null);
+                                }, 10);
                               }}
                               style={{ background: 'white', borderRadius: 10, overflow: 'hidden', cursor: 'pointer', border: '1px solid #e5e7eb', transition: 'box-shadow 0.15s' }}
                               onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 12px rgba(37,99,235,0.12)'}
