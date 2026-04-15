@@ -1525,7 +1525,10 @@ export default function TablesPage() {
                   style={{ background: desktopView === tab.view ? 'rgba(255,255,255,0.22)' : 'transparent', color: 'white', border: 'none', padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: '0.88rem', fontWeight: desktopView === tab.view ? 700 : 400, display: 'flex', alignItems: 'center', gap: 5 }}
                 >{tab.label}</button>
               ))}
-              <div style={{ position: 'relative', flex: 1, maxWidth: 400 }}>
+              
+              <div style={{ flex: 1 }} />
+              
+              <div style={{ position: 'relative', width: '100%', maxWidth: 400 }}>
                 <div style={{ background: 'rgba(255,255,255,0.15)', borderRadius: 8, padding: '0', display: 'flex', alignItems: 'center', gap: 8, color: 'white', border: desktopSearch ? '1.5px solid rgba(255,255,255,0.4)' : '1.5px solid transparent' }}>
                   <Search size={13} style={{ opacity: 0.7, marginLeft: 12, flexShrink: 0 }} />
                   <input
