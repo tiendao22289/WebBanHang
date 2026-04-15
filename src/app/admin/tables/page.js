@@ -1629,6 +1629,10 @@ export default function TablesPage() {
                           .map(item => (
                             <div key={item.id}
                               onClick={() => {
+                                if (!selectedTable) {
+                                  Swal.fire('Chú ý', 'Vui lòng chọn một Phòng/Bàn hoặc Hoá đơn trước khi gọi món!', 'warning');
+                                  return;
+                                }
                                 setOptionModalItem(item);
                                 setSelectedOptions({});
                                 setOptionQuantity(1);
