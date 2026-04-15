@@ -1590,7 +1590,7 @@ export default function TablesPage() {
             {/* 2-pane content */}
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
               {/* LEFT: Table browser or Menu view */}
-              <div style={{ width: desktopView === 'tables' ? '65%' : '60%', display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderRight: '1px solid #e2e8f0', overflow: 'hidden', transition: 'width 0.25s ease' }}>
+              <div style={{ width: '50%', display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderRight: '1px solid #e2e8f0', overflow: 'hidden' }}>
                 {desktopView === 'menu' ? (
                   /* ── Menu Grid View ── */
                   <>
