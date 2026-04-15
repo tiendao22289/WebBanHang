@@ -1714,21 +1714,65 @@ export default function TablesPage() {
                         {filteredTables.map(table => {
                           const isChild = !!table.merged_with;
                           const isHost = tables.some(t => t.merged_with === table.id);
-                          const isOccupied = table.status === 'occupied' || isChild || isHost;
+                          const isMergedGroup = isChild || isHost;
+                          const isOccupied = table.status === 'occupied' || isMergedGroup;
                           const isSelected = selectedTable?.id === table.id;
                           const tableTotal = (orders[table.merged_with || table.id] || []).reduce((s, o) => s + (o.total_amount || 0), 0);
                           const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(pj => pj.status === 'failed'));
                           
+                          // Style derivation: Merged group is Purple, Normal Occupied is Blue, Empty is White
+                          const bgColors = {
+                            selected: '#1d4ed8', // Dark blue when selected
+                            merged: '#f5f3ff', // Light purple for merged
+                            occupied: '#eff6ff', // Light blue for normal occupied
+                            empty: 'white'
+                          };
+                          
+                          const borderColors = {
+                            selected: '#1d4ed8',
+                            merged: '#c4b5fd', // Purple border
+                            occupied: '#bfdbfe', // Blue border
+                            empty: '#e5e7eb'
+                          };
+                          
+                          const iconColors = {
+                            selected: 'rgba(255,255,255,0.5)',
+                            merged: '#a855f7', // Purple icon
+                            occupied: '#60a5fa', // Blue icon
+                            empty: '#cbd5e1'
+                          };
+                          
+                          const textColors = {
+                            selected: 'white',
+                            merged: '#6b21a8', // Deep purple text
+                            occupied: '#1e3a8a', // Deep blue text
+                            empty: '#374151'
+                          };
+                          
+                          const pillTagColors = {
+                            selected: { bg: 'white', text: '#1d4ed8' },
+                            merged: { bg: '#ede9fe', text: '#7e22ce' },
+                            occupied: { bg: '#e0f2fe', text: '#2563eb' }
+                          };
+
+                          const bg = isSelected ? bgColors.selected : isMergedGroup ? bgColors.merged : isOccupied ? bgColors.occupied : bgColors.empty;
+                          const border = isSelected ? borderColors.selected : isMergedGroup ? borderColors.merged : isOccupied ? borderColors.occupied : borderColors.empty;
+                          const iconCol = isSelected ? iconColors.selected : isMergedGroup ? iconColors.merged : isOccupied ? iconColors.occupied : iconColors.empty;
+                          const textCol = isSelected ? textColors.selected : isMergedGroup ? textColors.merged : isOccupied ? textColors.occupied : textColors.empty;
+                          const pillStyle = isSelected ? pillTagColors.selected : isMergedGroup ? pillTagColors.merged : pillTagColors.occupied;
+                          
+                          const shadowHover = isMergedGroup ? '0 8px 16px rgba(147,51,234,0.15)' : isOccupied ? '0 8px 16px rgba(37,99,235,0.15)' : '0 8px 16px rgba(0,0,0,0.08)';
+
                           return (
                             <div key={table.id}
                               onClick={() => { setSelectedTable(table); setDesktopView('menu'); }}
-                              onMouseEnter={e => { if (!isSelected) e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = isOccupied ? '0 8px 16px rgba(37,99,235,0.15)' : '0 8px 16px rgba(0,0,0,0.08)'; }}
-                              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 4px 16px rgba(37,99,235,0.35)' : isOccupied ? 'none' : 'none'; }}
+                              onMouseEnter={e => { if (!isSelected) e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = shadowHover; }}
+                              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 4px 16px rgba(37,99,235,0.35)' : 'none'; }}
                               style={{
                                 display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                                 padding: '16px 8px 14px', borderRadius: 12, cursor: 'pointer', minHeight: 110,
-                                background: isSelected ? '#1d4ed8' : isOccupied ? '#eff6ff' : 'white',
-                                border: '1.5px solid ' + (isSelected ? '#1d4ed8' : isOccupied ? '#bfdbfe' : '#e5e7eb'),
+                                background: bg,
+                                border: '1.5px solid ' + border,
                                 boxShadow: isSelected ? '0 4px 16px rgba(37,99,235,0.35)' : 'none',
                                 transition: 'all 0.15s',
                                 position: 'relative', gap: 8,
@@ -1756,20 +1800,20 @@ export default function TablesPage() {
                               {/* Table icon */}
                               <svg width="46" height="32" viewBox="0 0 40 30" fill="none" style={{ marginTop: isHost ? 5 : 0 }}>
                                 <rect x="3" y="10" width="34" height="10" rx="3.5"
-                                  fill={isSelected ? 'rgba(255,255,255,0.2)' : isOccupied ? 'transparent' : 'transparent'}
-                                  stroke={isSelected ? 'rgba(255,255,255,0.5)' : isOccupied ? '#60a5fa' : '#cbd5e1'} strokeWidth="2.5" />
-                                <rect x="7" y="1" width="4.5" height="10" rx="2.25" fill={isSelected ? 'rgba(255,255,255,0.5)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
-                                <rect x="28.5" y="1" width="4.5" height="10" rx="2.25" fill={isSelected ? 'rgba(255,255,255,0.5)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
-                                <rect x="7" y="21" width="4.5" height="9" rx="2.25" fill={isSelected ? 'rgba(255,255,255,0.5)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
-                                <rect x="28.5" y="21" width="4.5" height="9" rx="2.25" fill={isSelected ? 'rgba(255,255,255,0.5)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
+                                  fill={isSelected ? 'rgba(255,255,255,0.2)' : 'transparent'}
+                                  stroke={iconCol} strokeWidth="2.5" />
+                                <rect x="7" y="1" width="4.5" height="10" rx="2.25" fill={iconCol} />
+                                <rect x="28.5" y="1" width="4.5" height="10" rx="2.25" fill={iconCol} />
+                                <rect x="7" y="21" width="4.5" height="9" rx="2.25" fill={iconCol} />
+                                <rect x="28.5" y="21" width="4.5" height="9" rx="2.25" fill={iconCol} />
                               </svg>
                               
                               {/* Table name */}
-                              <span style={{ fontSize: '0.85rem', fontWeight: 700, color: isSelected ? 'white' : isOccupied ? '#1e3a8a' : '#374151' }}>{table.table_name || `B${table.table_number}`}</span>
+                              <span style={{ fontSize: '0.85rem', fontWeight: 700, color: textCol }}>{table.table_name || `B${table.table_number}`}</span>
                               
                               {/* Revenue or Status */}
                               {tableTotal > 0 ? (
-                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: isSelected ? '#1d4ed8' : '#2563eb', background: isSelected ? 'white' : '#e0f2fe', borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>
+                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: pillStyle.text, background: pillStyle.bg, borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>
                                   {tableTotal >= 1000 ? (tableTotal / 1000).toFixed(0) + 'k' : tableTotal.toLocaleString('vi-VN')}đ
                                 </span>
                               ) : (
