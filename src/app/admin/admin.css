@@ -179,7 +179,20 @@
   min-height: 100vh;
   background: var(--color-bg);
   transition: margin-left 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+  position: relative;
 }
+
+/* Override global page-content constraints for admin:
+   remove max-width centering so table/order grids fill full width */
+.admin-layout .page-content,
+.admin-main .page-content {
+  max-width: none !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  width: 100% !important;
+}
+
 
 /* ══════════════════════════════════════════
    MOBILE: Bottom Tab Bar
