@@ -1712,65 +1712,68 @@ export default function TablesPage() {
                       )}
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 14 }}>
                         {filteredTables.map(table => {
-                          const isOccupied = table.status === 'occupied';
+                          const isChild = !!table.merged_with;
+                          const isHost = tables.some(t => t.merged_with === table.id);
+                          const isOccupied = table.status === 'occupied' || isChild || isHost;
                           const isSelected = selectedTable?.id === table.id;
                           const tableTotal = (orders[table.merged_with || table.id] || []).reduce((s, o) => s + (o.total_amount || 0), 0);
                           const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(pj => pj.status === 'failed'));
-                          const isMerged = !!table.merged_with;
+                          
                           return (
                             <div key={table.id}
                               onClick={() => { setSelectedTable(table); setDesktopView('menu'); }}
-                              onMouseEnter={e => { if (!isSelected) e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = isOccupied ? '0 8px 24px rgba(37,99,235,0.25)' : '0 8px 20px rgba(0,0,0,0.1)'; }}
-                              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 4px 16px rgba(37,99,235,0.35)' : isOccupied ? '0 2px 8px rgba(37,99,235,0.12)' : '0 1px 4px rgba(0,0,0,0.06)'; }}
+                              onMouseEnter={e => { if (!isSelected) e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = isOccupied ? '0 8px 16px rgba(37,99,235,0.15)' : '0 8px 16px rgba(0,0,0,0.08)'; }}
+                              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 4px 16px rgba(37,99,235,0.35)' : isOccupied ? 'none' : 'none'; }}
                               style={{
                                 display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                                padding: '14px 8px 12px', borderRadius: 14, cursor: 'pointer', minHeight: 115,
-                                background: isSelected
-                                  ? 'linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%)'
-                                  : isOccupied
-                                  ? 'linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%)'
-                                  : 'white',
-                                border: '1.5px solid ' + (isSelected ? '#1d4ed8' : isOccupied ? '#93c5fd' : '#e2e8f0'),
-                                boxShadow: isSelected ? '0 4px 16px rgba(37,99,235,0.35)' : isOccupied ? '0 2px 8px rgba(37,99,235,0.12)' : '0 1px 4px rgba(0,0,0,0.06)',
-                                transition: 'transform 0.15s, box-shadow 0.15s',
-                                position: 'relative', gap: 6,
+                                padding: '16px 8px 14px', borderRadius: 12, cursor: 'pointer', minHeight: 110,
+                                background: isSelected ? '#1d4ed8' : isOccupied ? '#eff6ff' : 'white',
+                                border: '1.5px solid ' + (isSelected ? '#1d4ed8' : isOccupied ? '#bfdbfe' : '#e5e7eb'),
+                                boxShadow: isSelected ? '0 4px 16px rgba(37,99,235,0.35)' : 'none',
+                                transition: 'all 0.15s',
+                                position: 'relative', gap: 8,
                               }}
                             >
                               {/* Status dot */}
                               <div style={{
-                                position: 'absolute', top: 8, right: 9, width: 8, height: 8, borderRadius: '50%',
+                                position: 'absolute', top: 8, right: 8, width: 8, height: 8, borderRadius: '50%',
                                 background: isOccupied ? '#22c55e' : '#d1d5db',
-                                boxShadow: isOccupied ? '0 0 0 2px rgba(34,197,94,0.25)' : 'none'
                               }} />
                               {/* Print error badge */}
                               {hasPrintError && (
-                                <div style={{ position: 'absolute', top: -5, left: -5, background: '#ef4444', color: 'white', borderRadius: '50%', padding: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.2)', zIndex: 10 }}>
+                                <div style={{ position: 'absolute', top: -5, right: -5, background: '#ef4444', color: 'white', borderRadius: '50%', padding: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.2)', zIndex: 10 }}>
                                   <Printer size={10} strokeWidth={2.5} />
                                 </div>
                               )}
-                              {/* Merged badge */}
-                              {isMerged && !isSelected && (
-                                <div style={{ position: 'absolute', top: 7, left: 7, fontSize: '0.55rem', background: '#f97316', color: 'white', borderRadius: 4, padding: '1px 4px', fontWeight: 700, lineHeight: 1.4 }}>GỘP</div>
+                              {/* Merged badge (ONLY ON HOST according to mobile UI) */}
+                              {isHost && !isSelected && (
+                                <div style={{ position: 'absolute', top: 7, left: 7, fontSize: '0.6rem', background: '#f97316', color: 'white', borderRadius: 4, padding: '1px 5px', fontWeight: 700, letterSpacing: '0.02em' }}>GỘP</div>
                               )}
+                              {isHost && isSelected && (
+                                <div style={{ position: 'absolute', top: 7, left: 7, fontSize: '0.6rem', background: '#ffedd5', color: '#ea580c', borderRadius: 4, padding: '1px 5px', fontWeight: 700, letterSpacing: '0.02em' }}>GỘP</div>
+                              )}
+                              
                               {/* Table icon */}
-                              <svg width="40" height="30" viewBox="0 0 40 30" fill="none">
-                                <rect x="3" y="10" width="34" height="11" rx="3.5"
-                                  fill={isSelected ? 'rgba(255,255,255,0.2)' : isOccupied ? '#bfdbfe' : '#e2e8f0'}
-                                  stroke={isSelected ? 'rgba(255,255,255,0.45)' : isOccupied ? '#60a5fa' : '#cbd5e1'} strokeWidth="1.5" />
-                                <rect x="7" y="1" width="4.5" height="10" rx="2" fill={isSelected ? 'rgba(255,255,255,0.4)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
-                                <rect x="28.5" y="1" width="4.5" height="10" rx="2" fill={isSelected ? 'rgba(255,255,255,0.4)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
-                                <rect x="7" y="21" width="4.5" height="8" rx="2" fill={isSelected ? 'rgba(255,255,255,0.4)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
-                                <rect x="28.5" y="21" width="4.5" height="8" rx="2" fill={isSelected ? 'rgba(255,255,255,0.4)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
+                              <svg width="46" height="32" viewBox="0 0 40 30" fill="none" style={{ marginTop: isHost ? 5 : 0 }}>
+                                <rect x="3" y="10" width="34" height="10" rx="3.5"
+                                  fill={isSelected ? 'rgba(255,255,255,0.2)' : isOccupied ? 'transparent' : 'transparent'}
+                                  stroke={isSelected ? 'rgba(255,255,255,0.5)' : isOccupied ? '#60a5fa' : '#cbd5e1'} strokeWidth="2.5" />
+                                <rect x="7" y="1" width="4.5" height="10" rx="2.25" fill={isSelected ? 'rgba(255,255,255,0.5)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
+                                <rect x="28.5" y="1" width="4.5" height="10" rx="2.25" fill={isSelected ? 'rgba(255,255,255,0.5)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
+                                <rect x="7" y="21" width="4.5" height="9" rx="2.25" fill={isSelected ? 'rgba(255,255,255,0.5)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
+                                <rect x="28.5" y="21" width="4.5" height="9" rx="2.25" fill={isSelected ? 'rgba(255,255,255,0.5)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
                               </svg>
+                              
                               {/* Table name */}
-                              <span style={{ fontSize: '0.82rem', fontWeight: 800, color: isSelected ? 'white' : isOccupied ? '#1e40af' : '#374151', letterSpacing: '0.01em' }}>B{table.table_number}</span>
-                              {/* Revenue */}
+                              <span style={{ fontSize: '0.85rem', fontWeight: 700, color: isSelected ? 'white' : isOccupied ? '#1e3a8a' : '#374151' }}>{table.table_name || `B${table.table_number}`}</span>
+                              
+                              {/* Revenue or Status */}
                               {tableTotal > 0 ? (
-                                <span style={{ fontSize: '0.68rem', fontWeight: 700, color: isSelected ? 'rgba(255,255,255,0.9)' : '#2563eb', background: isSelected ? 'rgba(255,255,255,0.2)' : '#dbeafe', borderRadius: 6, padding: '2px 6px', whiteSpace: 'nowrap' }}>
+                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: isSelected ? '#1d4ed8' : '#2563eb', background: isSelected ? 'white' : '#e0f2fe', borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>
                                   {tableTotal >= 1000 ? (tableTotal / 1000).toFixed(0) + 'k' : tableTotal.toLocaleString('vi-VN')}đ
                                 </span>
                               ) : (
-                                <span style={{ fontSize: '0.65rem', color: isSelected ? 'rgba(255,255,255,0.5)' : '#9ca3af' }}>Trống</span>
+                                <span style={{ fontSize: '0.7rem', color: isSelected ? 'rgba(255,255,255,0.6)' : '#9ca3af' }}>Trống</span>
                               )}
                             </div>
                           );
