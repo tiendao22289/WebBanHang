@@ -1648,10 +1648,6 @@ export default function TablesPage() {
                           <span style={{ fontSize: '0.8rem', color: filterTab === f.key ? '#2563eb' : '#374151', fontWeight: filterTab === f.key ? 600 : 400 }}>{f.label}</span>
                         </div>
                       ))}
-                      <div style={{ flex: 1 }} />
-                      <button style={{ background: '#fff7ed', color: '#ea580c', border: '1px solid #fed7aa', borderRadius: 100, padding: '3px 10px', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                        🔔 Gọi món qua QR
-                      </button>
                     </div>
                     {/* Table grid */}
                     <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', background: '#f1f5f9' }}>
