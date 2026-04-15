@@ -1519,10 +1519,10 @@ export default function TablesPage() {
           <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', margin: '-2rem', marginTop: '-2rem' }}>
             {/* Blue top nav bar */}
             <div style={{ background: '#1e3a8a', display: 'flex', alignItems: 'center', gap: 4, padding: '8px 12px', flexShrink: 0 }}>
-              {[{ label: 'Phòng bàn', view: 'tables' }, { label: 'Thực đơn', view: 'menu' }, { label: 'Đặt gọi món', view: 'tables' }].map((tab, i) => (
+              {[{ label: 'Phòng bàn', view: 'tables' }, { label: 'Thực đơn', view: 'menu' }].map((tab) => (
                 <button key={tab.label}
-                  onClick={() => { if (i !== 2) setDesktopView(tab.view); }}
-                  style={{ background: desktopView === tab.view && i < 2 ? 'rgba(255,255,255,0.22)' : 'transparent', color: 'white', border: 'none', padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: '0.88rem', fontWeight: desktopView === tab.view && i < 2 ? 700 : 400, display: 'flex', alignItems: 'center', gap: 5 }}
+                  onClick={() => setDesktopView(tab.view)}
+                  style={{ background: desktopView === tab.view ? 'rgba(255,255,255,0.22)' : 'transparent', color: 'white', border: 'none', padding: '7px 16px', borderRadius: 6, cursor: 'pointer', fontSize: '0.88rem', fontWeight: desktopView === tab.view ? 700 : 400, display: 'flex', alignItems: 'center', gap: 5 }}
                 >{tab.label}</button>
               ))}
               <div style={{ position: 'relative', flex: 1, maxWidth: 400 }}>
@@ -1590,7 +1590,7 @@ export default function TablesPage() {
             {/* 2-pane content */}
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
               {/* LEFT: Table browser or Menu view */}
-              <div style={{ width: '42%', display: 'flex', flexDirection: 'column', background: 'white', borderRight: '1px solid #e5e7eb', overflow: 'hidden' }}>
+              <div style={{ width: desktopView === 'tables' ? '65%' : '60%', display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderRight: '1px solid #e2e8f0', overflow: 'hidden', transition: 'width 0.25s ease' }}>
                 {desktopView === 'menu' ? (
                   /* ── Menu Grid View ── */
                   <>
@@ -1670,7 +1670,7 @@ export default function TablesPage() {
                       </button>
                     </div>
                     {/* Table grid */}
-                    <div style={{ flex: 1, overflowY: 'auto', padding: 10, background: '#f8fafc' }}>
+                    <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', background: '#f1f5f9' }}>
                       {/* Takeaway pinned card — desktop */}
                       {takeawayTable && (
                         <div style={{ background: '#eff6ff', border: '2px solid #bfdbfe', borderRadius: 12, padding: '10px 14px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1695,59 +1695,97 @@ export default function TablesPage() {
                           </button>
                         </div>
                       )}
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: 12 }}>
                         {filteredTables.map(table => {
                           const isOccupied = table.status === 'occupied';
                           const isSelected = selectedTable?.id === table.id;
                           const tableTotal = (orders[table.merged_with || table.id] || []).reduce((s, o) => s + (o.total_amount || 0), 0);
                           const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(pj => pj.status === 'failed'));
+                          const isMerged = !!table.merged_with;
                           return (
                             <div key={table.id}
-                              onClick={() => { setSelectedTable(table); setDesktopView('menu'); if (!isOccupied && isMobile) setAddingToOrder('admin'); }}
+                              onClick={() => { setSelectedTable(table); setDesktopView('menu'); }}
+                              onMouseEnter={e => { if (!isSelected) e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = isOccupied ? '0 8px 24px rgba(37,99,235,0.25)' : '0 8px 20px rgba(0,0,0,0.1)'; }}
+                              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 4px 16px rgba(37,99,235,0.35)' : isOccupied ? '0 2px 8px rgba(37,99,235,0.12)' : '0 1px 4px rgba(0,0,0,0.06)'; }}
                               style={{
-                                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', padding: '8px 4px 6px', borderRadius: 8, cursor: 'pointer', minHeight: 72, transition: 'all 0.12s',
-                                background: isSelected ? '#2563eb' : isOccupied ? '#dbeafe' : 'white',
-                                border: '1.5px solid ' + (isSelected ? '#2563eb' : isOccupied ? '#93c5fd' : '#e5e7eb'),
-                                position: 'relative'
+                                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                                padding: '14px 8px 12px', borderRadius: 14, cursor: 'pointer', minHeight: 100,
+                                background: isSelected
+                                  ? 'linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%)'
+                                  : isOccupied
+                                  ? 'linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%)'
+                                  : 'white',
+                                border: '1.5px solid ' + (isSelected ? '#1d4ed8' : isOccupied ? '#93c5fd' : '#e2e8f0'),
+                                boxShadow: isSelected ? '0 4px 16px rgba(37,99,235,0.35)' : isOccupied ? '0 2px 8px rgba(37,99,235,0.12)' : '0 1px 4px rgba(0,0,0,0.06)',
+                                transition: 'transform 0.15s, box-shadow 0.15s',
+                                position: 'relative', gap: 6,
                               }}
                             >
+                              {/* Status dot */}
+                              <div style={{
+                                position: 'absolute', top: 8, right: 9, width: 8, height: 8, borderRadius: '50%',
+                                background: isOccupied ? '#22c55e' : '#d1d5db',
+                                boxShadow: isOccupied ? '0 0 0 2px rgba(34,197,94,0.25)' : 'none'
+                              }} />
+                              {/* Print error badge */}
                               {hasPrintError && (
-                                <div style={{ position: 'absolute', top: -5, right: -5, background: '#ef4444', color: 'white', borderRadius: '50%', padding: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.2)', zIndex: 10 }}>
-                                  <Printer size={11} strokeWidth={2.5} />
+                                <div style={{ position: 'absolute', top: -5, left: -5, background: '#ef4444', color: 'white', borderRadius: '50%', padding: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.2)', zIndex: 10 }}>
+                                  <Printer size={10} strokeWidth={2.5} />
                                 </div>
                               )}
-                              <svg width="38" height="30" viewBox="0 0 38 30" fill="none">
-                                <rect x="4" y="9" width="30" height="12" rx="3"
-                                  fill={isSelected ? 'rgba(255,255,255,0.25)' : '#dbeafe'}
-                                  stroke={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'} strokeWidth="1.5" />
-                                <rect x="7" y="1" width="4" height="9" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'} />
-                                <rect x="27" y="1" width="4" height="9" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'} />
-                                <rect x="7" y="21" width="4" height="8" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'} />
-                                <rect x="27" y="21" width="4" height="8" rx="1.5" fill={isSelected ? 'rgba(255,255,255,0.5)' : '#93c5fd'} />
+                              {/* Merged badge */}
+                              {isMerged && !isSelected && (
+                                <div style={{ position: 'absolute', top: 7, left: 7, fontSize: '0.55rem', background: '#f97316', color: 'white', borderRadius: 4, padding: '1px 4px', fontWeight: 700, lineHeight: 1.4 }}>GỘP</div>
+                              )}
+                              {/* Table icon */}
+                              <svg width="40" height="30" viewBox="0 0 40 30" fill="none">
+                                <rect x="3" y="10" width="34" height="11" rx="3.5"
+                                  fill={isSelected ? 'rgba(255,255,255,0.2)' : isOccupied ? '#bfdbfe' : '#e2e8f0'}
+                                  stroke={isSelected ? 'rgba(255,255,255,0.45)' : isOccupied ? '#60a5fa' : '#cbd5e1'} strokeWidth="1.5" />
+                                <rect x="7" y="1" width="4.5" height="10" rx="2" fill={isSelected ? 'rgba(255,255,255,0.4)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
+                                <rect x="28.5" y="1" width="4.5" height="10" rx="2" fill={isSelected ? 'rgba(255,255,255,0.4)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
+                                <rect x="7" y="21" width="4.5" height="8" rx="2" fill={isSelected ? 'rgba(255,255,255,0.4)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
+                                <rect x="28.5" y="21" width="4.5" height="8" rx="2" fill={isSelected ? 'rgba(255,255,255,0.4)' : isOccupied ? '#60a5fa' : '#cbd5e1'} />
                               </svg>
-                              <span style={{ fontSize: '0.72rem', fontWeight: 700, marginTop: 2, color: isSelected ? 'white' : isOccupied ? '#1d4ed8' : '#374151' }}>B{table.table_number}</span>
-                              {tableTotal > 0 && (
-                                <span style={{ fontSize: '0.6rem', fontWeight: 600, color: isSelected ? 'rgba(255,255,255,0.85)' : '#2563eb', marginTop: 1, whiteSpace: 'nowrap' }}>
+                              {/* Table name */}
+                              <span style={{ fontSize: '0.82rem', fontWeight: 800, color: isSelected ? 'white' : isOccupied ? '#1e40af' : '#374151', letterSpacing: '0.01em' }}>B{table.table_number}</span>
+                              {/* Revenue */}
+                              {tableTotal > 0 ? (
+                                <span style={{ fontSize: '0.68rem', fontWeight: 700, color: isSelected ? 'rgba(255,255,255,0.9)' : '#2563eb', background: isSelected ? 'rgba(255,255,255,0.2)' : '#dbeafe', borderRadius: 6, padding: '2px 6px', whiteSpace: 'nowrap' }}>
                                   {tableTotal >= 1000 ? (tableTotal / 1000).toFixed(0) + 'k' : tableTotal.toLocaleString('vi-VN')}đ
                                 </span>
+                              ) : (
+                                <span style={{ fontSize: '0.65rem', color: isSelected ? 'rgba(255,255,255,0.5)' : '#9ca3af' }}>Trống</span>
                               )}
                             </div>
                           );
                         })}
-                        <div onClick={() => setShowAddModal(true)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: '1.5px dashed #d1d5db', minHeight: 72, cursor: 'pointer', color: '#9ca3af', gap: 2, background: 'white' }}>
-                          <Plus size={16} strokeWidth={1.5} />
-                          <span style={{ fontSize: '0.65rem' }}>Thêm bàn</span>
+                        {/* Add table button */}
+                        <div onClick={() => setShowAddModal(true)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRadius: 14, border: '1.5px dashed #cbd5e1', minHeight: 100, cursor: 'pointer', color: '#94a3b8', gap: 6, background: 'white', transition: 'all 0.15s' }}
+                          onMouseEnter={e => { e.currentTarget.style.borderColor = '#2563eb'; e.currentTarget.style.color = '#2563eb'; e.currentTarget.style.background = '#eff6ff'; }}
+                          onMouseLeave={e => { e.currentTarget.style.borderColor = '#cbd5e1'; e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.background = 'white'; }}
+                        >
+                          <Plus size={20} strokeWidth={1.5} />
+                          <span style={{ fontSize: '0.7rem', fontWeight: 600 }}>Thêm bàn</span>
                         </div>
                       </div>
                     </div>
                     {/* Bottom bar */}
-                    <div style={{ padding: '8px 12px', background: 'white', borderTop: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', cursor: 'pointer', color: '#374151' }}>
-                        <input type="checkbox" defaultChecked style={{ accentColor: '#2563eb' }} />
-                        Mở thực đơn khi chọn bàn
-                      </label>
-                      <button onClick={() => setShowAddModal(true)} style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <Plus size={13} /> Thêm bàn
+                    <div style={{ padding: '10px 16px', background: 'white', borderTop: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
+                      {/* Legend */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 0 2px rgba(34,197,94,0.2)' }} />
+                          <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>Có khách</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#d1d5db' }} />
+                          <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>Trống</span>
+                        </div>
+                      </div>
+                      <div style={{ flex: 1 }} />
+                      <button onClick={() => setShowAddModal(true)} style={{ background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white', border: 'none', borderRadius: 8, padding: '7px 14px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, boxShadow: '0 2px 8px rgba(37,99,235,0.3)' }}>
+                        <Plus size={14} /> Thêm bàn
                       </button>
                     </div>
                   </>

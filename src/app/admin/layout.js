@@ -13,8 +13,9 @@ import {
   UsersRound,
   Wallet,
   LogOut,
-  Lock,
   Settings,
+  Menu,
+  X,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './admin.css';
@@ -35,17 +36,16 @@ const ALL_NAV = [
   { href: '/admin/settings',  label: 'Cài đặt',     icon: Settings, adminOnly: true },
 ];
 
-// Pages staff are allowed to visit
 const STAFF_ALLOWED_HREFS = ['/admin/tables', '/admin/orders', '/admin/payroll'];
-
 const STAFF_NAV = ALL_NAV.filter(n => STAFF_ALLOWED_HREFS.some(a => n.href.startsWith(a)));
 
 export default function AdminLayout({ children }) {
   const pathname = usePathname();
   const router   = useRouter();
 
-  const [user,    setUser]    = useState(null);
-  const [mounted, setMounted] = useState(false);
+  const [user,       setUser]       = useState(null);
+  const [mounted,    setMounted]    = useState(false);
+  const [collapsed,  setCollapsed]  = useState(false);
 
   // Login form state
   const [phone,   setPhone]   = useState('');
@@ -58,9 +58,18 @@ export default function AdminLayout({ children }) {
     try {
       const saved = localStorage.getItem('staffUser');
       if (saved) setUser(JSON.parse(saved));
+      const savedCollapsed = localStorage.getItem('sidebarCollapsed');
+      if (savedCollapsed === 'true') setCollapsed(true);
     } catch {}
     setMounted(true);
   }, []);
+
+  // Persist sidebar state
+  const toggleSidebar = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    localStorage.setItem('sidebarCollapsed', String(next));
+  };
 
   // Redirect staff away from restricted pages
   useEffect(() => {
@@ -93,7 +102,6 @@ export default function AdminLayout({ children }) {
     setUser(u);
     setLoading(false);
 
-    // Update last_login silently
     supabase.from('staff').update({ last_login: new Date().toISOString() }).eq('id', data.id);
   };
 
@@ -104,7 +112,6 @@ export default function AdminLayout({ children }) {
     setPin('');
   };
 
-  // Prevent SSR flash
   if (!mounted) return null;
 
   // ── Login screen ──────────────────────────────────────────────────────────
@@ -119,7 +126,6 @@ export default function AdminLayout({ children }) {
           background: 'white', borderRadius: 20, padding: '36px 32px', width: '100%', maxWidth: 380,
           boxShadow: '0 20px 60px rgba(220,38,38,0.1), 0 4px 16px rgba(0,0,0,0.06)',
         }}>
-          {/* Logo */}
           <div style={{ textAlign: 'center', marginBottom: 28 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 6 }}>
               <ChefHat size={32} color="#dc2626" />
@@ -179,50 +185,83 @@ export default function AdminLayout({ children }) {
   const navItems = user.role === 'admin' ? ALL_NAV : STAFF_NAV;
 
   return (
-    <div className="admin-layout">
+    <div className={`admin-layout ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <aside className="sidebar">
-        <div className="sidebar-header">
-          <div className="sidebar-logo">
-            <ChefHat size={28} />
-            <div>
-              <h1 className="sidebar-title">Nhà Hàng</h1>
-              <span className="sidebar-subtitle">Quản lý đặt món</span>
+        {/* Hamburger toggle button */}
+        <button
+          onClick={toggleSidebar}
+          className="sidebar-toggle"
+          title={collapsed ? 'Mở rộng menu' : 'Thu gọn menu'}
+        >
+          {collapsed ? <Menu size={20} /> : <X size={20} />}
+        </button>
+
+        {!collapsed && (
+          <div className="sidebar-header">
+            <div className="sidebar-logo">
+              <ChefHat size={28} />
+              <div>
+                <h1 className="sidebar-title">Nhà Hàng</h1>
+                <span className="sidebar-subtitle">Quản lý đặt món</span>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         <nav className="sidebar-nav">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = pathname.startsWith(item.href);
             return (
-              <Link key={item.href} href={item.href} className={`nav-item ${isActive ? 'active' : ''}`}>
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`nav-item ${isActive ? 'active' : ''}`}
+                title={collapsed ? item.label : ''}
+              >
                 <Icon size={20} />
-                <span>{item.label}</span>
+                {!collapsed && <span>{item.label}</span>}
               </Link>
             );
           })}
         </nav>
 
-        <div className="sidebar-footer">
-          {/* User info */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '8px 10px', background: '#fef2f2', borderRadius: 10 }}>
-            <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#dc2626', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14, flexShrink: 0 }}>
+        {!collapsed && (
+          <div className="sidebar-footer">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '8px 10px', background: '#fef2f2', borderRadius: 10 }}>
+              <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#dc2626', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14, flexShrink: 0 }}>
+                {user.full_name?.charAt(0) || '?'}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.full_name}</div>
+                <div style={{ fontSize: '0.7rem', color: user.role === 'admin' ? '#92400e' : '#0369a1', fontWeight: 600 }}>
+                  {user.role === 'admin' ? '👑 Admin' : '👤 Nhân viên'}
+                </div>
+              </div>
+              <button onClick={handleLogout} title="Đăng xuất"
+                style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 4, flexShrink: 0 }}>
+                <LogOut size={16} />
+              </button>
+            </div>
+            <div className="sidebar-version">v1.0.0</div>
+          </div>
+        )}
+
+        {/* Collapsed footer: just avatar + logout */}
+        {collapsed && (
+          <div className="sidebar-footer sidebar-footer-collapsed">
+            <div
+              title={user.full_name}
+              style={{ width: 36, height: 36, borderRadius: '50%', background: '#dc2626', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14, cursor: 'default' }}
+            >
               {user.full_name?.charAt(0) || '?'}
             </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.full_name}</div>
-              <div style={{ fontSize: '0.7rem', color: user.role === 'admin' ? '#92400e' : '#0369a1', fontWeight: 600 }}>
-                {user.role === 'admin' ? '👑 Admin' : '👤 Nhân viên'}
-              </div>
-            </div>
             <button onClick={handleLogout} title="Đăng xuất"
-              style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 4, flexShrink: 0 }}>
+              style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', padding: 4, marginTop: 4 }}>
               <LogOut size={16} />
             </button>
           </div>
-          <div className="sidebar-version">v1.0.0</div>
-        </div>
+        )}
       </aside>
 
       <main className="admin-main">
