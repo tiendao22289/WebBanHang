@@ -1443,17 +1443,6 @@ export default function TablesPage() {
                             </button>
                           )}
                           <button
-                            onClick={() => {
-                              setDiscountValue(0);
-                              setDiscountMode('VND');
-                              setCustomNewPrice(null);
-                              setEditingPriceItem({ orderId: item._orderId, itemId: item.id });
-                            }}
-                            style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#fdf4ff', color: '#c026d3', border: '1px solid #f5d0fe', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
-                          >
-                            💲 Sửa giá
-                          </button>
-                          <button
                             onClick={async () => {
                               const { value: targetTableId } = await Swal.fire({
                                 title: 'Chuyển món sang bàn nào?',
