@@ -1409,6 +1409,37 @@ export default function TablesPage() {
                             {order.status === 'pending' ? 'Chờ' : 'Đang làm'}
                           </span>
                           <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                            {/* In bếp */}
+                            <button
+                              onClick={() => {
+                                const items = (order.order_items || []);
+                                const printWin = window.open('', '_blank', 'width=320,height=500');
+                                printWin.document.write(`
+                                  <html><head><title>Phiếu bếp</title><style>
+                                    body{font-family:monospace;font-size:15px;padding:12px;margin:0}
+                                    h2{text-align:center;margin:4px 0;font-size:18px}
+                                    .row{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed #ccc}
+                                    .qty{font-size:18px;font-weight:bold}
+                                    hr{border:1px dashed #555}
+                                  </style></head><body>
+                                  <h2>PHIẾU BẾP</h2>
+                                  <p style="text-align:center;margin:2px 0">Bàn ${selectedTable?.table_number} — ${order.customer_name}</p>
+                                  <p style="text-align:center;font-size:11px;color:#666;margin:2px 0">${new Date().toLocaleTimeString('vi-VN')}</p>
+                                  <hr/>
+                                  ${items.map((i, n) => {
+                                  const opts = (i.item_options || []).map(o => o.choice).join(', ');
+                                  return `<div class="row">
+                                      <span>${n + 1}. <strong>${i.menu_item?.name || i.name}</strong>${opts ? `<br/><small style="color:#555">${opts}</small>` : ''}${i.note ? `<br/><small style="color:#888">📝 ${i.note}</small>` : ''}</span>
+                                      <span class="qty">x${i.quantity}</span>
+                                    </div>`;
+                                }).join('')}
+                                  </body></html>`);
+                                printWin.document.close();
+                                printWin.focus();
+                                printWin.print();
+                              }}
+                              style={{ background: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 6, color: '#16a34a', cursor: 'pointer', padding: '3px 10px', fontSize: '0.76rem', fontWeight: 700 }}
+                            >🍳 Bếp</button>
                             {/* In bill */}
                             <button
                               onClick={() => {
