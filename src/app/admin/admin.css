@@ -15,7 +15,7 @@
   --font-display: 'DM Sans', sans-serif;
   --radius-lg: 1.25rem;
   --radius-xl: 1.5rem;
-  --shadow-md: 0 10px 25px -5px rgba(0,0,0,0.06), 0 4px 8px -4px rgba(0,0,0,0.04);
+  --shadow-md: 0 10px 25px -5px rgba(0, 0, 0, 0.06), 0 4px 8px -4px rgba(0, 0, 0, 0.04);
 
   font-family: var(--font-body);
   color: var(--color-text);
@@ -46,6 +46,60 @@
 
 .sidebar-collapsed .admin-main {
   margin-left: var(--sidebar-collapsed-width);
+}
+
+/* ── Auto-collapse sidebar on small desktops (769–1024px) ── */
+@media (min-width: 769px) and (max-width: 1024px) {
+
+  /* Sidebar collapses to icon-only automatically */
+  .sidebar {
+    width: var(--sidebar-width) !important;
+    /* 64px from global */
+  }
+
+  .admin-main {
+    margin-left: 64px !important;
+  }
+
+  .sidebar-header,
+  .sidebar-footer {
+    display: none;
+  }
+
+  .sidebar-toggle {
+    display: none;
+    /* hide hamburger – layout already icon-only */
+  }
+
+  .nav-item {
+    justify-content: center;
+    padding: 12px 8px;
+  }
+
+  .nav-item span {
+    display: none;
+  }
+
+  .nav-item:hover {
+    transform: none;
+    background: var(--color-primary-bg);
+  }
+}
+
+/* ── Medium desktops (1025–1280px): slightly smaller sidebar ── */
+@media (min-width: 1025px) and (max-width: 1280px) {
+  .sidebar-nav {
+    padding: var(--space-4) var(--space-3);
+  }
+
+  .nav-item {
+    font-size: 0.88rem;
+    padding: var(--space-3) var(--space-3);
+  }
+
+  .sidebar-title {
+    font-size: 1.2rem;
+  }
 }
 
 /* Hamburger toggle button */
@@ -198,6 +252,7 @@
    MOBILE: Bottom Tab Bar
    ══════════════════════════════════════════ */
 @media (max-width: 768px) {
+
   /* Hide hamburger toggle — mobile uses bottom tab bar */
   .sidebar-toggle {
     display: none;
@@ -211,6 +266,7 @@
   .sidebar-collapsed .admin-main {
     margin-left: 0;
   }
+
   .admin-layout {
     flex-direction: column;
   }
