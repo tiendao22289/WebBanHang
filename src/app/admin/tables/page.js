@@ -1409,6 +1409,56 @@ export default function TablesPage() {
                             {order.status === 'pending' ? 'Chờ' : 'Đang làm'}
                           </span>
                           <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                            {/* In bill */}
+                            <button
+                              onClick={() => {
+                                const items = (order.order_items || []);
+                                const total = items.reduce((s, i) => s + i.unit_price * i.quantity, 0);
+                                const printWin = window.open('', '_blank', 'width=380,height=600');
+                                printWin.document.write(`
+                                  <html><head><title>Hóa đơn</title><style>
+                                    body{font-family:monospace;font-size:13px;padding:12px;margin:0}
+                                    h2{text-align:center;margin:4px 0}
+                                    .row{display:flex;justify-content:space-between}
+                                    hr{border:1px dashed #555}
+                                  </style></head><body>
+                                  <h2>HÓA ĐƠN</h2>
+                                  <p style="text-align:center">Bàn ${selectedTable?.table_number} — ${order.customer_name}</p>
+                                  <hr/>
+                                  ${items.map((i, n) => `<div class="row"><span>${n + 1}. ${i.menu_item?.name || i.name} x${i.quantity}</span><span>${(i.unit_price * i.quantity).toLocaleString('vi-VN')}đ</span></div>`).join('')}
+                                  <hr/>
+                                  <div class="row"><strong>Tổng cộng</strong><strong>${total.toLocaleString('vi-VN')}đ</strong></div>
+                                  </body></html>`);
+                                printWin.document.close();
+                                printWin.focus();
+                                printWin.print();
+                              }}
+                              style={{ background: '#fff7ed', border: '1.5px solid #fed7aa', borderRadius: 6, color: '#ea580c', cursor: 'pointer', padding: '3px 10px', fontSize: '0.76rem', fontWeight: 700 }}
+                            >🖨 In</button>
+                            {/* Huỷ bill */}
+                            <button
+                              onClick={async () => {
+                                const confirm = await Swal.fire({
+                                  title: 'Huỷ bill?',
+                                  text: `Xác nhận huỷ bill của "${order.customer_name}"?`,
+                                  icon: 'warning', showCancelButton: true,
+                                  confirmButtonText: 'Huỷ bill', cancelButtonText: 'Giữ lại',
+                                  confirmButtonColor: '#ef4444', reverseButtons: true,
+                                });
+                                if (!confirm.isConfirmed) return;
+                                await supabase.from('orders').update({ status: 'cancelled', total_amount: 0 }).eq('id', order.id);
+                                const remaining = tableBills.filter(o => o.id !== order.id && o.status !== 'cancelled');
+                                if (remaining.length === 0) {
+                                  const hId = selectedTable.merged_with || selectedTable.id;
+                                  await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
+                                  setSelectedTable(null);
+                                }
+                                fetchTables();
+                                Swal.fire({ title: 'Đã huỷ', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
+                              }}
+                              style={{ background: '#fff1f2', border: '1.5px solid #fecdd3', borderRadius: 6, color: '#dc2626', cursor: 'pointer', padding: '3px 10px', fontSize: '0.76rem', fontWeight: 700 }}
+                            >✕ Huỷ</button>
+                            {/* Chuyển bàn */}
                             <button
                               onClick={async () => {
                                 const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
