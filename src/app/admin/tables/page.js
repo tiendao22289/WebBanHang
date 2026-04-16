@@ -3703,33 +3703,27 @@ export default function TablesPage() {
                 style={{ flex: 1, padding: '12px', border: '1.5px solid #e5e7eb', borderRadius: 12, background: 'white', color: '#6b7280', fontWeight: 600, cursor: 'pointer', fontSize: '0.9rem' }}>
                 Quay lại
               </button>
-              {paymentCountdown > 0 ? (
-                <div style={{ flex: 2, padding: '12px', background: '#eff6ff', color: '#1d4ed8', border: '1.5px dashed #bfdbfe', borderRadius: 12, fontWeight: 700, fontSize: '0.9rem', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  ⏳ Chờ xác nhận... ({Math.floor(paymentCountdown / 60)}:{String(paymentCountdown % 60).padStart(2, '0')})
-                </div>
-              ) : (
-                <button
-                  onClick={async () => {
-                    await recordBankPayment(qrAccount.id, paymentModal.total);
-                    await completeTable(paymentModal.table, 'transfer');
-                    setPaymentModal(null);
-                    setConfirmPayment(null);
-                    setTransactionCode(null);
-                    setPaymentCountdown(0);
-                    setSelectedTable(null);
-                    setDesktopView('tables');
-                    Swal.fire({
-                      icon: 'success',
-                      title: '✅ Chuyển khoản thành công!',
-                      html: `<span style="font-size:1rem">Bàn <b>B${paymentModal.table.table_number}</b> — <b style="color:#fff;font-size:1.1rem">${paymentModal.total.toLocaleString('vi-VN')}đ</b></span>`,
-                      timer: 3000, timerProgressBar: true, showConfirmButton: false,
-                      position: 'top-end', toast: true, background: '#1d4ed8', color: '#fff', iconColor: '#fff',
-                    });
-                  }}
-                  style={{ flex: 2, padding: '12px', border: 'none', borderRadius: 12, background: '#2563eb', color: 'white', fontWeight: 800, cursor: 'pointer', fontSize: '0.95rem' }}>
-                  ✅ Đã nhận tiền
-                </button>
-              )}
+              <button
+                onClick={async () => {
+                  await recordBankPayment(qrAccount.id, paymentModal.total);
+                  await completeTable(paymentModal.table, 'transfer');
+                  setPaymentModal(null);
+                  setConfirmPayment(null);
+                  setTransactionCode(null);
+                  setPaymentCountdown(0);
+                  setSelectedTable(null);
+                  setDesktopView('tables');
+                  Swal.fire({
+                    icon: 'success',
+                    title: '✅ Chuyển khoản thành công!',
+                    html: `<span style="font-size:1rem">Bàn <b>B${paymentModal.table.table_number}</b> — <b style="color:#fff;font-size:1.1rem">${paymentModal.total.toLocaleString('vi-VN')}đ</b></span>`,
+                    timer: 3000, timerProgressBar: true, showConfirmButton: false,
+                    position: 'top-end', toast: true, background: '#1d4ed8', color: '#fff', iconColor: '#fff',
+                  });
+                }}
+                style={{ flex: 2, padding: '12px', border: 'none', borderRadius: 12, background: '#2563eb', color: 'white', fontWeight: 800, cursor: 'pointer', fontSize: '0.95rem' }}>
+                ✅ Đã nhận tiền
+              </button>
             </div>
           </div>
         </div>
