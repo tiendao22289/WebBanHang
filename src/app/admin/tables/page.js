@@ -1793,19 +1793,87 @@ export default function TablesPage() {
                           return (
                             <div key={table.id}
                               onClick={() => { setSelectedTable(table); setDesktopView('menu'); }}
-                              onMouseEnter={e => { if (!isSelected) e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = shadowHover; }}
-                              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 4px 16px rgba(37,99,235,0.35)' : 'none'; }}
+                              onMouseEnter={e => { if (!isSelected) { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = shadowHover; } }}
+                              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 8px 24px rgba(29,78,216,0.4)' : '0 1px 4px rgba(0,0,0,0.07)'; }}
                               style={{
-                                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                                padding: '16px 8px 14px', borderRadius: 12, cursor: 'pointer', minHeight: 110,
-                                background: bg,
-                                border: '1.5px solid ' + border,
-                                boxShadow: isSelected ? '0 4px 16px rgba(37,99,235,0.35)' : 'none',
-                                transition: 'all 0.15s',
-                                position: 'relative', gap: 8,
+                                position: 'relative', borderRadius: 14, cursor: 'pointer',
+                                overflow: 'hidden',
+                                background: isSelected
+                                  ? 'linear-gradient(145deg, #1e3a8a, #1d4ed8)'
+                                  : isMergedGroup ? 'linear-gradient(145deg, #faf5ff, #f3e8ff)'
+                                    : isOccupied ? 'linear-gradient(145deg, #f0fdf4, #dcfce7)'
+                                      : 'white',
+                                border: `1.5px solid ${border}`,
+                                boxShadow: isSelected ? '0 8px 24px rgba(29,78,216,0.4)' : '0 1px 4px rgba(0,0,0,0.07)',
+                                transition: 'all 0.18s cubic-bezier(0.4, 0, 0.2, 1)',
                               }}
                             >
-                              {/* History button - top right */}
+                              {/* Accent bar at top */}
+                              <div style={{
+                                height: 4,
+                                background: isSelected ? 'rgba(255,255,255,0.35)'
+                                  : isMergedGroup ? 'linear-gradient(90deg, #a855f7, #c084fc)'
+                                    : isOccupied ? 'linear-gradient(90deg, #16a34a, #4ade80)'
+                                      : '#e5e7eb',
+                              }} />
+
+                              {/* Card body */}
+                              <div style={{ padding: '10px 8px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7 }}>
+
+                                {/* Merged / print error badges */}
+                                {isHost && (
+                                  <div style={{
+                                    position: 'absolute', top: 10, left: 8,
+                                    fontSize: '0.55rem', background: isSelected ? 'rgba(255,255,255,0.2)' : '#f97316',
+                                    color: isSelected ? 'rgba(255,255,255,0.9)' : 'white',
+                                    borderRadius: 4, padding: '1px 5px', fontWeight: 800, letterSpacing: '0.04em'
+                                  }}>GỘP</div>
+                                )}
+                                {hasPrintError && (
+                                  <div style={{ position: 'absolute', top: -1, right: -1, background: '#ef4444', color: 'white', borderRadius: '0 14px 0 8px', padding: '2px 5px', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
+                                    <Printer size={9} strokeWidth={2.5} />
+                                  </div>
+                                )}
+
+                                {/* Number badge */}
+                                <div style={{
+                                  width: 46, height: 46, borderRadius: '50%',
+                                  background: isSelected ? 'rgba(255,255,255,0.18)'
+                                    : isMergedGroup ? '#a855f7'
+                                      : isOccupied ? '#16a34a'
+                                        : '#f1f5f9',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  fontSize: '1.1rem', fontWeight: 900,
+                                  color: isSelected ? 'white' : (isOccupied || isMergedGroup) ? 'white' : '#64748b',
+                                  boxShadow: isOccupied && !isSelected ? '0 3px 10px rgba(22,163,74,0.35)'
+                                    : isMergedGroup && !isSelected ? '0 3px 10px rgba(168,85,247,0.35)' : 'none',
+                                  border: isSelected ? '2px solid rgba(255,255,255,0.25)' : 'none',
+                                  flexShrink: 0,
+                                }}>
+                                  {table.table_number}
+                                </div>
+
+                                {/* Table name */}
+                                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: isSelected ? 'rgba(255,255,255,0.95)' : isMergedGroup ? '#6b21a8' : isOccupied ? '#14532d' : '#374151', letterSpacing: '0.01em' }}>
+                                  {table.table_name || `B${table.table_number}`}
+                                </span>
+
+                                {/* Revenue or empty */}
+                                {tableTotal > 0 ? (
+                                  <div style={{
+                                    fontSize: '0.72rem', fontWeight: 800,
+                                    color: isSelected ? '#93c5fd' : isMergedGroup ? '#7e22ce' : '#16a34a',
+                                    background: isSelected ? 'rgba(255,255,255,0.12)' : isMergedGroup ? '#ede9fe' : '#dcfce7',
+                                    borderRadius: 20, padding: '2px 10px', whiteSpace: 'nowrap',
+                                  }}>
+                                    {tableTotal >= 1000000 ? (tableTotal / 1000000).toFixed(1) + 'M' : tableTotal >= 1000 ? (tableTotal / 1000).toFixed(0) + 'k' : tableTotal.toLocaleString('vi-VN')}đ
+                                  </div>
+                                ) : (
+                                  <div style={{ fontSize: '0.68rem', color: isSelected ? 'rgba(255,255,255,0.4)' : '#cbd5e1', fontWeight: 500 }}>— trống —</div>
+                                )}
+                              </div>
+
+                              {/* History button */}
                               <div
                                 onClick={async (e) => {
                                   e.stopPropagation();
@@ -1824,50 +1892,14 @@ export default function TablesPage() {
                                   setTableHistoryData(data || []);
                                   setTableHistoryLoading(false);
                                 }}
-                                style={{ position: 'absolute', top: 6, right: 6, opacity: 0.6, cursor: 'pointer', zIndex: 5, padding: 4 }}
+                                style={{ position: 'absolute', top: 8, right: 7, opacity: 0.45, cursor: 'pointer', zIndex: 5, padding: 3 }}
                                 title="Lịch sử bàn 8H"
                               >
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={isSelected ? 'rgba(255,255,255,0.7)' : isMergedGroup ? '#a855f7' : isOccupied ? '#3b82f6' : '#9ca3af'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={isSelected ? 'white' : isMergedGroup ? '#a855f7' : isOccupied ? '#16a34a' : '#9ca3af'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                   <circle cx="12" cy="12" r="10" />
                                   <polyline points="12 6 12 12 16 14" />
                                 </svg>
                               </div>
-                              {/* Print error badge */}
-                              {hasPrintError && (
-                                <div style={{ position: 'absolute', top: -5, right: -5, background: '#ef4444', color: 'white', borderRadius: '50%', padding: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 2px 4px rgba(0,0,0,0.2)', zIndex: 10 }}>
-                                  <Printer size={10} strokeWidth={2.5} />
-                                </div>
-                              )}
-                              {/* Merged badge (ONLY ON HOST according to mobile UI) */}
-                              {isHost && !isSelected && (
-                                <div style={{ position: 'absolute', top: 7, left: 7, fontSize: '0.6rem', background: '#f97316', color: 'white', borderRadius: 4, padding: '1px 5px', fontWeight: 700, letterSpacing: '0.02em' }}>GỘP</div>
-                              )}
-                              {isHost && isSelected && (
-                                <div style={{ position: 'absolute', top: 7, left: 7, fontSize: '0.6rem', background: '#ffedd5', color: '#ea580c', borderRadius: 4, padding: '1px 5px', fontWeight: 700, letterSpacing: '0.02em' }}>GỘP</div>
-                              )}
-
-                              {/* Table icon */}
-                              <svg width="46" height="32" viewBox="0 0 40 30" fill="none" style={{ marginTop: isHost ? 5 : 0 }}>
-                                <rect x="3" y="10" width="34" height="10" rx="3.5"
-                                  fill={isSelected ? 'rgba(255,255,255,0.2)' : 'transparent'}
-                                  stroke={iconCol} strokeWidth="2.5" />
-                                <rect x="7" y="1" width="4.5" height="10" rx="2.25" fill={iconCol} />
-                                <rect x="28.5" y="1" width="4.5" height="10" rx="2.25" fill={iconCol} />
-                                <rect x="7" y="21" width="4.5" height="9" rx="2.25" fill={iconCol} />
-                                <rect x="28.5" y="21" width="4.5" height="9" rx="2.25" fill={iconCol} />
-                              </svg>
-
-                              {/* Table name */}
-                              <span style={{ fontSize: '0.85rem', fontWeight: 700, color: textCol }}>{table.table_name || `B${table.table_number}`}</span>
-
-                              {/* Revenue or Status */}
-                              {tableTotal > 0 ? (
-                                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: pillStyle.text, background: pillStyle.bg, borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>
-                                  {tableTotal >= 1000 ? (tableTotal / 1000).toFixed(0) + 'k' : tableTotal.toLocaleString('vi-VN')}đ
-                                </span>
-                              ) : (
-                                <span style={{ fontSize: '0.7rem', color: isSelected ? 'rgba(255,255,255,0.6)' : '#9ca3af' }}>Trống</span>
-                              )}
                             </div>
                           );
                         })}
