@@ -1077,9 +1077,13 @@ export default function TablesPage() {
     // Xử lý cắm cờ các bill đã bị gộp
     if (otherIds.length > 0) {
       const { error: updErr } = await supabase.from('orders')
-        .update({ status: 'merged', merged_into: mainBill.id, total_amount: 0 })
+        // Thử bỏ merged_into ra nếu cột này không tồn tại, nhưng có thể chỉ là status thôi?
+        .update({ status: 'cancelled', total_amount: 0 })
         .in('id', otherIds);
-      if (updErr) console.error("Error setting merged bills to neutral", updErr);
+      if (updErr) {
+        Swal.fire('Lỗi Cập nhật Bill Phụ', updErr.message, 'error');
+        return;
+      }
     }
 
     // Cập nhật lại tổng tiền main bill
@@ -1088,7 +1092,7 @@ export default function TablesPage() {
     fetchTables();
     Swal.fire({
       title: 'Thành công',
-      text: 'Đã gộp đơn và dồn các món giống nhau!',
+      text: 'Đã gộp đơn và dồn các món! (Các bill phụ đã chuyển sang Huỷ)',
       icon: 'success',
       toast: true,
       position: 'top-end',
