@@ -3412,7 +3412,7 @@ export default function TablesPage() {
             onClick={e => e.stopPropagation()}
           >
             {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: 'white', borderBottom: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 'calc(12px + env(safe-area-inset-top)) 16px 12px', background: 'white', borderBottom: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
               <button
                 onClick={() => setShowBillPreview(false)}
                 style={{
@@ -3492,7 +3492,7 @@ export default function TablesPage() {
             </div>
 
             {/* Print button */}
-            <div style={{ padding: '10px 16px 16px', background: 'white' }}>
+            <div style={{ padding: '10px 16px calc(16px + env(safe-area-inset-bottom))', background: 'white' }}>
               <button
                 onClick={handlePrintInvoice}
                 style={{
