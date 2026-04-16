@@ -174,7 +174,7 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
       >
         {/* Vòng tiến trình */}
         <svg width="70" height="70" style={{ position: 'absolute', top: -5, left: -5, transform: 'rotate(-90deg)', pointerEvents: 'none' }}>
-          <circle cx="35" cy="35" r="30" fill="none" stroke="#fecaca" strokeWidth="4"/>
+          <circle cx="35" cy="35" r="30" fill="none" stroke="#fecaca" strokeWidth="4" />
           <circle cx="35" cy="35" r="30" fill="none" stroke={hasGift ? '#f59e0b' : '#ef4444'} strokeWidth="4"
             strokeDasharray={`${2 * Math.PI * 30}`}
             strokeDashoffset={`${2 * Math.PI * 30 * (1 - progress / 100)}`}
@@ -250,7 +250,7 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
               <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'linear-gradient(135deg, #22c55e, #16a34a)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.6rem', flexShrink: 0 }}>🎁</div>
               <div>
                 <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#111827' }}>Khuyến Mãi Hôm Nay</div>
-                <div style={{ fontSize: '0.82rem', color: '#6b7280' }}>Chọn đủ <b style={{color:'#16a34a'}}>{threshold} món</b> được tặng miễn phí!</div>
+                <div style={{ fontSize: '0.82rem', color: '#6b7280' }}>Chọn đủ <b style={{ color: '#16a34a' }}>{threshold} món</b> được tặng miễn phí!</div>
               </div>
             </div>
 
@@ -264,7 +264,7 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
                 <div style={{ width: `${progress}%`, height: '100%', background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 6, transition: 'width 0.5s ease' }} />
               </div>
               {qualifyingQty < threshold && (
-                <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 6 }}>Thêm <b style={{color:'#dc2626'}}>{threshold - qualifyingQty} món</b> nữa để nhận quà!</div>
+                <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 6 }}>Thêm <b style={{ color: '#dc2626' }}>{threshold - qualifyingQty} món</b> nữa để nhận quà!</div>
               )}
             </div>
 
@@ -442,7 +442,7 @@ function OrderContent() {
     initSession();
     const saved = getSavedSession();
     if (saved?.orderId) setCurrentOrderId(saved.orderId);
-    
+
     // Thu thập GPS và kiểm tra khách có ở nhà hàng không
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -463,7 +463,7 @@ function OrderContent() {
               const { lat: rLat, lng: rLng, radius = 300 } = JSON.parse(data.value);
               const dist = getDistanceMeters(pos.coords.latitude, pos.coords.longitude, rLat, rLng);
               if (dist > radius) setLocationWarning(true);
-            } catch {}
+            } catch { }
           }
         },
         () => { /* từ chối — bỏ qua, không cản trở */ },
@@ -541,20 +541,20 @@ function OrderContent() {
       }, handleTableUpdate)
       // Watch for print_jobs changes — cập nhật trực tiếp state và re-fetch
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'print_jobs' }, (payload) => {
-         const updatedJob = payload.new;
-         // Cập nhật trực tiếp vào previousOrders state (không cần re-fetch)
-         setPreviousOrders(prev => prev.map(order => {
-           const jobs = order.print_jobs || [];
-           const jobIdx = jobs.findIndex(j => j.id === updatedJob.id);
-           if (jobIdx === -1) return order;
-           const newJobs = jobs.map(j => j.id === updatedJob.id ? { ...j, status: updatedJob.status, error_message: updatedJob.error_message } : j);
-           return { ...order, print_jobs: newJobs };
-         }));
-         // Đồng thời re-fetch để đảm bảo dữ liệu chính xác
-         try {
-           const saved = getSavedSession();
-           fetchPreviousOrders(saved?.customerPhone || '');
-         } catch(e) { fetchPreviousOrders(); }
+        const updatedJob = payload.new;
+        // Cập nhật trực tiếp vào previousOrders state (không cần re-fetch)
+        setPreviousOrders(prev => prev.map(order => {
+          const jobs = order.print_jobs || [];
+          const jobIdx = jobs.findIndex(j => j.id === updatedJob.id);
+          if (jobIdx === -1) return order;
+          const newJobs = jobs.map(j => j.id === updatedJob.id ? { ...j, status: updatedJob.status, error_message: updatedJob.error_message } : j);
+          return { ...order, print_jobs: newJobs };
+        }));
+        // Đồng thời re-fetch để đảm bảo dữ liệu chính xác
+        try {
+          const saved = getSavedSession();
+          fetchPreviousOrders(saved?.customerPhone || '');
+        } catch (e) { fetchPreviousOrders(); }
       })
       // Watch for orders being updated (including table transfers)
       .on('postgres_changes', {
@@ -566,7 +566,7 @@ function OrderContent() {
         // Xử lý CHUYỂN BÀN (Nếu order của khách bị đổi sang bàn khác)
         if (isMyOrder && payload.new.table_id && payload.new.table_id !== activeTableId) {
           const newTid = payload.new.table_id;
-          
+
           // Lấy table_number của bàn mới
           supabase.from('tables').select('table_number').eq('id', newTid).single().then(({ data }) => {
             if (data?.table_number) {
@@ -575,13 +575,13 @@ function OrderContent() {
               setMovedMessage(`Bill của bạn đã được chuyển qua bàn khác.\nBạn hãy quét mã lại bàn mới để order thêm món nhé.\n\nChân thành cảm ơn quý khách.`);
             }
           });
-          
+
           // Clear session cục bộ để không load lại bill cũ
           clearSession();
           setPreviousOrders([]);
           setShowCart(false);
           setShowOrdered(false);
-          
+
           return;
         }
 
@@ -714,7 +714,7 @@ function OrderContent() {
           tableId: urlTableId,
           date: getTodayStr(),
         }));
-      } catch (err) {}
+      } catch (err) { }
       setPreviousOrders([]);
       setShowInfoModal(true);
       return;
@@ -944,11 +944,11 @@ function OrderContent() {
           _note: optNote
         });
       }
+      // Chỉ thêm vào giftCart local, gửi cùng đơn khi khách bấm Gửi đơn hàng
+      setGiftCart(prev => [...prev, ...giftItems]);
       setOptionModal(null);
       setIsGiftMode(false);
       setShowGiftModal(false);
-      // Gửi thẳng vào DB ngay
-      submitGiftDirectly(giftItems);
       return;
     }
 
@@ -1292,7 +1292,7 @@ function OrderContent() {
       const itemCats = getItemCategories(item);
       itemCats.forEach(catId => {
         if (catId !== activeCategory) return; // only group the active category
-        
+
         const catObj = categories.find(c => c.id === catId);
         const catName = catObj?.name ? catObj.name : 'Chưa phân loại';
         const actualCatId = catId || 'other';
@@ -1384,8 +1384,8 @@ function OrderContent() {
 
   return (
     <>
-      <PrintErrorAlert 
-        customerOrderId={currentOrderId} 
+      <PrintErrorAlert
+        customerOrderId={currentOrderId}
         customerOrderIds={previousOrders.map(o => o.id)}
         onRecovered={() => {
           const saved = getSavedSession();
@@ -1393,7 +1393,7 @@ function OrderContent() {
         }}
       />
       <div className="co-page">
-      <style>{`
+        <style>{`
         @keyframes bounce-pointer {
           0%, 100% { transform: translateY(0); }
           50% { transform: translateY(6px); }
@@ -1406,327 +1406,327 @@ function OrderContent() {
           to { background-position: -200% center; }
         }
       `}</style>
-      {/* Customer Info Modal */}
-      {showInfoModal && (
-        <div className="co-modal-overlay">
-          <div className="co-info-modal">
-            <div className="co-info-header" style={{ paddingBottom: '16px' }}>
-              <h2 style={{ fontSize: '2.2rem', fontWeight: 800, color: '#111827', margin: 0, lineHeight: 1.2 }}>Bàn {tableNumber || '...'}</h2>
-              <p style={{ fontSize: '0.85rem', color: '#15803d', fontWeight: 600, margin: '8px 0 0 0', padding: '4px 12px', background: '#dcfce7', borderRadius: '20px', display: 'inline-block' }}>
-                🎁 Nhập thông tin để tích điểm Nhận Quà
-              </p>
-              <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '6px 0 0 0', fontStyle: 'italic' }}>
-                (Có thể thao tác Bỏ qua ngay ở dưới nếu quý khách thấy phiền)
-              </p>
-            </div>
-            <div className="co-info-form">
-              {/* Location warning — chỉ hiện nếu khách ra ngoài phạm vi */}
-              {locationWarning && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  background: '#fff7ed', border: '1px solid #fed7aa',
-                  borderRadius: 10, padding: '8px 12px', marginBottom: 4,
-                  fontSize: '0.82rem', color: '#92400e',
-                }}>
-                  <span>⚠️</span>
-                  <span>Vị trí của bạn có vẻ không ở nhà hàng. Nếu đây là nhầm lẫn, hãy tiếp tục.</span>
-                </div>
-              )}
-              <div className="co-field">
-                <User size={18} />
-                <input
-                  className="co-input"
-                  placeholder="Tên của bạn"
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  autoFocus
-                />
+        {/* Customer Info Modal */}
+        {showInfoModal && (
+          <div className="co-modal-overlay">
+            <div className="co-info-modal">
+              <div className="co-info-header" style={{ paddingBottom: '16px' }}>
+                <h2 style={{ fontSize: '2.2rem', fontWeight: 800, color: '#111827', margin: 0, lineHeight: 1.2 }}>Bàn {tableNumber || '...'}</h2>
+                <p style={{ fontSize: '0.85rem', color: '#15803d', fontWeight: 600, margin: '8px 0 0 0', padding: '4px 12px', background: '#dcfce7', borderRadius: '20px', display: 'inline-block' }}>
+                  🎁 Nhập thông tin để tích điểm Nhận Quà
+                </p>
+                <p style={{ fontSize: '0.75rem', color: '#6b7280', margin: '6px 0 0 0', fontStyle: 'italic' }}>
+                  (Có thể thao tác Bỏ qua ngay ở dưới nếu quý khách thấy phiền)
+                </p>
               </div>
-              <div className="co-field">
-                <Phone size={18} />
-                <input
-                  className="co-input"
-                  placeholder="Số điện thoại"
-                  type="tel"
-                  value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
-                />
-              </div>
-              {isTakeaway && (
-                <div className="co-field" style={{ borderColor: '#bfdbfe', background: '#eff6ff' }}>
-                  <span style={{ fontSize: '1rem', flexShrink: 0 }}>📍</span>
+              <div className="co-info-form">
+                {/* Location warning — chỉ hiện nếu khách ra ngoài phạm vi */}
+                {locationWarning && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    background: '#fff7ed', border: '1px solid #fed7aa',
+                    borderRadius: 10, padding: '8px 12px', marginBottom: 4,
+                    fontSize: '0.82rem', color: '#92400e',
+                  }}>
+                    <span>⚠️</span>
+                    <span>Vị trí của bạn có vẻ không ở nhà hàng. Nếu đây là nhầm lẫn, hãy tiếp tục.</span>
+                  </div>
+                )}
+                <div className="co-field">
+                  <User size={18} />
                   <input
                     className="co-input"
-                    placeholder="Địa chỉ nhận hàng (bắt buộc)"
-                    value={deliveryAddress}
-                    onChange={(e) => setDeliveryAddress(e.target.value)}
-                    style={{ background: 'transparent' }}
+                    placeholder="Tên của bạn"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    autoFocus
                   />
                 </div>
-              )}
-              <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
-                <button
-                  className="co-btn-start"
-                  style={{ flex: 1, background: '#f3f4f6', color: '#4b5563', border: '1.5px solid #e5e7eb' }}
-                  onClick={() => {
-                    saveSession('', '', '');
-                    setShowInfoModal(false);
-                    setShowPromoPopup(true);
-                    fetchPreviousOrders();
-                  }}
-                >
-                  Bỏ qua
-                </button>
-                <button
-                  className="co-btn-start"
-                  style={{ flex: 2 }}
-                  disabled={isTakeaway && !deliveryAddress.trim()}
-                  onClick={() => {
-                    saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim());
-                    setShowInfoModal(false);
-                    setShowPromoPopup(true);
-                    fetchPreviousOrders();
-                  }}
-                >
-                  {isTakeaway ? '🛵 Đặt món Mang về' : 'Xem thực đơn'}
-                </button>
+                <div className="co-field">
+                  <Phone size={18} />
+                  <input
+                    className="co-input"
+                    placeholder="Số điện thoại"
+                    type="tel"
+                    value={customerPhone}
+                    onChange={(e) => setCustomerPhone(e.target.value)}
+                  />
+                </div>
+                {isTakeaway && (
+                  <div className="co-field" style={{ borderColor: '#bfdbfe', background: '#eff6ff' }}>
+                    <span style={{ fontSize: '1rem', flexShrink: 0 }}>📍</span>
+                    <input
+                      className="co-input"
+                      placeholder="Địa chỉ nhận hàng (bắt buộc)"
+                      value={deliveryAddress}
+                      onChange={(e) => setDeliveryAddress(e.target.value)}
+                      style={{ background: 'transparent' }}
+                    />
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+                  <button
+                    className="co-btn-start"
+                    style={{ flex: 1, background: '#f3f4f6', color: '#4b5563', border: '1.5px solid #e5e7eb' }}
+                    onClick={() => {
+                      saveSession('', '', '');
+                      setShowInfoModal(false);
+                      setShowPromoPopup(true);
+                      fetchPreviousOrders();
+                    }}
+                  >
+                    Bỏ qua
+                  </button>
+                  <button
+                    className="co-btn-start"
+                    style={{ flex: 2 }}
+                    disabled={isTakeaway && !deliveryAddress.trim()}
+                    onClick={() => {
+                      saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim());
+                      setShowInfoModal(false);
+                      setShowPromoPopup(true);
+                      fetchPreviousOrders();
+                    }}
+                  >
+                    {isTakeaway ? '🛵 Đặt món Mang về' : 'Xem thực đơn'}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* ─── Promo Popup Modal ─── */}
-      {showPromoPopup && (
-        <div className="co-modal-overlay" style={{ zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="co-info-modal" style={{ borderRadius: '24px', padding: '32px 24px', margin: '0 20px', animation: 'coSlideUp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)', maxWidth: '360px', position: 'relative', overflow: 'hidden', background: 'linear-gradient(180deg, #ffffff 0%, #fff7ed 100%)' }} onClick={e => e.stopPropagation()}>
-            {/* Background elements */}
-            <div style={{ position: 'absolute', top: -30, left: -30, fontSize: '6rem', opacity: 0.1, transform: 'rotate(-15deg)' }}>🔥</div>
-            <div style={{ position: 'absolute', bottom: -20, right: -20, fontSize: '5rem', opacity: 0.1, transform: 'rotate(15deg)' }}>🎁</div>
+        {/* ─── Promo Popup Modal ─── */}
+        {showPromoPopup && (
+          <div className="co-modal-overlay" style={{ zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div className="co-info-modal" style={{ borderRadius: '24px', padding: '32px 24px', margin: '0 20px', animation: 'coSlideUp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)', maxWidth: '360px', position: 'relative', overflow: 'hidden', background: 'linear-gradient(180deg, #ffffff 0%, #fff7ed 100%)' }} onClick={e => e.stopPropagation()}>
+              {/* Background elements */}
+              <div style={{ position: 'absolute', top: -30, left: -30, fontSize: '6rem', opacity: 0.1, transform: 'rotate(-15deg)' }}>🔥</div>
+              <div style={{ position: 'absolute', bottom: -20, right: -20, fontSize: '5rem', opacity: 0.1, transform: 'rotate(15deg)' }}>🎁</div>
 
-            <div style={{ position: 'relative', zIndex: 2, textAlign: 'center' }}>
-              <div style={{ fontSize: '3.5rem', marginBottom: '8px', animation: 'promo-pop 2s infinite ease-in-out' }}>🎁</div>
-              <h2 style={{ fontSize: '1.8rem', fontWeight: 900, color: '#ea580c', margin: '0 0 16px', lineHeight: 1.2, textTransform: 'uppercase' }}>Tin Vui!</h2>
-              
-              <div style={{
-                fontSize: '1.1rem', color: '#ffffff', fontWeight: 900, margin: '0 auto 24px', padding: '12px 20px',
-                background: 'linear-gradient(90deg, #ef4444, #f59e0b, #ef4444)', backgroundSize: '200% auto',
-                borderRadius: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '100%',
-                animation: 'promo-pop 1.5s infinite ease-in-out, promo-shine 3s linear infinite', 
-                boxShadow: '0 6px 20px rgba(239, 68, 68, 0.4)' 
-              }}>
-                KHUYẾN MÃI 8 MÓN TẶNG 1 MÓN
+              <div style={{ position: 'relative', zIndex: 2, textAlign: 'center' }}>
+                <div style={{ fontSize: '3.5rem', marginBottom: '8px', animation: 'promo-pop 2s infinite ease-in-out' }}>🎁</div>
+                <h2 style={{ fontSize: '1.8rem', fontWeight: 900, color: '#ea580c', margin: '0 0 16px', lineHeight: 1.2, textTransform: 'uppercase' }}>Tin Vui!</h2>
+
+                <div style={{
+                  fontSize: '1.1rem', color: '#ffffff', fontWeight: 900, margin: '0 auto 24px', padding: '12px 20px',
+                  background: 'linear-gradient(90deg, #ef4444, #f59e0b, #ef4444)', backgroundSize: '200% auto',
+                  borderRadius: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '100%',
+                  animation: 'promo-pop 1.5s infinite ease-in-out, promo-shine 3s linear infinite',
+                  boxShadow: '0 6px 20px rgba(239, 68, 68, 0.4)'
+                }}>
+                  KHUYẾN MÃI 8 MÓN TẶNG 1 MÓN
+                </div>
+
+                <p style={{ color: '#4b5563', fontSize: '0.95rem', fontWeight: 600, lineHeight: 1.5, margin: '0 0 24px' }}>
+                  Cứ mỗi 8 món được đặt, bạn sẽ được tự do chọn 1 món quà ngẫu nhiên từ nhà hàng! Chúc bạn dùng bữa ngon miệng nha.
+                </p>
+
+                <button
+                  onClick={() => setShowPromoPopup(false)}
+                  style={{
+                    width: '100%', padding: '14px', background: '#3b82f6', color: 'white',
+                    border: 'none', borderRadius: '16px', fontSize: '1.05rem', fontWeight: 800,
+                    cursor: 'pointer', boxShadow: '0 4px 14px rgba(59, 130, 246, 0.3)',
+                    transition: 'background 0.2s'
+                  }}
+                >
+                  Đặt món ngay!
+                </button>
               </div>
 
-              <p style={{ color: '#4b5563', fontSize: '0.95rem', fontWeight: 600, lineHeight: 1.5, margin: '0 0 24px' }}>
-                Cứ mỗi 8 món được đặt, bạn sẽ được tự do chọn 1 món quà ngẫu nhiên từ nhà hàng! Chúc bạn dùng bữa ngon miệng nha.
-              </p>
-
-              <button 
+              <button
                 onClick={() => setShowPromoPopup(false)}
-                style={{ 
-                  width: '100%', padding: '14px', background: '#3b82f6', color: 'white', 
-                  border: 'none', borderRadius: '16px', fontSize: '1.05rem', fontWeight: 800, 
-                  cursor: 'pointer', boxShadow: '0 4px 14px rgba(59, 130, 246, 0.3)',
-                  transition: 'background 0.2s'
-                }}
+                style={{ position: 'absolute', top: 12, right: 12, width: 32, height: 32, background: 'rgba(0,0,0,0.05)', borderRadius: '50%', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 10 }}
               >
-                Đặt món ngay!
+                <X size={18} color="#6b7280" />
               </button>
             </div>
-            
-            <button
-               onClick={() => setShowPromoPopup(false)}
-               style={{ position: 'absolute', top: 12, right: 12, width: 32, height: 32, background: 'rgba(0,0,0,0.05)', borderRadius: '50%', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 10 }}
-            >
-              <X size={18} color="#6b7280" />
-            </button>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* ─── Top Header (compact) ─── */}
-      <div className="co-topbar">
-        {/* Restaurant name row */}
-        <div className="co-header-bar" style={{ padding: '8px 12px 4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          {/* Logo & Contact */}
-          <div className="co-header-brand" style={{ flex: 1, minWidth: 0, paddingRight: 5 }}>
-            <span className="co-header-title" style={{ display: 'block', fontSize: '1.2rem', fontWeight: 800, color: '#1d4ed8' }}>
-              Ốc Bảo Khang
-            </span>
-            <span className="co-header-contact" style={{ display: 'block', fontSize: '0.65rem', marginTop: 2, color: '#4b5563', whiteSpace: 'nowrap', overflow: 'visible' }}>💬 0946.433.417 | 📞 0977.496.781</span>
-          </div>
+        {/* ─── Top Header (compact) ─── */}
+        <div className="co-topbar">
+          {/* Restaurant name row */}
+          <div className="co-header-bar" style={{ padding: '8px 12px 4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            {/* Logo & Contact */}
+            <div className="co-header-brand" style={{ flex: 1, minWidth: 0, paddingRight: 5 }}>
+              <span className="co-header-title" style={{ display: 'block', fontSize: '1.2rem', fontWeight: 800, color: '#1d4ed8' }}>
+                Ốc Bảo Khang
+              </span>
+              <span className="co-header-contact" style={{ display: 'block', fontSize: '0.65rem', marginTop: 2, color: '#4b5563', whiteSpace: 'nowrap', overflow: 'visible' }}>💬 0946.433.417 | 📞 0977.496.781</span>
+            </div>
 
-          {/* Table Badge */}
-          <div style={{ display: 'flex', alignItems: 'center', marginRight: '10px' }}>
-             <span style={{ fontSize: '0.95rem', background: '#eff6ff', color: '#2563eb', padding: '4px 12px', borderRadius: '20px', fontWeight: '900', border: '1.5px solid #bfdbfe', whiteSpace: 'nowrap' }}>
+            {/* Table Badge */}
+            <div style={{ display: 'flex', alignItems: 'center', marginRight: '10px' }}>
+              <span style={{ fontSize: '0.95rem', background: '#eff6ff', color: '#2563eb', padding: '4px 12px', borderRadius: '20px', fontWeight: '900', border: '1.5px solid #bfdbfe', whiteSpace: 'nowrap' }}>
                 {isTakeaway ? 'Mang về' : `Bàn ${tableNumber ?? '...'}`}
-             </span>
-          </div>
+              </span>
+            </div>
 
-          <div className="co-header-actions" style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-            <button
-              className="co-history-btn"
-              style={{ padding: '5px 10px', fontSize: '0.75rem' }}
-              onClick={() => { setShowOrdered(true); fetchPreviousOrders(); }}
-            >
-              📋 Đã gọi
-            </button>
-            <button className="co-header-btn" style={{ width: 30, height: 30 }} onClick={() => setShowInfoModal(true)}>✕</button>
-          </div>
-        </div>
-
-        {/* Filter row: category dropdown + search */}
-        <div className="co-filter-row" style={{ padding: '4px 12px 8px', gap: 6 }}>
-          <select
-            className="co-cat-dropdown"
-            style={{ padding: '7px 10px', fontSize: '0.8rem' }}
-            value={activeCategory}
-            onChange={e => handleCatClick(e.target.value)}
-          >
-            <option value="all">Tất cả</option>
-            {categories.map(cat => (
-              <option key={cat.id} value={cat.id}>{cat.name}</option>
-            ))}
-          </select>
-          <div className="co-search-box" style={{ padding: '7px 10px' }}>
-            <Search size={14} />
-            <input
-              placeholder="Tìm món"
-              style={{ fontSize: '0.8rem' }}
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-            />
-            {searchTerm && (
-              <button className="co-search-clear" onClick={() => setSearchTerm('')}>
-                <X size={13} />
+            <div className="co-header-actions" style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+              <button
+                className="co-history-btn"
+                style={{ padding: '5px 10px', fontSize: '0.75rem' }}
+                onClick={() => { setShowOrdered(true); fetchPreviousOrders(); }}
+              >
+                📋 Đã gọi
               </button>
-            )}
+              <button className="co-header-btn" style={{ width: 30, height: 30 }} onClick={() => setShowInfoModal(true)}>✕</button>
+            </div>
+          </div>
+
+          {/* Filter row: category dropdown + search */}
+          <div className="co-filter-row" style={{ padding: '4px 12px 8px', gap: 6 }}>
+            <select
+              className="co-cat-dropdown"
+              style={{ padding: '7px 10px', fontSize: '0.8rem' }}
+              value={activeCategory}
+              onChange={e => handleCatClick(e.target.value)}
+            >
+              <option value="all">Tất cả</option>
+              {categories.map(cat => (
+                <option key={cat.id} value={cat.id}>{cat.name}</option>
+              ))}
+            </select>
+            <div className="co-search-box" style={{ padding: '7px 10px' }}>
+              <Search size={14} />
+              <input
+                placeholder="Tìm món"
+                style={{ fontSize: '0.8rem' }}
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+              />
+              {searchTerm && (
+                <button className="co-search-clear" onClick={() => setSearchTerm('')}>
+                  <X size={13} />
+                </button>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* ─── Menu Content ─── */}
-      <div className="co-content">
-        {/* Menu Items */}
-        {groupedItems.map(({ catId, catName, items }) => (
-          <div
-            key={catId}
-            className="co-category-group"
-            data-cat-id={catId}
-            ref={el => { sectionRefs.current[catId] = el; }}
-          >
-            <h3 className="co-cat-title">{catName} ({items.length})</h3>
-            <div className={viewMode === 'grid' ? 'co-items-grid' : 'co-items-list'}>
-              {items.map(item => {
-                const qty = getCartQty(item.id);
-                return viewMode === 'list' ? (
-                  <div key={item.id} className="co-item-row" onClick={() => addToCart(item)} style={{ cursor: 'pointer' }}>
-                    <div className="co-item-img" style={{ position: 'relative' }}>
-                      {item.image_url ? (
-                        <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 100px, 150px" style={{ objectFit: 'cover' }} />
-                      ) : (
-                        <div className="co-item-placeholder"><ChefHat size={20} /></div>
-                      )}
-                    </div>
-                    <div className="co-item-info">
-                      <span className="co-item-name">{item.name}</span>
-                      {item.description ? (
-                        <span style={{ fontSize: '0.72rem', color: '#ea580c', lineHeight: 1.3, marginTop: 1, display: 'block' }}>{item.description}</span>
-                      ) : null}
-                      {promoConfig.enabled && item.counts_for_promotion && (
-                        <span style={{ fontSize: '0.68rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 6px', fontWeight: 600, marginTop: 2, alignSelf: 'flex-start' }}>🎯 Được Tính vào Khuyến Mãi</span>
-                      )}
-                      <span className="co-item-price">{getItemDisplayPrice(item)}</span>
-                    </div>
-                    <div className="co-item-action">
-                      {item.options && item.options.length > 0 ? (
-                        /* Có options: luôn cho bấm + để chọn thêm variant */
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          {qty > 0 && (
-                            <span className="co-qty-badge">{qty}</span>
-                          )}
+        {/* ─── Menu Content ─── */}
+        <div className="co-content">
+          {/* Menu Items */}
+          {groupedItems.map(({ catId, catName, items }) => (
+            <div
+              key={catId}
+              className="co-category-group"
+              data-cat-id={catId}
+              ref={el => { sectionRefs.current[catId] = el; }}
+            >
+              <h3 className="co-cat-title">{catName} ({items.length})</h3>
+              <div className={viewMode === 'grid' ? 'co-items-grid' : 'co-items-list'}>
+                {items.map(item => {
+                  const qty = getCartQty(item.id);
+                  return viewMode === 'list' ? (
+                    <div key={item.id} className="co-item-row" onClick={() => addToCart(item)} style={{ cursor: 'pointer' }}>
+                      <div className="co-item-img" style={{ position: 'relative' }}>
+                        {item.image_url ? (
+                          <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 100px, 150px" style={{ objectFit: 'cover' }} />
+                        ) : (
+                          <div className="co-item-placeholder"><ChefHat size={20} /></div>
+                        )}
+                      </div>
+                      <div className="co-item-info">
+                        <span className="co-item-name">{item.name}</span>
+                        {item.description ? (
+                          <span style={{ fontSize: '0.72rem', color: '#ea580c', lineHeight: 1.3, marginTop: 1, display: 'block' }}>{item.description}</span>
+                        ) : null}
+                        {promoConfig.enabled && item.counts_for_promotion && (
+                          <span style={{ fontSize: '0.68rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 6px', fontWeight: 600, marginTop: 2, alignSelf: 'flex-start' }}>🎯 Được Tính vào Khuyến Mãi</span>
+                        )}
+                        <span className="co-item-price">{getItemDisplayPrice(item)}</span>
+                      </div>
+                      <div className="co-item-action">
+                        {item.options && item.options.length > 0 ? (
+                          /* Có options: luôn cho bấm + để chọn thêm variant */
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {qty > 0 && (
+                              <span className="co-qty-badge">{qty}</span>
+                            )}
+                            <button className="co-add-btn" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
+                              <Plus size={18} />
+                            </button>
+                          </div>
+                        ) : qty > 0 ? (
+                          /* Không options: nút +/- bình thường */
+                          <div className="co-qty-control" onClick={(e) => e.stopPropagation()}>
+                            <button onClick={() => updateQuantity(item.id, -1, null)}><Minus size={14} /></button>
+                            <span>{qty}</span>
+                            <button onClick={() => updateQuantity(item.id, 1, null)}><Plus size={14} /></button>
+                          </div>
+                        ) : (
                           <button className="co-add-btn" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
                             <Plus size={18} />
                           </button>
-                        </div>
-                      ) : qty > 0 ? (
-                        /* Không options: nút +/- bình thường */
-                        <div className="co-qty-control" onClick={(e) => e.stopPropagation()}>
-                          <button onClick={() => updateQuantity(item.id, -1, null)}><Minus size={14} /></button>
-                          <span>{qty}</span>
-                          <button onClick={() => updateQuantity(item.id, 1, null)}><Plus size={14} /></button>
-                        </div>
-                      ) : (
-                        <button className="co-add-btn" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
-                          <Plus size={18} />
-                        </button>
-                      )}
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div key={item.id} className="co-item-card" onClick={() => addToCart(item)} style={{ cursor: 'pointer' }}>
-                    <div className="co-card-img" style={{ position: 'relative' }}>
-                      {item.image_url ? (
-                        <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 50vw, 33vw" style={{ objectFit: 'cover' }} />
-                      ) : (
-                        <div className="co-item-placeholder"><ChefHat size={24} /></div>
+                  ) : (
+                    <div key={item.id} className="co-item-card" onClick={() => addToCart(item)} style={{ cursor: 'pointer' }}>
+                      <div className="co-card-img" style={{ position: 'relative' }}>
+                        {item.image_url ? (
+                          <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 50vw, 33vw" style={{ objectFit: 'cover' }} />
+                        ) : (
+                          <div className="co-item-placeholder"><ChefHat size={24} /></div>
+                        )}
+                      </div>
+                      <span className="co-item-name">{item.name}</span>
+                      {item.description ? (
+                        <span style={{ fontSize: '0.7rem', color: '#ea580c', lineHeight: 1.3, marginTop: 1, display: 'block', padding: '0 4px' }}>{item.description}</span>
+                      ) : null}
+                      {promoConfig.enabled && item.counts_for_promotion && (
+                        <span style={{ fontSize: '0.65rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 5px', fontWeight: 600, display: 'block', marginBottom: 2 }}>🎯 Được Tính vào Khuyến Mãi</span>
                       )}
-                    </div>
-                    <span className="co-item-name">{item.name}</span>
-                    {item.description ? (
-                      <span style={{ fontSize: '0.7rem', color: '#ea580c', lineHeight: 1.3, marginTop: 1, display: 'block', padding: '0 4px' }}>{item.description}</span>
-                    ) : null}
-                    {promoConfig.enabled && item.counts_for_promotion && (
-                      <span style={{ fontSize: '0.65rem', color: '#b45309', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 5px', fontWeight: 600, display: 'block', marginBottom: 2 }}>🎯 Được Tính vào Khuyến Mãi</span>
-                    )}
-                    <div className="co-card-bottom">
-                      <span className="co-item-price">{getItemDisplayPrice(item)}</span>
-                      {item.options && item.options.length > 0 ? (
-                        /* Grid — có options */
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                          {qty > 0 && (
-                            <span className="co-qty-badge co-qty-badge--sm">{qty}</span>
-                          )}
+                      <div className="co-card-bottom">
+                        <span className="co-item-price">{getItemDisplayPrice(item)}</span>
+                        {item.options && item.options.length > 0 ? (
+                          /* Grid — có options */
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                            {qty > 0 && (
+                              <span className="co-qty-badge co-qty-badge--sm">{qty}</span>
+                            )}
+                            <button className="co-add-btn small" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
+                              <Plus size={14} />
+                            </button>
+                          </div>
+                        ) : qty > 0 ? (
+                          <div className="co-qty-control small" onClick={(e) => e.stopPropagation()}>
+                            <button onClick={() => updateQuantity(item.id, -1, null)}><Minus size={12} /></button>
+                            <span>{qty}</span>
+                            <button onClick={() => updateQuantity(item.id, 1, null)}><Plus size={12} /></button>
+                          </div>
+                        ) : (
                           <button className="co-add-btn small" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
                             <Plus size={14} />
                           </button>
-                        </div>
-                      ) : qty > 0 ? (
-                        <div className="co-qty-control small" onClick={(e) => e.stopPropagation()}>
-                          <button onClick={() => updateQuantity(item.id, -1, null)}><Minus size={12} /></button>
-                          <span>{qty}</span>
-                          <button onClick={() => updateQuantity(item.id, 1, null)}><Plus size={12} /></button>
-                        </div>
-                      ) : (
-                        <button className="co-add-btn small" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
-                          <Plus size={14} />
-                        </button>
-                      )}
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
 
-      {/* ─── Draggable Promotion Bubble (luôn hiện khi promo bật) ─── */}
-      {promoConfig.enabled && (
-        <DraggablePromoBubble
-          qualifyingQty={qualifyingQty}
-          threshold={promoConfig.threshold}
-          giftCount={giftCount}
-          availableGiftSlots={availableGiftSlots}
-          giftItems={giftItems}
-          promoEnabled={promoConfig.enabled}
-          onOpenGift={() => setShowGiftModal(true)}
-        />
-      )}
+        {/* ─── Draggable Promotion Bubble (luôn hiện khi promo bật) ─── */}
+        {promoConfig.enabled && (
+          <DraggablePromoBubble
+            qualifyingQty={qualifyingQty}
+            threshold={promoConfig.threshold}
+            giftCount={giftCount}
+            availableGiftSlots={availableGiftSlots}
+            giftItems={giftItems}
+            promoEnabled={promoConfig.enabled}
+            onOpenGift={() => setShowGiftModal(true)}
+          />
+        )}
 
-      {/* ─── Cart FAB ─── */}
-      <style>{`
+        {/* ─── Cart FAB ─── */}
+        <style>{`
         @keyframes co-cart-shimmer {
           0% { left: -100%; opacity: 0; }
           15% { opacity: 0.8; }
@@ -1741,565 +1741,567 @@ function OrderContent() {
           20% { transform: translateY(0) rotate(0); }
         }
       `}</style>
-      
-      {/* ─── Cart FAB (Split Design) ─── */}
-      {totalItems > 0 && (
-        <div style={{ 
-          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 90, 
-          maxWidth: 500, margin: '0 auto', 
-          padding: '12px 16px', paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))',
-          display: 'flex', gap: 12, pointerEvents: 'none', alignItems: 'stretch'
-        }}>
-          {/* Nút Chọn Lại */}
-          <button 
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowResetConfirm(true);
-            }}
-            style={{ 
-              pointerEvents: 'auto', flexShrink: 0,
-              background: 'white', color: '#ef4444', 
-              border: '2px solid #ef4444', borderRadius: '16px', 
-              padding: '0 8px',
-              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, 
-              cursor: 'pointer', boxShadow: '0 4px 14px rgba(239, 68, 68, 0.15)', transition: 'transform 0.1s'
-            }}
-          >
-            <RotateCcw size={18} strokeWidth={2.5} />
-            <span style={{ fontSize: '0.65rem', fontWeight: 900 }}>CHỌN LẠI</span>
-          </button>
 
-          {/* Nút Giỏ Hàng */}
-          <button 
-            onClick={() => setShowCart(true)}
-            style={{ 
-              pointerEvents: 'auto', flex: 1, minWidth: 0,
-              background: !showCart ? 'linear-gradient(135deg, #3b82f6, #2563eb)' : '#2563eb',
-              boxShadow: !showCart ? '0 6px 20px rgba(37, 99, 235, 0.45)' : '0 4px 14px rgba(37, 99, 235, 0.3)',
-              overflow: 'hidden', position: 'relative',
-              borderRadius: '16px', border: 'none', color: 'white', padding: '12px 16px',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, cursor: 'pointer'
-            }}
-          >
-            {!showCart && (
-              <div style={{
-                position: 'absolute', top: 0, left: 0, width: '60%', height: '100%',
-                background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent)',
-                transform: 'skewX(-20deg)', animation: 'co-cart-shimmer 3s infinite', pointerEvents: 'none'
-              }} />
-            )}
+        {/* ─── Cart FAB (Split Design) ─── */}
+        {totalItems > 0 && (
+          <div style={{
+            position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 90,
+            maxWidth: 500, margin: '0 auto',
+            padding: '12px 16px', paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))',
+            display: 'flex', gap: 12, pointerEvents: 'none', alignItems: 'stretch'
+          }}>
+            {/* Nút Chọn Lại */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowResetConfirm(true);
+              }}
+              style={{
+                pointerEvents: 'auto', flexShrink: 0,
+                background: 'white', color: '#ef4444',
+                border: '2px solid #ef4444', borderRadius: '16px',
+                padding: '0 8px',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4,
+                cursor: 'pointer', boxShadow: '0 4px 14px rgba(239, 68, 68, 0.15)', transition: 'transform 0.1s'
+              }}
+            >
+              <RotateCcw size={18} strokeWidth={2.5} />
+              <span style={{ fontSize: '0.65rem', fontWeight: 900 }}>CHỌN LẠI</span>
+            </button>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, position: 'relative', zIndex: 2, minWidth: 0 }}>
-              <div style={{ position: 'relative', animation: !showCart ? 'co-cart-attention 3s infinite 0.2s' : 'none' }}>
-                <ShoppingBag size={24} style={{ flexShrink: 0 }} />
-                {!showCart && <span style={{ position: 'absolute', top: -4, right: -4, width: 10, height: 10, background: '#fef3c7', borderRadius: '50%', boxShadow: '0 0 0 2px #2563eb' }} />}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
-                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '0.95rem', fontWeight: 800 }}>
-                  {(!showCart && (totalItems + giftCart.length) > 0) ? 'BẤM ĐỂ GỬI MÓN!' : 'Giỏ hàng'}
-                </span>
-                {!showCart && <span style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.9 }}>{totalItems + giftCart.length} món • Gửi ngay</span>}
-              </div>
-            </div>
-            
-            <strong style={{ position: 'relative', zIndex: 2, fontSize: '1.05rem', fontWeight: 900, flexShrink: 0 }}>{formatPrice(totalAmount)}</strong>
-          </button>
-        </div>
-      )}
-
-      {/* ─── Reset Confirm Modal ─── */}
-      {showResetConfirm && (
-        <div className="co-modal-overlay" onClick={() => setShowResetConfirm(false)} style={{ zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="co-info-modal" style={{ borderRadius: '24px', padding: '24px', margin: '0 20px', animation: 'coSlideUp 0.3s ease', maxWidth: '340px' }} onClick={e => e.stopPropagation()}>
-            <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-              <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: '#fee2e2', color: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-                <RotateCcw size={32} strokeWidth={2.5} />
-              </div>
-              <h3 style={{ fontSize: '1.25rem', fontWeight: 900, color: '#111827', margin: '0 0 8px' }}>Chọn lại từ đầu?</h3>
-              <p style={{ color: '#6b7280', fontSize: '0.9rem', fontWeight: 600, lineHeight: 1.5, margin: 0 }}>Toàn bộ món ăn và quà tặng đã chọn sẽ bị xóa. Bạn có chắc chắn muốn bắt đầu lại?</p>
-            </div>
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <button 
-                onClick={() => setShowResetConfirm(false)}
-                style={{ flex: 1, padding: '14px', background: '#f3f4f6', color: '#4b5563', border: 'none', borderRadius: '16px', fontSize: '0.95rem', fontWeight: 800, cursor: 'pointer' }}
-              >
-                Giữ lại
-              </button>
-              <button 
-                onClick={() => {
-                  setCart([]);
-                  setGiftCart([]);
-                  setShowResetConfirm(false);
-                }}
-                style={{ flex: 1, padding: '14px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '16px', fontSize: '0.95rem', fontWeight: 800, cursor: 'pointer', boxShadow: '0 4px 12px rgba(239, 68, 68, 0.3)' }}
-              >
-                Đồng ý xóa
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-
-      {/* ─── Gift Item Modal ─── */}
-      {showGiftModal && (
-        <div className="co-modal-overlay" onClick={() => setShowGiftModal(false)}>
-          <div className="co-info-modal" style={{ maxHeight: '80vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
-            <div className="co-info-header" style={{ paddingBottom: 12 }}>
-              <div style={{ fontSize: '2rem' }}>🎁</div>
-              <h2 style={{ fontSize: '1.1rem', margin: 0 }}>Chọn món tặng</h2>
-              <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: '#6b7280' }}>
-                Còn {availableGiftSlots} lượt chọn miễn phí
-              </p>
-            </div>
-            <div style={{ padding: '0 16px 16px' }}>
-              {giftItems.length === 0 ? (
-                <p style={{ textAlign: 'center', color: '#9ca3af', padding: 20 }}>Chưa có món tặng nào được cấu hình</p>
-              ) : giftItems.map(g => (
-                <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid #f3f4f6' }}>
-                  <div style={{ width: 48, height: 48, borderRadius: 8, background: '#f1f5f9', flexShrink: 0, overflow: 'hidden', position: 'relative' }}>
-                    {g.image_url
-                      ? <img src={g.image_url} alt={g.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem' }}>🍽️</div>}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{g.name}</div>
-                    <div style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 600 }}>Miễn phí 🎁</div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {(() => { const addedQty = giftCart.filter(x => x.id === g.id).length; return addedQty > 0 ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <button onClick={() => setGiftCart(prev => { const idx = prev.findLastIndex(x => x.id === g.id); return idx >= 0 ? prev.filter((_, i) => i !== idx) : prev; })} style={{ width: 28, height: 28, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '1rem', color: '#374151' }}>−</button>
-                        <span style={{ fontWeight: 700, minWidth: 18, textAlign: 'center', fontSize: '0.95rem' }}>{addedQty}</span>
-                      </div>
-                    ) : null; })()}
-                    <button
-                      disabled={availableGiftSlots === 0}
-                      onClick={() => {
-                        if (availableGiftSlots <= 0) return;
-                        if (g.options && g.options.length > 0) {
-                          setIsGiftMode(true);
-                          setOptionModal(g);
-                          setModalError('');
-                          const init = {};
-                          g.options.forEach(opt => {
-                            if (opt.choices && opt.choices.length > 0) init[opt.name] = opt.choices[0];
-                          });
-                          setSelectedOpts(init);
-                          setOptionQty(1);
-                          setOptNote('');
-                        } else {
-                          // Gửi thẳng vào DB, không cần qua giftCart
-                          submitGiftDirectly([{ id: g.id, name: g.name, price: 0, is_gift: true }]);
-                          setShowGiftModal(false);
-                        }
-                      }}
-                      style={{ background: availableGiftSlots > 0 ? '#16a34a' : '#e2e8f0', color: availableGiftSlots > 0 ? 'white' : '#94a3b8', border: 'none', borderRadius: 8, padding: '6px 14px', fontWeight: 700, fontSize: '0.82rem', cursor: availableGiftSlots > 0 ? 'pointer' : 'not-allowed' }}>
-                      + Thêm
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <button onClick={() => setShowGiftModal(false)} style={{ width: '100%', padding: '11px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>
-                Đóng
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ─── Order Success Toast ─── */}
-      {orderSuccess && (
-        <div className="co-success-toast">
-          ✅ Đã gửi đơn hàng thành công!
-        </div>
-      )}
-
-      {/* ─── Gift Lost Toast ─── */}
-      {giftLostToast && (
-        <div className="co-success-toast" style={{ background: '#92400e', borderColor: '#fbbf24' }}>
-          ⚠️ Bạn đã xóa bớt món — món tặng đã bị hủy do không đủ số lượng!
-        </div>
-      )}
-
-      {/* ─── Admin Unlock Toast (Admin thêm món → khách đủ điều kiện nhận quà) ─── */}
-      {adminUnlockToast && (
-        <div
-          className="co-success-toast"
-          style={{
-            background: 'linear-gradient(135deg, #15803d, #166534)',
-            borderColor: '#4ade80',
-            cursor: 'pointer',
-            animation: 'co-cart-bounce 0.4s ease'
-          }}
-          onClick={() => { setAdminUnlockToast(false); setShowGiftModal(true); }}
-        >
-          🎁 <b>Chúc mừng!</b> Bạn đã đủ điều kiện nhận món tặng miễn phí! Nhấn vào đây để chọn quà →
-        </div>
-      )}
-
-      {/* ─── Order Paid Banner ─── */}
-      {orderPaid && (
-        <div className="co-cancelled-banner" style={{ background: 'linear-gradient(135deg,#052e16,#14532d)', borderColor: '#16a34a' }}>
-          <div className="co-cancelled-icon">✅</div>
-          <div className="co-cancelled-text">
-            <strong style={{ color: '#4ade80' }}>Thanh toán thành công!</strong>
-            <span style={{ color: '#86efac' }}>
-              Cảm ơn quý khách đã ủng hộ nhà hàng 🙏
-              {orderPaid.total > 0 && (
-                <b style={{ display: 'block', fontSize: '1.1rem', color: 'white', marginTop: 4 }}>
-                  {orderPaid.total.toLocaleString('vi-VN')} đ
-                </b>
+            {/* Nút Giỏ Hàng */}
+            <button
+              onClick={() => setShowCart(true)}
+              style={{
+                pointerEvents: 'auto', flex: 1, minWidth: 0,
+                background: !showCart ? 'linear-gradient(135deg, #3b82f6, #2563eb)' : '#2563eb',
+                boxShadow: !showCart ? '0 6px 20px rgba(37, 99, 235, 0.45)' : '0 4px 14px rgba(37, 99, 235, 0.3)',
+                overflow: 'hidden', position: 'relative',
+                borderRadius: '16px', border: 'none', color: 'white', padding: '12px 16px',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, cursor: 'pointer'
+              }}
+            >
+              {!showCart && (
+                <div style={{
+                  position: 'absolute', top: 0, left: 0, width: '60%', height: '100%',
+                  background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent)',
+                  transform: 'skewX(-20deg)', animation: 'co-cart-shimmer 3s infinite', pointerEvents: 'none'
+                }} />
               )}
-            </span>
-          </div>
-          <button
-            className="co-cancelled-restart"
-            style={{ background: '#16a34a', borderColor: '#16a34a' }}
-            onClick={() => setOrderPaid(null)}
-          >
-            Đóng
-          </button>
-        </div>
-      )}
 
-      {/* ─── Order Cancelled Banner ─── */}
-      {orderCancelled && (
-        <div className="co-cancelled-banner">
-          <div className="co-cancelled-icon">🗑️</div>
-          <div className="co-cancelled-text">
-            <strong>Đơn hàng đã bị hủy</strong>
-            <span>Nhà hàng đã hủy toàn bộ đơn của bàn này.</span>
-          </div>
-          <button
-            className="co-cancelled-restart"
-            onClick={() => {
-              setOrderCancelled(false);
-              setShowInfoModal(true);
-            }}
-          >
-            Đặt lại
-          </button>
-        </div>
-      )}
-
-      {/* ─── Option Selection Modal ─── */}
-      {optionModal && (
-        <div className="co-modal-overlay" onClick={() => setOptionModal(null)}>
-          <div className="co-sheet" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh' }}>
-            <div className="co-sheet-handle" />
-            <div className="co-sheet-header">
-              <div>
-                <div style={{ fontWeight: 700, fontSize: '1.05rem', display: 'flex', alignItems: 'center' }}>
-                  {optionModal.name} {isGiftMode && <span style={{fontSize: '0.75rem', color: '#16a34a', background: '#dcfce7', padding: '2px 6px', borderRadius: 4, marginLeft: 8}}>🎁 Món Tặng</span>}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, position: 'relative', zIndex: 2, minWidth: 0 }}>
+                <div style={{ position: 'relative', animation: !showCart ? 'co-cart-attention 3s infinite 0.2s' : 'none' }}>
+                  <ShoppingBag size={24} style={{ flexShrink: 0 }} />
+                  {!showCart && <span style={{ position: 'absolute', top: -4, right: -4, width: 10, height: 10, background: '#fef3c7', borderRadius: '50%', boxShadow: '0 0 0 2px #2563eb' }} />}
                 </div>
-                {optionModal.description ? (
-                  <div style={{ fontSize: '0.78rem', color: '#ea580c', marginTop: 2, lineHeight: 1.4 }}>{optionModal.description}</div>
-                ) : null}
-                <div style={{ color: isGiftMode ? '#16a34a' : '#2563eb', fontWeight: 700, fontSize: '1rem', marginTop: 2 }}>
-                  {isGiftMode ? 'Miễn phí — 0đ' : `${computeModalPrice(optionModal.price, optionModal.options, selectedOpts).toLocaleString('vi-VN')}đ`}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
+                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '0.95rem', fontWeight: 800 }}>
+                    {(!showCart && (totalItems + giftCart.length) > 0) ? 'BẤM ĐỂ GỬI MÓN!' : 'Giỏ hàng'}
+                  </span>
+                  {!showCart && <span style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.9 }}>{totalItems + giftCart.length} món • Gửi ngay</span>}
                 </div>
               </div>
-              <button onClick={() => setOptionModal(null)}><X size={20} /></button>
+
+              <strong style={{ position: 'relative', zIndex: 2, fontSize: '1.05rem', fontWeight: 900, flexShrink: 0 }}>{formatPrice(totalAmount)}</strong>
+            </button>
+          </div>
+        )}
+
+        {/* ─── Reset Confirm Modal ─── */}
+        {showResetConfirm && (
+          <div className="co-modal-overlay" onClick={() => setShowResetConfirm(false)} style={{ zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div className="co-info-modal" style={{ borderRadius: '24px', padding: '24px', margin: '0 20px', animation: 'coSlideUp 0.3s ease', maxWidth: '340px' }} onClick={e => e.stopPropagation()}>
+              <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+                <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: '#fee2e2', color: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                  <RotateCcw size={32} strokeWidth={2.5} />
+                </div>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 900, color: '#111827', margin: '0 0 8px' }}>Chọn lại từ đầu?</h3>
+                <p style={{ color: '#6b7280', fontSize: '0.9rem', fontWeight: 600, lineHeight: 1.5, margin: 0 }}>Toàn bộ món ăn và quà tặng đã chọn sẽ bị xóa. Bạn có chắc chắn muốn bắt đầu lại?</p>
+              </div>
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button
+                  onClick={() => setShowResetConfirm(false)}
+                  style={{ flex: 1, padding: '14px', background: '#f3f4f6', color: '#4b5563', border: 'none', borderRadius: '16px', fontSize: '0.95rem', fontWeight: 800, cursor: 'pointer' }}
+                >
+                  Giữ lại
+                </button>
+                <button
+                  onClick={() => {
+                    setCart([]);
+                    setGiftCart([]);
+                    setShowResetConfirm(false);
+                  }}
+                  style={{ flex: 1, padding: '14px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '16px', fontSize: '0.95rem', fontWeight: 800, cursor: 'pointer', boxShadow: '0 4px 12px rgba(239, 68, 68, 0.3)' }}
+                >
+                  Đồng ý xóa
+                </button>
+              </div>
             </div>
-            <div className="co-sheet-body">
-              {optionModal.options.map((opt, oi) => (
-                <div key={oi} style={{ marginBottom: 10, marginTop: oi === 0 ? 0 : 4 }}>
+          </div>
+        )}
+
+
+        {/* ─── Gift Item Modal ─── */}
+        {showGiftModal && (
+          <div className="co-modal-overlay" onClick={() => setShowGiftModal(false)}>
+            <div className="co-info-modal" style={{ maxHeight: '80vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+              <div className="co-info-header" style={{ paddingBottom: 12 }}>
+                <div style={{ fontSize: '2rem' }}>🎁</div>
+                <h2 style={{ fontSize: '1.1rem', margin: 0 }}>Chọn món tặng</h2>
+                <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: '#6b7280' }}>
+                  Còn {availableGiftSlots} lượt chọn miễn phí
+                </p>
+              </div>
+              <div style={{ padding: '0 16px 16px' }}>
+                {giftItems.length === 0 ? (
+                  <p style={{ textAlign: 'center', color: '#9ca3af', padding: 20 }}>Chưa có món tặng nào được cấu hình</p>
+                ) : giftItems.map(g => (
+                  <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid #f3f4f6' }}>
+                    <div style={{ width: 48, height: 48, borderRadius: 8, background: '#f1f5f9', flexShrink: 0, overflow: 'hidden', position: 'relative' }}>
+                      {g.image_url
+                        ? <img src={g.image_url} alt={g.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem' }}>🍽️</div>}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{g.name}</div>
+                      <div style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 600 }}>Miễn phí 🎁</div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {(() => {
+                        const addedQty = giftCart.filter(x => x.id === g.id).length; return addedQty > 0 ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <button onClick={() => setGiftCart(prev => { const idx = prev.findLastIndex(x => x.id === g.id); return idx >= 0 ? prev.filter((_, i) => i !== idx) : prev; })} style={{ width: 28, height: 28, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '1rem', color: '#374151' }}>−</button>
+                            <span style={{ fontWeight: 700, minWidth: 18, textAlign: 'center', fontSize: '0.95rem' }}>{addedQty}</span>
+                          </div>
+                        ) : null;
+                      })()}
+                      <button
+                        disabled={availableGiftSlots === 0}
+                        onClick={() => {
+                          if (availableGiftSlots <= 0) return;
+                          if (g.options && g.options.length > 0) {
+                            setIsGiftMode(true);
+                            setOptionModal(g);
+                            setModalError('');
+                            const init = {};
+                            g.options.forEach(opt => {
+                              if (opt.choices && opt.choices.length > 0) init[opt.name] = opt.choices[0];
+                            });
+                            setSelectedOpts(init);
+                            setOptionQty(1);
+                            setOptNote('');
+                          } else {
+                            // Chỉ thêm vào giftCart local, gửi cùng đơn khi bấm Gửi đơn hàng
+                            setGiftCart(prev => [...prev, { id: g.id, name: g.name, price: 0, is_gift: true }]);
+                            setShowGiftModal(false);
+                          }
+                        }}
+                        style={{ background: availableGiftSlots > 0 ? '#16a34a' : '#e2e8f0', color: availableGiftSlots > 0 ? 'white' : '#94a3b8', border: 'none', borderRadius: 8, padding: '6px 14px', fontWeight: 700, fontSize: '0.82rem', cursor: availableGiftSlots > 0 ? 'pointer' : 'not-allowed' }}>
+                        + Thêm
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <button onClick={() => setShowGiftModal(false)} style={{ width: '100%', padding: '11px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>
+                  Đóng
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Order Success Toast ─── */}
+        {orderSuccess && (
+          <div className="co-success-toast">
+            ✅ Đã gửi đơn hàng thành công!
+          </div>
+        )}
+
+        {/* ─── Gift Lost Toast ─── */}
+        {giftLostToast && (
+          <div className="co-success-toast" style={{ background: '#92400e', borderColor: '#fbbf24' }}>
+            ⚠️ Bạn đã xóa bớt món — món tặng đã bị hủy do không đủ số lượng!
+          </div>
+        )}
+
+        {/* ─── Admin Unlock Toast (Admin thêm món → khách đủ điều kiện nhận quà) ─── */}
+        {adminUnlockToast && (
+          <div
+            className="co-success-toast"
+            style={{
+              background: 'linear-gradient(135deg, #15803d, #166534)',
+              borderColor: '#4ade80',
+              cursor: 'pointer',
+              animation: 'co-cart-bounce 0.4s ease'
+            }}
+            onClick={() => { setAdminUnlockToast(false); setShowGiftModal(true); }}
+          >
+            🎁 <b>Chúc mừng!</b> Bạn đã đủ điều kiện nhận món tặng miễn phí! Nhấn vào đây để chọn quà →
+          </div>
+        )}
+
+        {/* ─── Order Paid Banner ─── */}
+        {orderPaid && (
+          <div className="co-cancelled-banner" style={{ background: 'linear-gradient(135deg,#052e16,#14532d)', borderColor: '#16a34a' }}>
+            <div className="co-cancelled-icon">✅</div>
+            <div className="co-cancelled-text">
+              <strong style={{ color: '#4ade80' }}>Thanh toán thành công!</strong>
+              <span style={{ color: '#86efac' }}>
+                Cảm ơn quý khách đã ủng hộ nhà hàng 🙏
+                {orderPaid.total > 0 && (
+                  <b style={{ display: 'block', fontSize: '1.1rem', color: 'white', marginTop: 4 }}>
+                    {orderPaid.total.toLocaleString('vi-VN')} đ
+                  </b>
+                )}
+              </span>
+            </div>
+            <button
+              className="co-cancelled-restart"
+              style={{ background: '#16a34a', borderColor: '#16a34a' }}
+              onClick={() => setOrderPaid(null)}
+            >
+              Đóng
+            </button>
+          </div>
+        )}
+
+        {/* ─── Order Cancelled Banner ─── */}
+        {orderCancelled && (
+          <div className="co-cancelled-banner">
+            <div className="co-cancelled-icon">🗑️</div>
+            <div className="co-cancelled-text">
+              <strong>Đơn hàng đã bị hủy</strong>
+              <span>Nhà hàng đã hủy toàn bộ đơn của bàn này.</span>
+            </div>
+            <button
+              className="co-cancelled-restart"
+              onClick={() => {
+                setOrderCancelled(false);
+                setShowInfoModal(true);
+              }}
+            >
+              Đặt lại
+            </button>
+          </div>
+        )}
+
+        {/* ─── Option Selection Modal ─── */}
+        {optionModal && (
+          <div className="co-modal-overlay" onClick={() => setOptionModal(null)}>
+            <div className="co-sheet" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh' }}>
+              <div className="co-sheet-handle" />
+              <div className="co-sheet-header">
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '1.05rem', display: 'flex', alignItems: 'center' }}>
+                    {optionModal.name} {isGiftMode && <span style={{ fontSize: '0.75rem', color: '#16a34a', background: '#dcfce7', padding: '2px 6px', borderRadius: 4, marginLeft: 8 }}>🎁 Món Tặng</span>}
+                  </div>
+                  {optionModal.description ? (
+                    <div style={{ fontSize: '0.78rem', color: '#ea580c', marginTop: 2, lineHeight: 1.4 }}>{optionModal.description}</div>
+                  ) : null}
+                  <div style={{ color: isGiftMode ? '#16a34a' : '#2563eb', fontWeight: 700, fontSize: '1rem', marginTop: 2 }}>
+                    {isGiftMode ? 'Miễn phí — 0đ' : `${computeModalPrice(optionModal.price, optionModal.options, selectedOpts).toLocaleString('vi-VN')}đ`}
+                  </div>
+                </div>
+                <button onClick={() => setOptionModal(null)}><X size={20} /></button>
+              </div>
+              <div className="co-sheet-body">
+                {optionModal.options.map((opt, oi) => (
+                  <div key={oi} style={{ marginBottom: 10, marginTop: oi === 0 ? 0 : 4 }}>
+                    <div style={{
+                      fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
+                      letterSpacing: '0.06em', color: '#1d4ed8',
+                      background: '#eff6ff', borderLeft: '3px solid #2563eb',
+                      padding: '3px 8px', borderRadius: '5px',
+                      display: 'inline-block', marginBottom: 6
+                    }}>{opt.name}</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0px' }}>
+                      {opt.choices.map((choice, ci) => {
+                        const p = opt.prices?.[ci];
+                        const hasPrice = p !== null && p !== '';
+                        const displayPrice = hasPrice ? Number(p) : 0;
+                        const isMulti = opt.name.toLowerCase().includes('khẩu vị') || opt.name.toLowerCase().includes('thêm') || opt.name.toLowerCase().includes('topping');
+                        const active = isMulti ? (selectedOpts[opt.name] || []).includes(choice) : selectedOpts[opt.name] === choice;
+                        return (
+                          <button key={ci} onClick={() => {
+                            if (isMulti) {
+                              const currentArr = selectedOpts[opt.name] || [];
+                              if (currentArr.includes(choice)) {
+                                setSelectedOpts({ ...selectedOpts, [opt.name]: currentArr.filter(c => c !== choice) });
+                              } else {
+                                setSelectedOpts({ ...selectedOpts, [opt.name]: [...currentArr, choice] });
+                              }
+                            } else {
+                              setSelectedOpts({ ...selectedOpts, [opt.name]: choice });
+                              if (hasPrice) setChoicePrice(Number(p));
+                            }
+                          }} style={{
+                            padding: '6px 4px',
+                            border: 'none',
+                            background: 'transparent',
+                            color: active ? '#1d4ed8' : '#4b5563',
+                            fontWeight: active ? 700 : 500,
+                            fontSize: '0.85rem', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', gap: '8px',
+                            transition: 'all 0.2s ease',
+                            textAlign: 'left',
+                            width: '100%',
+                            borderBottom: ci < opt.choices.length - 1 ? '1px solid #f3f4f6' : 'none',
+                          }}>
+                            {/* Radio/Check circle */}
+                            <div style={{
+                              width: 16, height: 16, borderRadius: isMulti ? '4px' : '50%', flexShrink: 0,
+                              border: active ? '4.5px solid #2563eb' : '1.5px solid #d1d5db',
+                              background: (active && isMulti) ? '#2563eb' : 'white',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              transition: 'all 0.2s ease'
+                            }}>
+                              {active && isMulti && <span style={{ color: 'white', fontSize: '10px', fontWeight: 'bold' }}>✓</span>}
+                            </div>
+
+                            <span style={{ flex: 1, lineHeight: 1.25 }}>{choice}</span>
+
+                            {hasPrice && Number(p) > 0 ? (
+                              <span style={{
+                                fontSize: '0.72rem',
+                                color: active ? '#1e40af' : '#6b7280',
+                                fontWeight: 700
+                              }}>
+                                +{displayPrice.toLocaleString('vi-VN')}đ
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                <div style={{ marginBottom: 16, marginTop: 4 }}>
                   <div style={{
                     fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
                     letterSpacing: '0.06em', color: '#1d4ed8',
                     background: '#eff6ff', borderLeft: '3px solid #2563eb',
                     padding: '3px 8px', borderRadius: '5px',
-                    display: 'inline-block', marginBottom: 6
-                  }}>{opt.name}</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0px' }}>
-                    {opt.choices.map((choice, ci) => {
-                      const p = opt.prices?.[ci];
-                      const hasPrice = p !== null && p !== '';
-                      const displayPrice = hasPrice ? Number(p) : 0;
-                      const isMulti = opt.name.toLowerCase().includes('khẩu vị') || opt.name.toLowerCase().includes('thêm') || opt.name.toLowerCase().includes('topping');
-                      const active = isMulti ? (selectedOpts[opt.name] || []).includes(choice) : selectedOpts[opt.name] === choice;
-                      return (
-                        <button key={ci} onClick={() => {
-                          if (isMulti) {
-                            const currentArr = selectedOpts[opt.name] || [];
-                            if (currentArr.includes(choice)) {
-                              setSelectedOpts({ ...selectedOpts, [opt.name]: currentArr.filter(c => c !== choice) });
-                            } else {
-                              setSelectedOpts({ ...selectedOpts, [opt.name]: [...currentArr, choice] });
-                            }
-                          } else {
-                            setSelectedOpts({ ...selectedOpts, [opt.name]: choice });
-                            if (hasPrice) setChoicePrice(Number(p));
-                          }
-                        }} style={{
-                          padding: '6px 4px', 
-                          border: 'none',
-                          background: 'transparent',
-                          color: active ? '#1d4ed8' : '#4b5563',
-                          fontWeight: active ? 700 : 500,
-                          fontSize: '0.85rem', cursor: 'pointer',
-                          display: 'flex', alignItems: 'center', gap: '8px',
-                          transition: 'all 0.2s ease',
-                          textAlign: 'left',
-                          width: '100%',
-                          borderBottom: ci < opt.choices.length - 1 ? '1px solid #f3f4f6' : 'none',
-                        }}>
-                          {/* Radio/Check circle */}
-                          <div style={{
-                            width: 16, height: 16, borderRadius: isMulti ? '4px' : '50%', flexShrink: 0,
-                            border: active ? '4.5px solid #2563eb' : '1.5px solid #d1d5db',
-                            background: (active && isMulti) ? '#2563eb' : 'white',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            transition: 'all 0.2s ease'
-                          }}>
-                             {active && isMulti && <span style={{ color: 'white', fontSize: '10px', fontWeight: 'bold' }}>✓</span>}
-                          </div>
-                          
-                          <span style={{ flex: 1, lineHeight: 1.25 }}>{choice}</span>
-                          
-                          {hasPrice && Number(p) > 0 ? (
-                            <span style={{ 
-                              fontSize: '0.72rem', 
-                              color: active ? '#1e40af' : '#6b7280',
-                              fontWeight: 700
-                            }}>
-                              +{displayPrice.toLocaleString('vi-VN')}đ
-                            </span>
-                          ) : null}
-                        </button>
-                      );
-                    })}
+                    display: 'inline-block', marginBottom: 8
+                  }}>Ghi chú</div>
+                  <input
+                    className="co-input"
+                    placeholder="Thêm ghi chú cho nhà bếp..."
+                    value={optNote}
+                    onChange={e => setOptNote(e.target.value)}
+                    style={{ borderRadius: 10, padding: '10px 14px' }}
+                  />
+                </div>
+                {modalError && (
+                  <div style={{ color: '#dc2626', fontSize: '0.85rem', textAlign: 'center', marginBottom: 12, fontWeight: 500, background: '#fef2f2', padding: '6px', borderRadius: '8px' }}>
+                    {modalError}
                   </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 24, marginBottom: 8 }}>
+                  <button onClick={() => { setOptionQty(Math.max(1, optionQty - 1)); setModalError(''); }} style={{ width: 36, height: 36, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={18} /></button>
+                  <span style={{ fontWeight: 700, fontSize: '1.1rem', minWidth: 24, textAlign: 'center' }}>{optionQty}</span>
+                  <button onClick={() => { setOptionQty(optionQty + 1); setModalError(''); }} style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={18} /></button>
                 </div>
-              ))}
-              <div style={{ marginBottom: 16, marginTop: 4 }}>
-                <div style={{
-                  fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
-                  letterSpacing: '0.06em', color: '#1d4ed8',
-                  background: '#eff6ff', borderLeft: '3px solid #2563eb',
-                  padding: '3px 8px', borderRadius: '5px',
-                  display: 'inline-block', marginBottom: 8
-                }}>Ghi chú</div>
-                <input
-                  className="co-input"
-                  placeholder="Thêm ghi chú cho nhà bếp..."
-                  value={optNote}
-                  onChange={e => setOptNote(e.target.value)}
-                  style={{ borderRadius: 10, padding: '10px 14px' }}
-                />
               </div>
-              {modalError && (
-                <div style={{ color: '#dc2626', fontSize: '0.85rem', textAlign: 'center', marginBottom: 12, fontWeight: 500, background: '#fef2f2', padding: '6px', borderRadius: '8px' }}>
-                  {modalError}
-                </div>
-              )}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 24, marginBottom: 8 }}>
-                <button onClick={() => { setOptionQty(Math.max(1, optionQty - 1)); setModalError(''); }} style={{ width: 36, height: 36, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={18} /></button>
-                <span style={{ fontWeight: 700, fontSize: '1.1rem', minWidth: 24, textAlign: 'center' }}>{optionQty}</span>
-                <button onClick={() => { setOptionQty(optionQty + 1); setModalError(''); }} style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={18} /></button>
+              <div className="co-sheet-footer">
+                <button className="co-btn-submit" onClick={confirmOptionAdd} style={isGiftMode ? { background: '#16a34a' } : {}}>
+                  {isGiftMode ? 'Thêm món tặng • 0đ' : `Thêm vào giỏ • ${(computeModalPrice(optionModal.price, optionModal.options, selectedOpts) * optionQty).toLocaleString('vi-VN')}đ`}
+                </button>
               </div>
-            </div>
-            <div className="co-sheet-footer">
-              <button className="co-btn-submit" onClick={confirmOptionAdd} style={isGiftMode ? { background: '#16a34a' } : {}}>
-                {isGiftMode ? 'Thêm món tặng • 0đ' : `Thêm vào giỏ • ${(computeModalPrice(optionModal.price, optionModal.options, selectedOpts) * optionQty).toLocaleString('vi-VN')}đ`}
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* ─── Cart Sheet ─── */}
-      {showCart && (
-        <div className="co-modal-overlay" onClick={() => setShowCart(false)}>
-          <div className="co-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="co-sheet-handle" />
-            <div className="co-sheet-header">
-              <h3>Giỏ hàng ({totalItems} món)</h3>
-              <button onClick={() => setShowCart(false)}><X size={20} /></button>
-            </div>
-            <div className="co-sheet-body">
-              {[...cart].sort((a, b) => a.name.localeCompare(b.name, 'vi')).map((item, idx) => (
-                <div key={item._optionKey || item.id + '-' + idx} className="co-cart-item">
-                  <div className="co-cart-item-info">
-                    <strong>{item.name}</strong>
-                    {/* Hiển thị khẩu vị / options đã chọn */}
-                    {item._options && item._options.length > 0 && (
-                      <span className="co-cart-item-opts">
-                        {item._options.map(o => o.choice).join(' · ')}
-                      </span>
-                    )}
-                    {item._note && (
-                      <span className="co-cart-item-note">📝 {item._note}</span>
-                    )}
-                    <span className="co-cart-item-price">{formatPrice(item.price)}</span>
-                  </div>
-                  <div className="co-qty-control">
-                    <button onClick={() => updateQuantity(item._optionKey || item.id, -1, item._optionKey)}><Minus size={14} /></button>
-                    <span>{item.quantity}</span>
-                    <button onClick={() => updateQuantity(item._optionKey || item.id, 1, item._optionKey)}><Plus size={14} /></button>
-                  </div>
-                </div>
-              ))}
-              {/* Gift items in cart */}
-              {giftCart.length > 0 && (
-                <div style={{ borderTop: '1.5px dashed #86efac', marginTop: 8, paddingTop: 8 }}>
-                  <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#15803d', marginBottom: 6 }}>🎁 Món tặng miễn phí</div>
-                  {giftCart.map((g, idx) => (
-                    <div key={idx} className="co-cart-item" style={{ background: '#f0fdf4', borderRadius: 8, padding: '6px 10px', marginBottom: 4 }}>
-                      <div className="co-cart-item-info">
-                        <strong style={{ color: '#15803d' }}>{g.name}</strong>
-                        {g._options && g._options.length > 0 && (
-                          <span className="co-cart-item-opts" style={{ color: '#16a34a', opacity: 0.9 }}>
-                            {g._options.map(o => o.choice).join(' · ')}
-                          </span>
-                        )}
-                        {g._note && (
-                          <span className="co-cart-item-note" style={{ color: '#15803d', opacity: 0.9 }}>📝 {g._note}</span>
-                        )}
-                        <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 700, marginTop: 2, display: 'block' }}>🎁 Miễn phí — 0đ</span>
-                      </div>
-                      <button onClick={() => setGiftCart(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 4 }}>
-                        <X size={14} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="co-sheet-footer" style={{ position: 'relative' }}>
-              <div className="co-cart-total">
-                <span>Tổng cộng</span>
-                <strong>{formatPrice(totalAmount)}</strong>
+        {/* ─── Cart Sheet ─── */}
+        {showCart && (
+          <div className="co-modal-overlay" onClick={() => setShowCart(false)}>
+            <div className="co-sheet" onClick={(e) => e.stopPropagation()}>
+              <div className="co-sheet-handle" />
+              <div className="co-sheet-header">
+                <h3>Giỏ hàng ({totalItems} món)</h3>
+                <button onClick={() => setShowCart(false)}><X size={20} /></button>
               </div>
-
-              {cart.length > 0 && !submitting && (
-                <div style={{ position: 'absolute', top: '-38px', left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none', zIndex: 10 }}>
-                  <div style={{ background: '#ea580c', color: 'white', padding: '6px 16px', borderRadius: '24px', fontSize: '0.85rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 4px 12px rgba(234, 88, 12, 0.4)', animation: 'bounce-pointer 1.2s infinite' }}>
-                    👇 Nhớ bấm Gửi đơn để bếp làm nhé!
-                  </div>
-                </div>
-              )}
-
-              <button
-                className="co-btn-submit"
-                onClick={submitOrder}
-                disabled={submitting}
-                style={{ position: 'relative', zIndex: 1, boxShadow: cart.length > 0 ? '0 4px 15px rgba(37, 99, 235, 0.35)' : 'none', animation: cart.length > 0 ? 'co-gift-pulse 2.5s infinite' : 'none' }}
-              >
-                <Send size={18} />
-                {submitting ? 'Đang gửi...' : 'Gửi đơn hàng'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ─── Previous Orders Sheet ─── */}
-      {showOrdered && (
-        <div className="co-modal-overlay" onClick={() => setShowOrdered(false)}>
-          <div className="co-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="co-sheet-handle" />
-            <div className="co-sheet-header">
-              <h3>Món đã gọi</h3>
-              <button onClick={() => setShowOrdered(false)}><X size={20} /></button>
-            </div>
-            <div className="co-sheet-body">
-              {previousOrders.length > 0 ? (
-                previousOrders.map(order => (
-                  <div key={order.id} className="co-prev-order">
-                    <div className="co-prev-header">
-                      <div className="co-prev-time">
-                        <Clock size={14} />
-                        {new Date(order.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
-                        <span className="co-prev-name">
-                          • {order.customer_name || 'Admin'}
-                          {order.status === 'merged' && <span style={{ fontSize: '0.65rem', background: '#ede9fe', color: '#7c3aed', borderRadius: 4, padding: '0 4px', marginLeft: 4, fontWeight: 700 }}>Đã gộp</span>}
+              <div className="co-sheet-body">
+                {[...cart].sort((a, b) => a.name.localeCompare(b.name, 'vi')).map((item, idx) => (
+                  <div key={item._optionKey || item.id + '-' + idx} className="co-cart-item">
+                    <div className="co-cart-item-info">
+                      <strong>{item.name}</strong>
+                      {/* Hiển thị khẩu vị / options đã chọn */}
+                      {item._options && item._options.length > 0 && (
+                        <span className="co-cart-item-opts">
+                          {item._options.map(o => o.choice).join(' · ')}
                         </span>
-                      </div>
-                      {(() => {
-                        let text = "";
-                        let statusClass = `co-status-${order.status}`;
-                        let customStyle = {};
-
-                        if (order.status === 'pending') {
-                          const pJobs = order.print_jobs || [];
-                          const failed = pJobs.find(j => j.status === 'failed');
-                          const done = pJobs.find(j => j.status === 'done');
-                          
-                          if (failed) {
-                            text = "Bếp chưa nhận Bill! Gọi NV duyệt";
-                            statusClass = "co-status-failed";
-                            customStyle = { background: '#fef2f2', color: '#b91c1c', border: '1px solid #fca5a5' };
-                          } else if (done) {
-                            text = "Bếp đã nhận Bill";
-                            statusClass = "co-status-preparing";
-                            customStyle = { background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0' };
-                          } else {
-                            text = "Đang gửi bill vào bếp...";
-                            statusClass = "co-status-pending";
-                          }
-                        } else if (order.status === 'merged') {
-                          text = 'Đã gộp vào bill chính';
-                          customStyle = { background: '#f5f3ff', color: '#7c3aed', border: '1px solid #c4b5fd' };
-                        } else {
-                          text = order.status === 'preparing' ? 'Đang làm' :
-                                 order.status === 'completed' ? 'Hoàn thành' : 'Đã thanh toán';
-                        }
-                        
-                        return (
-                          <span className={`co-status ${statusClass}`} style={customStyle}>
-                            {text}
-                          </span>
-                        );
-                      })()}
+                      )}
+                      {item._note && (
+                        <span className="co-cart-item-note">📝 {item._note}</span>
+                      )}
+                      <span className="co-cart-item-price">{formatPrice(item.price)}</span>
                     </div>
-                    {order.order_items?.map(oi => (
-                      <div key={oi.id} className="co-prev-item">
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                            {oi.quantity}x {oi.menu_item?.name || '—'}
-                            {oi.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>🎁 Món Tặng</span>}
-                          </span>
-                          {oi.item_options && oi.item_options.length > 0 && (
-                            <span className="co-prev-item-opts">
-                              {oi.item_options.map(o => o.choice).join(' · ')}
+                    <div className="co-qty-control">
+                      <button onClick={() => updateQuantity(item._optionKey || item.id, -1, item._optionKey)}><Minus size={14} /></button>
+                      <span>{item.quantity}</span>
+                      <button onClick={() => updateQuantity(item._optionKey || item.id, 1, item._optionKey)}><Plus size={14} /></button>
+                    </div>
+                  </div>
+                ))}
+                {/* Gift items in cart */}
+                {giftCart.length > 0 && (
+                  <div style={{ borderTop: '1.5px dashed #86efac', marginTop: 8, paddingTop: 8 }}>
+                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#15803d', marginBottom: 6 }}>🎁 Món tặng miễn phí</div>
+                    {giftCart.map((g, idx) => (
+                      <div key={idx} className="co-cart-item" style={{ background: '#f0fdf4', borderRadius: 8, padding: '6px 10px', marginBottom: 4 }}>
+                        <div className="co-cart-item-info">
+                          <strong style={{ color: '#15803d' }}>{g.name}</strong>
+                          {g._options && g._options.length > 0 && (
+                            <span className="co-cart-item-opts" style={{ color: '#16a34a', opacity: 0.9 }}>
+                              {g._options.map(o => o.choice).join(' · ')}
                             </span>
                           )}
-                          {oi.note && (
-                            <span className="co-prev-item-note">📝 {oi.note}</span>
+                          {g._note && (
+                            <span className="co-cart-item-note" style={{ color: '#15803d', opacity: 0.9 }}>📝 {g._note}</span>
                           )}
+                          <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 700, marginTop: 2, display: 'block' }}>🎁 Miễn phí — 0đ</span>
                         </div>
-                        <span style={{ color: oi.is_gift ? '#16a34a' : undefined, fontWeight: oi.is_gift ? 700 : undefined }}>
-                          {oi.is_gift ? '0đ' : formatPrice(oi.unit_price * oi.quantity)}
-                        </span>
+                        <button onClick={() => setGiftCart(prev => prev.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 4 }}>
+                          <X size={14} />
+                        </button>
                       </div>
                     ))}
-                    <div className="co-prev-footer">
-                      <div className="co-prev-total">
-                        Tổng: <strong>{formatPrice(order.total_amount)}</strong>
-                      </div>
-                      {(order.status === 'completed' || order.status === 'paid') && (
-                        <button className="co-reorder-btn" onClick={() => reorderBill(order)}>
-                          Đặt lại
-                        </button>
-                      )}
+                  </div>
+                )}
+              </div>
+              <div className="co-sheet-footer" style={{ position: 'relative' }}>
+                <div className="co-cart-total">
+                  <span>Tổng cộng</span>
+                  <strong>{formatPrice(totalAmount)}</strong>
+                </div>
+
+                {cart.length > 0 && !submitting && (
+                  <div style={{ position: 'absolute', top: '-38px', left: 0, right: 0, display: 'flex', justifyContent: 'center', pointerEvents: 'none', zIndex: 10 }}>
+                    <div style={{ background: '#ea580c', color: 'white', padding: '6px 16px', borderRadius: '24px', fontSize: '0.85rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 4px 12px rgba(234, 88, 12, 0.4)', animation: 'bounce-pointer 1.2s infinite' }}>
+                      👇 Nhớ bấm Gửi đơn để bếp làm nhé!
                     </div>
                   </div>
-                ))
-              ) : (
-                <div className="co-empty">
-                  <ShoppingBag size={32} />
-                  <p>Chưa có món nào được gọi</p>
-                </div>
-              )}
+                )}
+
+                <button
+                  className="co-btn-submit"
+                  onClick={submitOrder}
+                  disabled={submitting}
+                  style={{ position: 'relative', zIndex: 1, boxShadow: cart.length > 0 ? '0 4px 15px rgba(37, 99, 235, 0.35)' : 'none', animation: cart.length > 0 ? 'co-gift-pulse 2.5s infinite' : 'none' }}
+                >
+                  <Send size={18} />
+                  {submitting ? 'Đang gửi...' : 'Gửi đơn hàng'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+
+        {/* ─── Previous Orders Sheet ─── */}
+        {showOrdered && (
+          <div className="co-modal-overlay" onClick={() => setShowOrdered(false)}>
+            <div className="co-sheet" onClick={(e) => e.stopPropagation()}>
+              <div className="co-sheet-handle" />
+              <div className="co-sheet-header">
+                <h3>Món đã gọi</h3>
+                <button onClick={() => setShowOrdered(false)}><X size={20} /></button>
+              </div>
+              <div className="co-sheet-body">
+                {previousOrders.length > 0 ? (
+                  previousOrders.map(order => (
+                    <div key={order.id} className="co-prev-order">
+                      <div className="co-prev-header">
+                        <div className="co-prev-time">
+                          <Clock size={14} />
+                          {new Date(order.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
+                          <span className="co-prev-name">
+                            • {order.customer_name || 'Admin'}
+                            {order.status === 'merged' && <span style={{ fontSize: '0.65rem', background: '#ede9fe', color: '#7c3aed', borderRadius: 4, padding: '0 4px', marginLeft: 4, fontWeight: 700 }}>Đã gộp</span>}
+                          </span>
+                        </div>
+                        {(() => {
+                          let text = "";
+                          let statusClass = `co-status-${order.status}`;
+                          let customStyle = {};
+
+                          if (order.status === 'pending') {
+                            const pJobs = order.print_jobs || [];
+                            const failed = pJobs.find(j => j.status === 'failed');
+                            const done = pJobs.find(j => j.status === 'done');
+
+                            if (failed) {
+                              text = "Bếp chưa nhận Bill! Gọi NV duyệt";
+                              statusClass = "co-status-failed";
+                              customStyle = { background: '#fef2f2', color: '#b91c1c', border: '1px solid #fca5a5' };
+                            } else if (done) {
+                              text = "Bếp đã nhận Bill";
+                              statusClass = "co-status-preparing";
+                              customStyle = { background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0' };
+                            } else {
+                              text = "Đang gửi bill vào bếp...";
+                              statusClass = "co-status-pending";
+                            }
+                          } else if (order.status === 'merged') {
+                            text = 'Đã gộp vào bill chính';
+                            customStyle = { background: '#f5f3ff', color: '#7c3aed', border: '1px solid #c4b5fd' };
+                          } else {
+                            text = order.status === 'preparing' ? 'Đang làm' :
+                              order.status === 'completed' ? 'Hoàn thành' : 'Đã thanh toán';
+                          }
+
+                          return (
+                            <span className={`co-status ${statusClass}`} style={customStyle}>
+                              {text}
+                            </span>
+                          );
+                        })()}
+                      </div>
+                      {order.order_items?.map(oi => (
+                        <div key={oi.id} className="co-prev-item">
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              {oi.quantity}x {oi.menu_item?.name || '—'}
+                              {oi.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>🎁 Món Tặng</span>}
+                            </span>
+                            {oi.item_options && oi.item_options.length > 0 && (
+                              <span className="co-prev-item-opts">
+                                {oi.item_options.map(o => o.choice).join(' · ')}
+                              </span>
+                            )}
+                            {oi.note && (
+                              <span className="co-prev-item-note">📝 {oi.note}</span>
+                            )}
+                          </div>
+                          <span style={{ color: oi.is_gift ? '#16a34a' : undefined, fontWeight: oi.is_gift ? 700 : undefined }}>
+                            {oi.is_gift ? '0đ' : formatPrice(oi.unit_price * oi.quantity)}
+                          </span>
+                        </div>
+                      ))}
+                      <div className="co-prev-footer">
+                        <div className="co-prev-total">
+                          Tổng: <strong>{formatPrice(order.total_amount)}</strong>
+                        </div>
+                        {(order.status === 'completed' || order.status === 'paid') && (
+                          <button className="co-reorder-btn" onClick={() => reorderBill(order)}>
+                            Đặt lại
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="co-empty">
+                    <ShoppingBag size={32} />
+                    <p>Chưa có món nào được gọi</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </>
   );
 }
