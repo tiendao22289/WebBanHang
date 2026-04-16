@@ -1388,169 +1388,224 @@ export default function TablesPage() {
                 <span style={{ background: '#f0fdf4', color: '#16a34a', borderRadius: 100, padding: '4px 10px', fontSize: '0.72rem', fontWeight: 600, border: '1px solid #bbf7d0' }}>giá khuyến mãi</span>
                 <button onClick={() => setAddingToOrder('admin')} style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>+ Thêm món</button>
               </div>
-              {/* Items */}
+              {/* Items grouped by bill */}
               <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
-                {allOrderItems.length === 0 ? (
+                {tableBills.length === 0 ? (
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#9ca3af', fontSize: '0.9rem' }}>Chưa có món nào</div>
-                ) : allOrderItems.map((item, idx) => {
-                  const optionText = item.item_options?.map(o => o.choice).join(', ') || '';
-                  const isEditingThisPrice = desktopInlinePriceItem === item.id;
-                  const subtotal = item.unit_price * item.quantity;
+                ) : tableBills.map((order, billIdx) => {
+                  const billItems = (order.order_items || []).map(item => ({ ...item, _orderId: order.id }));
                   return (
-                    <div key={item.id} style={{ display: 'flex', alignItems: 'flex-start', padding: '9px 12px', borderBottom: '1px solid #f3f4f6', gap: 8, background: isEditingThisPrice ? '#fefce8' : 'white', transition: 'background 0.15s' }}>
-                      {/* Index */}
-                      <span style={{ color: '#9ca3af', fontSize: '0.78rem', minWidth: 16, paddingTop: 3, flexShrink: 0 }}>{idx + 1}.</span>
-
-                      {/* Name + option + note */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#111827' }}>{item.menu_item?.name || item.name}</div>
-                        {optionText ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
-                            <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>{optionText}</span>
-                            {item.menu_item && (
-                              <div
-                                onClick={() => { setOptionModalItem(item.menu_item); setSelectedOptions({}); setOptionQuantity(item.quantity); setOptionNote(''); setEditingPrice(false); setCustomPrice(null); }}
-                                style={{ width: 11, height: 11, background: '#ef4444', borderRadius: 2, cursor: 'pointer', flexShrink: 0 }}
-                                title="Sửa khẩu vị"
-                              />
-                            )}
-                          </div>
-                        ) : item.menu_item ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 }}>
-                            <span style={{ fontSize: '0.72rem', color: '#d1d5db', fontStyle: 'italic' }}>chưa chọn khẩu vị</span>
-                          </div>
-                        ) : null}
-
-                        {/* THE 3 ACTION BUTTONS UNDER THE ITEM NAME */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-                          {item.menu_item && (
+                    <div key={order.id}>
+                      {/* Bill Header Row */}
+                      {tableBills.length > 1 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: '#f8fafc', borderBottom: '1px solid #e5e7eb', borderTop: billIdx > 0 ? '2px solid #e5e7eb' : 'none' }}>
+                          <span style={{ background: '#2563eb', color: 'white', borderRadius: 10, padding: '1px 8px', fontSize: '0.7rem', fontWeight: 700 }}>#{billIdx + 1}</span>
+                          <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#111827' }}>👤 {order.customer_name}</span>
+                          <span style={{
+                            fontSize: '0.68rem', fontWeight: 700, padding: '2px 7px', borderRadius: 20,
+                            background: order.status === 'pending' ? '#fef3c7' : '#dbeafe',
+                            color: order.status === 'pending' ? '#d97706' : '#2563eb',
+                          }}>
+                            {order.status === 'pending' ? 'Chờ' : 'Đang làm'}
+                          </span>
+                          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
                             <button
-                              onClick={() => {
-                                const current = {};
-                                (item.item_options || []).forEach(o => { current[o.name] = o.choice; });
-                                setSelectedOptions(current);
-                                setOptionQuantity(item.quantity);
-                                setOptionNote(item.note || '');
-                                setEditingOrderItem({ orderId: item._orderId, itemId: item.id });
-                                const fullItem = menuItems.find(m => m.id === item.menu_item_id) || item.menu_item;
-                                setOptionModalItem(fullItem);
-                                setEditingPrice(false);
-                                setCustomPrice(null);
-                              }}
-                              style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
-                            >
-                              🖊 Đổi loại
-                            </button>
-                          )}
-                          <button
-                            onClick={async () => {
-                              const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
-                              if (otherTables.length === 0) {
-                                Swal.fire('Lỗi', 'Không có bàn nào khác để chuyển!', 'error');
-                                return;
-                              }
-                              const inputOptions = {};
-                              otherTables.forEach(t => {
-                                inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Đang có khách)' : '(Trống)'}`;
-                              });
-
-                              const { value: targetTableId } = await Swal.fire({
-                                title: 'Chuyển bill',
-                                text: 'Chuyển toàn bộ bill này sang bàn khác?',
-                                input: 'select',
-                                inputOptions,
-                                inputPlaceholder: 'Chọn bàn muốn chuyển đến',
-                                showCancelButton: true,
-                                confirmButtonColor: '#2563eb',
-                                cancelButtonColor: '#6b7280',
-                                confirmButtonText: 'Chuyển',
-                                cancelButtonText: 'Huỷ',
-                                reverseButtons: true,
-                                inputValidator: (value) => {
-                                  if (!value) return 'Vui lòng chọn một bàn!';
-                                }
-                              });
-
-                              if (targetTableId) {
-                                const { error } = await supabase.from('orders').update({ table_id: targetTableId }).eq('id', item._orderId);
-                                if (error) {
-                                  Swal.fire('Lỗi', error.message, 'error');
-                                  return;
-                                }
-
+                              onClick={async () => {
+                                const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
+                                if (otherTables.length === 0) { Swal.fire('Lỗi', 'Không có bàn khác!', 'error'); return; }
+                                const inputOptions = {};
+                                otherTables.forEach(t => { inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Có khách)' : '(Trống)'}`; });
+                                const { value: targetTableId } = await Swal.fire({
+                                  title: 'Chuyển bill sang bàn',
+                                  input: 'select', inputOptions, inputPlaceholder: 'Chọn bàn...',
+                                  showCancelButton: true, confirmButtonText: 'Chuyển', cancelButtonText: 'Huỷ',
+                                  confirmButtonColor: '#2563eb', reverseButtons: true,
+                                  inputValidator: (v) => { if (!v) return 'Vui lòng chọn bàn!'; }
+                                });
+                                if (!targetTableId) return;
+                                const { error } = await supabase.from('orders').update({ table_id: targetTableId }).eq('id', order.id);
+                                if (error) { Swal.fire('Lỗi', error.message, 'error'); return; }
                                 const targetTable = otherTables.find(t => t.id === targetTableId);
-                                if (targetTable && targetTable.status === 'available') {
+                                if (targetTable?.status === 'available') {
                                   await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
                                 }
-
-                                const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== item._orderId && o.status !== 'cancelled');
+                                const remaining = tableBills.filter(o => o.id !== order.id && o.status !== 'cancelled');
                                 if (remaining.length === 0) {
                                   const hId = selectedTable.merged_with || selectedTable.id;
                                   await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
                                   setSelectedTable(null);
                                 }
-
                                 fetchTables();
-                                Swal.fire({ title: 'Thành công', text: 'Đã chuyển bill sang bàn mới!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
-                              }
-                            }}
-                            style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
-                          >
-                            ➜ Chuyển bàn
-                          </button>
+                                Swal.fire({ title: 'Thành công', text: 'Đã chuyển bill!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
+                              }}
+                              style={{ background: '#e0e7ff', border: '1.5px solid #a5b4fc', borderRadius: 6, color: '#4f46e5', cursor: 'pointer', padding: '3px 10px', fontSize: '0.76rem', fontWeight: 700 }}
+                            >➜ Chuyển bàn</button>
+                          </div>
                         </div>
+                      )}
+                      {/* Items in this bill */}
+                      {billItems.map((item, idx) => {
+                        const optionText = item.item_options?.map(o => o.choice).join(', ') || '';
+                        const isEditingThisPrice = desktopInlinePriceItem === item.id;
+                        const subtotal = item.unit_price * item.quantity;
+                        return (
+                          <div key={item.id} style={{ display: 'flex', alignItems: 'flex-start', padding: '9px 12px', borderBottom: '1px solid #f3f4f6', gap: 8, background: isEditingThisPrice ? '#fefce8' : 'white', transition: 'background 0.15s' }}>
+                            {/* Index */}
+                            <span style={{ color: '#9ca3af', fontSize: '0.78rem', minWidth: 16, paddingTop: 3, flexShrink: 0 }}>{idx + 1}.</span>
 
-                      </div>
+                            {/* Name + option + note */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#111827' }}>{item.menu_item?.name || item.name}</div>
+                              {optionText ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
+                                  <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>{optionText}</span>
+                                  {item.menu_item && (
+                                    <div
+                                      onClick={() => { setOptionModalItem(item.menu_item); setSelectedOptions({}); setOptionQuantity(item.quantity); setOptionNote(''); setEditingPrice(false); setCustomPrice(null); }}
+                                      style={{ width: 11, height: 11, background: '#ef4444', borderRadius: 2, cursor: 'pointer', flexShrink: 0 }}
+                                      title="Sửa khẩu vị"
+                                    />
+                                  )}
+                                </div>
+                              ) : item.menu_item ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 }}>
+                                  <span style={{ fontSize: '0.72rem', color: '#d1d5db', fontStyle: 'italic' }}>chưa chọn khẩu vị</span>
+                                </div>
+                              ) : null}
 
-                      {/* Qty controls */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, paddingTop: 1 }}>
-                        <button onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, -1)} style={{ width: 22, height: 22, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem' }}>−</button>
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{item.quantity}</span>
-                        <button onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, 1)} style={{ width: 22, height: 22, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem' }}>+</button>
-                      </div>
+                              {/* THE 3 ACTION BUTTONS UNDER THE ITEM NAME */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                                {item.menu_item && (
+                                  <button
+                                    onClick={() => {
+                                      const current = {};
+                                      (item.item_options || []).forEach(o => { current[o.name] = o.choice; });
+                                      setSelectedOptions(current);
+                                      setOptionQuantity(item.quantity);
+                                      setOptionNote(item.note || '');
+                                      setEditingOrderItem({ orderId: item._orderId, itemId: item.id });
+                                      const fullItem = menuItems.find(m => m.id === item.menu_item_id) || item.menu_item;
+                                      setOptionModalItem(fullItem);
+                                      setEditingPrice(false);
+                                      setCustomPrice(null);
+                                    }}
+                                    style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                                  >
+                                    🖊 Đổi loại
+                                  </button>
+                                )}
+                                <button
+                                  onClick={async () => {
+                                    const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
+                                    if (otherTables.length === 0) {
+                                      Swal.fire('Lỗi', 'Không có bàn nào khác để chuyển!', 'error');
+                                      return;
+                                    }
+                                    const inputOptions = {};
+                                    otherTables.forEach(t => {
+                                      inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Đang có khách)' : '(Trống)'}`;
+                                    });
 
-                      {/* Unit price — inline editable */}
-                      <div style={{ flexShrink: 0, paddingTop: 1 }}>
-                        {isEditingThisPrice ? (
-                          <input
-                            type="text" inputMode="numeric" pattern="[0-9]*" autoFocus
-                            value={desktopInlinePriceVal}
-                            onChange={e => setDesktopInlinePriceVal(e.target.value.replace(/\D/g, ''))}
-                            onBlur={async () => {
-                              const newP = parseInt(desktopInlinePriceVal, 10);
-                              if (!isNaN(newP) && newP >= 0) await updateItemPrice(item._orderId, item.id, newP);
-                              setDesktopInlinePriceItem(null);
-                            }}
-                            onKeyDown={async e => {
-                              if (e.key === 'Enter') {
-                                const newP = parseInt(desktopInlinePriceVal, 10);
-                                if (!isNaN(newP) && newP >= 0) await updateItemPrice(item._orderId, item.id, newP);
-                                setDesktopInlinePriceItem(null);
-                              } else if (e.key === 'Escape') setDesktopInlinePriceItem(null);
-                            }}
-                            style={{ width: 72, textAlign: 'right', border: '1.5px solid #ef4444', borderRadius: 4, padding: '2px 4px', fontSize: '0.82rem', outline: 'none', fontWeight: 600, background: 'white' }}
-                          />
-                        ) : (
-                          <span
-                            onClick={() => { setDesktopInlinePriceItem(item.id); setDesktopInlinePriceVal(String(item.unit_price)); }}
-                            style={{ display: 'block', minWidth: 65, textAlign: 'right', fontSize: '0.82rem', color: '#374151', cursor: 'pointer', padding: '2px 4px', borderRadius: 4, border: '1.5px solid transparent' }}
-                            title="Click để sửa giá"
-                          >{item.unit_price.toLocaleString('vi-VN')}</span>
-                        )}
-                      </div>
+                                    const { value: targetTableId } = await Swal.fire({
+                                      title: 'Chuyển bill',
+                                      text: 'Chuyển toàn bộ bill này sang bàn khác?',
+                                      input: 'select',
+                                      inputOptions,
+                                      inputPlaceholder: 'Chọn bàn muốn chuyển đến',
+                                      showCancelButton: true,
+                                      confirmButtonColor: '#2563eb',
+                                      cancelButtonColor: '#6b7280',
+                                      confirmButtonText: 'Chuyển',
+                                      cancelButtonText: 'Huỷ',
+                                      reverseButtons: true,
+                                      inputValidator: (value) => {
+                                        if (!value) return 'Vui lòng chọn một bàn!';
+                                      }
+                                    });
 
-                      {/* Subtotal */}
-                      <span style={{ minWidth: 68, textAlign: 'right', fontSize: '0.85rem', fontWeight: 700, color: '#111827', flexShrink: 0, paddingTop: 3 }}>{subtotal.toLocaleString('vi-VN')}</span>
+                                    if (targetTableId) {
+                                      const { error } = await supabase.from('orders').update({ table_id: targetTableId }).eq('id', item._orderId);
+                                      if (error) {
+                                        Swal.fire('Lỗi', error.message, 'error');
+                                        return;
+                                      }
 
-                      {/* Action icons */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0, paddingTop: 1 }}>
-                        <button
-                          title="Xóa món"
-                          onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, -item.quantity)}
-                          style={{ width: 24, height: 24, border: '1px solid #fca5a5', borderRadius: 4, background: '#fff5f5', cursor: 'pointer', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ef4444' }}
-                        ><Trash2 size={13} /></button>
-                      </div>
+                                      const targetTable = otherTables.find(t => t.id === targetTableId);
+                                      if (targetTable && targetTable.status === 'available') {
+                                        await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
+                                      }
 
+                                      const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== item._orderId && o.status !== 'cancelled');
+                                      if (remaining.length === 0) {
+                                        const hId = selectedTable.merged_with || selectedTable.id;
+                                        await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
+                                        setSelectedTable(null);
+                                      }
+
+                                      fetchTables();
+                                      Swal.fire({ title: 'Thành công', text: 'Đã chuyển bill sang bàn mới!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
+                                    }
+                                  }}
+                                  style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                                >
+                                  ➜ Chuyển bàn
+                                </button>
+                              </div>
+
+                            </div>
+
+                            {/* Qty controls */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, paddingTop: 1 }}>
+                              <button onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, -1)} style={{ width: 22, height: 22, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem' }}>−</button>
+                              <span style={{ fontSize: '0.85rem', fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{item.quantity}</span>
+                              <button onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, 1)} style={{ width: 22, height: 22, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem' }}>+</button>
+                            </div>
+
+                            {/* Unit price — inline editable */}
+                            <div style={{ flexShrink: 0, paddingTop: 1 }}>
+                              {isEditingThisPrice ? (
+                                <input
+                                  type="text" inputMode="numeric" pattern="[0-9]*" autoFocus
+                                  value={desktopInlinePriceVal}
+                                  onChange={e => setDesktopInlinePriceVal(e.target.value.replace(/\D/g, ''))}
+                                  onBlur={async () => {
+                                    const newP = parseInt(desktopInlinePriceVal, 10);
+                                    if (!isNaN(newP) && newP >= 0) await updateItemPrice(item._orderId, item.id, newP);
+                                    setDesktopInlinePriceItem(null);
+                                  }}
+                                  onKeyDown={async e => {
+                                    if (e.key === 'Enter') {
+                                      const newP = parseInt(desktopInlinePriceVal, 10);
+                                      if (!isNaN(newP) && newP >= 0) await updateItemPrice(item._orderId, item.id, newP);
+                                      setDesktopInlinePriceItem(null);
+                                    } else if (e.key === 'Escape') setDesktopInlinePriceItem(null);
+                                  }}
+                                  style={{ width: 72, textAlign: 'right', border: '1.5px solid #ef4444', borderRadius: 4, padding: '2px 4px', fontSize: '0.82rem', outline: 'none', fontWeight: 600, background: 'white' }}
+                                />
+                              ) : (
+                                <span
+                                  onClick={() => { setDesktopInlinePriceItem(item.id); setDesktopInlinePriceVal(String(item.unit_price)); }}
+                                  style={{ display: 'block', minWidth: 65, textAlign: 'right', fontSize: '0.82rem', color: '#374151', cursor: 'pointer', padding: '2px 4px', borderRadius: 4, border: '1.5px solid transparent' }}
+                                  title="Click để sửa giá"
+                                >{item.unit_price.toLocaleString('vi-VN')}</span>
+                              )}
+                            </div>
+
+                            {/* Subtotal */}
+                            <span style={{ minWidth: 68, textAlign: 'right', fontSize: '0.85rem', fontWeight: 700, color: '#111827', flexShrink: 0, paddingTop: 3 }}>{subtotal.toLocaleString('vi-VN')}</span>
+
+                            {/* Action icons */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0, paddingTop: 1 }}>
+                              <button
+                                title="Xóa món"
+                                onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, -item.quantity)}
+                                style={{ width: 24, height: 24, border: '1px solid #fca5a5', borderRadius: 4, background: '#fff5f5', cursor: 'pointer', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ef4444' }}
+                              ><Trash2 size={13} /></button>
+                            </div>
+
+                          </div>
+                        );
+                      })}
                     </div>
                   );
                 })}
@@ -1562,15 +1617,18 @@ export default function TablesPage() {
               </div>
 
               {/* Nút Gộp Bill Desktop */}
-              {tableBills.length > 1 && (
-                <div style={{ padding: '8px 12px', borderTop: '1px solid #e5e7eb', background: '#f8fafc', flexShrink: 0 }}>
-                  <button
-                    onClick={mergeBills}
-                    style={{ flex: 1, width: '100%', padding: '10px', border: '1.5px dashed #8b5cf6', borderRadius: 8, background: '#f5f3ff', color: '#7c3aed', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
-                    🔗 Gộp tất cả {tableBills.length} bill lại thành 1
-                  </button>
-                </div>
-              )}
+
+              {
+                tableBills.length > 1 && (
+                  <div style={{ padding: '8px 12px', borderTop: '1px solid #e5e7eb', background: '#f8fafc', flexShrink: 0 }}>
+                    <button
+                      onClick={mergeBills}
+                      style={{ flex: 1, width: '100%', padding: '10px', border: '1.5px dashed #8b5cf6', borderRadius: 8, background: '#f5f3ff', color: '#7c3aed', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                      🔗 Gộp tất cả {tableBills.length} bill lại thành 1
+                    </button>
+                  </div>
+                )
+              }
               {/* Action buttons */}
               <div style={{ display: 'flex', gap: 8, padding: '10px 12px', borderTop: '1px solid #e5e7eb', background: 'white', flexShrink: 0 }}>
                 <button
@@ -2030,453 +2088,501 @@ export default function TablesPage() {
         );
       })()}
       {/* ══ PAYMENT MODAL ══ */}
-      {paymentModal && (() => {
-        const { table, total } = paymentModal;
-        const fmt = (n) => new Intl.NumberFormat('vi-VN').format(n) + 'đ';
+      {
+        paymentModal && (() => {
+          const { table, total } = paymentModal;
+          const fmt = (n) => new Intl.NumberFormat('vi-VN').format(n) + 'đ';
 
-        const closeModal = () => { setPaymentModal(null); setQrAccount(null); setShowTransfer(false); setTransactionCode(null); setPaymentCountdown(0); };
+          const closeModal = () => { setPaymentModal(null); setQrAccount(null); setShowTransfer(false); setTransactionCode(null); setPaymentCountdown(0); };
 
-        const doCashPayment = async () => {
-          closeModal();
-          await completeTable(table.id, 'cash');
-        };
-
-        const doTransferPayment = async () => {
-          if (qrAccount) await recordBankPayment(qrAccount.id, total);
-          closeModal();
-          await completeTable(table.id, 'transfer');
-        };
-
-        const doCancelOrder = async () => {
-          if (!window.confirm('Bạn có chắc muốn huỷ tất cả đơn của bàn này?')) return;
-          const hostId = table.merged_with || table.id;
-          // Hủy tất cả đơn của host (kể cả đơn từ bàn satellite đã được chuyển sang)
-          await supabase.from('orders')
-            .update({ status: 'cancelled', payment_method: 'cancelled' })
-            .eq('table_id', hostId)
-            .in('status', ['pending', 'preparing', 'completed']);
-          // Reset toàn bộ nhóm gộp (host + all satellites)
-          await supabase.from('tables')
-            .update({ status: 'available', occupied_at: null, merged_with: null })
-            .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
-          closeModal();
-          setSelectedTable(null);
-          fetchTables();
-        };
-
-        // Vietcombank VietQR string: bank_id|account_number|amount|description
-        const buildVietQR = (acc) => {
-          if (!acc) return '';
-          const bankMap = {
-            'vietcombank': '970436', 'vcb': '970436',
-            'mb bank': '970422', 'mbbank': '970422',
-            'techcombank': '970407', 'tcb': '970407',
-            'agribank': '970405',
-            'vietinbank': '970415', 'ctg': '970415',
-            'bidv': '970418',
-            'acb': '970416',
-            'vpbank': '970432',
-            'tpbank': '970423',
-            'sacombank': '970403',
+          const doCashPayment = async () => {
+            closeModal();
+            await completeTable(table.id, 'cash');
           };
-          const bankKey = acc.bank_name.toLowerCase().replace(/\s+/g, '');
-          const bin = bankMap[bankKey] || bankMap[acc.bank_name.toLowerCase()] || '970436';
-          const desc = encodeURIComponent(transactionCode || `T1 B${table.table_number}`);
-          return `https://img.vietqr.io/image/${bin}-${acc.account_number}-compact2.png?amount=${total}&addInfo=${desc}&accountName=${encodeURIComponent(acc.account_name)}`;
-        };
 
-        const handleTransferClick = async () => {
-          // Chỉ sinh mã nếu chưa có
-          if (!transactionCode) {
-            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-            let code = '';
-            for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+          const doTransferPayment = async () => {
+            if (qrAccount) await recordBankPayment(qrAccount.id, total);
+            closeModal();
+            await completeTable(table.id, 'transfer');
+          };
 
-            const tableBills = orders[table.merged_with || table.id] || [];
-            const orderIdsStr = tableBills.map(o => o.id).join(',');
+          const doCancelOrder = async () => {
+            if (!window.confirm('Bạn có chắc muốn huỷ tất cả đơn của bàn này?')) return;
+            const hostId = table.merged_with || table.id;
+            // Hủy tất cả đơn của host (kể cả đơn từ bàn satellite đã được chuyển sang)
+            await supabase.from('orders')
+              .update({ status: 'cancelled', payment_method: 'cancelled' })
+              .eq('table_id', hostId)
+              .in('status', ['pending', 'preparing', 'completed']);
+            // Reset toàn bộ nhóm gộp (host + all satellites)
+            await supabase.from('tables')
+              .update({ status: 'available', occupied_at: null, merged_with: null })
+              .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
+            closeModal();
+            setSelectedTable(null);
+            fetchTables();
+          };
 
-            if (orderIdsStr) {
-              await supabase.from('payment_transactions').insert({
-                transaction_code: code,
-                order_ids: orderIdsStr,
-                account_id: qrAccount?.id || null,
-                total_amount: total
-              });
+          // Vietcombank VietQR string: bank_id|account_number|amount|description
+          const buildVietQR = (acc) => {
+            if (!acc) return '';
+            const bankMap = {
+              'vietcombank': '970436', 'vcb': '970436',
+              'mb bank': '970422', 'mbbank': '970422',
+              'techcombank': '970407', 'tcb': '970407',
+              'agribank': '970405',
+              'vietinbank': '970415', 'ctg': '970415',
+              'bidv': '970418',
+              'acb': '970416',
+              'vpbank': '970432',
+              'tpbank': '970423',
+              'sacombank': '970403',
+            };
+            const bankKey = acc.bank_name.toLowerCase().replace(/\s+/g, '');
+            const bin = bankMap[bankKey] || bankMap[acc.bank_name.toLowerCase()] || '970436';
+            const desc = encodeURIComponent(transactionCode || `T1 B${table.table_number}`);
+            return `https://img.vietqr.io/image/${bin}-${acc.account_number}-compact2.png?amount=${total}&addInfo=${desc}&accountName=${encodeURIComponent(acc.account_name)}`;
+          };
+
+          const handleTransferClick = async () => {
+            // Chỉ sinh mã nếu chưa có
+            if (!transactionCode) {
+              const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+              let code = '';
+              for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+
+              const tableBills = orders[table.merged_with || table.id] || [];
+              const orderIdsStr = tableBills.map(o => o.id).join(',');
+
+              if (orderIdsStr) {
+                await supabase.from('payment_transactions').insert({
+                  transaction_code: code,
+                  order_ids: orderIdsStr,
+                  account_id: qrAccount?.id || null,
+                  total_amount: total
+                });
+              }
+              setTransactionCode(code);
             }
-            setTransactionCode(code);
-          }
-          setShowTransfer(true);
-          setPaymentCountdown(300);
-        };
+            setShowTransfer(true);
+            setPaymentCountdown(300);
+          };
 
 
-        return (
-          <div style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
-            onClick={closeModal}>
-            <div style={{ background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 480, padding: '20px 16px 28px', boxShadow: '0 -8px 40px rgba(0,0,0,0.18)' }}
-              onClick={e => e.stopPropagation()}>
+          return (
+            <div style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
+              onClick={closeModal}>
+              <div style={{ background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 480, padding: '20px 16px 28px', boxShadow: '0 -8px 40px rgba(0,0,0,0.18)' }}
+                onClick={e => e.stopPropagation()}>
 
-              {/* Header */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                <div>
-                  <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>💳 Thanh toán</div>
-                  <div style={{ fontSize: '0.82rem', color: '#64748b' }}>Bàn {table.table_number}</div>
+                {/* Header */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>💳 Thanh toán</div>
+                    <div style={{ fontSize: '0.82rem', color: '#64748b' }}>Bàn {table.table_number}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Tổng cộng</div>
+                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#c53b3b' }}>{fmt(total)}</div>
+                  </div>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Tổng cộng</div>
-                  <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#c53b3b' }}>{fmt(total)}</div>
-                </div>
-              </div>
 
-              {!showTransfer ? (
-                /* ── Step 1: Choose payment method ── */
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {/* Tiền mặt */}
-                  <button onClick={doCashPayment}
-                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#f0fdf4', border: '1.5px solid #bbf7d0', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
-                    <span style={{ fontSize: '1.5rem' }}>💵</span>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#15803d' }}>Tiền mặt</div>
-                      <div style={{ fontSize: '0.75rem', color: '#16a34a' }}>Nhận tiền mặt — đóng bàn ngay</div>
-                    </div>
-                    <div style={{ marginLeft: 'auto', background: '#16a34a', color: 'white', borderRadius: 8, padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700 }}>Xác nhận</div>
-                  </button>
-
-                  {/* Chuyển khoản */}
-                  <button onClick={handleTransferClick}
-                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#eff6ff', border: '1.5px solid #bfdbfe', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
-                    <span style={{ fontSize: '1.5rem' }}>📲</span>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1d4ed8' }}>Chuyển khoản</div>
-                      <div style={{ fontSize: '0.75rem', color: '#3b82f6' }}>Hiện mã QR cho khách quét</div>
-                    </div>
-                    <div style={{ marginLeft: 'auto', color: '#3b82f6', fontSize: '1.1rem' }}>›</div>
-                  </button>
-
-                </div>
-              ) : (
-                /* ── Step 2: QR Transfer ── */
-                <div>
-                  <button onClick={() => setShowTransfer(false)} style={{ background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, marginBottom: 10, padding: 0 }}>‹ Quay lại</button>
-
-                  {qrAccount ? (
-                    <>
-                      {/* VietQR image */}
-                      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
-                        <img
-                          src={buildVietQR(qrAccount)}
-                          alt="QR chuyển khoản"
-                          style={{ width: 220, height: 220, borderRadius: 12, border: '2px solid #bfdbfe', objectFit: 'contain', background: 'white' }}
-                          onError={e => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
-                        />
-                        <div style={{ width: 220, height: 220, display: 'none', alignItems: 'center', justifyContent: 'center', border: '2px solid #bfdbfe', borderRadius: 12, flexDirection: 'column', gap: 6 }}>
-                          <QRCodeSVG value={`${qrAccount.bank_name}|${qrAccount.account_number}|${total}`} size={180} level="H" includeMargin />
-                        </div>
+                {!showTransfer ? (
+                  /* ── Step 1: Choose payment method ── */
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {/* Tiền mặt */}
+                    <button onClick={doCashPayment}
+                      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#f0fdf4', border: '1.5px solid #bbf7d0', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
+                      <span style={{ fontSize: '1.5rem' }}>💵</span>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#15803d' }}>Tiền mặt</div>
+                        <div style={{ fontSize: '0.75rem', color: '#16a34a' }}>Nhận tiền mặt — đóng bàn ngay</div>
                       </div>
+                      <div style={{ marginLeft: 'auto', background: '#16a34a', color: 'white', borderRadius: 8, padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700 }}>Xác nhận</div>
+                    </button>
 
-                      {/* Account info */}
-                      <div style={{ background: '#f8fafc', borderRadius: 12, padding: '10px 14px', marginBottom: 10, fontSize: '0.85rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                          <span style={{ color: '#64748b' }}>Ngân hàng</span>
-                          <span style={{ fontWeight: 700, color: '#0f172a' }}>{qrAccount.bank_name}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                          <span style={{ color: '#64748b' }}>Số tài khoản</span>
-                          <span style={{ fontWeight: 700, color: '#0f172a', letterSpacing: 1 }}>{qrAccount.account_number}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                          <span style={{ color: '#64748b' }}>Tên tài khoản</span>
-                          <span style={{ fontWeight: 700, color: '#0f172a' }}>{qrAccount.account_name}</span>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                          <span style={{ color: '#64748b' }}>Số tiền</span>
-                          <span style={{ fontWeight: 800, color: '#c53b3b', fontSize: '1rem' }}>{fmt(total)}</span>
-                        </div>
+                    {/* Chuyển khoản */}
+                    <button onClick={handleTransferClick}
+                      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#eff6ff', border: '1.5px solid #bfdbfe', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
+                      <span style={{ fontSize: '1.5rem' }}>📲</span>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1d4ed8' }}>Chuyển khoản</div>
+                        <div style={{ fontSize: '0.75rem', color: '#3b82f6' }}>Hiện mã QR cho khách quét</div>
                       </div>
+                      <div style={{ marginLeft: 'auto', color: '#3b82f6', fontSize: '1.1rem' }}>›</div>
+                    </button>
 
-                      {/* Daily limit badge */}
-                      {(() => {
-                        const pct = Math.round((qrAccount.received_today / qrAccount.daily_limit) * 100);
-                        const remaining = qrAccount.daily_limit - qrAccount.received_today;
-                        return (
-                          <div style={{ fontSize: '0.73rem', color: '#64748b', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <div style={{ flex: 1, height: 4, background: '#e2e8f0', borderRadius: 2, overflow: 'hidden' }}>
-                              <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: pct > 90 ? '#f59e0b' : '#3b82f6', transition: 'width 0.3s' }} />
+                  </div>
+                ) : (
+                  /* ── Step 2: QR Transfer ── */
+                  <div>
+                    <button onClick={() => setShowTransfer(false)} style={{ background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, marginBottom: 10, padding: 0 }}>‹ Quay lại</button>
+
+                    {qrAccount ? (
+                      <>
+                        {/* VietQR image */}
+                        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+                          <img
+                            src={buildVietQR(qrAccount)}
+                            alt="QR chuyển khoản"
+                            style={{ width: 220, height: 220, borderRadius: 12, border: '2px solid #bfdbfe', objectFit: 'contain', background: 'white' }}
+                            onError={e => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
+                          />
+                          <div style={{ width: 220, height: 220, display: 'none', alignItems: 'center', justifyContent: 'center', border: '2px solid #bfdbfe', borderRadius: 12, flexDirection: 'column', gap: 6 }}>
+                            <QRCodeSVG value={`${qrAccount.bank_name}|${qrAccount.account_number}|${total}`} size={180} level="H" includeMargin />
+                          </div>
+                        </div>
+
+                        {/* Account info */}
+                        <div style={{ background: '#f8fafc', borderRadius: 12, padding: '10px 14px', marginBottom: 10, fontSize: '0.85rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <span style={{ color: '#64748b' }}>Ngân hàng</span>
+                            <span style={{ fontWeight: 700, color: '#0f172a' }}>{qrAccount.bank_name}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <span style={{ color: '#64748b' }}>Số tài khoản</span>
+                            <span style={{ fontWeight: 700, color: '#0f172a', letterSpacing: 1 }}>{qrAccount.account_number}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <span style={{ color: '#64748b' }}>Tên tài khoản</span>
+                            <span style={{ fontWeight: 700, color: '#0f172a' }}>{qrAccount.account_name}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: '#64748b' }}>Số tiền</span>
+                            <span style={{ fontWeight: 800, color: '#c53b3b', fontSize: '1rem' }}>{fmt(total)}</span>
+                          </div>
+                        </div>
+
+                        {/* Daily limit badge */}
+                        {(() => {
+                          const pct = Math.round((qrAccount.received_today / qrAccount.daily_limit) * 100);
+                          const remaining = qrAccount.daily_limit - qrAccount.received_today;
+                          return (
+                            <div style={{ fontSize: '0.73rem', color: '#64748b', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <div style={{ flex: 1, height: 4, background: '#e2e8f0', borderRadius: 2, overflow: 'hidden' }}>
+                                <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: pct > 90 ? '#f59e0b' : '#3b82f6', transition: 'width 0.3s' }} />
+                              </div>
+                              <span>Hạn mức: {fmt(Math.max(0, remaining))} còn lại</span>
                             </div>
-                            <span>Hạn mức: {fmt(Math.max(0, remaining))} còn lại</span>
-                          </div>
-                        );
-                      })()}
+                          );
+                        })()}
 
-                      {/* Switch account (if multiple) */}
-                      {bankAccounts.length > 1 && (
-                        <div style={{ marginBottom: 10 }}>
-                          <div style={{ fontSize: '0.73rem', color: '#64748b', marginBottom: 4 }}>Đổi tài khoản nhận:</div>
-                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                            {bankAccounts.map(acc => (
-                              <button key={acc.id} onClick={() => setQrAccount(acc)}
-                                style={{ padding: '4px 10px', borderRadius: 8, border: `1.5px solid ${acc.id === qrAccount.id ? '#2563eb' : '#e2e8f0'}`, background: acc.id === qrAccount.id ? '#eff6ff' : 'white', cursor: 'pointer', fontSize: '0.75rem', fontWeight: acc.id === qrAccount.id ? 700 : 500, color: acc.id === qrAccount.id ? '#1d4ed8' : '#374151' }}>
-                                {acc.bank_name} · {acc.account_number.slice(-4)}
-                                {acc.received_today >= acc.daily_limit && <span style={{ marginLeft: 4, color: '#f59e0b' }}>⚠️</span>}
-                              </button>
-                            ))}
+                        {/* Switch account (if multiple) */}
+                        {bankAccounts.length > 1 && (
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{ fontSize: '0.73rem', color: '#64748b', marginBottom: 4 }}>Đổi tài khoản nhận:</div>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {bankAccounts.map(acc => (
+                                <button key={acc.id} onClick={() => setQrAccount(acc)}
+                                  style={{ padding: '4px 10px', borderRadius: 8, border: `1.5px solid ${acc.id === qrAccount.id ? '#2563eb' : '#e2e8f0'}`, background: acc.id === qrAccount.id ? '#eff6ff' : 'white', cursor: 'pointer', fontSize: '0.75rem', fontWeight: acc.id === qrAccount.id ? 700 : 500, color: acc.id === qrAccount.id ? '#1d4ed8' : '#374151' }}>
+                                  {acc.bank_name} · {acc.account_number.slice(-4)}
+                                  {acc.received_today >= acc.daily_limit && <span style={{ marginLeft: 4, color: '#f59e0b' }}>⚠️</span>}
+                                </button>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div style={{ textAlign: 'center', color: '#64748b', padding: 32 }}>Chưa cấu hình tài khoản ngân hàng</div>
-                  )}
+                        )}
+                      </>
+                    ) : (
+                      <div style={{ textAlign: 'center', color: '#64748b', padding: 32 }}>Chưa cấu hình tài khoản ngân hàng</div>
+                    )}
 
-                  <button onClick={doTransferPayment}
-                    style={{ width: '100%', padding: '13px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 12, fontWeight: 800, fontSize: '1rem', cursor: 'pointer' }}>
-                    ✅ Xác nhận thủ công đã nhận tiền
-                  </button>
-                </div>
-              )}
+                    <button onClick={doTransferPayment}
+                      style={{ width: '100%', padding: '13px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 12, fontWeight: 800, fontSize: '1rem', cursor: 'pointer' }}>
+                      ✅ Xác nhận thủ công đã nhận tiền
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })()
+      }
 
       {/* QR Code Modal - uses table UUID in URL */}
-      {showQR && (
-        <div className="modal-overlay" onClick={() => setShowQR(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>QR Code - {showQR.table_type === 'takeaway' ? (showQR.table_name || 'Mang về') : `Bàn ${showQR.table_number}`}</h3>
-              <button className="btn btn-ghost btn-icon" onClick={() => setShowQR(null)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body" style={{ textAlign: 'center' }}>
-              <div className="qr-container">
-                <QRCodeSVG
-                  id={`qr-${showQR.id}`}
-                  value={`${baseUrl}/order?table=${showQR.id}`}
-                  size={250}
-                  level="H"
-                  includeMargin
-                  style={{ borderRadius: '12px' }}
-                />
-              </div>
-              <p className="text-muted text-sm mt-4">
-                {showQR.table_type === 'takeaway' ? 'Quét mã QR để đặt món Mang về' : `Quét mã QR này để đặt món tại Bàn ${showQR.table_number}`}
-              </p>
-              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 16 }}>
-                <button
-                  className="btn btn-primary"
-                  onClick={() => downloadQR(showQR)}
-                >
-                  <Download size={16} /> Tải QR
-                </button>
-                <button
-                  className="btn btn-outline"
-                  onClick={() => setShowShareSheet(true)}
-                >
-                  🔗 Chia sẻ
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Custom Share Sheet ── */}
-      {showShareSheet && showQR && (() => {
-        const url = `${baseUrl}/order?table=${showQR.id}`;
-        const text = encodeURIComponent(`Quét mã để đặt món: ${url}`);
-        const encodedUrl = encodeURIComponent(url);
-        const shareOptions = [
-          { label: 'Zalo', emoji: '💬', href: `https://zalo.me/chat?appid=4445&url=${encodedUrl}`, bg: '#0068FF' },
-          { label: 'WhatsApp', emoji: '📱', href: `https://wa.me/?text=${text}`, bg: '#25D366' },
-          { label: 'Facebook', emoji: '📘', href: `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`, bg: '#1877F2' },
-          { label: 'Messenger', emoji: '💙', href: `fb-messenger://share/?link=${encodedUrl}`, bg: '#0084FF' },
-          { label: 'SMS', emoji: '✉️', href: `sms:?body=${text}`, bg: '#34C759' },
-        ];
-        return (
-          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
-            onClick={() => setShowShareSheet(false)}>
-            <div style={{ background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 480, padding: '20px 20px 32px' }}
-              onClick={e => e.stopPropagation()}>
-              <div style={{ textAlign: 'center', marginBottom: 4 }}>
-                <div style={{ width: 36, height: 4, background: '#e5e7eb', borderRadius: 99, margin: '0 auto 16px' }} />
-                <div style={{ fontWeight: 700, fontSize: '1rem', color: '#111827', marginBottom: 4 }}>Chia sẻ mã QR</div>
-                <div style={{ fontSize: '0.8rem', color: '#6b7280', background: '#f3f4f6', borderRadius: 8, padding: '6px 12px', display: 'inline-block', wordBreak: 'break-all' }}>{url}</div>
-              </div>
-              {/* App icons row */}
-              <div style={{ display: 'flex', justifyContent: 'center', gap: 20, margin: '20px 0 16px' }}>
-                {shareOptions.map(opt => (
-                  <a key={opt.label} href={opt.href} target="_blank" rel="noopener noreferrer"
-                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, textDecoration: 'none' }}
-                    onClick={() => setShowShareSheet(false)}>
-                    <div style={{ width: 52, height: 52, borderRadius: 16, background: opt.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
-                      {opt.emoji}
-                    </div>
-                    <span style={{ fontSize: '0.72rem', color: '#374151', fontWeight: 500 }}>{opt.label}</span>
-                  </a>
-                ))}
-              </div>
-              {/* Copy link */}
-              <button
-                onClick={async () => {
-                  try { await navigator.clipboard.writeText(url); } catch { window.prompt('Sao chép:', url); }
-                  setShowShareSheet(false);
-                  alert('Đã sao chép link!');
-                }}
-                style={{ width: '100%', padding: '13px', border: '1.5px solid #e5e7eb', borderRadius: 12, background: 'white', fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
-              >
-                📋 Sao chép link
-              </button>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Table Detail Modal - mobile only; desktop shows inline in right panel */}
-      {isMobile && selectedTable && !addingToOrder && (
-        <div className="modal-overlay" onClick={() => setSelectedTable(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
-            <div className="modal-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2, paddingBottom: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                <h3 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Bàn {selectedTable.table_number}</h3>
-                <button className="btn btn-ghost btn-icon" onClick={() => setSelectedTable(null)}>
+      {
+        showQR && (
+          <div className="modal-overlay" onClick={() => setShowQR(null)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h3>QR Code - {showQR.table_type === 'takeaway' ? (showQR.table_name || 'Mang về') : `Bàn ${showQR.table_number}`}</h3>
+                <button className="btn btn-ghost btn-icon" onClick={() => setShowQR(null)}>
                   <X size={20} />
                 </button>
               </div>
-
+              <div className="modal-body" style={{ textAlign: 'center' }}>
+                <div className="qr-container">
+                  <QRCodeSVG
+                    id={`qr-${showQR.id}`}
+                    value={`${baseUrl}/order?table=${showQR.id}`}
+                    size={250}
+                    level="H"
+                    includeMargin
+                    style={{ borderRadius: '12px' }}
+                  />
+                </div>
+                <p className="text-muted text-sm mt-4">
+                  {showQR.table_type === 'takeaway' ? 'Quét mã QR để đặt món Mang về' : `Quét mã QR này để đặt món tại Bàn ${showQR.table_number}`}
+                </p>
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 16 }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => downloadQR(showQR)}
+                  >
+                    <Download size={16} /> Tải QR
+                  </button>
+                  <button
+                    className="btn btn-outline"
+                    onClick={() => setShowShareSheet(true)}
+                  >
+                    🔗 Chia sẻ
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="modal-body" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+          </div>
+        )
+      }
 
-              {/* Printable Invoice (hidden on screen, shown on print) */}
-              <div style={{ display: 'none' }}>
-                <div ref={invoiceRef}>
-                  <div className="invoice">
-                    <div className="invoice-header">
-                      <h3>🍽️ NHÀ HÀNG</h3>
-                      <p>HOÁ ĐƠN - BÀN {selectedTable.table_number}</p>
-                    </div>
-                    <div className="invoice-info">
-                      <div><strong>Thời gian:</strong> {new Date().toLocaleString('vi-VN')}</div>
-                      <div><strong>Số bill:</strong> {getSelectedTableOrders().length}</div>
-                    </div>
-                    {getSelectedTableOrders().map((order, idx) => (
-                      <div key={order.id} style={{ marginBottom: '16px' }}>
-                        <p style={{ fontWeight: 'bold', borderBottom: '1px solid #ccc', paddingBottom: '4px' }}>
-                          Bill #{idx + 1} — {order.customer_name} ({order.customer_phone})
-                        </p>
-                        <table className="invoice-table">
-                          <thead>
-                            <tr><th>Món</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr>
-                          </thead>
-                          <tbody>
-                            {order.order_items?.map((item) => (
-                              <tr key={item.id}>
-                                <td>
-                                  {item.menu_item?.name || 'Món đã xoá'}
-                                  {item.item_options?.length > 0 && (() => {
-                                    const loai = item.item_options.find(o => o.name?.toLowerCase() === 'loại' && o.choice?.toLowerCase() !== 'bình thường');
-                                    const others = item.item_options.filter(o => o.name?.toLowerCase() !== 'loại' && o.choice?.toLowerCase() !== 'bình thường');
-                                    if (!loai && others.length === 0) return null;
-                                    return (
-                                      <div style={{ fontSize: '0.75rem', color: '#555', marginTop: '2px' }}>
-                                        {loai && <div>{loai.choice}</div>}
-                                        {others.length > 0 && <div style={{ fontStyle: 'italic' }}>{others.map(o => o.choice).join(', ')}</div>}
-                                      </div>
-                                    );
-                                  })()}
-                                  {item.note && <div style={{ fontSize: '0.75rem', fontStyle: 'italic' }}>* {item.note}</div>}
-                                </td>
-                                <td>{item.quantity}</td>
-                                <td>{formatPrice(item.unit_price)}</td>
-                                <td>{formatPrice(item.unit_price * item.quantity)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                        <div style={{ textAlign: 'right', fontWeight: 'bold', marginTop: '8px' }}>
-                          Tổng bill #{idx + 1}: {formatPrice(order.total_amount)}
-                        </div>
+      {/* ── Custom Share Sheet ── */}
+      {
+        showShareSheet && showQR && (() => {
+          const url = `${baseUrl}/order?table=${showQR.id}`;
+          const text = encodeURIComponent(`Quét mã để đặt món: ${url}`);
+          const encodedUrl = encodeURIComponent(url);
+          const shareOptions = [
+            { label: 'Zalo', emoji: '💬', href: `https://zalo.me/chat?appid=4445&url=${encodedUrl}`, bg: '#0068FF' },
+            { label: 'WhatsApp', emoji: '📱', href: `https://wa.me/?text=${text}`, bg: '#25D366' },
+            { label: 'Facebook', emoji: '📘', href: `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`, bg: '#1877F2' },
+            { label: 'Messenger', emoji: '💙', href: `fb-messenger://share/?link=${encodedUrl}`, bg: '#0084FF' },
+            { label: 'SMS', emoji: '✉️', href: `sms:?body=${text}`, bg: '#34C759' },
+          ];
+          return (
+            <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
+              onClick={() => setShowShareSheet(false)}>
+              <div style={{ background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 480, padding: '20px 20px 32px' }}
+                onClick={e => e.stopPropagation()}>
+                <div style={{ textAlign: 'center', marginBottom: 4 }}>
+                  <div style={{ width: 36, height: 4, background: '#e5e7eb', borderRadius: 99, margin: '0 auto 16px' }} />
+                  <div style={{ fontWeight: 700, fontSize: '1rem', color: '#111827', marginBottom: 4 }}>Chia sẻ mã QR</div>
+                  <div style={{ fontSize: '0.8rem', color: '#6b7280', background: '#f3f4f6', borderRadius: 8, padding: '6px 12px', display: 'inline-block', wordBreak: 'break-all' }}>{url}</div>
+                </div>
+                {/* App icons row */}
+                <div style={{ display: 'flex', justifyContent: 'center', gap: 20, margin: '20px 0 16px' }}>
+                  {shareOptions.map(opt => (
+                    <a key={opt.label} href={opt.href} target="_blank" rel="noopener noreferrer"
+                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, textDecoration: 'none' }}
+                      onClick={() => setShowShareSheet(false)}>
+                      <div style={{ width: 52, height: 52, borderRadius: 16, background: opt.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}>
+                        {opt.emoji}
                       </div>
-                    ))}
-                    <div style={{ textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', borderTop: '2px solid #333', paddingTop: '8px' }}>
-                      TỔNG CỘNG: {formatPrice(getSelectedTableOrders().reduce((s, o) => s + (o.total_amount || 0), 0))}
-                    </div>
-                    <div className="invoice-footer">
-                      <p>Cảm ơn quý khách! 🙏</p>
+                      <span style={{ fontSize: '0.72rem', color: '#374151', fontWeight: 500 }}>{opt.label}</span>
+                    </a>
+                  ))}
+                </div>
+                {/* Copy link */}
+                <button
+                  onClick={async () => {
+                    try { await navigator.clipboard.writeText(url); } catch { window.prompt('Sao chép:', url); }
+                    setShowShareSheet(false);
+                    alert('Đã sao chép link!');
+                  }}
+                  style={{ width: '100%', padding: '13px', border: '1.5px solid #e5e7eb', borderRadius: 12, background: 'white', fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                >
+                  📋 Sao chép link
+                </button>
+              </div>
+            </div>
+          );
+        })()
+      }
+
+      {/* Table Detail Modal - mobile only; desktop shows inline in right panel */}
+      {
+        isMobile && selectedTable && !addingToOrder && (
+          <div className="modal-overlay" onClick={() => setSelectedTable(null)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+              <div className="modal-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2, paddingBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                  <h3 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Bàn {selectedTable.table_number}</h3>
+                  <button className="btn btn-ghost btn-icon" onClick={() => setSelectedTable(null)}>
+                    <X size={20} />
+                  </button>
+                </div>
+
+              </div>
+              <div className="modal-body" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+
+                {/* Printable Invoice (hidden on screen, shown on print) */}
+                <div style={{ display: 'none' }}>
+                  <div ref={invoiceRef}>
+                    <div className="invoice">
+                      <div className="invoice-header">
+                        <h3>🍽️ NHÀ HÀNG</h3>
+                        <p>HOÁ ĐƠN - BÀN {selectedTable.table_number}</p>
+                      </div>
+                      <div className="invoice-info">
+                        <div><strong>Thời gian:</strong> {new Date().toLocaleString('vi-VN')}</div>
+                        <div><strong>Số bill:</strong> {getSelectedTableOrders().length}</div>
+                      </div>
+                      {getSelectedTableOrders().map((order, idx) => (
+                        <div key={order.id} style={{ marginBottom: '16px' }}>
+                          <p style={{ fontWeight: 'bold', borderBottom: '1px solid #ccc', paddingBottom: '4px' }}>
+                            Bill #{idx + 1} — {order.customer_name} ({order.customer_phone})
+                          </p>
+                          <table className="invoice-table">
+                            <thead>
+                              <tr><th>Món</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr>
+                            </thead>
+                            <tbody>
+                              {order.order_items?.map((item) => (
+                                <tr key={item.id}>
+                                  <td>
+                                    {item.menu_item?.name || 'Món đã xoá'}
+                                    {item.item_options?.length > 0 && (() => {
+                                      const loai = item.item_options.find(o => o.name?.toLowerCase() === 'loại' && o.choice?.toLowerCase() !== 'bình thường');
+                                      const others = item.item_options.filter(o => o.name?.toLowerCase() !== 'loại' && o.choice?.toLowerCase() !== 'bình thường');
+                                      if (!loai && others.length === 0) return null;
+                                      return (
+                                        <div style={{ fontSize: '0.75rem', color: '#555', marginTop: '2px' }}>
+                                          {loai && <div>{loai.choice}</div>}
+                                          {others.length > 0 && <div style={{ fontStyle: 'italic' }}>{others.map(o => o.choice).join(', ')}</div>}
+                                        </div>
+                                      );
+                                    })()}
+                                    {item.note && <div style={{ fontSize: '0.75rem', fontStyle: 'italic' }}>* {item.note}</div>}
+                                  </td>
+                                  <td>{item.quantity}</td>
+                                  <td>{formatPrice(item.unit_price)}</td>
+                                  <td>{formatPrice(item.unit_price * item.quantity)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          <div style={{ textAlign: 'right', fontWeight: 'bold', marginTop: '8px' }}>
+                            Tổng bill #{idx + 1}: {formatPrice(order.total_amount)}
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{ textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', borderTop: '2px solid #333', paddingTop: '8px' }}>
+                        TỔNG CỘNG: {formatPrice(getSelectedTableOrders().reduce((s, o) => s + (o.total_amount || 0), 0))}
+                      </div>
+                      <div className="invoice-footer">
+                        <p>Cảm ơn quý khách! 🙏</p>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
 
-              {/* On-screen bills display */}
-              {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 ? (
-                orders[selectedTable.merged_with || selectedTable.id].map((order, idx) => (
-                  <div key={order.id} className="order-detail-card">
-                    {/* Customer name header per bill */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 0 8px', borderBottom: '1px solid #f3f4f6', marginBottom: 4 }}>
-                      {orders[selectedTable.merged_with || selectedTable.id].length > 1 && (
-                        <span style={{ fontSize: '0.7rem', background: '#2563eb', color: 'white', borderRadius: 10, padding: '1px 7px', fontWeight: 700 }}>
-                          #{idx + 1}
+                {/* On-screen bills display */}
+                {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 ? (
+                  orders[selectedTable.merged_with || selectedTable.id].map((order, idx) => (
+                    <div key={order.id} className="order-detail-card">
+                      {/* Customer name header per bill */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 0 8px', borderBottom: '1px solid #f3f4f6', marginBottom: 4 }}>
+                        {orders[selectedTable.merged_with || selectedTable.id].length > 1 && (
+                          <span style={{ fontSize: '0.7rem', background: '#2563eb', color: 'white', borderRadius: 10, padding: '1px 7px', fontWeight: 700 }}>
+                            #{idx + 1}
+                          </span>
+                        )}
+                        <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>
+                          👤 {order.customer_name}
                         </span>
-                      )}
-                      <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>
-                        👤 {order.customer_name}
-                      </span>
-                      {order.customer_phone && order.customer_phone !== 'Quản lý' && (
-                        <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>· {order.customer_phone}</span>
-                      )}
-                      {/* Status badge */}
-                      <span style={{
-                        fontSize: '0.68rem', fontWeight: 700, padding: '2px 7px', borderRadius: 20,
-                        background: order.status === 'pending' ? '#fef3c7' : order.status === 'preparing' ? '#dbeafe' : order.status === 'completed' ? '#dcfce7' : '#f3f4f6',
-                        color: order.status === 'pending' ? '#d97706' : order.status === 'preparing' ? '#2563eb' : order.status === 'completed' ? '#16a34a' : '#6b7280',
-                      }}>
-                        {order.status === 'pending' ? 'Chờ' : order.status === 'preparing' ? 'Đang làm' : order.status === 'completed' ? 'Xong' : order.status}
-                      </span>
-                      {/* Cancel this single bill */}
-                      <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexShrink: 0 }}>
-                        <button
-                          onClick={async () => {
-                            const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
-                            if (otherTables.length === 0) {
-                              Swal.fire('Lỗi', 'Không có bàn nào khác để chuyển!', 'error');
-                              return;
-                            }
-
-                            const inputOptions = {};
-                            otherTables.forEach(t => {
-                              inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Đang có khách)' : '(Trống)'}`;
-                            });
-
-                            const { value: targetTableId } = await Swal.fire({
-                              title: 'Chuyển bàn',
-                              input: 'select',
-                              inputOptions,
-                              inputPlaceholder: 'Chọn bàn muốn chuyển đến',
-                              showCancelButton: true,
-                              confirmButtonColor: '#2563eb',
-                              cancelButtonColor: '#6b7280',
-                              confirmButtonText: 'Chuyển',
-                              cancelButtonText: 'Huỷ',
-                              reverseButtons: true,
-                              inputValidator: (value) => {
-                                if (!value) return 'Vui lòng chọn một bàn!';
-                              }
-                            });
-
-                            if (targetTableId) {
-                              const { error } = await supabase.from('orders').update({ table_id: targetTableId }).eq('id', order.id);
-                              if (error) {
-                                Swal.fire('Lỗi', error.message, 'error');
+                        {order.customer_phone && order.customer_phone !== 'Quản lý' && (
+                          <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>· {order.customer_phone}</span>
+                        )}
+                        {/* Status badge */}
+                        <span style={{
+                          fontSize: '0.68rem', fontWeight: 700, padding: '2px 7px', borderRadius: 20,
+                          background: order.status === 'pending' ? '#fef3c7' : order.status === 'preparing' ? '#dbeafe' : order.status === 'completed' ? '#dcfce7' : '#f3f4f6',
+                          color: order.status === 'pending' ? '#d97706' : order.status === 'preparing' ? '#2563eb' : order.status === 'completed' ? '#16a34a' : '#6b7280',
+                        }}>
+                          {order.status === 'pending' ? 'Chờ' : order.status === 'preparing' ? 'Đang làm' : order.status === 'completed' ? 'Xong' : order.status}
+                        </span>
+                        {/* Cancel this single bill */}
+                        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexShrink: 0 }}>
+                          <button
+                            onClick={async () => {
+                              const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
+                              if (otherTables.length === 0) {
+                                Swal.fire('Lỗi', 'Không có bàn nào khác để chuyển!', 'error');
                                 return;
                               }
 
-                              const targetTable = otherTables.find(t => t.id === targetTableId);
-                              if (targetTable && targetTable.status === 'available') {
-                                await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
-                              }
+                              const inputOptions = {};
+                              otherTables.forEach(t => {
+                                inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Đang có khách)' : '(Trống)'}`;
+                              });
 
+                              const { value: targetTableId } = await Swal.fire({
+                                title: 'Chuyển bàn',
+                                input: 'select',
+                                inputOptions,
+                                inputPlaceholder: 'Chọn bàn muốn chuyển đến',
+                                showCancelButton: true,
+                                confirmButtonColor: '#2563eb',
+                                cancelButtonColor: '#6b7280',
+                                confirmButtonText: 'Chuyển',
+                                cancelButtonText: 'Huỷ',
+                                reverseButtons: true,
+                                inputValidator: (value) => {
+                                  if (!value) return 'Vui lòng chọn một bàn!';
+                                }
+                              });
+
+                              if (targetTableId) {
+                                const { error } = await supabase.from('orders').update({ table_id: targetTableId }).eq('id', order.id);
+                                if (error) {
+                                  Swal.fire('Lỗi', error.message, 'error');
+                                  return;
+                                }
+
+                                const targetTable = otherTables.find(t => t.id === targetTableId);
+                                if (targetTable && targetTable.status === 'available') {
+                                  await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
+                                }
+
+                                const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== order.id && o.status !== 'cancelled');
+                                if (remaining.length === 0) {
+                                  // Reset toàn bộ nhóm gộp
+                                  const hId = selectedTable.merged_with || selectedTable.id;
+                                  await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
+                                  setSelectedTable(null);
+                                }
+                                fetchTables();
+                                Swal.fire({
+                                  title: 'Thành công',
+                                  text: 'Đã chuyển bàn!',
+                                  icon: 'success',
+                                  toast: true,
+                                  position: 'top-end',
+                                  showConfirmButton: false,
+                                  timer: 2000
+                                });
+                              }
+                            }}
+                            title="Chuyển bill này sang bàn khác"
+                            style={{ background: '#e0e7ff', border: '1.5px solid #a5b4fc', borderRadius: 8, color: '#4f46e5', cursor: 'pointer', padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap' }}
+                          >
+                            Chuyển bàn
+                          </button>
+
+                          <button
+                            onClick={async () => {
+                              const result = await Swal.fire({
+                                title: 'Huỷ bill?',
+                                html: `Huỷ bill của <b>${order.customer_name}</b>?`,
+                                icon: 'warning',
+                                showCancelButton: true,
+                                confirmButtonColor: '#dc2626',
+                                cancelButtonColor: '#6b7280',
+                                confirmButtonText: 'Huỷ bill',
+                                cancelButtonText: 'Không',
+                                reverseButtons: true,
+                              });
+                              if (!result.isConfirmed) return;
+                              await supabase.from('orders').update({ status: 'cancelled' }).eq('id', order.id);
+                              // If all orders at this table are now cancelled, reset the table
                               const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== order.id && o.status !== 'cancelled');
                               if (remaining.length === 0) {
                                 // Reset toàn bộ nhóm gộp
@@ -2485,1539 +2591,1523 @@ export default function TablesPage() {
                                 setSelectedTable(null);
                               }
                               fetchTables();
-                              Swal.fire({
-                                title: 'Thành công',
-                                text: 'Đã chuyển bàn!',
-                                icon: 'success',
-                                toast: true,
-                                position: 'top-end',
-                                showConfirmButton: false,
-                                timer: 2000
-                              });
-                            }
-                          }}
-                          title="Chuyển bill này sang bàn khác"
-                          style={{ background: '#e0e7ff', border: '1.5px solid #a5b4fc', borderRadius: 8, color: '#4f46e5', cursor: 'pointer', padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap' }}
-                        >
-                          Chuyển bàn
-                        </button>
+                            }}
+                            title="Huỷ bill này"
+                            style={{ background: '#fff1f2', border: '1.5px solid #fca5a5', borderRadius: 8, color: '#dc2626', cursor: 'pointer', padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap' }}
+                          >
+                            Huỷ bill
+                          </button>
+                        </div>
+                      </div>
+                      <div className="order-items-list">
+                        {order.order_items?.map((item) => (
+                          <div key={item.id} style={{
+                            display: 'flex', gap: 12, padding: '10px 0',
+                            borderBottom: '1px solid #f3f4f6', alignItems: 'flex-start'
+                          }}>
+                            {/* Food Image */}
+                            <div style={{
+                              width: 52, height: 52, borderRadius: 10,
+                              flexShrink: 0, overflow: 'hidden',
+                              background: '#f3f4f6',
+                              border: '1px solid #e5e7eb',
+                            }}>
+                              {item.menu_item?.image_url ? (
+                                <img
+                                  src={item.menu_item.image_url}
+                                  alt={item.menu_item.name}
+                                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                />
+                              ) : (
+                                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem' }}>🍽️</div>
+                              )}
+                            </div>
 
-                        <button
-                          onClick={async () => {
-                            const result = await Swal.fire({
-                              title: 'Huỷ bill?',
-                              html: `Huỷ bill của <b>${order.customer_name}</b>?`,
-                              icon: 'warning',
-                              showCancelButton: true,
-                              confirmButtonColor: '#dc2626',
-                              cancelButtonColor: '#6b7280',
-                              confirmButtonText: 'Huỷ bill',
-                              cancelButtonText: 'Không',
-                              reverseButtons: true,
-                            });
-                            if (!result.isConfirmed) return;
-                            await supabase.from('orders').update({ status: 'cancelled' }).eq('id', order.id);
-                            // If all orders at this table are now cancelled, reset the table
-                            const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== order.id && o.status !== 'cancelled');
-                            if (remaining.length === 0) {
-                              // Reset toàn bộ nhóm gộp
-                              const hId = selectedTable.merged_with || selectedTable.id;
-                              await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
-                              setSelectedTable(null);
-                            }
-                            fetchTables();
-                          }}
-                          title="Huỷ bill này"
-                          style={{ background: '#fff1f2', border: '1.5px solid #fca5a5', borderRadius: 8, color: '#dc2626', cursor: 'pointer', padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap' }}
-                        >
-                          Huỷ bill
-                        </button>
+                            {/* Content */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              {/* Row 1: Name + delete button */}
+                              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 4 }}>
+                                <span style={{ fontSize: '0.97rem', fontWeight: 600, color: '#111827', lineHeight: 1.3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                  {item.menu_item?.name || 'Món đã xoá'}
+                                  {item.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700, lineHeight: 1 }}>🎁 Món Tặng</span>}
+                                </span>
+                                <button
+                                  title="Xóa món"
+                                  onClick={() => removeItemFromOrder(order.id, item.id, item.menu_item?.name || 'Món này')}
+                                  style={{
+                                    flexShrink: 0, background: 'none', border: 'none',
+                                    color: '#9ca3af', cursor: 'pointer', padding: '0 2px',
+                                    fontSize: '1.1rem', lineHeight: 1,
+                                  }}
+                                >
+                                  ···
+                                </button>
+                              </div>
+
+                              {(() => {
+                                const fullItem = menuItems.find(m => m.id === item.menu_item_id);
+                                const hasOptions = fullItem?.options?.length > 0;
+
+                                const loaiOption = (item.item_options || []).find(o => o.name?.toLowerCase() === 'loại' && o.choice?.toLowerCase() !== 'bình thường');
+                                const otherOptions = (item.item_options || []).filter(o => o.name?.toLowerCase() !== 'loại' && o.choice?.toLowerCase() !== 'bình thường');
+                                const hasValidOptions = loaiOption || otherOptions.length > 0;
+
+                                if (!hasOptions && !hasValidOptions) return null;
+
+                                const openEdit = () => {
+                                  if (!hasOptions) return;
+                                  const current = {};
+                                  (item.item_options || []).forEach(o => { current[o.name] = o.choice; });
+                                  setSelectedOptions(current);
+                                  setOptionQuantity(item.quantity);
+                                  setOptionNote(item.note || '');
+                                  setEditingOrderItem({ orderId: order.id, itemId: item.id });
+                                  setOptionModalItem(fullItem);
+                                  setEditingPrice(false);
+                                  setCustomPrice(null);
+                                };
+                                return (
+                                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 4 }}>
+                                    {hasValidOptions && (
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                        {loaiOption && (
+                                          <span style={{ fontSize: '0.85rem', color: '#6b7280', fontWeight: 500 }}>
+                                            {loaiOption.choice}
+                                          </span>
+                                        )}
+                                        {otherOptions.length > 0 && (
+                                          <span style={{ fontSize: '0.82rem', color: '#9ca3af', fontStyle: 'italic' }}>
+                                            {otherOptions.map(o => o.choice).join(', ')}
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
+                                    {hasOptions && (
+                                      <button
+                                        onClick={openEdit}
+                                        title={item.item_options?.length > 0 ? "Đổi khẩu vị" : "Chọn loại"}
+                                        style={{
+                                          background: '#eff6ff', border: '1px solid #bfdbfe',
+                                          borderRadius: 5, padding: '1px 6px',
+                                          cursor: 'pointer', color: '#2563eb',
+                                          fontSize: '0.72rem', fontWeight: 600,
+                                          display: 'flex', alignItems: 'center', gap: 3,
+                                          whiteSpace: 'nowrap', flexShrink: 0,
+                                          marginTop: hasValidOptions ? 0 : 2
+                                        }}
+                                      >
+                                        ✏️ {item.item_options?.length > 0 ? 'Đổi' : 'Chọn loại'}
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              })()}
+                              {item.note && (
+                                <div style={{ fontSize: '0.82rem', color: '#9ca3af', fontStyle: 'italic', marginTop: 2 }}>
+                                  {item.note}
+                                </div>
+                              )}
+
+                              {/* Row 3: Price left + qty controls right */}
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+                                {/* Editable price */}
+                                {/* Normal price display + edit button */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                                  <span style={{ fontSize: '0.92rem', fontWeight: 700, color: '#111827', display: 'flex', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
+                                    <span style={{ color: '#6b7280', fontWeight: 500, fontSize: '0.82rem' }}>
+                                      {formatPrice(item.unit_price).replace('đ', '')}
+                                    </span>
+                                    <span style={{ color: '#9ca3af', fontSize: '0.78rem' }}>×{item.quantity}</span>
+                                    <span style={{ color: '#9ca3af', fontSize: '0.78rem' }}>=</span>
+                                    <span style={{ color: '#c53b3b', fontWeight: 800 }}>
+                                      {formatPrice(item.unit_price * item.quantity).replace('đ', '')}
+                                    </span>
+                                  </span>
+                                  <button
+                                    onClick={() => {
+                                      setDiscountValue(0);
+                                      setDiscountMode('VND');
+                                      setCustomNewPrice(null);
+                                      setShowPriceModal({ orderId: order.id, itemId: item.id, originalPrice: item.unit_price });
+                                    }}
+                                    title="Sửa giá"
+                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#d1d5db', padding: 2, display: 'flex', alignItems: 'center' }}
+                                  >
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                                    </svg>
+                                  </button>
+                                </div>
+                                {/* Qty controls */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                  <button
+                                    onClick={() => updateItemQuantity(order.id, item.id, item.quantity, -1)}
+                                    style={{
+                                      width: 28, height: 28, borderRadius: 50,
+                                      border: '1.5px solid #d1d5db', background: 'white',
+                                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                      cursor: 'pointer', color: '#374151'
+                                    }}
+                                  >
+                                    <Minus size={13} strokeWidth={2} />
+                                  </button>
+                                  <span style={{ fontSize: '1rem', fontWeight: 600, color: '#111827', minWidth: 16, textAlign: 'center' }}>
+                                    {item.quantity}
+                                  </span>
+                                  <button
+                                    onClick={() => updateItemQuantity(order.id, item.id, item.quantity, 1)}
+                                    style={{
+                                      width: 28, height: 28, borderRadius: 50,
+                                      border: '1.5px solid #d1d5db', background: 'white',
+                                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                      cursor: 'pointer', color: '#374151'
+                                    }}
+                                  >
+                                    <Plus size={13} strokeWidth={2} />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                    <div className="order-items-list">
-                      {order.order_items?.map((item) => (
-                        <div key={item.id} style={{
-                          display: 'flex', gap: 12, padding: '10px 0',
-                          borderBottom: '1px solid #f3f4f6', alignItems: 'flex-start'
-                        }}>
-                          {/* Food Image */}
-                          <div style={{
-                            width: 52, height: 52, borderRadius: 10,
-                            flexShrink: 0, overflow: 'hidden',
-                            background: '#f3f4f6',
-                            border: '1px solid #e5e7eb',
-                          }}>
-                            {item.menu_item?.image_url ? (
-                              <img
-                                src={item.menu_item.image_url}
-                                alt={item.menu_item.name}
-                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                              />
-                            ) : (
-                              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem' }}>🍽️</div>
-                            )}
-                          </div>
-
-                          {/* Content */}
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            {/* Row 1: Name + delete button */}
-                            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 4 }}>
-                              <span style={{ fontSize: '0.97rem', fontWeight: 600, color: '#111827', lineHeight: 1.3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                {item.menu_item?.name || 'Món đã xoá'}
-                                {item.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700, lineHeight: 1 }}>🎁 Món Tặng</span>}
-                              </span>
-                              <button
-                                title="Xóa món"
-                                onClick={() => removeItemFromOrder(order.id, item.id, item.menu_item?.name || 'Món này')}
-                                style={{
-                                  flexShrink: 0, background: 'none', border: 'none',
-                                  color: '#9ca3af', cursor: 'pointer', padding: '0 2px',
-                                  fontSize: '1.1rem', lineHeight: 1,
-                                }}
-                              >
-                                ···
-                              </button>
-                            </div>
-
-                            {(() => {
-                              const fullItem = menuItems.find(m => m.id === item.menu_item_id);
-                              const hasOptions = fullItem?.options?.length > 0;
-
-                              const loaiOption = (item.item_options || []).find(o => o.name?.toLowerCase() === 'loại' && o.choice?.toLowerCase() !== 'bình thường');
-                              const otherOptions = (item.item_options || []).filter(o => o.name?.toLowerCase() !== 'loại' && o.choice?.toLowerCase() !== 'bình thường');
-                              const hasValidOptions = loaiOption || otherOptions.length > 0;
-
-                              if (!hasOptions && !hasValidOptions) return null;
-
-                              const openEdit = () => {
-                                if (!hasOptions) return;
-                                const current = {};
-                                (item.item_options || []).forEach(o => { current[o.name] = o.choice; });
-                                setSelectedOptions(current);
-                                setOptionQuantity(item.quantity);
-                                setOptionNote(item.note || '');
-                                setEditingOrderItem({ orderId: order.id, itemId: item.id });
-                                setOptionModalItem(fullItem);
-                                setEditingPrice(false);
-                                setCustomPrice(null);
-                              };
-                              return (
-                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 4 }}>
-                                  {hasValidOptions && (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                                      {loaiOption && (
-                                        <span style={{ fontSize: '0.85rem', color: '#6b7280', fontWeight: 500 }}>
-                                          {loaiOption.choice}
-                                        </span>
-                                      )}
-                                      {otherOptions.length > 0 && (
-                                        <span style={{ fontSize: '0.82rem', color: '#9ca3af', fontStyle: 'italic' }}>
-                                          {otherOptions.map(o => o.choice).join(', ')}
-                                        </span>
-                                      )}
-                                    </div>
-                                  )}
-                                  {hasOptions && (
-                                    <button
-                                      onClick={openEdit}
-                                      title={item.item_options?.length > 0 ? "Đổi khẩu vị" : "Chọn loại"}
-                                      style={{
-                                        background: '#eff6ff', border: '1px solid #bfdbfe',
-                                        borderRadius: 5, padding: '1px 6px',
-                                        cursor: 'pointer', color: '#2563eb',
-                                        fontSize: '0.72rem', fontWeight: 600,
-                                        display: 'flex', alignItems: 'center', gap: 3,
-                                        whiteSpace: 'nowrap', flexShrink: 0,
-                                        marginTop: hasValidOptions ? 0 : 2
-                                      }}
-                                    >
-                                      ✏️ {item.item_options?.length > 0 ? 'Đổi' : 'Chọn loại'}
-                                    </button>
-                                  )}
-                                </div>
-                              );
-                            })()}
-                            {item.note && (
-                              <div style={{ fontSize: '0.82rem', color: '#9ca3af', fontStyle: 'italic', marginTop: 2 }}>
-                                {item.note}
-                              </div>
-                            )}
-
-                            {/* Row 3: Price left + qty controls right */}
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
-                              {/* Editable price */}
-                              {/* Normal price display + edit button */}
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                                <span style={{ fontSize: '0.92rem', fontWeight: 700, color: '#111827', display: 'flex', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
-                                  <span style={{ color: '#6b7280', fontWeight: 500, fontSize: '0.82rem' }}>
-                                    {formatPrice(item.unit_price).replace('đ', '')}
-                                  </span>
-                                  <span style={{ color: '#9ca3af', fontSize: '0.78rem' }}>×{item.quantity}</span>
-                                  <span style={{ color: '#9ca3af', fontSize: '0.78rem' }}>=</span>
-                                  <span style={{ color: '#c53b3b', fontWeight: 800 }}>
-                                    {formatPrice(item.unit_price * item.quantity).replace('đ', '')}
-                                  </span>
-                                </span>
-                                <button
-                                  onClick={() => {
-                                    setDiscountValue(0);
-                                    setDiscountMode('VND');
-                                    setCustomNewPrice(null);
-                                    setShowPriceModal({ orderId: order.id, itemId: item.id, originalPrice: item.unit_price });
-                                  }}
-                                  title="Sửa giá"
-                                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#d1d5db', padding: 2, display: 'flex', alignItems: 'center' }}
-                                >
-                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                                  </svg>
-                                </button>
-                              </div>
-                              {/* Qty controls */}
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                <button
-                                  onClick={() => updateItemQuantity(order.id, item.id, item.quantity, -1)}
-                                  style={{
-                                    width: 28, height: 28, borderRadius: 50,
-                                    border: '1.5px solid #d1d5db', background: 'white',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    cursor: 'pointer', color: '#374151'
-                                  }}
-                                >
-                                  <Minus size={13} strokeWidth={2} />
-                                </button>
-                                <span style={{ fontSize: '1rem', fontWeight: 600, color: '#111827', minWidth: 16, textAlign: 'center' }}>
-                                  {item.quantity}
-                                </span>
-                                <button
-                                  onClick={() => updateItemQuantity(order.id, item.id, item.quantity, 1)}
-                                  style={{
-                                    width: 28, height: 28, borderRadius: 50,
-                                    border: '1.5px solid #d1d5db', background: 'white',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    cursor: 'pointer', color: '#374151'
-                                  }}
-                                >
-                                  <Plus size={13} strokeWidth={2} />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="empty-state" style={{ padding: 'var(--space-8)' }}>
-                  <ChefHat size={48} className="text-muted" />
-                  <p className="mt-4">Bàn này chưa có đơn hàng nào.</p>
-                  <button className="btn btn-primary mt-4" onClick={() => setAddingToOrder('admin')}>
-                    <Plus size={16} /> Bắt đầu gọi món
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Floating FAB — absolutely positioned on modal, not in scroll area */}
-            {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (
-              <button
-                onClick={() => setAddingToOrder('admin')}
-                style={{
-                  position: 'absolute',
-                  right: 16,
-                  bottom: 115,
-                  width: 50, height: 50,
-                  borderRadius: '50%',
-                  background: '#2563eb',
-                  border: 'none',
-                  color: 'white',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  boxShadow: '0 4px 20px rgba(37,99,235,0.45)',
-                  zIndex: 20,
-                  touchAction: 'manipulation',
-                }}
-              >
-                <Plus size={22} strokeWidth={2.5} />
-              </button>
-            )}
-            <div className="modal-footer" style={{ padding: '8px 12px', gap: 6, flexDirection: 'column', alignItems: 'stretch' }}>
-              {/* Total summary row */}
-              {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (() => {
-                const total = orders[selectedTable.merged_with || selectedTable.id].reduce((s, o) => s + (o.total_amount || 0), 0);
-                return (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid #f3f4f6' }}>
-                    <span style={{ fontSize: '0.88rem', color: '#6b7280', fontWeight: 500 }}>Tổng cộng:</span>
-                    <span style={{ fontSize: '1.05rem', fontWeight: 800, color: '#c53b3b' }}>{formatPrice(total)}</span>
-                  </div>
-                );
-              })()}
-
-              {/* Nút Gộp Bill Mobile — REMOVED standalone row, moved into action row below */}
-
-              {/* Action buttons row — all in one row */}
-              {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (() => {
-                const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
-                const smallBtnStyle = {
-                  width: 54, minWidth: 54,
-                  padding: '5px 2px',
-                  borderRadius: 12,
-                  background: 'white',
-                  cursor: 'pointer',
-                  display: 'flex', flexDirection: 'column',
-                  alignItems: 'center', justifyContent: 'center',
-                  gap: 2,
-                  fontSize: '0.65rem', fontWeight: 600,
-                };
-                return (
-                  <div style={{ display: 'flex', gap: 5, width: '100%', alignItems: 'stretch' }}>
-
-                    {/* Tạm tính */}
-                    <button onClick={() => setShowBillPreview(true)} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
-                      <Receipt size={16} strokeWidth={1.8} />
-                      Tạm tính
-                    </button>
-
-                    {/* Gộp bàn */}
-                    <button onClick={handleMergeTable} style={{ ...smallBtnStyle, border: '1.5px solid #d8b4fe', color: '#9333ea' }}>
-                      <Users size={16} strokeWidth={1.8} />
-                      Gộp bàn
-                    </button>
-
-                    {/* Gộp bill — chỉ hiện khi có > 1 bill */}
-                    {tableBills.length > 1 && (
-                      <button onClick={mergeBills} style={{ ...smallBtnStyle, border: '1.5px dashed #8b5cf6', color: '#7c3aed', background: '#faf5ff' }}>
-                        🔗
-                        <span style={{ fontSize: '0.6rem', lineHeight: 1.1, textAlign: 'center' }}>Gộp bill</span>
-                      </button>
-                    )}
-
-                    {/* Huỷ đơn */}
-                    <button onClick={() => setCancelConfirm(selectedTable)} style={{ ...smallBtnStyle, border: '1.5px solid #fca5a5', color: '#dc2626' }}>
-                      <Trash2 size={16} strokeWidth={1.8} />
-                      Huỷ đơn
-                    </button>
-
-                    {/* In hoá đơn — compact */}
-                    <button onClick={handlePrintInvoice} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
-                      <Printer size={16} strokeWidth={1.8} />
-                      In HĐ
-                    </button>
-
-                    {/* Thanh toán — solid blue pill, widest */}
-                    <button
-                      onClick={() => {
-                        const total = orders[selectedTable.merged_with || selectedTable.id]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
-                        setConfirmPayment({ table: selectedTable, totalAmount: total });
-                      }}
-                      style={{
-                        flex: 2,
-                        padding: '8px 10px',
-                        border: 'none',
-                        borderRadius: 100,
-                        background: '#2563eb',
-                        color: 'white',
-                        cursor: 'pointer',
-                        fontSize: '0.9rem', fontWeight: 700,
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      Thanh toán
+                  ))
+                ) : (
+                  <div className="empty-state" style={{ padding: 'var(--space-8)' }}>
+                    <ChefHat size={48} className="text-muted" />
+                    <p className="mt-4">Bàn này chưa có đơn hàng nào.</p>
+                    <button className="btn btn-primary mt-4" onClick={() => setAddingToOrder('admin')}>
+                      <Plus size={16} /> Bắt đầu gọi món
                     </button>
                   </div>
-                );
-              })()}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Sửa giá bán bottom-sheet modal ── */}
-      {showPriceModal && (() => {
-        const orig = showPriceModal.originalPrice;
-        const newPrice = discountMode === 'VND'
-          ? Math.max(0, orig - (discountValue || 0))
-          : Math.max(0, orig - Math.round(orig * (discountValue || 0) / 100));
-        return (
-          <div
-            style={{
-              position: 'fixed', inset: 0, zIndex: 1200,
-              background: 'rgba(0,0,0,0.45)',
-              display: 'flex', alignItems: 'flex-end',
-            }}
-            onClick={() => setShowPriceModal(null)}
-          >
-            <div
-              style={{
-                width: '100%', background: 'white',
-                borderRadius: '20px 20px 0 0',
-                padding: '0 0 32px 0',
-                boxShadow: '0 -4px 30px rgba(0,0,0,0.15)',
-                animation: 'slideUp 0.25s ease-out',
-              }}
-              onClick={e => e.stopPropagation()}
-            >
-              {/* Header */}
-              <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '18px 20px 14px',
-                borderBottom: '1px solid #f3f4f6',
-              }}>
-                <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#111827' }}>Sửa giá bán</span>
-                <button
-                  onClick={() => setShowPriceModal(null)}
-                  style={{ background: 'none', border: 'none', fontSize: '1.3rem', color: '#6b7280', cursor: 'pointer', lineHeight: 1 }}
-                >×</button>
+                )}
               </div>
 
-              <div style={{ padding: '20px 20px 0' }}>
-                {/* Giá bán */}
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 6, fontWeight: 500 }}>Giá bán</div>
-                  <div style={{
-                    background: '#f9fafb', borderRadius: 12, padding: '14px 16px',
-                    textAlign: 'right', fontSize: '1.05rem', fontWeight: 700, color: '#111827',
-                    border: '1px solid #f3f4f6',
-                  }}>
-                    {orig.toLocaleString('vi-VN')}
-                  </div>
+              {/* Floating FAB — absolutely positioned on modal, not in scroll area */}
+              {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (
+                <button
+                  onClick={() => setAddingToOrder('admin')}
+                  style={{
+                    position: 'absolute',
+                    right: 16,
+                    bottom: 115,
+                    width: 50, height: 50,
+                    borderRadius: '50%',
+                    background: '#2563eb',
+                    border: 'none',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 20px rgba(37,99,235,0.45)',
+                    zIndex: 20,
+                    touchAction: 'manipulation',
+                  }}
+                >
+                  <Plus size={22} strokeWidth={2.5} />
+                </button>
+              )}
+              <div className="modal-footer" style={{ padding: '8px 12px', gap: 6, flexDirection: 'column', alignItems: 'stretch' }}>
+                {/* Total summary row */}
+                {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (() => {
+                  const total = orders[selectedTable.merged_with || selectedTable.id].reduce((s, o) => s + (o.total_amount || 0), 0);
+                  return (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid #f3f4f6' }}>
+                      <span style={{ fontSize: '0.88rem', color: '#6b7280', fontWeight: 500 }}>Tổng cộng:</span>
+                      <span style={{ fontSize: '1.05rem', fontWeight: 800, color: '#c53b3b' }}>{formatPrice(total)}</span>
+                    </div>
+                  );
+                })()}
+
+                {/* Nút Gộp Bill Mobile — REMOVED standalone row, moved into action row below */}
+
+                {/* Action buttons row — all in one row */}
+                {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (() => {
+                  const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
+                  const smallBtnStyle = {
+                    width: 54, minWidth: 54,
+                    padding: '5px 2px',
+                    borderRadius: 12,
+                    background: 'white',
+                    cursor: 'pointer',
+                    display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center',
+                    gap: 2,
+                    fontSize: '0.65rem', fontWeight: 600,
+                  };
+                  return (
+                    <div style={{ display: 'flex', gap: 5, width: '100%', alignItems: 'stretch' }}>
+
+                      {/* Tạm tính */}
+                      <button onClick={() => setShowBillPreview(true)} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
+                        <Receipt size={16} strokeWidth={1.8} />
+                        Tạm tính
+                      </button>
+
+                      {/* Gộp bàn */}
+                      <button onClick={handleMergeTable} style={{ ...smallBtnStyle, border: '1.5px solid #d8b4fe', color: '#9333ea' }}>
+                        <Users size={16} strokeWidth={1.8} />
+                        Gộp bàn
+                      </button>
+
+                      {/* Gộp bill — chỉ hiện khi có > 1 bill */}
+                      {tableBills.length > 1 && (
+                        <button onClick={mergeBills} style={{ ...smallBtnStyle, border: '1.5px dashed #8b5cf6', color: '#7c3aed', background: '#faf5ff' }}>
+                          🔗
+                          <span style={{ fontSize: '0.6rem', lineHeight: 1.1, textAlign: 'center' }}>Gộp bill</span>
+                        </button>
+                      )}
+
+                      {/* Huỷ đơn */}
+                      <button onClick={() => setCancelConfirm(selectedTable)} style={{ ...smallBtnStyle, border: '1.5px solid #fca5a5', color: '#dc2626' }}>
+                        <Trash2 size={16} strokeWidth={1.8} />
+                        Huỷ đơn
+                      </button>
+
+                      {/* In hoá đơn — compact */}
+                      <button onClick={handlePrintInvoice} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
+                        <Printer size={16} strokeWidth={1.8} />
+                        In HĐ
+                      </button>
+
+                      {/* Thanh toán — solid blue pill, widest */}
+                      <button
+                        onClick={() => {
+                          const total = orders[selectedTable.merged_with || selectedTable.id]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
+                          setConfirmPayment({ table: selectedTable, totalAmount: total });
+                        }}
+                        style={{
+                          flex: 2,
+                          padding: '8px 10px',
+                          border: 'none',
+                          borderRadius: 100,
+                          background: '#2563eb',
+                          color: 'white',
+                          cursor: 'pointer',
+                          fontSize: '0.9rem', fontWeight: 700,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        Thanh toán
+                      </button>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* ── Sửa giá bán bottom-sheet modal ── */}
+      {
+        showPriceModal && (() => {
+          const orig = showPriceModal.originalPrice;
+          const newPrice = discountMode === 'VND'
+            ? Math.max(0, orig - (discountValue || 0))
+            : Math.max(0, orig - Math.round(orig * (discountValue || 0) / 100));
+          return (
+            <div
+              style={{
+                position: 'fixed', inset: 0, zIndex: 1200,
+                background: 'rgba(0,0,0,0.45)',
+                display: 'flex', alignItems: 'flex-end',
+              }}
+              onClick={() => setShowPriceModal(null)}
+            >
+              <div
+                style={{
+                  width: '100%', background: 'white',
+                  borderRadius: '20px 20px 0 0',
+                  padding: '0 0 32px 0',
+                  boxShadow: '0 -4px 30px rgba(0,0,0,0.15)',
+                  animation: 'slideUp 0.25s ease-out',
+                }}
+                onClick={e => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '18px 20px 14px',
+                  borderBottom: '1px solid #f3f4f6',
+                }}>
+                  <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#111827' }}>Sửa giá bán</span>
+                  <button
+                    onClick={() => setShowPriceModal(null)}
+                    style={{ background: 'none', border: 'none', fontSize: '1.3rem', color: '#6b7280', cursor: 'pointer', lineHeight: 1 }}
+                  >×</button>
                 </div>
 
-                {/* Giảm giá */}
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 6, fontWeight: 500 }}>Giảm giá</div>
-                  <div style={{
-                    display: 'flex', alignItems: 'center', gap: 0,
-                    border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden',
-                    background: 'white',
-                  }}>
-                    {/* Toggle VNĐ / % */}
-                    <div style={{ display: 'flex', borderRight: '1px solid #e5e7eb', flexShrink: 0 }}>
-                      {['VND', '% '].map(m => (
-                        <button
-                          key={m}
-                          onClick={() => { setDiscountMode(m.trim()); setDiscountValue(0); }}
-                          style={{
-                            padding: '12px 14px', border: 'none', cursor: 'pointer',
-                            fontSize: '0.85rem', fontWeight: 700,
-                            background: discountMode === m.trim() ? '#eff6ff' : 'white',
-                            color: discountMode === m.trim() ? '#2563eb' : '#9ca3af',
-                          }}
-                        >{m.trim() === 'VND' ? 'VNĐ' : '%'}</button>
-                      ))}
+                <div style={{ padding: '20px 20px 0' }}>
+                  {/* Giá bán */}
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 6, fontWeight: 500 }}>Giá bán</div>
+                    <div style={{
+                      background: '#f9fafb', borderRadius: 12, padding: '14px 16px',
+                      textAlign: 'right', fontSize: '1.05rem', fontWeight: 700, color: '#111827',
+                      border: '1px solid #f3f4f6',
+                    }}>
+                      {orig.toLocaleString('vi-VN')}
                     </div>
+                  </div>
+
+                  {/* Giảm giá */}
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 6, fontWeight: 500 }}>Giảm giá</div>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 0,
+                      border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden',
+                      background: 'white',
+                    }}>
+                      {/* Toggle VNĐ / % */}
+                      <div style={{ display: 'flex', borderRight: '1px solid #e5e7eb', flexShrink: 0 }}>
+                        {['VND', '% '].map(m => (
+                          <button
+                            key={m}
+                            onClick={() => { setDiscountMode(m.trim()); setDiscountValue(0); }}
+                            style={{
+                              padding: '12px 14px', border: 'none', cursor: 'pointer',
+                              fontSize: '0.85rem', fontWeight: 700,
+                              background: discountMode === m.trim() ? '#eff6ff' : 'white',
+                              color: discountMode === m.trim() ? '#2563eb' : '#9ca3af',
+                            }}
+                          >{m.trim() === 'VND' ? 'VNĐ' : '%'}</button>
+                        ))}
+                      </div>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        placeholder="0"
+                        value={discountValue || ''}
+                        onChange={e => {
+                          const v = Number(e.target.value.replace(/\D/g, '')) || 0;
+                          setDiscountValue(v);
+                          // recalculate and clear customNewPrice so Giá mới reflects calculation
+                          setCustomNewPrice(null);
+                        }}
+                        style={{
+                          flex: 1, border: 'none', outline: 'none',
+                          padding: '12px 16px', fontSize: '16px',
+                          fontWeight: 600, textAlign: 'right', background: 'white',
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Giá mới — editable */}
+                  <div style={{ marginBottom: 24 }}>
+                    <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 6, fontWeight: 500 }}>Giá mới</div>
                     <input
                       type="text"
                       inputMode="numeric"
                       pattern="[0-9]*"
-                      placeholder="0"
-                      value={discountValue || ''}
-                      onChange={e => {
-                        const v = Number(e.target.value.replace(/\D/g, '')) || 0;
-                        setDiscountValue(v);
-                        // recalculate and clear customNewPrice so Giá mới reflects calculation
-                        setCustomNewPrice(null);
-                      }}
+                      value={customNewPrice != null ? customNewPrice : newPrice}
+                      onChange={e => setCustomNewPrice(Number(e.target.value.replace(/\D/g, '')) || 0)}
                       style={{
-                        flex: 1, border: 'none', outline: 'none',
-                        padding: '12px 16px', fontSize: '16px',
-                        fontWeight: 600, textAlign: 'right', background: 'white',
+                        width: '100%', boxSizing: 'border-box',
+                        background: '#f9fafb', borderRadius: 12, padding: '14px 16px',
+                        textAlign: 'right', fontSize: '16px', fontWeight: 700,
+                        color: (customNewPrice != null ? customNewPrice : newPrice) < orig ? '#2563eb' : '#111827',
+                        border: '1.5px solid #2563eb', outline: 'none',
                       }}
                     />
                   </div>
-                </div>
 
-                {/* Giá mới — editable */}
-                <div style={{ marginBottom: 24 }}>
-                  <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 6, fontWeight: 500 }}>Giá mới</div>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    value={customNewPrice != null ? customNewPrice : newPrice}
-                    onChange={e => setCustomNewPrice(Number(e.target.value.replace(/\D/g, '')) || 0)}
+                  {/* Lưu button */}
+                  <button
+                    onClick={() => updateItemPrice(showPriceModal.orderId, showPriceModal.itemId, customNewPrice != null ? customNewPrice : newPrice)}
                     style={{
-                      width: '100%', boxSizing: 'border-box',
-                      background: '#f9fafb', borderRadius: 12, padding: '14px 16px',
-                      textAlign: 'right', fontSize: '16px', fontWeight: 700,
-                      color: (customNewPrice != null ? customNewPrice : newPrice) < orig ? '#2563eb' : '#111827',
-                      border: '1.5px solid #2563eb', outline: 'none',
+                      width: '100%', padding: '15px', borderRadius: 100,
+                      background: '#2563eb', border: 'none', color: 'white',
+                      fontSize: '1rem', fontWeight: 700, cursor: 'pointer',
+                      boxShadow: '0 4px 16px rgba(37,99,235,0.35)',
                     }}
-                  />
+                  >
+                    Lưu
+                  </button>
                 </div>
-
-                {/* Lưu button */}
-                <button
-                  onClick={() => updateItemPrice(showPriceModal.orderId, showPriceModal.itemId, customNewPrice != null ? customNewPrice : newPrice)}
-                  style={{
-                    width: '100%', padding: '15px', borderRadius: 100,
-                    background: '#2563eb', border: 'none', color: 'white',
-                    fontSize: '1rem', fontWeight: 700, cursor: 'pointer',
-                    boxShadow: '0 4px 16px rgba(37,99,235,0.35)',
-                  }}
-                >
-                  Lưu
-                </button>
               </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })()
+      }
 
       {/* Admin Menu Modal */}
 
-      {addingToOrder && (() => {
-        const closeModal = () => {
-          setAddingToOrder(null);
-          setAddItemSearch('');
-          if (selectedTable && (!orders[selectedTable.merged_with || selectedTable.id] || orders[selectedTable.merged_with || selectedTable.id].length === 0)) {
-            setSelectedTable(null);
-          }
-        };
+      {
+        addingToOrder && (() => {
+          const closeModal = () => {
+            setAddingToOrder(null);
+            setAddItemSearch('');
+            if (selectedTable && (!orders[selectedTable.merged_with || selectedTable.id] || orders[selectedTable.merged_with || selectedTable.id].length === 0)) {
+              setSelectedTable(null);
+            }
+          };
 
-        const activeOrder = selectedTable && orders[selectedTable.merged_with || selectedTable.id]
-          ? (orders[selectedTable.merged_with || selectedTable.id].find(o => o.customer_name === 'Admin') || orders[selectedTable.merged_with || selectedTable.id][0])
-          : null;
-        const orderItems = activeOrder?.order_items || [];
-        const totalCartItems = orderItems.reduce((sum, oi) => sum + oi.quantity, 0);
+          const activeOrder = selectedTable && orders[selectedTable.merged_with || selectedTable.id]
+            ? (orders[selectedTable.merged_with || selectedTable.id].find(o => o.customer_name === 'Admin') || orders[selectedTable.merged_with || selectedTable.id][0])
+            : null;
+          const orderItems = activeOrder?.order_items || [];
+          const totalCartItems = orderItems.reduce((sum, oi) => sum + oi.quantity, 0);
 
-        const getItemCategories = (item) => {
-          let itemCats = item.category_id ? [item.category_id] : [];
-          if (item.options) {
-            item.options.forEach(opt => {
-              if (opt.choiceCategories) {
-                opt.choiceCategories.forEach(c => {
-                  if (c && !itemCats.includes(c)) itemCats.push(c);
-                });
-              }
-            });
-          }
-          return itemCats.length > 0 ? itemCats : [null];
-        };
+          const getItemCategories = (item) => {
+            let itemCats = item.category_id ? [item.category_id] : [];
+            if (item.options) {
+              item.options.forEach(opt => {
+                if (opt.choiceCategories) {
+                  opt.choiceCategories.forEach(c => {
+                    if (c && !itemCats.includes(c)) itemCats.push(c);
+                  });
+                }
+              });
+            }
+            return itemCats.length > 0 ? itemCats : [null];
+          };
 
-        const filteredItems = menuItems.filter(item => {
-          const itemCats = getItemCategories(item);
-          const matchesCat = activeMenuCategory === 'all' || itemCats.includes(activeMenuCategory);
-          const matchesSearch = removeVietnameseTones(item.name).includes(removeVietnameseTones(addItemSearch));
-          return matchesCat && matchesSearch;
-        });
+          const filteredItems = menuItems.filter(item => {
+            const itemCats = getItemCategories(item);
+            const matchesCat = activeMenuCategory === 'all' || itemCats.includes(activeMenuCategory);
+            const matchesSearch = removeVietnameseTones(item.name).includes(removeVietnameseTones(addItemSearch));
+            return matchesCat && matchesSearch;
+          });
 
-        // Group filtered items by category (map them correctly to categories)
-        const grouped = categories
-          .map(cat => ({
-            ...cat,
-            items: filteredItems.filter(item => getItemCategories(item).includes(cat.id))
-          }))
-          .filter(cat => cat.items.length > 0 && (activeMenuCategory === 'all' || cat.id === activeMenuCategory));
+          // Group filtered items by category (map them correctly to categories)
+          const grouped = categories
+            .map(cat => ({
+              ...cat,
+              items: filteredItems.filter(item => getItemCategories(item).includes(cat.id))
+            }))
+            .filter(cat => cat.items.length > 0 && (activeMenuCategory === 'all' || cat.id === activeMenuCategory));
 
-        return (
-          <div
-            style={{
-              position: 'fixed', inset: 0, zIndex: 1050,
-              background: 'white',
-              display: 'flex', flexDirection: 'column',
-              overflow: 'hidden'
-            }}
-          >
-            {/* Top bar & Search combined */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', paddingTop: 'calc(env(safe-area-inset-top, 0px) + 12px)', borderBottom: '1px solid #f3f4f6' }}>
-              <span style={{ fontWeight: 900, fontSize: '1.25rem', color: '#2563eb', whiteSpace: 'nowrap' }}>Bàn {selectedTable?.table_number}</span>
+          return (
+            <div
+              style={{
+                position: 'fixed', inset: 0, zIndex: 1050,
+                background: 'white',
+                display: 'flex', flexDirection: 'column',
+                overflow: 'hidden'
+              }}
+            >
+              {/* Top bar & Search combined */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', paddingTop: 'calc(env(safe-area-inset-top, 0px) + 12px)', borderBottom: '1px solid #f3f4f6' }}>
+                <span style={{ fontWeight: 900, fontSize: '1.25rem', color: '#2563eb', whiteSpace: 'nowrap' }}>Bàn {selectedTable?.table_number}</span>
 
-              <div style={{ position: 'relative', flex: 1 }}>
-                <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
-                <input
-                  placeholder="Tìm món ăn..."
-                  value={addItemSearch}
-                  onChange={e => setAddItemSearch(e.target.value)}
-                  style={{
-                    width: '100%', padding: '8px 28px 8px 34px',
-                    borderRadius: 20, border: '1px solid #e5e7eb',
-                    background: '#f9fafb', fontSize: '0.88rem', outline: 'none'
-                  }}
-                />
-                {addItemSearch && (
+                <div style={{ position: 'relative', flex: 1 }}>
+                  <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
+                  <input
+                    placeholder="Tìm món ăn..."
+                    value={addItemSearch}
+                    onChange={e => setAddItemSearch(e.target.value)}
+                    style={{
+                      width: '100%', padding: '8px 28px 8px 34px',
+                      borderRadius: 20, border: '1px solid #e5e7eb',
+                      background: '#f9fafb', fontSize: '0.88rem', outline: 'none'
+                    }}
+                  />
+                  {addItemSearch && (
+                    <button
+                      onClick={() => setAddItemSearch('')}
+                      style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 2, display: 'flex' }}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4, flexShrink: 0, display: 'flex' }}
+                  onClick={closeModal}
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              {/* Category pills */}
+              <div style={{ display: 'flex', gap: 6, padding: '6px 12px', overflowX: 'auto', flexShrink: 0, borderBottom: '1px solid #f3f4f6' }}>
+                {[{ id: 'all', name: 'Tất cả' }, ...categories].map(cat => (
                   <button
-                    onClick={() => setAddItemSearch('')}
-                    style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 2, display: 'flex' }}
+                    key={cat.id}
+                    onClick={() => setActiveMenuCategory(cat.id)}
+                    style={{
+                      flexShrink: 0,
+                      padding: '5px 14px',
+                      borderRadius: 24,
+                      border: '1.5px solid',
+                      borderColor: activeMenuCategory === cat.id ? '#2563eb' : '#e5e7eb',
+                      background: activeMenuCategory === cat.id ? '#2563eb' : 'white',
+                      color: activeMenuCategory === cat.id ? 'white' : '#374151',
+                      fontWeight: activeMenuCategory === cat.id ? 700 : 500,
+                      fontSize: '0.8rem',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
                   >
-                    <X size={14} />
+                    {cat.name}
                   </button>
+                ))}
+              </div>
+
+              {/* Item list */}
+              <div style={{ flex: 1, overflowY: 'auto', background: '#fafafa', paddingBottom: totalCartItems > 0 ? 90 : 16 }}>
+                {filteredItems.length === 0 && (
+                  <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>Không tìm thấy món ăn nào</div>
+                )}
+
+                {activeMenuCategory === 'all' ? (
+                  /* ── Tất cả: flat list, không header nhóm ── */
+                  filteredItems.map(item => {
+                    const itemsInOrder = orderItems.filter(oi => oi.menu_item_id === item.id);
+                    const qty = itemsInOrder.reduce((s, oi) => s + oi.quantity, 0);
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={() => addItemToOrder('admin', item)}
+                        style={{
+                          display: 'flex', alignItems: 'center',
+                          padding: '7px 12px',
+                          background: 'white',
+                          borderBottom: '1px solid #f3f4f6',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <div style={{
+                          width: 44, height: 44, borderRadius: 8,
+                          overflow: 'hidden', flexShrink: 0,
+                          background: '#eff6ff',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          position: 'relative'
+                        }}>
+                          {item.image_url
+                            ? <Image src={item.image_url} alt={item.name} fill sizes="44px" style={{ objectFit: 'cover' }} />
+                            : <ChefHat size={20} style={{ color: '#93c5fd' }} />}
+                        </div>
+                        <div style={{ flex: 1, marginLeft: 10, paddingRight: 6 }}>
+                          <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#111827', marginBottom: 1, lineHeight: 1.25 }}>{item.name}</div>
+                          <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#6b7280' }}>{getItemDisplayPrice(item)}</div>
+                        </div>
+                        {qty > 0 ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={e => e.stopPropagation()}>
+                            <button onClick={() => decreaseItemFromMenu(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                              <Minus size={13} strokeWidth={2.5} />
+                            </button>
+                            <span style={{ width: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{qty}</span>
+                            <button onClick={() => addItemToOrder('admin', item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                              <Plus size={13} strokeWidth={2.5} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button onClick={e => { e.stopPropagation(); addItemToOrder('admin', item); }} style={{ width: 28, height: 28, borderRadius: '50%', background: 'white', border: '1.5px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#374151' }}>
+                            <Plus size={15} strokeWidth={2} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })
+                ) : (
+                  /* ── Category cụ thể: hiển thị theo nhóm có header ── */
+                  grouped.map(cat => (
+                    <div key={cat.id}>
+                      <div style={{ padding: '8px 16px 2px', fontSize: '0.72rem', fontWeight: 800, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        {cat.name} ({cat.items.length})
+                      </div>
+                      {cat.items.map(item => {
+                        const itemsInOrder = orderItems.filter(oi => oi.menu_item_id === item.id);
+                        const qty = itemsInOrder.reduce((s, oi) => s + oi.quantity, 0);
+                        return (
+                          <div
+                            key={item.id}
+                            onClick={() => addItemToOrder('admin', item)}
+                            style={{
+                              display: 'flex', alignItems: 'center',
+                              padding: '7px 12px',
+                              background: 'white',
+                              borderBottom: '1px solid #f3f4f6',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <div style={{
+                              width: 44, height: 44, borderRadius: 8,
+                              overflow: 'hidden', flexShrink: 0,
+                              background: '#eff6ff',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              position: 'relative'
+                            }}>
+                              {item.image_url
+                                ? <Image src={item.image_url} alt={item.name} fill sizes="44px" style={{ objectFit: 'cover' }} />
+                                : <ChefHat size={20} style={{ color: '#93c5fd' }} />}
+                            </div>
+                            <div style={{ flex: 1, marginLeft: 10, paddingRight: 6 }}>
+                              <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#111827', marginBottom: 1, lineHeight: 1.25 }}>{item.name}</div>
+                              <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#6b7280' }}>{getItemDisplayPrice(item)}</div>
+                            </div>
+                            {qty > 0 ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={e => e.stopPropagation()}>
+                                <button onClick={() => decreaseItemFromMenu(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                                  <Minus size={13} strokeWidth={2.5} />
+                                </button>
+                                <span style={{ width: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{qty}</span>
+                                <button onClick={() => addItemToOrder('admin', item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                                  <Plus size={13} strokeWidth={2.5} />
+                                </button>
+                              </div>
+                            ) : (
+                              <button onClick={e => { e.stopPropagation(); addItemToOrder('admin', item); }} style={{ width: 28, height: 28, borderRadius: '50%', background: 'white', border: '1.5px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#374151' }}>
+                                <Plus size={15} strokeWidth={2} />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))
                 )}
               </div>
 
-              <button
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4, flexShrink: 0, display: 'flex' }}
-                onClick={closeModal}
-              >
-                <X size={24} />
-              </button>
-            </div>
-
-            {/* Category pills */}
-            <div style={{ display: 'flex', gap: 6, padding: '6px 12px', overflowX: 'auto', flexShrink: 0, borderBottom: '1px solid #f3f4f6' }}>
-              {[{ id: 'all', name: 'Tất cả' }, ...categories].map(cat => (
-                <button
-                  key={cat.id}
-                  onClick={() => setActiveMenuCategory(cat.id)}
+              {/* Floating cart bar */}
+              {activeOrder && totalCartItems > 0 && (
+                <div
                   style={{
-                    flexShrink: 0,
-                    padding: '5px 14px',
-                    borderRadius: 24,
-                    border: '1.5px solid',
-                    borderColor: activeMenuCategory === cat.id ? '#2563eb' : '#e5e7eb',
-                    background: activeMenuCategory === cat.id ? '#2563eb' : 'white',
-                    color: activeMenuCategory === cat.id ? 'white' : '#374151',
-                    fontWeight: activeMenuCategory === cat.id ? 700 : 500,
-                    fontSize: '0.8rem',
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
+                    position: 'absolute', bottom: 0, left: 0, right: 0,
+                    padding: '10px 16px 14px',
+                    background: 'white',
+                    borderTop: '1px solid #f3f4f6'
                   }}
                 >
-                  {cat.name}
-                </button>
-              ))}
-            </div>
-
-            {/* Item list */}
-            <div style={{ flex: 1, overflowY: 'auto', background: '#fafafa', paddingBottom: totalCartItems > 0 ? 90 : 16 }}>
-              {filteredItems.length === 0 && (
-                <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>Không tìm thấy món ăn nào</div>
-              )}
-
-              {activeMenuCategory === 'all' ? (
-                /* ── Tất cả: flat list, không header nhóm ── */
-                filteredItems.map(item => {
-                  const itemsInOrder = orderItems.filter(oi => oi.menu_item_id === item.id);
-                  const qty = itemsInOrder.reduce((s, oi) => s + oi.quantity, 0);
-                  return (
-                    <div
-                      key={item.id}
-                      onClick={() => addItemToOrder('admin', item)}
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    {/* Chọn lại */}
+                    <button
+                      onClick={() => { closeModal(); }}
                       style={{
-                        display: 'flex', alignItems: 'center',
-                        padding: '7px 12px',
-                        background: 'white',
-                        borderBottom: '1px solid #f3f4f6',
+                        flex: 1, padding: '10px 0', borderRadius: 100,
+                        border: '1.5px solid #e5e7eb', background: 'white',
+                        fontSize: '0.9rem', fontWeight: 600, color: '#374151',
                         cursor: 'pointer'
                       }}
                     >
-                      <div style={{
-                        width: 44, height: 44, borderRadius: 8,
-                        overflow: 'hidden', flexShrink: 0,
-                        background: '#eff6ff',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        position: 'relative'
-                      }}>
-                        {item.image_url
-                          ? <Image src={item.image_url} alt={item.name} fill sizes="44px" style={{ objectFit: 'cover' }} />
-                          : <ChefHat size={20} style={{ color: '#93c5fd' }} />}
-                      </div>
-                      <div style={{ flex: 1, marginLeft: 10, paddingRight: 6 }}>
-                        <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#111827', marginBottom: 1, lineHeight: 1.25 }}>{item.name}</div>
-                        <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#6b7280' }}>{getItemDisplayPrice(item)}</div>
-                      </div>
-                      {qty > 0 ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={e => e.stopPropagation()}>
-                          <button onClick={() => decreaseItemFromMenu(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
-                            <Minus size={13} strokeWidth={2.5} />
-                          </button>
-                          <span style={{ width: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{qty}</span>
-                          <button onClick={() => addItemToOrder('admin', item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
-                            <Plus size={13} strokeWidth={2.5} />
-                          </button>
-                        </div>
-                      ) : (
-                        <button onClick={e => { e.stopPropagation(); addItemToOrder('admin', item); }} style={{ width: 28, height: 28, borderRadius: '50%', background: 'white', border: '1.5px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#374151' }}>
-                          <Plus size={15} strokeWidth={2} />
-                        </button>
-                      )}
-                    </div>
-                  );
-                })
-              ) : (
-                /* ── Category cụ thể: hiển thị theo nhóm có header ── */
-                grouped.map(cat => (
-                  <div key={cat.id}>
-                    <div style={{ padding: '8px 16px 2px', fontSize: '0.72rem', fontWeight: 800, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                      {cat.name} ({cat.items.length})
-                    </div>
-                    {cat.items.map(item => {
-                      const itemsInOrder = orderItems.filter(oi => oi.menu_item_id === item.id);
-                      const qty = itemsInOrder.reduce((s, oi) => s + oi.quantity, 0);
-                      return (
-                        <div
-                          key={item.id}
-                          onClick={() => addItemToOrder('admin', item)}
-                          style={{
-                            display: 'flex', alignItems: 'center',
-                            padding: '7px 12px',
-                            background: 'white',
-                            borderBottom: '1px solid #f3f4f6',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          <div style={{
-                            width: 44, height: 44, borderRadius: 8,
-                            overflow: 'hidden', flexShrink: 0,
-                            background: '#eff6ff',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            position: 'relative'
-                          }}>
-                            {item.image_url
-                              ? <Image src={item.image_url} alt={item.name} fill sizes="44px" style={{ objectFit: 'cover' }} />
-                              : <ChefHat size={20} style={{ color: '#93c5fd' }} />}
-                          </div>
-                          <div style={{ flex: 1, marginLeft: 10, paddingRight: 6 }}>
-                            <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#111827', marginBottom: 1, lineHeight: 1.25 }}>{item.name}</div>
-                            <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#6b7280' }}>{getItemDisplayPrice(item)}</div>
-                          </div>
-                          {qty > 0 ? (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={e => e.stopPropagation()}>
-                              <button onClick={() => decreaseItemFromMenu(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
-                                <Minus size={13} strokeWidth={2.5} />
-                              </button>
-                              <span style={{ width: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{qty}</span>
-                              <button onClick={() => addItemToOrder('admin', item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
-                                <Plus size={13} strokeWidth={2.5} />
-                              </button>
-                            </div>
-                          ) : (
-                            <button onClick={e => { e.stopPropagation(); addItemToOrder('admin', item); }} style={{ width: 28, height: 28, borderRadius: '50%', background: 'white', border: '1.5px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#374151' }}>
-                              <Plus size={15} strokeWidth={2} />
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
+                      Chọn lại
+                    </button>
+                    {/* Xem đơn */}
+                    <button
+                      onClick={closeModal}
+                      style={{
+                        flex: 1, padding: '10px 16px', borderRadius: 100,
+                        border: 'none', background: '#2563eb',
+                        color: 'white', cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        boxShadow: '0 4px 14px rgba(37,99,235,0.35)'
+                      }}
+                    >
+                      <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Xem đơn</span>
+                      <span style={{
+                        background: 'white', color: '#2563eb',
+                        borderRadius: 20, padding: '2px 8px',
+                        fontSize: '0.82rem', fontWeight: 700
+                      }}>{totalCartItems}</span>
+                    </button>
                   </div>
-                ))
+                </div>
               )}
             </div>
-
-            {/* Floating cart bar */}
-            {activeOrder && totalCartItems > 0 && (
-              <div
-                style={{
-                  position: 'absolute', bottom: 0, left: 0, right: 0,
-                  padding: '10px 16px 14px',
-                  background: 'white',
-                  borderTop: '1px solid #f3f4f6'
-                }}
-              >
-                <div style={{ display: 'flex', gap: 10 }}>
-                  {/* Chọn lại */}
-                  <button
-                    onClick={() => { closeModal(); }}
-                    style={{
-                      flex: 1, padding: '10px 0', borderRadius: 100,
-                      border: '1.5px solid #e5e7eb', background: 'white',
-                      fontSize: '0.9rem', fontWeight: 600, color: '#374151',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Chọn lại
-                  </button>
-                  {/* Xem đơn */}
-                  <button
-                    onClick={closeModal}
-                    style={{
-                      flex: 1, padding: '10px 16px', borderRadius: 100,
-                      border: 'none', background: '#2563eb',
-                      color: 'white', cursor: 'pointer',
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      boxShadow: '0 4px 14px rgba(37,99,235,0.35)'
-                    }}
-                  >
-                    <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Xem đơn</span>
-                    <span style={{
-                      background: 'white', color: '#2563eb',
-                      borderRadius: 20, padding: '2px 8px',
-                      fontSize: '0.82rem', fontWeight: 700
-                    }}>{totalCartItems}</span>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })()}
+          );
+        })()
+      }
 
       {/* Item Options Modal */}
-      {optionModalItem && (
-        <div className="modal-overlay" style={{ zIndex: 1100 }} onClick={() => setOptionModalItem(null)}>
-          <div className="options-modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="options-modal-header">
-              <h3>Tuỳ chọn món</h3>
-              <button className="btn btn-ghost btn-icon" onClick={() => setOptionModalItem(null)}>
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="options-modal-body">
-              <div className="options-item-info">
-                {optionModalItem.image_url ? (
-                  <img src={optionModalItem.image_url} alt={optionModalItem.name} />
-                ) : (
-                  <div className="flex justify-center items-center rounded-xl bg-gray-100 text-gray-400" style={{ width: '80px', height: '80px' }}>
-                    <ChefHat size={32} />
-                  </div>
-                )}
-                <div className="options-item-info-text">
-                  <div className="name">{optionModalItem.name}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {editingPrice ? (
-                      <>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          autoFocus
-                          value={customPrice ?? optionModalItem.price}
-                          onChange={e => setCustomPrice(Number(e.target.value.replace(/\D/g, '')))}
-                          style={{
-                            width: 100, padding: '5px 10px', borderRadius: 8,
-                            border: '1.5px solid #2563eb', fontSize: '16px',
-                            fontWeight: 600, outline: 'none'
-                          }}
-                        />
-                        <button
-                          onClick={() => setEditingPrice(false)}
-                          style={{ background: '#2563eb', border: 'none', borderRadius: 6, color: 'white', padding: '3px 8px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
-                        >✓</button>
-                      </>
-                    ) : (
-                      <>
-                        <span className="price">{formatPrice(customPrice ?? optionModalItem.price)}</span>
-                        <button
-                          onClick={() => { setCustomPrice(customPrice ?? optionModalItem.price); setEditingPrice(true); }}
-                          title="Sửa giá"
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 2, display: 'flex', alignItems: 'center' }}
-                        >
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                          </svg>
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {optionModalItem.options && optionModalItem.options.map((opt, idx) => (
-                <div key={idx} style={{ marginBottom: 8, marginTop: idx === 0 ? 0 : 4 }}>
-                  <div className="options-group-title">{opt.name}</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginTop: 6 }}>
-                    {opt.choices.map((choice, cIdx) => {
-                      const choiceP = opt.prices?.[cIdx];
-                      const hasPrice = choiceP !== null && choiceP !== '' && Number(choiceP) > 0;
-                      const isSelected = selectedOptions[opt.name] === choice;
-                      return (
-                        <label
-                          key={cIdx}
-                          onClick={() => {
-                            setSelectedOptions({ ...selectedOptions, [opt.name]: choice });
-                            if (hasPrice) setCustomPrice(Number(choiceP));
-                          }}
-                          style={{
-                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                            padding: '7px 4px', cursor: 'pointer',
-                            borderBottom: cIdx < opt.choices.length - 1 ? '1px solid #f3f4f6' : 'none',
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <div style={{
-                              width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
-                              border: isSelected ? '5px solid #2563eb' : '1.5px solid #d1d5db',
-                              background: 'white', transition: 'all 0.15s',
-                            }} />
-                            <span style={{
-                              fontSize: '0.88rem', fontWeight: isSelected ? 700 : 500,
-                              color: isSelected ? '#1d4ed8' : '#374151',
-                            }}>{choice}</span>
-                          </div>
-                          {hasPrice ? (
-                            <span style={{ fontSize: '0.78rem', color: '#6b7280', fontWeight: 500 }}>
-                              +{formatPrice(Number(choiceP))}
-                            </span>
-                          ) : null}
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-
-              <div>
-                <div className="options-group-title">Ghi chú</div>
-                <input
-                  type="text"
-                  className="options-note-input"
-                  placeholder="Thêm ghi chú cho nhà bếp..."
-                  value={optionNote}
-                  onChange={(e) => setOptionNote(e.target.value)}
-                />
-              </div>
-
-              <div className="options-qty-control">
-                <button className="options-qty-btn" onClick={() => setOptionQuantity(Math.max(1, optionQuantity - 1))}>
-                  <Minus size={20} />
-                </button>
-                <div className="options-qty-value">{optionQuantity}</div>
-                <button className="options-qty-btn" onClick={() => setOptionQuantity(optionQuantity + 1)}>
-                  <Plus size={20} />
+      {
+        optionModalItem && (
+          <div className="modal-overlay" style={{ zIndex: 1100 }} onClick={() => setOptionModalItem(null)}>
+            <div className="options-modal-content" onClick={(e) => e.stopPropagation()}>
+              <div className="options-modal-header">
+                <h3>Tuỳ chọn món</h3>
+                <button className="btn btn-ghost btn-icon" onClick={() => setOptionModalItem(null)}>
+                  <X size={20} />
                 </button>
               </div>
-            </div>
 
-            <div className="options-bottom-bar">
-              <button className="btn-add-to-order" onClick={handleConfirmOptions}>
-                Thêm vào đơn • {formatPrice((customPrice ?? optionModalItem.price) * optionQuantity)}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+              <div className="options-modal-body">
+                <div className="options-item-info">
+                  {optionModalItem.image_url ? (
+                    <img src={optionModalItem.image_url} alt={optionModalItem.name} />
+                  ) : (
+                    <div className="flex justify-center items-center rounded-xl bg-gray-100 text-gray-400" style={{ width: '80px', height: '80px' }}>
+                      <ChefHat size={32} />
+                    </div>
+                  )}
+                  <div className="options-item-info-text">
+                    <div className="name">{optionModalItem.name}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {editingPrice ? (
+                        <>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            autoFocus
+                            value={customPrice ?? optionModalItem.price}
+                            onChange={e => setCustomPrice(Number(e.target.value.replace(/\D/g, '')))}
+                            style={{
+                              width: 100, padding: '5px 10px', borderRadius: 8,
+                              border: '1.5px solid #2563eb', fontSize: '16px',
+                              fontWeight: 600, outline: 'none'
+                            }}
+                          />
+                          <button
+                            onClick={() => setEditingPrice(false)}
+                            style={{ background: '#2563eb', border: 'none', borderRadius: 6, color: 'white', padding: '3px 8px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
+                          >✓</button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="price">{formatPrice(customPrice ?? optionModalItem.price)}</span>
+                          <button
+                            onClick={() => { setCustomPrice(customPrice ?? optionModalItem.price); setEditingPrice(true); }}
+                            title="Sửa giá"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', padding: 2, display: 'flex', alignItems: 'center' }}
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                            </svg>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
 
-      {/* ── Takeaway Orders Modal ── */}
-      {showTakeawayOrders && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 3500, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
-          onClick={() => setShowTakeawayOrders(false)}>
-          <div style={{ background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 640, maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-            onClick={e => e.stopPropagation()}>
-            {/* Header */}
-            <div style={{ padding: '16px 20px 12px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: '1.4rem' }}>🛵</span>
+                {optionModalItem.options && optionModalItem.options.map((opt, idx) => (
+                  <div key={idx} style={{ marginBottom: 8, marginTop: idx === 0 ? 0 : 4 }}>
+                    <div className="options-group-title">{opt.name}</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginTop: 6 }}>
+                      {opt.choices.map((choice, cIdx) => {
+                        const choiceP = opt.prices?.[cIdx];
+                        const hasPrice = choiceP !== null && choiceP !== '' && Number(choiceP) > 0;
+                        const isSelected = selectedOptions[opt.name] === choice;
+                        return (
+                          <label
+                            key={cIdx}
+                            onClick={() => {
+                              setSelectedOptions({ ...selectedOptions, [opt.name]: choice });
+                              if (hasPrice) setCustomPrice(Number(choiceP));
+                            }}
+                            style={{
+                              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                              padding: '7px 4px', cursor: 'pointer',
+                              borderBottom: cIdx < opt.choices.length - 1 ? '1px solid #f3f4f6' : 'none',
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <div style={{
+                                width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+                                border: isSelected ? '5px solid #2563eb' : '1.5px solid #d1d5db',
+                                background: 'white', transition: 'all 0.15s',
+                              }} />
+                              <span style={{
+                                fontSize: '0.88rem', fontWeight: isSelected ? 700 : 500,
+                                color: isSelected ? '#1d4ed8' : '#374151',
+                              }}>{choice}</span>
+                            </div>
+                            {hasPrice ? (
+                              <span style={{ fontSize: '0.78rem', color: '#6b7280', fontWeight: 500 }}>
+                                +{formatPrice(Number(choiceP))}
+                              </span>
+                            ) : null}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+
                 <div>
-                  <div style={{ fontWeight: 800, fontSize: '1rem', color: '#1d4ed8' }}>Đơn Mang Về</div>
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>{takeawayOrders.length} đơn đang chờ</div>
-                </div>
-              </div>
-              <button onClick={() => setShowTakeawayOrders(false)}
-                style={{ width: 32, height: 32, borderRadius: '50%', border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280', fontSize: '1rem' }}>
-                ✕
-              </button>
-            </div>
-            {/* Orders list */}
-            <div style={{ overflowY: 'auto', flex: 1, padding: '12px 16px 24px' }}>
-              {takeawayOrders.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '40px 0', color: '#9ca3af' }}>
-                  <div style={{ fontSize: '2rem', marginBottom: 8 }}>✅</div>
-                  <div>Không có đơn nào đang chờ</div>
-                </div>
-              ) : takeawayOrders.map(order => (
-                <div key={order.orderIds?.join(',') || order.customer_phone} style={{ background: '#f8fafc', border: '1px solid #e0e7ff', borderRadius: 14, padding: '14px', marginBottom: 12 }}>
-                  {/* Customer info */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                    <div>
-                      <div style={{ fontWeight: 700, color: '#111827', fontSize: '0.95rem' }}>{order.customer_name}</div>
-                      <div style={{ fontSize: '0.8rem', color: '#6b7280' }}>📞 {order.customer_phone}</div>
-                      {order.delivery_address && (
-                        <div style={{ fontSize: '0.82rem', color: '#1d4ed8', marginTop: 4, background: '#eff6ff', borderRadius: 6, padding: '4px 8px', display: 'inline-block' }}>
-                          📍 {order.delivery_address}
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
-                      {formatTime(order.created_at)}
-                      {order.orderIds?.length > 1 && <span style={{ marginLeft: 6, background: '#e0e7ff', color: '#3730a3', borderRadius: 4, padding: '1px 5px', fontSize: '0.7rem', fontWeight: 600 }}>{order.orderIds.length} lượt đặt</span>}
-                    </div>
-                  </div>
-                  {/* Items */}
-                  <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 8, marginBottom: 10 }}>
-                    {(order.order_items || []).map((item, idx) => (
-                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#374151', paddingBottom: 4 }}>
-                        <span>{item.menu_item?.name || 'Món đã xoá'} × {item.quantity}</span>
-                        <span style={{ fontWeight: 600 }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
-                      </div>
-                    ))}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, paddingTop: 6, borderTop: '1px dashed #d1d5db', color: '#111827' }}>
-                      <span>Tổng cộng</span>
-                      <span style={{ color: '#1d4ed8' }}>{order.total_amount?.toLocaleString('vi-VN')}đ</span>
-                    </div>
-                  </div>
-                  {/* Complete button */}
-                  <button
-                    onClick={() => completeKitchenOrder(order.orderIds || [order.id])}
-                    style={{ width: '100%', padding: '10px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}
-                  >
-                    ✓ Đã hoàn thành — Đã giao đi
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add Table Modal */}
-      {showAddModal && (
-        <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '400px' }}>
-            <div className="modal-header">
-              <h3>Thêm bàn mới</h3>
-              <button className="btn btn-ghost btn-icon" onClick={() => setShowAddModal(false)}>
-                <X size={20} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label className="form-label">Số bàn</label>
-                <input
-                  type="number"
-                  className="input"
-                  value={newTableNumber}
-                  onChange={(e) => setNewTableNumber(e.target.value)}
-                  placeholder="Nhập số bàn..."
-                  min="1"
-                  autoFocus
-                />
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-outline" onClick={() => setShowAddModal(false)}>Huỷ</button>
-              <button className="btn btn-primary" onClick={addTable}>
-                <Plus size={16} /> Thêm
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* Full-screen Bill Preview Modal */}
-      {showBillPreview && selectedTable && (() => {
-        const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
-        const rawItems = tableBills.flatMap(b => b.order_items || []);
-        const grandTotal = tableBills.reduce((s, b) => s + b.total_amount, 0);
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-        const dateStr = now.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
-
-        // Gộp các món giống nhau (cùng tên + options + giá + gift)
-        const mergedMap = new Map();
-        for (const item of rawItems) {
-          const name = item.menu_item?.name || '?';
-          const optionsKey = (item.item_options || [])
-            .map(o => `${o.name}:${o.choice}`)
-            .sort()
-            .join('|');
-          const key = `${name}__${optionsKey}__${item.unit_price}__${item.is_gift ? 'gift' : ''}`;
-          if (mergedMap.has(key)) {
-            const existing = mergedMap.get(key);
-            existing.quantity += item.quantity || 1;
-          } else {
-            mergedMap.set(key, { ...item, quantity: item.quantity || 1 });
-          }
-        }
-        // Sắp xếp theo alphabet
-        const allItems = [...mergedMap.values()].sort((a, b) =>
-          (a.menu_item?.name || '').localeCompare(b.menu_item?.name || '', 'vi')
-        );
-        const totalQty = allItems.reduce((s, i) => s + i.quantity, 0);
-
-        return (
-          <div
-            style={{
-              position: 'fixed', inset: 0, zIndex: 2000,
-              background: '#f8fafc',
-              display: 'flex', flexDirection: 'column',
-              fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-            }}
-            onClick={e => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 'calc(12px + env(safe-area-inset-top)) 16px 12px', background: 'white', borderBottom: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-              <button
-                onClick={() => setShowBillPreview(false)}
-                style={{
-                  width: 32, height: 32, borderRadius: '50%',
-                  border: '1.5px solid #e5e7eb', background: 'white',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  cursor: 'pointer', color: '#6b7280', fontSize: '0.9rem', flexShrink: 0
-                }}
-              >✕</button>
-              <span style={{ fontSize: '1rem', fontWeight: 700, color: '#111827', flex: 1 }}>Phiếu tạm tính</span>
-              <span style={{
-                fontSize: '0.82rem', fontWeight: 700, color: '#2563eb',
-                background: '#eff6ff', borderRadius: 20, padding: '3px 12px',
-              }}>
-                Bàn {selectedTable.table_number}
-              </span>
-            </div>
-
-            {/* Timestamp */}
-            <div style={{ padding: '6px 16px 4px', fontSize: '0.75rem', color: '#9ca3af', textAlign: 'center' }}>
-              {timeStr} · {dateStr}
-            </div>
-
-            {/* Items list */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '4px 12px 8px' }}>
-              {allItems.map((item, idx) => {
-                const optionText = item.item_options?.map(o => o.choice).join(' · ') || item.note || '';
-                const subtotal = item.unit_price * item.quantity;
-                return (
-                  <div key={idx} style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '9px 12px', marginBottom: 5,
-                    background: 'white', borderRadius: 10,
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-                    gap: 8,
-                  }}>
-                    {/* Left: name + option */}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {item.menu_item?.name || 'Món đã xoá'}
-                      </div>
-                      {optionText && (
-                        <div style={{ fontSize: '0.75rem', color: '#f59e0b', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {optionText}
-                        </div>
-                      )}
-                    </div>
-                    {/* Right: qty × price = subtotal */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                      <span style={{ fontSize: '0.78rem', color: '#9ca3af' }}>
-                        {item.unit_price.toLocaleString('vi-VN')} × {item.quantity}
-                      </span>
-                      <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#111827', minWidth: 60, textAlign: 'right' }}>
-                        {subtotal.toLocaleString('vi-VN')}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Summary section */}
-            <div style={{ background: 'white', borderTop: '1px solid #e5e7eb', padding: '10px 16px 6px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0' }}>
-                <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>
-                  Tổng cộng
-                  <span style={{ fontSize: '0.72rem', background: '#f3f4f6', color: '#6b7280', borderRadius: 4, padding: '1px 5px', fontWeight: 600, marginLeft: 6 }}>
-                    {totalQty} món
-                  </span>
-                </span>
-                <span style={{ fontSize: '0.82rem', color: '#374151', fontWeight: 500 }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0 6px', borderTop: '1px dashed #e5e7eb', marginTop: 4 }}>
-                <span style={{ fontSize: '0.95rem', fontWeight: 700, color: '#111827' }}>Khách cần trả</span>
-                <span style={{ fontSize: '1.1rem', fontWeight: 800, color: '#2563eb' }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
-              </div>
-            </div>
-
-            {/* Print button */}
-            <div style={{ padding: '10px 16px calc(16px + env(safe-area-inset-bottom))', background: 'white' }}>
-              <button
-                onClick={handlePrintInvoice}
-                style={{
-                  width: '100%', padding: '13px 0',
-                  borderRadius: 100, border: 'none',
-                  background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white',
-                  fontSize: '0.95rem', fontWeight: 700,
-                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                  boxShadow: '0 4px 12px rgba(37,99,235,0.35)',
-                }}
-              >
-                🖨️ In phiếu tạm tính
-              </button>
-            </div>
-          </div>
-        );
-      })()}
-      {/* Custom Delete Confirmation Modal */}
-      {confirmDelete && (
-        <div
-          style={{
-            position: 'fixed', inset: 0, zIndex: 3000,
-            background: 'rgba(0,0,0,0.45)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: 20,
-          }}
-          onClick={() => setConfirmDelete(null)}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              background: 'white',
-              borderRadius: 20,
-              padding: '28px 24px 20px',
-              maxWidth: 340,
-              width: '100%',
-              textAlign: 'center',
-              boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
-            }}
-          >
-            <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>🗑️</div>
-            <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#111827', marginBottom: 8 }}>
-              Xoá món này?
-            </div>
-            <div style={{ fontSize: '0.9rem', color: '#6b7280', marginBottom: 24 }}>
-              <span style={{ fontWeight: 600, color: '#374151' }}>{confirmDelete.itemName}</span> sẽ bị xoá khỏi bill.
-            </div>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button
-                onClick={() => setConfirmDelete(null)}
-                style={{
-                  flex: 1, padding: '12px 0', borderRadius: 12,
-                  border: '1.5px solid #e5e7eb', background: 'white',
-                  fontSize: '0.95rem', fontWeight: 600, color: '#374151',
-                  cursor: 'pointer'
-                }}
-              >
-                Huỷ
-              </button>
-              <button
-                onClick={() => performDeleteItem(confirmDelete.orderId, confirmDelete.itemId)}
-                style={{
-                  flex: 1, padding: '12px 0', borderRadius: 12,
-                  border: 'none', background: '#e11d48',
-                  fontSize: '0.95rem', fontWeight: 700, color: 'white',
-                  cursor: 'pointer'
-                }}
-              >
-                Xoá món
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* ── Custom Payment Confirmation Modal (Redesigned) ── */}
-      {confirmPayment && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
-          onClick={() => setConfirmPayment(null)}>
-          <div style={{ background: 'white', borderRadius: '24px 24px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,0.15)', width: '100%', maxWidth: 640, padding: '24px 20px calc(24px + env(safe-area-inset-bottom))' }}
-            onClick={e => e.stopPropagation()}>
-
-            {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
-              <div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#111827', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  💳 Thanh toán
-                </div>
-                <div style={{ fontSize: '0.95rem', color: '#6b7280', marginTop: 4 }}>
-                  Bàn {confirmPayment.table.table_number}
-                </div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.9rem', color: '#6b7280', fontWeight: 500 }}>Tổng cộng</div>
-                <div style={{ fontSize: '1.65rem', fontWeight: 800, color: '#dc2626', lineHeight: 1.1 }}>
-                  {confirmPayment.totalAmount.toLocaleString('vi-VN')}đ
-                </div>
-              </div>
-            </div>
-
-            {/* Buttons */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-
-              {/* Tiền mặt Button */}
-              <div
-                onClick={async () => {
-                  await completeTable(confirmPayment.table, 'cash');
-                  setConfirmPayment(null);
-                  setSelectedTable(null);
-                  setDesktopView('tables');
-                  Swal.fire({
-                    icon: 'success',
-                    title: '✅ Thanh toán tiền mặt!',
-                    html: `<span style="font-size:1rem">Bàn <b>B${confirmPayment.table.table_number}</b> — <b style="color:#fff;font-size:1.1rem">${confirmPayment.totalAmount.toLocaleString('vi-VN')}đ</b></span>`,
-                    timer: 3000, timerProgressBar: true, showConfirmButton: false,
-                    position: 'top-end', toast: true, background: '#16a34a', color: '#fff', iconColor: '#fff',
-                  });
-                }}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '16px', background: '#f0fdf4', border: '1.5px solid #bbf7d0',
-                  borderRadius: 16, cursor: 'pointer', transition: 'all 0.15s'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <div style={{ fontSize: '1.8rem' }}>💵</div>
-                  <div>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#16a34a' }}>Tiền mặt</div>
-                    <div style={{ fontSize: '0.8rem', color: '#15803d', marginTop: 2, fontWeight: 500 }}>Nhận tiền mặt — đóng bàn ngay</div>
-                  </div>
-                </div>
-                <div style={{ background: '#16a34a', color: 'white', padding: '6px 14px', borderRadius: 8, fontSize: '0.9rem', fontWeight: 700 }}>
-                  Xác nhận
-                </div>
-              </div>
-
-              {/* Chuyển khoản Button */}
-              <div
-                onClick={() => openPaymentModal(confirmPayment.table, confirmPayment.totalAmount)}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '16px', background: '#eff6ff', border: '1.5px solid #bfdbfe',
-                  borderRadius: 16, cursor: 'pointer', transition: 'all 0.15s'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <div style={{ fontSize: '1.8rem' }}>📲</div>
-                  <div>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#2563eb' }}>Chuyển khoản</div>
-                    <div style={{ fontSize: '0.8rem', color: '#1d4ed8', marginTop: 2, fontWeight: 500 }}>Hiện mã QR cho khách quét</div>
-                  </div>
-                </div>
-                <div style={{ color: '#2563eb', fontSize: '1.2rem', fontWeight: 800, paddingRight: 4 }}>
-                  ›
-                </div>
-              </div>
-
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── QR Transfer Payment Modal ── */}
-      {paymentModal && qrAccount && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-          onClick={() => { setPaymentModal(null); setConfirmPayment(null); }}>
-          <div style={{ background: 'white', borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.2)', width: '100%', maxWidth: 380, overflow: 'hidden' }}
-            onClick={e => e.stopPropagation()}>
-            {/* Header */}
-            <div style={{ background: qrAccount.overLimit ? '#dc2626' : '#2563eb', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ color: 'white', fontWeight: 800, fontSize: '1rem' }}>📲 Chuyển khoản</div>
-                <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.8rem' }}>Bàn B{paymentModal.table.table_number} · {paymentModal.total.toLocaleString('vi-VN')}đ</div>
-              </div>
-              <button onClick={() => { setPaymentModal(null); }}
-                style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '50%', width: 32, height: 32, color: 'white', cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
-            </div>
-
-            {/* QR + account info */}
-            <div style={{ padding: '16px 18px' }}>
-              <div style={{ border: `2px solid ${qrAccount.overLimit ? '#ef4444' : '#bfdbfe'}`, borderRadius: 16, padding: '24px 16px', background: qrAccount.overLimit ? '#fff7f7' : '#f0f9ff', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-
-                {/* QR Code (Large, on top) */}
-                <div style={{ padding: 12, background: 'white', borderRadius: 16, border: `1.5px solid ${qrAccount.overLimit ? '#fca5a5' : '#bfdbfe'}`, marginBottom: 16 }}>
-                  <img
-                    src={buildQrUrl(qrAccount, paymentModal.total, transactionCode || `Thanh toan B${paymentModal.table.table_number}`)}
-                    alt="QR"
-                    style={{ width: 260, height: 260, display: 'block', objectFit: 'contain', aspectRatio: '1/1' }}
+                  <div className="options-group-title">Ghi chú</div>
+                  <input
+                    type="text"
+                    className="options-note-input"
+                    placeholder="Thêm ghi chú cho nhà bếp..."
+                    value={optionNote}
+                    onChange={(e) => setOptionNote(e.target.value)}
                   />
                 </div>
 
-                {/* Account Details (Below) */}
-                <div style={{ width: '100%' }}>
-                  <div style={{ fontWeight: 800, fontSize: '1.2rem', color: '#0f172a' }}>{qrAccount.bank_name}</div>
-                  <div style={{ fontSize: '1.4rem', letterSpacing: 2, fontWeight: 800, color: qrAccount.overLimit ? '#dc2626' : '#1d4ed8', marginTop: 4 }}>{qrAccount.account_number}</div>
-                  <div style={{ fontSize: '0.9rem', color: '#475569', marginTop: 4, textTransform: 'uppercase', fontWeight: 600 }}>{qrAccount.account_name}</div>
+                <div className="options-qty-control">
+                  <button className="options-qty-btn" onClick={() => setOptionQuantity(Math.max(1, optionQuantity - 1))}>
+                    <Minus size={20} />
+                  </button>
+                  <div className="options-qty-value">{optionQuantity}</div>
+                  <button className="options-qty-btn" onClick={() => setOptionQuantity(optionQuantity + 1)}>
+                    <Plus size={20} />
+                  </button>
+                </div>
+              </div>
 
-                  <div style={{ background: 'white', borderRadius: 12, padding: '10px', marginTop: 12, border: '1px dashed #cbd5e1' }}>
-                    <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 2 }}>Số tiền cần thanh toán</div>
-                    <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#0f172a' }}>{paymentModal.total.toLocaleString('vi-VN')}đ</div>
+              <div className="options-bottom-bar">
+                <button className="btn-add-to-order" onClick={handleConfirmOptions}>
+                  Thêm vào đơn • {formatPrice((customPrice ?? optionModalItem.price) * optionQuantity)}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* ── Takeaway Orders Modal ── */}
+      {
+        showTakeawayOrders && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 3500, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
+            onClick={() => setShowTakeawayOrders(false)}>
+            <div style={{ background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 640, maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+              onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div style={{ padding: '16px 20px 12px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: '1.4rem' }}>🛵</span>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: '1rem', color: '#1d4ed8' }}>Đơn Mang Về</div>
+                    <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>{takeawayOrders.length} đơn đang chờ</div>
+                  </div>
+                </div>
+                <button onClick={() => setShowTakeawayOrders(false)}
+                  style={{ width: 32, height: 32, borderRadius: '50%', border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280', fontSize: '1rem' }}>
+                  ✕
+                </button>
+              </div>
+              {/* Orders list */}
+              <div style={{ overflowY: 'auto', flex: 1, padding: '12px 16px 24px' }}>
+                {takeawayOrders.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '40px 0', color: '#9ca3af' }}>
+                    <div style={{ fontSize: '2rem', marginBottom: 8 }}>✅</div>
+                    <div>Không có đơn nào đang chờ</div>
+                  </div>
+                ) : takeawayOrders.map(order => (
+                  <div key={order.orderIds?.join(',') || order.customer_phone} style={{ background: '#f8fafc', border: '1px solid #e0e7ff', borderRadius: 14, padding: '14px', marginBottom: 12 }}>
+                    {/* Customer info */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                      <div>
+                        <div style={{ fontWeight: 700, color: '#111827', fontSize: '0.95rem' }}>{order.customer_name}</div>
+                        <div style={{ fontSize: '0.8rem', color: '#6b7280' }}>📞 {order.customer_phone}</div>
+                        {order.delivery_address && (
+                          <div style={{ fontSize: '0.82rem', color: '#1d4ed8', marginTop: 4, background: '#eff6ff', borderRadius: 6, padding: '4px 8px', display: 'inline-block' }}>
+                            📍 {order.delivery_address}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
+                        {formatTime(order.created_at)}
+                        {order.orderIds?.length > 1 && <span style={{ marginLeft: 6, background: '#e0e7ff', color: '#3730a3', borderRadius: 4, padding: '1px 5px', fontSize: '0.7rem', fontWeight: 600 }}>{order.orderIds.length} lượt đặt</span>}
+                      </div>
+                    </div>
+                    {/* Items */}
+                    <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 8, marginBottom: 10 }}>
+                      {(order.order_items || []).map((item, idx) => (
+                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#374151', paddingBottom: 4 }}>
+                          <span>{item.menu_item?.name || 'Món đã xoá'} × {item.quantity}</span>
+                          <span style={{ fontWeight: 600 }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
+                        </div>
+                      ))}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, paddingTop: 6, borderTop: '1px dashed #d1d5db', color: '#111827' }}>
+                        <span>Tổng cộng</span>
+                        <span style={{ color: '#1d4ed8' }}>{order.total_amount?.toLocaleString('vi-VN')}đ</span>
+                      </div>
+                    </div>
+                    {/* Complete button */}
+                    <button
+                      onClick={() => completeKitchenOrder(order.orderIds || [order.id])}
+                      style={{ width: '100%', padding: '10px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}
+                    >
+                      ✓ Đã hoàn thành — Đã giao đi
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* Add Table Modal */}
+      {
+        showAddModal && (
+          <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '400px' }}>
+              <div className="modal-header">
+                <h3>Thêm bàn mới</h3>
+                <button className="btn btn-ghost btn-icon" onClick={() => setShowAddModal(false)}>
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="modal-body">
+                <div className="form-group">
+                  <label className="form-label">Số bàn</label>
+                  <input
+                    type="number"
+                    className="input"
+                    value={newTableNumber}
+                    onChange={(e) => setNewTableNumber(e.target.value)}
+                    placeholder="Nhập số bàn..."
+                    min="1"
+                    autoFocus
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-outline" onClick={() => setShowAddModal(false)}>Huỷ</button>
+                <button className="btn btn-primary" onClick={addTable}>
+                  <Plus size={16} /> Thêm
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+      {/* Full-screen Bill Preview Modal */}
+      {
+        showBillPreview && selectedTable && (() => {
+          const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
+          const rawItems = tableBills.flatMap(b => b.order_items || []);
+          const grandTotal = tableBills.reduce((s, b) => s + b.total_amount, 0);
+          const now = new Date();
+          const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+          const dateStr = now.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+          // Gộp các món giống nhau (cùng tên + options + giá + gift)
+          const mergedMap = new Map();
+          for (const item of rawItems) {
+            const name = item.menu_item?.name || '?';
+            const optionsKey = (item.item_options || [])
+              .map(o => `${o.name}:${o.choice}`)
+              .sort()
+              .join('|');
+            const key = `${name}__${optionsKey}__${item.unit_price}__${item.is_gift ? 'gift' : ''}`;
+            if (mergedMap.has(key)) {
+              const existing = mergedMap.get(key);
+              existing.quantity += item.quantity || 1;
+            } else {
+              mergedMap.set(key, { ...item, quantity: item.quantity || 1 });
+            }
+          }
+          // Sắp xếp theo alphabet
+          const allItems = [...mergedMap.values()].sort((a, b) =>
+            (a.menu_item?.name || '').localeCompare(b.menu_item?.name || '', 'vi')
+          );
+          const totalQty = allItems.reduce((s, i) => s + i.quantity, 0);
+
+          return (
+            <div
+              style={{
+                position: 'fixed', inset: 0, zIndex: 2000,
+                background: '#f8fafc',
+                display: 'flex', flexDirection: 'column',
+                fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+              }}
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 'calc(12px + env(safe-area-inset-top)) 16px 12px', background: 'white', borderBottom: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+                <button
+                  onClick={() => setShowBillPreview(false)}
+                  style={{
+                    width: 32, height: 32, borderRadius: '50%',
+                    border: '1.5px solid #e5e7eb', background: 'white',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    cursor: 'pointer', color: '#6b7280', fontSize: '0.9rem', flexShrink: 0
+                  }}
+                >✕</button>
+                <span style={{ fontSize: '1rem', fontWeight: 700, color: '#111827', flex: 1 }}>Phiếu tạm tính</span>
+                <span style={{
+                  fontSize: '0.82rem', fontWeight: 700, color: '#2563eb',
+                  background: '#eff6ff', borderRadius: 20, padding: '3px 12px',
+                }}>
+                  Bàn {selectedTable.table_number}
+                </span>
+              </div>
+
+              {/* Timestamp */}
+              <div style={{ padding: '6px 16px 4px', fontSize: '0.75rem', color: '#9ca3af', textAlign: 'center' }}>
+                {timeStr} · {dateStr}
+              </div>
+
+              {/* Items list */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: '4px 12px 8px' }}>
+                {allItems.map((item, idx) => {
+                  const optionText = item.item_options?.map(o => o.choice).join(' · ') || item.note || '';
+                  const subtotal = item.unit_price * item.quantity;
+                  return (
+                    <div key={idx} style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '9px 12px', marginBottom: 5,
+                      background: 'white', borderRadius: 10,
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                      gap: 8,
+                    }}>
+                      {/* Left: name + option */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {item.menu_item?.name || 'Món đã xoá'}
+                        </div>
+                        {optionText && (
+                          <div style={{ fontSize: '0.75rem', color: '#f59e0b', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {optionText}
+                          </div>
+                        )}
+                      </div>
+                      {/* Right: qty × price = subtotal */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        <span style={{ fontSize: '0.78rem', color: '#9ca3af' }}>
+                          {item.unit_price.toLocaleString('vi-VN')} × {item.quantity}
+                        </span>
+                        <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#111827', minWidth: 60, textAlign: 'right' }}>
+                          {subtotal.toLocaleString('vi-VN')}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Summary section */}
+              <div style={{ background: 'white', borderTop: '1px solid #e5e7eb', padding: '10px 16px 6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0' }}>
+                  <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>
+                    Tổng cộng
+                    <span style={{ fontSize: '0.72rem', background: '#f3f4f6', color: '#6b7280', borderRadius: 4, padding: '1px 5px', fontWeight: 600, marginLeft: 6 }}>
+                      {totalQty} món
+                    </span>
+                  </span>
+                  <span style={{ fontSize: '0.82rem', color: '#374151', fontWeight: 500 }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0 6px', borderTop: '1px dashed #e5e7eb', marginTop: 4 }}>
+                  <span style={{ fontSize: '0.95rem', fontWeight: 700, color: '#111827' }}>Khách cần trả</span>
+                  <span style={{ fontSize: '1.1rem', fontWeight: 800, color: '#2563eb' }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
+                </div>
+              </div>
+
+              {/* Print button */}
+              <div style={{ padding: '10px 16px calc(16px + env(safe-area-inset-bottom))', background: 'white' }}>
+                <button
+                  onClick={handlePrintInvoice}
+                  style={{
+                    width: '100%', padding: '13px 0',
+                    borderRadius: 100, border: 'none',
+                    background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white',
+                    fontSize: '0.95rem', fontWeight: 700,
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    boxShadow: '0 4px 12px rgba(37,99,235,0.35)',
+                  }}
+                >
+                  🖨️ In phiếu tạm tính
+                </button>
+              </div>
+            </div>
+          );
+        })()
+      }
+      {/* Custom Delete Confirmation Modal */}
+      {
+        confirmDelete && (
+          <div
+            style={{
+              position: 'fixed', inset: 0, zIndex: 3000,
+              background: 'rgba(0,0,0,0.45)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 20,
+            }}
+            onClick={() => setConfirmDelete(null)}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                background: 'white',
+                borderRadius: 20,
+                padding: '28px 24px 20px',
+                maxWidth: 340,
+                width: '100%',
+                textAlign: 'center',
+                boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+              }}
+            >
+              <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>🗑️</div>
+              <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#111827', marginBottom: 8 }}>
+                Xoá món này?
+              </div>
+              <div style={{ fontSize: '0.9rem', color: '#6b7280', marginBottom: 24 }}>
+                <span style={{ fontWeight: 600, color: '#374151' }}>{confirmDelete.itemName}</span> sẽ bị xoá khỏi bill.
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  onClick={() => setConfirmDelete(null)}
+                  style={{
+                    flex: 1, padding: '12px 0', borderRadius: 12,
+                    border: '1.5px solid #e5e7eb', background: 'white',
+                    fontSize: '0.95rem', fontWeight: 600, color: '#374151',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Huỷ
+                </button>
+                <button
+                  onClick={() => performDeleteItem(confirmDelete.orderId, confirmDelete.itemId)}
+                  style={{
+                    flex: 1, padding: '12px 0', borderRadius: 12,
+                    border: 'none', background: '#e11d48',
+                    fontSize: '0.95rem', fontWeight: 700, color: 'white',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Xoá món
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+      {/* ── Custom Payment Confirmation Modal (Redesigned) ── */}
+      {
+        confirmPayment && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
+            onClick={() => setConfirmPayment(null)}>
+            <div style={{ background: 'white', borderRadius: '24px 24px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,0.15)', width: '100%', maxWidth: 640, padding: '24px 20px calc(24px + env(safe-area-inset-bottom))' }}
+              onClick={e => e.stopPropagation()}>
+
+              {/* Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+                <div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#111827', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    💳 Thanh toán
+                  </div>
+                  <div style={{ fontSize: '0.95rem', color: '#6b7280', marginTop: 4 }}>
+                    Bàn {confirmPayment.table.table_number}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '0.9rem', color: '#6b7280', fontWeight: 500 }}>Tổng cộng</div>
+                  <div style={{ fontSize: '1.65rem', fontWeight: 800, color: '#dc2626', lineHeight: 1.1 }}>
+                    {confirmPayment.totalAmount.toLocaleString('vi-VN')}đ
                   </div>
                 </div>
               </div>
-            </div>
 
-            {/* Confirm button */}
-            <div style={{ padding: '0 18px 18px', display: 'flex', gap: 10 }}>
-              <button onClick={() => { setPaymentModal(null); setConfirmPayment(null); setTransactionCode(null); setPaymentCountdown(0); }}
-                style={{ flex: 1, padding: '12px', border: '1.5px solid #e5e7eb', borderRadius: 12, background: 'white', color: '#6b7280', fontWeight: 600, cursor: 'pointer', fontSize: '0.9rem' }}>
-                Quay lại
-              </button>
-              <button
-                onClick={async () => {
-                  await recordBankPayment(qrAccount.id, paymentModal.total);
-                  await completeTable(paymentModal.table, 'transfer');
-                  setPaymentModal(null);
-                  setConfirmPayment(null);
-                  setTransactionCode(null);
-                  setPaymentCountdown(0);
-                  setSelectedTable(null);
-                  setDesktopView('tables');
-                  Swal.fire({
-                    icon: 'success',
-                    title: '✅ Chuyển khoản thành công!',
-                    html: `<span style="font-size:1rem">Bàn <b>B${paymentModal.table.table_number}</b> — <b style="color:#fff;font-size:1.1rem">${paymentModal.total.toLocaleString('vi-VN')}đ</b></span>`,
-                    timer: 3000, timerProgressBar: true, showConfirmButton: false,
-                    position: 'top-end', toast: true, background: '#1d4ed8', color: '#fff', iconColor: '#fff',
-                  });
-                }}
-                style={{ flex: 2, padding: '12px', border: 'none', borderRadius: 12, background: '#2563eb', color: 'white', fontWeight: 800, cursor: 'pointer', fontSize: '0.95rem' }}>
-                ✅ Đã nhận tiền
-              </button>
+              {/* Buttons */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+                {/* Tiền mặt Button */}
+                <div
+                  onClick={async () => {
+                    await completeTable(confirmPayment.table, 'cash');
+                    setConfirmPayment(null);
+                    setSelectedTable(null);
+                    setDesktopView('tables');
+                    Swal.fire({
+                      icon: 'success',
+                      title: '✅ Thanh toán tiền mặt!',
+                      html: `<span style="font-size:1rem">Bàn <b>B${confirmPayment.table.table_number}</b> — <b style="color:#fff;font-size:1.1rem">${confirmPayment.totalAmount.toLocaleString('vi-VN')}đ</b></span>`,
+                      timer: 3000, timerProgressBar: true, showConfirmButton: false,
+                      position: 'top-end', toast: true, background: '#16a34a', color: '#fff', iconColor: '#fff',
+                    });
+                  }}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '16px', background: '#f0fdf4', border: '1.5px solid #bbf7d0',
+                    borderRadius: 16, cursor: 'pointer', transition: 'all 0.15s'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                    <div style={{ fontSize: '1.8rem' }}>💵</div>
+                    <div>
+                      <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#16a34a' }}>Tiền mặt</div>
+                      <div style={{ fontSize: '0.8rem', color: '#15803d', marginTop: 2, fontWeight: 500 }}>Nhận tiền mặt — đóng bàn ngay</div>
+                    </div>
+                  </div>
+                  <div style={{ background: '#16a34a', color: 'white', padding: '6px 14px', borderRadius: 8, fontSize: '0.9rem', fontWeight: 700 }}>
+                    Xác nhận
+                  </div>
+                </div>
+
+                {/* Chuyển khoản Button */}
+                <div
+                  onClick={() => openPaymentModal(confirmPayment.table, confirmPayment.totalAmount)}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '16px', background: '#eff6ff', border: '1.5px solid #bfdbfe',
+                    borderRadius: 16, cursor: 'pointer', transition: 'all 0.15s'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                    <div style={{ fontSize: '1.8rem' }}>📲</div>
+                    <div>
+                      <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#2563eb' }}>Chuyển khoản</div>
+                      <div style={{ fontSize: '0.8rem', color: '#1d4ed8', marginTop: 2, fontWeight: 500 }}>Hiện mã QR cho khách quét</div>
+                    </div>
+                  </div>
+                  <div style={{ color: '#2563eb', fontSize: '1.2rem', fontWeight: 800, paddingRight: 4 }}>
+                    ›
+                  </div>
+                </div>
+
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
+
+      {/* ── QR Transfer Payment Modal ── */}
+      {
+        paymentModal && qrAccount && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+            onClick={() => { setPaymentModal(null); setConfirmPayment(null); }}>
+            <div style={{ background: 'white', borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.2)', width: '100%', maxWidth: 380, overflow: 'hidden' }}
+              onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div style={{ background: qrAccount.overLimit ? '#dc2626' : '#2563eb', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ color: 'white', fontWeight: 800, fontSize: '1rem' }}>📲 Chuyển khoản</div>
+                  <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.8rem' }}>Bàn B{paymentModal.table.table_number} · {paymentModal.total.toLocaleString('vi-VN')}đ</div>
+                </div>
+                <button onClick={() => { setPaymentModal(null); }}
+                  style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '50%', width: 32, height: 32, color: 'white', cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+              </div>
+
+              {/* QR + account info */}
+              <div style={{ padding: '16px 18px' }}>
+                <div style={{ border: `2px solid ${qrAccount.overLimit ? '#ef4444' : '#bfdbfe'}`, borderRadius: 16, padding: '24px 16px', background: qrAccount.overLimit ? '#fff7f7' : '#f0f9ff', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+
+                  {/* QR Code (Large, on top) */}
+                  <div style={{ padding: 12, background: 'white', borderRadius: 16, border: `1.5px solid ${qrAccount.overLimit ? '#fca5a5' : '#bfdbfe'}`, marginBottom: 16 }}>
+                    <img
+                      src={buildQrUrl(qrAccount, paymentModal.total, transactionCode || `Thanh toan B${paymentModal.table.table_number}`)}
+                      alt="QR"
+                      style={{ width: 260, height: 260, display: 'block', objectFit: 'contain', aspectRatio: '1/1' }}
+                    />
+                  </div>
+
+                  {/* Account Details (Below) */}
+                  <div style={{ width: '100%' }}>
+                    <div style={{ fontWeight: 800, fontSize: '1.2rem', color: '#0f172a' }}>{qrAccount.bank_name}</div>
+                    <div style={{ fontSize: '1.4rem', letterSpacing: 2, fontWeight: 800, color: qrAccount.overLimit ? '#dc2626' : '#1d4ed8', marginTop: 4 }}>{qrAccount.account_number}</div>
+                    <div style={{ fontSize: '0.9rem', color: '#475569', marginTop: 4, textTransform: 'uppercase', fontWeight: 600 }}>{qrAccount.account_name}</div>
+
+                    <div style={{ background: 'white', borderRadius: 12, padding: '10px', marginTop: 12, border: '1px dashed #cbd5e1' }}>
+                      <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 2 }}>Số tiền cần thanh toán</div>
+                      <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#0f172a' }}>{paymentModal.total.toLocaleString('vi-VN')}đ</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Confirm button */}
+              <div style={{ padding: '0 18px 18px', display: 'flex', gap: 10 }}>
+                <button onClick={() => { setPaymentModal(null); setConfirmPayment(null); setTransactionCode(null); setPaymentCountdown(0); }}
+                  style={{ flex: 1, padding: '12px', border: '1.5px solid #e5e7eb', borderRadius: 12, background: 'white', color: '#6b7280', fontWeight: 600, cursor: 'pointer', fontSize: '0.9rem' }}>
+                  Quay lại
+                </button>
+                <button
+                  onClick={async () => {
+                    await recordBankPayment(qrAccount.id, paymentModal.total);
+                    await completeTable(paymentModal.table, 'transfer');
+                    setPaymentModal(null);
+                    setConfirmPayment(null);
+                    setTransactionCode(null);
+                    setPaymentCountdown(0);
+                    setSelectedTable(null);
+                    setDesktopView('tables');
+                    Swal.fire({
+                      icon: 'success',
+                      title: '✅ Chuyển khoản thành công!',
+                      html: `<span style="font-size:1rem">Bàn <b>B${paymentModal.table.table_number}</b> — <b style="color:#fff;font-size:1.1rem">${paymentModal.total.toLocaleString('vi-VN')}đ</b></span>`,
+                      timer: 3000, timerProgressBar: true, showConfirmButton: false,
+                      position: 'top-end', toast: true, background: '#1d4ed8', color: '#fff', iconColor: '#fff',
+                    });
+                  }}
+                  style={{ flex: 2, padding: '12px', border: 'none', borderRadius: 12, background: '#2563eb', color: 'white', fontWeight: 800, cursor: 'pointer', fontSize: '0.95rem' }}>
+                  ✅ Đã nhận tiền
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
 
       {/* ══ HUỶ ĐƠN CONFIRMATION MODAL ══ */}
-      {cancelConfirm && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 3000,
-          background: 'rgba(0,0,0,0.5)',
-          display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-          animation: 'fadeIn 0.15s ease',
-        }}
-          onClick={() => setCancelConfirm(null)}
-        >
+      {
+        cancelConfirm && (
           <div style={{
-            background: 'white',
-            borderRadius: '24px 24px 0 0',
-            width: '100%', maxWidth: 420,
-            padding: '28px 20px 36px',
-            boxShadow: '0 -12px 48px rgba(220,38,38,0.15)',
-            animation: 'slideUp 0.2s ease',
+            position: 'fixed', inset: 0, zIndex: 3000,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+            animation: 'fadeIn 0.15s ease',
           }}
-            onClick={e => e.stopPropagation()}
+            onClick={() => setCancelConfirm(null)}
           >
-            {/* Warning icon */}
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
-              <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'linear-gradient(135deg,#fee2e2,#fecaca)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem', boxShadow: '0 4px 20px rgba(220,38,38,0.2)' }}>🗑️</div>
-            </div>
-            <div style={{ textAlign: 'center', marginBottom: 8 }}>
-              <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#0f172a' }}>Huỷ toàn bộ đơn?</div>
-              <div style={{ fontSize: '0.85rem', color: '#6b7280', marginTop: 4 }}>
-                Bàn <strong>{cancelConfirm.table_number}</strong> — tất cả đơn chưa thanh toán sẽ bị huỷ
-              </div>
-            </div>
-            {/* Warning note */}
             <div style={{
-              background: '#fef9c3', border: '1px solid #fde68a',
-              borderRadius: 10, padding: '10px 14px',
-              fontSize: '0.8rem', color: '#92400e', fontWeight: 500,
-              marginTop: 12, marginBottom: 20, textAlign: 'center',
-            }}>
-              ⚠️ Hành động này <strong>không thể hoàn tác</strong>. Bàn sẽ được trả về trạng thái trống.
-            </div>
-
-            {/* Action buttons */}
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => setCancelConfirm(null)}
-                style={{
-                  flex: 1, padding: '13px', border: '1.5px solid #e2e8f0',
-                  borderRadius: 14, background: 'white', cursor: 'pointer',
-                  fontSize: '0.95rem', fontWeight: 700, color: '#374151',
-                }}>
-                Không, giữ lại
-              </button>
-              <button
-                onClick={async () => {
-                  const t = cancelConfirm;
-
-                  // ─── 1. Close ALL panels INSTANTLY ───
-                  setCancelConfirm(null);
-                  setSelectedTable(null);
-                  setAddingToOrder(null);
-                  setAddItemSearch('');
-                  setActiveMenuCategory('all');
-                  setShowBillPreview(false);
-                  setPaymentModal(null);
-                  setOrders(prev => ({ ...prev, [t.id]: [] }));
-
-                  // ─── 2. DB updates in background (after UI is already gone) ───
-                  const hostId = t.merged_with || t.id;
-                  // Hủy tất cả đơn của host (kể cả đơn từ bàn satellite đã được chuyển sang)
-                  await supabase.from('orders')
-                    .update({ status: 'cancelled', payment_method: 'cancelled' })
-                    .eq('table_id', hostId)
-                    .in('status', ['pending', 'preparing', 'completed']);
-                  // Reset toàn bộ nhóm gộp (host + all satellites)
-                  await supabase.from('tables')
-                    .update({ status: 'available', occupied_at: null, merged_with: null })
-                    .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
-                  fetchTables();
-                }}
-                style={{
-                  flex: 1, padding: '13px', border: 'none',
-                  borderRadius: 14,
-                  background: 'linear-gradient(135deg,#ef4444,#dc2626)',
-                  color: 'white', cursor: 'pointer',
-                  fontSize: '0.95rem', fontWeight: 800,
-                  boxShadow: '0 4px 16px rgba(220,38,38,0.35)',
-                }}>
-                Có, huỷ đơn
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* ══ LỊCH SỬ BÀN 8H ══ */}
-      {showTableHistory && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 3100, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={() => setShowTableHistory(null)}>
-          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '80dvh', background: 'white', borderRadius: '20px 20px 0 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #f3f4f6', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 800, fontSize: '1rem', color: '#1f2937' }}>🕐 Lịch sử Bàn {showTableHistory.table_number}</div>
-                <div style={{ fontSize: '0.72rem', color: '#9ca3af', marginTop: 1 }}>8 tiếng gần nhất</div>
+              background: 'white',
+              borderRadius: '24px 24px 0 0',
+              width: '100%', maxWidth: 420,
+              padding: '28px 20px 36px',
+              boxShadow: '0 -12px 48px rgba(220,38,38,0.15)',
+              animation: 'slideUp 0.2s ease',
+            }}
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Warning icon */}
+              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
+                <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'linear-gradient(135deg,#fee2e2,#fecaca)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem', boxShadow: '0 4px 20px rgba(220,38,38,0.2)' }}>🗑️</div>
               </div>
-              <button onClick={() => setShowTableHistory(null)} style={{ background: '#f3f4f6', border: 'none', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
-            </div>
-            <div style={{ overflowY: 'auto', flex: 1, padding: '10px 14px 20px' }}>
-              {tableHistoryLoading ? (
-                <div style={{ textAlign: 'center', padding: '30px 0', color: '#9ca3af', fontSize: '0.85rem' }}>Đang tải...</div>
-              ) : tableHistoryData.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '30px 0', color: '#d1d5db', fontSize: '0.85rem' }}>
-                  <div style={{ fontSize: '2rem', marginBottom: 6 }}>📭</div>Không có lịch sử trong 8 tiếng qua
+              <div style={{ textAlign: 'center', marginBottom: 8 }}>
+                <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#0f172a' }}>Huỷ toàn bộ đơn?</div>
+                <div style={{ fontSize: '0.85rem', color: '#6b7280', marginTop: 4 }}>
+                  Bàn <strong>{cancelConfirm.table_number}</strong> — tất cả đơn chưa thanh toán sẽ bị huỷ
                 </div>
-              ) : tableHistoryData.map(order => {
-                const isPaid = order.status === 'paid';
-                const tTime = new Date(order.updated_at || order.created_at);
-                const timeStr = tTime.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-                return (
-                  <div key={order.id} style={{ borderBottom: '1px solid #f3f4f6', paddingBottom: 10, marginBottom: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                      <span style={{ fontSize: '0.68rem', color: '#9ca3af' }}>{timeStr}</span>
-                      <span style={{ fontSize: '0.68rem', fontWeight: 600, color: '#6b7280' }}>•</span>
-                      <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#374151' }}>{order.customer_name || 'Khách'}</span>
-                      <span style={{ marginLeft: 'auto', fontSize: '0.62rem', fontWeight: 700, borderRadius: 100, padding: '2px 8px', background: isPaid ? '#dcfce7' : '#fee2e2', color: isPaid ? '#16a34a' : '#dc2626' }}>
-                        {isPaid ? '✓ Đã TT' : '✗ Đã huỷ'}
-                      </span>
-                    </div>
-                    {(order.order_items || []).slice(0, 4).map(item => (
-                      <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#6b7280', paddingLeft: 4, marginBottom: 2 }}>
-                        <span>{item.quantity}x {item.menu_item?.name || item.item_name}</span>
-                        <span style={{ fontWeight: 600 }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
-                      </div>
-                    ))}
-                    {(order.order_items || []).length > 4 && <div style={{ fontSize: '0.68rem', color: '#9ca3af', paddingLeft: 4 }}>...+{order.order_items.length - 4} món khác</div>}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, paddingTop: 4, borderTop: '1px dashed #f3f4f6' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontSize: '0.72rem', color: '#9ca3af' }}>Tổng</span>
-                        <span style={{ fontSize: '0.82rem', fontWeight: 800, color: isPaid ? '#16a34a' : '#dc2626' }}>{(order.total_amount || 0).toLocaleString('vi-VN')}đ</span>
-                      </div>
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          const btn = e.currentTarget;
-                          const orig = btn.textContent;
-                          btn.textContent = '⏳'; btn.disabled = true;
-                          const { success } = await sendTableSummaryPrintJob(supabase, [order.id]);
-                          btn.textContent = success ? '✓ Gửii' : '✗ Lỗi';
-                          setTimeout(() => { if (btn) { btn.textContent = orig; btn.disabled = false; } }, 2000);
-                        }}
-                        style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, color: '#0284c7', fontSize: '0.7rem', fontWeight: 700, padding: '4px 10px', cursor: 'pointer' }}>
-                        🖨️ In lại
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+              </div>
+              {/* Warning note */}
+              <div style={{
+                background: '#fef9c3', border: '1px solid #fde68a',
+                borderRadius: 10, padding: '10px 14px',
+                fontSize: '0.8rem', color: '#92400e', fontWeight: 500,
+                marginTop: 12, marginBottom: 20, textAlign: 'center',
+              }}>
+                ⚠️ Hành động này <strong>không thể hoàn tác</strong>. Bàn sẽ được trả về trạng thái trống.
+              </div>
+
+              {/* Action buttons */}
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={() => setCancelConfirm(null)}
+                  style={{
+                    flex: 1, padding: '13px', border: '1.5px solid #e2e8f0',
+                    borderRadius: 14, background: 'white', cursor: 'pointer',
+                    fontSize: '0.95rem', fontWeight: 700, color: '#374151',
+                  }}>
+                  Không, giữ lại
+                </button>
+                <button
+                  onClick={async () => {
+                    const t = cancelConfirm;
+
+                    // ─── 1. Close ALL panels INSTANTLY ───
+                    setCancelConfirm(null);
+                    setSelectedTable(null);
+                    setAddingToOrder(null);
+                    setAddItemSearch('');
+                    setActiveMenuCategory('all');
+                    setShowBillPreview(false);
+                    setPaymentModal(null);
+                    setOrders(prev => ({ ...prev, [t.id]: [] }));
+
+                    // ─── 2. DB updates in background (after UI is already gone) ───
+                    const hostId = t.merged_with || t.id;
+                    // Hủy tất cả đơn của host (kể cả đơn từ bàn satellite đã được chuyển sang)
+                    await supabase.from('orders')
+                      .update({ status: 'cancelled', payment_method: 'cancelled' })
+                      .eq('table_id', hostId)
+                      .in('status', ['pending', 'preparing', 'completed']);
+                    // Reset toàn bộ nhóm gộp (host + all satellites)
+                    await supabase.from('tables')
+                      .update({ status: 'available', occupied_at: null, merged_with: null })
+                      .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
+                    fetchTables();
+                  }}
+                  style={{
+                    flex: 1, padding: '13px', border: 'none',
+                    borderRadius: 14,
+                    background: 'linear-gradient(135deg,#ef4444,#dc2626)',
+                    color: 'white', cursor: 'pointer',
+                    fontSize: '0.95rem', fontWeight: 800,
+                    boxShadow: '0 4px 16px rgba(220,38,38,0.35)',
+                  }}>
+                  Có, huỷ đơn
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
+      {/* ══ LỊCH SỬ BÀN 8H ══ */}
+      {
+        showTableHistory && (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 3100, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={() => setShowTableHistory(null)}>
+            <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '80dvh', background: 'white', borderRadius: '20px 20px 0 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #f3f4f6', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 800, fontSize: '1rem', color: '#1f2937' }}>🕐 Lịch sử Bàn {showTableHistory.table_number}</div>
+                  <div style={{ fontSize: '0.72rem', color: '#9ca3af', marginTop: 1 }}>8 tiếng gần nhất</div>
+                </div>
+                <button onClick={() => setShowTableHistory(null)} style={{ background: '#f3f4f6', border: 'none', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+              </div>
+              <div style={{ overflowY: 'auto', flex: 1, padding: '10px 14px 20px' }}>
+                {tableHistoryLoading ? (
+                  <div style={{ textAlign: 'center', padding: '30px 0', color: '#9ca3af', fontSize: '0.85rem' }}>Đang tải...</div>
+                ) : tableHistoryData.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '30px 0', color: '#d1d5db', fontSize: '0.85rem' }}>
+                    <div style={{ fontSize: '2rem', marginBottom: 6 }}>📭</div>Không có lịch sử trong 8 tiếng qua
+                  </div>
+                ) : tableHistoryData.map(order => {
+                  const isPaid = order.status === 'paid';
+                  const tTime = new Date(order.updated_at || order.created_at);
+                  const timeStr = tTime.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+                  return (
+                    <div key={order.id} style={{ borderBottom: '1px solid #f3f4f6', paddingBottom: 10, marginBottom: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                        <span style={{ fontSize: '0.68rem', color: '#9ca3af' }}>{timeStr}</span>
+                        <span style={{ fontSize: '0.68rem', fontWeight: 600, color: '#6b7280' }}>•</span>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#374151' }}>{order.customer_name || 'Khách'}</span>
+                        <span style={{ marginLeft: 'auto', fontSize: '0.62rem', fontWeight: 700, borderRadius: 100, padding: '2px 8px', background: isPaid ? '#dcfce7' : '#fee2e2', color: isPaid ? '#16a34a' : '#dc2626' }}>
+                          {isPaid ? '✓ Đã TT' : '✗ Đã huỷ'}
+                        </span>
+                      </div>
+                      {(order.order_items || []).slice(0, 4).map(item => (
+                        <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#6b7280', paddingLeft: 4, marginBottom: 2 }}>
+                          <span>{item.quantity}x {item.menu_item?.name || item.item_name}</span>
+                          <span style={{ fontWeight: 600 }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
+                        </div>
+                      ))}
+                      {(order.order_items || []).length > 4 && <div style={{ fontSize: '0.68rem', color: '#9ca3af', paddingLeft: 4 }}>...+{order.order_items.length - 4} món khác</div>}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, paddingTop: 4, borderTop: '1px dashed #f3f4f6' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: '0.72rem', color: '#9ca3af' }}>Tổng</span>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 800, color: isPaid ? '#16a34a' : '#dc2626' }}>{(order.total_amount || 0).toLocaleString('vi-VN')}đ</span>
+                        </div>
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const btn = e.currentTarget;
+                            const orig = btn.textContent;
+                            btn.textContent = '⏳'; btn.disabled = true;
+                            const { success } = await sendTableSummaryPrintJob(supabase, [order.id]);
+                            btn.textContent = success ? '✓ Gửii' : '✗ Lỗi';
+                            setTimeout(() => { if (btn) { btn.textContent = orig; btn.disabled = false; } }, 2000);
+                          }}
+                          style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, color: '#0284c7', fontSize: '0.7rem', fontWeight: 700, padding: '4px 10px', cursor: 'pointer' }}>
+                          🖨️ In lại
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )
+      }
 
       {/* ─── Print Toast ─── */}
-      {printToast && (
-        <div style={{
-          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
-          zIndex: 9999, padding: '10px 20px', borderRadius: 100, fontWeight: 700,
-          fontSize: '0.9rem', whiteSpace: 'nowrap', boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
-          background: printToast === 'ok' ? '#15803d' : printToast === 'err' ? '#dc2626' : '#2563eb',
-          color: 'white', display: 'flex', alignItems: 'center', gap: 8,
-        }}>
-          {printToast === 'sending' && '🖨️ Đang gửi lệnh in...'}
-          {printToast === 'ok' && '✅ Đã gửi lệnh in thành công!'}
-          {printToast === 'err' && '❌ Lỗi gửi lệnh in!'}
-        </div>
-      )}
-    </div>
+      {
+        printToast && (
+          <div style={{
+            position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 9999, padding: '10px 20px', borderRadius: 100, fontWeight: 700,
+            fontSize: '0.9rem', whiteSpace: 'nowrap', boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+            background: printToast === 'ok' ? '#15803d' : printToast === 'err' ? '#dc2626' : '#2563eb',
+            color: 'white', display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            {printToast === 'sending' && '🖨️ Đang gửi lệnh in...'}
+            {printToast === 'ok' && '✅ Đã gửi lệnh in thành công!'}
+            {printToast === 'err' && '❌ Lỗi gửi lệnh in!'}
+          </div>
+        )
+      }
+    </div >
   );
 }
