@@ -1442,9 +1442,19 @@ export default function TablesPage() {
                             >🍳 Bếp</button>
                             {/* In bill */}
                             <button
-                              onClick={() => {
+                              onClick={async () => {
                                 const items = (order.order_items || []);
                                 const total = items.reduce((s, i) => s + i.unit_price * i.quantity, 0);
+                                const { isConfirmed } = await Swal.fire({
+                                  title: '🖨 In hoá đơn?',
+                                  html: `In hoá đơn bàn <strong>${selectedTable?.table_number}</strong>?<br/><span style="color:#dc2626;font-weight:700;font-size:1.1em">Tổng: ${total.toLocaleString('vi-VN')}đ</span>`,
+                                  showCancelButton: true,
+                                  confirmButtonText: '🖨 In ngay',
+                                  cancelButtonText: 'Huỷ',
+                                  confirmButtonColor: '#2563eb',
+                                  reverseButtons: true,
+                                });
+                                if (!isConfirmed) return;
                                 const printWin = window.open('', '_blank', 'width=380,height=600');
                                 printWin.document.write(`
                                   <html><head><title>Hóa đơn</title><style>
