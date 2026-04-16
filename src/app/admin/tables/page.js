@@ -1397,7 +1397,7 @@ export default function TablesPage() {
                   return (
                     <div key={order.id}>
                       {/* Bill Header Row */}
-                      {tableBills.length > 1 && (
+                      {(
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: '#f8fafc', borderBottom: '1px solid #e5e7eb', borderTop: billIdx > 0 ? '2px solid #e5e7eb' : 'none' }}>
                           <span style={{ background: '#2563eb', color: 'white', borderRadius: 10, padding: '1px 8px', fontSize: '0.7rem', fontWeight: 700 }}>#{billIdx + 1}</span>
                           <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#111827' }}>👤 {order.customer_name}</span>
@@ -1494,62 +1494,6 @@ export default function TablesPage() {
                                     🖊 Đổi loại
                                   </button>
                                 )}
-                                <button
-                                  onClick={async () => {
-                                    const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
-                                    if (otherTables.length === 0) {
-                                      Swal.fire('Lỗi', 'Không có bàn nào khác để chuyển!', 'error');
-                                      return;
-                                    }
-                                    const inputOptions = {};
-                                    otherTables.forEach(t => {
-                                      inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Đang có khách)' : '(Trống)'}`;
-                                    });
-
-                                    const { value: targetTableId } = await Swal.fire({
-                                      title: 'Chuyển bill',
-                                      text: 'Chuyển toàn bộ bill này sang bàn khác?',
-                                      input: 'select',
-                                      inputOptions,
-                                      inputPlaceholder: 'Chọn bàn muốn chuyển đến',
-                                      showCancelButton: true,
-                                      confirmButtonColor: '#2563eb',
-                                      cancelButtonColor: '#6b7280',
-                                      confirmButtonText: 'Chuyển',
-                                      cancelButtonText: 'Huỷ',
-                                      reverseButtons: true,
-                                      inputValidator: (value) => {
-                                        if (!value) return 'Vui lòng chọn một bàn!';
-                                      }
-                                    });
-
-                                    if (targetTableId) {
-                                      const { error } = await supabase.from('orders').update({ table_id: targetTableId }).eq('id', item._orderId);
-                                      if (error) {
-                                        Swal.fire('Lỗi', error.message, 'error');
-                                        return;
-                                      }
-
-                                      const targetTable = otherTables.find(t => t.id === targetTableId);
-                                      if (targetTable && targetTable.status === 'available') {
-                                        await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
-                                      }
-
-                                      const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== item._orderId && o.status !== 'cancelled');
-                                      if (remaining.length === 0) {
-                                        const hId = selectedTable.merged_with || selectedTable.id;
-                                        await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
-                                        setSelectedTable(null);
-                                      }
-
-                                      fetchTables();
-                                      Swal.fire({ title: 'Thành công', text: 'Đã chuyển bill sang bàn mới!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
-                                    }
-                                  }}
-                                  style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
-                                >
-                                  ➜ Chuyển bàn
-                                </button>
                               </div>
 
                             </div>
