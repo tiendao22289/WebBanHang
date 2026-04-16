@@ -1416,16 +1416,85 @@ export default function TablesPage() {
                             )}
                           </div>
                         ) : item.menu_item ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 }}>
                             <span style={{ fontSize: '0.72rem', color: '#d1d5db', fontStyle: 'italic' }}>chưa chọn khẩu vị</span>
-                            <div
-                              onClick={() => { setOptionModalItem(item.menu_item); setSelectedOptions({}); setOptionQuantity(item.quantity); setOptionNote(''); setEditingPrice(false); setCustomPrice(null); }}
-                              style={{ width: 11, height: 11, background: '#d1d5db', borderRadius: 2, cursor: 'pointer', flexShrink: 0 }}
-                              title="Chọn khẩu vị"
-                            />
                           </div>
                         ) : null}
-                        <div style={{ fontSize: '0.72rem', color: '#2563eb', cursor: 'pointer', marginTop: 1 }}>📝 Ghi chú/Món thêm</div>
+
+                        {/* THE 3 ACTION BUTTONS UNDER THE ITEM NAME */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                          {item.menu_item && (
+                            <button
+                              onClick={() => {
+                                setOptionModalItem(item.menu_item);
+                                setSelectedOptions({});
+                                setOptionQuantity(item.quantity);
+                                setOptionNote('');
+                                setEditingPrice(false);
+                                setCustomPrice(null);
+                              }}
+                              style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                            >
+                              🖊 Đổi loại
+                            </button>
+                          )}
+                          <button
+                            onClick={() => { setDesktopInlinePriceItem(item.id); setDesktopInlinePriceVal(String(item.unit_price)); }}
+                            style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#fdf4ff', color: '#c026d3', border: '1px solid #f5d0fe', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                          >
+                            💲 Sửa giá
+                          </button>
+                          <button
+                            onClick={async () => {
+                              const { value: targetTableId } = await Swal.fire({
+                                title: 'Chuyển món sang bàn nào?',
+                                input: 'select',
+                                inputOptions: Object.fromEntries(
+                                  tables
+                                    .filter(t => t.id !== selectedTable.id && !t.deleted)
+                                    .map(t => [t.id, t.table_name || `Bàn ${t.table_number}`])
+                                ),
+                                inputPlaceholder: 'Chọn bàn...',
+                                showCancelButton: true,
+                                confirmButtonText: 'Chuyển món',
+                                cancelButtonText: 'Huỷ',
+                              });
+
+                              if (!targetTableId) return;
+
+                              const { data: activeOrder } = await supabase
+                                .from('orders')
+                                .select('id')
+                                .eq('table_id', targetTableId)
+                                .in('status', ['pending', 'preparing'])
+                                .maybeSingle();
+
+                              let newOrderId;
+                              if (activeOrder) {
+                                newOrderId = activeOrder.id;
+                              } else {
+                                const { data: newOrder } = await supabase
+                                  .from('orders')
+                                  .insert({
+                                    table_id: targetTableId,
+                                    customer_name: 'Khách',
+                                    status: 'pending',
+                                    total_amount: 0
+                                  }).select().single();
+                                newOrderId = newOrder.id;
+                                await supabase.from('tables').update({ status: 'occupied' }).eq('id', targetTableId);
+                              }
+
+                              await supabase.from('order_items').update({ order_id: newOrderId }).eq('id', item.id);
+                              fetchTables();
+                              Swal.fire({ title: 'Thành công', text: 'Đã chuyển món!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
+                            }}
+                            style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
+                          >
+                            ➜ Chuyển bàn
+                          </button>
+                        </div>
+
                       </div>
 
                       {/* Qty controls */}
@@ -1459,7 +1528,7 @@ export default function TablesPage() {
                         ) : (
                           <span
                             onClick={() => { setDesktopInlinePriceItem(item.id); setDesktopInlinePriceVal(String(item.unit_price)); }}
-                            style={{ display: 'block', minWidth: 65, textAlign: 'right', fontSize: '0.82rem', color: '#374151', cursor: 'text', padding: '2px 4px', borderRadius: 4, border: '1.5px solid transparent' }}
+                            style={{ display: 'block', minWidth: 65, textAlign: 'right', fontSize: '0.82rem', color: '#374151', cursor: 'pointer', padding: '2px 4px', borderRadius: 4, border: '1.5px solid transparent' }}
                             title="Click để sửa giá"
                           >{item.unit_price.toLocaleString('vi-VN')}</span>
                         )}
@@ -1470,14 +1539,13 @@ export default function TablesPage() {
 
                       {/* Action icons */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0, paddingTop: 1 }}>
-                        <button title="Thêm ghi chú" style={{ width: 20, height: 20, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280' }}>+</button>
-                        <button title="Yêu thích" style={{ width: 20, height: 20, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', fontSize: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f59e0b' }}>☆</button>
                         <button
                           title="Xóa món"
                           onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, -item.quantity)}
-                          style={{ width: 20, height: 20, border: '1px solid #fca5a5', borderRadius: 4, background: '#fff5f5', cursor: 'pointer', fontSize: '0.7rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ef4444' }}
-                        >🗑</button>
+                          style={{ width: 24, height: 24, border: '1px solid #fca5a5', borderRadius: 4, background: '#fff5f5', cursor: 'pointer', fontSize: '0.8rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ef4444' }}
+                        ><Trash2 size={13} /></button>
                       </div>
+
                     </div>
                   );
                 })}
