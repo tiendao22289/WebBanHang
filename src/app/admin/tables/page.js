@@ -1603,7 +1603,7 @@ export default function TablesPage() {
             {/* 2-pane content */}
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
               {/* LEFT: Table browser or Menu view */}
-              <div style={{ width: '65%', display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderRight: '1px solid #e2e8f0', overflow: 'hidden', transition: 'width 0.25s ease' }}>
+              <div style={{ flex: '6 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', background: '#f1f5f9', borderRight: '1px solid #e2e8f0', overflow: 'hidden', transition: 'flex 0.25s ease' }}>
                 {desktopView === 'menu' ? (
                   /* ── Menu Grid View ── */
                   <>
@@ -1619,9 +1619,9 @@ export default function TablesPage() {
                         >{cat.name}</button>
                       ))}
                     </div>
-                    {/* Menu grid 7 columns */}
+                    {/* Menu grid - responsive auto-fill */}
                     <div style={{ flex: 1, overflowY: 'auto', padding: '10px', background: '#f8fafc' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: 8 }}>
                         {menuItems
                           .filter(m => {
                             const searchStr = desktopSearch.trim();
@@ -1904,7 +1904,7 @@ export default function TablesPage() {
               </div>
 
               {/* RIGHT: Order detail */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'white', overflow: 'hidden', minWidth: 0 }}>
+              <div style={{ flex: '4 1 0', minWidth: 320, maxWidth: '45%', display: 'flex', flexDirection: 'column', background: 'white', overflow: 'hidden' }}>
                 {desktopOrderDetail()}
               </div>
             </div>
