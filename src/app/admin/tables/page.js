@@ -1432,7 +1432,8 @@ export default function TablesPage() {
                                 setOptionQuantity(item.quantity);
                                 setOptionNote(item.note || '');
                                 setEditingOrderItem({ orderId: item._orderId, itemId: item.id });
-                                setOptionModalItem(item.menu_item);
+                                const fullItem = menuItems.find(m => m.id === item.menu_item_id) || item.menu_item;
+                                setOptionModalItem(fullItem);
                                 setEditingPrice(false);
                                 setCustomPrice(null);
                               }}
