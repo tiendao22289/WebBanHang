@@ -1426,10 +1426,13 @@ export default function TablesPage() {
                           {item.menu_item && (
                             <button
                               onClick={() => {
-                                setOptionModalItem(item.menu_item);
-                                setSelectedOptions({});
+                                const current = {};
+                                (item.item_options || []).forEach(o => { current[o.name] = o.choice; });
+                                setSelectedOptions(current);
                                 setOptionQuantity(item.quantity);
-                                setOptionNote('');
+                                setOptionNote(item.note || '');
+                                setEditingOrderItem({ orderId: item._orderId, itemId: item.id });
+                                setOptionModalItem(item.menu_item);
                                 setEditingPrice(false);
                                 setCustomPrice(null);
                               }}
@@ -1439,7 +1442,12 @@ export default function TablesPage() {
                             </button>
                           )}
                           <button
-                            onClick={() => { setDesktopInlinePriceItem(item.id); setDesktopInlinePriceVal(String(item.unit_price)); }}
+                            onClick={() => {
+                              setDiscountValue(0);
+                              setDiscountMode('VND');
+                              setCustomNewPrice(null);
+                              setEditingPriceItem({ orderId: item._orderId, itemId: item.id });
+                            }}
                             style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#fdf4ff', color: '#c026d3', border: '1px solid #f5d0fe', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
                           >
                             💲 Sửa giá
