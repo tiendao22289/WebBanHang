@@ -1455,24 +1455,12 @@ export default function TablesPage() {
                                   reverseButtons: true,
                                 });
                                 if (!isConfirmed) return;
-                                const printWin = window.open('', '_blank', 'width=380,height=600');
-                                printWin.document.write(`
-                                  <html><head><title>Hóa đơn</title><style>
-                                    body{font-family:monospace;font-size:13px;padding:12px;margin:0}
-                                    h2{text-align:center;margin:4px 0}
-                                    .row{display:flex;justify-content:space-between}
-                                    hr{border:1px dashed #555}
-                                  </style></head><body>
-                                  <h2>HÓA ĐƠN</h2>
-                                  <p style="text-align:center">Bàn ${selectedTable?.table_number} — ${order.customer_name}</p>
-                                  <hr/>
-                                  ${items.map((i, n) => `<div class="row"><span>${n + 1}. ${i.menu_item?.name || i.name} x${i.quantity}</span><span>${(i.unit_price * i.quantity).toLocaleString('vi-VN')}đ</span></div>`).join('')}
-                                  <hr/>
-                                  <div class="row"><strong>Tổng cộng</strong><strong>${total.toLocaleString('vi-VN')}đ</strong></div>
-                                  </body></html>`);
-                                printWin.document.close();
-                                printWin.focus();
-                                printWin.print();
+                                const { success, error: printErr } = await sendTableSummaryPrintJob(supabase, [order.id]);
+                                if (success) {
+                                  Swal.fire({ title: 'Đã gửi lệnh in!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
+                                } else {
+                                  Swal.fire('Lỗi in', printErr || 'Không kết nối được máy in', 'error');
+                                }
                               }}
                               style={{ background: '#fff7ed', border: '1.5px solid #fed7aa', borderRadius: 6, color: '#ea580c', cursor: 'pointer', padding: '3px 10px', fontSize: '0.76rem', fontWeight: 700 }}
                             >🖨 In</button>
