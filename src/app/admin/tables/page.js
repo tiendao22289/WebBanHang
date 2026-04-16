@@ -268,36 +268,36 @@ export default function TablesPage() {
     if (showTransfer && transactionCode) {
       const channel = supabase
         .channel(`payment_tx_${transactionCode}`)
-        .on('postgres_changes', { 
-          event: 'UPDATE', 
-          schema: 'public', 
-          table: 'payment_transactions', 
-          filter: `transaction_code=eq.${transactionCode}` 
+        .on('postgres_changes', {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'payment_transactions',
+          filter: `transaction_code=eq.${transactionCode}`
         }, (payload) => {
-           if (payload.new && payload.new.status === 'completed') {
-             // Success
-             Swal.fire({
-                title: 'Thành công',
-                text: 'Hệ thống đã nhận được thanh toán!',
-                icon: 'success',
-                timer: 2000,
-                showConfirmButton: false,
-                position: 'top-end',
-                toast: true
-             });
-             setPaymentModal(null);
-             setQrAccount(null);
-             setShowTransfer(false);
-             setTransactionCode(null);
-             setPaymentCountdown(0);
-             setSelectedTable(null);
-             setConfirmPayment(null);
-             setDesktopView('tables');
-             fetchTables();
-           }
+          if (payload.new && payload.new.status === 'completed') {
+            // Success
+            Swal.fire({
+              title: 'Thành công',
+              text: 'Hệ thống đã nhận được thanh toán!',
+              icon: 'success',
+              timer: 2000,
+              showConfirmButton: false,
+              position: 'top-end',
+              toast: true
+            });
+            setPaymentModal(null);
+            setQrAccount(null);
+            setShowTransfer(false);
+            setTransactionCode(null);
+            setPaymentCountdown(0);
+            setSelectedTable(null);
+            setConfirmPayment(null);
+            setDesktopView('tables');
+            fetchTables();
+          }
         })
         .subscribe();
-      
+
       return () => {
         supabase.removeChannel(channel);
       };
@@ -425,15 +425,15 @@ export default function TablesPage() {
     const { account, overLimit } = await getActiveAccount();
     const finalAcc = account ? { ...account, overLimit } : null;
     setQrAccount(finalAcc);
-    
+
     // Auto-generate transaction code for mobile workflow
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code = '';
     for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
-    
+
     const tableBills = orders[table.merged_with || table.id] || [];
     const orderIdsStr = tableBills.map(o => o.id).join(',');
-    
+
     if (orderIdsStr) {
       await supabase.from('payment_transactions').insert({
         transaction_code: code,
@@ -1537,14 +1537,14 @@ export default function TablesPage() {
           <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', margin: '-2rem', marginTop: '-2rem' }}>
             {/* Blue top nav bar */}
             <div style={{ background: '#0b2149', display: 'flex', alignItems: 'flex-end', gap: 15, padding: '8px 12px 0 12px', flexShrink: 0 }}>
-              
+
               {/* Folder Tabs */}
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4 }}>
                 {[{ label: 'Phòng bàn', view: 'tables', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg> }, { label: 'Thực đơn', view: 'menu', icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg> }].map((tab) => {
                   const isActive = desktopView === tab.view;
                   // For seamless blending, use white. However, table background is f1f5f9. We use a dynamic colour or just white.
                   const activeBg = tab.view === 'menu' ? 'white' : '#f1f5f9';
-                  
+
                   return (
                     <button key={tab.label}
                       onClick={() => setDesktopView(tab.view)}
@@ -1572,7 +1572,7 @@ export default function TablesPage() {
                   );
                 })}
               </div>
-              
+
               {/* Search Bar & Actions */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 10, flex: 1 }}>
                 <div style={{ position: 'relative', width: '100%', maxWidth: 350 }}>
@@ -1593,9 +1593,9 @@ export default function TablesPage() {
                     )}
                   </div>
                 </div>
-                
+
                 {/* Plus Button */}
-                <button onClick={() => setShowAddModal(true)} style={{ background: '#0284c7', color: 'white', border: 'none', borderRadius: '50%', width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '1.4rem', fontWeight: 500, flexShrink: 0, transition: 'all 0.1s' }} onMouseOver={e=>e.target.style.background='#0369a1'} onMouseOut={e=>e.target.style.background='#0284c7'}>+</button>
+                <button onClick={() => setShowAddModal(true)} style={{ background: '#0284c7', color: 'white', border: 'none', borderRadius: '50%', width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '1.4rem', fontWeight: 500, flexShrink: 0, transition: 'all 0.1s' }} onMouseOver={e => e.target.style.background = '#0369a1'} onMouseOut={e => e.target.style.background = '#0284c7'}>+</button>
               </div>
 
             </div>
@@ -1746,7 +1746,7 @@ export default function TablesPage() {
                           const isSelected = selectedTable?.id === table.id;
                           const tableTotal = (orders[table.merged_with || table.id] || []).reduce((s, o) => s + (o.total_amount || 0), 0);
                           const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(pj => pj.status === 'failed'));
-                          
+
                           // Style derivation: Merged group is Purple, Normal Occupied is Blue, Empty is White
                           const bgColors = {
                             selected: '#1d4ed8', // Dark blue when selected
@@ -1754,28 +1754,28 @@ export default function TablesPage() {
                             occupied: '#eff6ff', // Light blue for normal occupied
                             empty: 'white'
                           };
-                          
+
                           const borderColors = {
                             selected: '#1d4ed8',
                             merged: '#c4b5fd', // Purple border
                             occupied: '#bfdbfe', // Blue border
                             empty: '#e5e7eb'
                           };
-                          
+
                           const iconColors = {
                             selected: 'rgba(255,255,255,0.5)',
                             merged: '#a855f7', // Purple icon
                             occupied: '#60a5fa', // Blue icon
                             empty: '#cbd5e1'
                           };
-                          
+
                           const textColors = {
                             selected: 'white',
                             merged: '#6b21a8', // Deep purple text
                             occupied: '#1e3a8a', // Deep blue text
                             empty: '#374151'
                           };
-                          
+
                           const pillTagColors = {
                             selected: { bg: 'white', text: '#1d4ed8' },
                             merged: { bg: '#ede9fe', text: '#7e22ce' },
@@ -1787,7 +1787,7 @@ export default function TablesPage() {
                           const iconCol = isSelected ? iconColors.selected : isMergedGroup ? iconColors.merged : isOccupied ? iconColors.occupied : iconColors.empty;
                           const textCol = isSelected ? textColors.selected : isMergedGroup ? textColors.merged : isOccupied ? textColors.occupied : textColors.empty;
                           const pillStyle = isSelected ? pillTagColors.selected : isMergedGroup ? pillTagColors.merged : pillTagColors.occupied;
-                          
+
                           const shadowHover = isMergedGroup ? '0 8px 16px rgba(147,51,234,0.15)' : isOccupied ? '0 8px 16px rgba(37,99,235,0.15)' : '0 8px 16px rgba(0,0,0,0.08)';
 
                           return (
@@ -1845,7 +1845,7 @@ export default function TablesPage() {
                               {isHost && isSelected && (
                                 <div style={{ position: 'absolute', top: 7, left: 7, fontSize: '0.6rem', background: '#ffedd5', color: '#ea580c', borderRadius: 4, padding: '1px 5px', fontWeight: 700, letterSpacing: '0.02em' }}>GỘP</div>
                               )}
-                              
+
                               {/* Table icon */}
                               <svg width="46" height="32" viewBox="0 0 40 30" fill="none" style={{ marginTop: isHost ? 5 : 0 }}>
                                 <rect x="3" y="10" width="34" height="10" rx="3.5"
@@ -1856,10 +1856,10 @@ export default function TablesPage() {
                                 <rect x="7" y="21" width="4.5" height="9" rx="2.25" fill={iconCol} />
                                 <rect x="28.5" y="21" width="4.5" height="9" rx="2.25" fill={iconCol} />
                               </svg>
-                              
+
                               {/* Table name */}
                               <span style={{ fontSize: '0.85rem', fontWeight: 700, color: textCol }}>{table.table_name || `B${table.table_number}`}</span>
-                              
+
                               {/* Revenue or Status */}
                               {tableTotal > 0 ? (
                                 <span style={{ fontSize: '0.7rem', fontWeight: 700, color: pillStyle.text, background: pillStyle.bg, borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>
@@ -1973,10 +1973,10 @@ export default function TablesPage() {
             const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
             let code = '';
             for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
-            
+
             const tableBills = orders[table.merged_with || table.id] || [];
             const orderIdsStr = tableBills.map(o => o.id).join(',');
-            
+
             if (orderIdsStr) {
               await supabase.from('payment_transactions').insert({
                 transaction_code: code,
@@ -2110,16 +2110,10 @@ export default function TablesPage() {
                     <div style={{ textAlign: 'center', color: '#64748b', padding: 32 }}>Chưa cấu hình tài khoản ngân hàng</div>
                   )}
 
-                  {paymentCountdown > 0 ? (
-                    <div style={{ width: '100%', padding: '13px', background: '#f8fafc', color: '#64748b', border: '1.5px dashed #cbd5e1', borderRadius: 12, fontWeight: 700, fontSize: '0.95rem', textAlign: 'center' }}>
-                      ⏳ Đang chờ xác nhận tự động... ({Math.floor(paymentCountdown / 60)}:{String(paymentCountdown % 60).padStart(2, '0')})
-                    </div>
-                  ) : (
-                    <button onClick={doTransferPayment}
-                      style={{ width: '100%', padding: '13px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 12, fontWeight: 800, fontSize: '1rem', cursor: 'pointer' }}>
-                      ✅ Xác nhận thủ công đã nhận tiền
-                    </button>
-                  )}
+                  <button onClick={doTransferPayment}
+                    style={{ width: '100%', padding: '13px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 12, fontWeight: 800, fontSize: '1rem', cursor: 'pointer' }}>
+                    ✅ Xác nhận thủ công đã nhận tiền
+                  </button>
                 </div>
               )}
             </div>
