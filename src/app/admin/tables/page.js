@@ -208,8 +208,6 @@ export default function TablesPage() {
 
     if (tablesData) {
       setTables(tablesData);
-      // ── Fetch ALL pending/preparing orders for ALL tables (not just occupied) ──
-      // This avoids the race condition where the order arrives before the table status updates.
       const allTableIds = tablesData.map(t => t.id);
       if (allTableIds.length > 0) {
         try {
@@ -231,9 +229,7 @@ export default function TablesPage() {
 
           const ordersByTable = {};
           ordersData?.forEach(order => {
-            if (!ordersByTable[order.table_id]) {
-              ordersByTable[order.table_id] = [];
-            }
+            if (!ordersByTable[order.table_id]) ordersByTable[order.table_id] = [];
             ordersByTable[order.table_id].push(order);
           });
           setOrders(ordersByTable);
@@ -246,12 +242,39 @@ export default function TablesPage() {
     }
     setMenuItems(menuData || []);
     const finalCats = catsData || [];
-    if (menuData?.some(i => !i.category_id)) {
-      finalCats.push({ id: null, name: 'Chưa phân loại' });
-    }
+    if (menuData?.some(i => !i.category_id)) finalCats.push({ id: null, name: 'Chưa phân loại' });
     setCategories(finalCats);
     setLoading(false);
   }, []);
+
+  // ─── Chỉ refresh orders (không fetch lại menu/tables/categories) ───
+  const fetchOrdersOnly = useCallback(async () => {
+    const currentTableIds = tables.map(t => t.id);
+    if (currentTableIds.length === 0) return;
+    try {
+      const { data: ordersData } = await supabase
+        .from('orders')
+        .select(`
+          *,
+          order_items (
+            *,
+            menu_item:menu_items (name, price, image_url)
+          ),
+          print_jobs (id, status)
+        `)
+        .in('table_id', currentTableIds)
+        .in('status', ['pending', 'preparing'])
+        .order('created_at', { ascending: false });
+      const ordersByTable = {};
+      ordersData?.forEach(order => {
+        if (!ordersByTable[order.table_id]) ordersByTable[order.table_id] = [];
+        ordersByTable[order.table_id].push(order);
+      });
+      setOrders(ordersByTable);
+    } catch (e) {
+      console.error('[fetchOrdersOnly] error:', e);
+    }
+  }, [tables]);
 
   // Payment Countdown Timer
   useEffect(() => {
@@ -583,100 +606,95 @@ export default function TablesPage() {
 
   async function performDeleteItem(orderId, itemId) {
     setConfirmDelete(null);
-    // Delete the order item
-    const { data: deletedItem } = await supabase
-      .from('order_items')
-      .delete()
-      .eq('id', itemId)
-      .select()
-      .single();
-    if (!deletedItem) return;
-    // Recalculate order total
-    const { data: remaining } = await supabase
-      .from('order_items')
-      .select('unit_price, quantity')
-      .eq('order_id', orderId);
-    const newTotal = (remaining || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    await supabase.from('order_items').delete().eq('id', itemId);
+
+    // Tính total locally: bỏ item vừa xóa ra khỏi mảng hiện tại
+    const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
+    const newTotal = (orderNow?.order_items || [])
+      .filter(i => i.id !== itemId)
+      .reduce((s, i) => s + i.unit_price * i.quantity, 0);
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
 
     await syncOrderPromotions(orderId);
-    fetchTables();
+    fetchOrdersOnly();
   }
 
   async function updateItemQuantity(orderId, itemId, currentQuantity, change) {
     const newQuantity = currentQuantity + change;
-    if (newQuantity <= 0) {
-      return removeItemFromOrder(orderId, itemId);
-    }
+    if (newQuantity <= 0) return removeItemFromOrder(orderId, itemId);
 
-    // Update quantity
-    await supabase
-      .from('order_items')
-      .update({ quantity: newQuantity })
-      .eq('id', itemId);
+    // Optimistic: cập nhật local state ngay lập tức
+    setOrders(prev => {
+      const next = { ...prev };
+      for (const tableId in next) {
+        next[tableId] = next[tableId].map(order => {
+          if (order.id !== orderId) return order;
+          const updatedItems = (order.order_items || []).map(i =>
+            i.id === itemId ? { ...i, quantity: newQuantity } : i
+          );
+          const newTotal = updatedItems.reduce((s, i) => s + i.unit_price * i.quantity, 0);
+          return { ...order, order_items: updatedItems, total_amount: newTotal };
+        });
+      }
+      return next;
+    });
 
-    // Recalculate order total
-    const { data: allItems } = await supabase
-      .from('order_items')
-      .select('unit_price, quantity')
-      .eq('order_id', orderId);
-    const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
-    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+    // Tính total từ local state (không cần query lại DB)
+    const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
+    const itemsNow = (orderNow?.order_items || []).map(i =>
+      i.id === itemId ? { ...i, quantity: newQuantity } : i
+    );
+    const newTotal = itemsNow.reduce((s, i) => s + i.unit_price * i.quantity, 0);
+
+    // 2 API calls song song thay vì 3 tuần tự
+    await Promise.all([
+      supabase.from('order_items').update({ quantity: newQuantity }).eq('id', itemId),
+      supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId),
+    ]);
 
     await syncOrderPromotions(orderId);
-    fetchTables();
+    // Chỉ refresh orders, không fetch lại toàn bộ
+    fetchOrdersOnly();
   }
 
   async function updateItemPrice(orderId, itemId, newPrice) {
     if (!newPrice || newPrice <= 0) return;
     await supabase.from('order_items').update({ unit_price: newPrice }).eq('id', itemId);
-    // recalculate order total
-    const { data: allItems } = await supabase
-      .from('order_items').select('unit_price, quantity').eq('order_id', orderId);
-    const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    // Tính lại total locally
+    const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
+    const newTotal = (orderNow?.order_items || []).reduce((s, i) =>
+      s + (i.id === itemId ? newPrice : i.unit_price) * i.quantity, 0
+    );
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
     setEditItemPrice(null);
     setShowPriceModal(null);
     setDiscountValue(0);
     setDiscountMode('VND');
     setCustomNewPrice(null);
-    fetchTables();
+    fetchOrdersOnly();
   }
 
   async function updateOrderItemOptions(orderId, itemId, newOptions, note, newPrice = null, newQty = null) {
     const updatePayload = { item_options: newOptions, note: note || '' };
-    // Cập nhật giá nếu có
-    if (newPrice != null && newPrice > 0) {
-      updatePayload.unit_price = newPrice;
-    }
-    // Cập nhật số lượng nếu có thay đổi
-    if (newQty != null && newQty > 0) {
-      updatePayload.quantity = newQty;
-    }
+    if (newPrice != null && newPrice > 0) updatePayload.unit_price = newPrice;
+    if (newQty != null && newQty > 0) updatePayload.quantity = newQty;
     await supabase.from('order_items').update(updatePayload).eq('id', itemId);
 
-    // Tính lại tổng tiền — query sau khi update để lấy giá trị mới nhất
-    const { data: allItems } = await supabase
-      .from('order_items').select('id, unit_price, quantity').eq('order_id', orderId);
-
-    // Nếu DB chưa reflect kịp, tự override item vừa update trong mảng
-    const finalItems = (allItems || []).map(i => {
-      if (i.id === itemId) {
-        return {
-          unit_price: newPrice != null && newPrice > 0 ? newPrice : i.unit_price,
-          quantity: newQty != null && newQty > 0 ? newQty : i.quantity,
-        };
-      }
-      return i;
-    });
-    const newTotal = finalItems.reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    // Tính lại total locally (không cần query DB)
+    const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
+    const newTotal = (orderNow?.order_items || []).reduce((s, i) => {
+      if (i.id !== itemId) return s + i.unit_price * i.quantity;
+      const price = newPrice != null && newPrice > 0 ? newPrice : i.unit_price;
+      const qty = newQty != null && newQty > 0 ? newQty : i.quantity;
+      return s + price * qty;
+    }, 0);
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
 
     setEditingOrderItem(null);
     setOptionModalItem(null);
     setSelectedOptions({});
     setOptionNote('');
-    fetchTables();
+    fetchOrdersOnly();
   }
 
   const decreaseItemFromMenu = async (menuItemId) => {
@@ -792,12 +810,19 @@ export default function TablesPage() {
       });
     }
 
-    const { data: allItems } = await supabase
-      .from('order_items')
-      .select('unit_price, quantity')
-      .eq('order_id', targetOrderId);
-
-    const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    // Tính total locally: lấy items từ local state rồi cộng item vừa thêm
+    const orderNow = Object.values(orders).flat().find(o => o.id === targetOrderId);
+    let newTotal;
+    if (existing) {
+      // tăng số lượng existing item
+      newTotal = (orderNow?.order_items || []).reduce((s, i) =>
+        s + i.unit_price * (i.id === existing.id ? existing.quantity + qty : i.quantity), 0
+      );
+    } else {
+      // item mới hoàn toàn
+      const existingTotal = (orderNow?.order_items || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+      newTotal = existingTotal + menuItem.price * qty;
+    }
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
 
     // ── Kiểm tra unlock khuyến mãi và thông báo cho khách ──
@@ -840,12 +865,11 @@ export default function TablesPage() {
       }
     } catch (e) { console.error('promo unlock check error:', e); }
 
-    // Reset option modal state if it was open
     setOptionModalItem(null);
     setSelectedOptions({});
     setOptionQuantity(1);
     setOptionNote('');
-    fetchTables();
+    fetchOrdersOnly();
   }
 
   function handleConfirmOptions() {

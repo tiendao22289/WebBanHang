@@ -128,15 +128,6 @@ export default function CustomersPage() {
             <div className="label">Tổng khách hàng</div>
           </div>
         </div>
-        <div className="summary-card">
-          <div className="icon-wrapper" style={{ background: '#FEF3D9', color: '#F5A623' }}>
-            <DollarSign size={22} />
-          </div>
-          <div>
-            <div className="value">{formatPrice(totalRevenue)}</div>
-            <div className="label">Tổng doanh thu từ khách</div>
-          </div>
-        </div>
       </div>
 
       {/* Search */}
@@ -162,7 +153,6 @@ export default function CustomersPage() {
                   <th>Khách hàng</th>
                   <th>Số điện thoại</th>
                   <th>Số lần ghé</th>
-                  <th>Tổng chi tiêu</th>
                   <th>Lần cuối</th>
                   <th></th>
                 </tr>
@@ -188,16 +178,9 @@ export default function CustomersPage() {
                       <span className="visit-badge">{customer.visit_count || 0} lần</span>
                     </td>
                     <td>
-                      <strong className="text-accent">{formatPrice(customer.total_spent || 0)}</strong>
-                    </td>
-                    <td>
                       <span className="text-muted text-sm">{timeAgo(customer.last_visit_at)}</span>
                     </td>
-                    <td>
-                      <button className="btn btn-ghost btn-sm" onClick={() => viewCustomerHistory(customer)}>
-                        <Eye size={14} /> Lịch sử
-                      </button>
-                    </td>
+                    <td></td>
                   </tr>
                 ))}
               </tbody>
@@ -262,8 +245,8 @@ export default function CustomersPage() {
                           <span className="timeline-table">Bàn {order.table?.table_number || '?'}</span>
                           <span className={`badge badge-${order.status}`}>
                             {order.status === 'pending' ? 'Chờ' :
-                             order.status === 'preparing' ? 'Đang làm' :
-                             order.status === 'completed' ? 'Xong' : 'Đã thanh toán'}
+                              order.status === 'preparing' ? 'Đang làm' :
+                                order.status === 'completed' ? 'Xong' : 'Đã thanh toán'}
                           </span>
                         </div>
                         <div className="timeline-items">
