@@ -5,6 +5,7 @@ import { removeVietnameseTones } from '@/lib/utils';
 import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
+import Swal from 'sweetalert2';
 import {
   Plus,
   Pencil,
@@ -143,7 +144,18 @@ export default function MenuPage() {
   }
 
   async function deleteCat(id) {
-    if (!confirm('Xoá danh mục sẽ bỏ liên kết với các món ăn. Tiếp tục?')) return;
+    const result = await Swal.fire({
+      title: 'Xoá danh mục?',
+      text: 'Danh mục này và liên kết với các món ăn sẽ bị huỷ. Tiếp tục?',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#ef4444',
+      cancelButtonColor: '#9ca3af',
+      confirmButtonText: 'Vâng, xoá nó',
+      cancelButtonText: 'Huỷ'
+    });
+    if (!result.isConfirmed) return;
+
     await supabase.from('categories').delete().eq('id', id);
     if (activeCategory === id) setActiveCategory(null);
     fetchData();
@@ -230,12 +242,35 @@ export default function MenuPage() {
   }
 
   async function deleteItem(id) {
-    if (!confirm('Xoá món ăn này?')) return;
+    const result = await Swal.fire({
+      title: 'Xoá món ăn?',
+      text: 'Món ăn này sẽ bị xoá vĩnh viễn khỏi thực đơn.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#ef4444',
+      cancelButtonColor: '#9ca3af',
+      confirmButtonText: 'Vâng, xoá nó',
+      cancelButtonText: 'Huỷ'
+    });
+    if (!result.isConfirmed) return;
+
     await supabase.from('menu_items').delete().eq('id', id);
     fetchData();
   }
 
   async function toggleAvailable(item) {
+    const result = await Swal.fire({
+      title: item.is_available ? 'Ẩn món ăn?' : 'Hiện món ăn?',
+      text: item.is_available ? 'Món ăn sẽ bị ẩn khỏi thực đơn của khách hàng.' : 'Món ăn sẽ hiển thị lại cho khách hàng.',
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonColor: item.is_available ? '#ef4444' : '#2563eb',
+      cancelButtonColor: '#9ca3af',
+      confirmButtonText: item.is_available ? 'Vâng, ẩn món' : 'Vâng, hiện món',
+      cancelButtonText: 'Huỷ'
+    });
+    if (!result.isConfirmed) return;
+
     await supabase.from('menu_items').update({ is_available: !item.is_available }).eq('id', item.id);
     fetchData();
   }
@@ -406,14 +441,16 @@ export default function MenuPage() {
         {/* Visibility filter with counts */}
         <div style={{ display: 'flex', gap: 4, background: '#f3f4f6', borderRadius: 10, padding: 3, flexShrink: 0 }}>
           {[
-            {key:'all', label:'Tất cả', count: countAll},
-            {key:'visible', label:'👁 Hiện', count: countVisible},
-            {key:'hidden', label:'🙈 Ẩn', count: countHidden}
+            { key: 'all', label: 'Tất cả', count: countAll },
+            { key: 'visible', label: '👁 Hiện', count: countVisible },
+            { key: 'hidden', label: '🙈 Ẩn', count: countHidden }
           ].map(f => (
             <button key={f.key} onClick={() => setVisibilityFilter(f.key)}
-              style={{ padding: '6px 12px', borderRadius: 8, border: 'none', fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer', transition: 'all 0.15s',
+              style={{
+                padding: '6px 12px', borderRadius: 8, border: 'none', fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer', transition: 'all 0.15s',
                 background: visibilityFilter === f.key ? '#2563eb' : 'transparent',
-                color: visibilityFilter === f.key ? 'white' : '#6b7280' }}>
+                color: visibilityFilter === f.key ? 'white' : '#6b7280'
+              }}>
               {f.label} <span style={{ opacity: 0.8, fontWeight: 500 }}>({f.count})</span>
             </button>
           ))}
@@ -563,89 +600,89 @@ export default function MenuPage() {
                 </div>
 
                 {itemForm.options.map((opt, optIndex) => (
-                <div
-                  key={optIndex}
-                  style={{
-                    background: '#fff',
-                    border: '1.5px solid #e2e8f0',
-                    borderLeft: '4px solid #6366f1',
-                    borderRadius: 12,
-                    marginBottom: 12,
-                    overflow: 'hidden',
-                  }}
-                >
-                  {/* Header: option name + delete */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: '#f8faff', borderBottom: '1px solid #e2e8f0' }}>
-                    <input
-                      className="input"
-                      value={opt.name}
-                      onChange={(e) => updateOptionName(optIndex, e.target.value)}
-                      placeholder="Tên nhóm tuỳ chọn (VD: Khẩu vị, Loại)"
-                      style={{ flex: 1, fontSize: '0.9rem', fontWeight: 700, border: 'none', background: 'transparent', boxShadow: 'none', padding: '2px 4px', color: '#1e1b4b' }}
-                    />
-                    <button
-                      onClick={() => removeOption(optIndex)}
-                      title="Xoá nhóm này"
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', opacity: 0.7, padding: 4, display: 'flex', alignItems: 'center' }}
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
-
-                  {/* Choice rows */}
-                  <div style={{ padding: '10px 12px' }}>
-                    {/* Column headers */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 26px', gap: 6, marginBottom: 6 }}>
-                      <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tên lựa chọn</span>
-                      <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Giá (đ)</span>
-                      <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Danh mục in</span>
-                      <span />
+                  <div
+                    key={optIndex}
+                    style={{
+                      background: '#fff',
+                      border: '1.5px solid #e2e8f0',
+                      borderLeft: '4px solid #6366f1',
+                      borderRadius: 12,
+                      marginBottom: 12,
+                      overflow: 'hidden',
+                    }}
+                  >
+                    {/* Header: option name + delete */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: '#f8faff', borderBottom: '1px solid #e2e8f0' }}>
+                      <input
+                        className="input"
+                        value={opt.name}
+                        onChange={(e) => updateOptionName(optIndex, e.target.value)}
+                        placeholder="Tên nhóm tuỳ chọn (VD: Khẩu vị, Loại)"
+                        style={{ flex: 1, fontSize: '0.9rem', fontWeight: 700, border: 'none', background: 'transparent', boxShadow: 'none', padding: '2px 4px', color: '#1e1b4b' }}
+                      />
+                      <button
+                        onClick={() => removeOption(optIndex)}
+                        title="Xoá nhóm này"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', opacity: 0.7, padding: 4, display: 'flex', alignItems: 'center' }}
+                      >
+                        <Trash2 size={15} />
+                      </button>
                     </div>
 
-                    {opt.choices.map((choice, choiceIndex) => (
-                      <div key={choiceIndex} style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 26px', gap: 6, marginBottom: 6, alignItems: 'center' }}>
-                        <input
-                          className="input input-sm"
-                          value={choice}
-                          onChange={(e) => updateOptionChoice(optIndex, choiceIndex, e.target.value)}
-                          placeholder={`Xào, Hấp, Luộc...`}
-                          style={{ minWidth: 0 }}
-                        />
-                        <input
-                          className="input input-sm"
-                          type="number"
-                          value={opt.prices?.[choiceIndex] ?? ''}
-                          onChange={(e) => updateChoicePrice(optIndex, choiceIndex, e.target.value)}
-                          placeholder="0"
-                          style={{ minWidth: 0, borderColor: '#c7d2fe', background: '#eef2ff', textAlign: 'right', fontSize: '0.85rem', padding: '5px 6px' }}
-                        />
-                        <select
-                          value={opt.choiceCategories?.[choiceIndex] ?? ''}
-                          onChange={(e) => updateChoiceCategory(optIndex, choiceIndex, e.target.value)}
-                          style={{ minWidth: 0, fontSize: '0.78rem', padding: '5px 6px', border: '1px solid #bbf7d0', borderRadius: 8, background: '#f0fdf4', color: '#166534', cursor: 'pointer', outline: 'none' }}
-                        >
-                          <option value="">--</option>
-                          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                        </select>
-                        <button
-                          onClick={() => removeOptionChoice(optIndex, choiceIndex)}
-                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#cbd5e1', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                          onMouseEnter={e => e.currentTarget.style.color = '#ef4444'}
-                          onMouseLeave={e => e.currentTarget.style.color = '#cbd5e1'}
-                        >
-                          <X size={13} />
-                        </button>
+                    {/* Choice rows */}
+                    <div style={{ padding: '10px 12px' }}>
+                      {/* Column headers */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 26px', gap: 6, marginBottom: 6 }}>
+                        <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tên lựa chọn</span>
+                        <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Giá (đ)</span>
+                        <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Danh mục in</span>
+                        <span />
                       </div>
-                    ))}
 
-                    <button
-                      onClick={() => addOptionChoice(optIndex)}
-                      style={{ marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.78rem', color: '#6366f1', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
-                    >
-                      <Plus size={12} /> Thêm lựa chọn
-                    </button>
+                      {opt.choices.map((choice, choiceIndex) => (
+                        <div key={choiceIndex} style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 26px', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                          <input
+                            className="input input-sm"
+                            value={choice}
+                            onChange={(e) => updateOptionChoice(optIndex, choiceIndex, e.target.value)}
+                            placeholder={`Xào, Hấp, Luộc...`}
+                            style={{ minWidth: 0 }}
+                          />
+                          <input
+                            className="input input-sm"
+                            type="number"
+                            value={opt.prices?.[choiceIndex] ?? ''}
+                            onChange={(e) => updateChoicePrice(optIndex, choiceIndex, e.target.value)}
+                            placeholder="0"
+                            style={{ minWidth: 0, borderColor: '#c7d2fe', background: '#eef2ff', textAlign: 'right', fontSize: '0.85rem', padding: '5px 6px' }}
+                          />
+                          <select
+                            value={opt.choiceCategories?.[choiceIndex] ?? ''}
+                            onChange={(e) => updateChoiceCategory(optIndex, choiceIndex, e.target.value)}
+                            style={{ minWidth: 0, fontSize: '0.78rem', padding: '5px 6px', border: '1px solid #bbf7d0', borderRadius: 8, background: '#f0fdf4', color: '#166534', cursor: 'pointer', outline: 'none' }}
+                          >
+                            <option value="">--</option>
+                            {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                          </select>
+                          <button
+                            onClick={() => removeOptionChoice(optIndex, choiceIndex)}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#cbd5e1', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            onMouseEnter={e => e.currentTarget.style.color = '#ef4444'}
+                            onMouseLeave={e => e.currentTarget.style.color = '#cbd5e1'}
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      ))}
+
+                      <button
+                        onClick={() => addOptionChoice(optIndex)}
+                        style={{ marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.78rem', color: '#6366f1', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}
+                      >
+                        <Plus size={12} /> Thêm lựa chọn
+                      </button>
+                    </div>
                   </div>
-                </div>
                 ))}
               </div>
             </div>
