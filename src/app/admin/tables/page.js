@@ -1444,48 +1444,55 @@ export default function TablesPage() {
                           )}
                           <button
                             onClick={async () => {
-                              const { value: targetTableId } = await Swal.fire({
-                                title: 'Chuyển món sang bàn nào?',
-                                input: 'select',
-                                inputOptions: Object.fromEntries(
-                                  tables
-                                    .filter(t => t.id !== selectedTable.id && !t.deleted)
-                                    .map(t => [t.id, t.table_name || `Bàn ${t.table_number}`])
-                                ),
-                                inputPlaceholder: 'Chọn bàn...',
-                                showCancelButton: true,
-                                confirmButtonText: 'Chuyển món',
-                                cancelButtonText: 'Huỷ',
+                              const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
+                              if (otherTables.length === 0) {
+                                Swal.fire('Lỗi', 'Không có bàn nào khác để chuyển!', 'error');
+                                return;
+                              }
+                              const inputOptions = {};
+                              otherTables.forEach(t => {
+                                inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Đang có khách)' : '(Trống)'}`;
                               });
 
-                              if (!targetTableId) return;
+                              const { value: targetTableId } = await Swal.fire({
+                                title: 'Chuyển bill',
+                                text: 'Chuyển toàn bộ bill này sang bàn khác?',
+                                input: 'select',
+                                inputOptions,
+                                inputPlaceholder: 'Chọn bàn muốn chuyển đến',
+                                showCancelButton: true,
+                                confirmButtonColor: '#2563eb',
+                                cancelButtonColor: '#6b7280',
+                                confirmButtonText: 'Chuyển',
+                                cancelButtonText: 'Huỷ',
+                                reverseButtons: true,
+                                inputValidator: (value) => {
+                                  if (!value) return 'Vui lòng chọn một bàn!';
+                                }
+                              });
 
-                              const { data: activeOrder } = await supabase
-                                .from('orders')
-                                .select('id')
-                                .eq('table_id', targetTableId)
-                                .in('status', ['pending', 'preparing'])
-                                .maybeSingle();
+                              if (targetTableId) {
+                                const { error } = await supabase.from('orders').update({ table_id: targetTableId }).eq('id', item._orderId);
+                                if (error) {
+                                  Swal.fire('Lỗi', error.message, 'error');
+                                  return;
+                                }
 
-                              let newOrderId;
-                              if (activeOrder) {
-                                newOrderId = activeOrder.id;
-                              } else {
-                                const { data: newOrder } = await supabase
-                                  .from('orders')
-                                  .insert({
-                                    table_id: targetTableId,
-                                    customer_name: 'Khách',
-                                    status: 'pending',
-                                    total_amount: 0
-                                  }).select().single();
-                                newOrderId = newOrder.id;
-                                await supabase.from('tables').update({ status: 'occupied' }).eq('id', targetTableId);
+                                const targetTable = otherTables.find(t => t.id === targetTableId);
+                                if (targetTable && targetTable.status === 'available') {
+                                  await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
+                                }
+
+                                const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== item._orderId && o.status !== 'cancelled');
+                                if (remaining.length === 0) {
+                                  const hId = selectedTable.merged_with || selectedTable.id;
+                                  await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
+                                  setSelectedTable(null);
+                                }
+
+                                fetchTables();
+                                Swal.fire({ title: 'Thành công', text: 'Đã chuyển bill sang bàn mới!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
                               }
-
-                              await supabase.from('order_items').update({ order_id: newOrderId }).eq('id', item.id);
-                              fetchTables();
-                              Swal.fire({ title: 'Thành công', text: 'Đã chuyển món!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
                             }}
                             style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}
                           >
