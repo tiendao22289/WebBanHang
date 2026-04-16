@@ -1011,13 +1011,13 @@ export default function TablesPage() {
 
     if (!isConfirmed) return;
 
-    // Use the oldest bill as the main one
+    // Lấy bill tạo đầu tiên làm bill gốc
     const sortedBills = [...tableBills].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     const mainBill = sortedBills[0];
     const allBillIds = sortedBills.map(b => b.id);
     const otherIds = allBillIds.filter(id => id !== mainBill.id);
 
-    // Fetch all items from all bills
+    // Fetch toàn bộ món của tất cả các bills
     const { data: allItems, error: fetchErr } = await supabase
       .from('order_items')
       .select('*')
@@ -1028,16 +1028,15 @@ export default function TablesPage() {
       return;
     }
 
-    // Group items
+    // Nhóm các món lại bằng key duy nhất (gộp qty nếu giống nhau)
     const groupedMap = {};
     allItems.forEach(item => {
-      // Create a unique key based on menu_item_id, options, unit_price and note
       const optsString = item.item_options ? JSON.stringify(item.item_options) : '[]';
-      const key = `${item.menu_item_id}_${item.unit_price}_${optsString}_${item.note || ''}`;
+      const key = `${item.menu_item_id}_${item.unit_price}_${optsString}_${item.note || ''}_${item.is_gift ? 'gift' : 'normal'}`;
 
       if (!groupedMap[key]) {
         groupedMap[key] = {
-          order_id: mainBill.id,
+          order_id: mainBill.id, // Sẽ đẩy vào main bill
           menu_item_id: item.menu_item_id,
           quantity: 0,
           unit_price: item.unit_price,
@@ -1051,26 +1050,39 @@ export default function TablesPage() {
 
     const newItems = Object.values(groupedMap);
 
-    // Calculate new total
-    const newTotal = newItems.reduce((s, i) => s + i.unit_price * i.quantity, 0);
+    // Tổng mới không cộng tiền từ quà tặng `is_gift` hoặc áp dụng logic riêng (nếu món không phải quà tặng thì cộng)
+    let newTotal = 0;
+    newItems.forEach(i => {
+      if (!i.is_gift) {
+        newTotal += Number(i.unit_price) * Number(i.quantity);
+      }
+    });
 
-    // Delete all existing items from all these bills
-    await supabase.from('order_items').delete().in('order_id', allBillIds);
+    // === QUAN TRỌNG: Xoá cũ trước khi chèn ===
+    const { error: delErr } = await supabase.from('order_items').delete().in('order_id', allBillIds);
+    if (delErr) {
+      Swal.fire('Lỗi', 'Không thể xoá dữ liệu cũ, xin vui lòng kiểm tra kết nối! ' + delErr.message, 'error');
+      return;
+    }
 
-    // Insert grouped items into main bill
+    // Chèn lại các món đã gộp vào main bill
     if (newItems.length > 0) {
-      await supabase.from('order_items').insert(newItems);
+      const { error: insErr } = await supabase.from('order_items').insert(newItems);
+      if (insErr) {
+        Swal.fire('Lỗi', 'Lỗi khi ghi dữ liệu gộp: ' + insErr.message, 'error');
+        return;
+      }
     }
 
-    // Thay vì xóa, đánh dấu các bill phụ là 'merged' để giữ lịch sử cho khách
-    // và ghi nhận merged_into để biết chúng đã được gộp vào bill nào
+    // Xử lý cắm cờ các bill đã bị gộp
     if (otherIds.length > 0) {
-      await supabase.from('orders')
-        .update({ status: 'merged', merged_into: mainBill.id })
+      const { error: updErr } = await supabase.from('orders')
+        .update({ status: 'merged', merged_into: mainBill.id, total_amount: 0 })
         .in('id', otherIds);
+      if (updErr) console.error("Error setting merged bills to neutral", updErr);
     }
 
-    // Update main bill total
+    // Cập nhật lại tổng tiền main bill
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', mainBill.id);
 
     fetchTables();
@@ -1794,26 +1806,25 @@ export default function TablesPage() {
                             <div key={table.id}
                               onClick={() => { setSelectedTable(table); setDesktopView('menu'); }}
                               onMouseEnter={e => { if (!isSelected) { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = shadowHover; } }}
-                              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 8px 24px rgba(29,78,216,0.4)' : '0 1px 4px rgba(0,0,0,0.07)'; }}
+                              onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 8px 24px rgba(29,78,216,0.3)' : '0 1px 4px rgba(0,0,0,0.07)'; }}
                               style={{
                                 position: 'relative', borderRadius: 14, cursor: 'pointer',
                                 overflow: 'hidden',
-                                background: isSelected
-                                  ? 'linear-gradient(145deg, #1e3a8a, #1d4ed8)'
-                                  : isMergedGroup ? 'linear-gradient(145deg, #faf5ff, #f3e8ff)'
-                                    : isOccupied ? 'linear-gradient(145deg, #f0fdf4, #dcfce7)'
+                                background: isSelected ? 'white'
+                                  : isMergedGroup ? 'linear-gradient(145deg, #9333ea, #7e22ce)'
+                                    : isOccupied ? 'linear-gradient(145deg, #16a34a, #15803d)'
                                       : 'white',
                                 border: `1.5px solid ${border}`,
-                                boxShadow: isSelected ? '0 8px 24px rgba(29,78,216,0.4)' : '0 1px 4px rgba(0,0,0,0.07)',
+                                boxShadow: isSelected ? '0 8px 24px rgba(29,78,216,0.3)' : '0 1px 4px rgba(0,0,0,0.07)',
                                 transition: 'all 0.18s cubic-bezier(0.4, 0, 0.2, 1)',
                               }}
                             >
                               {/* Accent bar at top */}
                               <div style={{
                                 height: 4,
-                                background: isSelected ? 'rgba(255,255,255,0.35)'
-                                  : isMergedGroup ? 'linear-gradient(90deg, #a855f7, #c084fc)'
-                                    : isOccupied ? 'linear-gradient(90deg, #16a34a, #4ade80)'
+                                background: isSelected ? 'linear-gradient(90deg, #1e3a8a, #1d4ed8)'
+                                  : isMergedGroup ? 'linear-gradient(90deg, #f3e8ff, #e9d5ff)'
+                                    : isOccupied ? 'linear-gradient(90deg, #dcfce7, #bbf7d0)'
                                       : '#e5e7eb',
                               }} />
 
@@ -1824,8 +1835,8 @@ export default function TablesPage() {
                                 {isHost && (
                                   <div style={{
                                     position: 'absolute', top: 10, left: 8,
-                                    fontSize: '0.55rem', background: isSelected ? 'rgba(255,255,255,0.2)' : '#f97316',
-                                    color: isSelected ? 'rgba(255,255,255,0.9)' : 'white',
+                                    fontSize: '0.55rem', background: isSelected ? '#f97316' : 'rgba(255,255,255,0.2)',
+                                    color: 'white',
                                     borderRadius: 4, padding: '1px 5px', fontWeight: 800, letterSpacing: '0.04em'
                                   }}>GỘP</div>
                                 )}
@@ -1838,23 +1849,21 @@ export default function TablesPage() {
                                 {/* Number badge */}
                                 <div style={{
                                   width: 46, height: 46, borderRadius: '50%',
-                                  background: isSelected ? 'rgba(255,255,255,0.18)'
-                                    : isMergedGroup ? '#a855f7'
-                                      : isOccupied ? '#16a34a'
-                                        : '#f1f5f9',
+                                  background: isSelected ? '#1e3a8a'
+                                    : (isOccupied || isMergedGroup) ? 'rgba(255,255,255,0.18)'
+                                      : '#f1f5f9',
                                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                                   fontSize: '1.1rem', fontWeight: 900,
                                   color: isSelected ? 'white' : (isOccupied || isMergedGroup) ? 'white' : '#64748b',
-                                  boxShadow: isOccupied && !isSelected ? '0 3px 10px rgba(22,163,74,0.35)'
-                                    : isMergedGroup && !isSelected ? '0 3px 10px rgba(168,85,247,0.35)' : 'none',
-                                  border: isSelected ? '2px solid rgba(255,255,255,0.25)' : 'none',
+                                  boxShadow: isSelected ? '0 3px 10px rgba(30,58,138,0.3)' : 'none',
+                                  border: (isOccupied || isMergedGroup) ? '2px solid rgba(255,255,255,0.25)' : 'none',
                                   flexShrink: 0,
                                 }}>
                                   {table.table_number}
                                 </div>
 
                                 {/* Table name */}
-                                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: isSelected ? 'rgba(255,255,255,0.95)' : isMergedGroup ? '#6b21a8' : isOccupied ? '#14532d' : '#374151', letterSpacing: '0.01em' }}>
+                                <span style={{ fontSize: '0.8rem', fontWeight: 700, color: isSelected ? '#1d4ed8' : (isOccupied || isMergedGroup) ? 'rgba(255,255,255,0.95)' : '#374151', letterSpacing: '0.01em' }}>
                                   {table.table_name || `B${table.table_number}`}
                                 </span>
 
@@ -1862,14 +1871,14 @@ export default function TablesPage() {
                                 {tableTotal > 0 ? (
                                   <div style={{
                                     fontSize: '0.72rem', fontWeight: 800,
-                                    color: isSelected ? '#93c5fd' : isMergedGroup ? '#7e22ce' : '#16a34a',
-                                    background: isSelected ? 'rgba(255,255,255,0.12)' : isMergedGroup ? '#ede9fe' : '#dcfce7',
+                                    color: isSelected ? '#1d4ed8' : isMergedGroup ? '#e9d5ff' : '#dcfce7',
+                                    background: isSelected ? '#eff6ff' : 'rgba(255,255,255,0.15)',
                                     borderRadius: 20, padding: '2px 10px', whiteSpace: 'nowrap',
                                   }}>
                                     {tableTotal >= 1000000 ? (tableTotal / 1000000).toFixed(1) + 'M' : tableTotal >= 1000 ? (tableTotal / 1000).toFixed(0) + 'k' : tableTotal.toLocaleString('vi-VN')}đ
                                   </div>
                                 ) : (
-                                  <div style={{ fontSize: '0.68rem', color: isSelected ? 'rgba(255,255,255,0.4)' : '#cbd5e1', fontWeight: 500 }}>— trống —</div>
+                                  <div style={{ fontSize: '0.68rem', color: isSelected ? '#93c5fd' : (isOccupied || isMergedGroup) ? 'rgba(255,255,255,0.4)' : '#cbd5e1', fontWeight: 500 }}>— trống —</div>
                                 )}
                               </div>
 
@@ -1895,7 +1904,7 @@ export default function TablesPage() {
                                 style={{ position: 'absolute', top: 8, right: 7, opacity: 0.45, cursor: 'pointer', zIndex: 5, padding: 3 }}
                                 title="Lịch sử bàn 8H"
                               >
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={isSelected ? 'white' : isMergedGroup ? '#a855f7' : isOccupied ? '#16a34a' : '#9ca3af'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={isSelected ? '#1d4ed8' : (isOccupied || isMergedGroup) ? 'white' : '#9ca3af'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                   <circle cx="12" cy="12" r="10" />
                                   <polyline points="12 6 12 12 16 14" />
                                 </svg>
