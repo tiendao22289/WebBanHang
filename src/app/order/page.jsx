@@ -775,15 +775,23 @@ function OrderContent() {
   }
 
   async function fetchMenu() {
-    const [{ data: cats }, { data: items }, { data: tableData }] = await Promise.all([
+    const [{ data: cats }, { data: items }, { data: tableData }, { data: salesStats }] = await Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
-      supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).order('created_at'),
+      supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).order('sort_order').order('created_at'),
       activeTableId ? supabase.from('tables').select('table_number, status, table_type, table_name').eq('id', activeTableId).single() : { data: null },
+      supabase.rpc('get_menu_sales_stats')
     ]);
     const finalCats = cats || [];
     if (items?.some(i => !i.category_id)) {
       finalCats.push({ id: null, name: 'Chưa phân loại' });
     }
+
+    if (salesStats && items) {
+      const salesMap = {};
+      salesStats.forEach(s => { salesMap[s.menu_item_id] = Number(s.total_sold) || 0 });
+      items.forEach(item => { item.total_sold = salesMap[item.id] || 0 });
+    }
+
     setCategories(finalCats);
     setMenuItems(items || []);
     const isTW = tableData?.table_type === 'takeaway';
@@ -1631,6 +1639,9 @@ function OrderContent() {
                       </div>
                       <div className="co-item-info">
                         <span className="co-item-name">{item.name}</span>
+                        {item.total_sold > 0 && (
+                          <span style={{ fontSize: '0.68rem', color: '#6b7280', marginTop: 2, display: 'block', fontWeight: 600 }}>🔥 Đã bán {item.total_sold.toLocaleString('vi-VN')}</span>
+                        )}
                         {item.description ? (
                           <span style={{ fontSize: '0.72rem', color: '#ea580c', lineHeight: 1.3, marginTop: 1, display: 'block' }}>{item.description}</span>
                         ) : null}
@@ -1674,6 +1685,9 @@ function OrderContent() {
                         )}
                       </div>
                       <span className="co-item-name">{item.name}</span>
+                      {item.total_sold > 0 && (
+                        <span style={{ fontSize: '0.65rem', color: '#6b7280', marginTop: 1, padding: '0 4px', display: 'block', fontWeight: 600 }}>🔥 Đã bán {item.total_sold.toLocaleString('vi-VN')}</span>
+                      )}
                       {item.description ? (
                         <span style={{ fontSize: '0.7rem', color: '#ea580c', lineHeight: 1.3, marginTop: 1, display: 'block', padding: '0 4px' }}>{item.description}</span>
                       ) : null}

@@ -2,7 +2,7 @@
   "name": "Nhà Hàng - Gọi Món",
   "short_name": "Gọi Món",
   "description": "Quét QR để gọi món ngay tại bàn",
-  "start_url": "/order",
+  "start_url": "/admin/tables",
   "scope": "/",
   "display": "fullscreen",
   "display_override": ["fullscreen", "standalone", "minimal-ui"],

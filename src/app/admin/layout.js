@@ -7,7 +7,6 @@ import { createClient } from '@supabase/supabase-js';
 import {
   LayoutGrid,
   UtensilsCrossed,
-  Receipt,
   BarChart3,
   ChefHat,
   UsersRound,
@@ -26,31 +25,31 @@ const supabase = createClient(
 );
 
 const ALL_NAV = [
-  { href: '/admin/tables',    label: 'Quản lý bàn', icon: LayoutGrid },
-  { href: '/admin/menu',      label: 'Thực đơn',    icon: UtensilsCrossed },
-  { href: '/admin/orders',    label: 'Hoá đơn',     icon: Receipt },
-  { href: '/admin/customers', label: 'Khách hàng',  icon: UsersRound },
-  { href: '/admin/notes',     label: 'Sổ tay',      icon: ChefHat },
-  { href: '/admin/payroll',   label: 'Tính Lương',  icon: Wallet },
-  { href: '/admin/stats',     label: 'Thống kê',    icon: BarChart3 },
-  { href: '/admin/settings',  label: 'Cài đặt',     icon: Settings, adminOnly: true },
+  { href: '/admin/tables', label: 'Quản lý bàn', icon: LayoutGrid },
+  { href: '/admin/menu', label: 'Thực đơn', icon: UtensilsCrossed },
+
+  { href: '/admin/customers', label: 'Khách hàng', icon: UsersRound },
+  { href: '/admin/notes', label: 'Sổ tay', icon: ChefHat },
+  { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
+  { href: '/admin/stats', label: 'Thống kê', icon: BarChart3 },
+  { href: '/admin/settings', label: 'Cài đặt', icon: Settings, adminOnly: true },
 ];
 
-const STAFF_ALLOWED_HREFS = ['/admin/tables', '/admin/orders', '/admin/payroll'];
+const STAFF_ALLOWED_HREFS = ['/admin/tables', '/admin/payroll'];
 const STAFF_NAV = ALL_NAV.filter(n => STAFF_ALLOWED_HREFS.some(a => n.href.startsWith(a)));
 
 export default function AdminLayout({ children }) {
   const pathname = usePathname();
-  const router   = useRouter();
+  const router = useRouter();
 
-  const [user,       setUser]       = useState(null);
-  const [mounted,    setMounted]    = useState(false);
-  const [collapsed,  setCollapsed]  = useState(false);
+  const [user, setUser] = useState(null);
+  const [mounted, setMounted] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
 
   // Login form state
-  const [phone,   setPhone]   = useState('');
-  const [pin,     setPin]     = useState('');
-  const [err,     setErr]     = useState('');
+  const [phone, setPhone] = useState('');
+  const [pin, setPin] = useState('');
+  const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
 
   // Restore session on mount
@@ -60,7 +59,7 @@ export default function AdminLayout({ children }) {
       if (saved) setUser(JSON.parse(saved));
       const savedCollapsed = localStorage.getItem('sidebarCollapsed');
       if (savedCollapsed === 'true') setCollapsed(true);
-    } catch {}
+    } catch { }
     setMounted(true);
   }, []);
 

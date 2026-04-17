@@ -1,11 +1,26 @@
 'use client';
 import { removeVietnameseTones } from '@/lib/utils';
 
-
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import Swal from 'sweetalert2';
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  DragOverlay,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  rectSortingStrategy,
+  useSortable,
+  arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import {
   Plus,
   Pencil,
@@ -19,13 +34,128 @@ import {
 } from 'lucide-react';
 import './menu.css';
 
+// ─── Sortable Card Component ───────────────────────────────────────────────
+function SortableMenuCard({ item, categories, getItemCategories, getItemDisplayPrice, toggleAvailable, openItemModal, deleteItem }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: item.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.3 : 1,
+    position: 'relative',
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <MenuCard
+        item={item}
+        categories={categories}
+        getItemCategories={getItemCategories}
+        getItemDisplayPrice={getItemDisplayPrice}
+        toggleAvailable={toggleAvailable}
+        openItemModal={openItemModal}
+        deleteItem={deleteItem}
+        dragHandleProps={{ ...attributes, ...listeners }}
+      />
+    </div>
+  );
+}
+
+// ─── Menu Card UI ──────────────────────────────────────────────────────────
+function MenuCard({ item, categories, getItemCategories, getItemDisplayPrice, toggleAvailable, openItemModal, deleteItem, dragHandleProps }) {
+  return (
+    <div className={`menu-card ${!item.is_available ? 'unavailable' : ''}`}>
+      {/* Drag handle */}
+      <div
+        {...dragHandleProps}
+        style={{
+          position: 'absolute',
+          top: 6,
+          left: 6,
+          zIndex: 10,
+          cursor: 'grab',
+          background: 'rgba(255,255,255,0.85)',
+          borderRadius: 6,
+          padding: '2px 4px',
+          display: 'flex',
+          alignItems: 'center',
+          color: '#9ca3af',
+          touchAction: 'none',
+        }}
+        title="Kéo để sắp xếp"
+      >
+        <GripVertical size={14} />
+      </div>
+
+      <div className="menu-card-image" style={{ position: 'relative' }}>
+        {item.image_url ? (
+          <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 100vw, 300px" style={{ objectFit: 'cover' }} />
+        ) : (
+          <div className="menu-card-placeholder">
+            <ImageIcon size={32} />
+          </div>
+        )}
+      </div>
+      <div className="menu-card-body">
+        <div className="menu-card-cat" style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+          {getItemCategories(item).map((catId, idx) => {
+            const cName = categories.find(c => c.id === catId)?.name || 'Chưa phân loại';
+            return <span key={idx} style={{ background: '#f3f4f6', padding: '2px 6px', borderRadius: '4px', fontSize: '0.65rem' }}>{cName}</span>;
+          })}
+        </div>
+        <h4 className="menu-card-name" style={{ marginTop: '0.3rem' }}>{item.name}</h4>
+        {(item.counts_for_promotion || item.is_gift_item) && (
+          <div style={{ display: 'flex', gap: 4, marginBottom: 4, flexWrap: 'wrap' }}>
+            {item.counts_for_promotion && <span style={{ fontSize: '0.65rem', background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>🎯 Được Tính vào Khuyến Mãi</span>}
+            {item.is_gift_item && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>🎁 Món tặng</span>}
+          </div>
+        )}
+        {item.description && (
+          <p className="menu-card-desc">{item.description}</p>
+        )}
+        <div className="menu-card-footer">
+          <span className="menu-card-price">{getItemDisplayPrice(item)}</span>
+          <div className="flex gap-1">
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => toggleAvailable(item)}
+              title={item.is_available ? 'Ẩn món' : 'Hiện món'}
+              style={{ color: item.is_available ? '#2563eb' : '#9ca3af' }}
+            >
+              {item.is_available ? <Eye size={14} /> : <EyeOff size={14} />}
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => openItemModal(item)}>
+              <Pencil size={14} />
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => deleteItem(item.id)}>
+              <Trash2 size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Page ─────────────────────────────────────────────────────────────
 export default function MenuPage() {
   const [categories, setCategories] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [visibilityFilter, setVisibilityFilter] = useState('visible'); // 'all' | 'visible' | 'hidden'
+  const [visibilityFilter, setVisibilityFilter] = useState('visible');
+
+  // DnD state
+  const [activeId, setActiveId] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Modal states
   const [showCatModal, setShowCatModal] = useState(false);
@@ -44,6 +174,16 @@ export default function MenuPage() {
   const [promoConfig, setPromoConfig] = useState({ enabled: false, threshold: 8 });
   const [showPromoModal, setShowPromoModal] = useState(false);
   const [promoSaving, setPromoSaving] = useState(false);
+
+  // DnD sensors — hỗ trợ cả chuột (PC) và ngón tay (điện thoại)
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 8 }, // cần kéo 8px mới kích hoạt
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 250, tolerance: 6 }, // nhấn giữ 250ms
+    })
+  );
 
   useEffect(() => {
     const isModalOpen = showCatModal || showItemModal;
@@ -76,7 +216,6 @@ export default function MenuPage() {
 
   async function savePromoConfig() {
     setPromoSaving(true);
-    // upsert both keys
     for (const [key, value] of [
       ['promotion_enabled', String(promoConfig.enabled)],
       ['promotion_threshold', String(promoConfig.threshold)],
@@ -108,7 +247,7 @@ export default function MenuPage() {
   async function fetchData() {
     const [{ data: cats }, { data: items }] = await Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
-      supabase.from('menu_items').select('*, category:categories(name)').order('created_at'),
+      supabase.from('menu_items').select('*, category:categories(name)').order('sort_order').order('created_at'),
     ]);
     const fetchedItems = items || [];
     const finalCats = cats || [];
@@ -120,7 +259,7 @@ export default function MenuPage() {
     setLoading(false);
   }
 
-  // Category CRUD
+  // ─── Category CRUD ──────────────────────────────────────────────────────
   function openCatModal(cat = null) {
     if (cat) {
       setEditingCat(cat);
@@ -155,13 +294,12 @@ export default function MenuPage() {
       cancelButtonText: 'Huỷ'
     });
     if (!result.isConfirmed) return;
-
     await supabase.from('categories').delete().eq('id', id);
     if (activeCategory === id) setActiveCategory(null);
     fetchData();
   }
 
-  // Menu Item CRUD
+  // ─── Menu Item CRUD ─────────────────────────────────────────────────────
   function openItemModal(item = null) {
     if (item) {
       setEditingItem(item);
@@ -204,7 +342,6 @@ export default function MenuPage() {
   async function saveItem() {
     if (!itemForm.name.trim()) return;
 
-    // Clean up options (remove empty choices, remove options without names or choices)
     const cleanedOptions = itemForm.options
       .map((opt) => ({
         name: opt.name.trim(),
@@ -231,11 +368,11 @@ export default function MenuPage() {
     };
 
     if (editingItem) {
-      const { data: res, error } = await supabase.from('menu_items').update(data).eq('id', editingItem.id).select();
-      console.log('[saveItem] update result:', res, 'error:', error, 'payload:', data);
+      await supabase.from('menu_items').update(data).eq('id', editingItem.id);
     } else {
-      const { data: res, error } = await supabase.from('menu_items').insert(data).select();
-      console.log('[saveItem] insert result:', res, 'error:', error);
+      // New item: đặt sort_order = max + 1
+      const maxOrder = menuItems.reduce((m, i) => Math.max(m, i.sort_order || 0), 0);
+      await supabase.from('menu_items').insert({ ...data, sort_order: maxOrder + 1 });
     }
     setShowItemModal(false);
     fetchData();
@@ -253,7 +390,6 @@ export default function MenuPage() {
       cancelButtonText: 'Huỷ'
     });
     if (!result.isConfirmed) return;
-
     await supabase.from('menu_items').delete().eq('id', id);
     fetchData();
   }
@@ -270,12 +406,11 @@ export default function MenuPage() {
       cancelButtonText: 'Huỷ'
     });
     if (!result.isConfirmed) return;
-
     await supabase.from('menu_items').update({ is_available: !item.is_available }).eq('id', item.id);
     fetchData();
   }
 
-  // Option Handlers
+  // ─── Option Handlers ────────────────────────────────────────────────────
   function addOption() {
     setItemForm(prev => ({
       ...prev,
@@ -347,13 +482,61 @@ export default function MenuPage() {
     return new Intl.NumberFormat('vi-VN').format(item.price || 0) + 'đ';
   }
 
-  // Base: category + search filter (before visibility filter)
+  // ─── DnD Handlers ──────────────────────────────────────────────────────
+  function handleDragStart(event) {
+    setActiveId(event.active.id);
+  }
+
+  async function handleDragEnd(event) {
+    const { active, over } = event;
+    setActiveId(null);
+    if (!over || active.id === over.id) return;
+
+    // Chỉ sắp xếp trong filteredItems (danh sách đang hiển thị)
+    const oldIndex = filteredItems.findIndex(i => i.id === active.id);
+    const newIndex = filteredItems.findIndex(i => i.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    // Tạo mảng mới đã sắp xếp
+    const reordered = arrayMove(filteredItems, oldIndex, newIndex);
+
+    // Cập nhật state ngay (optimistic update)
+    setMenuItems(prev => {
+      // Giữ các item không trong filteredItems, chỉ thay thế những item đang hiển thị
+      const filteredIds = new Set(filteredItems.map(i => i.id));
+      const others = prev.filter(i => !filteredIds.has(i.id));
+      return [...others, ...reordered];
+    });
+
+    // Lưu sort_order mới lên Supabase
+    setIsSaving(true);
+    try {
+      const updates = reordered.map((item, idx) => ({
+        id: item.id,
+        sort_order: idx + 1,
+      }));
+
+      // Batch update từng item
+      await Promise.all(
+        updates.map(u =>
+          supabase.from('menu_items').update({ sort_order: u.sort_order }).eq('id', u.id)
+        )
+      );
+    } catch (err) {
+      console.error('Lỗi cập nhật thứ tự:', err);
+      fetchData(); // rollback nếu lỗi
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  // ─── Filters ────────────────────────────────────────────────────────────
   const baseItems = menuItems.filter(i => {
     const itemCats = getItemCategories(i);
     if (activeCategory !== null && !itemCats.includes(activeCategory)) return false;
     if (searchQuery.trim()) {
       const q = removeVietnameseTones(searchQuery);
-      return removeVietnameseTones(i.name).includes(q) || removeVietnameseTones(i.description).includes(q);
+      return removeVietnameseTones(i.name).includes(q) || removeVietnameseTones(i.description || '').includes(q);
     }
     return true;
   });
@@ -367,6 +550,10 @@ export default function MenuPage() {
     return true;
   });
 
+  const activeItem = activeId ? menuItems.find(i => i.id === activeId) : null;
+
+  // Drag-and-drop chỉ bật khi không search và xem "Tất cả" danh mục hoặc một danh mục cụ thể
+  const isDndEnabled = !searchQuery.trim();
 
   if (loading) {
     return <div className="page-content"><div className="empty-state"><p>Đang tải...</p></div></div>;
@@ -379,7 +566,10 @@ export default function MenuPage() {
           <h1 className="page-title" style={{ marginBottom: 2 }}>Thực đơn</h1>
           <p className="page-subtitle" style={{ margin: 0, fontSize: '0.8rem' }}>Quản lý danh mục và món ăn</p>
         </div>
-        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+          {isSaving && (
+            <span style={{ fontSize: '0.75rem', color: '#6b7280', fontStyle: 'italic' }}>Đang lưu...</span>
+          )}
           <button onClick={() => setShowPromoModal(true)} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', background: promoConfig.enabled ? '#eff6ff' : 'white', color: promoConfig.enabled ? '#2563eb' : '#374151', border: `1.5px solid ${promoConfig.enabled ? '#bfdbfe' : '#e5e7eb'}`, borderRadius: 8, fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
             🎁 {promoConfig.enabled ? `KM: ${promoConfig.threshold} món` : 'Khuyến mại'}
           </button>
@@ -421,8 +611,7 @@ export default function MenuPage() {
       </div>
 
       {/* Search + Visibility Filter bar */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-        {/* Search input */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
           <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', pointerEvents: 'none', fontSize: '1rem' }}>🔍</span>
           <input
@@ -438,7 +627,6 @@ export default function MenuPage() {
             <button onClick={() => setSearchQuery('')} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '1rem', padding: 2 }}>×</button>
           )}
         </div>
-        {/* Visibility filter with counts */}
         <div style={{ display: 'flex', gap: 4, background: '#f3f4f6', borderRadius: 10, padding: 3, flexShrink: 0 }}>
           {[
             { key: 'all', label: 'Tất cả', count: countAll },
@@ -457,68 +645,69 @@ export default function MenuPage() {
         </div>
       </div>
 
-      <div className="menu-grid">
-        {filteredItems.length > 0 ? (
-          filteredItems.map((item) => (
-            <div key={item.id} className={`menu-card ${!item.is_available ? 'unavailable' : ''}`}>
-              <div className="menu-card-image" style={{ position: 'relative' }}>
-                {item.image_url ? (
-                  <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 100vw, 300px" style={{ objectFit: 'cover' }} />
-                ) : (
-                  <div className="menu-card-placeholder">
-                    <ImageIcon size={32} />
-                  </div>
-                )}
+      {/* DnD hint */}
+      {isDndEnabled && filteredItems.length > 1 && (
+        <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, color: '#6b7280', fontSize: '0.76rem' }}>
+          <GripVertical size={13} />
+          <span>Kéo biểu tượng ⠿ trên mỗi thẻ để thay đổi thứ tự hiển thị</span>
+        </div>
+      )}
+
+      {/* Menu Grid with DnD */}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext
+          items={filteredItems.map(i => i.id)}
+          strategy={rectSortingStrategy}
+        >
+          <div className="menu-grid">
+            {filteredItems.length > 0 ? (
+              filteredItems.map((item) => (
+                <SortableMenuCard
+                  key={item.id}
+                  item={item}
+                  categories={categories}
+                  getItemCategories={getItemCategories}
+                  getItemDisplayPrice={getItemDisplayPrice}
+                  toggleAvailable={toggleAvailable}
+                  openItemModal={openItemModal}
+                  deleteItem={deleteItem}
+                />
+              ))
+            ) : (
+              <div className="empty-state" style={{ gridColumn: '1 / -1' }}>
+                <FolderOpen size={48} />
+                <p>Chưa có món ăn nào</p>
+                <button className="btn btn-primary mt-4" onClick={() => openItemModal()}>
+                  <Plus size={16} /> Thêm món đầu tiên
+                </button>
               </div>
-              <div className="menu-card-body">
-                <div className="menu-card-cat" style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                  {getItemCategories(item).map((catId, idx) => {
-                    const cName = categories.find(c => c.id === catId)?.name || 'Chưa phân loại';
-                    return <span key={idx} style={{ background: '#f3f4f6', padding: '2px 6px', borderRadius: '4px', fontSize: '0.65rem' }}>{cName}</span>;
-                  })}
-                </div>
-                <h4 className="menu-card-name" style={{ marginTop: '0.3rem' }}>{item.name}</h4>
-                {(item.counts_for_promotion || item.is_gift_item) && (
-                  <div style={{ display: 'flex', gap: 4, marginBottom: 4, flexWrap: 'wrap' }}>
-                    {item.counts_for_promotion && <span style={{ fontSize: '0.65rem', background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>🎯 Được Tính vào Khuyến Mãi</span>}
-                    {item.is_gift_item && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>🎁 Món tặng</span>}
-                  </div>
-                )}
-                {item.description && (
-                  <p className="menu-card-desc">{item.description}</p>
-                )}
-                <div className="menu-card-footer">
-                  <span className="menu-card-price">{getItemDisplayPrice(item)}</span>
-                  <div className="flex gap-1">
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => toggleAvailable(item)}
-                      title={item.is_available ? 'Ẩn món' : 'Hiện món'}
-                      style={{ color: item.is_available ? '#2563eb' : '#9ca3af' }}
-                    >
-                      {item.is_available ? <Eye size={14} /> : <EyeOff size={14} />}
-                    </button>
-                    <button className="btn btn-ghost btn-sm" onClick={() => openItemModal(item)}>
-                      <Pencil size={14} />
-                    </button>
-                    <button className="btn btn-ghost btn-sm" onClick={() => deleteItem(item.id)}>
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))
-        ) : (
-          <div className="empty-state" style={{ gridColumn: '1 / -1' }}>
-            <FolderOpen size={48} />
-            <p>Chưa có món ăn nào</p>
-            <button className="btn btn-primary mt-4" onClick={() => openItemModal()}>
-              <Plus size={16} /> Thêm món đầu tiên
-            </button>
+            )}
           </div>
-        )}
-      </div>
+        </SortableContext>
+
+        {/* Overlay: bóng mờ hiện trong khi kéo */}
+        <DragOverlay>
+          {activeItem && (
+            <div style={{ opacity: 0.85, transform: 'scale(1.04)', boxShadow: '0 16px 40px rgba(0,0,0,0.2)', borderRadius: 12, background: 'white' }}>
+              <MenuCard
+                item={activeItem}
+                categories={categories}
+                getItemCategories={getItemCategories}
+                getItemDisplayPrice={getItemDisplayPrice}
+                toggleAvailable={() => { }}
+                openItemModal={() => { }}
+                deleteItem={() => { }}
+                dragHandleProps={{}}
+              />
+            </div>
+          )}
+        </DragOverlay>
+      </DndContext>
 
       {/* Category Modal */}
       {showCatModal && (
@@ -589,7 +778,6 @@ export default function MenuPage() {
                 </label>
               </div>
 
-              {/* Danh mục của món — giữ trước phần tuỳ chọn */}
               {/* Options Section */}
               <div className="options-section" style={{ borderTop: '1px solid #dbeafe', paddingTop: '1rem', marginTop: '1rem' }}>
                 <div className="flex justify-between items-center mb-3">
@@ -611,7 +799,6 @@ export default function MenuPage() {
                       overflow: 'hidden',
                     }}
                   >
-                    {/* Header: option name + delete */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: '#f8faff', borderBottom: '1px solid #e2e8f0' }}>
                       <input
                         className="input"
@@ -629,9 +816,7 @@ export default function MenuPage() {
                       </button>
                     </div>
 
-                    {/* Choice rows */}
                     <div style={{ padding: '10px 12px' }}>
-                      {/* Column headers */}
                       <div style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 26px', gap: 6, marginBottom: 6 }}>
                         <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tên lựa chọn</span>
                         <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Giá (đ)</span>
