@@ -426,7 +426,9 @@ export default function SettingsPage() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: '#0f172a' }}>⚙️ Cài đặt</h1>
-          <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: '#64748b' }}>Quản lý tài khoản ngân hàng nhận thanh toán QR</p>
+          <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: '#64748b' }}>
+            Quản lý tài khoản ngân hàng nhận thanh toán <span onClick={() => setShowSecretModal(true)} style={{ cursor: 'pointer' }}>QR</span>
+          </p>
         </div>
         <div style={{ width: 44 }}></div>
       </div>

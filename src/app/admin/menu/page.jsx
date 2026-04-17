@@ -316,6 +316,7 @@ export default function MenuPage() {
           ...opt,
           prices: opt.prices || Array(opt.choices?.length || 0).fill(null),
           choiceCategories: opt.choiceCategories || Array(opt.choices?.length || 0).fill(''),
+          hiddenChoices: opt.hiddenChoices || Array(opt.choices?.length || 0).fill(false),
         })),
       });
     } else {
@@ -326,12 +327,13 @@ export default function MenuPage() {
         image_url: '', is_available: true,
         counts_for_promotion: false, is_gift_item: false,
         options: [
-          { name: 'LOẠI', choices: [''], prices: [50000], choiceCategories: [''] },
+          { name: 'LOẠI', choices: [''], prices: [50000], choiceCategories: [''], hiddenChoices: [false] },
           {
             name: 'KHẨU VỊ',
             choices: ['Bình Thường', 'Làm Cay', 'Không Cay', 'Xào Mặn', 'Xào Ngọt', 'Ít ớt', 'Cay vừa'],
             prices: [null, null, null, null, null, null, null],
             choiceCategories: ['', '', '', '', '', '', ''],
+            hiddenChoices: [false, false, false, false, false, false, false],
           },
         ],
       });
@@ -351,6 +353,9 @@ export default function MenuPage() {
           .filter((_, ci) => opt.choices[ci]?.trim()),
         choiceCategories: opt.choices
           .map((c, ci) => c.trim() ? (opt.choiceCategories?.[ci] ?? '') : null)
+          .filter((_, ci) => opt.choices[ci]?.trim()),
+        hiddenChoices: opt.choices
+          .map((c, ci) => c.trim() ? (opt.hiddenChoices?.[ci] ?? false) : false)
           .filter((_, ci) => opt.choices[ci]?.trim()),
       }))
       .filter(opt => opt.name && opt.choices.length > 0);
@@ -414,7 +419,7 @@ export default function MenuPage() {
   function addOption() {
     setItemForm(prev => ({
       ...prev,
-      options: [...prev.options, { name: '', choices: [''], prices: [null], choiceCategories: [''] }]
+      options: [...prev.options, { name: '', choices: [''], prices: [null], choiceCategories: [''], hiddenChoices: [false] }]
     }));
   }
 
@@ -437,6 +442,8 @@ export default function MenuPage() {
     newOptions[optIndex].prices.push(50000);
     if (!newOptions[optIndex].choiceCategories) newOptions[optIndex].choiceCategories = [];
     newOptions[optIndex].choiceCategories.push('');
+    if (!newOptions[optIndex].hiddenChoices) newOptions[optIndex].hiddenChoices = [];
+    newOptions[optIndex].hiddenChoices.push(false);
     setItemForm({ ...itemForm, options: newOptions });
   }
 
@@ -458,6 +465,16 @@ export default function MenuPage() {
     newOptions[optIndex].choices.splice(choiceIndex, 1);
     if (newOptions[optIndex].prices) newOptions[optIndex].prices.splice(choiceIndex, 1);
     if (newOptions[optIndex].choiceCategories) newOptions[optIndex].choiceCategories.splice(choiceIndex, 1);
+    if (newOptions[optIndex].hiddenChoices) newOptions[optIndex].hiddenChoices.splice(choiceIndex, 1);
+    setItemForm({ ...itemForm, options: newOptions });
+  }
+
+  function toggleChoiceHidden(optIndex, choiceIndex) {
+    const newOptions = [...itemForm.options];
+    if (!newOptions[optIndex].hiddenChoices) {
+      newOptions[optIndex].hiddenChoices = Array(newOptions[optIndex].choices.length).fill(false);
+    }
+    newOptions[optIndex].hiddenChoices[choiceIndex] = !newOptions[optIndex].hiddenChoices[choiceIndex];
     setItemForm({ ...itemForm, options: newOptions });
   }
 
@@ -817,21 +834,23 @@ export default function MenuPage() {
                     </div>
 
                     <div style={{ padding: '10px 12px' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 26px', gap: 6, marginBottom: 6 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 50px', gap: 6, marginBottom: 6 }}>
                         <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tên lựa chọn</span>
                         <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Giá (đ)</span>
                         <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Danh mục in</span>
                         <span />
                       </div>
 
-                      {opt.choices.map((choice, choiceIndex) => (
-                        <div key={choiceIndex} style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 26px', gap: 6, marginBottom: 6, alignItems: 'center' }}>
+                      {opt.choices.map((choice, choiceIndex) => {
+                        const isHidden = opt.hiddenChoices?.[choiceIndex];
+                        return (
+                        <div key={choiceIndex} style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 50px', gap: 6, marginBottom: 6, alignItems: 'center', opacity: isHidden ? 0.5 : 1 }}>
                           <input
                             className="input input-sm"
                             value={choice}
                             onChange={(e) => updateOptionChoice(optIndex, choiceIndex, e.target.value)}
                             placeholder={`Xào, Hấp, Luộc...`}
-                            style={{ minWidth: 0 }}
+                            style={{ minWidth: 0, textDecoration: isHidden ? 'line-through' : 'none' }}
                           />
                           <input
                             className="input input-sm"
@@ -849,16 +868,26 @@ export default function MenuPage() {
                             <option value="">--</option>
                             {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                           </select>
-                          <button
-                            onClick={() => removeOptionChoice(optIndex, choiceIndex)}
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#cbd5e1', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                            onMouseEnter={e => e.currentTarget.style.color = '#ef4444'}
-                            onMouseLeave={e => e.currentTarget.style.color = '#cbd5e1'}
-                          >
-                            <X size={13} />
-                          </button>
+                          <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                            <button
+                              onClick={() => toggleChoiceHidden(optIndex, choiceIndex)}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: isHidden ? '#f59e0b' : '#cbd5e1', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                              title={isHidden ? "Đang ẩn - Nhấn để hiện" : "Nhấn để ẩn"}
+                            >
+                              {isHidden ? <EyeOff size={13} /> : <Eye size={13} />}
+                            </button>
+                            <button
+                              onClick={() => removeOptionChoice(optIndex, choiceIndex)}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#cbd5e1', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                              onMouseEnter={e => e.currentTarget.style.color = '#ef4444'}
+                              onMouseLeave={e => e.currentTarget.style.color = '#cbd5e1'}
+                              title="Xoá"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
                         </div>
-                      ))}
+                      )})}
 
                       <button
                         onClick={() => addOptionChoice(optIndex)}

@@ -2032,6 +2032,7 @@ function OrderContent() {
                     }}>{opt.name}</div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0px' }}>
                       {opt.choices.map((choice, ci) => {
+                        if (opt.hiddenChoices?.[ci]) return null;
                         const p = opt.prices?.[ci];
                         const hasPrice = p !== null && p !== '';
                         const displayPrice = hasPrice ? Number(p) : 0;
