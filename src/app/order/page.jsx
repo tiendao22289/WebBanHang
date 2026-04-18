@@ -26,7 +26,7 @@ import {
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './order.css';
 
-const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGiftSlots, onOpenGift, giftItems = [], promoEnabled }) => {
+const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGiftSlots, onOpenGift, giftItems = [], promoEnabled, callout = null }) => {
   const [showPreview, setShowPreview] = useState(false);
   const [pos, setPos] = useState({ x: -100, y: -100 });
   const posRef = useRef({ x: -100, y: -100 });
@@ -221,6 +221,40 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
         }}>
           KHUYẾN MÃI
         </div>
+
+        {/* Speech bubble callout */}
+        {callout && (
+          <div style={{
+            position: 'absolute',
+            right: 72,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            background: callout.isGift
+              ? 'linear-gradient(135deg, #15803d, #16a34a)'
+              : 'linear-gradient(135deg, #7c3aed, #a855f7)',
+            color: 'white',
+            borderRadius: 14,
+            padding: '10px 16px',
+            fontSize: '0.88rem',
+            fontWeight: 700,
+            width: 240,
+            lineHeight: 1.5,
+            boxShadow: '0 4px 20px rgba(0,0,0,0.25)',
+            pointerEvents: 'none',
+            whiteSpace: 'normal',
+            animation: 'calloutPop 0.35s cubic-bezier(0.175,0.885,0.32,1.275)',
+            zIndex: 110,
+          }}>
+            {callout.text}
+            <div style={{
+              position: 'absolute', right: -8, top: '50%', transform: 'translateY(-50%)',
+              width: 0, height: 0,
+              borderTop: '7px solid transparent',
+              borderBottom: '7px solid transparent',
+              borderLeft: callout.isGift ? '8px solid #16a34a' : '8px solid #7c3aed',
+            }} />
+          </div>
+        )}
       </div>
 
       {/* Modal xem trước món tặng */}
@@ -306,6 +340,10 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
           from { transform: translateY(100%); }
           to { transform: translateY(0); }
         }
+        @keyframes calloutPop {
+          from { opacity: 0; transform: translateY(-50%) scale(0.85); }
+          to   { opacity: 1; transform: translateY(-50%) scale(1); }
+        }
       `}</style>
     </>
   );
@@ -350,6 +388,9 @@ function OrderContent() {
   const [showGiftModal, setShowGiftModal] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showPromoPopup, setShowPromoPopup] = useState(false);
+  const [promoCallout, setPromoCallout] = useState(null); // { text, isGift } | null
+  const promoCalloutTimerRef = useRef(null);
+  const prevQualifyingQtyRef = useRef(0);
 
   // Option selection modal for items with choices
   const [optionModal, setOptionModal] = useState(null);
@@ -1029,6 +1070,10 @@ function OrderContent() {
       // Tăng: mở khóa gift mới → thông báo + mở modal
       setAdminUnlockToast(true);
       setTimeout(() => setAdminUnlockToast(false), 6000);
+      // Callout từ bubble
+      setPromoCallout({ text: `🎉 Bạn đã được tặng ${giftCount} món!`, isGift: true });
+      if (promoCalloutTimerRef.current) clearTimeout(promoCalloutTimerRef.current);
+      promoCalloutTimerRef.current = setTimeout(() => setPromoCallout(null), 6000);
       if (availableGiftSlots > 0) {
         setTimeout(() => setShowGiftModal(true), 800);
       }
@@ -1055,6 +1100,33 @@ function OrderContent() {
       return prev;
     });
   }, [giftCount]);
+
+  // ── Callout gợi ý khuyến mãi — hoạt động theo TỪNG CHU KỲ ──
+  // Threshold=8: 5–7 → sắp được tặng 1, 13–15 → sắp được tặng 2, 21–23 → sắp được tặng 3...
+  useEffect(() => {
+    if (!promoConfig.enabled || promoConfig.threshold <= 0) return;
+    const prev = prevQualifyingQtyRef.current;
+    prevQualifyingQtyRef.current = qualifyingQty;
+    if (qualifyingQty <= prev) return; // chỉ trigger khi thêm món
+
+    const thr = promoConfig.threshold;
+    const posInCycle = qualifyingQty % thr; // vị trí trong chu kỳ hiện tại (0 = vừa đủ)
+    // Khi posInCycle = 0 thì vừa đạt ngưỡng → giftCount useEffect xử lý
+    if (posInCycle === 0 || posInCycle < 5) return;
+
+    const currentGifts = Math.floor(qualifyingQty / thr); // số quà đã mở
+    const nextThreshold = (currentGifts + 1) * thr;
+    const remaining = nextThreshold - qualifyingQty;
+    const nextGiftNum = currentGifts + 1;
+
+    const text = nextGiftNum === 1
+      ? `Bạn còn thiếu ${remaining} món nữa là được khuyến mãi! 🔥`
+      : `Còn thiếu ${remaining} món nữa là được tặng món thứ ${nextGiftNum}! 🔥`;
+
+    setPromoCallout({ text, isGift: false });
+    if (promoCalloutTimerRef.current) clearTimeout(promoCalloutTimerRef.current);
+    promoCalloutTimerRef.current = setTimeout(() => setPromoCallout(null), 5000);
+  }, [qualifyingQty]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalAmount = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
@@ -1736,6 +1808,7 @@ function OrderContent() {
             giftItems={giftItems}
             promoEnabled={promoConfig.enabled}
             onOpenGift={() => setShowGiftModal(true)}
+            callout={promoCallout}
           />
         )}
 
@@ -1860,10 +1933,10 @@ function OrderContent() {
           <div className="co-modal-overlay" onClick={() => setShowGiftModal(false)}>
             <div className="co-info-modal" style={{ maxHeight: '80vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
               <div className="co-info-header" style={{ paddingBottom: 12 }}>
-                <div style={{ fontSize: '2rem' }}>🎁</div>
-                <h2 style={{ fontSize: '1.1rem', margin: 0 }}>Chọn món tặng</h2>
-                <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: '#6b7280' }}>
-                  Còn {availableGiftSlots} lượt chọn miễn phí
+                <div style={{ fontSize: '3.5rem' }}>🎁</div>
+                <h2 style={{ fontSize: '2rem', margin: 0, fontWeight: 900 }}>Chọn món tặng</h2>
+                <p style={{ margin: '8px 0 0', fontSize: '1.25rem', color: '#16a34a', fontWeight: 700 }}>
+                  Còn <b style={{ fontSize: '1.5rem', color: '#dc2626' }}>{availableGiftSlots}</b> lượt chọn miễn phí
                 </p>
               </div>
               <div style={{ padding: '0 16px 16px' }}>
@@ -1939,6 +2012,7 @@ function OrderContent() {
             ⚠️ Bạn đã xóa bớt món — món tặng đã bị hủy do không đủ số lượng!
           </div>
         )}
+
 
         {/* ─── Admin Unlock Toast (Admin thêm món → khách đủ điều kiện nhận quà) ─── */}
         {adminUnlockToast && (
