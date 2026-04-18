@@ -56,7 +56,8 @@ export default function StatsPage() {
         )
       `)
       .gte('created_at', startDate.toISOString())
-      .in('status', ['completed', 'paid']);
+      .in('status', ['completed', 'paid'])
+      .eq('payment_method', 'transfer');
 
     if (!ordersData) {
       setLoading(false);
