@@ -93,16 +93,18 @@ export async function sendSmartPrintJobs(supabase, orderId) {
       if (!printerCategoryMap[assignedPrinter.id]) {
         printerCategoryMap[assignedPrinter.id] = { printer: assignedPrinter, categoryIds: new Set() };
       }
-      if (resolvedCategoryId) {
-        printerCategoryMap[assignedPrinter.id].categoryIds.add(resolvedCategoryId);
-      }
+      
+      // Thêm null vào Set nếu món không có category (hoặc category bị xóa)
+      // Điều này giúp PrintAgent hiểu là "Chỉ in những món không có danh mục" thay vì "In tất cả (Bill tổng)"
+      printerCategoryMap[assignedPrinter.id].categoryIds.add(resolvedCategoryId || null);
     }
 
     // 5. INSERT 1 print_job / printer có items
     const jobs = Object.values(printerCategoryMap).map(({ printer, categoryIds }) => ({
       order_id: orderId,
       printer_id: printer.id,
-      filter_category_ids: categoryIds.size > 0 ? Array.from(categoryIds) : null,
+      // Array.from(categoryIds) lúc này luôn có phần tử (VD: [null] hoặc ['uuid_1'])
+      filter_category_ids: Array.from(categoryIds),
       status: 'pending',
     }));
 
