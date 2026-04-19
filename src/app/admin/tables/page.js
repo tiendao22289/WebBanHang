@@ -1350,7 +1350,7 @@ export default function TablesPage() {
               {/* Underline Tabs */}
               <div style={{ background: 'white', borderBottom: '1px solid #e5e7eb', position: 'sticky', top: 0, zIndex: 10 }}>
                 <div style={{ display: 'flex' }}>
-                  {[{ key: 'ALL', label: 'Tất cả' }, { key: 'OCCUPIED', label: 'Sử dụng' }, { key: 'EMPTY', label: 'Còn trống' }].map(tab => (
+                  {[{ key: 'ALL', label: `Tất cả (${tables.filter(t => t.table_type !== 'takeaway').length})` }, { key: 'OCCUPIED', label: `Sử dụng (${occupiedCount})` }, { key: 'EMPTY', label: `Còn trống (${availableCount})` }].map(tab => (
                     <button key={tab.key} onClick={() => setFilterTab(tab.key)} style={{
                       flex: 1, padding: '14px 8px', border: 'none', background: 'none',
                       fontSize: '0.95rem', fontWeight: 600, cursor: 'pointer',
