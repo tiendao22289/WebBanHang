@@ -1170,6 +1170,7 @@ function OrderContent() {
     // Nếu còn slot quà chưa chọn → nhắc khách chọn trước
     if (promoConfig.enabled && availableGiftSlots > 0 && !giftPromptPending) {
       setGiftPromptPending(true);
+      setShowCart(false);   // đóng giỏ hàng để tập trung vào chọn quà
       setShowGiftModal(true);
       return;
     }
