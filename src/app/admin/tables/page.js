@@ -3408,7 +3408,7 @@ export default function TablesPage() {
               </div>
 
               <div className="options-modal-body">
-                <div className="options-item-info">
+                <div className="options-item-info" style={{ borderBottom: 'none', paddingBottom: 0 }}>
                   {optionModalItem.image_url ? (
                     <img src={optionModalItem.image_url} alt={optionModalItem.name} />
                   ) : (
