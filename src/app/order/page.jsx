@@ -851,6 +851,7 @@ function OrderContent() {
     }
 
     // Nếu có giỏ hàng lưu sẵn thì nạp vào (phục hồi từ dạng nén)
+    let cartToSave = [];
     if (saved?.cart && Array.isArray(saved.cart) && saved.cart.length > 0) {
       const expandedCart = saved.cart.map(c => {
         const originalItem = fetchedItems?.find(m => m.id === c.id || m.id === c.i);
@@ -864,11 +865,14 @@ function OrderContent() {
           price: c.price !== undefined ? c.price : (c.p !== undefined ? c.p : originalItem.price)
         };
       }).filter(Boolean);
-      if (expandedCart.length > 0) setCart(expandedCart);
+      if (expandedCart.length > 0) {
+        setCart(expandedCart);
+        cartToSave = expandedCart;
+      }
     }
 
     // Cập nhật lại thời gian hoạt động để gia hạn
-    saveSession(saved.customerName, saved.customerPhone, saved.deliveryAddress, saved.orderId, saved.cart || []);
+    saveSession(saved.customerName, saved.customerPhone, saved.deliveryAddress, saved.orderId, cartToSave);
 
     // Session + bill còn active → skip modal, fetch orders
     setShowInfoModal(false);
