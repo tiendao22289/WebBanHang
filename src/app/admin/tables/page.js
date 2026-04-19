@@ -72,6 +72,9 @@ export default function TablesPage() {
   const [activeMenuCategory, setActiveMenuCategory] = useState('all');
   const [addItemSearch, setAddItemSearch] = useState('');
   const [addedItemAlert, setAddedItemAlert] = useState(null);
+  // ─── Draft Cart: giỏ hàng tạm, chỉ push lên server khi bấm "Xác nhận" ───
+  const [draftCart, setDraftCart] = useState([]); // [{ menuItemId, menuItem, qty, options, note, price }]
+  const [isConfirmingDraft, setIsConfirmingDraft] = useState(false);
 
   // States for Item Options
   const [optionModalItem, setOptionModalItem] = useState(null);
@@ -713,11 +716,10 @@ export default function TablesPage() {
   };
 
 
-  async function addItemToOrder(orderId, menuItem, optionsData = [], qty = 1, note = '') {
-    // If the item has options and we haven't selected them yet, show the modal
-    if (menuItem.options && menuItem.options.length > 0 && optionsData.length === 0) {
-      setOptionModalItem(menuItem);
-      // Pre-select the first choice for each option
+  // ─── Draft Cart helpers (0 API calls, chỉ cập nhật local state) ───────────
+  function addToDraft(menuItem, options = [], qty = 1, note = '', price = null) {
+    // Nếu món có options mà chưa chọn → mở modal trước
+    if (menuItem.options && menuItem.options.length > 0 && options.length === 0) {
       const initialOptions = {};
       let initialPrice = null;
       menuItem.options.forEach(opt => {
@@ -728,6 +730,7 @@ export default function TablesPage() {
           }
         }
       });
+      setOptionModalItem(menuItem);
       setSelectedOptions(initialOptions);
       setOptionQuantity(1);
       setOptionNote('');
@@ -735,13 +738,49 @@ export default function TablesPage() {
       setCustomPrice(initialPrice);
       return;
     }
+    const finalPrice = price != null ? price : menuItem.price;
+    const optsKey = JSON.stringify(options);
+    setDraftCart(prev => {
+      const idx = prev.findIndex(d =>
+        d.menuItemId === menuItem.id &&
+        JSON.stringify(d.options) === optsKey &&
+        (d.note || '') === (note || '')
+      );
+      if (idx !== -1) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], qty: next[idx].qty + qty };
+        return next;
+      }
+      return [...prev, { menuItemId: menuItem.id, menuItem, qty, options, note: note || '', price: finalPrice }];
+    });
+  }
 
-    let targetOrderId = orderId;
+  function decreaseFromDraft(menuItemId) {
+    setDraftCart(prev => {
+      let lastIdx = -1;
+      for (let i = prev.length - 1; i >= 0; i--) {
+        if (prev[i].menuItemId === menuItemId) { lastIdx = i; break; }
+      }
+      if (lastIdx === -1) return prev;
+      const next = [...prev];
+      if (next[lastIdx].qty <= 1) {
+        next.splice(lastIdx, 1);
+      } else {
+        next[lastIdx] = { ...next[lastIdx], qty: next[lastIdx].qty - 1 };
+      }
+      return next;
+    });
+  }
 
-    if (orderId === 'admin') {
+  // ─── Xác nhận draft: gửi tất cả items lên server 1 lần ─────────────────────
+  async function confirmDraft() {
+    if (draftCart.length === 0 || !selectedTable) return;
+    setIsConfirmingDraft(true);
+    try {
+      // 1. Tìm hoặc tạo Admin order
+      let targetOrderId;
       const { data: adminOrder } = await supabase
-        .from('orders')
-        .select('id')
+        .from('orders').select('id')
         .eq('table_id', selectedTable.merged_with || selectedTable.id)
         .eq('customer_name', 'Admin')
         .in('status', ['pending', 'preparing', 'completed'])
@@ -757,142 +796,124 @@ export default function TablesPage() {
             customer_name: 'Admin',
             customer_phone: 'Quản lý',
             status: 'pending',
-            total_amount: 0
+            total_amount: 0,
           })
-          .select()
-          .single();
-
+          .select().single();
         if (error || !newOrder) return;
         targetOrderId = newOrder.id;
-
         if (selectedTable.status === 'available') {
-          await supabase
-            .from('tables')
+          await supabase.from('tables')
             .update({ status: 'occupied', occupied_at: new Date().toISOString() })
             .eq('id', selectedTable.id);
         }
       }
+
+      // 2. Lấy items hiện có trong order
+      const { data: currentItems } = await supabase
+        .from('order_items').select('*').eq('order_id', targetOrderId);
+
+      // 3. Batch upsert tất cả draft items song song
+      await Promise.all(draftCart.map(draft => {
+        const optsJsonb = draft.options || [];
+        const existing = (currentItems || []).find(item =>
+          item.menu_item_id === draft.menuItemId &&
+          JSON.stringify(item.item_options || []) === JSON.stringify(optsJsonb) &&
+          (item.note || '') === (draft.note || '')
+        );
+        if (existing) {
+          return supabase.from('order_items')
+            .update({ quantity: existing.quantity + draft.qty })
+            .eq('id', existing.id);
+        }
+        return supabase.from('order_items').insert({
+          order_id: targetOrderId,
+          menu_item_id: draft.menuItemId,
+          quantity: draft.qty,
+          unit_price: draft.price,
+          item_options: optsJsonb,
+          note: draft.note || '',
+        });
+      }));
+
+      // 4. Tính lại tổng tiền từ DB
+      const { data: allItems } = await supabase
+        .from('order_items').select('unit_price, quantity').eq('order_id', targetOrderId);
+      const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
+      await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
+
+      // 5. Sync khuyến mãi (không await — chạy ngầm)
+      syncOrderPromotions(targetOrderId);
+
+      // 6. Clear draft, đóng modal, refresh
+      setDraftCart([]);
+      setAddingToOrder(null);
+      setAddItemSearch('');
+      fetchOrdersOnly();
+    } catch (err) {
+      console.error('[confirmDraft] error:', err);
+    } finally {
+      setIsConfirmingDraft(false);
     }
+  }
 
-    // Convert options data to JSONB array or keep it easy to query
+  // ─── Legacy addItemToOrder: chỉ dùng cho các path ngoài menu modal ──────────
+  async function addItemToOrder(orderId, menuItem, optionsData = [], qty = 1, note = '') {
+    // Nếu gọi từ menu modal → chuyển sang draft
+    if (orderId === 'admin') {
+      addToDraft(menuItem, optionsData, qty, note, null);
+      return;
+    }
+    // Các path khác (giữ nguyên logic cũ)
     const optionsJsonb = optionsData.length > 0 ? optionsData : [];
-
-    // Check if item already exists in the target order WITH THE SAME EXACT OPTIONS & NOTE
     const { data: existingItems } = await supabase
-      .from('order_items')
-      .select('*')
-      .eq('order_id', targetOrderId)
-      .eq('menu_item_id', menuItem.id);
-
+      .from('order_items').select('*')
+      .eq('order_id', orderId).eq('menu_item_id', menuItem.id);
     let existing = null;
-    if (existingItems && existingItems.length > 0) {
+    if (existingItems?.length > 0) {
       existing = existingItems.find(item => {
-        const itemOpts = item.item_options || [];
-        const sameOptions = JSON.stringify(itemOpts) === JSON.stringify(optionsJsonb);
-        const sameNote = (item.note || '') === note;
-        return sameOptions && sameNote;
+        return JSON.stringify(item.item_options || []) === JSON.stringify(optionsJsonb) &&
+          (item.note || '') === note;
       });
     }
-
     if (existing) {
-      await supabase
-        .from('order_items')
-        .update({ quantity: existing.quantity + qty })
-        .eq('id', existing.id);
+      await supabase.from('order_items').update({ quantity: existing.quantity + qty }).eq('id', existing.id);
     } else {
       await supabase.from('order_items').insert({
-        order_id: targetOrderId,
-        menu_item_id: menuItem.id,
-        quantity: qty,
-        unit_price: menuItem.price,
-        item_options: optionsJsonb,
-        note: note
+        order_id: orderId, menu_item_id: menuItem.id, quantity: qty,
+        unit_price: menuItem.price, item_options: optionsJsonb, note,
       });
     }
-
-    // Tính total locally: lấy items từ local state rồi cộng item vừa thêm
-    const orderNow = Object.values(orders).flat().find(o => o.id === targetOrderId);
-    let newTotal;
-    if (existing) {
-      // tăng số lượng existing item
-      newTotal = (orderNow?.order_items || []).reduce((s, i) =>
-        s + i.unit_price * (i.id === existing.id ? existing.quantity + qty : i.quantity), 0
-      );
-    } else {
-      // item mới hoàn toàn
-      const existingTotal = (orderNow?.order_items || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
-      newTotal = existingTotal + menuItem.price * qty;
-    }
-    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
-
-    // ── Kiểm tra unlock khuyến mãi và thông báo cho khách ──
-    try {
-      const { data: settingsRows } = await supabase.from('settings').select('key, value').in('key', ['promotion_enabled', 'promotion_threshold']);
-      const cfg = { enabled: false, threshold: 8 };
-      if (settingsRows) {
-        const m = Object.fromEntries(settingsRows.map(r => [r.key, r.value]));
-        cfg.enabled = m.promotion_enabled === 'true';
-        cfg.threshold = parseInt(m.promotion_threshold) || 8;
-      }
-      if (cfg.enabled) {
-        // Lấy order thuộc bàn này
-        const { data: orderRow } = await supabase.from('orders').select('table_id').eq('id', targetOrderId).maybeSingle();
-        if (orderRow?.table_id) {
-          // Lấy toàn bộ order_items của bàn hôm nay
-          const now = new Date();
-          const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-          const { data: tableOrders } = await supabase
-            .from('orders')
-            .select(`id, order_items( id, quantity, is_gift, menu_items(counts_for_promotion) )`)
-            .eq('table_id', orderRow.table_id)
-            .gte('created_at', startOfDay)
-            .in('status', ['pending', 'preparing', 'completed']);
-
-          let totalQualifying = 0;
-          let totalGifts = 0;
-          for (const ord of (tableOrders || [])) {
-            for (const it of (ord.order_items || [])) {
-              if (it.is_gift) { totalGifts += it.quantity; }
-              else if (it.menu_items?.counts_for_promotion) { totalQualifying += it.quantity; }
-            }
-          }
-          const maxGifts = Math.floor(totalQualifying / cfg.threshold);
-          const newUnlockedCount = maxGifts; // tổng gift đc hưởng
-
-          // Ghi vào tables.promo_gift_unlocked → Realtime sẽ notify khách
-          await supabase.from('tables').update({ promo_gift_unlocked: newUnlockedCount }).eq('id', orderRow.table_id);
-        }
-      }
-    } catch (e) { console.error('promo unlock check error:', e); }
-
-    setOptionModalItem(null);
-    setSelectedOptions({});
-    setOptionQuantity(1);
-    setOptionNote('');
+    const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
+    const newTotal = existing
+      ? (orderNow?.order_items || []).reduce((s, i) => s + i.unit_price * (i.id === existing.id ? existing.quantity + qty : i.quantity), 0)
+      : (orderNow?.order_items || []).reduce((s, i) => s + i.unit_price * i.quantity, 0) + menuItem.price * qty;
+    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+    syncOrderPromotions(orderId);
     fetchOrdersOnly();
   }
 
   function handleConfirmOptions() {
     if (!optionModalItem) return;
-    // Format selected options into array
     const optionsData = Object.keys(selectedOptions).map(key => ({
       name: key,
       choice: selectedOptions[key]
     }));
-    // Use custom price if set
-    const itemWithPrice = customPrice != null
-      ? { ...optionModalItem, price: customPrice }
-      : optionModalItem;
-    // Lưu customPrice trước khi clear state
-    const finalPrice = customPrice;
+    const finalPrice = customPrice; // lưu trước khi clear
+    const itemWithPrice = finalPrice != null ? { ...optionModalItem, price: finalPrice } : optionModalItem;
     setEditingPrice(false);
     setCustomPrice(null);
 
     if (editingOrderItem) {
-      // UPDATE existing order item's options — cập nhật cả giá và số lượng
+      // EDIT món có sẵn trong bill → vẫn push thẳng lên server
       updateOrderItemOptions(editingOrderItem.orderId, editingOrderItem.itemId, optionsData, optionNote, finalPrice, optionQuantity);
     } else {
-      addItemToOrder('admin', itemWithPrice, optionsData, optionQuantity, optionNote);
+      // Món MỚI → thêm vào draft (không push server)
+      const price = finalPrice ?? optionModalItem.price;
+      addToDraft(itemWithPrice, optionsData, optionQuantity, optionNote, price);
+      setOptionModalItem(null);
+      setSelectedOptions({});
+      setOptionQuantity(1);
+      setOptionNote('');
     }
   }
 
@@ -1871,6 +1892,34 @@ export default function TablesPage() {
                           ))}
                       </div>
                     </div>
+                    {/* ── Draft confirm bar (desktop) ── */}
+                    {draftCart.length > 0 && (
+                      <div style={{
+                        padding: '10px 12px', borderTop: '2px solid #e0e7ff',
+                        background: 'white', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0
+                      }}>
+                        <div style={{ flex: 1, fontSize: '0.82rem', color: '#374151', fontWeight: 600 }}>
+                          🛒 {draftCart.reduce((s, d) => s + d.qty, 0)} món chưa gửi
+                        </div>
+                        <button
+                          onClick={() => setDraftCart([])}
+                          style={{ padding: '6px 14px', borderRadius: 20, border: '1px solid #e5e7eb', background: 'white', color: '#6b7280', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer' }}
+                        >Huỷ</button>
+                        <button
+                          onClick={confirmDraft}
+                          disabled={isConfirmingDraft}
+                          style={{
+                            padding: '6px 18px', borderRadius: 20, border: 'none',
+                            background: isConfirmingDraft ? '#93c5fd' : '#2563eb',
+                            color: 'white', fontSize: '0.82rem', fontWeight: 700,
+                            cursor: isConfirmingDraft ? 'not-allowed' : 'pointer',
+                            boxShadow: '0 2px 8px rgba(37,99,235,0.3)'
+                          }}
+                        >
+                          {isConfirmingDraft ? '⏳ Đang gửi...' : '✅ Xác nhận gọi món'}
+                        </button>
+                      </div>
+                    )}
                   </>
                 ) : (
                   /* ── Table Browser ── */
@@ -3069,6 +3118,7 @@ export default function TablesPage() {
       {
         addingToOrder && (() => {
           const closeModal = () => {
+            setDraftCart([]);
             setAddingToOrder(null);
             setAddItemSearch('');
             if (selectedTable && (!orders[selectedTable.merged_with || selectedTable.id] || orders[selectedTable.merged_with || selectedTable.id].length === 0)) {
@@ -3076,11 +3126,8 @@ export default function TablesPage() {
             }
           };
 
-          const activeOrder = selectedTable && orders[selectedTable.merged_with || selectedTable.id]
-            ? (orders[selectedTable.merged_with || selectedTable.id].find(o => o.customer_name === 'Admin') || orders[selectedTable.merged_with || selectedTable.id][0])
-            : null;
-          const orderItems = activeOrder?.order_items || [];
-          const totalCartItems = orderItems.reduce((sum, oi) => sum + oi.quantity, 0);
+          // Draft cart tổng hợp
+          const draftTotal = draftCart.reduce((s, d) => s + d.qty, 0);
 
           const getItemCategories = (item) => {
             let itemCats = item.category_id ? [item.category_id] : [];
@@ -3180,7 +3227,7 @@ export default function TablesPage() {
               </div>
 
               {/* Item list */}
-              <div style={{ flex: 1, overflowY: 'auto', background: '#fafafa', paddingBottom: totalCartItems > 0 ? 90 : 16 }}>
+              <div style={{ flex: 1, overflowY: 'auto', background: '#fafafa', paddingBottom: draftTotal > 0 ? 90 : 16 }}>
                 {filteredItems.length === 0 && (
                   <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af' }}>Không tìm thấy món ăn nào</div>
                 )}
@@ -3188,12 +3235,11 @@ export default function TablesPage() {
                 {activeMenuCategory === 'all' ? (
                   /* ── Tất cả: flat list, không header nhóm ── */
                   filteredItems.map(item => {
-                    const itemsInOrder = orderItems.filter(oi => oi.menu_item_id === item.id);
-                    const qty = itemsInOrder.reduce((s, oi) => s + oi.quantity, 0);
+                    const qty = draftCart.filter(d => d.menuItemId === item.id).reduce((s, d) => s + d.qty, 0);
                     return (
                       <div
                         key={item.id}
-                        onClick={() => addItemToOrder('admin', item)}
+                        onClick={() => addToDraft(item)}
                         style={{
                           display: 'flex', alignItems: 'center',
                           padding: '7px 12px',
@@ -3219,16 +3265,16 @@ export default function TablesPage() {
                         </div>
                         {qty > 0 ? (
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={e => e.stopPropagation()}>
-                            <button onClick={() => decreaseItemFromMenu(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                            <button onClick={() => decreaseFromDraft(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
                               <Minus size={13} strokeWidth={2.5} />
                             </button>
-                            <span style={{ width: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{qty}</span>
-                            <button onClick={() => addItemToOrder('admin', item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                            <span style={{ width: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#2563eb' }}>{qty}</span>
+                            <button onClick={() => addToDraft(item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #2563eb', background: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}>
                               <Plus size={13} strokeWidth={2.5} />
                             </button>
                           </div>
                         ) : (
-                          <button onClick={e => { e.stopPropagation(); addItemToOrder('admin', item); }} style={{ width: 28, height: 28, borderRadius: '50%', background: 'white', border: '1.5px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#374151' }}>
+                          <button onClick={e => { e.stopPropagation(); addToDraft(item); }} style={{ width: 28, height: 28, borderRadius: '50%', background: 'white', border: '1.5px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#374151' }}>
                             <Plus size={15} strokeWidth={2} />
                           </button>
                         )}
@@ -3243,12 +3289,11 @@ export default function TablesPage() {
                         {cat.name} ({cat.items.length})
                       </div>
                       {cat.items.map(item => {
-                        const itemsInOrder = orderItems.filter(oi => oi.menu_item_id === item.id);
-                        const qty = itemsInOrder.reduce((s, oi) => s + oi.quantity, 0);
+                        const qty = draftCart.filter(d => d.menuItemId === item.id).reduce((s, d) => s + d.qty, 0);
                         return (
                           <div
                             key={item.id}
-                            onClick={() => addItemToOrder('admin', item)}
+                            onClick={() => addToDraft(item)}
                             style={{
                               display: 'flex', alignItems: 'center',
                               padding: '7px 12px',
@@ -3274,16 +3319,16 @@ export default function TablesPage() {
                             </div>
                             {qty > 0 ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={e => e.stopPropagation()}>
-                                <button onClick={() => decreaseItemFromMenu(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                                <button onClick={() => decreaseFromDraft(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
                                   <Minus size={13} strokeWidth={2.5} />
                                 </button>
-                                <span style={{ width: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{qty}</span>
-                                <button onClick={() => addItemToOrder('admin', item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                                <span style={{ width: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#2563eb' }}>{qty}</span>
+                                <button onClick={() => addToDraft(item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #2563eb', background: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}>
                                   <Plus size={13} strokeWidth={2.5} />
                                 </button>
                               </div>
                             ) : (
-                              <button onClick={e => { e.stopPropagation(); addItemToOrder('admin', item); }} style={{ width: 28, height: 28, borderRadius: '50%', background: 'white', border: '1.5px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#374151' }}>
+                              <button onClick={e => { e.stopPropagation(); addToDraft(item); }} style={{ width: 28, height: 28, borderRadius: '50%', background: 'white', border: '1.5px solid #d1d5db', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#374151' }}>
                                 <Plus size={15} strokeWidth={2} />
                               </button>
                             )}
@@ -3295,46 +3340,53 @@ export default function TablesPage() {
                 )}
               </div>
 
-              {/* Floating cart bar */}
-              {activeOrder && totalCartItems > 0 && (
+              {/* Floating confirm bar — hiện khi có món trong draft */}
+              {draftTotal > 0 && (
                 <div
                   style={{
                     position: 'absolute', bottom: 0, left: 0, right: 0,
                     padding: '10px 16px 14px',
                     background: 'white',
-                    borderTop: '1px solid #f3f4f6'
+                    borderTop: '2px solid #e0e7ff'
                   }}
                 >
                   <div style={{ display: 'flex', gap: 10 }}>
-                    {/* Chọn lại */}
-                    <button
-                      onClick={() => { closeModal(); }}
-                      style={{
-                        flex: 1, padding: '10px 0', borderRadius: 100,
-                        border: '1.5px solid #e5e7eb', background: 'white',
-                        fontSize: '0.9rem', fontWeight: 600, color: '#374151',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Chọn lại
-                    </button>
-                    {/* Xem đơn */}
+                    {/* Huỷ draft */}
                     <button
                       onClick={closeModal}
                       style={{
-                        flex: 1, padding: '10px 16px', borderRadius: 100,
-                        border: 'none', background: '#2563eb',
-                        color: 'white', cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        boxShadow: '0 4px 14px rgba(37,99,235,0.35)'
+                        flex: 1, padding: '10px 0', borderRadius: 100,
+                        border: '1.5px solid #e5e7eb', background: 'white',
+                        fontSize: '0.9rem', fontWeight: 600, color: '#6b7280',
+                        cursor: 'pointer'
                       }}
                     >
-                      <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>Xem đơn</span>
-                      <span style={{
-                        background: 'white', color: '#2563eb',
-                        borderRadius: 20, padding: '2px 8px',
-                        fontSize: '0.82rem', fontWeight: 700
-                      }}>{totalCartItems}</span>
+                      Huỷ
+                    </button>
+                    {/* Xác nhận gửi món */}
+                    <button
+                      onClick={confirmDraft}
+                      disabled={isConfirmingDraft}
+                      style={{
+                        flex: 2, padding: '10px 16px', borderRadius: 100,
+                        border: 'none',
+                        background: isConfirmingDraft ? '#93c5fd' : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                        color: 'white', cursor: isConfirmingDraft ? 'not-allowed' : 'pointer',
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        boxShadow: '0 4px 14px rgba(37,99,235,0.4)',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>
+                        {isConfirmingDraft ? '⏳ Đang gửi...' : '✅ Xác nhận gọi món'}
+                      </span>
+                      {!isConfirmingDraft && (
+                        <span style={{
+                          background: 'white', color: '#2563eb',
+                          borderRadius: 20, padding: '2px 10px',
+                          fontSize: '0.82rem', fontWeight: 800
+                        }}>{draftTotal}</span>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -3674,21 +3726,21 @@ export default function TablesPage() {
                     }}>
                       {/* Left: name + option */}
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {item.menu_item?.name || 'Món đã xoá'}
                         </div>
                         {optionText && (
-                          <div style={{ fontSize: '0.75rem', color: '#f59e0b', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <div style={{ fontSize: '0.85rem', color: '#f59e0b', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {optionText}
                           </div>
                         )}
                       </div>
                       {/* Right: qty × price = subtotal */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                        <span style={{ fontSize: '0.78rem', color: '#9ca3af' }}>
+                        <span style={{ fontSize: '0.9rem', color: '#9ca3af' }}>
                           {item.unit_price.toLocaleString('vi-VN')} × {item.quantity}
                         </span>
-                        <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#111827', minWidth: 60, textAlign: 'right' }}>
+                        <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#111827', minWidth: 60, textAlign: 'right' }}>
                           {subtotal.toLocaleString('vi-VN')}
                         </span>
                       </div>
@@ -3700,17 +3752,17 @@ export default function TablesPage() {
               {/* Summary section */}
               <div style={{ background: 'white', borderTop: '1px solid #e5e7eb', padding: '10px 16px 6px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0' }}>
-                  <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>
+                  <span style={{ fontSize: '0.95rem', color: '#6b7280' }}>
                     Tổng cộng
-                    <span style={{ fontSize: '0.72rem', background: '#f3f4f6', color: '#6b7280', borderRadius: 4, padding: '1px 5px', fontWeight: 600, marginLeft: 6 }}>
+                    <span style={{ fontSize: '0.8rem', background: '#f3f4f6', color: '#6b7280', borderRadius: 4, padding: '2px 6px', fontWeight: 600, marginLeft: 8 }}>
                       {totalQty} món
                     </span>
                   </span>
-                  <span style={{ fontSize: '0.82rem', color: '#374151', fontWeight: 500 }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
+                  <span style={{ fontSize: '1rem', color: '#374151', fontWeight: 600 }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0 6px', borderTop: '1px dashed #e5e7eb', marginTop: 4 }}>
-                  <span style={{ fontSize: '0.95rem', fontWeight: 700, color: '#111827' }}>Khách cần trả</span>
-                  <span style={{ fontSize: '1.1rem', fontWeight: 800, color: '#2563eb' }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0 8px', borderTop: '1px dashed #e5e7eb', marginTop: 6 }}>
+                  <span style={{ fontSize: '1.15rem', fontWeight: 700, color: '#111827' }}>Khách cần trả</span>
+                  <span style={{ fontSize: '1.4rem', fontWeight: 800, color: '#2563eb' }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
                 </div>
               </div>
 

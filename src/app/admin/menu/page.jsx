@@ -167,7 +167,7 @@ export default function MenuPage() {
   const [catForm, setCatForm] = useState({ name: '', sort_order: 0 });
   const [itemForm, setItemForm] = useState({
     name: '', description: '', price: '', category_id: '', image_url: '', is_available: true,
-    counts_for_promotion: false, is_gift_item: false,
+    counts_for_promotion: false, is_gift_item: false, promo_divisor: 1,
   });
 
   // Promotion config
@@ -303,6 +303,8 @@ export default function MenuPage() {
   function openItemModal(item = null) {
     if (item) {
       setEditingItem(item);
+      const promoOpt = (item.options || []).find(o => o.__promo_divisor);
+      const divisor = promoOpt ? promoOpt.__promo_divisor : 1;
       setItemForm({
         name: item.name,
         description: item.description || '',
@@ -312,7 +314,8 @@ export default function MenuPage() {
         is_available: item.is_available,
         counts_for_promotion: item.counts_for_promotion || false,
         is_gift_item: item.is_gift_item || false,
-        options: (item.options || []).map(opt => ({
+        promo_divisor: divisor,
+        options: (item.options || []).filter(o => !o.__promo_divisor).map(opt => ({
           ...opt,
           prices: opt.prices || Array(opt.choices?.length || 0).fill(null),
           choiceCategories: opt.choiceCategories || Array(opt.choices?.length || 0).fill(''),
@@ -325,7 +328,7 @@ export default function MenuPage() {
         name: '', description: '', price: '',
         category_id: activeCategory || '',
         image_url: '', is_available: true,
-        counts_for_promotion: false, is_gift_item: false,
+        counts_for_promotion: false, is_gift_item: false, promo_divisor: 1,
         options: [
           { name: 'LOẠI', choices: [''], prices: [50000], choiceCategories: [''], hiddenChoices: [false] },
           {
@@ -359,6 +362,10 @@ export default function MenuPage() {
           .filter((_, ci) => opt.choices[ci]?.trim()),
       }))
       .filter(opt => opt.name && opt.choices.length > 0);
+
+    if (itemForm.counts_for_promotion && parseInt(itemForm.promo_divisor) > 1) {
+      cleanedOptions.push({ __promo_divisor: parseInt(itemForm.promo_divisor) });
+    }
 
     const data = {
       name: itemForm.name,
@@ -789,6 +796,19 @@ export default function MenuPage() {
                   <input type="checkbox" checked={itemForm.counts_for_promotion} onChange={e => setItemForm({ ...itemForm, counts_for_promotion: e.target.checked })} />
                   <span style={{ fontSize: '0.82rem', color: '#374151' }}>🎯 Tính vào khuyến mại (đếm quantity)</span>
                 </label>
+                {itemForm.counts_for_promotion && (
+                  <div style={{ marginLeft: 24, marginBottom: 12 }}>
+                    <label style={{ display: 'block', fontSize: '0.75rem', color: '#6b7280', marginBottom: 4 }}>Số lượng cần để tính 1 phần KM</label>
+                    <input 
+                      type="number" 
+                      min="1" 
+                      value={itemForm.promo_divisor} 
+                      onChange={e => setItemForm({ ...itemForm, promo_divisor: parseInt(e.target.value) || 1 })} 
+                      style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: '0.8rem', background: '#fff' }}
+                    />
+                    <p style={{ fontSize: '0.65rem', color: '#9ca3af', marginTop: 4 }}>Ví dụ: Đặt là 2 thì khách mua 2 món này mới tính là 1 phần KM.</p>
+                  </div>
+                )}
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                   <input type="checkbox" checked={itemForm.is_gift_item} onChange={e => setItemForm({ ...itemForm, is_gift_item: e.target.checked })} />
                   <span style={{ fontSize: '0.82rem', color: '#374151' }}>🎁 Là món tặng (khách được chọn)</span>

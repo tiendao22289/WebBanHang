@@ -943,6 +943,7 @@ function OrderContent() {
       const init = {};
       let initPrice = null;
       item.options.forEach(opt => {
+        if (!opt.name) return;
         const isMulti = opt.name.toLowerCase().includes('khẩu vị') || opt.name.toLowerCase().includes('thêm') || opt.name.toLowerCase().includes('topping');
         if (opt.choices && opt.choices.length > 0) {
           init[opt.name] = isMulti ? [] : opt.choices[0];
@@ -1030,17 +1031,41 @@ function OrderContent() {
   }
 
   // Promotion calculations
-  // qualifyingQty từ local cart (chưa gửi)
-  const localQualifyingQty = cart.reduce((sum, item) => sum + (menuItems.find(m => m.id === item.id)?.counts_for_promotion ? item.quantity : 0), 0);
-  // qualifyingQty từ các đơn đã gửi (tính từ previousOrders)
-  const submittedQualifyingQty = (previousOrders || []).reduce((sum, order) => {
-    return sum + (order.order_items || []).reduce((s, oi) => {
-      if (oi.is_gift) return s;
-      const menuItem = menuItems.find(m => m.id === oi.menu_item_id);
-      return s + (menuItem?.counts_for_promotion ? (oi.quantity || 0) : 0);
-    }, 0);
-  }, 0);
-  const qualifyingQty = localQualifyingQty + submittedQualifyingQty;
+  // qualifyingQty được tính bằng cách gom nhóm số lượng theo menu_item_id từ cả giỏ hàng và các đơn đã gửi
+  const qualifyingQty = (() => {
+    if (!promoConfig.enabled) return 0;
+    
+    // Gom nhóm số lượng
+    const qtyByItem = {};
+    
+    // 1. Từ giỏ hàng (local)
+    cart.forEach(item => {
+      qtyByItem[item.id] = (qtyByItem[item.id] || 0) + item.quantity;
+    });
+    
+    // 2. Từ các đơn đã gửi
+    (previousOrders || []).forEach(order => {
+      (order.order_items || []).forEach(oi => {
+        if (!oi.is_gift) {
+          qtyByItem[oi.menu_item_id] = (qtyByItem[oi.menu_item_id] || 0) + (oi.quantity || 0);
+        }
+      });
+    });
+
+    // 3. Tính điểm khuyến mãi
+    let totalPoints = 0;
+    Object.entries(qtyByItem).forEach(([itemId, totalQty]) => {
+      const menuItem = menuItems.find(m => m.id === itemId);
+      if (menuItem?.counts_for_promotion) {
+        const promoOpt = (menuItem.options || []).find(o => o.__promo_divisor);
+        const divisor = promoOpt ? promoOpt.__promo_divisor : 1;
+        totalPoints += Math.floor(totalQty / divisor);
+      }
+    });
+    
+    return totalPoints;
+  })();
+
   const giftCount = promoConfig.enabled ? Math.floor(qualifyingQty / promoConfig.threshold) : 0;
   // usedGiftSlots = gifts đã gửi vào DB (trong previousOrders) + gifts trong local giftCart chưa gửi
   const submittedGiftSlots = (previousOrders || []).reduce((sum, order) => {
@@ -1300,6 +1325,7 @@ function OrderContent() {
     let hasExplicitOptionPrice = false;
     let sum = 0;
     (options || []).forEach(opt => {
+      if (!opt.name) return;
       const selected = opts[opt.name];
       if (Array.isArray(selected)) {
         selected.forEach(selItem => {
@@ -1329,7 +1355,7 @@ function OrderContent() {
   // Lấy tất cả choices của item để hiển thị dạng tags
   function getItemOptionTags(item) {
     if (!item.options || item.options.length === 0) return [];
-    return item.options.map(opt => ({
+    return item.options.filter(opt => opt.name).map(opt => ({
       name: opt.name,
       choices: opt.choices || [],
     }));
@@ -1972,7 +1998,7 @@ function OrderContent() {
                             setModalError('');
                             const init = {};
                             g.options.forEach(opt => {
-                              if (opt.choices && opt.choices.length > 0) init[opt.name] = opt.choices[0];
+                              if (opt.name && opt.choices && opt.choices.length > 0) init[opt.name] = opt.choices[0];
                             });
                             setSelectedOpts(init);
                             setOptionQty(1);
@@ -2095,7 +2121,7 @@ function OrderContent() {
                 <button onClick={() => setOptionModal(null)}><X size={20} /></button>
               </div>
               <div className="co-sheet-body">
-                {optionModal.options.map((opt, oi) => (
+                {optionModal.options.filter(opt => opt.name).map((opt, oi) => (
                   <div key={oi} style={{ marginBottom: 10, marginTop: oi === 0 ? 0 : 4 }}>
                     <div style={{
                       fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',

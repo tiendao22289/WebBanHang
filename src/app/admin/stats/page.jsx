@@ -45,8 +45,33 @@ export default function StatsPage() {
       startDate.setDate(now.getDate() - 30);
     }
 
-    // Fetch orders in period
-    const { data: ordersData } = await supabase
+    // Lấy các tài khoản đang "Hiển thị"
+    const { data: activeAccounts } = await supabase
+      .from('bank_accounts')
+      .select('id')
+      .eq('is_active', true);
+    
+    const activeAccountIds = activeAccounts ? activeAccounts.map(a => a.id) : [];
+
+    // Lấy tất cả giao dịch thuộc các tài khoản này
+    const { data: activeTxs } = await supabase
+      .from('payment_transactions')
+      .select('order_ids')
+      .in('account_id', activeAccountIds);
+
+    const activeOrderIds = new Set();
+    if (activeTxs) {
+      activeTxs.forEach(tx => {
+        if (tx.order_ids) {
+          tx.order_ids.split(',').forEach(id => activeOrderIds.add(id));
+        }
+      });
+    }
+
+    // Fetch orders in period (chỉ lấy transfer, completed/paid)
+    // - "Tiền mặt" không vào vì payment_method = 'cash'
+    // - "Huỷ đơn" không vào vì status = 'cancelled'
+    const { data: allTransferOrders } = await supabase
       .from('orders')
       .select(`
         *,
@@ -59,10 +84,13 @@ export default function StatsPage() {
       .in('status', ['completed', 'paid'])
       .eq('payment_method', 'transfer');
 
-    if (!ordersData) {
+    if (!allTransferOrders) {
       setLoading(false);
       return;
     }
+
+    // Lọc chỉ giữ lại các đơn hàng thuộc tài khoản đang hiển thị
+    const ordersData = allTransferOrders.filter(order => activeOrderIds.has(order.id.toString()));
 
     // Total stats
     const totalRevenue = ordersData.reduce((sum, o) => sum + (o.total_amount || 0), 0);
