@@ -772,6 +772,23 @@ export default function TablesPage() {
     });
   }
 
+  function setDraftQuantity(menuItemId, newQty) {
+    if (newQty <= 0) {
+      setDraftCart(prev => prev.filter(item => item.menuItemId !== menuItemId));
+      return;
+    }
+    setDraftCart(prev => {
+      let lastIdx = -1;
+      for (let i = prev.length - 1; i >= 0; i--) {
+        if (prev[i].menuItemId === menuItemId) { lastIdx = i; break; }
+      }
+      if (lastIdx === -1) return prev;
+      const next = [...prev];
+      next[lastIdx] = { ...next[lastIdx], qty: newQty };
+      return next;
+    });
+  }
+
   // ─── Xác nhận draft: gửi tất cả items lên server 1 lần ─────────────────────
   async function confirmDraft() {
     if (draftCart.length === 0 || !selectedTable) return;
@@ -1606,7 +1623,24 @@ export default function TablesPage() {
                             {/* Qty controls */}
                             <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, paddingTop: 1 }}>
                               <button onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, -1)} style={{ width: 22, height: 22, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem' }}>−</button>
-                              <span style={{ fontSize: '0.85rem', fontWeight: 600, minWidth: 18, textAlign: 'center' }}>{item.quantity}</span>
+                              <span
+                                onClick={async () => {
+                                  const { value: newQty } = await Swal.fire({
+                                    title: 'Nhập số lượng',
+                                    input: 'number',
+                                    inputValue: item.quantity,
+                                    inputAttributes: { min: 1, step: 1 },
+                                    showCancelButton: true,
+                                    confirmButtonText: 'Lưu',
+                                    cancelButtonText: 'Hủy'
+                                  });
+                                  if (newQty && Number(newQty) > 0 && Number(newQty) !== item.quantity) {
+                                    const change = Number(newQty) - item.quantity;
+                                    await updateItemQuantity(item._orderId, item.id, item.quantity, change);
+                                  }
+                                }}
+                                style={{ fontSize: '0.85rem', fontWeight: 600, minWidth: 18, textAlign: 'center', cursor: 'pointer', color: '#2563eb', padding: '0 6px' }}
+                              >{item.quantity}</span>
                               <button onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, 1)} style={{ width: 22, height: 22, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem' }}>+</button>
                             </div>
 
@@ -2829,7 +2863,24 @@ export default function TablesPage() {
                                   >
                                     <Minus size={13} strokeWidth={2} />
                                   </button>
-                                  <span style={{ fontSize: '1rem', fontWeight: 600, color: '#111827', minWidth: 16, textAlign: 'center' }}>
+                                  <span
+                                    onClick={async () => {
+                                      const { value: newQty } = await Swal.fire({
+                                        title: 'Nhập số lượng',
+                                        input: 'number',
+                                        inputValue: item.quantity,
+                                        inputAttributes: { min: 1, step: 1 },
+                                        showCancelButton: true,
+                                        confirmButtonText: 'Lưu',
+                                        cancelButtonText: 'Hủy'
+                                      });
+                                      if (newQty && Number(newQty) > 0 && Number(newQty) !== item.quantity) {
+                                        const change = Number(newQty) - item.quantity;
+                                        await updateItemQuantity(order.id, item.id, item.quantity, change);
+                                      }
+                                    }}
+                                    style={{ fontSize: '1rem', fontWeight: 600, color: '#2563eb', minWidth: 16, textAlign: 'center', cursor: 'pointer', padding: '0 8px' }}
+                                  >
                                     {item.quantity}
                                   </span>
                                   <button
@@ -3268,7 +3319,23 @@ export default function TablesPage() {
                             <button onClick={() => decreaseFromDraft(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
                               <Minus size={13} strokeWidth={2.5} />
                             </button>
-                            <span style={{ width: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#2563eb' }}>{qty}</span>
+                            <span
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                const { value: newQty } = await Swal.fire({
+                                  title: 'Nhập số lượng',
+                                  input: 'number',
+                                  inputValue: qty,
+                                  inputAttributes: { min: 1, step: 1 },
+                                  showCancelButton: true,
+                                  confirmButtonText: 'Lưu',
+                                  cancelButtonText: 'Hủy'
+                                });
+                                if (newQty && Number(newQty) > 0 && Number(newQty) !== qty) {
+                                  setDraftQuantity(item.id, Number(newQty));
+                                }
+                              }}
+                              style={{ minWidth: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#2563eb', cursor: 'pointer', padding: '0 6px' }}>{qty}</span>
                             <button onClick={() => addToDraft(item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #2563eb', background: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}>
                               <Plus size={13} strokeWidth={2.5} />
                             </button>
@@ -3322,7 +3389,23 @@ export default function TablesPage() {
                                 <button onClick={() => decreaseFromDraft(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
                                   <Minus size={13} strokeWidth={2.5} />
                                 </button>
-                                <span style={{ width: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#2563eb' }}>{qty}</span>
+                                <span
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    const { value: newQty } = await Swal.fire({
+                                      title: 'Nhập số lượng',
+                                      input: 'number',
+                                      inputValue: qty,
+                                      inputAttributes: { min: 1, step: 1 },
+                                      showCancelButton: true,
+                                      confirmButtonText: 'Lưu',
+                                      cancelButtonText: 'Hủy'
+                                    });
+                                    if (newQty && Number(newQty) > 0 && Number(newQty) !== qty) {
+                                      setDraftQuantity(item.id, Number(newQty));
+                                    }
+                                  }}
+                                  style={{ minWidth: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#2563eb', cursor: 'pointer', padding: '0 6px' }}>{qty}</span>
                                 <button onClick={() => addToDraft(item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #2563eb', background: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}>
                                   <Plus size={13} strokeWidth={2.5} />
                                 </button>
