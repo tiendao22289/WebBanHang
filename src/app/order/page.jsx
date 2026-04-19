@@ -2156,18 +2156,27 @@ function OrderContent() {
                     {isGiftMode ? 'Miễn phí — 0đ' : `${computeModalPrice(optionModal.price, optionModal.options, selectedOpts).toLocaleString('vi-VN')}đ`}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <button onClick={() => { setOptionQty(Math.max(1, optionQty - 1)); setModalError(''); }} style={{ width: 32, height: 32, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={16} /></button>
+                    <button onClick={() => { setOptionQty(Math.max(1, (Number(optionQty) || 1) - 1)); setModalError(''); }} style={{ width: 32, height: 32, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={16} /></button>
                     <input
                       type="number"
                       min={1}
                       value={optionQty}
                       onChange={e => {
-                        const v = parseInt(e.target.value, 10);
-                        if (!isNaN(v) && v >= 1) { setOptionQty(v); setModalError(''); }
+                        const val = e.target.value;
+                        if (val === '') {
+                          setOptionQty('');
+                          setModalError('');
+                        } else {
+                          const v = parseInt(val, 10);
+                          if (!isNaN(v) && v >= 1) { setOptionQty(v); setModalError(''); }
+                        }
+                      }}
+                      onBlur={() => {
+                        if (optionQty === '' || optionQty < 1) setOptionQty(1);
                       }}
                       style={{ width: 44, textAlign: 'center', fontWeight: 700, fontSize: '1.05rem', border: '1.5px solid #e5e7eb', borderRadius: 8, padding: '3px 4px', outline: 'none' }}
                     />
-                    <button onClick={() => { setOptionQty(optionQty + 1); setModalError(''); }} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={16} /></button>
+                    <button onClick={() => { setOptionQty((Number(optionQty) || 0) + 1); setModalError(''); }} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={16} /></button>
                   </div>
                 </div>
               </div>
@@ -2302,7 +2311,7 @@ function OrderContent() {
               </div>
               <div className="co-sheet-footer">
                 <button className="co-btn-submit" onClick={confirmOptionAdd} style={isGiftMode ? { background: '#16a34a' } : {}}>
-                  {isGiftMode ? 'Thêm món tặng • 0đ' : `Thêm vào giỏ • ${(computeModalPrice(optionModal.price, optionModal.options, selectedOpts) * optionQty).toLocaleString('vi-VN')}đ`}
+                  {isGiftMode ? 'Thêm món tặng • 0đ' : `Thêm vào giỏ • ${(computeModalPrice(optionModal.price, optionModal.options, selectedOpts) * (Number(optionQty) || 0)).toLocaleString('vi-VN')}đ`}
                 </button>
               </div>
             </div>
