@@ -2156,29 +2156,40 @@ function OrderContent() {
                   </div>
                 </div>
 
-                {/* Hàng 3: Số lượng (giữa, nhỏ lại một chút) */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8 }}>
-                  <button onClick={() => { setOptionQty(Math.max(1, (Number(optionQty) || 1) - 1)); setModalError(''); }} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid #d1d5db', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={14} /></button>
+                {/* Hàng 3: Số lượng & Ghi chú */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+                  {/* Số lượng */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <button onClick={() => { setOptionQty(Math.max(1, (Number(optionQty) || 1) - 1)); setModalError(''); }} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid #d1d5db', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Minus size={14} /></button>
+                    <input
+                      type="number"
+                      min={1}
+                      value={optionQty}
+                      onChange={e => {
+                        const val = e.target.value;
+                        if (val === '') {
+                          setOptionQty('');
+                          setModalError('');
+                        } else {
+                          const v = parseInt(val, 10);
+                          if (!isNaN(v) && v >= 1) { setOptionQty(v); setModalError(''); }
+                        }
+                      }}
+                      onBlur={() => {
+                        if (optionQty === '' || optionQty < 1) setOptionQty(1);
+                      }}
+                      style={{ width: 56, textAlign: 'center', fontWeight: 700, fontSize: '1rem', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 4px', outline: 'none' }}
+                    />
+                    <button onClick={() => { setOptionQty((Number(optionQty) || 0) + 1); setModalError(''); }} style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Plus size={14} /></button>
+                  </div>
+                  {/* Ghi chú */}
                   <input
-                    type="number"
-                    min={1}
-                    value={optionQty}
-                    onChange={e => {
-                      const val = e.target.value;
-                      if (val === '') {
-                        setOptionQty('');
-                        setModalError('');
-                      } else {
-                        const v = parseInt(val, 10);
-                        if (!isNaN(v) && v >= 1) { setOptionQty(v); setModalError(''); }
-                      }
-                    }}
-                    onBlur={() => {
-                      if (optionQty === '' || optionQty < 1) setOptionQty(1);
-                    }}
-                    style={{ width: 56, textAlign: 'center', fontWeight: 700, fontSize: '1rem', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 4px', outline: 'none' }}
+                    className="co-input"
+                    placeholder="Ghi chú cho bếp..."
+                    value={optNote}
+                    onChange={e => setOptNote(e.target.value)}
+                    style={{ flex: 1, borderRadius: 8, padding: '6px 12px', border: '1px solid #d1d5db', outline: 'none', fontSize: '0.9rem', minWidth: 0 }}
                   />
-                  <button onClick={() => { setOptionQty((Number(optionQty) || 0) + 1); setModalError(''); }} style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={14} /></button>
                 </div>
               </div>
               <div className="co-sheet-body">
@@ -2231,23 +2242,6 @@ function OrderContent() {
                   </div>
                 ))}
 
-                {/* Ghi chú — nằm giữa Loại và Khẩu vị */}
-                <div style={{ marginBottom: 12, marginTop: 4 }}>
-                  <div style={{
-                    fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
-                    letterSpacing: '0.06em', color: '#1d4ed8',
-                    background: '#eff6ff', borderLeft: '3px solid #2563eb',
-                    padding: '3px 8px', borderRadius: '5px',
-                    display: 'inline-block', marginBottom: 8
-                  }}>Ghi chú</div>
-                  <input
-                    className="co-input"
-                    placeholder="Thêm ghi chú cho nhà bếp..."
-                    value={optNote}
-                    onChange={e => setOptNote(e.target.value)}
-                    style={{ borderRadius: 10, padding: '10px 14px' }}
-                  />
-                </div>
 
                 {/* Nhóm 2: Các option Khẩu vị / Thêm / Topping */}
                 {optionModal.options.filter(opt => opt.name && (opt.name.toLowerCase().includes('khẩu vị') || opt.name.toLowerCase().includes('thêm') || opt.name.toLowerCase().includes('topping'))).map((opt, oi) => (
