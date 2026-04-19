@@ -2138,7 +2138,7 @@ function OrderContent() {
             <div className="co-sheet" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh' }}>
               <div className="co-sheet-handle" />
               <div className="co-sheet-header">
-                <div>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: '1.05rem', display: 'flex', alignItems: 'center' }}>
                     {optionModal.name} {isGiftMode && <span style={{ fontSize: '0.75rem', color: '#16a34a', background: '#dcfce7', padding: '2px 6px', borderRadius: 4, marginLeft: 8 }}>🎁 Món Tặng</span>}
                   </div>
@@ -2149,10 +2149,17 @@ function OrderContent() {
                     {isGiftMode ? 'Miễn phí — 0đ' : `${computeModalPrice(optionModal.price, optionModal.options, selectedOpts).toLocaleString('vi-VN')}đ`}
                   </div>
                 </div>
-                <button onClick={() => setOptionModal(null)}><X size={20} /></button>
+                {/* Quantity + Close on same row */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                  <button onClick={() => { setOptionQty(Math.max(1, optionQty - 1)); setModalError(''); }} style={{ width: 32, height: 32, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={16} /></button>
+                  <span style={{ fontWeight: 700, fontSize: '1.1rem', minWidth: 22, textAlign: 'center' }}>{optionQty}</span>
+                  <button onClick={() => { setOptionQty(optionQty + 1); setModalError(''); }} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={16} /></button>
+                  <button onClick={() => setOptionModal(null)} style={{ marginLeft: 4 }}><X size={20} /></button>
+                </div>
               </div>
               <div className="co-sheet-body">
-                {optionModal.options.filter(opt => opt.name).map((opt, oi) => (
+                {/* Nhóm 1: Các option KHÔNG phải khẩu vị (Loại, v.v.) */}
+                {optionModal.options.filter(opt => opt.name && !opt.name.toLowerCase().includes('khẩu vị') && !opt.name.toLowerCase().includes('thêm') && !opt.name.toLowerCase().includes('topping')).map((opt, oi) => (
                   <div key={oi} style={{ marginBottom: 10, marginTop: oi === 0 ? 0 : 4 }}>
                     <div style={{
                       fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
@@ -2167,53 +2174,29 @@ function OrderContent() {
                         const p = opt.prices?.[ci];
                         const hasPrice = p !== null && p !== '';
                         const displayPrice = hasPrice ? Number(p) : 0;
-                        const isMulti = opt.name.toLowerCase().includes('khẩu vị') || opt.name.toLowerCase().includes('thêm') || opt.name.toLowerCase().includes('topping');
-                        const active = isMulti ? (selectedOpts[opt.name] || []).includes(choice) : selectedOpts[opt.name] === choice;
+                        const isMulti = false;
+                        const active = selectedOpts[opt.name] === choice;
                         return (
                           <button key={ci} onClick={() => {
-                            if (isMulti) {
-                              const currentArr = selectedOpts[opt.name] || [];
-                              if (currentArr.includes(choice)) {
-                                setSelectedOpts({ ...selectedOpts, [opt.name]: currentArr.filter(c => c !== choice) });
-                              } else {
-                                setSelectedOpts({ ...selectedOpts, [opt.name]: [...currentArr, choice] });
-                              }
-                            } else {
-                              setSelectedOpts({ ...selectedOpts, [opt.name]: choice });
-                              if (hasPrice) setChoicePrice(Number(p));
-                            }
+                            setSelectedOpts({ ...selectedOpts, [opt.name]: choice });
+                            if (hasPrice) setChoicePrice(Number(p));
                           }} style={{
-                            padding: '6px 4px',
-                            border: 'none',
-                            background: 'transparent',
-                            color: active ? '#1d4ed8' : '#4b5563',
-                            fontWeight: active ? 700 : 500,
+                            padding: '6px 4px', border: 'none', background: 'transparent',
+                            color: active ? '#1d4ed8' : '#4b5563', fontWeight: active ? 700 : 500,
                             fontSize: '0.85rem', cursor: 'pointer',
                             display: 'flex', alignItems: 'center', gap: '8px',
-                            transition: 'all 0.2s ease',
-                            textAlign: 'left',
-                            width: '100%',
+                            transition: 'all 0.2s ease', textAlign: 'left', width: '100%',
                             borderBottom: ci < opt.choices.length - 1 ? '1px solid #f3f4f6' : 'none',
                           }}>
-                            {/* Radio/Check circle */}
                             <div style={{
-                              width: 16, height: 16, borderRadius: isMulti ? '4px' : '50%', flexShrink: 0,
+                              width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
                               border: active ? '4.5px solid #2563eb' : '1.5px solid #d1d5db',
-                              background: (active && isMulti) ? '#2563eb' : 'white',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
                               transition: 'all 0.2s ease'
-                            }}>
-                              {active && isMulti && <span style={{ color: 'white', fontSize: '10px', fontWeight: 'bold' }}>✓</span>}
-                            </div>
-
+                            }} />
                             <span style={{ flex: 1, lineHeight: 1.25 }}>{choice}</span>
-
                             {hasPrice && Number(p) > 0 ? (
-                              <span style={{
-                                fontSize: '0.72rem',
-                                color: active ? '#1e40af' : '#6b7280',
-                                fontWeight: 700
-                              }}>
+                              <span style={{ fontSize: '0.72rem', color: active ? '#1e40af' : '#6b7280', fontWeight: 700 }}>
                                 +{displayPrice.toLocaleString('vi-VN')}đ
                               </span>
                             ) : null}
@@ -2223,7 +2206,9 @@ function OrderContent() {
                     </div>
                   </div>
                 ))}
-                <div style={{ marginBottom: 16, marginTop: 4 }}>
+
+                {/* Ghi chú — nằm giữa Loại và Khẩu vị */}
+                <div style={{ marginBottom: 12, marginTop: 4 }}>
                   <div style={{
                     fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
                     letterSpacing: '0.06em', color: '#1d4ed8',
@@ -2239,16 +2224,67 @@ function OrderContent() {
                     style={{ borderRadius: 10, padding: '10px 14px' }}
                   />
                 </div>
+
+                {/* Nhóm 2: Các option Khẩu vị / Thêm / Topping */}
+                {optionModal.options.filter(opt => opt.name && (opt.name.toLowerCase().includes('khẩu vị') || opt.name.toLowerCase().includes('thêm') || opt.name.toLowerCase().includes('topping'))).map((opt, oi) => (
+                  <div key={oi} style={{ marginBottom: 10, marginTop: 4 }}>
+                    <div style={{
+                      fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
+                      letterSpacing: '0.06em', color: '#1d4ed8',
+                      background: '#eff6ff', borderLeft: '3px solid #2563eb',
+                      padding: '3px 8px', borderRadius: '5px',
+                      display: 'inline-block', marginBottom: 6
+                    }}>{opt.name}</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0px' }}>
+                      {opt.choices.map((choice, ci) => {
+                        if (opt.hiddenChoices?.[ci]) return null;
+                        const p = opt.prices?.[ci];
+                        const hasPrice = p !== null && p !== '';
+                        const displayPrice = hasPrice ? Number(p) : 0;
+                        const active = (selectedOpts[opt.name] || []).includes(choice);
+                        return (
+                          <button key={ci} onClick={() => {
+                            const currentArr = selectedOpts[opt.name] || [];
+                            if (currentArr.includes(choice)) {
+                              setSelectedOpts({ ...selectedOpts, [opt.name]: currentArr.filter(c => c !== choice) });
+                            } else {
+                              setSelectedOpts({ ...selectedOpts, [opt.name]: [...currentArr, choice] });
+                            }
+                          }} style={{
+                            padding: '6px 4px', border: 'none', background: 'transparent',
+                            color: active ? '#1d4ed8' : '#4b5563', fontWeight: active ? 700 : 500,
+                            fontSize: '0.85rem', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', gap: '8px',
+                            transition: 'all 0.2s ease', textAlign: 'left', width: '100%',
+                            borderBottom: ci < opt.choices.length - 1 ? '1px solid #f3f4f6' : 'none',
+                          }}>
+                            <div style={{
+                              width: 16, height: 16, borderRadius: '4px', flexShrink: 0,
+                              border: active ? '4.5px solid #2563eb' : '1.5px solid #d1d5db',
+                              background: active ? '#2563eb' : 'white',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              transition: 'all 0.2s ease'
+                            }}>
+                              {active && <span style={{ color: 'white', fontSize: '10px', fontWeight: 'bold' }}>✓</span>}
+                            </div>
+                            <span style={{ flex: 1, lineHeight: 1.25 }}>{choice}</span>
+                            {hasPrice && Number(p) > 0 ? (
+                              <span style={{ fontSize: '0.72rem', color: active ? '#1e40af' : '#6b7280', fontWeight: 700 }}>
+                                +{displayPrice.toLocaleString('vi-VN')}đ
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+
                 {modalError && (
                   <div style={{ color: '#dc2626', fontSize: '0.85rem', textAlign: 'center', marginBottom: 12, fontWeight: 500, background: '#fef2f2', padding: '6px', borderRadius: '8px' }}>
                     {modalError}
                   </div>
                 )}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 24, marginBottom: 8 }}>
-                  <button onClick={() => { setOptionQty(Math.max(1, optionQty - 1)); setModalError(''); }} style={{ width: 36, height: 36, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={18} /></button>
-                  <span style={{ fontWeight: 700, fontSize: '1.1rem', minWidth: 24, textAlign: 'center' }}>{optionQty}</span>
-                  <button onClick={() => { setOptionQty(optionQty + 1); setModalError(''); }} style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={18} /></button>
-                </div>
               </div>
               <div className="co-sheet-footer">
                 <button className="co-btn-submit" onClick={confirmOptionAdd} style={isGiftMode ? { background: '#16a34a' } : {}}>
