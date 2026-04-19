@@ -3401,10 +3401,9 @@ export default function TablesPage() {
         optionModalItem && (
           <div className="modal-overlay" style={{ zIndex: 1100 }} onClick={() => setOptionModalItem(null)}>
             <div className="options-modal-content" onClick={(e) => e.stopPropagation()}>
-              <div className="options-modal-header">
-                <h3>Tuỳ chọn món</h3>
-                <button className="btn btn-ghost btn-icon" onClick={() => setOptionModalItem(null)}>
-                  <X size={20} />
+              <div className="options-modal-header" style={{ padding: '12px 16px 4px', borderBottom: 'none', display: 'flex', justifyContent: 'flex-end', minHeight: 'auto' }}>
+                <button style={{ border: 'none', background: '#f3f4f6', borderRadius: '50%', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} onClick={() => setOptionModalItem(null)}>
+                  <X size={16} color="#4b5563" />
                 </button>
               </div>
 
@@ -3459,6 +3458,41 @@ export default function TablesPage() {
                   </div>
                 </div>
 
+                {/* Hàng 3: Số lượng & Ghi chú */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, padding: '0 16px', marginBottom: 12 }}>
+                  {/* Số lượng */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <button onClick={() => setOptionQuantity(Math.max(1, (Number(optionQuantity) || 1) - 1))} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid #d1d5db', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Minus size={14} /></button>
+                    <input
+                      type="number"
+                      min={1}
+                      value={optionQuantity}
+                      onChange={e => {
+                        const val = e.target.value;
+                        if (val === '') {
+                          setOptionQuantity('');
+                        } else {
+                          const v = parseInt(val, 10);
+                          if (!isNaN(v) && v >= 1) setOptionQuantity(v);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (optionQuantity === '' || optionQuantity < 1) setOptionQuantity(1);
+                      }}
+                      style={{ width: 56, textAlign: 'center', fontWeight: 700, fontSize: '1rem', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 4px', outline: 'none' }}
+                    />
+                    <button onClick={() => setOptionQuantity((Number(optionQuantity) || 0) + 1)} style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Plus size={14} /></button>
+                  </div>
+                  {/* Ghi chú */}
+                  <input
+                    type="text"
+                    placeholder="Ghi chú cho bếp..."
+                    value={optionNote}
+                    onChange={(e) => setOptionNote(e.target.value)}
+                    style={{ flex: 1, borderRadius: 8, padding: '6px 12px', border: '1px solid #d1d5db', outline: 'none', fontSize: '0.9rem', minWidth: 0 }}
+                  />
+                </div>
+
                 {optionModalItem.options && optionModalItem.options.filter(opt => opt.name && opt.choices).map((opt, idx) => (
                   <div key={idx} style={{ marginBottom: 8, marginTop: idx === 0 ? 0 : 4 }}>
                     <div className="options-group-title">{opt.name}</div>
@@ -3503,26 +3537,7 @@ export default function TablesPage() {
                   </div>
                 ))}
 
-                <div>
-                  <div className="options-group-title">Ghi chú</div>
-                  <input
-                    type="text"
-                    className="options-note-input"
-                    placeholder="Thêm ghi chú cho nhà bếp..."
-                    value={optionNote}
-                    onChange={(e) => setOptionNote(e.target.value)}
-                  />
-                </div>
 
-                <div className="options-qty-control">
-                  <button className="options-qty-btn" onClick={() => setOptionQuantity(Math.max(1, optionQuantity - 1))}>
-                    <Minus size={20} />
-                  </button>
-                  <div className="options-qty-value">{optionQuantity}</div>
-                  <button className="options-qty-btn" onClick={() => setOptionQuantity(optionQuantity + 1)}>
-                    <Plus size={20} />
-                  </button>
-                </div>
               </div>
 
               <div className="options-bottom-bar">
