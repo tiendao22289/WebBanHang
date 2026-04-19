@@ -2157,7 +2157,7 @@ function OrderContent() {
                 </div>
 
                 {/* Hàng 3: Số lượng & Ghi chú */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, paddingTop: 12, paddingBottom: 12, borderTop: '1px solid #e5e7eb', borderBottom: '1px solid #e5e7eb', marginLeft: -16, marginRight: -16, paddingLeft: 16, paddingRight: 16 }}>
                   {/* Số lượng */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#4b5563', marginRight: 2 }}>Số lượng:</span>
@@ -2196,7 +2196,7 @@ function OrderContent() {
               <div className="co-sheet-body">
                 {/* Nhóm 1: Các option KHÔNG phải khẩu vị (Loại, v.v.) */}
                 {optionModal.options.filter(opt => opt.name && !opt.name.toLowerCase().includes('khẩu vị') && !opt.name.toLowerCase().includes('thêm') && !opt.name.toLowerCase().includes('topping')).map((opt, oi) => (
-                  <div key={oi} style={{ marginBottom: 10, marginTop: oi === 0 ? 0 : 4 }}>
+                  <div key={oi} style={{ marginBottom: 12, marginTop: oi === 0 ? 12 : 4, paddingBottom: 12, borderBottom: '1px solid #e5e7eb' }}>
                     <div style={{
                       fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
                       letterSpacing: '0.06em', color: '#1d4ed8',
@@ -2246,7 +2246,7 @@ function OrderContent() {
 
                 {/* Nhóm 2: Các option Khẩu vị / Thêm / Topping */}
                 {optionModal.options.filter(opt => opt.name && (opt.name.toLowerCase().includes('khẩu vị') || opt.name.toLowerCase().includes('thêm') || opt.name.toLowerCase().includes('topping'))).map((opt, oi) => (
-                  <div key={oi} style={{ marginBottom: 10, marginTop: 4 }}>
+                  <div key={oi} style={{ marginBottom: 12, marginTop: 12, paddingBottom: 12, borderBottom: '1px solid #e5e7eb' }}>
                     <div style={{
                       fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
                       letterSpacing: '0.06em', color: '#1d4ed8',

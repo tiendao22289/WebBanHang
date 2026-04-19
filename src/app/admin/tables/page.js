@@ -3459,7 +3459,7 @@ export default function TablesPage() {
                 </div>
 
                 {/* Hàng 3: Số lượng & Ghi chú */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, padding: '0 16px', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, paddingTop: 12, paddingBottom: 12, borderTop: '1px solid #e5e7eb', borderBottom: '1px solid #e5e7eb', paddingLeft: 16, paddingRight: 16 }}>
                   {/* Số lượng */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#4b5563', marginRight: 2 }}>Số lượng:</span>
@@ -3495,7 +3495,7 @@ export default function TablesPage() {
                 </div>
 
                 {optionModalItem.options && optionModalItem.options.filter(opt => opt.name && opt.choices).map((opt, idx) => (
-                  <div key={idx} style={{ marginBottom: 8, marginTop: idx === 0 ? 0 : 4 }}>
+                  <div key={idx} style={{ marginBottom: 12, marginTop: idx === 0 ? 12 : 4, paddingBottom: 12, borderBottom: '1px solid #e5e7eb', paddingLeft: 16, paddingRight: 16 }}>
                     <div className="options-group-title">{opt.name}</div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginTop: 6 }}>
                       {opt.choices.map((choice, cIdx) => {
