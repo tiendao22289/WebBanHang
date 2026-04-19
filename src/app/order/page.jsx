@@ -2160,6 +2160,7 @@ function OrderContent() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
                   {/* Số lượng */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#4b5563', marginRight: 2 }}>Số lượng:</span>
                     <button onClick={() => { setOptionQty(Math.max(1, (Number(optionQty) || 1) - 1)); setModalError(''); }} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid #d1d5db', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Minus size={14} /></button>
                     <input
                       type="number"
