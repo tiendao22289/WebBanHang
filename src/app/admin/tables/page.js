@@ -661,7 +661,7 @@ export default function TablesPage() {
   }
 
   async function updateItemPrice(orderId, itemId, newPrice) {
-    if (!newPrice || newPrice <= 0) return;
+    if (newPrice == null || newPrice < 0) return;
     await supabase.from('order_items').update({ unit_price: newPrice }).eq('id', itemId);
     // Tính lại total locally
     const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
@@ -679,7 +679,7 @@ export default function TablesPage() {
 
   async function updateOrderItemOptions(orderId, itemId, newOptions, note, newPrice = null, newQty = null) {
     const updatePayload = { item_options: newOptions, note: note || '' };
-    if (newPrice != null && newPrice > 0) updatePayload.unit_price = newPrice;
+    if (newPrice != null && newPrice >= 0) updatePayload.unit_price = newPrice;
     if (newQty != null && newQty > 0) updatePayload.quantity = newQty;
     await supabase.from('order_items').update(updatePayload).eq('id', itemId);
 
@@ -687,7 +687,7 @@ export default function TablesPage() {
     const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
     const newTotal = (orderNow?.order_items || []).reduce((s, i) => {
       if (i.id !== itemId) return s + i.unit_price * i.quantity;
-      const price = newPrice != null && newPrice > 0 ? newPrice : i.unit_price;
+      const price = newPrice != null && newPrice >= 0 ? newPrice : i.unit_price;
       const qty = newQty != null && newQty > 0 ? newQty : i.quantity;
       return s + price * qty;
     }, 0);
