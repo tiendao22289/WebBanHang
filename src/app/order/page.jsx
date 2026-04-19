@@ -436,15 +436,23 @@ function OrderContent() {
 
   function saveSession(name, phone, address = '', orderId = null, cartData = null) {
     try {
-      // Nếu không truyền cartData, mặc định dùng mảng rỗng để tránh lưu cart cũ của khách trước (khi clear)
-      // Nếu có dùng State `cart` trong hook thì có thể bị closure, nên truyền rõ `cartData` từ useEffect
+      // Tối ưu dung lượng cart để tránh lỗi Cookie > 4KB khi khách văng app Zalo
+      const compactCart = cartData ? cartData.map(c => ({
+        id: c.id,
+        q: c.quantity,
+        pk: c._optionKey,
+        po: c._options,
+        pn: c._note,
+        p: c.price
+      })) : null;
+
       const payload = {
         tableId: urlTableId,
         customerName: name,
         customerPhone: phone,
         deliveryAddress: address,
         orderId,
-        cart: cartData,
+        cart: compactCart,
         date: getTodayStr(),
         lastActive: Date.now(),
       };
@@ -484,7 +492,9 @@ function OrderContent() {
     } catch { return null; }
   }
 
+  const isSessionRestored = useRef(false);
   useEffect(() => {
+    if (!isSessionRestored.current) return;
     // Tự động lưu giỏ hàng mỗi khi có thay đổi (nếu đang có phiên hợp lệ)
     const saved = getSavedSession();
     if (saved && saved.tableId === urlTableId && saved.customerName) {
@@ -726,7 +736,7 @@ function OrderContent() {
   }, [orderCancelled]);
 
   async function initSession() {
-    const isTW = await fetchMenu();
+    const { isTW, items: fetchedItems } = await fetchMenu();
     if (!activeTableId) return;
 
     const saved = getSavedSession();
@@ -774,16 +784,18 @@ function OrderContent() {
 
           await fetchPreviousOrders(savedPhone);
           setShowOrdered(true);
+          isSessionRestored.current = true;
           return;
         }
       }
       // No active order → show info modal (pre-filled)
       setShowInfoModal(true);
+      isSessionRestored.current = true;
       return;
     }
 
-    // Different table → update tableId, show modal for new bill
-    if (saved?.tableId && saved.tableId !== urlTableId) {
+    // Different table → update tableId, keep name/phone, show modal for new bill
+    if (urlTableId && saved?.tableId && saved.tableId !== urlTableId) {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({
           customerName: saved.customerName || '',
@@ -794,14 +806,16 @@ function OrderContent() {
       } catch (err) { }
       setPreviousOrders([]);
       setShowInfoModal(true);
+      isSessionRestored.current = true;
       return;
     }
 
     // No session or different day → fresh start
-    if (!saved?.tableId || saved.date !== getTodayStr()) {
+    if (!saved || saved.date !== getTodayStr() || (!saved.tableId && urlTableId)) {
       clearSession();
       setPreviousOrders([]);
       setShowInfoModal(true);
+      isSessionRestored.current = true;
       return;
     }
 
@@ -812,10 +826,13 @@ function OrderContent() {
       .eq('id', activeTableId)
       .single();
 
-    if (tableData?.status !== 'occupied') {
+    // Chỉ xoá session (reset) nếu bàn trống VÀ khách đã từng gửi bill trước đó (đã ăn xong)
+    // Nếu khách mới vào bàn (chưa có orderId) thì giữ lại để không mất giỏ hàng đang chọn
+    if (tableData?.status !== 'occupied' && saved?.orderId) {
       clearSession();
       setPreviousOrders([]);
       setShowInfoModal(true);
+      isSessionRestored.current = true;
       return;
     }
 
@@ -829,12 +846,25 @@ function OrderContent() {
       clearSession();
       setPreviousOrders([]);
       setShowInfoModal(true);
+      isSessionRestored.current = true;
       return;
     }
 
-    // Nếu có giỏ hàng lưu sẵn thì nạp vào
+    // Nếu có giỏ hàng lưu sẵn thì nạp vào (phục hồi từ dạng nén)
     if (saved?.cart && Array.isArray(saved.cart) && saved.cart.length > 0) {
-      setCart(saved.cart);
+      const expandedCart = saved.cart.map(c => {
+        const originalItem = fetchedItems?.find(m => m.id === c.id || m.id === c.i);
+        if (!originalItem) return null;
+        return {
+          ...originalItem,
+          quantity: c.quantity || c.q || 1,
+          _optionKey: c._optionKey || c.pk,
+          _options: c._options || c.po,
+          _note: c._note || c.pn,
+          price: c.price !== undefined ? c.price : (c.p !== undefined ? c.p : originalItem.price)
+        };
+      }).filter(Boolean);
+      if (expandedCart.length > 0) setCart(expandedCart);
     }
 
     // Cập nhật lại thời gian hoạt động để gia hạn
@@ -843,6 +873,7 @@ function OrderContent() {
     // Session + bill còn active → skip modal, fetch orders
     setShowInfoModal(false);
     fetchPreviousOrders(saved.customerPhone);
+    isSessionRestored.current = true;
   }
 
   async function fetchMenu() {
@@ -883,7 +914,7 @@ function OrderContent() {
     const { data: gifts } = await supabase.from('menu_items').select('id, name, price, image_url, options').eq('is_gift_item', true).eq('is_available', true);
     setGiftItems(gifts || []);
     setLoading(false);
-    return isTW;
+    return { isTW, items: items || [] };
   }
 
   async function fetchPreviousOrders(phone = null) {
