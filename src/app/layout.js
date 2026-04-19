@@ -66,6 +66,18 @@ export default function RootLayout({ children }) {
         {/* ── Preconnect cải thiện tốc độ load ── */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="dns-prefetch" href="https://supabase.co" />
+
+        {/* ── Suppress Zalo injected script errors in Development ── */}
+        <script dangerouslySetInnerHTML={{
+          __html: `
+            window.addEventListener('error', function(e) {
+              if (e.message && e.message.includes('zaloJSV2')) {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+              }
+            }, true);
+          `
+        }} />
       </head>
       <body
         style={{
