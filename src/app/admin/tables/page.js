@@ -101,6 +101,7 @@ export default function TablesPage() {
   const [desktopMenuCat, setDesktopMenuCat] = useState('all');
   const [desktopInlinePriceItem, setDesktopInlinePriceItem] = useState(null); // item.id being edited
   const [desktopInlinePriceVal, setDesktopInlinePriceVal] = useState(''); // temp price string
+  const [editingQty, setEditingQty] = useState({}); // { itemId: stringValue }
   const [confirmPayment, setConfirmPayment] = useState(null); // { table, totalAmount }
   const [paymentModal, setPaymentModal] = useState(null); // { table, total }
   const [bankAccounts, setBankAccounts] = useState([]);
@@ -1623,24 +1624,28 @@ export default function TablesPage() {
                             {/* Qty controls */}
                             <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, paddingTop: 1 }}>
                               <button onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, -1)} style={{ width: 22, height: 22, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem' }}>−</button>
-                              <span
-                                onClick={async () => {
-                                  const { value: newQty } = await Swal.fire({
-                                    title: 'Nhập số lượng',
-                                    input: 'number',
-                                    inputValue: item.quantity,
-                                    inputAttributes: { min: 1, step: 1 },
-                                    showCancelButton: true,
-                                    confirmButtonText: 'Lưu',
-                                    cancelButtonText: 'Hủy'
-                                  });
-                                  if (newQty && Number(newQty) > 0 && Number(newQty) !== item.quantity) {
-                                    const change = Number(newQty) - item.quantity;
-                                    await updateItemQuantity(item._orderId, item.id, item.quantity, change);
+                              <input
+                                type="number"
+                                min={1}
+                                value={editingQty[item.id] !== undefined ? editingQty[item.id] : item.quantity}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setEditingQty(prev => ({ ...prev, [item.id]: val }));
+                                }}
+                                onBlur={async () => {
+                                  const val = editingQty[item.id];
+                                  if (val !== undefined) {
+                                    const parsed = parseInt(val, 10);
+                                    if (!isNaN(parsed) && parsed > 0 && parsed !== item.quantity) {
+                                      const change = parsed - item.quantity;
+                                      await updateItemQuantity(item._orderId, item.id, item.quantity, change);
+                                    }
+                                    setEditingQty(prev => { const next = { ...prev }; delete next[item.id]; return next; });
                                   }
                                 }}
-                                style={{ fontSize: '0.85rem', fontWeight: 600, minWidth: 18, textAlign: 'center', cursor: 'pointer', color: '#2563eb', padding: '0 6px' }}
-                              >{item.quantity}</span>
+                                onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                                style={{ width: 32, fontSize: '0.85rem', fontWeight: 600, textAlign: 'center', border: '1px solid transparent', background: 'transparent', outline: 'none', color: '#2563eb', padding: 0 }}
+                              />
                               <button onClick={() => updateItemQuantity(item._orderId, item.id, item.quantity, 1)} style={{ width: 22, height: 22, border: '1px solid #d1d5db', borderRadius: 4, background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.85rem' }}>+</button>
                             </div>
 
@@ -2590,28 +2595,66 @@ export default function TablesPage() {
                   orders[selectedTable.merged_with || selectedTable.id].map((order, idx) => (
                     <div key={order.id} className="order-detail-card">
                       {/* Customer name header per bill */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 0 8px', borderBottom: '1px solid #f3f4f6', marginBottom: 4 }}>
-                        {orders[selectedTable.merged_with || selectedTable.id].length > 1 && (
-                          <span style={{ fontSize: '0.7rem', background: '#2563eb', color: 'white', borderRadius: 10, padding: '1px 7px', fontWeight: 700 }}>
-                            #{idx + 1}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 0 6px', borderBottom: '1px solid #f3f4f6', marginBottom: 4 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          {orders[selectedTable.merged_with || selectedTable.id].length > 1 && (
+                            <span style={{ fontSize: '0.7rem', background: '#2563eb', color: 'white', borderRadius: 10, padding: '1px 7px', fontWeight: 700 }}>
+                              #{idx + 1}
+                            </span>
+                          )}
+                          <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>
+                            👤 {order.customer_name}
                           </span>
-                        )}
-                        <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>
-                          👤 {order.customer_name}
-                        </span>
-                        {order.customer_phone && order.customer_phone !== 'Quản lý' && (
-                          <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>· {order.customer_phone}</span>
-                        )}
-                        {/* Status badge */}
-                        <span style={{
-                          fontSize: '0.68rem', fontWeight: 700, padding: '2px 7px', borderRadius: 20,
-                          background: order.status === 'pending' ? '#fef3c7' : order.status === 'preparing' ? '#dbeafe' : order.status === 'completed' ? '#dcfce7' : '#f3f4f6',
-                          color: order.status === 'pending' ? '#d97706' : order.status === 'preparing' ? '#2563eb' : order.status === 'completed' ? '#16a34a' : '#6b7280',
-                        }}>
-                          {order.status === 'pending' ? 'Chờ' : order.status === 'preparing' ? 'Đang làm' : order.status === 'completed' ? 'Xong' : order.status}
-                        </span>
+                          {order.customer_phone && order.customer_phone !== 'Quản lý' && (
+                            <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>· {order.customer_phone}</span>
+                          )}
+                          {/* Status badge */}
+                          <span style={{
+                            fontSize: '0.68rem', fontWeight: 700, padding: '2px 7px', borderRadius: 20,
+                            background: order.status === 'pending' ? '#fef3c7' : order.status === 'preparing' ? '#dbeafe' : order.status === 'completed' ? '#dcfce7' : '#f3f4f6',
+                            color: order.status === 'pending' ? '#d97706' : order.status === 'preparing' ? '#2563eb' : order.status === 'completed' ? '#16a34a' : '#6b7280',
+                          }}>
+                            {order.status === 'pending' ? 'Chờ' : order.status === 'preparing' ? 'Đang làm' : order.status === 'completed' ? 'Xong' : order.status}
+                          </span>
+                        </div>
                         {/* Cancel this single bill */}
-                        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexShrink: 0 }}>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', marginTop: 2, width: '100%' }}>
+                          {/* In bếp */}
+                          <button
+                            onClick={async () => {
+                              const { success, error: printErr } = await sendSmartPrintJobs(supabase, order.id);
+                              if (success) {
+                                Swal.fire({ title: 'Đã gửi bếp!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
+                              } else {
+                                Swal.fire('Lỗi in bếp', printErr || 'Không kết nối được máy in bếp', 'error');
+                              }
+                            }}
+                            style={{ background: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 6, color: '#16a34a', cursor: 'pointer', padding: '3px 8px', fontSize: '0.7rem', fontWeight: 700 }}
+                          >In Bếp</button>
+                          {/* In bill */}
+                          <button
+                            onClick={async () => {
+                              const items = (order.order_items || []);
+                              const total = items.reduce((s, i) => s + i.unit_price * i.quantity, 0);
+                              const { isConfirmed } = await Swal.fire({
+                                title: '🖨 In hoá đơn?',
+                                html: `In hoá đơn bàn <strong>${selectedTable?.table_number}</strong>?<br/><span style="color:#dc2626;font-weight:700;font-size:1.1em">Tổng: ${total.toLocaleString('vi-VN')}đ</span>`,
+                                showCancelButton: true,
+                                confirmButtonText: '🖨 In ngay',
+                                cancelButtonText: 'Huỷ',
+                                confirmButtonColor: '#2563eb',
+                                reverseButtons: true,
+                              });
+                              if (!isConfirmed) return;
+                              const { success, error: printErr } = await sendTableSummaryPrintJob(supabase, [order.id]);
+                              if (success) {
+                                Swal.fire({ title: 'Đã gửi lệnh in!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
+                              } else {
+                                Swal.fire('Lỗi in', printErr || 'Không kết nối được máy in', 'error');
+                              }
+                            }}
+                            style={{ background: '#fff7ed', border: '1.5px solid #fed7aa', borderRadius: 6, color: '#ea580c', cursor: 'pointer', padding: '3px 8px', fontSize: '0.7rem', fontWeight: 700 }}
+                          >🖨 In</button>
                           <button
                             onClick={async () => {
                               const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
@@ -2863,26 +2906,28 @@ export default function TablesPage() {
                                   >
                                     <Minus size={13} strokeWidth={2} />
                                   </button>
-                                  <span
-                                    onClick={async () => {
-                                      const { value: newQty } = await Swal.fire({
-                                        title: 'Nhập số lượng',
-                                        input: 'number',
-                                        inputValue: item.quantity,
-                                        inputAttributes: { min: 1, step: 1 },
-                                        showCancelButton: true,
-                                        confirmButtonText: 'Lưu',
-                                        cancelButtonText: 'Hủy'
-                                      });
-                                      if (newQty && Number(newQty) > 0 && Number(newQty) !== item.quantity) {
-                                        const change = Number(newQty) - item.quantity;
-                                        await updateItemQuantity(order.id, item.id, item.quantity, change);
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    value={editingQty[item.id] !== undefined ? editingQty[item.id] : item.quantity}
+                                    onChange={e => {
+                                      const val = e.target.value;
+                                      setEditingQty(prev => ({ ...prev, [item.id]: val }));
+                                    }}
+                                    onBlur={async () => {
+                                      const val = editingQty[item.id];
+                                      if (val !== undefined) {
+                                        const parsed = parseInt(val, 10);
+                                        if (!isNaN(parsed) && parsed > 0 && parsed !== item.quantity) {
+                                          const change = parsed - item.quantity;
+                                          await updateItemQuantity(order.id, item.id, item.quantity, change);
+                                        }
+                                        setEditingQty(prev => { const next = { ...prev }; delete next[item.id]; return next; });
                                       }
                                     }}
-                                    style={{ fontSize: '1rem', fontWeight: 600, color: '#2563eb', minWidth: 16, textAlign: 'center', cursor: 'pointer', padding: '0 8px' }}
-                                  >
-                                    {item.quantity}
-                                  </span>
+                                    onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                                    style={{ width: 36, fontSize: '1rem', fontWeight: 600, color: '#2563eb', textAlign: 'center', border: '1px solid transparent', background: 'transparent', outline: 'none', padding: 0 }}
+                                  />
                                   <button
                                     onClick={() => updateItemQuantity(order.id, item.id, item.quantity, 1)}
                                     style={{
@@ -3319,23 +3364,32 @@ export default function TablesPage() {
                             <button onClick={() => decreaseFromDraft(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
                               <Minus size={13} strokeWidth={2.5} />
                             </button>
-                            <span
-                              onClick={async (e) => {
+                            <input
+                              type="number"
+                              min={1}
+                              value={editingQty[`draft_${item.id}`] !== undefined ? editingQty[`draft_${item.id}`] : qty}
+                              onChange={e => {
                                 e.stopPropagation();
-                                const { value: newQty } = await Swal.fire({
-                                  title: 'Nhập số lượng',
-                                  input: 'number',
-                                  inputValue: qty,
-                                  inputAttributes: { min: 1, step: 1 },
-                                  showCancelButton: true,
-                                  confirmButtonText: 'Lưu',
-                                  cancelButtonText: 'Hủy'
-                                });
-                                if (newQty && Number(newQty) > 0 && Number(newQty) !== qty) {
-                                  setDraftQuantity(item.id, Number(newQty));
+                                setEditingQty(prev => ({ ...prev, [`draft_${item.id}`]: e.target.value }));
+                              }}
+                              onClick={e => e.stopPropagation()}
+                              onBlur={e => {
+                                e.stopPropagation();
+                                const val = editingQty[`draft_${item.id}`];
+                                if (val !== undefined) {
+                                  const parsed = parseInt(val, 10);
+                                  if (!isNaN(parsed) && parsed > 0 && parsed !== qty) {
+                                    setDraftQuantity(item.id, parsed);
+                                  }
+                                  setEditingQty(prev => { const next = { ...prev }; delete next[`draft_${item.id}`]; return next; });
                                 }
                               }}
-                              style={{ minWidth: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#2563eb', cursor: 'pointer', padding: '0 6px' }}>{qty}</span>
+                              onKeyDown={e => {
+                                e.stopPropagation();
+                                if (e.key === 'Enter') e.target.blur();
+                              }}
+                              style={{ width: 32, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#2563eb', border: '1px solid transparent', background: 'transparent', outline: 'none', padding: 0 }}
+                            />
                             <button onClick={() => addToDraft(item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #2563eb', background: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}>
                               <Plus size={13} strokeWidth={2.5} />
                             </button>
@@ -3389,23 +3443,32 @@ export default function TablesPage() {
                                 <button onClick={() => decreaseFromDraft(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
                                   <Minus size={13} strokeWidth={2.5} />
                                 </button>
-                                <span
-                                  onClick={async (e) => {
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={editingQty[`draft_${item.id}`] !== undefined ? editingQty[`draft_${item.id}`] : qty}
+                                  onChange={e => {
                                     e.stopPropagation();
-                                    const { value: newQty } = await Swal.fire({
-                                      title: 'Nhập số lượng',
-                                      input: 'number',
-                                      inputValue: qty,
-                                      inputAttributes: { min: 1, step: 1 },
-                                      showCancelButton: true,
-                                      confirmButtonText: 'Lưu',
-                                      cancelButtonText: 'Hủy'
-                                    });
-                                    if (newQty && Number(newQty) > 0 && Number(newQty) !== qty) {
-                                      setDraftQuantity(item.id, Number(newQty));
+                                    setEditingQty(prev => ({ ...prev, [`draft_${item.id}`]: e.target.value }));
+                                  }}
+                                  onClick={e => e.stopPropagation()}
+                                  onBlur={e => {
+                                    e.stopPropagation();
+                                    const val = editingQty[`draft_${item.id}`];
+                                    if (val !== undefined) {
+                                      const parsed = parseInt(val, 10);
+                                      if (!isNaN(parsed) && parsed > 0 && parsed !== qty) {
+                                        setDraftQuantity(item.id, parsed);
+                                      }
+                                      setEditingQty(prev => { const next = { ...prev }; delete next[`draft_${item.id}`]; return next; });
                                     }
                                   }}
-                                  style={{ minWidth: 18, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#2563eb', cursor: 'pointer', padding: '0 6px' }}>{qty}</span>
+                                  onKeyDown={e => {
+                                    e.stopPropagation();
+                                    if (e.key === 'Enter') e.target.blur();
+                                  }}
+                                  style={{ width: 32, textAlign: 'center', fontWeight: 700, fontSize: '0.9rem', color: '#2563eb', border: '1px solid transparent', background: 'transparent', outline: 'none', padding: 0 }}
+                                />
                                 <button onClick={() => addToDraft(item)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #2563eb', background: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}>
                                   <Plus size={13} strokeWidth={2.5} />
                                 </button>

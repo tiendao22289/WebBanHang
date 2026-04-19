@@ -410,7 +410,7 @@ function OrderContent() {
   const justPaidRef = useRef(false); // track payment to avoid double-banner
   const locationRef = useRef(null); // { lat, lng, accuracy } — thu thập im lặng
 
-  // ─── LocalStorage helpers ───
+  // ─── LocalStorage & Cookie helpers ───
   const STORAGE_KEY = 'order_session';
 
   function getTodayStr() {
@@ -418,18 +418,41 @@ function OrderContent() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
-  function saveSession(name, phone, address = '', orderId = null) {
+  function setCookieFallback(key, value) {
+    // 7200 seconds = 2 hours
+    document.cookie = `${key}=${encodeURIComponent(value)}; max-age=7200; path=/;`;
+  }
+  function getCookieFallback(key) {
+    const name = key + "=";
+    const decodedCookie = decodeURIComponent(document.cookie);
+    const ca = decodedCookie.split(';');
+    for(let i = 0; i <ca.length; i++) {
+      let c = ca[i];
+      while (c.charAt(0) === ' ') c = c.substring(1);
+      if (c.indexOf(name) === 0) return c.substring(name.length, c.length);
+    }
+    return null;
+  }
+
+  function saveSession(name, phone, address = '', orderId = null, cartData = null) {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      // Nếu không truyền cartData, mặc định dùng mảng rỗng để tránh lưu cart cũ của khách trước (khi clear)
+      // Nếu có dùng State `cart` trong hook thì có thể bị closure, nên truyền rõ `cartData` từ useEffect
+      const payload = {
         tableId: urlTableId,
         customerName: name,
         customerPhone: phone,
         deliveryAddress: address,
         orderId,
+        cart: cartData,
         date: getTodayStr(),
-      }));
+        lastActive: Date.now(),
+      };
+      const jsonStr = JSON.stringify(payload);
+      localStorage.setItem(STORAGE_KEY, jsonStr);
+      setCookieFallback(STORAGE_KEY, jsonStr);
     } catch (error) {
-      console.warn('LocalStorage error:', error);
+      console.warn('Session save error:', error);
     }
   }
 
@@ -438,24 +461,36 @@ function OrderContent() {
     const saved = getSavedSession();
     if (saved) {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        const payload = {
           customerName: saved.customerName,
           customerPhone: saved.customerPhone,
           deliveryAddress: saved.deliveryAddress,
-        }));
+        };
+        const jsonStr = JSON.stringify(payload);
+        localStorage.setItem(STORAGE_KEY, jsonStr);
+        setCookieFallback(STORAGE_KEY, jsonStr);
       } catch (error) {
-        console.warn('LocalStorage error:', error);
+        console.warn('Session clear error:', error);
       }
     }
   }
 
   function getSavedSession() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      let raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) raw = getCookieFallback(STORAGE_KEY);
       if (!raw) return null;
       return JSON.parse(raw);
     } catch { return null; }
   }
+
+  useEffect(() => {
+    // Tự động lưu giỏ hàng mỗi khi có thay đổi (nếu đang có phiên hợp lệ)
+    const saved = getSavedSession();
+    if (saved && saved.tableId === urlTableId && saved.customerName) {
+      saveSession(saved.customerName, saved.customerPhone, saved.deliveryAddress, saved.orderId, cart);
+    }
+  }, [cart]);
 
   // Body scroll lock effect
   useEffect(() => {
@@ -784,32 +819,26 @@ function OrderContent() {
       return;
     }
 
-    // Kiểm tra session còn hợp lệ không (còn bill đang chờ/làm)
-    const savedOrderId = saved?.orderId;
-    let hasActiveBill = false;
-    if (savedOrderId) {
-      const { data: ord } = await supabase
-        .from('orders').select('status').eq('id', savedOrderId).maybeSingle();
-      hasActiveBill = ord?.status === 'pending' || ord?.status === 'preparing';
-    } else if (saved?.customerPhone) {
-      // Fallback: tìm theo phone nếu chưa có orderId
-      const now2 = new Date();
-      const startOfDay2 = new Date(now2.getFullYear(), now2.getMonth(), now2.getDate()).toISOString();
-      const { data: activeOrds } = await supabase
-        .from('orders').select('id')
-        .eq('table_id', activeTableId).eq('customer_phone', saved.customerPhone)
-        .gte('created_at', startOfDay2)
-        .in('status', ['pending', 'preparing']);
-      hasActiveBill = (activeOrds?.length || 0) > 0;
-    }
+    // Kiểm tra session còn hợp lệ không (tương tác trong vòng 2 tiếng)
+    const TWO_HOURS = 2 * 60 * 60 * 1000;
+    const lastActive = saved?.lastActive || 0;
+    const isSessionValid = (Date.now() - lastActive) < TWO_HOURS;
 
-    if (!hasActiveBill) {
-      // Không còn bill active → clear session, show modal để đặt mới
+    if (!isSessionValid) {
+      // Quá 2 tiếng không tương tác → clear session, show modal để đặt mới
       clearSession();
       setPreviousOrders([]);
       setShowInfoModal(true);
       return;
     }
+
+    // Nếu có giỏ hàng lưu sẵn thì nạp vào
+    if (saved?.cart && Array.isArray(saved.cart) && saved.cart.length > 0) {
+      setCart(saved.cart);
+    }
+
+    // Cập nhật lại thời gian hoạt động để gia hạn
+    saveSession(saved.customerName, saved.customerPhone, saved.deliveryAddress, saved.orderId, saved.cart || []);
 
     // Session + bill còn active → skip modal, fetch orders
     setShowInfoModal(false);
@@ -1029,6 +1058,27 @@ function OrderContent() {
         return newQty <= 0 ? null : { ...c, quantity: newQty };
       }).filter(Boolean)
     );
+  }
+
+  function decreaseQuantityFromMenu(itemId) {
+    setCart(prev => {
+      let targetIdx = -1;
+      for (let i = prev.length - 1; i >= 0; i--) {
+        if (prev[i].id === itemId) {
+          targetIdx = i;
+          break;
+        }
+      }
+      if (targetIdx === -1) return prev;
+      const next = [...prev];
+      const newQty = next[targetIdx].quantity - 1;
+      if (newQty <= 0) {
+        next.splice(targetIdx, 1);
+      } else {
+        next[targetIdx] = { ...next[targetIdx], quantity: newQty };
+      }
+      return next;
+    });
   }
 
   // Promotion calculations
@@ -1760,22 +1810,11 @@ function OrderContent() {
                         <span className="co-item-price">{getItemDisplayPrice(item)}</span>
                       </div>
                       <div className="co-item-action">
-                        {item.options && item.options.length > 0 ? (
-                          /* Có options: luôn cho bấm + để chọn thêm variant */
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            {qty > 0 && (
-                              <span className="co-qty-badge">{qty}</span>
-                            )}
-                            <button className="co-add-btn" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
-                              <Plus size={18} />
-                            </button>
-                          </div>
-                        ) : qty > 0 ? (
-                          /* Không options: nút +/- bình thường */
+                        {qty > 0 ? (
                           <div className="co-qty-control" onClick={(e) => e.stopPropagation()}>
-                            <button onClick={() => updateQuantity(item.id, -1, null)}><Minus size={14} /></button>
+                            <button onClick={() => decreaseQuantityFromMenu(item.id)}><Minus size={14} /></button>
                             <span>{qty}</span>
-                            <button onClick={() => updateQuantity(item.id, 1, null)}><Plus size={14} /></button>
+                            <button onClick={() => addToCart(item)}><Plus size={14} /></button>
                           </div>
                         ) : (
                           <button className="co-add-btn" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
@@ -1805,21 +1844,11 @@ function OrderContent() {
                       )}
                       <div className="co-card-bottom">
                         <span className="co-item-price">{getItemDisplayPrice(item)}</span>
-                        {item.options && item.options.length > 0 ? (
-                          /* Grid — có options */
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                            {qty > 0 && (
-                              <span className="co-qty-badge co-qty-badge--sm">{qty}</span>
-                            )}
-                            <button className="co-add-btn small" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
-                              <Plus size={14} />
-                            </button>
-                          </div>
-                        ) : qty > 0 ? (
+                        {qty > 0 ? (
                           <div className="co-qty-control small" onClick={(e) => e.stopPropagation()}>
-                            <button onClick={() => updateQuantity(item.id, -1, null)}><Minus size={12} /></button>
+                            <button onClick={() => decreaseQuantityFromMenu(item.id)}><Minus size={12} /></button>
                             <span>{qty}</span>
-                            <button onClick={() => updateQuantity(item.id, 1, null)}><Plus size={12} /></button>
+                            <button onClick={() => addToCart(item)}><Plus size={12} /></button>
                           </div>
                         ) : (
                           <button className="co-add-btn small" onClick={(e) => { e.stopPropagation(); addToCart(item); }}>
