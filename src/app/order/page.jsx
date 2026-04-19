@@ -2137,47 +2137,48 @@ function OrderContent() {
           <div className="co-modal-overlay" onClick={() => setOptionModal(null)}>
             <div className="co-sheet" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh' }}>
               <div className="co-sheet-handle" />
-              <div className="co-sheet-header" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 0 }}>
-                {/* Hàng 1: Tên + X */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: '1.05rem', display: 'flex', alignItems: 'center', flexWrap: 'wrap' }}>
-                      {optionModal.name} {isGiftMode && <span style={{ fontSize: '0.75rem', color: '#16a34a', background: '#dcfce7', padding: '2px 6px', borderRadius: 4, marginLeft: 8 }}>🎁 Món Tặng</span>}
-                    </div>
-                    {optionModal.description ? (
-                      <div style={{ fontSize: '0.78rem', color: '#ea580c', marginTop: 2, lineHeight: 1.4 }}>{optionModal.description}</div>
-                    ) : null}
-                  </div>
-                  <button onClick={() => setOptionModal(null)} style={{ flexShrink: 0 }}><X size={20} /></button>
+              <div className="co-sheet-header" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6, padding: '12px 16px' }}>
+                {/* Hàng 1: Chỉ có nút X bên phải */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button onClick={() => setOptionModal(null)} style={{ border: 'none', background: '#f3f4f6', borderRadius: '50%', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={16} color="#4b5563" /></button>
                 </div>
-                {/* Hàng 2: Giá + - qty + */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
-                  <div style={{ color: isGiftMode ? '#16a34a' : '#2563eb', fontWeight: 700, fontSize: '1.05rem' }}>
+
+                {/* Hàng 2: Tên & Giá */}
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '1.1rem', lineHeight: 1.3, marginBottom: 4 }}>
+                    {optionModal.name} {isGiftMode && <span style={{ fontSize: '0.75rem', color: '#16a34a', background: '#dcfce7', padding: '2px 6px', borderRadius: 4, marginLeft: 8 }}>🎁 Món Tặng</span>}
+                  </div>
+                  {optionModal.description ? (
+                    <div style={{ fontSize: '0.8rem', color: '#ea580c', marginBottom: 4, lineHeight: 1.4 }}>{optionModal.description}</div>
+                  ) : null}
+                  <div style={{ color: isGiftMode ? '#16a34a' : '#2563eb', fontWeight: 800, fontSize: '1.1rem' }}>
                     {isGiftMode ? 'Miễn phí — 0đ' : `${computeModalPrice(optionModal.price, optionModal.options, selectedOpts).toLocaleString('vi-VN')}đ`}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <button onClick={() => { setOptionQty(Math.max(1, (Number(optionQty) || 1) - 1)); setModalError(''); }} style={{ width: 32, height: 32, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={16} /></button>
-                    <input
-                      type="number"
-                      min={1}
-                      value={optionQty}
-                      onChange={e => {
-                        const val = e.target.value;
-                        if (val === '') {
-                          setOptionQty('');
-                          setModalError('');
-                        } else {
-                          const v = parseInt(val, 10);
-                          if (!isNaN(v) && v >= 1) { setOptionQty(v); setModalError(''); }
-                        }
-                      }}
-                      onBlur={() => {
-                        if (optionQty === '' || optionQty < 1) setOptionQty(1);
-                      }}
-                      style={{ width: 44, textAlign: 'center', fontWeight: 700, fontSize: '1.05rem', border: '1.5px solid #e5e7eb', borderRadius: 8, padding: '3px 4px', outline: 'none' }}
-                    />
-                    <button onClick={() => { setOptionQty((Number(optionQty) || 0) + 1); setModalError(''); }} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={16} /></button>
-                  </div>
+                </div>
+
+                {/* Hàng 3: Số lượng (giữa, nhỏ lại một chút) */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8 }}>
+                  <button onClick={() => { setOptionQty(Math.max(1, (Number(optionQty) || 1) - 1)); setModalError(''); }} style={{ width: 28, height: 28, borderRadius: '50%', border: '1px solid #d1d5db', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Minus size={14} /></button>
+                  <input
+                    type="number"
+                    min={1}
+                    value={optionQty}
+                    onChange={e => {
+                      const val = e.target.value;
+                      if (val === '') {
+                        setOptionQty('');
+                        setModalError('');
+                      } else {
+                        const v = parseInt(val, 10);
+                        if (!isNaN(v) && v >= 1) { setOptionQty(v); setModalError(''); }
+                      }
+                    }}
+                    onBlur={() => {
+                      if (optionQty === '' || optionQty < 1) setOptionQty(1);
+                    }}
+                    style={{ width: 40, textAlign: 'center', fontWeight: 700, fontSize: '1rem', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 4px', outline: 'none' }}
+                  />
+                  <button onClick={() => { setOptionQty((Number(optionQty) || 0) + 1); setModalError(''); }} style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={14} /></button>
                 </div>
               </div>
               <div className="co-sheet-body">
