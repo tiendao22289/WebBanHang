@@ -386,6 +386,7 @@ function OrderContent() {
   const [giftItems, setGiftItems] = useState([]); // is_gift_item items
   const [giftCart, setGiftCart] = useState([]); // { id, name, price:0, is_gift:true }
   const [showGiftModal, setShowGiftModal] = useState(false);
+  const [giftPromptPending, setGiftPromptPending] = useState(false); // đang chờ khách chọn quà để gửi đơn
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showPromoPopup, setShowPromoPopup] = useState(false);
   const [promoCallout, setPromoCallout] = useState(null); // { text, isGift } | null
@@ -1165,6 +1166,15 @@ function OrderContent() {
 
   async function submitOrder() {
     if (cart.length === 0 || submitting) return;
+
+    // Nếu còn slot quà chưa chọn → nhắc khách chọn trước
+    if (promoConfig.enabled && availableGiftSlots > 0 && !giftPromptPending) {
+      setGiftPromptPending(true);
+      setShowGiftModal(true);
+      return;
+    }
+
+    setGiftPromptPending(false);
     setSubmitting(true);
 
     try {
@@ -2017,8 +2027,28 @@ function OrderContent() {
                 ))}
               </div>
               <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <button onClick={() => setShowGiftModal(false)} style={{ width: '100%', padding: '11px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>
-                  Đóng
+                {giftPromptPending && (
+                  <button
+                    onClick={() => { setShowGiftModal(false); submitOrder(); }}
+                    style={{
+                      width: '100%', padding: '13px',
+                      background: 'linear-gradient(135deg, #16a34a, #15803d)',
+                      border: 'none', borderRadius: 10, fontWeight: 700,
+                      cursor: 'pointer', color: 'white', fontSize: '1rem',
+                      boxShadow: '0 4px 12px rgba(22,163,74,0.35)',
+                    }}
+                  >
+                    ✅ Xác nhận & Gửi đơn
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setShowGiftModal(false);
+                    if (giftPromptPending) { setGiftPromptPending(false); submitOrder(); }
+                  }}
+                  style={{ width: '100%', padding: '11px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}
+                >
+                  {giftPromptPending ? 'Bỏ qua, gửi không cần quà' : 'Đóng'}
                 </button>
               </div>
             </div>
