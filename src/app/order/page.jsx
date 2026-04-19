@@ -497,7 +497,7 @@ function OrderContent() {
     if (!isSessionRestored.current) return;
     // Tự động lưu giỏ hàng mỗi khi có thay đổi (nếu đang có phiên hợp lệ)
     const saved = getSavedSession();
-    if (saved && saved.tableId === urlTableId && saved.customerName) {
+    if (saved && saved.tableId === urlTableId) {
       saveSession(saved.customerName, saved.customerPhone, saved.deliveryAddress, saved.orderId, cart);
     }
   }, [cart]);
