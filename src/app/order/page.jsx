@@ -2176,7 +2176,7 @@ function OrderContent() {
                     onBlur={() => {
                       if (optionQty === '' || optionQty < 1) setOptionQty(1);
                     }}
-                    style={{ width: 40, textAlign: 'center', fontWeight: 700, fontSize: '1rem', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 4px', outline: 'none' }}
+                    style={{ width: 56, textAlign: 'center', fontWeight: 700, fontSize: '1rem', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 4px', outline: 'none' }}
                   />
                   <button onClick={() => { setOptionQty((Number(optionQty) || 0) + 1); setModalError(''); }} style={{ width: 28, height: 28, borderRadius: '50%', border: 'none', background: '#2563eb', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Plus size={14} /></button>
                 </div>
