@@ -723,7 +723,7 @@ export default function TablesPage() {
       const initialOptions = {};
       let initialPrice = null;
       menuItem.options.forEach(opt => {
-        if (opt.choices && opt.choices.length > 0) {
+        if (opt.name && opt.choices && opt.choices.length > 0) {
           initialOptions[opt.name] = opt.choices[0];
           if (initialPrice === null && opt.prices?.[0] != null && Number(opt.prices[0]) > 0) {
             initialPrice = Number(opt.prices[0]);
@@ -1155,7 +1155,7 @@ export default function TablesPage() {
     let minP = null;
     if (item.options && Array.isArray(item.options)) {
       for (const opt of item.options) {
-        if (opt.choices && opt.choices.length > 0 && opt.prices) {
+        if (opt.name && opt.choices && opt.choices.length > 0 && opt.prices) {
           const validPrices = opt.prices.map(p => p != null && String(p).trim() !== '' ? Number(p) : NaN).filter(p => !isNaN(p) && p >= 0);
           if (validPrices.length > 0) {
             const currentMin = Math.min(...validPrices);
@@ -3459,7 +3459,7 @@ export default function TablesPage() {
                   </div>
                 </div>
 
-                {optionModalItem.options && optionModalItem.options.map((opt, idx) => (
+                {optionModalItem.options && optionModalItem.options.filter(opt => opt.name && opt.choices).map((opt, idx) => (
                   <div key={idx} style={{ marginBottom: 8, marginTop: idx === 0 ? 0 : 4 }}>
                     <div className="options-group-title">{opt.name}</div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginTop: 6 }}>
