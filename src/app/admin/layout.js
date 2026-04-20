@@ -15,6 +15,7 @@ import {
   Settings,
   Menu,
   X,
+  QrCode,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './admin.css';
@@ -27,6 +28,7 @@ const supabase = createClient(
 const ALL_NAV = [
   { href: '/admin/tables', label: 'Quản lý bàn', icon: LayoutGrid },
   { href: '/admin/menu', label: 'Thực đơn', icon: UtensilsCrossed },
+  { href: '/admin/qr', label: 'Mã QR', icon: QrCode },
 
   { href: '/admin/customers', label: 'Khách hàng', icon: UsersRound },
   { href: '/admin/notes', label: 'Sổ tay', icon: ChefHat },

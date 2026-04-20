@@ -1,29 +1,34 @@
-# Kế hoạch tính năng: Mã Bill cố định cho Thanh toán
+# Kế hoạch Thêm Tính Năng "Tạo Mã QR Tùy Chỉnh"
 
-Dưới đây là ý hiểu của mình về yêu cầu của bạn:
+Tính năng này cho phép nhân viên/quản lý tạo nhanh một mã QR thanh toán với số tiền tùy chỉnh trên giao diện chính mà không cần gắn với một bàn cụ thể nào. 
 
-## 1. Phân tích yêu cầu (Ý hiểu)
-- **Vấn đề hiện tại:** Hiện giờ khi bấm "Thanh toán" trên máy tính, cửa sổ đầu tiên (chọn Tiền mặt / Chuyển khoản) chưa có mã bill. Chỉ khi bấm tiếp vào "Chuyển khoản" thì hệ thống mới sinh ra một mã giao dịch (`transactionCode`) ngẫu nhiên và lưu vào database. Mỗi lần tắt mở lại "Chuyển khoản" nó lại sinh mã mới (nếu code cũ xoá state).
-- **Yêu cầu mới:**
-  1. Ngay khi thu ngân bấm nút "Thanh toán" (ở giao diện chính), hệ thống sẽ hiển thị một **Mã Bill** trên cửa sổ popup đầu tiên.
-  2. Mã Bill này sẽ được sử dụng làm nội dung chuyển khoản nếu khách chọn trả bằng QR/Chuyển khoản.
-  3. Mã Bill này là **Cố định cho đơn hàng hiện tại**: Nếu thu ngân lỡ tay bấm tắt popup thanh toán đi, rồi bấm mở lại (cho cùng bàn đó, đơn đó) thì hệ thống vẫn lấy lại Mã Bill cũ đã tạo lúc nãy chứ không đẻ ra mã mới. Chỉ khi nào chưa có mã thì mới tạo mới.
+## 1. Phân tích yêu cầu (Đã cập nhật)
+- **Vị trí hiển thị:** Trên thanh menu chính (navbar) dưới dạng một nút/mục mới có icon QR Code.
+- **Tính năng chính:**
+  - Mở ra một trang hoặc giao diện để tạo QR.
+  - **Số tiền (Amount):** Mặc định là `0`, cho phép người dùng tự nhập số tiền cần thu.
+  - **Nội dung thanh toán (Info / Transaction Code):** Không cho phép tự gõ tay nữa. Hệ thống sẽ **tự động sinh mã ngẫu nhiên** (ví dụ: `HD8A2B9C`) giống hệt như cách mã cũ hoạt động ở phần thanh toán bàn.
+  - Giữ nguyên toàn bộ các thuật toán tạo QR và lưu trữ như phần "Chuyển khoản" (xoay vòng tài khoản, hiển thị QR code chuẩn VietQR, bắt sự kiện SePay).
 
-## 2. Câu hỏi xác nhận
-> [!IMPORTANT]
-> **Q: Về việc lưu trữ Mã Bill để dùng lại:**
-> Hiện tại khi tạo mã QR, hệ thống đã tự động lưu mã giao dịch này vào bảng `payment_transactions` (với trạng thái `pending`). 
-> Để đáp ứng yêu cầu "tắt đi mở lại vẫn giữ nguyên mã", mình sẽ làm theo logic sau:
-> - Khi bấm "Thanh toán", hệ thống sẽ query bảng `payment_transactions` xem có mã nào đang `pending` cho bàn/đơn hàng này chưa. 
-> - Nếu CÓ -> Tái sử dụng hiển thị mã đó.
-> - Nếu KHÔNG -> Sinh mã mới (ví dụ `A8F3K9`) và lưu vào bảng.
-> 
-> Nhờ cách này, dù thu ngân có **F5 tải lại trang web** thì lúc bấm thanh toán lại nó vẫn giữ nguyên mã cũ. Bạn thấy logic này đã chuẩn 100% ý bạn chưa?
+## 2. Chi tiết thực hiện
 
-## 3. Cách thức triển khai (Sau khi bạn OK)
-1. **Sửa Desktop & Mobile UI:** Tách đoạn code sinh `transactionCode` và insert vào bảng `payment_transactions` ra thành một hàm dùng chung `getOrGenerateBillCode(orders)`.
-2. **Gọi hàm khi mở Popup:** Khi bấm nút "Thanh toán" (cả trên PC và Điện thoại), gọi hàm trên để lấy được `mã bill`.
-3. **Hiển thị lên UI:** Bổ sung dòng "Mã Bill: #ABCXYZ" trên màn hình Popup chọn phương thức thanh toán. Đưa thẳng mã này vào QR code ở màn hình tiếp theo.
-4. **Dọn dẹp State:** Đảm bảo khi bấm nút "Quay lại" hoặc "Tắt", state vẫn không làm loạn database mà chỉ đóng giao diện.
+### A. Giao diện (UI)
+1. **Thêm mục vào Menu Chính:**
+   - Cập nhật `src/app/admin/layout.js`: Thêm `{ href: '/admin/qr', label: 'Tạo mã QR', icon: QrCode }` vào mảng `ALL_NAV`.
+2. **Tạo trang `/admin/qr/page.jsx`:**
+   - Giao diện gồm:
+     - Input **Số tiền** (nhập số, hiển thị định dạng VND).
+     - Text hiển thị **Nội dung thanh toán**: Chỉ hiển thị mã tự động sinh (được tạo khi mới mở trang hoặc khi bấm tạo lại).
+   - Nút **"Cập nhật mã QR"** (để tải lại ảnh QR sau khi nhập số tiền mới).
+   - Vùng hiển thị ảnh QR (sử dụng hàm `buildQrUrl`).
+   - Giao diện trạng thái realtime: Hiển thị "Đang chờ thanh toán..." và báo "✅ Thanh toán thành công" giống hệt màn hình thanh toán.
 
-Bạn đọc lại phần ý hiểu và câu hỏi xem đã khớp với thiết kế trong đầu bạn chưa nhé! Phản hồi "OK" hoặc chỉnh sửa thêm nếu cần.
+### B. Logic (Thuật toán)
+1. Lấy thông tin tài khoản ngân hàng hoạt động hiện tại (hàm `getActiveAccount()`).
+2. Sinh `transaction_code` (mã ngẫu nhiên 8 ký tự `ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789`) và dùng nó làm nội dung chuyển khoản.
+3. Khi quét mã QR hoặc khi tạo, lưu thông tin vào bảng `payment_transactions` với `status: 'pending'`, `total_amount: <số_tiền_đã_nhập>`, `transaction_code: <mã_sinh_tự_động>`, `order_ids: 'custom_qr'`.
+4. Subscription: Lắng nghe sự thay đổi của bảng `payment_transactions` thông qua Supabase Realtime để biết khi nào dòng đó chuyển thành `status: 'completed'`.
+
+## Các file dự kiến thay đổi
+- `src/app/admin/layout.js` (Thêm icon QR vào menu)
+- `src/app/admin/qr/page.jsx` (Giao diện và logic tạo mã QR)
