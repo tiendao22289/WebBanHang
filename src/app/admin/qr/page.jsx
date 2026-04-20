@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { getActiveAccount, buildQrUrl } from '@/lib/bankAccount';
-import { QrCode, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { QrCode, RefreshCw, CheckCircle2, Banknote } from 'lucide-react';
 import Swal from 'sweetalert2';
 
 const supabase = createClient(
@@ -45,6 +45,67 @@ export default function QrGeneratorPage() {
     let code = '';
     for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
     return code;
+  };
+
+  const handleCashPayment = async () => {
+    let currentAccount = qrAccount;
+    
+    // Lấy tài khoản nếu chưa có
+    if (!currentAccount) {
+      setIsGenerating(true);
+      const { account, overLimit, shouldHideStats } = await getActiveAccount();
+      if (account) {
+        currentAccount = { ...account, overLimit, shouldHideStats };
+        setQrAccount(currentAccount);
+      }
+      setIsGenerating(false);
+    }
+
+    if (!currentAccount) {
+      Swal.fire('Lỗi', 'Không tìm thấy tài khoản ngân hàng hoạt động!', 'error');
+      return;
+    }
+
+    const numAmount = parseInt(amount.replace(/\D/g, ''), 10) || 0;
+    if (numAmount <= 0) return;
+
+    try {
+      setIsGenerating(true);
+      
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: existing } = await supabase.from('bank_daily_totals')
+        .select('id, total_amount')
+        .eq('account_id', currentAccount.id).eq('date', today).maybeSingle();
+        
+      if (existing) {
+        await supabase.from('bank_daily_totals').update({ total_amount: existing.total_amount + numAmount }).eq('id', existing.id);
+      } else {
+        await supabase.from('bank_daily_totals').insert({ account_id: currentAccount.id, date: today, total_amount: numAmount });
+      }
+
+      Swal.fire({
+        icon: 'success',
+        title: '✅ Nhận tiền mặt!',
+        html: `Đã nhận <b style="color:#16a34a">${numAmount.toLocaleString('vi-VN')}đ</b> tiền mặt.`,
+        timer: 3000,
+        timerProgressBar: true,
+        showConfirmButton: false,
+        position: 'top-end',
+        toast: true,
+      });
+
+      // Reset form
+      setAmount('');
+      setPaymentStatus('idle');
+      setTransactionCode('');
+      if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
+
+    } catch (err) {
+      console.error(err);
+      Swal.fire('Lỗi', err.message, 'error');
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const handleGenerateQR = async () => {
@@ -245,6 +306,21 @@ export default function QrGeneratorPage() {
             >
               {isGenerating ? <RefreshCw className="animate-spin" size={20} /> : <QrCode size={20} />}
               Tạo mã QR
+            </button>
+            
+            <button
+              onClick={handleCashPayment}
+              disabled={isGenerating || !amount}
+              style={{
+                background: isGenerating || !amount ? '#cbd5e1' : '#16a34a',
+                color: 'white', border: 'none', borderRadius: 12, padding: '14px',
+                fontSize: '1rem', fontWeight: 700, cursor: isGenerating || !amount ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                transition: 'background 0.2s', marginTop: -6
+              }}
+            >
+              <Banknote size={20} />
+              Nhận tiền mặt
             </button>
           </div>
 

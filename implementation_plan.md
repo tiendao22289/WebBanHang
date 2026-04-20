@@ -1,34 +1,34 @@
-# Kế hoạch Thêm Tính Năng "Tạo Mã QR Tùy Chỉnh"
+# Kế hoạch Thêm Nút "Nhận Tiền Mặt"
 
-Tính năng này cho phép nhân viên/quản lý tạo nhanh một mã QR thanh toán với số tiền tùy chỉnh trên giao diện chính mà không cần gắn với một bàn cụ thể nào. 
-
-## 1. Phân tích yêu cầu (Đã cập nhật)
-- **Vị trí hiển thị:** Trên thanh menu chính (navbar) dưới dạng một nút/mục mới có icon QR Code.
-- **Tính năng chính:**
-  - Mở ra một trang hoặc giao diện để tạo QR.
-  - **Số tiền (Amount):** Mặc định là `0`, cho phép người dùng tự nhập số tiền cần thu.
-  - **Nội dung thanh toán (Info / Transaction Code):** Không cho phép tự gõ tay nữa. Hệ thống sẽ **tự động sinh mã ngẫu nhiên** (ví dụ: `HD8A2B9C`) giống hệt như cách mã cũ hoạt động ở phần thanh toán bàn.
-  - Giữ nguyên toàn bộ các thuật toán tạo QR và lưu trữ như phần "Chuyển khoản" (xoay vòng tài khoản, hiển thị QR code chuẩn VietQR, bắt sự kiện SePay).
+## 1. Phân tích yêu cầu
+- **Vị trí hiển thị:** Nằm ngay bên dưới hoặc bên cạnh nút "Tạo mã QR" hiện tại trên trang `/admin/qr`.
+- **Điều kiện bắt buộc:** Người dùng phải nhập số tiền (> 0) thì mới cho phép bấm nút "Nhận tiền mặt" (giống như điều kiện tạo QR).
+- **Tính năng và cơ chế hoạt động (Giống 100% thanh toán Tiền mặt ở mục Quản lý bàn):**
+  - Khi bấm vào "Nhận tiền mặt", hệ thống sẽ lấy tài khoản ngân hàng đang hoạt động hiện tại (thông qua hàm `getActiveAccount`).
+  - Cộng trực tiếp số tiền vừa nhập vào định mức trong ngày của tài khoản đó (`bank_daily_totals`).
+  - Lưu ý: Không cần tạo mã QR hay lưu vào `payment_transactions` chờ webhook, mà hệ thống sẽ xử lý cộng tiền trực tiếp và báo thành công luôn.
+  - Hiển thị thông báo "✅ Nhận tiền mặt thành công!" và xóa trắng form để sẵn sàng cho lần tiếp theo.
 
 ## 2. Chi tiết thực hiện
 
-### A. Giao diện (UI)
-1. **Thêm mục vào Menu Chính:**
-   - Cập nhật `src/app/admin/layout.js`: Thêm `{ href: '/admin/qr', label: 'Tạo mã QR', icon: QrCode }` vào mảng `ALL_NAV`.
-2. **Tạo trang `/admin/qr/page.jsx`:**
-   - Giao diện gồm:
-     - Input **Số tiền** (nhập số, hiển thị định dạng VND).
-     - Text hiển thị **Nội dung thanh toán**: Chỉ hiển thị mã tự động sinh (được tạo khi mới mở trang hoặc khi bấm tạo lại).
-   - Nút **"Cập nhật mã QR"** (để tải lại ảnh QR sau khi nhập số tiền mới).
-   - Vùng hiển thị ảnh QR (sử dụng hàm `buildQrUrl`).
-   - Giao diện trạng thái realtime: Hiển thị "Đang chờ thanh toán..." và báo "✅ Thanh toán thành công" giống hệt màn hình thanh toán.
+### A. Giao diện (UI) tại `src/app/admin/qr/page.jsx`
+- Thêm một nút **"💵 Nhận tiền mặt"** (màu xanh lá cây) bên cạnh hoặc bên dưới nút "Tạo mã QR" (màu xanh dương).
+- Trạng thái của nút (Bật/Tắt) sẽ phụ thuộc vào ô nhập số tiền (Nếu chưa nhập tiền sẽ bị mờ và không bấm được).
 
-### B. Logic (Thuật toán)
-1. Lấy thông tin tài khoản ngân hàng hoạt động hiện tại (hàm `getActiveAccount()`).
-2. Sinh `transaction_code` (mã ngẫu nhiên 8 ký tự `ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789`) và dùng nó làm nội dung chuyển khoản.
-3. Khi quét mã QR hoặc khi tạo, lưu thông tin vào bảng `payment_transactions` với `status: 'pending'`, `total_amount: <số_tiền_đã_nhập>`, `transaction_code: <mã_sinh_tự_động>`, `order_ids: 'custom_qr'`.
-4. Subscription: Lắng nghe sự thay đổi của bảng `payment_transactions` thông qua Supabase Realtime để biết khi nào dòng đó chuyển thành `status: 'completed'`.
+### B. Logic xử lý (Hàm `handleCashPayment`)
+1. Kiểm tra số tiền nhập vào có hợp lệ (> 0) không.
+2. Gọi hàm `getActiveAccount()` để lấy tài khoản đang nhận tiền (kèm `shouldHideStats`).
+3. Thực hiện logic cộng định mức (Giống `recordBankPayment`):
+   - Tìm bản ghi `bank_daily_totals` của tài khoản hiện tại trong ngày hôm nay.
+   - Nếu có, cộng thêm `amount`.
+   - Nếu chưa, tạo mới với `total_amount = amount`.
+4. Hiển thị thông báo (SweetAlert2) "💵 Nhận tiền mặt thành công!" với số tiền tương ứng (Màu xanh lá).
+5. Xóa trắng ô số tiền, mã giao dịch và trạng thái thanh toán để làm mới giao diện.
 
-## Các file dự kiến thay đổi
-- `src/app/admin/layout.js` (Thêm icon QR vào menu)
-- `src/app/admin/qr/page.jsx` (Giao diện và logic tạo mã QR)
+## User Review Required
+> [!IMPORTANT]
+> **Xác nhận luồng hoạt động:**
+> - Bấm **"Nhận tiền mặt"** -> Cộng ngay số tiền vào định mức của tài khoản đang xoay vòng hiện tại -> Báo thành công -> Xóa trắng form.
+> - Không lưu vào lịch sử hóa đơn bàn (vì đây là mục nhập số rời).
+>
+> Bạn xem qua mô tả trên, nếu thấy "OK" thì phản hồi lại để mình viết code nhé!
