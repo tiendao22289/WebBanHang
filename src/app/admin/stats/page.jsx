@@ -45,33 +45,8 @@ export default function StatsPage() {
       startDate.setDate(now.getDate() - 30);
     }
 
-    // Lấy các tài khoản đang "Hiển thị"
-    const { data: activeAccounts } = await supabase
-      .from('bank_accounts')
-      .select('id')
-      .eq('is_active', true);
-    
-    const activeAccountIds = activeAccounts ? activeAccounts.map(a => a.id) : [];
-
-    // Lấy tất cả giao dịch thuộc các tài khoản này
-    const { data: activeTxs } = await supabase
-      .from('payment_transactions')
-      .select('order_ids')
-      .in('account_id', activeAccountIds);
-
-    const activeOrderIds = new Set();
-    if (activeTxs) {
-      activeTxs.forEach(tx => {
-        if (tx.order_ids) {
-          tx.order_ids.split(',').forEach(id => activeOrderIds.add(id));
-        }
-      });
-    }
-
-    // Fetch orders in period (chỉ lấy transfer, completed/paid)
-    // - "Tiền mặt" không vào vì payment_method = 'cash'
-    // - "Huỷ đơn" không vào vì status = 'cancelled'
-    const { data: allTransferOrders } = await supabase
+    // Fetch orders in period (lấy cả cash và transfer, miễn là không bị ẩn khỏi thống kê)
+    const { data: allValidOrders } = await supabase
       .from('orders')
       .select(`
         *,
@@ -82,15 +57,14 @@ export default function StatsPage() {
       `)
       .gte('created_at', startDate.toISOString())
       .in('status', ['completed', 'paid'])
-      .eq('payment_method', 'transfer');
+      .is('is_hidden_from_stats', false); // Chỉ lấy các đơn hàng SỔ CHÍNH
 
-    if (!allTransferOrders) {
+    if (!allValidOrders) {
       setLoading(false);
       return;
     }
 
-    // Lọc chỉ giữ lại các đơn hàng thuộc tài khoản đang hiển thị
-    const ordersData = allTransferOrders.filter(order => activeOrderIds.has(order.id.toString()));
+    const ordersData = allValidOrders;
 
     // Total stats
     const totalRevenue = ordersData.reduce((sum, o) => sum + (o.total_amount || 0), 0);
@@ -164,8 +138,6 @@ export default function StatsPage() {
   }
 
   function formatPrice(price) {
-    if (price >= 1_000_000) return (price / 1_000_000).toFixed(1) + 'tr';
-    if (price >= 1_000) return (price / 1_000).toFixed(0) + 'k';
     return new Intl.NumberFormat('vi-VN').format(price) + 'đ';
   }
 

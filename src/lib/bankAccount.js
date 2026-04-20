@@ -25,11 +25,12 @@ export const BANK_IDS = {
 
 /**
  * Lấy tài khoản ngân hàng đang hoạt động theo logic:
- * 1. Lấy tất cả tài khoản is_active=true, sắp xếp theo sort_order ASC
+ * 1. Lấy TẤT CẢ tài khoản, sắp xếp ưu tiên: is_active=true lên đầu, sau đó theo sort_order ASC
  * 2. Chọn tài khoản đầu tiên chưa đạt hạn mức ngày (total < daily_limit)
- * 3. Nếu tất cả đã đạt hạn mức → trả về tài khoản cuối cùng + overLimit=true
+ * 3. Nếu tài khoản được chọn có is_active=false -> Đánh dấu ẩn khỏi thống kê (shouldHideStats = true)
+ * 4. Nếu tất cả đã đạt hạn mức → trả về tài khoản cuối cùng + overLimit=true + shouldHideStats=true
  *
- * @returns {{ account: object|null, overLimit: boolean }}
+ * @returns {{ account: object|null, overLimit: boolean, shouldHideStats: boolean }}
  */
 export async function getActiveAccount() {
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
@@ -37,11 +38,11 @@ export async function getActiveAccount() {
   const { data: accounts, error } = await supabase
     .from('bank_accounts')
     .select('*, bank_daily_totals(date, total_amount)')
-    .eq('is_active', true)
+    .order('is_active', { ascending: false })
     .order('sort_order', { ascending: true });
 
   if (error || !accounts || accounts.length === 0) {
-    return { account: null, overLimit: false };
+    return { account: null, overLimit: false, shouldHideStats: false };
   }
 
   // Tìm tài khoản đầu tiên chưa đạt hạn mức hôm nay
@@ -49,13 +50,17 @@ export async function getActiveAccount() {
     const todayRow = (acc.bank_daily_totals || []).find(r => r.date === today);
     const todayTotal = todayRow?.total_amount || 0;
     if (todayTotal < acc.daily_limit) {
-      return { account: acc, overLimit: false };
+      return { 
+        account: acc, 
+        overLimit: false, 
+        shouldHideStats: !acc.is_active // Nếu is_active=false thì ẩn thống kê
+      };
     }
   }
 
-  // Tất cả đều hết hạn mức → trả về tài khoản cuối cùng, đánh dấu overLimit
+  // Tất cả đều hết hạn mức → trả về tài khoản cuối cùng, đánh dấu overLimit và ẩn khỏi thống kê
   const last = accounts[accounts.length - 1];
-  return { account: last, overLimit: true };
+  return { account: last, overLimit: true, shouldHideStats: true };
 }
 
 /**

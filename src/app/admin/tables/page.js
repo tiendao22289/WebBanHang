@@ -280,6 +280,24 @@ export default function TablesPage() {
     }
   }, [tables]);
 
+  // Auto-fetch/generate bill code for Mobile when opening Table Detail
+  useEffect(() => {
+    let active = true;
+    if (paymentModal && !transactionCode && !qrAccount) {
+      const hostId = paymentModal.id;
+      const total = orders[hostId]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
+      if (total > 0) {
+        getActiveAccount().then(({ account }) => {
+          if (!active) return;
+          getOrGenerateBillCode(hostId, total, account?.id || null).then(code => {
+            if (active && code) setTransactionCode(code);
+          });
+        });
+      }
+    }
+    return () => { active = false; };
+  }, [paymentModal, transactionCode, qrAccount]); // Only re-run if these change
+
   // Payment Countdown Timer
   useEffect(() => {
     if (showTransfer && transactionCode && paymentCountdown > 0) {
@@ -426,14 +444,18 @@ export default function TablesPage() {
     fetchTables();
   }
 
-  async function completeTable(tableObj, paymentMethod = 'cash') {
+  async function completeTable(tableObj, paymentMethod = 'cash', shouldHideStats = false) {
     // Support both tableId (legacy) and tableObj
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
     const hostId = table.merged_with || table.id;
 
     await supabase
       .from('orders')
-      .update({ status: 'paid', payment_method: paymentMethod })
+      .update({ 
+        status: 'paid', 
+        payment_method: paymentMethod,
+        is_hidden_from_stats: shouldHideStats
+      })
       .eq('table_id', hostId)
       .in('status', ['pending', 'preparing', 'completed']);
 
@@ -447,31 +469,58 @@ export default function TablesPage() {
     fetchTables();
   }
 
-  // ── Smart bank account rotation (strict: no buffer) ──
-  async function openPaymentModal(table, total) {
-    const { account, overLimit } = await getActiveAccount();
-    const finalAcc = account ? { ...account, overLimit } : null;
-    setQrAccount(finalAcc);
+  // Lấy hoặc sinh mã Bill Code cố định cho đơn hàng
+  async function getOrGenerateBillCode(hostId, total, finalAccId = null) {
+    const tableBills = orders[hostId] || [];
+    if (tableBills.length === 0) return null;
+    
+    // Sort to keep the string identical for the same set of orders
+    const orderIdsStr = [...tableBills].map(o => o.id).sort().join(',');
 
-    // Auto-generate transaction code for mobile workflow
+    // Check if there is already a pending transaction for exactly these orders
+    const { data: existingTx } = await supabase
+      .from('payment_transactions')
+      .select('transaction_code')
+      .eq('order_ids', orderIdsStr)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existingTx && existingTx.transaction_code) {
+      return existingTx.transaction_code;
+    }
+
+    // Nếu chưa có, sinh mã mới
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code = '';
     for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
 
-    const tableBills = orders[table.merged_with || table.id] || [];
-    const orderIdsStr = tableBills.map(o => o.id).join(',');
+    await supabase.from('payment_transactions').insert({
+      transaction_code: code,
+      order_ids: orderIdsStr,
+      account_id: finalAccId,
+      total_amount: total,
+      status: 'pending'
+    });
 
-    if (orderIdsStr) {
-      await supabase.from('payment_transactions').insert({
-        transaction_code: code,
-        order_ids: orderIdsStr,
-        account_id: finalAcc?.id || null,
-        total_amount: total
-      });
+    return code;
+  }
+
+  // ── Smart bank account rotation (strict: no buffer) ──
+  async function openPaymentModal(table, total) {
+    const { account, overLimit, shouldHideStats } = await getActiveAccount();
+    const finalAcc = account ? { ...account, overLimit, shouldHideStats } : null;
+    setQrAccount(finalAcc);
+
+    const hostId = table.merged_with || table.id;
+    const code = await getOrGenerateBillCode(hostId, total, finalAcc?.id || null);
+
+    if (code) {
+      setTransactionCode(code);
+      setShowTransfer(true);
+      setPaymentCountdown(300);
     }
-    setTransactionCode(code);
-    setShowTransfer(true);
-    setPaymentCountdown(300);
 
     setPaymentModal({ table, total });
   }
@@ -1756,9 +1805,13 @@ export default function TablesPage() {
                   🗑️ Huỷ đơn
                 </button>
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (!selectedTable) return;
-                    setConfirmPayment({ table: selectedTable, totalAmount });
+                    const hostId = selectedTable.merged_with || selectedTable.id;
+                    const { account } = await getActiveAccount();
+                    const code = await getOrGenerateBillCode(hostId, totalAmount, account?.id || null);
+                    setConfirmPayment({ table: selectedTable, totalAmount, transactionCode: code });
+                    if (code) setTransactionCode(code);
                   }}
                   style={{ flex: 2, padding: '10px', border: 'none', borderRadius: 8, background: '#2563eb', color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
                   💵 Thanh toán
@@ -2219,7 +2272,7 @@ export default function TablesPage() {
           const doTransferPayment = async () => {
             if (qrAccount) await recordBankPayment(qrAccount.id, total);
             closeModal();
-            await completeTable(table.id, 'transfer');
+            await completeTable(table.id, 'transfer', qrAccount ? qrAccount.shouldHideStats : false);
           };
 
           const doCancelOrder = async () => {
@@ -2261,24 +2314,12 @@ export default function TablesPage() {
           };
 
           const handleTransferClick = async () => {
-            // Chỉ sinh mã nếu chưa có
+            // Chỉ sinh mã nếu chưa có (thường đã tự auto-fetch ở useEffect)
             if (!transactionCode) {
-              const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-              let code = '';
-              for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
-
-              const tableBills = orders[table.merged_with || table.id] || [];
-              const orderIdsStr = tableBills.map(o => o.id).join(',');
-
-              if (orderIdsStr) {
-                await supabase.from('payment_transactions').insert({
-                  transaction_code: code,
-                  order_ids: orderIdsStr,
-                  account_id: qrAccount?.id || null,
-                  total_amount: total
-                });
-              }
-              setTransactionCode(code);
+              const hostId = table.merged_with || table.id;
+              const total = orders[hostId]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
+              const code = await getOrGenerateBillCode(hostId, total, qrAccount?.id || null);
+              if (code) setTransactionCode(code);
             }
             setShowTransfer(true);
             setPaymentCountdown(300);
@@ -2295,7 +2336,7 @@ export default function TablesPage() {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                   <div>
                     <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>💳 Thanh toán</div>
-                    <div style={{ fontSize: '0.82rem', color: '#64748b' }}>Bàn {table.table_number}</div>
+                    <div style={{ fontSize: '0.82rem', color: '#64748b' }}>Bàn {table.table_number}{transactionCode && ` • Mã Bill: #${transactionCode}`}</div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Tổng cộng</div>
@@ -3048,9 +3089,13 @@ export default function TablesPage() {
 
                       {/* Thanh toán — solid blue pill, widest */}
                       <button
-                        onClick={() => {
-                          const total = orders[selectedTable.merged_with || selectedTable.id]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
-                          setConfirmPayment({ table: selectedTable, totalAmount: total });
+                        onClick={async () => {
+                          const hostId = selectedTable.merged_with || selectedTable.id;
+                          const total = orders[hostId]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
+                          const { account } = await getActiveAccount();
+                          const code = await getOrGenerateBillCode(hostId, total, account?.id || null);
+                          setConfirmPayment({ table: selectedTable, totalAmount: total, transactionCode: code });
+                          if (code) setTransactionCode(code);
                         }}
                         style={{
                           flex: 2,
@@ -4023,6 +4068,7 @@ export default function TablesPage() {
                   </div>
                   <div style={{ fontSize: '0.95rem', color: '#6b7280', marginTop: 4 }}>
                     Bàn {confirmPayment.table.table_number}
+                    {confirmPayment.transactionCode && ` • Mã Bill: #${confirmPayment.transactionCode}`}
                   </div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
@@ -4039,7 +4085,11 @@ export default function TablesPage() {
                 {/* Tiền mặt Button */}
                 <div
                   onClick={async () => {
-                    await completeTable(confirmPayment.table, 'cash');
+                    const { account, shouldHideStats } = await getActiveAccount();
+                    if (account) {
+                      await recordBankPayment(account.id, confirmPayment.totalAmount);
+                    }
+                    await completeTable(confirmPayment.table, 'cash', shouldHideStats);
                     setConfirmPayment(null);
                     setSelectedTable(null);
                     setDesktopView('tables');
@@ -4149,7 +4199,7 @@ export default function TablesPage() {
                 <button
                   onClick={async () => {
                     await recordBankPayment(qrAccount.id, paymentModal.total);
-                    await completeTable(paymentModal.table, 'transfer');
+                    await completeTable(paymentModal.table, 'transfer', qrAccount.shouldHideStats);
                     setPaymentModal(null);
                     setConfirmPayment(null);
                     setTransactionCode(null);
