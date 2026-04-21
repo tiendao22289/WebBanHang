@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 import { getActiveAccount, buildQrUrl } from '@/lib/bankAccount';
-import { QrCode, RefreshCw, CheckCircle2, Banknote } from 'lucide-react';
+import { QrCode, RefreshCw, CheckCircle2, Banknote, X } from 'lucide-react';
 import Swal from 'sweetalert2';
 
 const supabase = createClient(
@@ -19,6 +20,7 @@ export default function QrGeneratorPage() {
   const [isGenerating, setIsGenerating] = useState(false);
 
   const subscriptionRef = useRef(null);
+  const router = useRouter();
 
   // Lấy tài khoản ngân hàng lúc mới vào trang
   useEffect(() => {
@@ -266,10 +268,19 @@ export default function QrGeneratorPage() {
             <div style={{ background: '#eff6ff', padding: 10, borderRadius: 12, color: '#2563eb' }}>
               <QrCode size={28} />
             </div>
-            <div>
+            <div style={{ flex: 1 }}>
               <h2 style={{ margin: 0, fontSize: '1.3rem', fontWeight: 800, color: '#0f172a' }}>Tạo mã QR Tùy chỉnh</h2>
               <p style={{ margin: '4px 0 0', fontSize: '0.85rem', color: '#64748b' }}>Nhập số tiền để sinh mã QR thanh toán nhanh</p>
             </div>
+            <button
+              onClick={() => router.push('/admin/tables')}
+              style={{ background: '#f1f5f9', border: 'none', borderRadius: '50%', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#64748b', transition: 'background 0.2s', flexShrink: 0 }}
+              onMouseOver={(e) => e.currentTarget.style.background = '#e2e8f0'}
+              onMouseOut={(e) => e.currentTarget.style.background = '#f1f5f9'}
+              title="Đóng"
+            >
+              <X size={20} strokeWidth={2.5} />
+            </button>
           </div>
 
           {/* Form */}

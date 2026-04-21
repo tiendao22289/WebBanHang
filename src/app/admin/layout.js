@@ -37,7 +37,7 @@ const ALL_NAV = [
   { href: '/admin/settings', label: 'Cài đặt', icon: Settings, adminOnly: true },
 ];
 
-const STAFF_ALLOWED_HREFS = ['/admin/tables', '/admin/payroll'];
+const STAFF_ALLOWED_HREFS = ['/admin/tables', '/admin/payroll', '/admin/qr'];
 const STAFF_NAV = ALL_NAV.filter(n => STAFF_ALLOWED_HREFS.some(a => n.href.startsWith(a)));
 
 export default function AdminLayout({ children }) {
