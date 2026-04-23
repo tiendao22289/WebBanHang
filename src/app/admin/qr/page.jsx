@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
-import { getActiveAccount, buildQrUrl } from '@/lib/bankAccount';
+import { getShadowAccount, buildQrUrl } from '@/lib/bankAccount';
 import { QrCode, RefreshCw, CheckCircle2, Banknote, X } from 'lucide-react';
 import Swal from 'sweetalert2';
 
@@ -11,6 +11,17 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cổng QR Tùy chỉnh — Chỉ dùng thẻ ẨN (is_active = false)
+//
+// NGUYÊN TẮC:
+//   - Tuyệt đối không chạm vào thẻ Hiển thị (is_active = true).
+//   - Tiền thu qua đây vẫn được lưu vào bank_daily_totals của thẻ Ẩn
+//     để phục vụ xoay vòng giữa các thẻ cá nhân (ví dụ: thẻ vợ, thẻ em...).
+//   - Không có bill nào (order) được tạo / cập nhật qua cổng này.
+//     → Không ảnh hưởng gì đến sổ sách thống kê / báo cáo S2a-HKD.
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function QrGeneratorPage() {
   const [amount, setAmount] = useState('');
@@ -22,13 +33,11 @@ export default function QrGeneratorPage() {
   const subscriptionRef = useRef(null);
   const router = useRouter();
 
-  // Lấy tài khoản ngân hàng lúc mới vào trang
+  // Lấy thẻ ẨN lúc mới vào trang
   useEffect(() => {
     async function init() {
-      const { account, overLimit, shouldHideStats } = await getActiveAccount();
-      if (account) {
-        setQrAccount({ ...account, overLimit, shouldHideStats });
-      }
+      const { account } = await getShadowAccount();
+      if (account) setQrAccount(account);
     }
     init();
   }, []);
@@ -49,41 +58,25 @@ export default function QrGeneratorPage() {
     return code;
   };
 
+  // ─── Nhận tiền mặt qua cổng QR (chỉ lưu vào thẻ ẨN, không tạo bill) ────
   const handleCashPayment = async () => {
-    let currentAccount = qrAccount;
-    
-    // Lấy tài khoản nếu chưa có
-    if (!currentAccount) {
-      setIsGenerating(true);
-      const { account, overLimit, shouldHideStats } = await getActiveAccount();
-      if (account) {
-        currentAccount = { ...account, overLimit, shouldHideStats };
-        setQrAccount(currentAccount);
-      }
-      setIsGenerating(false);
-    }
+    setIsGenerating(true);
 
-    if (!currentAccount) {
-      Swal.fire('Lỗi', 'Không tìm thấy tài khoản ngân hàng hoạt động!', 'error');
+    // Luôn lấy lại thẻ Ẩn mới nhất (phòng trường hợp vừa xoay vòng)
+    const { account } = await getShadowAccount();
+    if (!account) {
+      Swal.fire('Lỗi', 'Không tìm thấy thẻ ngân hàng phù hợp!', 'error');
+      setIsGenerating(false);
       return;
     }
+    setQrAccount(account);
 
     const numAmount = parseInt(amount.replace(/\D/g, ''), 10) || 0;
-    if (numAmount <= 0) return;
+    if (numAmount <= 0) { setIsGenerating(false); return; }
 
     try {
-      setIsGenerating(true);
-      
-      const today = new Date().toISOString().slice(0, 10);
-      const { data: existing } = await supabase.from('bank_daily_totals')
-        .select('id, total_amount')
-        .eq('account_id', currentAccount.id).eq('date', today).maybeSingle();
-        
-      if (existing) {
-        await supabase.from('bank_daily_totals').update({ total_amount: existing.total_amount + numAmount }).eq('id', existing.id);
-      } else {
-        await supabase.from('bank_daily_totals').insert({ account_id: currentAccount.id, date: today, total_amount: numAmount });
-      }
+      // Cộng tiền vào định mức thẻ Ẩn (để xoay vòng thẻ cá nhân)
+      await recordShadowPayment(account.id, numAmount);
 
       Swal.fire({
         icon: 'success',
@@ -96,7 +89,6 @@ export default function QrGeneratorPage() {
         toast: true,
       });
 
-      // Reset form
       setAmount('');
       setPaymentStatus('idle');
       setTransactionCode('');
@@ -110,54 +102,31 @@ export default function QrGeneratorPage() {
     }
   };
 
+  // ─── Tạo mã QR cho thẻ ẨN ────────────────────────────────────────────────
   const handleGenerateQR = async () => {
-    let currentAccount = qrAccount;
-    
-    // Lấy tài khoản nếu chưa có hoặc cập nhật tài khoản mới nhất
-    if (!currentAccount) {
-      setIsGenerating(true);
-      const { account, overLimit, shouldHideStats } = await getActiveAccount();
-      if (account) {
-        currentAccount = { ...account, overLimit, shouldHideStats };
-        setQrAccount(currentAccount);
-      }
-    }
+    setIsGenerating(true);
 
-    if (!currentAccount) {
+    // Luôn lấy thẻ Ẩn mới nhất
+    const { account } = await getShadowAccount();
+    if (!account) {
       setIsGenerating(false);
-      Swal.fire('Lỗi', 'Không tìm thấy tài khoản ngân hàng hoạt động! Vui lòng kiểm tra lại kết nối mạng hoặc thiết lập tài khoản.', 'error');
+      Swal.fire('Lỗi', 'Không tìm thấy thẻ ngân hàng phù hợp! Vui lòng thêm thẻ phụ trong phần Cài đặt.', 'error');
       return;
     }
+    setQrAccount(account);
 
     const numAmount = parseInt(amount.replace(/\D/g, ''), 10) || 0;
-    
-    setIsGenerating(true);
-    setPaymentStatus('idle');
 
     try {
       const newCode = generateCode();
       setTransactionCode(newCode);
-
-      // Lưu vào payment_transactions
-      const { error } = await supabase.from('payment_transactions').insert({
-        transaction_code: newCode,
-        order_ids: 'custom_qr',
-        account_id: currentAccount.id,
-        total_amount: numAmount,
-        status: 'pending'
-      });
-
-      if (error) throw error;
-
       setPaymentStatus('pending');
 
-      // Đăng ký lắng nghe sự kiện
-      if (subscriptionRef.current) {
-        supabase.removeChannel(subscriptionRef.current);
-      }
+      // Lắng nghe realtime để tự xác nhận khi khách chuyển khoản
+      if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
 
       subscriptionRef.current = supabase
-        .channel(`payment_status_${newCode}`)
+        .channel(`shadow_qr_${newCode}`)
         .on(
           'postgres_changes',
           {
@@ -166,8 +135,12 @@ export default function QrGeneratorPage() {
             table: 'payment_transactions',
             filter: `transaction_code=eq.${newCode}`,
           },
-          (payload) => {
+          async (payload) => {
             if (payload.new && payload.new.status === 'completed') {
+              // Cộng tiền vào thẻ Ẩn khi khách chuyển xong
+              if (numAmount > 0) {
+                await recordShadowPayment(account.id, numAmount);
+              }
               setPaymentStatus('completed');
               Swal.fire({
                 icon: 'success',
@@ -184,6 +157,15 @@ export default function QrGeneratorPage() {
         )
         .subscribe();
 
+      // Lưu transaction để theo dõi (dùng account_id của thẻ Ẩn)
+      await supabase.from('payment_transactions').insert({
+        transaction_code: newCode,
+        order_ids: 'shadow_qr',
+        account_id: account.id,
+        total_amount: numAmount,
+        status: 'pending',
+      });
+
     } catch (err) {
       console.error(err);
       Swal.fire('Lỗi', 'Không thể tạo mã QR: ' + err.message, 'error');
@@ -192,15 +174,33 @@ export default function QrGeneratorPage() {
     }
   };
 
+  // ─── Cộng tiền vào định mức của thẻ Ẩn (để xoay vòng thẻ cá nhân) ──────
+  async function recordShadowPayment(accountId, amount) {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: existing } = await supabase
+      .from('bank_daily_totals')
+      .select('id, total_amount')
+      .eq('account_id', accountId)
+      .eq('date', today)
+      .maybeSingle();
+
+    if (existing) {
+      await supabase
+        .from('bank_daily_totals')
+        .update({ total_amount: existing.total_amount + amount })
+        .eq('id', existing.id);
+    } else {
+      await supabase
+        .from('bank_daily_totals')
+        .insert({ account_id: accountId, date: today, total_amount: amount });
+    }
+  }
+
   // Format số tiền khi nhập
   const handleAmountChange = (e) => {
     let val = e.target.value.replace(/\D/g, '');
-    if (!val) {
-      setAmount('');
-      return;
-    }
-    const num = parseInt(val, 10);
-    setAmount(num.toLocaleString('vi-VN'));
+    if (!val) { setAmount(''); return; }
+    setAmount(parseInt(val, 10).toLocaleString('vi-VN'));
   };
 
   const handleCancel = async () => {
@@ -224,28 +224,18 @@ export default function QrGeneratorPage() {
       showCancelButton: true,
       confirmButtonText: 'Đã nhận',
       cancelButtonText: 'Chưa',
-      confirmButtonColor: '#16a34a'
+      confirmButtonColor: '#16a34a',
     });
     if (!isConfirmed) return;
 
     try {
       const numAmount = parseInt(amount.replace(/\D/g, ''), 10) || 0;
-      
-      // Update transaction status
+
       await supabase.from('payment_transactions').update({ status: 'completed' }).eq('transaction_code', transactionCode);
-      
-      // Record to bank daily totals
+
+      // Cộng tiền vào thẻ Ẩn
       if (qrAccount && numAmount > 0) {
-        const today = new Date().toISOString().slice(0, 10);
-        const { data: existing } = await supabase.from('bank_daily_totals')
-          .select('id, total_amount')
-          .eq('account_id', qrAccount.id).eq('date', today).maybeSingle();
-          
-        if (existing) {
-          await supabase.from('bank_daily_totals').update({ total_amount: existing.total_amount + numAmount }).eq('id', existing.id);
-        } else {
-          await supabase.from('bank_daily_totals').insert({ account_id: qrAccount.id, date: today, total_amount: numAmount });
-        }
+        await recordShadowPayment(qrAccount.id, numAmount);
       }
 
       setPaymentStatus('completed');
@@ -270,7 +260,11 @@ export default function QrGeneratorPage() {
             </div>
             <div style={{ flex: 1 }}>
               <h2 style={{ margin: 0, fontSize: '1.3rem', fontWeight: 800, color: '#0f172a' }}>Tạo mã QR Tùy chỉnh</h2>
-              <p style={{ margin: '4px 0 0', fontSize: '0.85rem', color: '#64748b' }}>Nhập số tiền để sinh mã QR thanh toán nhanh</p>
+              <p style={{ margin: '4px 0 0', fontSize: '0.85rem', color: '#64748b' }}>
+                {qrAccount
+                  ? `Tài khoản: ${qrAccount.bank_name} - ${qrAccount.account_number}`
+                  : 'Nhập số tiền để sinh mã QR thanh toán nhanh'}
+              </p>
             </div>
             <button
               onClick={() => router.push('/admin/tables')}

@@ -308,7 +308,7 @@ export default function TablesPage() {
     }
   }, [showTransfer, transactionCode, paymentCountdown]);
 
-  // Realtime subscription for auto-confirm payment
+  // Realtime subscription for auto-confirm payment (Chuyển khoản)
   useEffect(() => {
     if (showTransfer && transactionCode) {
       const channel = supabase
@@ -318,12 +318,16 @@ export default function TablesPage() {
           schema: 'public',
           table: 'payment_transactions',
           filter: `transaction_code=eq.${transactionCode}`
-        }, (payload) => {
+        }, async (payload) => {
           if (payload.new && payload.new.status === 'completed') {
-            // Success
+            // Đóng bill + ghi nhận định mức + xử lý is_hidden_from_stats
+            // paymentModal.table chứa thông tin bàn cần đóng
+            if (paymentModal?.table) {
+              await completeTable(paymentModal.table, 'transfer');
+            }
             Swal.fire({
               title: 'Thành công',
-              text: 'Hệ thống đã nhận được thanh toán!',
+              text: 'Hệ thống đã nhận được thanh toán chuyển khoản!',
               icon: 'success',
               timer: 2000,
               showConfirmButton: false,
@@ -347,7 +351,7 @@ export default function TablesPage() {
         supabase.removeChannel(channel);
       };
     }
-  }, [showTransfer, transactionCode, fetchTables]);
+  }, [showTransfer, transactionCode, paymentModal, fetchTables]);
 
   useEffect(() => {
     fetchTables();
@@ -448,6 +452,41 @@ export default function TablesPage() {
     // Support both tableId (legacy) and tableObj
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
     const hostId = table.merged_with || table.id;
+
+    // ─── Kiểm tra hạn mức & ghi tiền vào thẻ phù hợp ───────────────────────────
+    // THIẾT KẾ HAI GIAI ĐOẠN:
+    //   GĐ1 (Thẻ Chính còn hạn mức):   ghi vào Thẻ A → bill VÀO thống kê ✅
+    //   GĐ2 (Thẻ Chính đầy, đóng băng): ghi vào Thẻ Dự Phòng (B/C/D) để
+    //     xoay vòng theo định mức riêng của từng thẻ → bill ẨN khỏi thống kê 🔴
+    try {
+      const { data: ordersToPay } = await supabase
+        .from('orders')
+        .select('total_amount')
+        .eq('table_id', hostId)
+        .in('status', ['pending', 'preparing', 'completed']);
+
+      const totalAmount = (ordersToPay || []).reduce((sum, o) => sum + (o.total_amount || 0), 0);
+
+      if (totalAmount > 0) {
+        const { account, overLimit, shouldHideStats: autoHide } = await getActiveAccount();
+
+        if (account) {
+          // Luôn cộng tiền vào thẻ được chỉ định:
+          //  - GĐ1: ghi vào Thẻ Chính (Thẻ A) để theo dõi định mức ngày
+          //  - GĐ2: ghi vào Thẻ Dự Phòng (Thẻ B/C/D) để xoay vòng giữa các thẻ
+          await recordBankPayment(account.id, totalAmount);
+        }
+
+        // Đồng bộ trạng thái ẩn/hiện: ưu tiên shouldHideStats từ caller,
+        // nếu caller không set thì dùng giá trị từ getActiveAccount()
+        if (!shouldHideStats && autoHide) {
+          shouldHideStats = autoHide;
+        }
+      }
+    } catch (err) {
+      console.error('[completeTable] Error updating bank totals:', err);
+    }
+    // ─────────────────────────────────────────────────────────────────────────────
 
     await supabase
       .from('orders')
@@ -4083,13 +4122,10 @@ export default function TablesPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
                 {/* Tiền mặt Button */}
+                {/* completeTable() tự xử lý: check hạn mức → cộng bank_daily_totals → gán is_hidden_from_stats */}
                 <div
                   onClick={async () => {
-                    const { account, shouldHideStats } = await getActiveAccount();
-                    if (account) {
-                      await recordBankPayment(account.id, confirmPayment.totalAmount);
-                    }
-                    await completeTable(confirmPayment.table, 'cash', shouldHideStats);
+                    await completeTable(confirmPayment.table, 'cash');
                     setConfirmPayment(null);
                     setSelectedTable(null);
                     setDesktopView('tables');
