@@ -1117,38 +1117,58 @@ function OrderContent() {
   }
 
   // Promotion calculations
-  // qualifyingQty được tính bằng cách gom nhóm số lượng theo menu_item_id từ cả giỏ hàng và các đơn đã gửi
+  // qualifyingQty được tính bằng cách lấy tổng số lượng / divisor của từng lựa chọn
   const qualifyingQty = (() => {
     if (!promoConfig.enabled) return 0;
     
-    // Gom nhóm số lượng
-    const qtyByItem = {};
-    
+    let totalPoints = 0;
+
+    const getDivisor = (menuItem, itemOptions) => {
+      if (!menuItem?.counts_for_promotion) return null;
+      let divisor = null;
+      // 1. Tìm divisor theo tuỳ chọn khách chọn
+      if (itemOptions && Array.isArray(itemOptions) && menuItem.options) {
+        for (const opt of itemOptions) {
+          const menuOpt = menuItem.options.find(o => o.name === opt.name);
+          if (menuOpt && menuOpt.choices && menuOpt.promoDivisors) {
+            const choiceIdx = menuOpt.choices.indexOf(opt.choice);
+            if (choiceIdx !== -1 && menuOpt.promoDivisors[choiceIdx]) {
+              divisor = Number(menuOpt.promoDivisors[choiceIdx]);
+              if (!isNaN(divisor) && divisor > 0) break;
+            }
+          }
+        }
+      }
+      // 2. Fallback về divisor mặc định của món
+      if (!divisor || isNaN(divisor) || divisor <= 0) {
+        const promoOpt = (menuItem.options || []).find(o => o.__promo_divisor);
+        divisor = promoOpt ? promoOpt.__promo_divisor : 1;
+      }
+      return divisor;
+    };
+
     // 1. Từ giỏ hàng (local)
     cart.forEach(item => {
-      qtyByItem[item.id] = (qtyByItem[item.id] || 0) + item.quantity;
+      const menuItem = menuItems.find(m => m.id === item.id);
+      const divisor = getDivisor(menuItem, item._options);
+      if (divisor) {
+        totalPoints += item.quantity / divisor;
+      }
     });
     
     // 2. Từ các đơn đã gửi
     (previousOrders || []).forEach(order => {
       (order.order_items || []).forEach(oi => {
         if (!oi.is_gift) {
-          qtyByItem[oi.menu_item_id] = (qtyByItem[oi.menu_item_id] || 0) + (oi.quantity || 0);
+          const menuItem = menuItems.find(m => m.id === oi.menu_item_id);
+          const divisor = getDivisor(menuItem, oi.item_options);
+          if (divisor) {
+            totalPoints += (oi.quantity || 0) / divisor;
+          }
         }
       });
     });
 
-    // 3. Tính điểm khuyến mãi
-    let totalPoints = 0;
-    Object.entries(qtyByItem).forEach(([itemId, totalQty]) => {
-      const menuItem = menuItems.find(m => m.id === itemId);
-      if (menuItem?.counts_for_promotion) {
-        const promoOpt = (menuItem.options || []).find(o => o.__promo_divisor);
-        const divisor = promoOpt ? promoOpt.__promo_divisor : 1;
-        totalPoints += Math.floor(totalQty / divisor);
-      }
-    });
-    
     return totalPoints;
   })();
 

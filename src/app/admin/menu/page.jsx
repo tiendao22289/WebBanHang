@@ -320,6 +320,7 @@ export default function MenuPage() {
           prices: opt.prices || Array(opt.choices?.length || 0).fill(null),
           choiceCategories: opt.choiceCategories || Array(opt.choices?.length || 0).fill(''),
           hiddenChoices: opt.hiddenChoices || Array(opt.choices?.length || 0).fill(false),
+          promoDivisors: opt.promoDivisors || Array(opt.choices?.length || 0).fill(''),
         })),
       });
     } else {
@@ -330,13 +331,14 @@ export default function MenuPage() {
         image_url: '', is_available: true,
         counts_for_promotion: false, is_gift_item: false, promo_divisor: 1,
         options: [
-          { name: 'LOẠI', choices: [''], prices: [50000], choiceCategories: [''], hiddenChoices: [false] },
+          { name: 'LOẠI', choices: [''], prices: [50000], choiceCategories: [''], hiddenChoices: [false], promoDivisors: [''] },
           {
             name: 'KHẨU VỊ',
             choices: ['Bình Thường', 'Làm Cay', 'Không Cay', 'Xào Mặn', 'Xào Ngọt', 'Ít ớt', 'Cay vừa'],
             prices: [null, null, null, null, null, null, null],
             choiceCategories: ['', '', '', '', '', '', ''],
             hiddenChoices: [false, false, false, false, false, false, false],
+            promoDivisors: ['', '', '', '', '', '', ''],
           },
         ],
       });
@@ -359,6 +361,9 @@ export default function MenuPage() {
           .filter((_, ci) => opt.choices[ci]?.trim()),
         hiddenChoices: opt.choices
           .map((c, ci) => c.trim() ? (opt.hiddenChoices?.[ci] ?? false) : false)
+          .filter((_, ci) => opt.choices[ci]?.trim()),
+        promoDivisors: opt.choices
+          .map((c, ci) => c.trim() ? (opt.promoDivisors?.[ci] ?? '') : '')
           .filter((_, ci) => opt.choices[ci]?.trim()),
       }))
       .filter(opt => opt.name && opt.choices.length > 0);
@@ -426,7 +431,7 @@ export default function MenuPage() {
   function addOption() {
     setItemForm(prev => ({
       ...prev,
-      options: [...prev.options, { name: '', choices: [''], prices: [null], choiceCategories: [''], hiddenChoices: [false] }]
+      options: [...prev.options, { name: '', choices: [''], prices: [null], choiceCategories: [''], hiddenChoices: [false], promoDivisors: [''] }]
     }));
   }
 
@@ -451,6 +456,8 @@ export default function MenuPage() {
     newOptions[optIndex].choiceCategories.push('');
     if (!newOptions[optIndex].hiddenChoices) newOptions[optIndex].hiddenChoices = [];
     newOptions[optIndex].hiddenChoices.push(false);
+    if (!newOptions[optIndex].promoDivisors) newOptions[optIndex].promoDivisors = [];
+    newOptions[optIndex].promoDivisors.push('');
     setItemForm({ ...itemForm, options: newOptions });
   }
 
@@ -473,6 +480,7 @@ export default function MenuPage() {
     if (newOptions[optIndex].prices) newOptions[optIndex].prices.splice(choiceIndex, 1);
     if (newOptions[optIndex].choiceCategories) newOptions[optIndex].choiceCategories.splice(choiceIndex, 1);
     if (newOptions[optIndex].hiddenChoices) newOptions[optIndex].hiddenChoices.splice(choiceIndex, 1);
+    if (newOptions[optIndex].promoDivisors) newOptions[optIndex].promoDivisors.splice(choiceIndex, 1);
     setItemForm({ ...itemForm, options: newOptions });
   }
 
@@ -489,6 +497,13 @@ export default function MenuPage() {
     const newOptions = [...itemForm.options];
     if (!newOptions[optIndex].choiceCategories) newOptions[optIndex].choiceCategories = [];
     newOptions[optIndex].choiceCategories[choiceIndex] = categoryId;
+    setItemForm({ ...itemForm, options: newOptions });
+  }
+
+  function updateChoicePromoDivisor(optIndex, choiceIndex, value) {
+    const newOptions = [...itemForm.options];
+    if (!newOptions[optIndex].promoDivisors) newOptions[optIndex].promoDivisors = [];
+    newOptions[optIndex].promoDivisors[choiceIndex] = value === '' ? '' : parseInt(value) || '';
     setItemForm({ ...itemForm, options: newOptions });
   }
 
@@ -854,17 +869,18 @@ export default function MenuPage() {
                     </div>
 
                     <div style={{ padding: '10px 12px' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 50px', gap: 6, marginBottom: 6 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: itemForm.counts_for_promotion ? '1.5fr 1fr 1.5fr 60px 50px' : '1.7fr 1.3fr 1.6fr 50px', gap: 6, marginBottom: 6 }}>
                         <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tên lựa chọn</span>
                         <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Giá (đ)</span>
                         <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Danh mục in</span>
+                        {itemForm.counts_for_promotion && <span style={{ fontSize: '0.68rem', color: '#92400e', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', title: 'Số lượng / 1 Khuyến Mãi' }}>SL/1 KM</span>}
                         <span />
                       </div>
 
                       {opt.choices.map((choice, choiceIndex) => {
                         const isHidden = opt.hiddenChoices?.[choiceIndex];
                         return (
-                        <div key={choiceIndex} style={{ display: 'grid', gridTemplateColumns: '1.7fr 1.3fr 1.6fr 50px', gap: 6, marginBottom: 6, alignItems: 'center', opacity: isHidden ? 0.5 : 1 }}>
+                        <div key={choiceIndex} style={{ display: 'grid', gridTemplateColumns: itemForm.counts_for_promotion ? '1.5fr 1fr 1.5fr 60px 50px' : '1.7fr 1.3fr 1.6fr 50px', gap: 6, marginBottom: 6, alignItems: 'center', opacity: isHidden ? 0.5 : 1 }}>
                           <input
                             className="input input-sm"
                             value={choice}
@@ -888,6 +904,18 @@ export default function MenuPage() {
                             <option value="">--</option>
                             {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                           </select>
+                          {itemForm.counts_for_promotion && (
+                            <input
+                              className="input input-sm"
+                              type="number"
+                              min="1"
+                              value={opt.promoDivisors?.[choiceIndex] ?? ''}
+                              onChange={(e) => updateChoicePromoDivisor(optIndex, choiceIndex, e.target.value)}
+                              placeholder="-"
+                              style={{ minWidth: 0, borderColor: '#fde68a', background: '#fffbeb', textAlign: 'center', fontSize: '0.85rem', padding: '5px 6px', color: '#92400e', fontWeight: 600 }}
+                              title="Để trống sẽ dùng số lượng mặc định của món"
+                            />
+                          )}
                           <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
                             <button
                               onClick={() => toggleChoiceHidden(optIndex, choiceIndex)}

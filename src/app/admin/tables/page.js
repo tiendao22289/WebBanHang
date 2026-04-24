@@ -633,7 +633,7 @@ export default function TablesPage() {
       // Lấy tất cả orders + items của bàn hôm nay
       const { data: tableOrders } = await supabase
         .from('orders')
-        .select(`id, order_items( id, quantity, is_gift, created_at, menu_items( id, counts_for_promotion ) )`)
+        .select(`id, order_items( id, quantity, is_gift, created_at, item_options, menu_items( id, counts_for_promotion, options ) )`)
         .eq('table_id', tableId)
         .gte('created_at', startOfDay)
         .in('status', ['pending', 'preparing', 'completed']);
@@ -648,7 +648,26 @@ export default function TablesPage() {
           if (it.is_gift) {
             allGiftItems.push(it);
           } else if (it.menu_items?.counts_for_promotion) {
-            qualifyingQty += it.quantity;
+            let divisor = null;
+            // 1. Check choice-specific divisor
+            if (it.item_options && Array.isArray(it.item_options) && it.menu_items.options) {
+              for (const opt of it.item_options) {
+                const menuOpt = it.menu_items.options.find(o => o.name === opt.name);
+                if (menuOpt && menuOpt.choices && menuOpt.promoDivisors) {
+                  const choiceIdx = menuOpt.choices.indexOf(opt.choice);
+                  if (choiceIdx !== -1 && menuOpt.promoDivisors[choiceIdx]) {
+                    divisor = Number(menuOpt.promoDivisors[choiceIdx]);
+                    if (!isNaN(divisor) && divisor > 0) break;
+                  }
+                }
+              }
+            }
+            // 2. Fallback to default divisor
+            if (!divisor || isNaN(divisor) || divisor <= 0) {
+              const promoOpt = (it.menu_items.options || []).find(o => o.__promo_divisor);
+              divisor = promoOpt ? promoOpt.__promo_divisor : 1;
+            }
+            qualifyingQty += it.quantity / divisor;
           }
         }
       }
