@@ -14,9 +14,9 @@ import {
   Landmark,
   Receipt
 } from 'lucide-react';
-import { 
-  startOfDay, endOfDay, subDays, startOfMonth, endOfMonth, 
-  startOfQuarter, endOfQuarter, format 
+import {
+  startOfDay, endOfDay, subDays, startOfMonth, endOfMonth,
+  startOfQuarter, endOfQuarter, format
 } from 'date-fns';
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
@@ -102,7 +102,7 @@ export default function StatsPage() {
       `)
       .gte('created_at', startDate.toISOString())
       .lte('created_at', endDate.toISOString())
-      .is('is_hidden_from_stats', false); 
+      .is('is_hidden_from_stats', false);
 
     if (!ordersData) {
       setLoading(false);
@@ -112,7 +112,7 @@ export default function StatsPage() {
     // 2. Lọc CỰC KỲ KHẮT KHE cho Thuế: 
     // - Chỉ lấy bill Thành Công / Đã thanh toán (Bỏ qua Hủy)
     // - Chỉ lấy Tiền mặt HOẶC Chuyển khoản (Bỏ qua thẻ, công nợ, khác...)
-    const validOrders = ordersData.filter(o => 
+    const validOrders = ordersData.filter(o =>
       (o.status === 'completed' || o.status === 'paid') &&
       (o.payment_method === 'cash' || o.payment_method === 'transfer')
     );
@@ -128,8 +128,8 @@ export default function StatsPage() {
     });
 
     // Công thức tuyệt đối: Gross = Cash + Transfer
-    const totalRevenue = cashRevenue + transferRevenue; 
-    
+    const totalRevenue = cashRevenue + transferRevenue;
+
     // Công thức tuyệt đối: Net = Gross / 1.08, VAT = Gross - Net
     const netRevenue = Math.round(totalRevenue / (1 + VAT_RATE));
     const vatAmount = totalRevenue - netRevenue;
@@ -163,7 +163,7 @@ export default function StatsPage() {
     });
 
     const revenueByDay = Object.entries(revenueMap).map(([date, revenue]) => ({ date, revenue }));
-    revenueByDay.sort((a,b) => a.date.localeCompare(b.date));
+    revenueByDay.sort((a, b) => a.date.localeCompare(b.date));
 
     // 6. Category breakdown
     const catMap = {};
@@ -236,7 +236,7 @@ export default function StatsPage() {
     sheet.mergeCells('D2:D5');
 
     // Dòng 3
-    sheet.getCell('A3').value = 'Mã số thuế: '; 
+    sheet.getCell('A3').value = 'Mã số thuế: ';
     sheet.getCell('A3').font = { name: 'Times New Roman', size: 12 };
 
     // Dòng 6: Tiêu đề chính
@@ -260,13 +260,13 @@ export default function StatsPage() {
     // Headers của Bảng (Dòng 9 - 11)
     sheet.getCell('A9').value = 'Chứng từ';
     sheet.mergeCells('A9:B9');
-    
+
     sheet.getCell('A10').value = 'Số hiệu';
     sheet.getCell('B10').value = 'Ngày, tháng';
-    
+
     sheet.getCell('C9').value = 'Diễn giải';
     sheet.mergeCells('C9:C10');
-    
+
     sheet.getCell('D9').value = 'Số tiền';
     sheet.mergeCells('D9:D10');
 
@@ -298,60 +298,60 @@ export default function StatsPage() {
     const r12 = sheet.addRow([null, null, '1. Ngành nghề: Bán đồ ăn uống', null]);
     r12.getCell(3).font = { name: 'Times New Roman', size: 12, bold: true };
     r12.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-       if (colNumber <= 4) {
-         cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
-       }
+      if (colNumber <= 4) {
+        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      }
     });
 
     // Đổ dữ liệu Data (Sắp xếp tăng dần theo thời gian)
-    const sortedOrders = [...stats.validOrders].sort((a,b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    
+    const sortedOrders = [...stats.validOrders].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
     sortedOrders.forEach(order => {
-       const dateStr = format(new Date(order.created_at), 'dd/MM/yyyy HH:mm');
-       const billId = `#${order.id.slice(0, 6).toUpperCase()}`;
-       const payment = order.payment_method === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt';
-       const totalBill = order.total_amount || 0;
+      const dateStr = format(new Date(order.created_at), 'dd/MM/yyyy HH:mm');
+      const billId = `#${order.id.slice(0, 6).toUpperCase()}`;
+      const payment = order.payment_method === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt';
+      const totalBill = order.total_amount || 0;
 
-       // 1. Dòng tổng của Bill
-       const rowBill = sheet.addRow([null, dateStr, `${billId} - Doanh thu bán hàng (${payment})`, totalBill]);
-       rowBill.getCell(4).numFmt = '#,##0 "VND"';
-       
-       rowBill.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-         if (colNumber <= 4) {
-           cell.font = { name: 'Times New Roman', size: 12, bold: true };
-           cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
-           
-           if (colNumber <= 2) cell.alignment = { vertical: 'middle', horizontal: 'center' };
-           else if (colNumber === 3) cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
-           else cell.alignment = { vertical: 'middle', horizontal: 'right' };
-         }
-       });
+      // 1. Dòng tổng của Bill
+      const rowBill = sheet.addRow([null, dateStr, `${billId} - Doanh thu bán hàng (${payment})`, totalBill]);
+      rowBill.getCell(4).numFmt = '#,##0 "VND"';
 
-       // 2. Dòng chi tiết các món ăn trong Bill
-       if (order.order_items && order.order_items.length > 0) {
-         order.order_items.forEach((item) => {
-            const itemTotal = item.quantity * item.unit_price;
-            const priceStr = new Intl.NumberFormat('vi-VN').format(item.unit_price) + 'đ';
-            
-            const rowItem = sheet.addRow([
-              null, 
-              null, 
-              `- ${item.menu_item?.name || 'Món đã xóa'} (số lượng: ${item.quantity}, đơn giá: ${priceStr})`, 
-              itemTotal
-            ]);
-            rowItem.getCell(4).numFmt = '#,##0 "VND"';
-            
-            rowItem.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-              if (colNumber <= 4) {
-                cell.font = { name: 'Times New Roman', size: 12 };
-                cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
-                
-                if (colNumber === 3) cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
-                if (colNumber === 4) cell.alignment = { vertical: 'middle', horizontal: 'right' };
-              }
-            });
-         });
-       }
+      rowBill.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        if (colNumber <= 4) {
+          cell.font = { name: 'Times New Roman', size: 12, bold: true };
+          cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+
+          if (colNumber <= 2) cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          else if (colNumber === 3) cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+          else cell.alignment = { vertical: 'middle', horizontal: 'right' };
+        }
+      });
+
+      // 2. Dòng chi tiết các món ăn trong Bill
+      if (order.order_items && order.order_items.length > 0) {
+        order.order_items.forEach((item) => {
+          const itemTotal = item.quantity * item.unit_price;
+          const priceStr = new Intl.NumberFormat('vi-VN').format(item.unit_price) + 'đ';
+
+          const rowItem = sheet.addRow([
+            null,
+            null,
+            `- ${item.menu_item?.name || 'Món đã xóa'} (số lượng: ${item.quantity}, đơn giá: ${priceStr})`,
+            itemTotal
+          ]);
+          rowItem.getCell(4).numFmt = '#,##0 "VND"';
+
+          rowItem.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            if (colNumber <= 4) {
+              cell.font = { name: 'Times New Roman', size: 12 };
+              cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+
+              if (colNumber === 3) cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+              if (colNumber === 4) cell.alignment = { vertical: 'middle', horizontal: 'right' };
+            }
+          });
+        });
+      }
     });
 
     // --- THÊM PHẦN TỔNG KẾT VÀ CHỮ KÝ Ở CUỐI BẢNG ---
@@ -387,7 +387,7 @@ export default function StatsPage() {
     // Phần chữ ký (Gộp ô C và D cho căn giữa đẹp mắt)
     const today = new Date();
     const dateStr = `Ngày ${today.getDate().toString().padStart(2, '0')} tháng ${today.getMonth() + 1} năm ${today.getFullYear()}`;
-    
+
     const sigDateRow = sheet.addRow([null, null, dateStr, null]);
     sheet.mergeCells(`C${sigDateRow.number}:D${sigDateRow.number}`);
     sigDateRow.getCell(3).font = { name: 'Times New Roman', size: 12, italic: true };
@@ -443,11 +443,11 @@ export default function StatsPage() {
                 </button>
               </div>
             )}
-            <button 
+            <button
               onClick={handleExportExcel}
-              style={{ 
-                display: 'flex', alignItems: 'center', gap: '8px', 
-                background: '#2DB67C', color: 'white', border: 'none', 
+              style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                background: '#2DB67C', color: 'white', border: 'none',
                 padding: '8px 16px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer',
                 boxShadow: '0 4px 6px -1px rgba(45, 182, 124, 0.2)'
               }}
@@ -502,18 +502,6 @@ export default function StatsPage() {
               <div>
                 <div className="value">{formatPrice(stats.cashRevenue)}</div>
                 <div className="label">Tiền mặt</div>
-              </div>
-            </div>
-
-            <div className="summary-card" style={{ borderLeft: '4px solid #8B5CF6' }}>
-              <div className="icon-wrapper" style={{ background: '#EDE9FE', color: '#8B5CF6' }}>
-                <Receipt size={22} />
-              </div>
-              <div>
-                <div className="value" style={{ fontSize: '1.2rem' }}>
-                  {formatPrice(stats.netRevenue)} <span style={{ fontSize: '0.8rem', color: '#6B7280', fontWeight: 'normal' }}>+ {formatPrice(stats.vatAmount)} VAT</span>
-                </div>
-                <div className="label">Doanh thu Net & Thuế GTGT</div>
               </div>
             </div>
           </div>
@@ -590,13 +578,13 @@ export default function StatsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {stats.validOrders.sort((a,b) => new Date(b.created_at) - new Date(a.created_at)).map(order => {
+                    {stats.validOrders.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map(order => {
                       const totalItems = order.order_items?.reduce((sum, item) => sum + item.quantity, 0) || 0;
                       const itemNames = order.order_items?.map(item => `${item.menu_item?.name || 'Món xóa'} (x${item.quantity})`).join(', ');
                       return (
-                        <tr 
-                          key={order.id} 
-                          style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }} 
+                        <tr
+                          key={order.id}
+                          style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer' }}
                           onClick={() => setSelectedBill(order)}
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8fafc'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
@@ -604,7 +592,7 @@ export default function StatsPage() {
                           <td style={{ padding: '12px 8px', fontWeight: 600, color: '#3b82f6', textDecoration: 'underline' }}>#{order.id.slice(0, 6).toUpperCase()}</td>
                           <td style={{ padding: '12px 8px' }}>{format(new Date(order.created_at), 'dd/MM/yyyy HH:mm')}</td>
                           <td style={{ padding: '12px 8px' }}>
-                            <span style={{ 
+                            <span style={{
                               padding: '4px 8px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600,
                               background: order.payment_method === 'transfer' ? '#dbeafe' : '#d1fae5',
                               color: order.payment_method === 'transfer' ? '#2563eb' : '#10b981'
@@ -634,11 +622,11 @@ export default function StatsPage() {
 
       {/* Chi tiết Hóa đơn Modal */}
       {selectedBill && (
-        <div 
+        <div
           style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
           onClick={() => setSelectedBill(null)}
         >
-          <div 
+          <div
             style={{ background: 'white', padding: '24px', borderRadius: '12px', width: '90%', maxWidth: '600px', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -646,13 +634,13 @@ export default function StatsPage() {
               <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#0f172a' }}>Chi tiết Hóa đơn <span style={{ color: '#3b82f6' }}>#{selectedBill.id.slice(0, 6).toUpperCase()}</span></h3>
               <button onClick={() => setSelectedBill(null)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '32px', height: '32px', borderRadius: '50%' }}>&times;</button>
             </div>
-            
+
             <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', fontSize: '0.95rem', color: '#475569', backgroundColor: '#f8fafc', padding: '12px', borderRadius: '8px' }}>
               <div>
                 <p style={{ margin: '4px 0' }}><strong>Thời gian:</strong> {format(new Date(selectedBill.created_at), 'dd/MM/yyyy HH:mm')}</p>
                 <p style={{ margin: '4px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <strong>PTTT:</strong> 
-                  <span style={{ 
+                  <strong>PTTT:</strong>
+                  <span style={{
                     padding: '2px 6px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 600,
                     background: selectedBill.payment_method === 'transfer' ? '#dbeafe' : '#d1fae5',
                     color: selectedBill.payment_method === 'transfer' ? '#2563eb' : '#10b981'
@@ -694,10 +682,10 @@ export default function StatsPage() {
                 </tbody>
               </table>
             </div>
-            
+
             <div style={{ marginTop: '20px', textAlign: 'right' }}>
-              <button 
-                onClick={() => setSelectedBill(null)} 
+              <button
+                onClick={() => setSelectedBill(null)}
                 style={{ padding: '10px 20px', background: '#e2e8f0', color: '#475569', border: 'none', borderRadius: '8px', fontWeight: 600, cursor: 'pointer' }}
               >
                 Đóng lại

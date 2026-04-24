@@ -413,7 +413,7 @@ export default function SettingsPage() {
   }
 
   function todayTotal(acc) {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     const row = acc.bank_daily_totals?.find(r => r.date === today);
     return row?.total_amount || 0;
   }

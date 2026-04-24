@@ -60,7 +60,7 @@ export async function POST(req) {
 
     // Ghi nhận doanh thu ngân hàng
     if (account_id && total_amount) {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
       const { data: existing } = await supabase
         .from('bank_daily_totals')
         .select('id, total_amount')

@@ -565,7 +565,7 @@ export default function TablesPage() {
   }
 
   async function recordBankPayment(accountId, amount) {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     // Upsert daily total (add to existing)
     const { data: existing } = await supabase
       .from('bank_daily_totals')
@@ -2309,7 +2309,6 @@ export default function TablesPage() {
           };
 
           const doTransferPayment = async () => {
-            if (qrAccount) await recordBankPayment(qrAccount.id, total);
             closeModal();
             await completeTable(table.id, 'transfer', qrAccount ? qrAccount.shouldHideStats : false);
           };
@@ -4234,7 +4233,6 @@ export default function TablesPage() {
                 </button>
                 <button
                   onClick={async () => {
-                    await recordBankPayment(qrAccount.id, paymentModal.total);
                     await completeTable(paymentModal.table, 'transfer', qrAccount.shouldHideStats);
                     setPaymentModal(null);
                     setConfirmPayment(null);

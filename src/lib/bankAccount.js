@@ -53,7 +53,7 @@ export const BANK_IDS = {
  * @returns {{ account: object|null, overLimit: boolean, shouldHideStats: boolean }}
  */
 export async function getActiveAccount() {
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10); // YYYY-MM-DD local
 
   // ── BƯỚC 1: Kiểm tra Thẻ Chính (is_visible = true) ──────────────────────
   const { data: primaryAccounts, error: primaryError } = await supabase
@@ -138,7 +138,7 @@ export async function getActiveAccount() {
  * @returns {{ account: object|null, overLimit: boolean, shouldHideStats: boolean }}
  */
 export async function getShadowAccount() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10); // YYYY-MM-DD local
 
   const { data: accounts, error } = await supabase
     .from('bank_accounts')

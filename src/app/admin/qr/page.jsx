@@ -176,7 +176,7 @@ export default function QrGeneratorPage() {
 
   // ─── Cộng tiền vào định mức của thẻ Ẩn (để xoay vòng thẻ cá nhân) ──────
   async function recordShadowPayment(accountId, amount) {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     const { data: existing } = await supabase
       .from('bank_daily_totals')
       .select('id, total_amount')
