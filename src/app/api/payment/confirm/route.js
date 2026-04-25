@@ -46,7 +46,11 @@ export async function POST(req) {
         // Hoàn tất các đơn hàng (chuyển sang paid)
         await supabase
           .from('orders')
-          .update({ status: 'paid', payment_method: 'transfer' })
+          .update({ 
+            status: 'paid', 
+            payment_method: 'transfer',
+            created_at: new Date().toISOString()
+          })
           .in('id', orderIdList)
           .in('status', ['pending', 'preparing', 'completed']);
         

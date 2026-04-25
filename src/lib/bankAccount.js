@@ -52,7 +52,7 @@ export const BANK_IDS = {
  *
  * @returns {{ account: object|null, overLimit: boolean, shouldHideStats: boolean }}
  */
-export async function getActiveAccount() {
+export async function getActiveAccount(billAmount = 0) {
   const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10); // YYYY-MM-DD local
 
   // ── BƯỚC 1: Kiểm tra Thẻ Chính (is_visible = true) ──────────────────────
@@ -67,6 +67,7 @@ export async function getActiveAccount() {
     const todayRow = (primary.bank_daily_totals || []).find(r => r.date === today);
     const todayTotal = todayRow?.total_amount || 0;
 
+    // Chỉ ẩn khi tài khoản ĐÃ đạt hoặc vượt hạn mức, bill mới vẫn được qua nếu chưa đủ
     if (todayTotal < primary.daily_limit) {
       // ✅ GĐ 1: Thẻ Chính CHƯA ĐẦY → bill vào thống kê
       return {
@@ -137,7 +138,7 @@ export async function getActiveAccount() {
  *
  * @returns {{ account: object|null, overLimit: boolean, shouldHideStats: boolean }}
  */
-export async function getShadowAccount() {
+export async function getShadowAccount(billAmount = 0) {
   const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10); // YYYY-MM-DD local
 
   const { data: accounts, error } = await supabase
@@ -183,4 +184,44 @@ export function buildQrUrl(account, amount = 0, info = '') {
   if (amount > 0) params.set('amount', amount);
   if (info) params.set('addInfo', info);
   return `${base}?${params.toString()}`;
+}
+
+// =============================================================================
+// ATOMIC PAYMENT PROCESSOR — chống race condition
+// =============================================================================
+
+/**
+ * processPaymentAtomic: Gọi Postgres RPC để ATOMIC check hạn mức + ghi tiền.
+ *
+ * Khác với getActiveAccount() + recordBankPayment() (2 bước riêng dễ bị race
+ * condition khi nhiều bill thanh toán cùng lúc), hàm này thực hiện toàn bộ
+ * trong MỘT transaction Postgres duy nhất có ROW-LEVEL LOCK trên bank_accounts.
+ *
+ * Cần chạy SQL trong Supabase Dashboard:
+ *   supabase/migrations/process_bank_payment_rpc.sql
+ *
+ * @param {number} amount - Số tiền của bill (VND)
+ * @returns {{ accountId: string|null, accountName: string|null, overLimit: boolean, shouldHideStats: boolean }}
+ */
+export async function processPaymentAtomic(amount) {
+  // Ngày hôm nay theo giờ Việt Nam (UTC+7) — format YYYY-MM-DD
+  const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+
+  const { data, error } = await supabase.rpc('process_bank_payment', {
+    p_amount: amount,
+    p_date: today,
+  });
+
+  if (error) {
+    console.error('[processPaymentAtomic] RPC error:', error);
+    // Fallback: không ẩn bill để tránh mất dữ liệu, nhưng log lỗi
+    return { accountId: null, accountName: null, overLimit: false, shouldHideStats: false };
+  }
+
+  return {
+    accountId:       data.account_id       || null,
+    accountName:     data.account_name     || null,
+    overLimit:       data.over_limit       ?? true,
+    shouldHideStats: data.should_hide_stats ?? true,
+  };
 }

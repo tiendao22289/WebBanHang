@@ -5,7 +5,7 @@ import { removeVietnameseTones } from '@/lib/utils';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
-import { getActiveAccount, buildQrUrl } from '@/lib/bankAccount';
+import { getActiveAccount, processPaymentAtomic, buildQrUrl } from '@/lib/bankAccount';
 import { sendTableSummaryPrintJob, sendSmartPrintJobs } from '@/lib/print';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
@@ -287,7 +287,7 @@ export default function TablesPage() {
       const hostId = paymentModal.id;
       const total = orders[hostId]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
       if (total > 0) {
-        getActiveAccount().then(({ account }) => {
+        getActiveAccount(total).then(({ account }) => {
           if (!active) return;
           getOrGenerateBillCode(hostId, total, account?.id || null).then(code => {
             if (active && code) setTransactionCode(code);
@@ -407,7 +407,7 @@ export default function TablesPage() {
         // Mark all active orders as paid (history preserved)
         await supabase
           .from('orders')
-          .update({ status: 'paid' })
+          .update({ status: 'paid', created_at: new Date().toISOString() })
           .in('table_id', expiredIds)
           .in('status', ['pending', 'preparing', 'completed']);
         // Reset tables — xóa cả merged_with để bàn không còn bị đánh dấu màu cam
@@ -449,15 +449,10 @@ export default function TablesPage() {
   }
 
   async function completeTable(tableObj, paymentMethod = 'cash', shouldHideStats = false) {
-    // Support both tableId (legacy) and tableObj
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
     const hostId = table.merged_with || table.id;
 
-    // ─── Kiểm tra hạn mức & ghi tiền vào thẻ phù hợp ───────────────────────────
-    // THIẾT KẾ HAI GIAI ĐOẠN:
-    //   GĐ1 (Thẻ Chính còn hạn mức):   ghi vào Thẻ A → bill VÀO thống kê ✅
-    //   GĐ2 (Thẻ Chính đầy, đóng băng): ghi vào Thẻ Dự Phòng (B/C/D) để
-    //     xoay vòng theo định mức riêng của từng thẻ → bill ẨN khỏi thống kê 🔴
+    // ─── Atomic: check hạn mức + ghi bank_daily_totals trong 1 Postgres transaction ───
     try {
       const { data: ordersToPay } = await supabase
         .from('orders')
@@ -468,32 +463,22 @@ export default function TablesPage() {
       const totalAmount = (ordersToPay || []).reduce((sum, o) => sum + (o.total_amount || 0), 0);
 
       if (totalAmount > 0) {
-        const { account, overLimit, shouldHideStats: autoHide } = await getActiveAccount();
-
-        if (account) {
-          // Luôn cộng tiền vào thẻ được chỉ định:
-          //  - GĐ1: ghi vào Thẻ Chính (Thẻ A) để theo dõi định mức ngày
-          //  - GĐ2: ghi vào Thẻ Dự Phòng (Thẻ B/C/D) để xoay vòng giữa các thẻ
-          await recordBankPayment(account.id, totalAmount);
-        }
-
-        // Đồng bộ trạng thái ẩn/hiện: ưu tiên shouldHideStats từ caller,
-        // nếu caller không set thì dùng giá trị từ getActiveAccount()
-        if (!shouldHideStats && autoHide) {
-          shouldHideStats = autoHide;
-        }
+        // Gọi RPC atomic — check hạn mức + ghi tiền trong 1 transaction, tránh race condition
+        const { shouldHideStats: autoHide } = await processPaymentAtomic(totalAmount);
+        if (!shouldHideStats && autoHide) shouldHideStats = autoHide;
       }
     } catch (err) {
-      console.error('[completeTable] Error updating bank totals:', err);
+      console.error('[completeTable] Error in processPaymentAtomic:', err);
     }
     // ─────────────────────────────────────────────────────────────────────────────
 
     await supabase
       .from('orders')
-      .update({ 
-        status: 'paid', 
+      .update({
+        status: 'paid',
         payment_method: paymentMethod,
-        is_hidden_from_stats: shouldHideStats
+        is_hidden_from_stats: shouldHideStats,
+        created_at: new Date().toISOString()
       })
       .eq('table_id', hostId)
       .in('status', ['pending', 'preparing', 'completed']);
@@ -548,7 +533,7 @@ export default function TablesPage() {
 
   // ── Smart bank account rotation (strict: no buffer) ──
   async function openPaymentModal(table, total) {
-    const { account, overLimit, shouldHideStats } = await getActiveAccount();
+    const { account, overLimit, shouldHideStats } = await getActiveAccount(total);
     const finalAcc = account ? { ...account, overLimit, shouldHideStats } : null;
     setQrAccount(finalAcc);
 
