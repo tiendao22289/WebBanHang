@@ -1333,8 +1333,6 @@ function OrderContent() {
             .from('customers')
             .update({
               name: customerName.trim() || existingCustomer.name,
-              total_spent: (existingCustomer.total_spent || 0) + effectiveTotal,
-              visit_count: (existingCustomer.visit_count || 0) + 1,
               last_visit_at: new Date().toISOString(),
             })
             .eq('id', customerId);
@@ -1344,8 +1342,6 @@ function OrderContent() {
             .insert({
               name: customerName.trim() || 'Khách mới',
               phone: customerPhone.trim(),
-              total_spent: effectiveTotal,
-              visit_count: 1,
               last_visit_at: new Date().toISOString(),
             })
             .select('id')

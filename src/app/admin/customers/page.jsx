@@ -13,6 +13,7 @@ import {
   TrendingUp,
   Clock,
   DollarSign,
+  Download,
 } from 'lucide-react';
 import './customers.css';
 
@@ -108,6 +109,30 @@ export default function CustomersPage() {
   const totalCustomers = customers.length;
   const totalRevenue = customers.reduce((sum, c) => sum + (c.total_spent || 0), 0);
 
+  const exportToExcel = () => {
+    // Add BOM (\uFEFF) to tell Excel this is UTF-8 encoded
+    let csvContent = '\uFEFFTên Khách Hàng,Số Điện Thoại,Số Lần Ghé\n';
+    
+    customers.forEach(c => {
+      // Clean up commas in names to avoid breaking the CSV format
+      const name = (c.name || 'Khách ẩn danh').replace(/,/g, '');
+      const phone = c.phone || '';
+      const visit = c.visit_count || 0;
+      
+      // Use ="09xx" format for phone numbers to prevent Excel from dropping the leading zero
+      csvContent += `"${name}",="${phone}","${visit}"\n`;
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Danh_sach_khach_hang_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="page-content">
       <div className="page-header">
@@ -130,15 +155,29 @@ export default function CustomersPage() {
         </div>
       </div>
 
-      {/* Search */}
-      <div className="customer-search">
-        <Search size={16} />
-        <input
-          className="input"
-          placeholder="Tìm theo tên hoặc số điện thoại..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
+      {/* Action Bar (Search & Export) */}
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
+        <div className="customer-search" style={{ flex: 1, marginBottom: 0 }}>
+          <Search size={16} />
+          <input
+            className="input"
+            placeholder="Tìm theo tên hoặc số điện thoại..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+        <button 
+          onClick={exportToExcel}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '6px',
+            padding: '10px 16px', background: '#10b981', color: 'white',
+            border: 'none', borderRadius: '10px', fontSize: '0.9rem',
+            fontWeight: 600, cursor: 'pointer', boxShadow: '0 2px 6px rgba(16, 185, 129, 0.25)'
+          }}
+        >
+          <Download size={16} />
+          Xuất Excel
+        </button>
       </div>
 
       {/* Customer List */}
