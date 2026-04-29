@@ -70,8 +70,11 @@ function SortableMenuCard({ item, categories, getItemCategories, getItemDisplayP
 
 // ─── Menu Card UI ──────────────────────────────────────────────────────────
 function MenuCard({ item, categories, getItemCategories, getItemDisplayPrice, toggleAvailable, openItemModal, deleteItem, dragHandleProps }) {
+  const isVisible = item.is_available && (!item.hidden_until || new Date(item.hidden_until) < new Date());
+  const isTempHidden = item.is_available && item.hidden_until && new Date(item.hidden_until) > new Date();
+
   return (
-    <div className={`menu-card ${!item.is_available ? 'unavailable' : ''}`}>
+    <div className={`menu-card ${!isVisible ? 'unavailable' : ''}`}>
       {/* Drag handle */}
       <div
         {...dragHandleProps}
@@ -111,6 +114,11 @@ function MenuCard({ item, categories, getItemCategories, getItemDisplayPrice, to
           })}
         </div>
         <h4 className="menu-card-name" style={{ marginTop: '0.3rem' }}>{item.name}</h4>
+        {isTempHidden && (
+          <div style={{ fontSize: '0.65rem', background: '#fee2e2', color: '#b91c1c', borderRadius: 4, padding: '2px 6px', fontWeight: 600, display: 'inline-block', marginBottom: 4 }}>
+            🕒 Ẩn đến {new Date(item.hidden_until).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
+          </div>
+        )}
         {(item.counts_for_promotion || item.is_gift_item) && (
           <div style={{ display: 'flex', gap: 4, marginBottom: 4, flexWrap: 'wrap' }}>
             {item.counts_for_promotion && <span style={{ fontSize: '0.65rem', background: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>🎯 Được Tính vào Khuyến Mãi</span>}
@@ -126,10 +134,10 @@ function MenuCard({ item, categories, getItemCategories, getItemDisplayPrice, to
             <button
               className="btn btn-ghost btn-sm"
               onClick={() => toggleAvailable(item)}
-              title={item.is_available ? 'Ẩn món' : 'Hiện món'}
-              style={{ color: item.is_available ? '#2563eb' : '#9ca3af' }}
+              title={isVisible ? 'Ẩn món' : 'Hiện món'}
+              style={{ color: isVisible ? '#2563eb' : '#9ca3af' }}
             >
-              {item.is_available ? <Eye size={14} /> : <EyeOff size={14} />}
+              {isVisible ? <Eye size={14} /> : <EyeOff size={14} />}
             </button>
             <button className="btn btn-ghost btn-sm" onClick={() => openItemModal(item)}>
               <Pencil size={14} />
@@ -412,18 +420,64 @@ export default function MenuPage() {
   }
 
   async function toggleAvailable(item) {
-    const result = await Swal.fire({
-      title: item.is_available ? 'Ẩn món ăn?' : 'Hiện món ăn?',
-      text: item.is_available ? 'Món ăn sẽ bị ẩn khỏi thực đơn của khách hàng.' : 'Món ăn sẽ hiển thị lại cho khách hàng.',
-      icon: 'question',
-      showCancelButton: true,
-      confirmButtonColor: item.is_available ? '#ef4444' : '#2563eb',
-      cancelButtonColor: '#9ca3af',
-      confirmButtonText: item.is_available ? 'Vâng, ẩn món' : 'Vâng, hiện món',
-      cancelButtonText: 'Huỷ'
-    });
-    if (!result.isConfirmed) return;
-    await supabase.from('menu_items').update({ is_available: !item.is_available }).eq('id', item.id);
+    const isVisible = item.is_available && (!item.hidden_until || new Date(item.hidden_until) < new Date());
+    
+    if (isVisible) {
+      const { value: hideOption } = await Swal.fire({
+        title: 'Ẩn món ăn?',
+        text: 'Chọn thời gian ẩn món ăn này:',
+        icon: 'question',
+        input: 'radio',
+        inputOptions: {
+          'today': 'Hết hôm nay',
+          '2h': '2 tiếng',
+          '4h': '4 tiếng',
+          'indefinite': 'Vô thời hạn'
+        },
+        inputValidator: (value) => {
+          if (!value) {
+            return 'Bạn cần chọn thời gian ẩn!';
+          }
+        },
+        showCancelButton: true,
+        confirmButtonColor: '#ef4444',
+        cancelButtonColor: '#9ca3af',
+        confirmButtonText: 'Vâng, ẩn món',
+        cancelButtonText: 'Huỷ'
+      });
+
+      if (!hideOption) return;
+
+      let updates = {};
+      if (hideOption === 'indefinite') {
+        updates = { is_available: false, hidden_until: null };
+      } else if (hideOption === 'today') {
+        const endOfDay = new Date();
+        endOfDay.setHours(23, 59, 59, 999);
+        updates = { is_available: true, hidden_until: endOfDay.toISOString() };
+      } else if (hideOption === '2h') {
+        const time = new Date(Date.now() + 2 * 60 * 60 * 1000);
+        updates = { is_available: true, hidden_until: time.toISOString() };
+      } else if (hideOption === '4h') {
+        const time = new Date(Date.now() + 4 * 60 * 60 * 1000);
+        updates = { is_available: true, hidden_until: time.toISOString() };
+      }
+
+      await supabase.from('menu_items').update(updates).eq('id', item.id);
+    } else {
+      const result = await Swal.fire({
+        title: 'Hiện món ăn?',
+        text: 'Món ăn sẽ hiển thị lại cho khách hàng.',
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonColor: '#2563eb',
+        cancelButtonColor: '#9ca3af',
+        confirmButtonText: 'Vâng, hiện món',
+        cancelButtonText: 'Huỷ'
+      });
+      if (!result.isConfirmed) return;
+      await supabase.from('menu_items').update({ is_available: true, hidden_until: null }).eq('id', item.id);
+    }
     fetchData();
   }
 
@@ -484,12 +538,66 @@ export default function MenuPage() {
     setItemForm({ ...itemForm, options: newOptions });
   }
 
-  function toggleChoiceHidden(optIndex, choiceIndex) {
+  async function toggleChoiceHidden(optIndex, choiceIndex) {
     const newOptions = [...itemForm.options];
     if (!newOptions[optIndex].hiddenChoices) {
       newOptions[optIndex].hiddenChoices = Array(newOptions[optIndex].choices.length).fill(false);
     }
-    newOptions[optIndex].hiddenChoices[choiceIndex] = !newOptions[optIndex].hiddenChoices[choiceIndex];
+    
+    const h = newOptions[optIndex].hiddenChoices[choiceIndex];
+    const isHidden = h === true || (typeof h === 'string' && new Date(h) > new Date());
+
+    if (!isHidden) {
+      const { value: hideOption } = await Swal.fire({
+        title: 'Ẩn lựa chọn này?',
+        text: 'Chọn thời gian ẩn:',
+        icon: 'question',
+        input: 'radio',
+        inputOptions: {
+          'today': 'Hết hôm nay',
+          '2h': '2 tiếng',
+          '4h': '4 tiếng',
+          'indefinite': 'Vô thời hạn'
+        },
+        inputValidator: (value) => {
+          if (!value) return 'Bạn cần chọn thời gian ẩn!';
+        },
+        showCancelButton: true,
+        confirmButtonColor: '#ef4444',
+        cancelButtonColor: '#9ca3af',
+        confirmButtonText: 'Vâng, ẩn',
+        cancelButtonText: 'Huỷ'
+      });
+
+      if (!hideOption) return;
+
+      if (hideOption === 'indefinite') {
+        newOptions[optIndex].hiddenChoices[choiceIndex] = true;
+      } else if (hideOption === 'today') {
+        const endOfDay = new Date();
+        endOfDay.setHours(23, 59, 59, 999);
+        newOptions[optIndex].hiddenChoices[choiceIndex] = endOfDay.toISOString();
+      } else if (hideOption === '2h') {
+        const time = new Date(Date.now() + 2 * 60 * 60 * 1000);
+        newOptions[optIndex].hiddenChoices[choiceIndex] = time.toISOString();
+      } else if (hideOption === '4h') {
+        const time = new Date(Date.now() + 4 * 60 * 60 * 1000);
+        newOptions[optIndex].hiddenChoices[choiceIndex] = time.toISOString();
+      }
+    } else {
+      const result = await Swal.fire({
+        title: 'Hiện lựa chọn này?',
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonColor: '#2563eb',
+        cancelButtonColor: '#9ca3af',
+        confirmButtonText: 'Vâng, hiện',
+        cancelButtonText: 'Huỷ'
+      });
+      if (!result.isConfirmed) return;
+      newOptions[optIndex].hiddenChoices[choiceIndex] = false;
+    }
+
     setItemForm({ ...itemForm, options: newOptions });
   }
 
@@ -580,12 +688,13 @@ export default function MenuPage() {
     return true;
   });
   const countAll = baseItems.length;
-  const countVisible = baseItems.filter(i => i.is_available).length;
-  const countHidden = baseItems.filter(i => !i.is_available).length;
+  const countVisible = baseItems.filter(i => i.is_available && (!i.hidden_until || new Date(i.hidden_until) < new Date())).length;
+  const countHidden = countAll - countVisible;
 
   const filteredItems = baseItems.filter(i => {
-    if (visibilityFilter === 'visible' && !i.is_available) return false;
-    if (visibilityFilter === 'hidden' && i.is_available) return false;
+    const isVisible = i.is_available && (!i.hidden_until || new Date(i.hidden_until) < new Date());
+    if (visibilityFilter === 'visible' && !isVisible) return false;
+    if (visibilityFilter === 'hidden' && isVisible) return false;
     return true;
   });
 
@@ -878,7 +987,9 @@ export default function MenuPage() {
                       </div>
 
                       {opt.choices.map((choice, choiceIndex) => {
-                        const isHidden = opt.hiddenChoices?.[choiceIndex];
+                        const h = opt.hiddenChoices?.[choiceIndex];
+                        const isHidden = h === true || (typeof h === 'string' && new Date(h) > new Date());
+                        const isTempHidden = typeof h === 'string' && new Date(h) > new Date();
                         return (
                         <div key={choiceIndex} style={{ display: 'grid', gridTemplateColumns: itemForm.counts_for_promotion ? '1.5fr 1fr 1.5fr 60px 50px' : '1.7fr 1.3fr 1.6fr 50px', gap: 6, marginBottom: 6, alignItems: 'center', opacity: isHidden ? 0.5 : 1 }}>
                           <input
@@ -920,7 +1031,7 @@ export default function MenuPage() {
                             <button
                               onClick={() => toggleChoiceHidden(optIndex, choiceIndex)}
                               style={{ background: 'none', border: 'none', cursor: 'pointer', color: isHidden ? '#f59e0b' : '#cbd5e1', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                              title={isHidden ? "Đang ẩn - Nhấn để hiện" : "Nhấn để ẩn"}
+                              title={isTempHidden ? `Đang ẩn đến ${new Date(h).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` : isHidden ? "Đang ẩn - Nhấn để hiện" : "Nhấn để ẩn"}
                             >
                               {isHidden ? <EyeOff size={13} /> : <Eye size={13} />}
                             </button>

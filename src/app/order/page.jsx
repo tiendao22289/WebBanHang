@@ -883,7 +883,7 @@ function OrderContent() {
   async function fetchMenu() {
     const [{ data: cats }, { data: items }, { data: tableData }, { data: salesStats }] = await Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
-      supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).order('sort_order').order('created_at'),
+      supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).or(`hidden_until.is.null,hidden_until.lt.${new Date().toISOString()}`).order('sort_order').order('created_at'),
       activeTableId ? supabase.from('tables').select('table_number, status, table_type, table_name').eq('id', activeTableId).single() : { data: null },
       supabase.rpc('get_menu_sales_stats')
     ]);
@@ -2290,7 +2290,9 @@ function OrderContent() {
                     }}>{opt.name}</div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0px' }}>
                       {opt.choices.map((choice, ci) => {
-                        if (opt.hiddenChoices?.[ci]) return null;
+                        const h = opt.hiddenChoices?.[ci];
+                        const isHidden = h === true || (typeof h === 'string' && new Date(h) > new Date());
+                        if (isHidden) return null;
                         const p = opt.prices?.[ci];
                         const hasPrice = p !== null && p !== '';
                         const displayPrice = hasPrice ? Number(p) : 0;
@@ -2340,7 +2342,9 @@ function OrderContent() {
                     }}>{opt.name}</div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0px' }}>
                       {opt.choices.map((choice, ci) => {
-                        if (opt.hiddenChoices?.[ci]) return null;
+                        const h = opt.hiddenChoices?.[ci];
+                        const isHidden = h === true || (typeof h === 'string' && new Date(h) > new Date());
+                        if (isHidden) return null;
                         const p = opt.prices?.[ci];
                         const hasPrice = p !== null && p !== '';
                         const displayPrice = hasPrice ? Number(p) : 0;
