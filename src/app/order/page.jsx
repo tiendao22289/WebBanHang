@@ -881,25 +881,30 @@ function OrderContent() {
   }
 
   async function fetchMenu() {
+    const now = new Date();
     const [{ data: cats }, { data: items }, { data: tableData }, { data: salesStats }] = await Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
-      supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).or(`hidden_until.is.null,hidden_until.lt.${new Date().toISOString()}`).order('sort_order').order('created_at'),
+      supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).order('sort_order').order('created_at'),
       activeTableId ? supabase.from('tables').select('table_number, status, table_type, table_name').eq('id', activeTableId).single() : { data: null },
       supabase.rpc('get_menu_sales_stats')
     ]);
+    // Lọc client-side: loại các món đang trong thời gian ẩn tạm thời
+    // (an toàn ngay cả khi cột hidden_until chưa tồn tại trong DB)
+    const visibleItems = (items || []).filter(i => !i.hidden_until || new Date(i.hidden_until) < now);
+
     const finalCats = cats || [];
-    if (items?.some(i => !i.category_id)) {
+    if (visibleItems.some(i => !i.category_id)) {
       finalCats.push({ id: null, name: 'Chưa phân loại' });
     }
 
-    if (salesStats && items) {
+    if (salesStats && visibleItems.length > 0) {
       const salesMap = {};
       salesStats.forEach(s => { salesMap[s.menu_item_id] = Number(s.total_sold) || 0 });
-      items.forEach(item => { item.total_sold = salesMap[item.id] || 0 });
+      visibleItems.forEach(item => { item.total_sold = salesMap[item.id] || 0 });
     }
 
     setCategories(finalCats);
-    setMenuItems(items || []);
+    setMenuItems(visibleItems);
     const isTW = tableData?.table_type === 'takeaway';
     if (tableData) {
       setTableNumber(isTW ? (tableData.table_name || 'Mang về') : tableData.table_number);
