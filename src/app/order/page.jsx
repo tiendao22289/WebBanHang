@@ -24,6 +24,7 @@ import {
   Check,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
+// import ChatOrderButton from '@/components/ChatOrderButton'; // TẮT TÍNH NĂNG CHAT AI
 import './order.css';
 
 const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGiftSlots, onOpenGift, giftItems = [], promoEnabled, callout = null }) => {
@@ -191,7 +192,7 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
           fontSize: '1.7rem', border: '3px solid white',
           animation: hasGift ? 'co-gift-pulse 2s infinite' : 'co-float 3s infinite ease-in-out'
         }}>
-          🎁
+          {hasGift ? <div className="snail-bounce">🐌</div> : <div className="snail-crawl">🐌</div>}
         </div>
 
         {/* Badge số */}
@@ -292,7 +293,7 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
             <div style={{ background: '#f0fdf4', borderRadius: 12, padding: '12px 14px', marginBottom: 20 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', fontWeight: 700, color: '#15803d', marginBottom: 8 }}>
                 <span>Tiến trình của bạn</span>
-                <span>{qualifyingQty}/{threshold} món</span>
+                <span>{Number.isInteger(qualifyingQty) ? qualifyingQty : qualifyingQty.toFixed(1)}/{threshold} điểm</span>
               </div>
               <div style={{ height: 8, background: '#dcfce7', borderRadius: 6, overflow: 'hidden' }}>
                 <div style={{ width: `${progress}%`, height: '100%', background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 6, transition: 'width 0.5s ease' }} />
@@ -392,6 +393,7 @@ function OrderContent() {
   const [promoCallout, setPromoCallout] = useState(null); // { text, isGift } | null
   const promoCalloutTimerRef = useRef(null);
   const prevQualifyingQtyRef = useRef(0);
+  const [showHolidayBanner, setShowHolidayBanner] = useState(true);
 
   // Option selection modal for items with choices
   const [optionModal, setOptionModal] = useState(null);
@@ -1248,16 +1250,38 @@ function OrderContent() {
     const thr = promoConfig.threshold;
     const posInCycle = qualifyingQty % thr; // vị trí trong chu kỳ hiện tại (0 = vừa đủ)
     // Khi posInCycle = 0 thì vừa đạt ngưỡng → giftCount useEffect xử lý
-    if (posInCycle === 0 || posInCycle < 5) return;
+    // Cho phép hiện thông báo ngay cả với số điểm nhỏ (vd: 0.5 điểm)
+    if (posInCycle === 0 || posInCycle < 0.1) return;
 
-    const currentGifts = Math.floor(qualifyingQty / thr); // số quà đã mở
+    // Khai báo các biến cần thiết
+    const currentGifts = Math.floor(qualifyingQty / thr);
     const nextThreshold = (currentGifts + 1) * thr;
     const remaining = nextThreshold - qualifyingQty;
     const nextGiftNum = currentGifts + 1;
 
-    const text = nextGiftNum === 1
-      ? `Bạn còn thiếu ${remaining} món nữa là được khuyến mãi! 🔥`
-      : `Còn thiếu ${remaining} món nữa là được tặng món thứ ${nextGiftNum}! 🔥`;
+    // Tìm món trong giỏ có số lượng lẻ (chưa đủ 1 điểm vì divisor > 1)
+    let partialItemMsg = null;
+    for (const cartItem of cart) {
+      const menuItem = menuItems.find(m => m.id === cartItem.id);
+      if (!menuItem?.counts_for_promotion) continue;
+      const promoOpt = (menuItem.options || []).find(o => o.__promo_divisor);
+      const divisor = promoOpt ? promoOpt.__promo_divisor : 1;
+      if (divisor <= 1) continue;
+      const remainder = cartItem.quantity % divisor;
+      if (remainder > 0) {
+        const needed = divisor - remainder;
+        partialItemMsg = `Thêm ${needed} ${menuItem.name} để tròn điểm, hoặc món khác tuỳ ý nhé! 🔥`;
+        break;
+      }
+    }
+
+    // Hiện thị thông báo: nếu remaining < 1 và có món lẻ → gợi ý thêm món đó
+    const remPoints = Math.ceil(remaining);
+    const text = (remaining < 1 && partialItemMsg)
+      ? partialItemMsg
+      : nextGiftNum === 1
+        ? `Bạn còn thiếu ${remPoints} điểm nữa là được khuyến mãi! 🔥`
+        : `Còn thiếu ${remPoints} điểm nữa là được tặng lần ${nextGiftNum}! 🔥`;
 
     setPromoCallout({ text, isGift: false });
     if (promoCalloutTimerRef.current) clearTimeout(promoCalloutTimerRef.current);
@@ -1274,16 +1298,22 @@ function OrderContent() {
 
 
 
-  async function submitOrder() {
-    if (cart.length === 0 || submitting) return;
+  // submitOrder: nhận cartOverride tuỳ chọn từ ChatOrderButton để gửi trực tiếp
+  async function submitOrder(cartOverride = null) {
+    const effectiveCart = Array.isArray(cartOverride) ? cartOverride : cart;
+    if (effectiveCart.length === 0 || submitting) return;
 
-    // Nếu còn slot quà chưa chọn → nhắc khách chọn trước
-    if (promoConfig.enabled && availableGiftSlots > 0 && !giftPromptPending) {
+    // Chỉ kiểm tra quà khi gọi từ giỏ hàng thông thường (không phải chat direct)
+    if (!Array.isArray(cartOverride) && promoConfig.enabled && availableGiftSlots > 0 && !giftPromptPending) {
       setGiftPromptPending(true);
-      setShowCart(false);   // đóng giỏ hàng để tập trung vào chọn quà
+      setShowCart(false);
       setShowGiftModal(true);
       return;
     }
+
+    const effectiveTotal = Array.isArray(cartOverride)
+      ? cartOverride.reduce((sum, i) => sum + (i.price || 0) * (i.quantity || 1), 0)
+      : totalAmount;
 
     setGiftPromptPending(false);
     setSubmitting(true);
@@ -1303,7 +1333,7 @@ function OrderContent() {
             .from('customers')
             .update({
               name: customerName.trim() || existingCustomer.name,
-              total_spent: (existingCustomer.total_spent || 0) + totalAmount,
+              total_spent: (existingCustomer.total_spent || 0) + effectiveTotal,
               visit_count: (existingCustomer.visit_count || 0) + 1,
               last_visit_at: new Date().toISOString(),
             })
@@ -1314,7 +1344,7 @@ function OrderContent() {
             .insert({
               name: customerName.trim() || 'Khách mới',
               phone: customerPhone.trim(),
-              total_spent: totalAmount,
+              total_spent: effectiveTotal,
               visit_count: 1,
               last_visit_at: new Date().toISOString(),
             })
@@ -1332,7 +1362,7 @@ function OrderContent() {
           customer_name: customerName.trim() || 'Khách ẩn danh',
           customer_phone: customerPhone.trim() || '',
           status: 'pending',
-          total_amount: totalAmount,
+          total_amount: effectiveTotal,
           ...(isTakeaway && deliveryAddress.trim() ? { delivery_address: deliveryAddress.trim() } : {}),
         })
         .select()
@@ -1341,7 +1371,7 @@ function OrderContent() {
       if (orderErr) throw orderErr;
 
       await supabase.from('order_items').insert([
-        ...cart.map(item => ({
+        ...effectiveCart.map(item => ({
           order_id: order.id,
           menu_item_id: item.id,
           quantity: item.quantity,
@@ -1366,7 +1396,6 @@ function OrderContent() {
         .update({ status: 'occupied', occupied_at: new Date().toISOString() })
         .eq('id', activeTableId);
 
-      // Gửi lệnh in tự động khi khách đặt món
       await sendPrintJob(supabase, order.id);
 
       setCart([]);
@@ -1375,7 +1404,6 @@ function OrderContent() {
       setShowCart(false);
       setOrderSuccess(true);
       setTimeout(() => setOrderSuccess(false), 3000);
-      // Save orderId to session so realtime can detect if THIS bill gets cancelled
       saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim(), order.id);
       setCurrentOrderId(order.id);
       fetchPreviousOrders();
@@ -1835,6 +1863,41 @@ function OrderContent() {
 
         {/* ─── Menu Content ─── */}
         <div className="co-content">
+
+          {/* ─── Holiday Banner ─── */}
+          {showHolidayBanner && (
+            <div style={{
+              margin: '12px 14px 16px',
+              padding: '16px 14px',
+              background: 'linear-gradient(135deg, #dc2626, #991b1b)',
+              borderRadius: '16px',
+              color: 'white',
+              position: 'relative',
+              boxShadow: '0 6px 16px rgba(220, 38, 38, 0.35)',
+              overflow: 'hidden',
+              border: '1.5px solid #ef4444'
+            }}>
+              {/* Cờ việt nam / Sao vàng background */}
+              <div style={{ position: 'absolute', top: -15, right: -15, opacity: 0.15, fontSize: '6rem', transform: 'rotate(15deg)', pointerEvents: 'none' }}>⭐</div>
+              
+              <button
+                onClick={() => setShowHolidayBanner(false)}
+                style={{ position: 'absolute', top: 10, right: 10, background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
+              >✕</button>
+              
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, position: 'relative', zIndex: 1 }}>
+                <span style={{ fontSize: '1.8rem', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>🇻🇳</span>
+                <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 900, letterSpacing: '0.02em', textTransform: 'uppercase', textShadow: '0 2px 4px rgba(0,0,0,0.3)' }}>
+                  Chào Mừng 30/4 - 1/5
+                </h3>
+              </div>
+              
+              <p style={{ margin: 0, fontSize: '0.85rem', fontWeight: 600, lineHeight: 1.45, opacity: 0.95, position: 'relative', zIndex: 1, paddingRight: 10 }}>
+                Ốc Bảo Khang kính chúc Quý Khách một kỳ nghỉ lễ thật nhiều niềm vui, hạnh phúc và ngon miệng! 🎉🍻
+              </p>
+            </div>
+          )}
+
           {/* Menu Items */}
           {groupedItems.map(({ catId, catName, items }) => (
             <div
@@ -2596,6 +2659,28 @@ function OrderContent() {
           </div>
         )}
       </div>
+
+      {/* ─── AI Chat Order Button ─── BẬT LẠI: bỏ comment 2 dòng dưới + import trên
+      <ChatOrderButton
+        menuItems={menuItems}
+        onConfirmOrder={(resolvedItems) => {
+          resolvedItems.forEach(item => {
+            setCart(prev => {
+              const key = item._optionKey;
+              if (key) {
+                const existing = prev.find(c => c._optionKey === key);
+                if (existing) return prev.map(c => c._optionKey === key ? { ...c, quantity: c.quantity + item.quantity } : c);
+              } else {
+                const existing = prev.find(c => c.id === item.id && !c._optionKey);
+                if (existing) return prev.map(c => c.id === item.id && !c._optionKey ? { ...c, quantity: c.quantity + item.quantity } : c);
+              }
+              return [...prev, item];
+            });
+          });
+        }}
+        onDirectSubmit={(resolvedItems) => submitOrder(resolvedItems)}
+      />
+      ─── */}
     </>
   );
 }

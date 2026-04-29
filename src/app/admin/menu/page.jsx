@@ -390,6 +390,7 @@ export default function MenuPage() {
       price: parseInt(itemForm.price) || 0,
       category_id: itemForm.category_id || null,
       options: cleanedOptions,
+      name_aliases: itemForm.name_aliases || '',
     };
 
     if (editingItem) {
@@ -463,7 +464,12 @@ export default function MenuPage() {
         updates = { is_available: true, hidden_until: time.toISOString() };
       }
 
-      await supabase.from('menu_items').update(updates).eq('id', item.id);
+      const { error } = await supabase.from('menu_items').update(updates).eq('id', item.id);
+      if (error) {
+        console.error('Update error:', error);
+        await Swal.fire('Lỗi', 'Không thể cập nhật: ' + error.message, 'error');
+        return;
+      }
     } else {
       const result = await Swal.fire({
         title: 'Hiện món ăn?',
@@ -903,6 +909,21 @@ export default function MenuPage() {
               <div className="form-group mb-4">
                 <label className="form-label">Mô tả</label>
                 <textarea className="textarea" value={itemForm.description} onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })} placeholder="Mô tả ngắn về món ăn..." />
+              </div>
+              {/* Tên gợi ý cho AI Chat */}
+              <div className="form-group mb-4" style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 10, padding: '10px 14px' }}>
+                <label className="form-label" style={{ color: '#0369a1', fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  🤖 Tên gợi ý cho AI Chat
+                </label>
+                <input
+                  className="input"
+                  value={itemForm.name_aliases || ''}
+                  onChange={(e) => setItemForm({ ...itemForm, name_aliases: e.target.value })}
+                  placeholder="Ví dụ: hau, con hau, hanh nuong (cách nhau bằng dấu phẩy)"
+                />
+                <div style={{ fontSize: '0.72rem', color: '#0369a1', marginTop: 4 }}>
+                  Các tên thay thế mà khách hay nhắn, giúp bot chat nhận diện đúng món.
+                </div>
               </div>
               <div className="form-group mb-4">
                 <label className="form-label">URL hình ảnh</label>

@@ -827,6 +827,31 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
   to   { transform: translate(-50%, 0);     opacity: 1; }
 }
 
+/* Snail Animations */
+.snail-bounce {
+  font-size: 32px;
+  animation: bounce 1.2s infinite ease-in-out;
+  display: inline-block;
+  line-height: 1;
+}
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+.snail-crawl {
+  font-size: 32px;
+  animation: crawl 3s linear infinite;
+  display: inline-block;
+  line-height: 1;
+}
+@keyframes crawl {
+  0%, 100% { transform: translateX(-4px) scaleX(1); }
+  49% { transform: translateX(4px) scaleX(1); }
+  50% { transform: translateX(4px) scaleX(-1); }
+  99% { transform: translateX(-4px) scaleX(-1); }
+}
+
 /* ═══════════════════════════════════
    CANCELLED / PAID BANNERS
    ═══════════════════════════════════ */
