@@ -393,7 +393,6 @@ function OrderContent() {
   const [promoCallout, setPromoCallout] = useState(null); // { text, isGift } | null
   const promoCalloutTimerRef = useRef(null);
   const prevQualifyingQtyRef = useRef(0);
-  const [showHolidayBanner, setShowHolidayBanner] = useState(true);
 
   // Option selection modal for items with choices
   const [optionModal, setOptionModal] = useState(null);
@@ -1750,12 +1749,47 @@ function OrderContent() {
         {/* ─── Promo Popup Modal ─── */}
         {showPromoPopup && (
           <div className="co-modal-overlay" style={{ zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div className="co-info-modal" style={{ borderRadius: '24px', padding: '32px 24px', margin: '0 20px', animation: 'coSlideUp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)', maxWidth: '360px', position: 'relative', overflow: 'hidden', background: 'linear-gradient(180deg, #ffffff 0%, #fff7ed 100%)' }} onClick={e => e.stopPropagation()}>
+            <div className="co-info-modal" style={{ borderRadius: 22, padding: 0, margin: '0 18px', animation: 'coSlideUp 0.32s cubic-bezier(0.32,0.72,0,1)', maxWidth: 380, position: 'relative', overflow: 'hidden', background: '#ffffff', boxShadow: '0 24px 70px rgba(15,23,42,0.28)' }} onClick={e => e.stopPropagation()}>
               {/* Background elements */}
               <div style={{ position: 'absolute', top: -30, left: -30, fontSize: '6rem', opacity: 0.1, transform: 'rotate(-15deg)' }}>🔥</div>
               <div style={{ position: 'absolute', bottom: -20, right: -20, fontSize: '5rem', opacity: 0.1, transform: 'rotate(15deg)' }}>🎁</div>
 
-              <div style={{ position: 'relative', zIndex: 2, textAlign: 'center' }}>
+              <div style={{ position: 'relative', zIndex: 2, textAlign: 'left', padding: '24px 22px 22px' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 999, background: '#ffedd5', color: '#c2410c', fontSize: '0.72rem', fontWeight: 900, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 14 }}>
+                  Ưu đãi hôm nay
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18 }}>
+                  <div style={{ width: 58, height: 58, borderRadius: 16, background: 'linear-gradient(135deg, #f97316, #dc2626)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '1.9rem', boxShadow: '0 10px 24px rgba(249,115,22,0.28)', flexShrink: 0 }}>
+                    🎁
+                  </div>
+                  <div>
+                    <h2 style={{ margin: 0, color: '#111827', fontSize: '1.45rem', lineHeight: 1.15, fontWeight: 900, letterSpacing: 0 }}>
+                      8 món tặng 1 món
+                    </h2>
+                    <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '0.88rem', lineHeight: 1.4, fontWeight: 600 }}>
+                      Tích đủ món trong đơn để mở quà tặng từ nhà hàng.
+                    </p>
+                  </div>
+                </div>
+                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 16, padding: '13px 14px', marginBottom: 16 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 9 }}>
+                    <span style={{ color: '#334155', fontSize: '0.83rem', fontWeight: 800 }}>Mốc nhận quà</span>
+                    <span style={{ color: '#ea580c', fontSize: '0.83rem', fontWeight: 900 }}>8 món</span>
+                  </div>
+                  <div style={{ height: 8, background: '#e2e8f0', borderRadius: 999, overflow: 'hidden' }}>
+                    <div style={{ width: '100%', height: '100%', background: 'linear-gradient(90deg, #f97316, #ef4444)', borderRadius: 999 }} />
+                  </div>
+                </div>
+                <p style={{ color: '#475569', fontSize: '0.94rem', fontWeight: 600, lineHeight: 1.55, margin: '0 0 18px' }}>
+                  Cứ mỗi <b style={{ color: '#0f172a' }}>8 món được tính khuyến mãi</b>, bạn được chọn 1 món quà ngẫu nhiên. Món tặng sẽ hiện trong giỏ khi đủ điều kiện.
+                </p>
+                <button
+                  onClick={() => setShowPromoPopup(false)}
+                  style={{ width: '100%', padding: '14px 16px', background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white', border: 'none', borderRadius: 14, fontSize: '1rem', fontWeight: 900, cursor: 'pointer', boxShadow: '0 10px 24px rgba(37,99,235,0.28)', letterSpacing: 0 }}
+                >
+                  Bắt đầu chọn món
+                </button>
+                <div style={{ display: 'none' }}>
                 <div style={{ fontSize: '3.5rem', marginBottom: '8px', animation: 'promo-pop 2s infinite ease-in-out' }}>🎁</div>
                 <h2 style={{ fontSize: '1.8rem', fontWeight: 900, color: '#ea580c', margin: '0 0 16px', lineHeight: 1.2, textTransform: 'uppercase' }}>Tin Vui!</h2>
 
@@ -1784,6 +1818,7 @@ function OrderContent() {
                 >
                   Đặt món ngay!
                 </button>
+                </div>
               </div>
 
               <button
@@ -1861,7 +1896,7 @@ function OrderContent() {
         <div className="co-content">
 
           {/* ─── Holiday Banner ─── */}
-          {showHolidayBanner && (
+          {false && (
             <div style={{
               margin: '12px 14px 16px',
               padding: '16px 14px',
@@ -1877,7 +1912,7 @@ function OrderContent() {
               <div style={{ position: 'absolute', top: -15, right: -15, opacity: 0.15, fontSize: '6rem', transform: 'rotate(15deg)', pointerEvents: 'none' }}>⭐</div>
               
               <button
-                onClick={() => setShowHolidayBanner(false)}
+                onClick={() => {}}
                 style={{ position: 'absolute', top: 10, right: 10, background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
               >✕</button>
               
