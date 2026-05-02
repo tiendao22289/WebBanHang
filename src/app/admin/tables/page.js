@@ -810,19 +810,26 @@ export default function TablesPage() {
 
 
   // ─── Draft Cart helpers (0 API calls, chỉ cập nhật local state) ───────────
+  function getInitialOptionSelection(menuItem) {
+    const initialOptions = {};
+    let initialPrice = null;
+
+    (menuItem.options || []).forEach(opt => {
+      if (opt.name && opt.choices && opt.choices.length > 0) {
+        initialOptions[opt.name] = opt.choices[0];
+        if (initialPrice === null && opt.prices?.[0] != null && Number(opt.prices[0]) > 0) {
+          initialPrice = Number(opt.prices[0]);
+        }
+      }
+    });
+
+    return { initialOptions, initialPrice };
+  }
+
   function addToDraft(menuItem, options = [], qty = 1, note = '', price = null) {
     // Nếu món có options mà chưa chọn → mở modal trước
     if (menuItem.options && menuItem.options.length > 0 && options.length === 0) {
-      const initialOptions = {};
-      let initialPrice = null;
-      menuItem.options.forEach(opt => {
-        if (opt.name && opt.choices && opt.choices.length > 0) {
-          initialOptions[opt.name] = opt.choices[0];
-          if (initialPrice === null && opt.prices?.[0] != null && Number(opt.prices[0]) > 0) {
-            initialPrice = Number(opt.prices[0]);
-          }
-        }
-      });
+      const { initialOptions, initialPrice } = getInitialOptionSelection(menuItem);
       setOptionModalItem(menuItem);
       setSelectedOptions(initialOptions);
       setOptionQuantity(1);
@@ -1990,12 +1997,13 @@ export default function TablesPage() {
 
                                 // Trì hoãn nhẹ để giải phóng luồng UI, chống lag khi render Modal
                                 setTimeout(() => {
+                                  const { initialOptions, initialPrice } = getInitialOptionSelection(item);
                                   setOptionModalItem(item);
-                                  setSelectedOptions({});
+                                  setSelectedOptions(initialOptions);
                                   setOptionQuantity(1);
                                   setOptionNote('');
                                   setEditingPrice(false);
-                                  setCustomPrice(null);
+                                  setCustomPrice(initialPrice);
                                 }, 10);
                               }}
                               style={{ background: 'white', borderRadius: 10, overflow: 'hidden', cursor: 'pointer', border: '1px solid #e5e7eb', transition: 'box-shadow 0.15s' }}
