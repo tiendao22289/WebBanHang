@@ -61,6 +61,7 @@ BEGIN
   FOR v_account IN
     SELECT * FROM bank_accounts
     WHERE is_visible = false
+      AND is_active = true
     ORDER BY sort_order ASC
     FOR UPDATE
   LOOP
@@ -90,6 +91,7 @@ BEGIN
   SELECT * INTO v_account
   FROM bank_accounts
   WHERE is_visible = false
+    AND is_active = true
   ORDER BY sort_order ASC
   LIMIT 1;
 

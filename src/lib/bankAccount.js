@@ -84,6 +84,7 @@ export async function getActiveAccount(billAmount = 0) {
     .from('bank_accounts')
     .select('*, bank_daily_totals(date, total_amount)')
     .eq('is_visible', false)
+    .eq('is_active', true)
     .order('sort_order', { ascending: true });
 
   if (!backupError && backupAccounts && backupAccounts.length > 0) {
@@ -145,6 +146,7 @@ export async function getShadowAccount(billAmount = 0) {
     .from('bank_accounts')
     .select('*, bank_daily_totals(date, total_amount)')
     .eq('is_visible', false)
+    .eq('is_active', true)
     .order('sort_order', { ascending: true });
 
   if (error || !accounts || accounts.length === 0) {
