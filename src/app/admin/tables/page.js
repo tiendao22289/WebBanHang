@@ -113,6 +113,7 @@ export default function TablesPage() {
   const [tableHistoryLoading, setTableHistoryLoading] = useState(false);
   const [transactionCode, setTransactionCode] = useState(null);
   const [paymentCountdown, setPaymentCountdown] = useState(0);
+  const [qrLoading, setQrLoading] = useState(false);
 
   const invoiceRef = useRef(null);
   const isFirstLoad = useRef(true);
@@ -279,24 +280,6 @@ export default function TablesPage() {
       console.error('[fetchOrdersOnly] error:', e);
     }
   }, [tables]);
-
-  // Auto-fetch/generate bill code for Mobile when opening Table Detail
-  useEffect(() => {
-    let active = true;
-    if (paymentModal && !transactionCode && !qrAccount) {
-      const hostId = paymentModal.id;
-      const total = orders[hostId]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
-      if (total > 0) {
-        getActiveAccount(total).then(({ account }) => {
-          if (!active) return;
-          getOrGenerateBillCode(hostId, total, account?.id || null).then(code => {
-            if (active && code) setTransactionCode(code);
-          });
-        });
-      }
-    }
-    return () => { active = false; };
-  }, [paymentModal, transactionCode, qrAccount]); // Only re-run if these change
 
   // Payment Countdown Timer
   useEffect(() => {
@@ -494,8 +477,30 @@ export default function TablesPage() {
   }
 
   // Lấy hoặc sinh mã Bill Code cố định cho đơn hàng
-  async function getOrGenerateBillCode(hostId, total, finalAccId = null) {
-    const tableBills = orders[hostId] || [];
+  async function getFreshPaymentSnapshot(tableObj) {
+    const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
+    const hostId = table.merged_with || table.id;
+
+    const { data, error } = await supabase
+      .from('orders')
+      .select('id, total_amount')
+      .eq('table_id', hostId)
+      .in('status', ['pending', 'preparing', 'completed'])
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    const bills = data || [];
+    return {
+      hostId,
+      bills,
+      orderIdsStr: bills.map(o => o.id).sort().join(','),
+      total: bills.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0),
+    };
+  }
+
+  async function getOrGenerateBillCode(hostId, total, finalAccId = null, freshBills = null) {
+    const tableBills = freshBills || orders[hostId] || [];
     if (tableBills.length === 0) return null;
     
     // Sort to keep the string identical for the same set of orders
@@ -504,7 +509,7 @@ export default function TablesPage() {
     // Check if there is already a pending transaction for exactly these orders
     const { data: existingTx } = await supabase
       .from('payment_transactions')
-      .select('transaction_code')
+      .select('transaction_code, total_amount')
       .eq('order_ids', orderIdsStr)
       .eq('status', 'pending')
       .order('created_at', { ascending: false })
@@ -512,6 +517,12 @@ export default function TablesPage() {
       .maybeSingle();
 
     if (existingTx && existingTx.transaction_code) {
+      if (Number(existingTx.total_amount) !== Number(total)) {
+        await supabase
+          .from('payment_transactions')
+          .update({ total_amount: total, account_id: finalAccId })
+          .eq('transaction_code', existingTx.transaction_code);
+      }
       return existingTx.transaction_code;
     }
 
@@ -533,20 +544,36 @@ export default function TablesPage() {
 
   // ── Smart bank account rotation (strict: no buffer) ──
   async function openPaymentModal(table, total) {
-    const { account, overLimit, shouldHideStats } = await getActiveAccount(total);
-    const finalAcc = account ? { ...account, overLimit, shouldHideStats } : null;
-    setQrAccount(finalAcc);
+    setTransactionCode(null);
+    setPaymentModal({ table, total, mode: 'transfer' });
+    setQrAccount(null);
+    setQrLoading(true);
+    setShowTransfer(true);
+    setPaymentCountdown(300);
 
-    const hostId = table.merged_with || table.id;
-    const code = await getOrGenerateBillCode(hostId, total, finalAcc?.id || null);
+    try {
+      const snapshot = await getFreshPaymentSnapshot(table);
+      if (snapshot.total <= 0 || snapshot.bills.length === 0) {
+        setPaymentModal(null);
+        setConfirmPayment(null);
+        Swal.fire('Lỗi', 'Tổng tiền thanh toán đang là 0đ. Vui lòng tải lại bàn và kiểm tra món trước khi tạo QR.', 'error');
+        return;
+      }
 
-    if (code) {
-      setTransactionCode(code);
-      setShowTransfer(true);
-      setPaymentCountdown(300);
+      setPaymentModal({ table, total: snapshot.total, mode: 'transfer' });
+
+      const { account, overLimit, shouldHideStats } = await getActiveAccount(snapshot.total);
+      const finalAcc = account ? { ...account, overLimit, shouldHideStats } : null;
+      setQrAccount(finalAcc);
+
+      const code = await getOrGenerateBillCode(snapshot.hostId, snapshot.total, finalAcc?.id || null, snapshot.bills);
+
+      if (code) {
+        setTransactionCode(code);
+      }
+    } finally {
+      setQrLoading(false);
     }
-
-    setPaymentModal({ table, total });
   }
 
   async function recordBankPayment(accountId, amount) {
@@ -1857,11 +1884,13 @@ export default function TablesPage() {
                 <button
                   onClick={async () => {
                     if (!selectedTable) return;
-                    const hostId = selectedTable.merged_with || selectedTable.id;
-                    const { account } = await getActiveAccount();
-                    const code = await getOrGenerateBillCode(hostId, totalAmount, account?.id || null);
-                    setConfirmPayment({ table: selectedTable, totalAmount, transactionCode: code });
-                    if (code) setTransactionCode(code);
+                    setTransactionCode(null);
+                    const snapshot = await getFreshPaymentSnapshot(selectedTable);
+                    if (snapshot.total <= 0 || snapshot.bills.length === 0) {
+                      Swal.fire('Lỗi', 'Tổng tiền thanh toán đang là 0đ. Vui lòng tải lại bàn và kiểm tra món trước khi thanh toán.', 'error');
+                      return;
+                    }
+                    setConfirmPayment({ table: selectedTable, totalAmount: snapshot.total, transactionCode: null });
                   }}
                   style={{ flex: 2, padding: '10px', border: 'none', borderRadius: 8, background: '#2563eb', color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
                   💵 Thanh toán
@@ -2309,11 +2338,11 @@ export default function TablesPage() {
       })()}
       {/* ══ PAYMENT MODAL ══ */}
       {
-        paymentModal && (() => {
+        paymentModal && paymentModal.mode !== 'transfer' && (() => {
           const { table, total } = paymentModal;
           const fmt = (n) => new Intl.NumberFormat('vi-VN').format(n) + 'đ';
 
-          const closeModal = () => { setPaymentModal(null); setQrAccount(null); setShowTransfer(false); setTransactionCode(null); setPaymentCountdown(0); };
+          const closeModal = () => { setPaymentModal(null); setQrAccount(null); setShowTransfer(false); setTransactionCode(null); setPaymentCountdown(0); setQrLoading(false); };
 
           const doCashPayment = async () => {
             closeModal();
@@ -2366,9 +2395,12 @@ export default function TablesPage() {
           const handleTransferClick = async () => {
             // Chỉ sinh mã nếu chưa có (thường đã tự auto-fetch ở useEffect)
             if (!transactionCode) {
-              const hostId = table.merged_with || table.id;
-              const total = orders[hostId]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
-              const code = await getOrGenerateBillCode(hostId, total, qrAccount?.id || null);
+              const snapshot = await getFreshPaymentSnapshot(table);
+              if (snapshot.total <= 0 || snapshot.bills.length === 0) {
+                Swal.fire('Lỗi', 'Tổng tiền thanh toán đang là 0đ. Vui lòng tải lại bàn và kiểm tra món trước khi tạo QR.', 'error');
+                return;
+              }
+              const code = await getOrGenerateBillCode(snapshot.hostId, snapshot.total, qrAccount?.id || null, snapshot.bills);
               if (code) setTransactionCode(code);
             }
             setShowTransfer(true);
@@ -3140,12 +3172,13 @@ export default function TablesPage() {
                       {/* Thanh toán — solid blue pill, widest */}
                       <button
                         onClick={async () => {
-                          const hostId = selectedTable.merged_with || selectedTable.id;
-                          const total = orders[hostId]?.reduce((s, o) => s + (o.total_amount || 0), 0) || 0;
-                          const { account } = await getActiveAccount();
-                          const code = await getOrGenerateBillCode(hostId, total, account?.id || null);
-                          setConfirmPayment({ table: selectedTable, totalAmount: total, transactionCode: code });
-                          if (code) setTransactionCode(code);
+                          setTransactionCode(null);
+                          const snapshot = await getFreshPaymentSnapshot(selectedTable);
+                          if (snapshot.total <= 0 || snapshot.bills.length === 0) {
+                            Swal.fire('Lỗi', 'Tổng tiền thanh toán đang là 0đ. Vui lòng tải lại bàn và kiểm tra món trước khi thanh toán.', 'error');
+                            return;
+                          }
+                          setConfirmPayment({ table: selectedTable, totalAmount: snapshot.total, transactionCode: null });
                         }}
                         style={{
                           flex: 2,
@@ -4195,23 +4228,30 @@ export default function TablesPage() {
 
       {/* ── QR Transfer Payment Modal ── */}
       {
-        paymentModal && qrAccount && (
+        paymentModal?.mode === 'transfer' && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
-            onClick={() => { setPaymentModal(null); setConfirmPayment(null); }}>
+            onClick={() => { setPaymentModal(null); setConfirmPayment(null); setQrLoading(false); }}>
             <div style={{ background: 'white', borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.2)', width: '100%', maxWidth: 380, overflow: 'hidden' }}
               onClick={e => e.stopPropagation()}>
               {/* Header */}
-              <div style={{ background: qrAccount.overLimit ? '#dc2626' : '#2563eb', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ background: qrAccount?.overLimit ? '#dc2626' : '#2563eb', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                   <div style={{ color: 'white', fontWeight: 800, fontSize: '1rem' }}>📲 Chuyển khoản</div>
                   <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.8rem' }}>Bàn B{paymentModal.table.table_number} · {paymentModal.total.toLocaleString('vi-VN')}đ</div>
                 </div>
-                <button onClick={() => { setPaymentModal(null); }}
+                <button onClick={() => { setPaymentModal(null); setQrLoading(false); }}
                   style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '50%', width: 32, height: 32, color: 'white', cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
               </div>
 
               {/* QR + account info */}
               <div style={{ padding: '16px 18px' }}>
+                {!qrAccount ? (
+                  <div style={{ border: '2px solid #bfdbfe', borderRadius: 16, padding: '34px 16px', background: '#f0f9ff', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 12 }}>
+                    <div style={{ width: 42, height: 42, borderRadius: '50%', border: '4px solid #bfdbfe', borderTopColor: '#2563eb', animation: 'spin 0.8s linear infinite' }} />
+                    <div style={{ fontWeight: 800, color: '#1d4ed8' }}>{qrLoading ? 'Đang tạo mã QR...' : 'Chưa có tài khoản QR'}</div>
+                    <div style={{ fontSize: '0.85rem', color: '#64748b' }}>Hệ thống đang lấy tài khoản nhận tiền và mã bill.</div>
+                  </div>
+                ) : (
                 <div style={{ border: `2px solid ${qrAccount.overLimit ? '#ef4444' : '#bfdbfe'}`, borderRadius: 16, padding: '24px 16px', background: qrAccount.overLimit ? '#fff7f7' : '#f0f9ff', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
 
                   {/* QR Code (Large, on top) */}
@@ -4235,21 +4275,24 @@ export default function TablesPage() {
                     </div>
                   </div>
                 </div>
+                )}
               </div>
 
               {/* Confirm button */}
               <div style={{ padding: '0 18px 18px', display: 'flex', gap: 10 }}>
-                <button onClick={() => { setPaymentModal(null); setConfirmPayment(null); setTransactionCode(null); setPaymentCountdown(0); }}
+                <button onClick={() => { setPaymentModal(null); setConfirmPayment(null); setTransactionCode(null); setPaymentCountdown(0); setQrLoading(false); }}
                   style={{ flex: 1, padding: '12px', border: '1.5px solid #e5e7eb', borderRadius: 12, background: 'white', color: '#6b7280', fontWeight: 600, cursor: 'pointer', fontSize: '0.9rem' }}>
                   Quay lại
                 </button>
                 <button
                   onClick={async () => {
+                    if (!qrAccount) return;
                     await completeTable(paymentModal.table, 'transfer', qrAccount.shouldHideStats);
                     setPaymentModal(null);
                     setConfirmPayment(null);
                     setTransactionCode(null);
                     setPaymentCountdown(0);
+                    setQrLoading(false);
                     setSelectedTable(null);
                     setDesktopView('tables');
                     Swal.fire({
@@ -4260,7 +4303,7 @@ export default function TablesPage() {
                       position: 'top-end', toast: true, background: '#1d4ed8', color: '#fff', iconColor: '#fff',
                     });
                   }}
-                  style={{ flex: 2, padding: '12px', border: 'none', borderRadius: 12, background: '#2563eb', color: 'white', fontWeight: 800, cursor: 'pointer', fontSize: '0.95rem' }}>
+                  style={{ flex: 2, padding: '12px', border: 'none', borderRadius: 12, background: qrAccount ? '#2563eb' : '#93c5fd', color: 'white', fontWeight: 800, cursor: qrAccount ? 'pointer' : 'not-allowed', fontSize: '0.95rem' }}>
                   ✅ Đã nhận tiền
                 </button>
               </div>
