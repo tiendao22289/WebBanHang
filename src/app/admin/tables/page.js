@@ -149,7 +149,7 @@ export default function TablesPage() {
   // ─── Gửi lệnh in tới PrintAgent — gộp orders của bàn → 1 phiếu → máy mặc định ───
   const handlePrintInvoice = async () => {
     if (!selectedTable) return;
-    const tableOrders = (orders[selectedTable.merged_with || selectedTable.id] || [])
+    const tableOrders = getSelectedTableOrders()
       .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
     if (tableOrders.length === 0) { alert('Không có đơn hàng để in!'); return; }
 
@@ -178,7 +178,7 @@ export default function TablesPage() {
   // ─── In phiếu tạm tính — cùng logic (gộp + máy mặc định) ──────────────────
   const handlePrintTempBill = async () => {
     if (!selectedTable) return;
-    const tableOrders = (orders[selectedTable.merged_with || selectedTable.id] || [])
+    const tableOrders = getSelectedTableOrders()
       .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
     if (tableOrders.length === 0) { alert('Không có đơn hàng để in!'); return; }
 
@@ -435,12 +435,15 @@ export default function TablesPage() {
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
     const hostId = table.merged_with || table.id;
 
+    // Lấy tất cả table ID trong nhóm gộp (host + satellites)
+    const groupTableIds = [hostId, ...tables.filter(t => t.merged_with === hostId).map(t => t.id)];
+
     // ─── Atomic: check hạn mức + ghi bank_daily_totals trong 1 Postgres transaction ───
     try {
       const { data: ordersToPay } = await supabase
         .from('orders')
         .select('total_amount')
-        .eq('table_id', hostId)
+        .in('table_id', groupTableIds)
         .in('status', ['pending', 'preparing', 'completed']);
 
       const totalAmount = (ordersToPay || []).reduce((sum, o) => sum + (o.total_amount || 0), 0);
@@ -463,7 +466,7 @@ export default function TablesPage() {
         is_hidden_from_stats: shouldHideStats,
         created_at: new Date().toISOString()
       })
-      .eq('table_id', hostId)
+      .in('table_id', groupTableIds)
       .in('status', ['pending', 'preparing', 'completed']);
 
     // Reset toàn bộ nhóm bàn gộp
@@ -481,10 +484,14 @@ export default function TablesPage() {
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
     const hostId = table.merged_with || table.id;
 
+    // Lấy tất cả table ID trong nhóm gộp (host + satellites)
+    const { data: _allTables } = await supabase.from('tables').select('id, merged_with');
+    const _freshGroupIds = [hostId, ...(_allTables || []).filter(t => t.merged_with === hostId).map(t => t.id)];
+
     const { data, error } = await supabase
       .from('orders')
       .select('id, total_amount')
-      .eq('table_id', hostId)
+      .in('table_id', _freshGroupIds)
       .in('status', ['pending', 'preparing', 'completed'])
       .order('created_at', { ascending: true });
 
@@ -821,8 +828,9 @@ export default function TablesPage() {
   }
 
   const decreaseItemFromMenu = async (menuItemId) => {
-    const activeOrder = selectedTable && orders[selectedTable.merged_with || selectedTable.id]
-      ? (orders[selectedTable.merged_with || selectedTable.id].find(o => o.customer_name === 'Admin') || orders[selectedTable.merged_with || selectedTable.id][0])
+    const _currentOrders = selectedTable ? getSelectedTableOrders() : [];
+    const activeOrder = _currentOrders.length > 0
+      ? (_currentOrders.find(o => o.customer_name === 'Admin') || _currentOrders[0])
       : null;
 
     if (!activeOrder) return;
@@ -1130,15 +1138,15 @@ export default function TablesPage() {
     for (const sid of selectedIds) {
       const targetTable = tables.find(t => t.id === sid);
       if (!targetTable) continue;
+      // Nếu bàn này đang là host của nhóm khác, kéo cả satellite của nó về hostId luôn
       const targetHostId = targetTable.merged_with || targetTable.id;
-      if (targetHostId !== hostId) {
-        const targetOrders = orders[targetHostId] || [];
-        if (targetOrders.length > 0) {
-          await supabase.from('orders')
-            .update({ table_id: hostId })
-            .in('id', targetOrders.map(o => o.id));
-        }
+      if (targetHostId !== hostId && targetHostId !== sid) {
+        // Chỉ cập nhật merged_with của các satellite con, KHÔNG di chuyển orders
+        await supabase.from('tables')
+          .update({ merged_with: hostId })
+          .eq('merged_with', targetHostId);
       }
+      // Chỉ cập nhật merged_with, KHÔNG đụng đến table_id của orders
       await supabase.from('tables')
         .update({ status: 'occupied', merged_with: hostId, occupied_at: new Date().toISOString() })
         .eq('id', sid);
@@ -1180,7 +1188,7 @@ export default function TablesPage() {
 
   async function mergeBills() {
     if (!selectedTable) return;
-    const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
+    const tableBills = getSelectedTableOrders();
     if (tableBills.length <= 1) {
       Swal.fire('Lỗi', 'Không có đủ bill để gộp!', 'error');
       return;
@@ -1318,10 +1326,21 @@ export default function TablesPage() {
     });
   }
 
-  // Get the table object for printing invoice
+  // Lấy TẤT CẢ đơn hàng của nhóm bàn gộp (host + satellites)
+  // Đọc orders theo từng table id, không dựa vào table_id bên trong order
   function getSelectedTableOrders() {
     if (!selectedTable) return [];
-    return orders[selectedTable.merged_with || selectedTable.id] || [];
+    const hostId = selectedTable.merged_with || selectedTable.id;
+    // Orders của bàn chính
+    let allOrders = [...(orders[hostId] || [])];
+    // Orders của tất cả bàn phụ đang gộp vào bàn chính này
+    tables.forEach(t => {
+      if (t.merged_with === hostId && t.id !== hostId) {
+        const satelliteOrders = orders[t.id] || [];
+        allOrders = [...allOrders, ...satelliteOrders];
+      }
+    });
+    return allOrders;
   }
 
   const availableCount = tables.filter(t => t.status === 'available' && t.table_type !== 'takeaway').length;
@@ -1392,11 +1411,14 @@ export default function TablesPage() {
         mergedHostIds.forEach((hid, idx) => { groupColorMap[hid] = GROUP_PALETTES[idx % GROUP_PALETTES.length]; });
 
         const tableCard = (table, compact = false) => {
-          const tableBills = orders[table.merged_with || table.id] || [];
           const isOccupied = table.status === 'occupied';
           const isMergedSatellite = !!table.merged_with;
           const isHost = !isMergedSatellite && !!groupColorMap[table.id];
           const hostIdCard = table.merged_with || table.id;
+          // Cộng dồn orders của cả nhóm gộp (host + satellites) để hiển thị tổng tiền chính xác
+          const _hostOrdersCard = orders[hostIdCard] || [];
+          const _satOrdersCard = tables.filter(t => t.merged_with === hostIdCard && t.id !== hostIdCard).flatMap(t => orders[t.id] || []);
+          const tableBills = [..._hostOrdersCard, ..._satOrdersCard];
           const groupColor = groupColorMap[hostIdCard] || null;
           const totalAmount = tableBills.reduce((s, o) => s + (o.total_amount || 0), 0);
           const guestCount = tableBills.length;
@@ -1558,7 +1580,7 @@ export default function TablesPage() {
               <p style={{ fontSize: '0.9rem' }}>Chọn bàn để xem đơn hàng</p>
             </div>
           );
-          const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
+          const tableBills = getSelectedTableOrders();
           // ── Collect ALL items from ALL orders (same as mobile) ──
           const allOrderItems = tableBills.flatMap(order =>
             (order.order_items || []).map(item => ({ ...item, _orderId: order.id }))
@@ -2714,13 +2736,15 @@ export default function TablesPage() {
                 </div>
 
                 {/* On-screen bills display */}
-                {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 ? (
-                  orders[selectedTable.merged_with || selectedTable.id].map((order, idx) => (
+                {(() => {
+                  const _screenOrders = getSelectedTableOrders();
+                  return _screenOrders?.length > 0 ? (
+                    _screenOrders.map((order, idx) => (
                     <div key={order.id} className="order-detail-card">
                       {/* Customer name header per bill */}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '4px 0 6px', borderBottom: '1px solid #f3f4f6', marginBottom: 4 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                          {orders[selectedTable.merged_with || selectedTable.id].length > 1 && (
+                          {_screenOrders.length > 1 && (
                             <span style={{ fontSize: '0.7rem', background: '#2563eb', color: 'white', borderRadius: 10, padding: '1px 7px', fontWeight: 700 }}>
                               #{idx + 1}
                             </span>
@@ -2819,7 +2843,7 @@ export default function TablesPage() {
                                   await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
                                 }
 
-                                const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== order.id && o.status !== 'cancelled');
+                                const remaining = getSelectedTableOrders().filter(o => o.id !== order.id && o.status !== 'cancelled');
                                 if (remaining.length === 0) {
                                   // Reset toàn bộ nhóm gộp
                                   const hId = selectedTable.merged_with || selectedTable.id;
@@ -2860,7 +2884,7 @@ export default function TablesPage() {
                               if (!result.isConfirmed) return;
                               await supabase.from('orders').update({ status: 'cancelled' }).eq('id', order.id);
                               // If all orders at this table are now cancelled, reset the table
-                              const remaining = orders[selectedTable.merged_with || selectedTable.id].filter(o => o.id !== order.id && o.status !== 'cancelled');
+                              const remaining = getSelectedTableOrders().filter(o => o.id !== order.id && o.status !== 'cancelled');
                               if (remaining.length === 0) {
                                 // Reset toàn bộ nhóm gộp
                                 const hId = selectedTable.merged_with || selectedTable.id;
@@ -3078,11 +3102,12 @@ export default function TablesPage() {
                       <Plus size={16} /> Bắt đầu gọi món
                     </button>
                   </div>
-                )}
+                 );
+                })()}
               </div>
 
               {/* Floating FAB — absolutely positioned on modal, not in scroll area */}
-              {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (
+              {getSelectedTableOrders()?.length > 0 && (
                 <button
                   onClick={() => setAddingToOrder('admin')}
                   style={{
@@ -3108,8 +3133,8 @@ export default function TablesPage() {
               )}
               <div className="modal-footer" style={{ padding: '8px 12px', gap: 6, flexDirection: 'column', alignItems: 'stretch' }}>
                 {/* Total summary row */}
-                {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (() => {
-                  const total = orders[selectedTable.merged_with || selectedTable.id].reduce((s, o) => s + (o.total_amount || 0), 0);
+                {getSelectedTableOrders()?.length > 0 && (() => {
+                  const total = getSelectedTableOrders().reduce((s, o) => s + (o.total_amount || 0), 0);
                   return (
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid #f3f4f6' }}>
                       <span style={{ fontSize: '0.88rem', color: '#6b7280', fontWeight: 500 }}>Tổng cộng:</span>
@@ -3121,8 +3146,8 @@ export default function TablesPage() {
                 {/* Nút Gộp Bill Mobile — REMOVED standalone row, moved into action row below */}
 
                 {/* Action buttons row — all in one row */}
-                {orders[selectedTable.merged_with || selectedTable.id]?.length > 0 && (() => {
-                  const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
+                {getSelectedTableOrders()?.length > 0 && (() => {
+                  const tableBills = getSelectedTableOrders();
                   const smallBtnStyle = {
                     width: 54, minWidth: 54,
                     padding: '5px 2px',
@@ -3345,7 +3370,7 @@ export default function TablesPage() {
             setDraftCart([]);
             setAddingToOrder(null);
             setAddItemSearch('');
-            if (selectedTable && (!orders[selectedTable.merged_with || selectedTable.id] || orders[selectedTable.merged_with || selectedTable.id].length === 0)) {
+            if (selectedTable && getSelectedTableOrders().length === 0) {
               setSelectedTable(null);
             }
           };
@@ -3937,7 +3962,7 @@ export default function TablesPage() {
       {/* Full-screen Bill Preview Modal */}
       {
         showBillPreview && selectedTable && (() => {
-          const tableBills = orders[selectedTable.merged_with || selectedTable.id] || [];
+          const tableBills = getSelectedTableOrders();
           const rawItems = tableBills.flatMap(b => b.order_items || []);
           const grandTotal = tableBills.reduce((s, b) => s + b.total_amount, 0);
           const now = new Date();
