@@ -582,6 +582,18 @@ function OrderContent() {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
+  async function refreshGroupIds(mergedWithVal, tableId) {
+    const hostId = mergedWithVal || tableId;
+    const { data: groupTables } = await supabase
+      .from('tables')
+      .select('id')
+      .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
+    const gIds = (groupTables || []).map(t => t.id);
+    setMergeGroupIds(gIds);
+    mergeGroupIdsRef.current = gIds;
+    fetchPreviousOrders();
+  }
+
   // ─── Realtime: detect when admin cancels order or resets table ───
   useEffect(() => {
     if (!activeTableId) return;
@@ -594,6 +606,12 @@ function OrderContent() {
       if (newData.promo_gift_unlocked !== undefined && newData.promo_gift_unlocked !== oldData.promo_gift_unlocked) {
         fetchPreviousOrders();
         // Notification logic sẽ được xử lý bởi useEffect giftCount bên dưới
+      }
+
+      // Case Bị Gộp Bàn (merged_with thay đổi)
+      if (newData.merged_with !== oldData.merged_with) {
+        refreshGroupIds(newData.merged_with, newData.id);
+        return;
       }
 
       // Case 2: Bàn trở về available = đã thanh toán hoặc admin huỷ
@@ -957,6 +975,9 @@ function OrderContent() {
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
 
+    // Dùng danh sách bàn gộp để hiển thị bill chung cho toàn nhóm
+    const targetIds = mergeGroupIdsRef.current?.length > 0 ? mergeGroupIdsRef.current : [activeTableId];
+
     // Kiểm tra xem bản thân có đang ở bàn này không (có orderId hoặc phone match)
     const savedOrderId = getSavedSession()?.orderId;
     let hasMySession = false;
@@ -967,19 +988,18 @@ function OrderContent() {
     } else if (phoneToUse) {
       const { data: myOrders } = await supabase
         .from('orders').select('id, status')
-        .eq('table_id', activeTableId).eq('customer_phone', phoneToUse)
+        .in('table_id', targetIds).eq('customer_phone', phoneToUse)
         .gte('created_at', startOfDay).lt('created_at', endOfDay)
         .in('status', ['pending', 'preparing']);
       hasMySession = (myOrders?.length || 0) > 0;
     }
 
-    // Nếu có session tại bàn → lấy TẤT CẢ bills của bàn hôm nay
-    // (kể cả admin order, người khác order, bill đã merge)
+    // Nếu có session tại bàn → lấy TẤT CẢ bills của toàn bộ nhóm bàn hôm nay
     if (hasMySession) {
       const { data: allTableBills } = await supabase
         .from('orders')
         .select(`*, order_items(*, menu_item:menu_items(name, price)), print_jobs(id, status, error_message)`)
-        .eq('table_id', activeTableId)
+        .in('table_id', targetIds)
         .gte('created_at', startOfDay).lt('created_at', endOfDay)
         .in('status', ['pending', 'preparing', 'merged', 'completed'])
         .order('created_at', { ascending: false });
@@ -996,7 +1016,7 @@ function OrderContent() {
       const { data } = await supabase
         .from('orders')
         .select(`*, order_items(*, menu_item:menu_items(name, price)), print_jobs(id, status, error_message)`)
-        .eq('table_id', activeTableId)
+        .in('table_id', targetIds)
         .eq('customer_phone', phoneToUse)
         .gte('created_at', startOfDay).lt('created_at', endOfDay)
         .in('status', ['completed', 'paid', 'merged'])
