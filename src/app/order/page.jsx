@@ -393,6 +393,10 @@ function OrderContent() {
   const [promoCallout, setPromoCallout] = useState(null); // { text, isGift } | null
   const promoCalloutTimerRef = useRef(null);
   const prevQualifyingQtyRef = useRef(0);
+  // Merge group — khuyến mãi chia sẻ
+  const [mergeGroupIds, setMergeGroupIds] = useState([]); // IDs tất cả bàn trong nhóm gộp
+  const [groupOrders, setGroupOrders] = useState([]);     // Orders của cả nhóm (chỉ dùng tính KM)
+  const mergeGroupIdsRef = useRef([]);
 
   // Option selection modal for items with choices
   const [optionModal, setOptionModal] = useState(null);
@@ -524,6 +528,13 @@ function OrderContent() {
     }, 3000);
     return () => clearInterval(interval);
   }, [showOrdered, customerPhone]);
+
+  // Khi mergeGroupIds thay đổi (admin gộp bàn) → fetch groupOrders ngay
+  useEffect(() => {
+    if (mergeGroupIds.length > 0) {
+      fetchGroupOrders(mergeGroupIds);
+    }
+  }, [mergeGroupIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Init: check localStorage session ───
   useEffect(() => {
@@ -704,6 +715,9 @@ function OrderContent() {
         // Chỉ re-fetch nếu item thuộc về một trong các order hiện tại của mình
         if (previousOrdersRef.current.some(o => o.id === orderId)) {
           fetchPreviousOrders();
+        } else {
+          // Order của bàn khác trong cùng nhóm gộp → chỉ cần cập nhật groupOrders để tính KM
+          fetchGroupOrders();
         }
       })
       .subscribe();
@@ -913,6 +927,15 @@ function OrderContent() {
       if (tableData.merged_with) {
         setActiveTableId(tableData.merged_with);
       }
+      // Lấy danh sách tất cả bàn trong nhóm gộp để tính khuyến mãi chung
+      const hostId = tableData.merged_with || tableData.id;
+      const { data: groupTables } = await supabase
+        .from('tables')
+        .select('id')
+        .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
+      const gIds = (groupTables || []).map(t => t.id);
+      setMergeGroupIds(gIds);
+      mergeGroupIdsRef.current = gIds;
     }
     // Load promotion config
     const { data: settings } = await supabase.from('settings').select('key, value')
@@ -962,6 +985,8 @@ function OrderContent() {
         .order('created_at', { ascending: false });
 
       setPreviousOrders(allTableBills || []);
+      // Đồng thời cập nhật groupOrders để tính KM chung cho nhóm
+      fetchGroupOrders();
       return;
     }
 
@@ -987,6 +1012,23 @@ function OrderContent() {
     }
 
     setPreviousOrders(myFinished);
+  }
+
+  // Lấy orders của cả nhóm bàn gộp — chỉ dùng để tính điểm KM và slot quà
+  async function fetchGroupOrders(groupIds) {
+    const ids = groupIds || mergeGroupIdsRef.current;
+    if (!ids || ids.length === 0) return;
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
+    const { data } = await supabase
+      .from('orders')
+      .select('id, table_id, order_items(id, menu_item_id, quantity, unit_price, is_gift, item_options, menu_item:menu_items(id, counts_for_promotion, options))')
+      .in('table_id', ids)
+      .gte('created_at', startOfDay)
+      .lt('created_at', endOfDay)
+      .in('status', ['pending', 'preparing', 'completed']);
+    setGroupOrders(data || []);
   }
 
   function reorderBill(order) {
@@ -1162,8 +1204,10 @@ function OrderContent() {
       }
     });
     
-    // 2. Từ các đơn đã gửi
-    (previousOrders || []).forEach(order => {
+    // 2. Từ các đơn đã gửi — tính từ TOÀN BỘ nhóm bàn gộp (groupOrders)
+    // Nếu chưa có groupOrders thì fallback về previousOrders của bàn mình
+    const ordersForPromo = groupOrders.length > 0 ? groupOrders : (previousOrders || []);
+    ordersForPromo.forEach(order => {
       (order.order_items || []).forEach(oi => {
         if (!oi.is_gift) {
           const menuItem = menuItems.find(m => m.id === oi.menu_item_id);
@@ -1179,8 +1223,10 @@ function OrderContent() {
   })();
 
   const giftCount = promoConfig.enabled ? Math.floor(qualifyingQty / promoConfig.threshold) : 0;
-  // usedGiftSlots = gifts đã gửi vào DB (trong previousOrders) + gifts trong local giftCart chưa gửi
-  const submittedGiftSlots = (previousOrders || []).reduce((sum, order) => {
+  // usedGiftSlots = gifts đã gửi của TOÀN NHÓM (groupOrders) + gifts trong local giftCart chưa gửi
+  // → Ngăn nhiều bàn trong cùng nhóm chọn quà vượt quá quota
+  const ordersForGiftCount = groupOrders.length > 0 ? groupOrders : (previousOrders || []);
+  const submittedGiftSlots = ordersForGiftCount.reduce((sum, order) => {
     return sum + (order.order_items || []).reduce((s, oi) => s + (oi.is_gift ? (oi.quantity || 1) : 0), 0);
   }, 0);
   const usedGiftSlots = submittedGiftSlots + giftCart.length;
@@ -1208,7 +1254,11 @@ function OrderContent() {
       setAdminUnlockToast(true);
       setTimeout(() => setAdminUnlockToast(false), 6000);
       // Callout từ bubble
-      setPromoCallout({ text: `🎉 Bạn đã được tặng ${giftCount} món!`, isGift: true });
+      const isGroupPromo = mergeGroupIds.length > 1;
+      const promoText = isGroupPromo
+        ? `🔗 Nhóm bàn của bạn đủ ${promoConfig.threshold} món — được tặng ${giftCount} món!`
+        : `🎉 Bạn đã được tặng ${giftCount} món!`;
+      setPromoCallout({ text: promoText, isGift: true });
       if (promoCalloutTimerRef.current) clearTimeout(promoCalloutTimerRef.current);
       promoCalloutTimerRef.current = setTimeout(() => setPromoCallout(null), 6000);
       if (availableGiftSlots > 0) {
