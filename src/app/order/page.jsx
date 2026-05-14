@@ -1945,7 +1945,7 @@ function OrderContent() {
                     <div key={item.id} className="co-item-row" onClick={() => addToCart(item)} style={{ cursor: 'pointer' }}>
                       <div className="co-item-img" style={{ position: 'relative' }}>
                         {item.image_url ? (
-                          <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 100px, 150px" style={{ objectFit: 'cover' }} />
+                          <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         ) : (
                           <div className="co-item-placeholder"><ChefHat size={20} /></div>
                         )}
@@ -1981,7 +1981,7 @@ function OrderContent() {
                     <div key={item.id} className="co-item-card" onClick={() => addToCart(item)} style={{ cursor: 'pointer' }}>
                       <div className="co-card-img" style={{ position: 'relative' }}>
                         {item.image_url ? (
-                          <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 50vw, 33vw" style={{ objectFit: 'cover' }} />
+                          <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         ) : (
                           <div className="co-item-placeholder"><ChefHat size={24} /></div>
                         )}

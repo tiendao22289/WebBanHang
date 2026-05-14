@@ -99,7 +99,7 @@ function MenuCard({ item, categories, getItemCategories, getItemDisplayPrice, to
 
       <div className="menu-card-image" style={{ position: 'relative' }}>
         {item.image_url ? (
-          <Image src={item.image_url} alt={item.name} fill sizes="(max-width: 768px) 100vw, 300px" style={{ objectFit: 'cover' }} />
+          <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         ) : (
           <div className="menu-card-placeholder">
             <ImageIcon size={32} />

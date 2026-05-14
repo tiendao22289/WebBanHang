@@ -3505,7 +3505,7 @@ export default function TablesPage() {
                           position: 'relative'
                         }}>
                           {item.image_url
-                            ? <Image src={item.image_url} alt={item.name} fill sizes="44px" style={{ objectFit: 'cover' }} />
+                            ? <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                             : <ChefHat size={20} style={{ color: '#93c5fd' }} />}
                         </div>
                         <div style={{ flex: 1, marginLeft: 10, paddingRight: 6 }}>
@@ -3584,7 +3584,7 @@ export default function TablesPage() {
                               position: 'relative'
                             }}>
                               {item.image_url
-                                ? <Image src={item.image_url} alt={item.name} fill sizes="44px" style={{ objectFit: 'cover' }} />
+                                ? <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                                 : <ChefHat size={20} style={{ color: '#93c5fd' }} />}
                             </div>
                             <div style={{ flex: 1, marginLeft: 10, paddingRight: 6 }}>
