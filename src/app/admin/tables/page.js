@@ -1255,36 +1255,19 @@ export default function TablesPage() {
       }
     });
 
-    // === QUAN TRỌNG: Xoá cũ trước khi chèn ===
-    const { error: delErr } = await supabase.from('order_items').delete().in('order_id', allBillIds);
-    if (delErr) {
-      Swal.fire('Lỗi', 'Không thể xoá dữ liệu cũ, xin vui lòng kiểm tra kết nối! ' + delErr.message, 'error');
+    // === THỰC THI ATOMIC BẰNG RPC ===
+    const { error: rpcErr } = await supabase.rpc('merge_bills_atomic', {
+      p_all_bill_ids: allBillIds,
+      p_main_bill_id: mainBill.id,
+      p_other_bill_ids: otherIds,
+      p_new_total: newTotal,
+      p_new_items: newItems
+    });
+
+    if (rpcErr) {
+      Swal.fire('Lỗi', 'Gộp bill thất bại, dữ liệu được bảo toàn! ' + rpcErr.message, 'error');
       return;
     }
-
-    // Chèn lại các món đã gộp vào main bill
-    if (newItems.length > 0) {
-      const { error: insErr } = await supabase.from('order_items').insert(newItems);
-      if (insErr) {
-        Swal.fire('Lỗi', 'Lỗi khi ghi dữ liệu gộp: ' + insErr.message, 'error');
-        return;
-      }
-    }
-
-    // Xử lý cắm cờ các bill đã bị gộp
-    if (otherIds.length > 0) {
-      const { error: updErr } = await supabase.from('orders')
-        // Thử bỏ merged_into ra nếu cột này không tồn tại, nhưng có thể chỉ là status thôi?
-        .update({ status: 'cancelled', total_amount: 0 })
-        .in('id', otherIds);
-      if (updErr) {
-        Swal.fire('Lỗi Cập nhật Bill Phụ', updErr.message, 'error');
-        return;
-      }
-    }
-
-    // Cập nhật lại tổng tiền main bill
-    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', mainBill.id);
 
     fetchTables();
     Swal.fire({
