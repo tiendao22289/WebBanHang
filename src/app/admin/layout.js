@@ -16,6 +16,7 @@ import {
   Menu,
   X,
   QrCode,
+  Star,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './admin.css';
@@ -31,6 +32,7 @@ const ALL_NAV = [
   { href: '/admin/qr', label: 'Mã QR', icon: QrCode },
 
   { href: '/admin/customers', label: 'Khách hàng', icon: UsersRound },
+  { href: '/admin/reviews', label: 'Đánh giá', icon: Star },
   { href: '/admin/notes', label: 'Sổ tay', icon: ChefHat },
   { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
   { href: '/admin/stats', label: 'Thống kê', icon: BarChart3 },

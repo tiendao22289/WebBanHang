@@ -22,6 +22,7 @@ import {
   Grid3X3,
   RotateCcw,
   Check,
+  Star,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 // import ChatOrderButton from '@/components/ChatOrderButton'; // TẮT TÍNH NĂNG CHAT AI
@@ -349,6 +350,134 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
     </>
   );
 };
+
+const DraggableFeedbackBubble = ({ onOpen }) => {
+  const [pos, setPos] = useState({ x: 16, y: 110 });
+  const posRef = useRef({ x: 16, y: 110 });
+  const dragRef = useRef({ isDragging: false, startX: 0, startY: 0, initialX: 0, initialY: 0, hasMoved: false });
+  const bubbleRef = useRef(null);
+
+  useEffect(() => {
+    const initPos = { x: 16, y: 110 };
+    posRef.current = initPos;
+    setPos(initPos);
+  }, []);
+
+  useEffect(() => {
+    const el = bubbleRef.current;
+    if (!el) return;
+
+    const onTouchStart = (e) => {
+      if (e.touches.length !== 1) return;
+      dragRef.current.isDragging = true;
+      dragRef.current.hasMoved = false;
+      dragRef.current.startX = e.touches[0].clientX;
+      dragRef.current.startY = e.touches[0].clientY;
+      dragRef.current.initialX = posRef.current.x;
+      dragRef.current.initialY = posRef.current.y;
+    };
+    const onTouchMove = (e) => {
+      if (!dragRef.current.isDragging || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - dragRef.current.startX;
+      const dy = e.touches[0].clientY - dragRef.current.startY;
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+        dragRef.current.hasMoved = true;
+        e.preventDefault();
+        const newPos = {
+          x: Math.min(Math.max(0, dragRef.current.initialX + dx), window.innerWidth - 56),
+          y: Math.min(Math.max(0, dragRef.current.initialY + dy), window.innerHeight - 60),
+        };
+        posRef.current = newPos;
+        setPos(newPos);
+      }
+    };
+    const onTouchEnd = () => {
+      if (!dragRef.current.isDragging) return;
+      dragRef.current.isDragging = false;
+      if (dragRef.current.hasMoved) {
+        setPos(p => {
+          const newPos = { ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 58 : 12 };
+          posRef.current = newPos;
+          return newPos;
+        });
+      }
+    };
+
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+    };
+  }, []);
+
+  const handleMouseDown = (e) => {
+    if (e.button !== 0) return;
+    dragRef.current.isDragging = true;
+    dragRef.current.hasMoved = false;
+    dragRef.current.startX = e.clientX;
+    dragRef.current.startY = e.clientY;
+    dragRef.current.initialX = posRef.current.x;
+    dragRef.current.initialY = posRef.current.y;
+  };
+  const handleMouseMove = (e) => {
+    if (!dragRef.current.isDragging) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) dragRef.current.hasMoved = true;
+    if (!dragRef.current.hasMoved) return;
+    const newPos = {
+      x: Math.min(Math.max(0, dragRef.current.initialX + dx), window.innerWidth - 56),
+      y: Math.min(Math.max(0, dragRef.current.initialY + dy), window.innerHeight - 60),
+    };
+    posRef.current = newPos;
+    setPos(newPos);
+  };
+  const handleMouseUp = () => {
+    if (!dragRef.current.isDragging) return;
+    dragRef.current.isDragging = false;
+    if (dragRef.current.hasMoved) {
+      setPos(p => {
+        const newPos = { ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 58 : 12 };
+        posRef.current = newPos;
+        return newPos;
+      });
+    }
+  };
+  const handleTap = () => {
+    if (dragRef.current.hasMoved) {
+      dragRef.current.hasMoved = false;
+      return;
+    }
+    onOpen?.();
+  };
+
+  useEffect(() => {
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
+  return (
+    <button
+      ref={bubbleRef}
+      className="co-feedback-bubble"
+      style={{ left: pos.x, top: pos.y }}
+      onMouseDown={handleMouseDown}
+      onClick={handleTap}
+      type="button"
+      aria-label="Đánh giá quán"
+    >
+      <span className="co-feedback-drop">★</span>
+      <span className="co-feedback-label">Góp ý</span>
+    </button>
+  );
+};
 function OrderContent() {
   const searchParams = useSearchParams();
   const urlTableId = searchParams.get('table');
@@ -373,7 +502,11 @@ function OrderContent() {
   const [searchTerm, setSearchTerm] = useState('');
   const [showCart, setShowCart] = useState(false);
   const [showOrdered, setShowOrdered] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [previousOrders, setPreviousOrders] = useState([]);
+  const [feedbackForms, setFeedbackForms] = useState({});
+  const [generalFeedback, setGeneralFeedback] = useState({ rating: 0, note: '' });
+  const [feedbackSaving, setFeedbackSaving] = useState({});
   const previousOrdersRef = useRef(previousOrders);
   useEffect(() => { previousOrdersRef.current = previousOrders; }, [previousOrders]);
   const [viewMode, setViewMode] = useState('list');
@@ -509,7 +642,7 @@ function OrderContent() {
 
   // Body scroll lock effect
   useEffect(() => {
-    const isModalOpen = showInfoModal || showCart || showOrdered;
+    const isModalOpen = showInfoModal || showCart || showOrdered || showFeedbackModal;
     if (isModalOpen) {
       const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
       document.body.style.setProperty('--scrollbar-width', `${scrollbarWidth}px`);
@@ -518,7 +651,7 @@ function OrderContent() {
       document.body.classList.remove('modal-open');
     }
     return () => document.body.classList.remove('modal-open');
-  }, [showInfoModal, showCart, showOrdered]);
+  }, [showInfoModal, showCart, showOrdered, showFeedbackModal]);
 
   // Cập nhật trạng thái đơn/in bill tự động mỗi 3 giây khi khách xem "Món đã gọi"
   useEffect(() => {
@@ -1065,6 +1198,84 @@ function OrderContent() {
       });
     });
     setShowOrdered(false);
+  }
+
+  function setFeedbackValue(orderId, patch) {
+    setFeedbackForms(prev => ({
+      ...prev,
+      [orderId]: {
+        rating: previousOrders.find(order => order.id === orderId)?.customer_rating || 0,
+        note: previousOrders.find(order => order.id === orderId)?.customer_feedback || '',
+        ...(prev[orderId] || {}),
+        ...patch,
+      }
+    }));
+  }
+
+  async function submitFeedback(order) {
+    const form = feedbackForms[order.id] || {};
+    const rating = Number(form.rating || order.customer_rating || 0);
+    const note = (form.note ?? order.customer_feedback ?? '').trim();
+
+    if (!rating && !note) {
+      alert('Vui lòng chọn số sao hoặc nhập góp ý nhé!');
+      return false;
+    }
+
+    setFeedbackSaving(prev => ({ ...prev, [order.id]: true }));
+    const { error } = await supabase
+      .from('orders')
+      .update({ customer_rating: rating || null, customer_feedback: note || null })
+      .eq('id', order.id);
+    setFeedbackSaving(prev => ({ ...prev, [order.id]: false }));
+
+    if (error) {
+      if (error.code === '42703') {
+        alert('Chưa lưu được đánh giá vì database chưa có cột đánh giá. Vui lòng chạy file add_order_feedback_columns.sql trên Supabase trước nhé!');
+      } else {
+        alert(`Chưa lưu được đánh giá. Lỗi: ${error.message || 'Vui lòng thử lại sau!'}`);
+      }
+      return false;
+    }
+
+    setPreviousOrders(prev => prev.map(item => item.id === order.id ? { ...item, customer_rating: rating || null, customer_feedback: note || null } : item));
+    alert('Cảm ơn quý khách đã góp ý!');
+    return true;
+  }
+
+  async function submitGeneralFeedback() {
+    const rating = Number(generalFeedback.rating || 0);
+    const note = (generalFeedback.note || '').trim();
+
+    if (!rating && !note) {
+      alert('Vui lòng chọn số sao hoặc nhập góp ý nhé!');
+      return false;
+    }
+
+    setFeedbackSaving(prev => ({ ...prev, general: true }));
+    const { error } = await supabase
+      .from('customer_reviews')
+      .insert({
+        customer_name: customerName?.trim() || null,
+        customer_phone: customerPhone?.trim() || null,
+        table_id: activeTableId || null,
+        rating: rating || null,
+        feedback: note || null,
+      });
+    setFeedbackSaving(prev => ({ ...prev, general: false }));
+
+    if (error) {
+      if (error.code === '42P01') {
+        alert('Chưa lưu được đánh giá vì database chưa có bảng customer_reviews. Vui lòng chạy file add_order_feedback_columns.sql trên Supabase trước nhé!');
+      } else {
+        alert(`Chưa lưu được đánh giá. Lỗi: ${error.message || 'Vui lòng thử lại sau!'}`);
+      }
+      return false;
+    }
+
+    setGeneralFeedback({ rating: 0, note: '' });
+    alert('Cảm ơn quý khách đã góp ý!');
+    return true;
   }
 
   function addToCart(item) {
@@ -2104,6 +2315,10 @@ function OrderContent() {
           />
         )}
 
+        {!showInfoModal && (
+          <DraggableFeedbackBubble onOpen={() => setShowFeedbackModal(true)} />
+        )}
+
         {/* ─── Cart FAB ─── */}
         <style>{`
         @keyframes co-cart-shimmer {
@@ -2658,13 +2873,69 @@ function OrderContent() {
           </div>
         )}
 
+        {showFeedbackModal && (() => {
+          const feedbackOrder = previousOrders[0];
+          const activeRating = feedbackOrder
+            ? feedbackForms[feedbackOrder.id]?.rating ?? feedbackOrder.customer_rating ?? 0
+            : generalFeedback.rating;
+          return (
+            <div className="co-modal-overlay" onClick={() => setShowFeedbackModal(false)}>
+              <div className="co-feedback-modal" onClick={e => e.stopPropagation()}>
+                <div className="co-feedback-modal-header">
+                  <div>
+                    <h3>Đánh giá quán</h3>
+                    <p>Góp ý của quý khách giúp quán phục vụ tốt hơn.</p>
+                  </div>
+                  <button onClick={() => setShowFeedbackModal(false)}><X size={18} /></button>
+                </div>
+                <div className="co-feedback-big-stars">
+                  {[1, 2, 3, 4, 5].map(star => (
+                    <button
+                      key={star}
+                      type="button"
+                      className={star <= activeRating ? 'active' : ''}
+                      onClick={() => feedbackOrder ? setFeedbackValue(feedbackOrder.id, { rating: star }) : setGeneralFeedback(prev => ({ ...prev, rating: star }))}
+                      aria-label={`${star} sao`}
+                    >
+                      <Star size={30} fill={star <= activeRating ? 'currentColor' : 'none'} />
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  value={feedbackOrder ? (feedbackForms[feedbackOrder.id]?.note ?? feedbackOrder.customer_feedback ?? '') : generalFeedback.note}
+                  onChange={e => feedbackOrder ? setFeedbackValue(feedbackOrder.id, { note: e.target.value }) : setGeneralFeedback(prev => ({ ...prev, note: e.target.value }))}
+                  placeholder="Quý khách góp ý cho quán tại đây..."
+                  rows={4}
+                />
+                <button
+                  className="co-btn-submit"
+                  onClick={async () => {
+                    const saved = feedbackOrder ? await submitFeedback(feedbackOrder) : await submitGeneralFeedback();
+                    if (saved) setShowFeedbackModal(false);
+                  }}
+                  disabled={feedbackOrder ? !!feedbackSaving[feedbackOrder.id] : !!feedbackSaving.general}
+                >
+                  {(feedbackOrder ? feedbackSaving[feedbackOrder.id] : feedbackSaving.general) ? 'Đang gửi...' : 'Gửi đánh giá'}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* ─── Previous Orders Sheet ─── */}
         {showOrdered && (
           <div className="co-modal-overlay" onClick={() => setShowOrdered(false)}>
             <div className="co-sheet" onClick={(e) => e.stopPropagation()}>
               <div className="co-sheet-handle" />
               <div className="co-sheet-header">
-                <h3>Món đã gọi</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <h3>Món đã gọi</h3>
+                  {previousOrders.length > 0 && (
+                    <span style={{ fontSize: '0.82rem', color: '#ef4444', fontWeight: 900 }}>
+                      Tổng tất cả bill: {formatPrice(previousOrders.reduce((sum, order) => sum + (order.total_amount || 0), 0))}
+                    </span>
+                  )}
+                </div>
                 <button onClick={() => setShowOrdered(false)}><X size={20} /></button>
               </div>
               <div className="co-sheet-body">
@@ -2747,6 +3018,38 @@ function OrderContent() {
                             Đặt lại
                           </button>
                         )}
+                      </div>
+                      <div className="co-feedback-box">
+                        <div className="co-feedback-title">Đánh giá & góp ý</div>
+                        <div className="co-rating-stars">
+                          {[1, 2, 3, 4, 5].map(star => {
+                            const activeRating = feedbackForms[order.id]?.rating ?? order.customer_rating ?? 0;
+                            return (
+                              <button
+                                key={star}
+                                type="button"
+                                className={star <= activeRating ? 'active' : ''}
+                                onClick={() => setFeedbackValue(order.id, { rating: star })}
+                                aria-label={`${star} sao`}
+                              >
+                                <Star size={22} fill={star <= activeRating ? 'currentColor' : 'none'} />
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <textarea
+                          value={feedbackForms[order.id]?.note ?? order.customer_feedback ?? ''}
+                          onChange={e => setFeedbackValue(order.id, { note: e.target.value })}
+                          placeholder="Góp ý cho quán..."
+                          rows={2}
+                        />
+                        <button
+                          className="co-feedback-submit"
+                          onClick={() => submitFeedback(order)}
+                          disabled={!!feedbackSaving[order.id]}
+                        >
+                          {feedbackSaving[order.id] ? 'Đang gửi...' : (order.customer_rating || order.customer_feedback ? 'Cập nhật góp ý' : 'Gửi góp ý')}
+                        </button>
                       </div>
                     </div>
                   ))
