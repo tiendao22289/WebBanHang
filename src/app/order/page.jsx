@@ -1529,8 +1529,10 @@ function OrderContent() {
       const max = Math.max(...allPrices);
       const fmt = n => new Intl.NumberFormat('vi-VN').format(n) + 'đ';
       if (min !== max) return `${fmt(min)} — ${fmt(max)}`;
+      if (min === 0) return 'Theo thời giá';
       return fmt(min);
     }
+    if (Number(item.price || 0) === 0) return 'Theo thời giá';
     return new Intl.NumberFormat('vi-VN').format(item.price || 0) + 'đ';
   }
 
