@@ -2390,16 +2390,15 @@ function OrderContent() {
         {/* ─── Option Selection Modal ─── */}
         {optionModal && (
           <div className="co-modal-overlay" onClick={() => setOptionModal(null)}>
-            <div className="co-sheet" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh' }}>
-              <div className="co-sheet-handle" />
-              <div className="co-sheet-header" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6, padding: '12px 16px' }}>
+            <div className="co-sheet co-option-sheet" onClick={e => e.stopPropagation()}>
+              <div className="co-sheet-header" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 4, padding: '10px 16px 8px', position: 'relative' }}>
                 {/* Hàng 1: Chỉ có nút X bên phải */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <div style={{ position: 'absolute', top: 8, right: 12, zIndex: 2 }}>
                   <button onClick={() => setOptionModal(null)} style={{ border: 'none', background: '#f3f4f6', borderRadius: '50%', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={16} color="#4b5563" /></button>
                 </div>
 
                 {/* Hàng 2: Tên & Giá */}
-                <div>
+                <div style={{ paddingRight: 40 }}>
                   <div style={{ fontWeight: 700, fontSize: '1.1rem', lineHeight: 1.3, marginBottom: 4 }}>
                     {optionModal.name} {isGiftMode && <span style={{ fontSize: '0.75rem', color: '#16a34a', background: '#dcfce7', padding: '2px 6px', borderRadius: 4, marginLeft: 8 }}>🎁 Món Tặng</span>}
                   </div>
@@ -2412,7 +2411,7 @@ function OrderContent() {
                 </div>
 
                 {/* Hàng 3: Số lượng & Ghi chú */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, paddingTop: 12, paddingBottom: 12, borderTop: '1px solid #e5e7eb', borderBottom: '1px solid #e5e7eb', marginLeft: -16, marginRight: -16, paddingLeft: 16, paddingRight: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8, paddingTop: 10, paddingBottom: 10, borderTop: '1px solid #e5e7eb', borderBottom: '1px solid #e5e7eb', marginLeft: -16, marginRight: -16, paddingLeft: 16, paddingRight: 16 }}>
                   {/* Số lượng */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#4b5563', marginRight: 2 }}>Số lượng:</span>

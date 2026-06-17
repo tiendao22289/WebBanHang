@@ -815,7 +815,22 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
 /* ══════════════════════════════════════
    OPTION SELECTION MODAL (khẩu vị)
    ══════════════════════════════════════ */
-/* Reuse .co-modal-overlay + .co-sheet */
+.co-option-sheet {
+  top: 0;
+  bottom: 0;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+  border-radius: 0;
+}
+.co-option-sheet .co-sheet-body {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+.co-option-sheet .co-sheet-footer {
+  padding-top: 10px;
+}
 
 /* ── Animations ── */
 @keyframes coSlideUp {
