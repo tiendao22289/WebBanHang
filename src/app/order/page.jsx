@@ -187,13 +187,15 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
 
         <div style={{
           width: 60, height: 60, borderRadius: '50%',
-          background: hasGift ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #ef4444, #dc2626)',
-          boxShadow: hasGift ? '0 8px 24px rgba(245,158,11,0.6)' : '0 8px 24px rgba(239,68,68,0.55)',
+          background: hasGift
+            ? 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 45%, #d97706 100%)'
+            : 'linear-gradient(135deg, #ef4444, #dc2626)',
+          boxShadow: hasGift ? '0 8px 24px rgba(245,158,11,0.55)' : '0 8px 24px rgba(239,68,68,0.55)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '1.7rem', border: '3px solid white',
-          animation: hasGift ? 'co-gift-pulse 2s infinite' : 'co-float 3s infinite ease-in-out'
+          fontSize: '1.75rem', border: '3px solid white',
+          animation: hasGift ? 'trophy-halo-pulse 1.6s infinite ease-out' : 'co-gift-pulse 2.5s infinite'
         }}>
-          {hasGift ? <div className="snail-bounce">🐌</div> : <div className="snail-crawl">🐌</div>}
+          {hasGift ? <div className="trophy-bounce">🏆</div> : <div className="trophy-shake">🏆</div>}
         </div>
 
         {/* Badge số */}
