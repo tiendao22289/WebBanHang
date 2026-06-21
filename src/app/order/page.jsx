@@ -384,8 +384,8 @@ const DraggableFeedbackBubble = ({ onOpen }) => {
         dragRef.current.hasMoved = true;
         e.preventDefault();
         const newPos = {
-          x: Math.min(Math.max(0, dragRef.current.initialX + dx), window.innerWidth - 56),
-          y: Math.min(Math.max(0, dragRef.current.initialY + dy), window.innerHeight - 60),
+          x: Math.min(Math.max(0, dragRef.current.initialX + dx), window.innerWidth - 120),
+          y: Math.min(Math.max(0, dragRef.current.initialY + dy), window.innerHeight - 50),
         };
         posRef.current = newPos;
         setPos(newPos);
@@ -396,7 +396,7 @@ const DraggableFeedbackBubble = ({ onOpen }) => {
       dragRef.current.isDragging = false;
       if (dragRef.current.hasMoved) {
         setPos(p => {
-          const newPos = { ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 58 : 12 };
+          const newPos = { ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 122 : 8 };
           posRef.current = newPos;
           return newPos;
         });
@@ -429,8 +429,8 @@ const DraggableFeedbackBubble = ({ onOpen }) => {
     if (Math.abs(dx) > 5 || Math.abs(dy) > 5) dragRef.current.hasMoved = true;
     if (!dragRef.current.hasMoved) return;
     const newPos = {
-      x: Math.min(Math.max(0, dragRef.current.initialX + dx), window.innerWidth - 56),
-      y: Math.min(Math.max(0, dragRef.current.initialY + dy), window.innerHeight - 60),
+      x: Math.min(Math.max(0, dragRef.current.initialX + dx), window.innerWidth - 120),
+      y: Math.min(Math.max(0, dragRef.current.initialY + dy), window.innerHeight - 50),
     };
     posRef.current = newPos;
     setPos(newPos);
@@ -440,7 +440,7 @@ const DraggableFeedbackBubble = ({ onOpen }) => {
     dragRef.current.isDragging = false;
     if (dragRef.current.hasMoved) {
       setPos(p => {
-        const newPos = { ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 58 : 12 };
+        const newPos = { ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 122 : 8 };
         posRef.current = newPos;
         return newPos;
       });
@@ -474,7 +474,8 @@ const DraggableFeedbackBubble = ({ onOpen }) => {
       aria-label="Đánh giá quán"
     >
       <span className="co-feedback-drop">★</span>
-      <span className="co-feedback-label">Góp ý</span>
+      <span className="co-feedback-label">Đánh giá</span>
+      <span className="co-feedback-badge">Mới!</span>
     </button>
   );
 };
@@ -507,6 +508,7 @@ function OrderContent() {
   const [feedbackForms, setFeedbackForms] = useState({});
   const [generalFeedback, setGeneralFeedback] = useState({ rating: 0, note: '' });
   const [feedbackSaving, setFeedbackSaving] = useState({});
+  const [feedbackToast, setFeedbackToast] = useState(null);
   const previousOrdersRef = useRef(previousOrders);
   useEffect(() => { previousOrdersRef.current = previousOrders; }, [previousOrders]);
   const [viewMode, setViewMode] = useState('list');
@@ -1212,13 +1214,18 @@ function OrderContent() {
     }));
   }
 
+  function showFeedbackToast(type, title, message) {
+    setFeedbackToast({ type, title, message });
+    window.setTimeout(() => setFeedbackToast(null), 3200);
+  }
+
   async function submitFeedback(order) {
     const form = feedbackForms[order.id] || {};
     const rating = Number(form.rating || order.customer_rating || 0);
     const note = (form.note ?? order.customer_feedback ?? '').trim();
 
     if (!rating && !note) {
-      alert('Vui lòng chọn số sao hoặc nhập góp ý nhé!');
+      showFeedbackToast('warning', 'Thiếu thông tin', 'Vui lòng chọn số sao hoặc nhập góp ý nhé!');
       return false;
     }
 
@@ -1231,15 +1238,15 @@ function OrderContent() {
 
     if (error) {
       if (error.code === '42703') {
-        alert('Chưa lưu được đánh giá vì database chưa có cột đánh giá. Vui lòng chạy file add_order_feedback_columns.sql trên Supabase trước nhé!');
+        showFeedbackToast('error', 'Chưa lưu được', 'Database chưa có cột đánh giá. Vui lòng chạy file SQL trên Supabase.');
       } else {
-        alert(`Chưa lưu được đánh giá. Lỗi: ${error.message || 'Vui lòng thử lại sau!'}`);
+        showFeedbackToast('error', 'Chưa lưu được', error.message || 'Vui lòng thử lại sau!');
       }
       return false;
     }
 
     setPreviousOrders(prev => prev.map(item => item.id === order.id ? { ...item, customer_rating: rating || null, customer_feedback: note || null } : item));
-    alert('Cảm ơn quý khách đã góp ý!');
+    showFeedbackToast('success', 'Cảm ơn quý khách!', 'Góp ý của quý khách đã được ghi nhận.');
     return true;
   }
 
@@ -1248,7 +1255,7 @@ function OrderContent() {
     const note = (generalFeedback.note || '').trim();
 
     if (!rating && !note) {
-      alert('Vui lòng chọn số sao hoặc nhập góp ý nhé!');
+      showFeedbackToast('warning', 'Thiếu thông tin', 'Vui lòng chọn số sao hoặc nhập góp ý nhé!');
       return false;
     }
 
@@ -1266,15 +1273,15 @@ function OrderContent() {
 
     if (error) {
       if (error.code === '42P01') {
-        alert('Chưa lưu được đánh giá vì database chưa có bảng customer_reviews. Vui lòng chạy file add_order_feedback_columns.sql trên Supabase trước nhé!');
+        showFeedbackToast('error', 'Chưa lưu được', 'Database chưa có bảng customer_reviews. Vui lòng chạy file SQL trên Supabase.');
       } else {
-        alert(`Chưa lưu được đánh giá. Lỗi: ${error.message || 'Vui lòng thử lại sau!'}`);
+        showFeedbackToast('error', 'Chưa lưu được', error.message || 'Vui lòng thử lại sau!');
       }
       return false;
     }
 
     setGeneralFeedback({ rating: 0, note: '' });
-    alert('Cảm ơn quý khách đã góp ý!');
+    showFeedbackToast('success', 'Cảm ơn quý khách!', 'Góp ý của quý khách đã được ghi nhận.');
     return true;
   }
 
@@ -1338,11 +1345,17 @@ function OrderContent() {
           _note: optNote
         });
       }
-      // Chỉ thêm vào giftCart local, gửi cùng đơn khi khách bấm Gửi đơn hàng
-      setGiftCart(prev => [...prev, ...giftItems]);
+      // Thêm vào giftCart; nếu cart trống → tự động submit ngay (gift-only flow)
+      // để khách không phải bấm thêm Gửi đơn, tránh lỗi gift treo trong local state
+      const newGiftCart = [...giftCart, ...giftItems];
+      setGiftCart(newGiftCart);
       setOptionModal(null);
       setIsGiftMode(false);
       setShowGiftModal(false);
+      if (cart.length === 0) {
+        // Pass newGiftCart làm override vì state setGiftCart chưa flush qua closure
+        submitOrder(null, newGiftCart);
+      }
       return;
     }
 
@@ -1492,9 +1505,8 @@ function OrderContent() {
       setPromoCallout({ text: promoText, isGift: true });
       if (promoCalloutTimerRef.current) clearTimeout(promoCalloutTimerRef.current);
       promoCalloutTimerRef.current = setTimeout(() => setPromoCallout(null), 6000);
-      if (availableGiftSlots > 0) {
-        setTimeout(() => setShowGiftModal(true), 800);
-      }
+      // KHÔNG tự bật gift modal — chỉ hiện toast/callout, để khách tự bấm bubble khi muốn.
+      // Auto-popup gây chen ngang flow order lần 2,3+ và có thể khiến bill không được in.
     } else if (giftCount < prev) {
       // Giảm: đóng toast và modal nếu đang mở
       setAdminUnlockToast(false);
@@ -1579,12 +1591,16 @@ function OrderContent() {
 
 
   // submitOrder: nhận cartOverride tuỳ chọn từ ChatOrderButton để gửi trực tiếp
-  async function submitOrder(cartOverride = null) {
+  // giftOverride: dùng cho gift-only flow để bypass stale closure khi vừa setGiftCart
+  async function submitOrder(cartOverride = null, giftOverride = null) {
     const effectiveCart = Array.isArray(cartOverride) ? cartOverride : cart;
-    if (effectiveCart.length === 0 || submitting) return;
+    const effectiveGifts = Array.isArray(giftOverride) ? giftOverride : giftCart;
+    // Cho phép gửi gift-only (cart rỗng nhưng giftCart/giftOverride có món)
+    if ((effectiveCart.length === 0 && effectiveGifts.length === 0) || submitting) return;
 
-    // Chỉ kiểm tra quà khi gọi từ giỏ hàng thông thường (không phải chat direct)
-    if (!Array.isArray(cartOverride) && promoConfig.enabled && availableGiftSlots > 0 && !giftPromptPending) {
+    // Chỉ kiểm tra quà khi gọi từ giỏ hàng thông thường (có món trong cart)
+    // Bỏ qua check nếu là gift-only flow (effectiveCart rỗng) — khách đang chốt quà
+    if (!Array.isArray(cartOverride) && effectiveCart.length > 0 && promoConfig.enabled && availableGiftSlots > 0 && !giftPromptPending) {
       setGiftPromptPending(true);
       setShowCart(false);
       setShowGiftModal(true);
@@ -1646,7 +1662,7 @@ function OrderContent() {
 
       if (orderErr) throw orderErr;
 
-      await supabase.from('order_items').insert([
+      const { error: itemsErr } = await supabase.from('order_items').insert([
         ...effectiveCart.map(item => ({
           order_id: order.id,
           menu_item_id: item.id,
@@ -1656,7 +1672,7 @@ function OrderContent() {
           note: item._note || notes[item.id] || null,
           is_gift: false,
         })),
-        ...giftCart.map(g => ({
+        ...effectiveGifts.map(g => ({
           order_id: order.id,
           menu_item_id: g.id,
           quantity: 1,
@@ -1667,12 +1683,24 @@ function OrderContent() {
         })),
       ]);
 
+      if (itemsErr) throw itemsErr;
+
       await supabase
         .from('tables')
         .update({ status: 'occupied', occupied_at: new Date().toISOString() })
         .eq('id', activeTableId);
 
-      await sendPrintJob(supabase, order.id);
+      // Gửi lệnh in — retry 1 lần nếu lỗi, alert khách nếu vẫn fail
+      let printResult = await sendPrintJob(supabase, order.id);
+      if (!printResult?.success) {
+        console.warn('[submitOrder] sendPrintJob lần 1 fail:', printResult?.error);
+        await new Promise(r => setTimeout(r, 500));
+        printResult = await sendPrintJob(supabase, order.id);
+      }
+      if (!printResult?.success) {
+        console.error('[submitOrder] sendPrintJob fail sau retry:', printResult?.error);
+        alert(`⚠ Món đã gửi vào bếp nhưng KHÔNG IN BILL ĐƯỢC.\nLý do: ${printResult?.error || 'Không xác định'}\n\nVui lòng báo nhân viên kiểm tra máy in.`);
+      }
 
       setCart([]);
       setNotes({});
@@ -1925,6 +1953,18 @@ function OrderContent() {
           fetchPreviousOrders(saved?.customerPhone || '');
         }}
       />
+      {feedbackToast && (
+        <div className={`co-feedback-toast ${feedbackToast.type}`}>
+          <div className="co-feedback-toast-icon">
+            {feedbackToast.type === 'success' ? '★' : feedbackToast.type === 'warning' ? '!' : '×'}
+          </div>
+          <div>
+            <strong>{feedbackToast.title}</strong>
+            <span>{feedbackToast.message}</span>
+          </div>
+          <button onClick={() => setFeedbackToast(null)}><X size={14} /></button>
+        </div>
+      )}
       <div className="co-page">
         <style>{`
         @keyframes bounce-pointer {
@@ -2485,9 +2525,14 @@ function OrderContent() {
                             setOptionQty(1);
                             setOptNote('');
                           } else {
-                            // Chỉ thêm vào giftCart local, gửi cùng đơn khi bấm Gửi đơn hàng
-                            setGiftCart(prev => [...prev, { id: g.id, name: g.name, price: 0, is_gift: true }]);
+                            // Thêm vào giftCart; nếu cart rỗng → tự động submit ngay
+                            const newGift = { id: g.id, name: g.name, price: 0, is_gift: true };
+                            const newGiftCart = [...giftCart, newGift];
+                            setGiftCart(newGiftCart);
                             setShowGiftModal(false);
+                            if (cart.length === 0) {
+                              submitOrder(null, newGiftCart);
+                            }
                           }
                         }}
                         style={{ background: availableGiftSlots > 0 ? '#16a34a' : '#e2e8f0', color: availableGiftSlots > 0 ? 'white' : '#94a3b8', border: 'none', borderRadius: 8, padding: '6px 14px', fontWeight: 700, fontSize: '0.82rem', cursor: availableGiftSlots > 0 ? 'pointer' : 'not-allowed' }}>

@@ -38,52 +38,59 @@ export default function DashboardScreen() {
         endDateStr = endOfMonth.toISOString();
       }
 
+      // ✅ OPTIMIZED: Server-side aggregation via RPC
+      // Trước: fetch toàn bộ rows → tính tổng trên client (gây Egress Throttling)
+      // Sau:  gọi 1 RPC → nhận JSON ~1KB tổng hợp sẵn
       const { data, error } = await supabase
-        .from('actual_revenue_logs')
-        .select('amount, payment_method, bank_account_number, bank_account_name')
-        .gte('created_at', startDateStr)
-        .lte('created_at', endDateStr);
+        .rpc('get_revenue_stats', {
+          start_date: startDateStr,
+          end_date:   endDateStr,
+        });
 
-      if (error) throw error;
-
-      let cash = 0;
-      let transfer = 0;
-      let bankTotals = {};
-      
-      data.forEach(log => {
-        if (log.payment_method === 'cash') {
-          cash += log.amount;
-        }
-        if (log.payment_method === 'transfer') {
-          transfer += log.amount;
-          
-          if (log.bank_account_number) {
-            const key = `${log.bank_account_name || 'Ngân hàng'} - ${log.bank_account_number}`;
-            if (!bankTotals[key]) {
-              bankTotals[key] = {
-                name: log.bank_account_name || 'Ngân hàng',
-                number: log.bank_account_number,
-                total: 0
-              };
-            }
-            bankTotals[key].total += log.amount;
-          }
-        }
-      });
+      if (error) {
+        // Fallback: nếu RPC chưa có, dùng query cũ
+        console.warn('[Dashboard] RPC không khả dụng, fallback:', error.message);
+        await fetchStatsFallback(startDateStr, endDateStr);
+        return;
+      }
 
       setStats({
-        total: cash + transfer,
-        cash,
-        transfer,
-        ordersCount: data.length,
-        banks: Object.values(bankTotals).sort((a, b) => b.total - a.total)
+        total:       data.total_revenue   || 0,
+        cash:        data.total_cash      || 0,
+        transfer:    data.total_transfer  || 0,
+        ordersCount: data.orders_count    || 0,
+        banks:       data.banks           || [],
       });
 
-
-
     } catch (e) {
-      console.error('Error fetching stats:', e);
+      console.error('[Dashboard] Error fetching stats:', e);
     }
+  };
+
+  // Fallback: dùng query raw nếu RPC chưa deploy (sẽ xoá sau)
+  const fetchStatsFallback = async (startDateStr, endDateStr) => {
+    const { data, error } = await supabase
+      .from('actual_revenue_logs')
+      .select('amount, payment_method, bank_account_number, bank_account_name')
+      .gte('created_at', startDateStr)
+      .lte('created_at', endDateStr);
+
+    if (error) { console.error('[Dashboard] Fallback error:', error); return; }
+
+    let cash = 0, transfer = 0;
+    const bankTotals = {};
+    data.forEach(log => {
+      if (log.payment_method === 'cash') cash += log.amount;
+      if (log.payment_method === 'transfer') {
+        transfer += log.amount;
+        if (log.bank_account_number) {
+          const key = `${log.bank_account_name}-${log.bank_account_number}`;
+          if (!bankTotals[key]) bankTotals[key] = { name: log.bank_account_name || 'Ngân hàng', number: log.bank_account_number, total: 0 };
+          bankTotals[key].total += log.amount;
+        }
+      }
+    });
+    setStats({ total: cash + transfer, cash, transfer, ordersCount: data.length, banks: Object.values(bankTotals).sort((a, b) => b.total - a.total) });
   };
 
   const onRefresh = async () => {

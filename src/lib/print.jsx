@@ -33,7 +33,9 @@ export async function sendSmartPrintJobs(supabase, orderId) {
       .eq('order_id', orderId);
 
     if (itemsErr) throw new Error('Không lấy được order_items: ' + itemsErr.message);
-    if (!items || items.length === 0) return { success: true, jobCount: 0 };
+    if (!items || items.length === 0) {
+      return { success: false, error: 'Đơn hàng không có món nào để in (order_items rỗng hoặc chưa đồng bộ).' };
+    }
 
     // 2. Fetch printers active + categories của từng máy
     const { data: printers, error: printersErr } = await supabase
@@ -45,7 +47,7 @@ export async function sendSmartPrintJobs(supabase, orderId) {
     if (printersErr) throw new Error('Không lấy được printers: ' + printersErr.message);
     if (!printers || printers.length === 0) {
       console.warn('[Print] Không có máy in active nào được cấu hình.');
-      return { success: true, jobCount: 0 };
+      return { success: false, error: 'Chưa cấu hình máy in active nào — vui lòng vào Cài đặt > Máy in để bật.' };
     }
 
     // 3. Build map: category_id → printer_id (ưu tiên printer có sort_order nhỏ nhất)
@@ -108,7 +110,9 @@ export async function sendSmartPrintJobs(supabase, orderId) {
       status: 'pending',
     }));
 
-    if (jobs.length === 0) return { success: true, jobCount: 0 };
+    if (jobs.length === 0) {
+      return { success: false, error: 'Không món nào khớp máy in (categoryId không có máy in tương ứng và không có máy in mặc định).' };
+    }
 
     const { error: insertErr } = await supabase.from('print_jobs').insert(jobs);
     if (insertErr) throw new Error('Lỗi insert print_jobs: ' + insertErr.message);
