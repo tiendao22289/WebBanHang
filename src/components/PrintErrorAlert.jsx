@@ -2,10 +2,96 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { AlertCircle, X, CheckCircle2, Printer } from 'lucide-react';
+import { AlertCircle, X, CheckCircle2, Printer, BellOff } from 'lucide-react';
+
+// ── Audio: alarm gắt cho lỗi máy in (square wave, khác chuông đơn mới) ──
+let _printerAudioCtx = null;
+function getPrinterAudioCtx() {
+  if (typeof window === 'undefined') return null;
+  if (_printerAudioCtx && _printerAudioCtx.state !== 'closed') return _printerAudioCtx;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  _printerAudioCtx = new AudioCtx();
+  return _printerAudioCtx;
+}
+
+// Alarm burst: triple-beep square wave xen kẽ 880/660Hz, kéo dài ~10 giây
+function playPrinterAlarm() {
+  try {
+    const audioCtx = getPrinterAudioCtx();
+    if (!audioCtx) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    const master = audioCtx.createGain();
+    master.gain.value = 0.55;
+    master.connect(audioCtx.destination);
+
+    const now = audioCtx.currentTime;
+    const BURST_DURATION = 10;
+    const BEEP_DUR = 0.2;
+    const BEEP_GAP = 0.08;
+    const GROUP_GAP = 0.4;
+    const HIGH = 880;
+    const LOW = 660;
+
+    let t = now;
+    let groupIdx = 0;
+    while (t < now + BURST_DURATION) {
+      for (let i = 0; i < 3 && t < now + BURST_DURATION; i++) {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'square';
+        osc.frequency.value = groupIdx % 2 === 0 ? HIGH : LOW;
+        osc.connect(gain);
+        gain.connect(master);
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.55, t + 0.005);
+        gain.gain.setValueAtTime(0.55, t + BEEP_DUR - 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + BEEP_DUR);
+        osc.start(t);
+        osc.stop(t + BEEP_DUR);
+        t += BEEP_DUR + BEEP_GAP;
+      }
+      t += GROUP_GAP;
+      groupIdx++;
+    }
+  } catch (e) {
+    console.log('Printer alarm not supported');
+  }
+}
+
+// "Ting!" vui khi máy in OK lại — glide 880Hz → 1320Hz
+function playPrinterRecovered() {
+  try {
+    const audioCtx = getPrinterAudioCtx();
+    if (!audioCtx) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    const master = audioCtx.createGain();
+    master.gain.value = 0.7;
+    master.connect(audioCtx.destination);
+
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.exponentialRampToValueAtTime(1320, now + 0.2);
+    osc.connect(gain);
+    gain.connect(master);
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.6, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+    osc.start(now);
+    osc.stop(now + 0.6);
+  } catch (e) {
+    console.log('Recovered chime not supported');
+  }
+}
 
 export default function PrintErrorAlert({ isAdmin = false, customerOrderId = null, customerOrderIds = [], onRecovered = null }) {
   const [errors, setErrors] = useState([]);
+  const [mutedErrorIds, setMutedErrorIds] = useState(() => new Set());
 
   useEffect(() => {
     // Customer mode: chỉ cần có tableId là đủ, hoặc isAdmin
@@ -93,6 +179,9 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
                const isRecovery = exists || (job.error_message && job.error_message.includes('Đã tự động in'));
                if (!isRecovery) return prev; // Tránh hiện Toast phiền phức cho các lệnh in bình thường
 
+               // Phát chuông "ting!" khi máy in OK lại (chỉ admin)
+               if (isAdmin) playPrinterRecovered();
+
                const msg = 'Máy bật lên đã in được bill thành công.';
                if (exists) {
                    return prev.map(e => e.id === job.id ? { ...e, isDone: true, msg } : e);
@@ -114,6 +203,15 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
       
     return () => { supabase.removeChannel(channel); }
   }, [isAdmin, customerOrderId, customerOrderIds.length]); // Re-run khi có thêm orders
+
+  // ── Alarm interval: kêu cycle 20s (10s ring + 10s im) khi có lỗi chưa được giải quyết ──
+  const hasActiveError = errors.some(e => !e.isDone && !mutedErrorIds.has(e.id));
+  useEffect(() => {
+    if (!isAdmin || !hasActiveError) return;
+    playPrinterAlarm();                                       // kêu ngay lần đầu
+    const interval = setInterval(playPrinterAlarm, 20000);    // cứ 20s lặp 1 burst (10s ring + 10s im)
+    return () => clearInterval(interval);
+  }, [isAdmin, hasActiveError]);
 
   if (errors.length === 0) return null;
 
@@ -155,11 +253,34 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
                     </div>
                  )}
               </div>
-              <button 
-                 onClick={() => setErrors(prev => prev.filter(e => e.id !== err.id))}
-                 style={{ background:'none', border:'none', cursor:'pointer', padding: 4, color: isDone ? '#16a34a' : '#ef4444', transition: 'all 0.2s', marginTop: 2 }}>
-                 <X size={18} />
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+                <button
+                   onClick={() => setErrors(prev => prev.filter(e => e.id !== err.id))}
+                   style={{ background:'none', border:'none', cursor:'pointer', padding: 4, color: isDone ? '#16a34a' : '#ef4444', transition: 'all 0.2s', marginTop: 2 }}>
+                   <X size={18} />
+                </button>
+                {isAdmin && !isDone && (() => {
+                  const isMuted = mutedErrorIds.has(err.id);
+                  return (
+                    <button
+                       onClick={() => setMutedErrorIds(prev => {
+                         const next = new Set(prev);
+                         if (next.has(err.id)) next.delete(err.id); else next.add(err.id);
+                         return next;
+                       })}
+                       title={isMuted ? 'Bật chuông lại' : 'Tắt chuông cho lỗi này'}
+                       style={{
+                         background: isMuted ? '#f3f4f6' : '#fee2e2',
+                         border: 'none', cursor: 'pointer', padding: 5,
+                         color: isMuted ? '#9ca3af' : '#dc2626',
+                         borderRadius: 6, transition: 'all 0.2s',
+                         display: 'flex', alignItems: 'center', justifyContent: 'center'
+                       }}>
+                       <BellOff size={15} />
+                    </button>
+                  );
+                })()}
+              </div>
            </div>
          );
        })}

@@ -25,31 +25,64 @@ import {
   ShoppingBag,
   Clock,
   Printer,
-  BellRing,
   Receipt,
   Search,
   ChefHat,
 } from 'lucide-react';
 import './tables.css';
 
-// Notification sound using Web Audio API
-function playNotificationSound() {
-  try {
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+// Tiếng chuông to vang vọng — Web Audio API, mô phỏng chuông kim loại bằng harmonic partials
+let _bellAudioCtx = null;
+function getBellAudioCtx() {
+  if (typeof window === 'undefined') return null;
+  if (_bellAudioCtx && _bellAudioCtx.state !== 'closed') return _bellAudioCtx;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  _bellAudioCtx = new AudioCtx();
+  return _bellAudioCtx;
+}
 
-    // Play two tones (ding-dong)
-    [0, 0.2].forEach((delay, i) => {
-      const oscillator = audioCtx.createOscillator();
-      const gainNode = audioCtx.createGain();
-      oscillator.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-      oscillator.frequency.value = i === 0 ? 880 : 660;
-      oscillator.type = 'sine';
-      gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime + delay);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + delay + 0.5);
-      oscillator.start(audioCtx.currentTime + delay);
-      oscillator.stop(audioCtx.currentTime + delay + 0.5);
-    });
+function playSingleBell(audioCtx, startTime, masterGain) {
+  const baseFreq = 660; // Hz — tần số chính, đủ ấm để có cảm giác "lớn"
+  // Bell partials (tỉ lệ hơi lệch hài hoà để có timbre chuông kim loại)
+  const partials = [
+    { freq: baseFreq,        gain: 0.85, duration: 3.2 },
+    { freq: baseFreq * 2.0,  gain: 0.55, duration: 2.6 },
+    { freq: baseFreq * 3.0,  gain: 0.32, duration: 2.0 },
+    { freq: baseFreq * 4.2,  gain: 0.20, duration: 1.4 },
+    { freq: baseFreq * 5.4,  gain: 0.12, duration: 1.0 },
+  ];
+  partials.forEach(p => {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = p.freq;
+    osc.connect(gain);
+    gain.connect(masterGain);
+    // Attack nhanh (5ms) + decay dài (vang vọng)
+    gain.gain.setValueAtTime(0, startTime);
+    gain.gain.linearRampToValueAtTime(p.gain, startTime + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + p.duration);
+    osc.start(startTime);
+    osc.stop(startTime + p.duration);
+  });
+}
+
+function ringBell() {
+  try {
+    const audioCtx = getBellAudioCtx();
+    if (!audioCtx) return;
+    // Một số browser suspend AudioContext nếu chưa có user interaction — thử resume
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    // Master gain để chỉnh âm lượng tổng (1.0 = to)
+    const master = audioCtx.createGain();
+    master.gain.value = 1.0;
+    master.connect(audioCtx.destination);
+
+    const now = audioCtx.currentTime;
+    playSingleBell(audioCtx, now, master);          // Tiếng 1
+    playSingleBell(audioCtx, now + 0.85, master);   // Tiếng 2 (cách 850ms)
   } catch (e) {
     console.log('Audio not supported');
   }
@@ -63,7 +96,6 @@ export default function TablesPage() {
   const [showQR, setShowQR] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newTableNumber, setNewTableNumber] = useState('');
-  const [newOrderAlert, setNewOrderAlert] = useState(null);
   const [filterTab, setFilterTab] = useState('ALL');
   const [columnsPerRow, setColumnsPerRow] = useState(5);
   const [menuItems, setMenuItems] = useState([]);
@@ -348,9 +380,7 @@ export default function TablesPage() {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
         if (payload.eventType === 'INSERT' && !isFirstLoad.current) {
-          playNotificationSound();
-          setNewOrderAlert(payload.new);
-          setTimeout(() => setNewOrderAlert(null), 5000);
+          ringBell();
         }
         fetchTables();
       })
@@ -1361,13 +1391,7 @@ export default function TablesPage() {
 
   return (
     <div className="page-content" style={{ background: '#f3f4f6', minHeight: '100vh' }}>
-      {/* New order notification toast */}
-      {newOrderAlert && (
-        <div className="notification-toast animate-slide-up">
-          <BellRing size={20} />
-          <span>🔔 Đơn hàng mới từ khách <strong>{newOrderAlert.customer_name}</strong>!</span>
-        </div>
-      )}
+      {/* Thông báo đơn hàng mới — dùng tiếng chuông Web Audio (xem ringBell()) thay vì toast */}
 
       {/* Helper: shared filtered tables + card data */}
       {(() => {
