@@ -488,12 +488,17 @@ function OrderContent() {
 
   const [tableNumber, setTableNumber] = useState(null);
   const [isTakeaway, setIsTakeaway] = useState(false);
+  // Ref đồng bộ — fix stale closure khi fetchPreviousOrders được gọi từ realtime listener
+  // (listener setup với deps [activeTableId] capture isTakeaway=false ban đầu)
+  const isTakeawayRef = useRef(isTakeaway);
+  useEffect(() => { isTakeawayRef.current = isTakeaway; }, [isTakeaway]);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const customerPhoneRef = useRef(customerPhone);
   useEffect(() => { customerPhoneRef.current = customerPhone; }, [customerPhone]);
 
   const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [customerNote, setCustomerNote] = useState(''); // ghi chú khách gửi cho bếp (chỉ takeaway)
   const [showInfoModal, setShowInfoModal] = useState(true);
   const [categories, setCategories] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
@@ -507,6 +512,10 @@ function OrderContent() {
   const [showOrdered, setShowOrdered] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [previousOrders, setPreviousOrders] = useState([]);
+  const [takeawaySeqMap, setTakeawaySeqMap] = useState({}); // { orderId: seqNo } cho takeaway
+  const [editingAddress, setEditingAddress] = useState(false);
+  const [editAddressInput, setEditAddressInput] = useState('');
+  const [addressUpdateSaving, setAddressUpdateSaving] = useState(false);
   const [feedbackForms, setFeedbackForms] = useState({});
   const [generalFeedback, setGeneralFeedback] = useState({ rating: 0, note: '' });
   const [feedbackSaving, setFeedbackSaving] = useState({});
@@ -665,6 +674,50 @@ function OrderContent() {
     }, 3000);
     return () => clearInterval(interval);
   }, [showOrdered, customerPhone]);
+
+  // Build mã đơn TW theo khách cho takeaway:
+  // - Mỗi SĐT khác = 1 base code mới (TW-001, TW-002, ...)
+  // - Đơn đầu của khách = plain base (TW-013)
+  // - Đơn thứ 2 trở đi của cùng khách = base + " Bill N" (TW-013 Bill 2, TW-013 Bill 3...)
+  useEffect(() => {
+    if (!isTakeaway || !activeTableId || previousOrders.length === 0) {
+      setTakeawaySeqMap({});
+      return;
+    }
+    (async () => {
+      const now = new Date();
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
+      // Fetch TẤT CẢ đơn takeaway hôm nay (no phone filter) để build code map đúng
+      const { data } = await supabase
+        .from('orders')
+        .select('id, created_at, customer_phone')
+        .eq('table_id', activeTableId)
+        .gte('created_at', startOfDay)
+        .lt('created_at', endOfDay)
+        .order('created_at', { ascending: true });
+
+      const customerOrderMap = new Map();
+      const customerFirstSeen = [];
+      for (const order of (data || [])) {
+        const phone = (order.customer_phone || '').trim() || `__anon_${order.id}`;
+        if (!customerOrderMap.has(phone)) {
+          customerOrderMap.set(phone, []);
+          customerFirstSeen.push(phone);
+        }
+        customerOrderMap.get(phone).push(order);
+      }
+      const map = {};
+      customerFirstSeen.forEach((phone, custIdx) => {
+        const baseCode = `TW-${String(custIdx + 1).padStart(3, '0')}`;
+        const orders = customerOrderMap.get(phone);
+        orders.forEach((order, orderIdx) => {
+          map[order.id] = orderIdx === 0 ? baseCode : `${baseCode} Bill ${orderIdx + 1}`;
+        });
+      });
+      setTakeawaySeqMap(map);
+    })();
+  }, [isTakeaway, activeTableId, previousOrders]);
 
   // Khi mergeGroupIds thay đổi (admin gộp bàn) → fetch groupOrders ngay
   useEffect(() => {
@@ -1079,6 +1132,7 @@ function OrderContent() {
     if (tableData) {
       setTableNumber(isTW ? (tableData.table_name || 'Mang về') : tableData.table_number);
       setIsTakeaway(isTW);
+      isTakeawayRef.current = isTW; // update ref đồng bộ, không đợi useEffect
       if (tableData.merged_with) {
         setActiveTableId(tableData.merged_with);
       }
@@ -1133,16 +1187,24 @@ function OrderContent() {
 
     // Nếu có session tại bàn → lấy TẤT CẢ bills của toàn bộ nhóm bàn hôm nay
     if (hasMySession) {
-      const { data: allTableBills } = await supabase
+      let bills = supabase
         .from('orders')
         .select(`*, order_items(*, menu_item:menu_items(name, price)), print_jobs(id, status, error_message)`)
         .in('table_id', targetIds)
         .gte('created_at', startOfDay).lt('created_at', endOfDay)
-        .in('status', ['pending', 'preparing', 'merged', 'completed'])
-        .order('created_at', { ascending: false });
+        .in('status', ['pending', 'preparing', 'merged', 'completed']);
+
+      // ── TAKEAWAY: filter theo SĐT để mỗi khách Mang Về chỉ thấy bill của mình ──
+      // (tránh pool chung KM + privacy leak vì tất cả khách dùng chung 1 takeawayTableId)
+      // Dùng ref để tránh stale closure khi gọi từ realtime listener
+      if (isTakeawayRef.current && phoneToUse) {
+        bills = bills.eq('customer_phone', phoneToUse);
+      }
+
+      const { data: allTableBills } = await bills.order('created_at', { ascending: false });
 
       setPreviousOrders(allTableBills || []);
-      // Đồng thời cập nhật groupOrders để tính KM chung cho nhóm
+      // Đồng thời cập nhật groupOrders để tính KM chung cho nhóm (chỉ dine-in)
       fetchGroupOrders();
       return;
     }
@@ -1178,13 +1240,22 @@ function OrderContent() {
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
     const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
-    const { data } = await supabase
+
+    let query = supabase
       .from('orders')
-      .select('id, table_id, order_items(id, menu_item_id, quantity, unit_price, is_gift, item_options, menu_item:menu_items(id, counts_for_promotion, options))')
+      .select('id, table_id, customer_phone, order_items(id, menu_item_id, quantity, unit_price, is_gift, item_options, menu_item:menu_items(id, counts_for_promotion, options))')
       .in('table_id', ids)
       .gte('created_at', startOfDay)
       .lt('created_at', endOfDay)
       .in('status', ['pending', 'preparing', 'completed']);
+
+    // ── TAKEAWAY: filter theo SĐT để KM không pool chung giữa các khách Mang Về ──
+    const phone = customerPhoneRef.current?.trim();
+    if (isTakeawayRef.current && phone) {
+      query = query.eq('customer_phone', phone);
+    }
+
+    const { data } = await query;
     setGroupOrders(data || []);
   }
 
@@ -1658,6 +1729,7 @@ function OrderContent() {
           status: 'pending',
           total_amount: effectiveTotal,
           ...(isTakeaway && deliveryAddress.trim() ? { delivery_address: deliveryAddress.trim() } : {}),
+          ...(isTakeaway && customerNote.trim() ? { customer_note: customerNote.trim() } : {}),
         })
         .select()
         .single();
@@ -1707,6 +1779,7 @@ function OrderContent() {
       setCart([]);
       setNotes({});
       setGiftCart([]);
+      setCustomerNote(''); // reset ghi chú takeaway sau khi gửi thành công
       setShowCart(false);
       setOrderSuccess(true);
       setTimeout(() => setOrderSuccess(false), 3000);
@@ -1718,6 +1791,42 @@ function OrderContent() {
       console.error(err);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // Đổi địa chỉ giao hàng — cập nhật vào tất cả đơn chưa giao + saveSession
+  async function updateDeliveryAddress(newAddress) {
+    const trimmed = (newAddress || '').trim();
+    if (!trimmed || trimmed === deliveryAddress) {
+      setEditingAddress(false);
+      return;
+    }
+    setAddressUpdateSaving(true);
+    try {
+      const phone = customerPhone.trim();
+      if (phone) {
+        // Update tất cả đơn takeaway hôm nay của khách CHƯA giao
+        const now = new Date();
+        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+        await supabase
+          .from('orders')
+          .update({ delivery_address: trimmed })
+          .eq('customer_phone', phone)
+          .eq('table_id', activeTableId)
+          .eq('kitchen_completed', false)
+          .gte('created_at', startOfDay);
+      }
+      setDeliveryAddress(trimmed);
+      // Cập nhật session để đơn tiếp theo dùng địa chỉ mới
+      const saved = getSavedSession();
+      saveSession(saved?.customerName || customerName.trim(), phone, trimmed, saved?.orderId, cart);
+      setEditingAddress(false);
+      fetchPreviousOrders();
+    } catch (err) {
+      alert('Không cập nhật được địa chỉ. Vui lòng thử lại.');
+      console.error(err);
+    } finally {
+      setAddressUpdateSaving(false);
     }
   }
 
@@ -2040,22 +2149,25 @@ function OrderContent() {
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+                  {/* Nút "Bỏ qua" CHỈ hiện cho bàn dine-in; Mang Về bắt buộc nhập SĐT để liên hệ giao hàng */}
+                  {!isTakeaway && (
+                    <button
+                      className="co-btn-start"
+                      style={{ flex: 1, background: '#f3f4f6', color: '#4b5563', border: '1.5px solid #e5e7eb' }}
+                      onClick={() => {
+                        saveSession('', '', '');
+                        setShowInfoModal(false);
+                        setShowPromoPopup(true);
+                        fetchPreviousOrders();
+                      }}
+                    >
+                      Bỏ qua
+                    </button>
+                  )}
                   <button
                     className="co-btn-start"
-                    style={{ flex: 1, background: '#f3f4f6', color: '#4b5563', border: '1.5px solid #e5e7eb' }}
-                    onClick={() => {
-                      saveSession('', '', '');
-                      setShowInfoModal(false);
-                      setShowPromoPopup(true);
-                      fetchPreviousOrders();
-                    }}
-                  >
-                    Bỏ qua
-                  </button>
-                  <button
-                    className="co-btn-start"
-                    style={{ flex: 2 }}
-                    disabled={isTakeaway && !deliveryAddress.trim()}
+                    style={{ flex: isTakeaway ? 1 : 2 }}
+                    disabled={isTakeaway && (!customerPhone.trim() || !deliveryAddress.trim())}
                     onClick={() => {
                       saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim());
                       setShowInfoModal(false);
@@ -2892,6 +3004,54 @@ function OrderContent() {
                   </div>
                 )}
               </div>
+              {/* Ghi chú khách gửi cho bếp — CHỈ takeaway */}
+              {isTakeaway && cart.length > 0 && (
+                <div style={{
+                  padding: '12px 16px 0',
+                  background: 'white',
+                }}>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    color: '#1d4ed8',
+                    marginBottom: 6,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6
+                  }}>
+                    📝 Ghi chú cho bếp <span style={{ fontWeight: 400, color: '#9ca3af', fontSize: '0.72rem' }}>(không bắt buộc)</span>
+                  </label>
+                  <textarea
+                    value={customerNote}
+                    onChange={(e) => setCustomerNote(e.target.value.slice(0, 300))}
+                    placeholder="VD: không cay, ít ngọt, giao trước 6h tối..."
+                    rows={2}
+                    maxLength={300}
+                    style={{
+                      width: '100%',
+                      padding: '8px 10px',
+                      border: '1.5px solid #bfdbfe',
+                      borderRadius: 10,
+                      fontSize: '0.85rem',
+                      fontFamily: 'inherit',
+                      resize: 'none',
+                      outline: 'none',
+                      background: '#eff6ff',
+                      color: '#1e3a8a',
+                      lineHeight: 1.4
+                    }}
+                  />
+                  <div style={{
+                    fontSize: '0.68rem',
+                    color: '#9ca3af',
+                    textAlign: 'right',
+                    marginTop: 2
+                  }}>
+                    {customerNote.length}/300
+                  </div>
+                </div>
+              )}
               <div className="co-sheet-footer" style={{ position: 'relative' }}>
                 <div className="co-cart-total">
                   <span>Tổng cộng</span>
@@ -2986,9 +3146,89 @@ function OrderContent() {
                 <button onClick={() => setShowOrdered(false)}><X size={20} /></button>
               </div>
               <div className="co-sheet-body">
+                {/* Banner địa chỉ giao hàng (chỉ takeaway) */}
+                {isTakeaway && deliveryAddress && (
+                  <div style={{
+                    background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 12,
+                    padding: '10px 12px', marginBottom: 12,
+                    display: 'flex', alignItems: 'center', gap: 10
+                  }}>
+                    <span style={{ fontSize: '1.1rem', flexShrink: 0 }}>📍</span>
+                    {editingAddress ? (
+                      <>
+                        <input
+                          type="text"
+                          value={editAddressInput}
+                          onChange={(e) => setEditAddressInput(e.target.value)}
+                          placeholder="Nhập địa chỉ mới..."
+                          autoFocus
+                          style={{
+                            flex: 1, padding: '6px 10px', border: '1.5px solid #93c5fd',
+                            borderRadius: 8, fontSize: '0.88rem', outline: 'none'
+                          }}
+                        />
+                        <button
+                          onClick={() => updateDeliveryAddress(editAddressInput)}
+                          disabled={addressUpdateSaving || !editAddressInput.trim()}
+                          style={{
+                            background: '#2563eb', color: 'white', border: 'none',
+                            borderRadius: 6, padding: '6px 12px', fontWeight: 700,
+                            fontSize: '0.82rem', cursor: 'pointer',
+                            opacity: (addressUpdateSaving || !editAddressInput.trim()) ? 0.5 : 1
+                          }}
+                        >
+                          {addressUpdateSaving ? '...' : 'Lưu'}
+                        </button>
+                        <button
+                          onClick={() => setEditingAddress(false)}
+                          style={{
+                            background: 'transparent', color: '#64748b', border: 'none',
+                            cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600
+                          }}
+                        >
+                          Huỷ
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ flex: 1, fontSize: '0.85rem', color: '#1e3a8a', lineHeight: 1.3 }}>
+                          <div style={{ fontSize: '0.7rem', color: '#3b82f6', fontWeight: 600, marginBottom: 2 }}>Giao tới</div>
+                          {deliveryAddress}
+                        </div>
+                        <button
+                          onClick={() => { setEditAddressInput(deliveryAddress); setEditingAddress(true); }}
+                          style={{
+                            background: 'white', color: '#2563eb', border: '1.5px solid #bfdbfe',
+                            borderRadius: 6, padding: '5px 10px', fontWeight: 700,
+                            fontSize: '0.78rem', cursor: 'pointer', flexShrink: 0
+                          }}
+                        >
+                          ✏️ Đổi
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
                 {previousOrders.length > 0 ? (
                   previousOrders.map(order => (
                     <div key={order.id} className="co-prev-order">
+                      {/* Mã đơn Mang Về (vd: TW-013 hoặc "TW-013 Bill 2" cho đơn thứ 2 cùng khách) */}
+                      {isTakeaway && takeawaySeqMap[order.id] && (
+                        <div style={{
+                          display: 'inline-block',
+                          background: 'linear-gradient(135deg, #1d4ed8, #2563eb)',
+                          color: 'white',
+                          padding: '4px 12px',
+                          borderRadius: 8,
+                          fontWeight: 800,
+                          fontSize: '0.92rem',
+                          letterSpacing: '0.05em',
+                          marginBottom: 8,
+                          boxShadow: '0 2px 6px rgba(37,99,235,0.3)'
+                        }}>
+                          🛵 {takeawaySeqMap[order.id]}
+                        </div>
+                      )}
                       <div className="co-prev-header">
                         <div className="co-prev-time">
                           <Clock size={14} />

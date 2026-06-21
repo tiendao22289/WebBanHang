@@ -435,6 +435,20 @@ export default function TablesPage() {
           .in('merged_with', expiredIds);
         fetchTables();
       }
+
+      // ── Auto-cleanup đơn TAKEAWAY treo quá 6h ──
+      // Tránh list "Xem đơn" bừa bộn vì admin quên bấm "Đã giao đi"
+      const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+      const takeawayTable = tables.find(t => t.table_type === 'takeaway');
+      if (takeawayTable) {
+        await supabase
+          .from('orders')
+          .update({ kitchen_completed: true, status: 'completed' })
+          .eq('table_id', takeawayTable.id)
+          .eq('kitchen_completed', false)
+          .in('status', ['pending', 'preparing'])
+          .lt('created_at', sixHoursAgo);
+      }
     }, 60000); // Check every 60 seconds
 
     return () => {
@@ -1362,6 +1376,41 @@ export default function TablesPage() {
   const fetchTakeawayOrders = async () => {
     const takeawayTable = tables.find(t => t.table_type === 'takeaway');
     if (!takeawayTable) return;
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
+
+    // 1. Lấy TẤT CẢ đơn takeaway hôm nay kèm SĐT để build seq map theo khách
+    const { data: allToday } = await supabase
+      .from('orders')
+      .select('id, created_at, customer_phone')
+      .eq('table_id', takeawayTable.id)
+      .gte('created_at', startOfDay)
+      .lt('created_at', endOfDay)
+      .order('created_at', { ascending: true });
+
+    // Group theo SĐT (giữ thứ tự xuất hiện đầu tiên), khách mỗi SĐT chia sẻ 1 base code,
+    // đơn đầu plain (TW-013), đơn sau thêm suffix (TW-013-2, TW-013-3...)
+    const customerOrderMap = new Map();
+    const customerFirstSeen = [];
+    for (const order of (allToday || [])) {
+      const phone = (order.customer_phone || '').trim() || `__anon_${order.id}`;
+      if (!customerOrderMap.has(phone)) {
+        customerOrderMap.set(phone, []);
+        customerFirstSeen.push(phone);
+      }
+      customerOrderMap.get(phone).push(order);
+    }
+    const codeMap = new Map();
+    customerFirstSeen.forEach((phone, custIdx) => {
+      const baseCode = `TW-${String(custIdx + 1).padStart(3, '0')}`;
+      const orders = customerOrderMap.get(phone);
+      orders.forEach((order, orderIdx) => {
+        codeMap.set(order.id, orderIdx === 0 ? baseCode : `${baseCode} Bill ${orderIdx + 1}`);
+      });
+    });
+
+    // 2. Lấy đơn đang chờ giao để hiển thị
     const { data } = await supabase
       .from('orders')
       .select('*, order_items(*, menu_item:menu_items(name, price))')
@@ -1369,13 +1418,30 @@ export default function TablesPage() {
       .eq('kitchen_completed', false)
       .in('status', ['pending', 'preparing'])
       .order('created_at', { ascending: false });
-    // Wrap each order in the same shape the modal expects (orderIds array)
-    setTakeawayOrders((data || []).map(o => ({ ...o, orderIds: [o.id] })));
+
+    setTakeawayOrders((data || []).map(o => ({
+      ...o,
+      orderIds: [o.id],
+      displayCode: codeMap.get(o.id) || '',
+    })));
   };
 
   const completeKitchenOrder = async (orderIds) => {
     const ids = Array.isArray(orderIds) ? orderIds : [orderIds];
     await supabase.from('orders').update({ kitchen_completed: true, status: 'completed' }).in('id', ids);
+    setTakeawayOrders(prev => prev.filter(o => !o.orderIds?.some(id => ids.includes(id))));
+  };
+
+  const cancelTakeawayOrder = async (orderIds, displayCode) => {
+    const ids = Array.isArray(orderIds) ? orderIds : [orderIds];
+    const confirmed = window.confirm(
+      `Huỷ đơn ${displayCode || ''}?\n\nĐơn này sẽ chuyển sang trạng thái "Đã huỷ" và biến mất khỏi danh sách.`
+    );
+    if (!confirmed) return;
+    await supabase
+      .from('orders')
+      .update({ kitchen_completed: true, status: 'cancelled', payment_method: 'cancelled' })
+      .in('id', ids);
     setTakeawayOrders(prev => prev.filter(o => !o.orderIds?.some(id => ids.includes(id))));
   };
 
@@ -3887,6 +3953,23 @@ export default function TablesPage() {
                   </div>
                 ) : takeawayOrders.map(order => (
                   <div key={order.orderIds?.join(',') || order.customer_phone} style={{ background: '#f8fafc', border: '1px solid #e0e7ff', borderRadius: 14, padding: '14px', marginBottom: 12 }}>
+                    {/* Mã đơn TW-XXX */}
+                    {order.displayCode && (
+                      <div style={{
+                        display: 'inline-block',
+                        background: 'linear-gradient(135deg, #1d4ed8, #2563eb)',
+                        color: 'white',
+                        padding: '4px 12px',
+                        borderRadius: 8,
+                        fontWeight: 800,
+                        fontSize: '0.95rem',
+                        letterSpacing: '0.05em',
+                        marginBottom: 10,
+                        boxShadow: '0 2px 6px rgba(37,99,235,0.3)'
+                      }}>
+                        {order.displayCode}
+                      </div>
+                    )}
                     {/* Customer info */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                       <div>
@@ -3916,13 +3999,41 @@ export default function TablesPage() {
                         <span style={{ color: '#1d4ed8' }}>{order.total_amount?.toLocaleString('vi-VN')}đ</span>
                       </div>
                     </div>
-                    {/* Complete button */}
-                    <button
-                      onClick={() => completeKitchenOrder(order.orderIds || [order.id])}
-                      style={{ width: '100%', padding: '10px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}
-                    >
-                      ✓ Đã hoàn thành — Đã giao đi
-                    </button>
+                    {/* Ghi chú khách gửi cho bếp */}
+                    {order.customer_note && (
+                      <div style={{
+                        background: '#fef3c7',
+                        border: '1px solid #fcd34d',
+                        borderRadius: 8,
+                        padding: '8px 10px',
+                        marginBottom: 10,
+                        display: 'flex',
+                        gap: 6,
+                        alignItems: 'flex-start'
+                      }}>
+                        <span style={{ fontSize: '0.9rem', flexShrink: 0 }}>📝</span>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: '0.7rem', color: '#92400e', fontWeight: 700, marginBottom: 2 }}>GHI CHÚ KHÁCH</div>
+                          <div style={{ fontSize: '0.85rem', color: '#78350f', lineHeight: 1.4 }}>{order.customer_note}</div>
+                        </div>
+                      </div>
+                    )}
+                    {/* Action buttons: Đã giao / Huỷ */}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        onClick={() => completeKitchenOrder(order.orderIds || [order.id])}
+                        style={{ flex: 1, padding: '10px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 10, fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}
+                      >
+                        ✓ Đã giao đi
+                      </button>
+                      <button
+                        onClick={() => cancelTakeawayOrder(order.orderIds || [order.id], order.displayCode)}
+                        style={{ padding: '10px 14px', background: 'white', color: '#dc2626', border: '1.5px solid #fca5a5', borderRadius: 10, fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                        title="Huỷ đơn này"
+                      >
+                        ✕ Huỷ
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
