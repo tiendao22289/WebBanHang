@@ -197,13 +197,21 @@ export default function StatsPage() {
     // 5. Doanh thu theo ngày (Biểu đồ)
     const revenueMap = {};
     validOrders.forEach(order => {
-      const key = format(new Date(order.created_at), 'dd/MM');
-      if (revenueMap[key] === undefined) revenueMap[key] = 0;
-      revenueMap[key] += order.total_amount || 0;
+      const orderDate = new Date(order.created_at);
+      const key = format(orderDate, 'yyyy-MM-dd');
+      if (revenueMap[key] === undefined) {
+        revenueMap[key] = {
+          date: format(orderDate, 'dd/MM'),
+          sortTime: startOfDay(orderDate).getTime(),
+          revenue: 0,
+        };
+      }
+      revenueMap[key].revenue += order.total_amount || 0;
     });
 
-    const revenueByDay = Object.entries(revenueMap).map(([date, revenue]) => ({ date, revenue }));
-    revenueByDay.sort((a, b) => a.date.localeCompare(b.date));
+    const revenueByDay = Object.values(revenueMap)
+      .sort((a, b) => a.sortTime - b.sortTime)
+      .map(({ date, revenue }) => ({ date, revenue }));
 
     // 6. Category breakdown
     const catMap = {};
