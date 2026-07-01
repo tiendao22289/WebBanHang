@@ -26,6 +26,39 @@ import './stats.css';
 const CHART_COLORS = ['#D4A574', '#C4453C', '#2DB67C', '#3B82F6', '#F5A623', '#8B5CF6', '#EC4899', '#14B8A6'];
 const PAYMENT_COLORS = ['#3B82F6', '#2DB67C']; // CK, Tiền mặt
 const VAT_RATE = 0.08; // 8% thuế suất F&B
+const ORDERS_PAGE_SIZE = 1000;
+
+async function fetchAllOrdersInRange(startDate, endDate) {
+  const allOrders = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('orders')
+      .select(`
+        *,
+        order_items (
+          *,
+          menu_item:menu_items(name, category_id, category:categories(name))
+        )
+      `)
+      .gte('created_at', startDate.toISOString())
+      .lte('created_at', endDate.toISOString())
+      .is('is_hidden_from_stats', false)
+      .order('created_at', { ascending: true })
+      .range(from, from + ORDERS_PAGE_SIZE - 1);
+
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+
+    allOrders.push(...data);
+
+    if (data.length < ORDERS_PAGE_SIZE) break;
+    from += ORDERS_PAGE_SIZE;
+  }
+
+  return allOrders;
+}
 
 export default function StatsPage() {
   const [period, setPeriod] = useState('today'); // today, yesterday, 7days, month, quarter, custom
@@ -89,22 +122,13 @@ export default function StatsPage() {
         endDate = endOfDay(now);
     }
 
-    // 1. Fetch ALL orders in period that are NOT hidden (is_hidden_from_stats = false)
-    // Sổ chính thức, giới hạn định mức đã được xử lý bởi is_hidden_from_stats lúc tạo bill
-    const { data: ordersData } = await supabase
-      .from('orders')
-      .select(`
-        *,
-        order_items (
-          *,
-          menu_item:menu_items(name, category_id, category:categories(name))
-        )
-      `)
-      .gte('created_at', startDate.toISOString())
-      .lte('created_at', endDate.toISOString())
-      .is('is_hidden_from_stats', false);
-
-    if (!ordersData) {
+    let ordersData = [];
+    try {
+      // 1. Fetch ALL orders in period that are NOT hidden (is_hidden_from_stats = false)
+      // Sổ chính thức, giới hạn định mức đã được xử lý bởi is_hidden_from_stats lúc tạo bill
+      ordersData = await fetchAllOrdersInRange(startDate, endDate);
+    } catch (error) {
+      console.error('[Stats] Error fetching orders:', error);
       setLoading(false);
       return;
     }
