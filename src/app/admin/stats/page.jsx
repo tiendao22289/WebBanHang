@@ -28,6 +28,16 @@ const PAYMENT_COLORS = ['#3B82F6', '#2DB67C']; // CK, Tiền mặt
 const VAT_RATE = 0.08; // 8% thuế suất F&B
 const ORDERS_PAGE_SIZE = 1000;
 
+function formatDateInput(date) {
+  return format(date, 'dd/MM/yyyy');
+}
+
+function parseDateInput(value) {
+  const [day, month, year] = value.split('/').map(Number);
+  if (!day || !month || !year) return new Date(NaN);
+  return new Date(year, month - 1, day);
+}
+
 async function fetchAllOrdersInRange(startDate, endDate) {
   const allOrders = [];
   let from = 0;
@@ -62,8 +72,8 @@ async function fetchAllOrdersInRange(startDate, endDate) {
 
 export default function StatsPage() {
   const [period, setPeriod] = useState('today'); // today, yesterday, 7days, month, quarter, custom
-  const [customStart, setCustomStart] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [customEnd, setCustomEnd] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [customStart, setCustomStart] = useState(formatDateInput(new Date()));
+  const [customEnd, setCustomEnd] = useState(formatDateInput(new Date()));
   const [stats, setStats] = useState({
     totalRevenue: 0,
     netRevenue: 0,
@@ -114,8 +124,13 @@ export default function StatsPage() {
         endDate = endOfQuarter(now);
         break;
       case 'custom':
-        startDate = startOfDay(new Date(customStart));
-        endDate = endOfDay(new Date(customEnd));
+        startDate = startOfDay(parseDateInput(customStart));
+        endDate = endOfDay(parseDateInput(customEnd));
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+          alert('Vui lòng nhập ngày theo định dạng dd/mm/yyyy');
+          setLoading(false);
+          return;
+        }
         break;
       default:
         startDate = startOfDay(now);
@@ -227,7 +242,7 @@ export default function StatsPage() {
     else if (period === '7days') periodLabel = '7 ngày gần nhất';
     else if (period === 'month') periodLabel = 'Tháng này';
     else if (period === 'quarter') periodLabel = 'Quý này';
-    else if (period === 'custom') periodLabel = `Từ ${format(new Date(customStart), 'dd/MM/yyyy')} đến ${format(new Date(customEnd), 'dd/MM/yyyy')}`;
+    else if (period === 'custom') periodLabel = `Từ ${customStart} đến ${customEnd}`;
 
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('So S2a HKD', {
@@ -459,9 +474,23 @@ export default function StatsPage() {
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             {period === 'custom' && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'white', padding: '4px 8px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)} style={{ border: 'none', outline: 'none', color: '#475569', fontSize: '0.85rem' }} />
+                <input
+                  type="text"
+                  value={customStart}
+                  onChange={e => setCustomStart(e.target.value)}
+                  placeholder="dd/mm/yyyy"
+                  inputMode="numeric"
+                  style={{ border: 'none', outline: 'none', color: '#475569', fontSize: '0.85rem', width: '92px' }}
+                />
                 <span style={{ color: '#94a3b8' }}>-</span>
-                <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)} style={{ border: 'none', outline: 'none', color: '#475569', fontSize: '0.85rem' }} />
+                <input
+                  type="text"
+                  value={customEnd}
+                  onChange={e => setCustomEnd(e.target.value)}
+                  placeholder="dd/mm/yyyy"
+                  inputMode="numeric"
+                  style={{ border: 'none', outline: 'none', color: '#475569', fontSize: '0.85rem', width: '92px' }}
+                />
                 <button onClick={fetchStats} style={{ padding: '4px 12px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
                   Lọc
                 </button>
