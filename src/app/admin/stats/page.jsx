@@ -20,6 +20,7 @@ import {
 } from 'date-fns';
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import './stats.css';
 
@@ -236,219 +237,228 @@ export default function StatsPage() {
 
   // === XUẤT EXCEL CHUẨN MẪU S2a-HKD VỚI EXCELJS ===
   const handleExportExcel = async () => {
-    let periodLabel = 'Khác';
-    if (period === 'today') periodLabel = 'Hôm nay';
-    else if (period === 'yesterday') periodLabel = 'Hôm qua';
-    else if (period === '7days') periodLabel = '7 ngày gần nhất';
-    else if (period === 'month') periodLabel = 'Tháng này';
-    else if (period === 'quarter') periodLabel = 'Quý này';
-    else if (period === 'custom') periodLabel = `Từ ${customStart} đến ${customEnd}`;
+    const sortedOrders = [...stats.validOrders].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('So S2a HKD', {
-      views: [{ showGridLines: false }],
-      pageSetup: { paperSize: 9, orientation: 'portrait' }
-    });
+    if (sortedOrders.length === 0) {
+      alert('Không có hóa đơn hợp lệ nào để xuất báo cáo.');
+      return;
+    }
 
-    // Cài đặt độ rộng cột chuẩn giống mẫu
-    sheet.columns = [
-      { key: 'A', width: 18 }, // Số hiệu
-      { key: 'B', width: 22 }, // Ngày tháng
-      { key: 'C', width: 60 }, // Diễn giải
-      { key: 'D', width: 25 }, // Số tiền
-    ];
+    const months = sortedOrders.reduce((acc, order) => {
+      const monthKey = format(new Date(order.created_at), 'yyyy-MM');
+      if (!acc[monthKey]) acc[monthKey] = [];
+      acc[monthKey].push(order);
+      return acc;
+    }, {});
 
-    // Tạo các dòng Header (từ 1 đến 8)
-    // Dòng 1
-    sheet.getCell('A1').value = 'HỘ KINH DOANH ỐC BẢO KHANG';
-    sheet.getCell('A1').font = { name: 'Times New Roman', size: 12, bold: true };
-    sheet.getCell('D1').value = 'Mẫu số S2a-HKD';
-    sheet.getCell('D1').font = { name: 'Times New Roman', size: 12, bold: true };
-    sheet.getCell('D1').alignment = { horizontal: 'center', vertical: 'middle' };
-
-    // Dòng 2
-    sheet.getCell('A2').value = 'Địa chỉ: 167B Nguyễn Văn Luông, Phường Bình Phú, Quận 6, TP.HCM';
-    sheet.getCell('A2').font = { name: 'Times New Roman', size: 12 };
-    sheet.getCell('D2').value = '(Kèm theo Thông tư số 152/2025/TT-BTC ngày 31 tháng 12 năm 2025 của Bộ trưởng Bộ Tài chính)';
-    sheet.getCell('D2').font = { name: 'Times New Roman', size: 11, italic: true };
-    sheet.getCell('D2').alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-    sheet.mergeCells('D2:D5');
-
-    // Dòng 3
-    sheet.getCell('A3').value = 'Mã số thuế: ';
-    sheet.getCell('A3').font = { name: 'Times New Roman', size: 12 };
-
-    // Dòng 6: Tiêu đề chính
-    sheet.getCell('A6').value = 'SỔ DOANH THU BÁN HÀNG HOÁ, DỊCH VỤ';
-    sheet.getCell('A6').font = { name: 'Times New Roman', size: 14, bold: true };
-    sheet.getCell('A6').alignment = { horizontal: 'center', vertical: 'middle' };
-    sheet.mergeCells('A6:D6');
-
-    // Dòng 7
-    sheet.getCell('A7').value = 'Địa điểm kinh doanh: 167B Nguyễn Văn Luông, Phường Bình Phú, Quận 6, TP.HCM';
-    sheet.getCell('A7').font = { name: 'Times New Roman', size: 12 };
-    sheet.getCell('A7').alignment = { horizontal: 'center', vertical: 'middle' };
-    sheet.mergeCells('A7:D7');
-
-    // Dòng 8
-    sheet.getCell('A8').value = `Kỳ kê khai: ${periodLabel}`;
-    sheet.getCell('A8').font = { name: 'Times New Roman', size: 12 };
-    sheet.getCell('A8').alignment = { horizontal: 'center', vertical: 'middle' };
-    sheet.mergeCells('A8:D8');
-
-    // Headers của Bảng (Dòng 9 - 11)
-    sheet.getCell('A9').value = 'Chứng từ';
-    sheet.mergeCells('A9:B9');
-
-    sheet.getCell('A10').value = 'Số hiệu';
-    sheet.getCell('B10').value = 'Ngày, tháng';
-
-    sheet.getCell('C9').value = 'Diễn giải';
-    sheet.mergeCells('C9:C10');
-
-    sheet.getCell('D9').value = 'Số tiền';
-    sheet.mergeCells('D9:D10');
-
-    sheet.getCell('A11').value = 'A';
-    sheet.getCell('B11').value = 'B';
-    sheet.getCell('C11').value = 'C';
-    sheet.getCell('D11').value = '1';
-
-    // Format style cho Header Bảng (Viền, In đậm, Căn giữa)
-    for (let r = 9; r <= 11; r++) {
-      const row = sheet.getRow(r);
-      row.eachCell({ includeEmpty: true }, (cell, colNum) => {
-        if (colNum <= 4) {
-          cell.font = { name: 'Times New Roman', size: 12, bold: (r < 11), italic: (r === 11) };
-          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    const styleReportRow = (row, options = {}) => {
+      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        if (colNumber <= 4) {
+          cell.font = { name: 'Times New Roman', size: 12, bold: !!options.bold, italic: !!options.italic };
           cell.border = {
             top: { style: 'thin' }, left: { style: 'thin' },
             bottom: { style: 'thin' }, right: { style: 'thin' }
           };
-        }
-      });
-    }
-    // Khắc phục border cho các ô merge bị mất viền phải
-    sheet.getCell('B9').border = { top: { style: 'thin' }, right: { style: 'thin' }, bottom: { style: 'thin' } };
-    sheet.getCell('D9').border = { top: { style: 'thin' }, right: { style: 'thin' }, left: { style: 'thin' } };
-    sheet.getCell('D10').border = { bottom: { style: 'thin' }, right: { style: 'thin' }, left: { style: 'thin' } };
-
-    // Dòng 12: Ngành nghề
-    const r12 = sheet.addRow([null, null, '1. Ngành nghề: Bán đồ ăn uống', null]);
-    r12.getCell(3).font = { name: 'Times New Roman', size: 12, bold: true };
-    r12.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-      if (colNumber <= 4) {
-        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
-      }
-    });
-
-    // Đổ dữ liệu Data (Sắp xếp tăng dần theo thời gian)
-    const sortedOrders = [...stats.validOrders].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-
-    sortedOrders.forEach(order => {
-      const dateStr = format(new Date(order.created_at), 'dd/MM/yyyy HH:mm');
-      const billId = `#${order.id.slice(0, 6).toUpperCase()}`;
-      const payment = order.payment_method === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt';
-      const totalBill = order.total_amount || 0;
-
-      // 1. Dòng tổng của Bill
-      const rowBill = sheet.addRow([null, dateStr, `${billId} - Doanh thu bán hàng (${payment})`, totalBill]);
-      rowBill.getCell(4).numFmt = '#,##0 "VND"';
-
-      rowBill.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-        if (colNumber <= 4) {
-          cell.font = { name: 'Times New Roman', size: 12, bold: true };
-          cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
 
           if (colNumber <= 2) cell.alignment = { vertical: 'middle', horizontal: 'center' };
-          else if (colNumber === 3) cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+          else if (colNumber === 3) cell.alignment = { vertical: 'middle', horizontal: options.centerText ? 'center' : 'left', wrapText: true };
           else cell.alignment = { vertical: 'middle', horizontal: 'right' };
         }
       });
+    };
 
-      // 2. Dòng chi tiết các món ăn trong Bill
-      if (order.order_items && order.order_items.length > 0) {
-        order.order_items.forEach((item) => {
-          const itemTotal = item.quantity * item.unit_price;
-          const priceStr = new Intl.NumberFormat('vi-VN').format(item.unit_price) + 'đ';
+    const addSummaryRow = (sheet, label, amount, fillColor = 'F8FAFC') => {
+      const row = sheet.addRow([null, null, label, amount]);
+      row.getCell(4).numFmt = '#,##0 "VND"';
+      row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        if (colNumber <= 4) {
+          cell.font = { name: 'Times New Roman', size: 12, bold: true };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fillColor } };
+          cell.border = {
+            top: { style: 'thin' }, left: { style: 'thin' },
+            bottom: { style: 'thin' }, right: { style: 'thin' }
+          };
+          if (colNumber === 3) cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          if (colNumber === 4) cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        }
+      });
+      return row;
+    };
 
-          const rowItem = sheet.addRow([
-            null,
-            null,
-            `- ${item.menu_item?.name || 'Món đã xóa'} (số lượng: ${item.quantity}, đơn giá: ${priceStr})`,
-            itemTotal
-          ]);
-          rowItem.getCell(4).numFmt = '#,##0 "VND"';
+    const createMonthWorkbook = (monthKey, monthOrders) => {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('So S2a HKD', {
+        views: [{ showGridLines: false }],
+        pageSetup: { paperSize: 9, orientation: 'portrait' }
+      });
 
-          rowItem.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-            if (colNumber <= 4) {
-              cell.font = { name: 'Times New Roman', size: 12 };
-              cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      sheet.columns = [
+        { key: 'A', width: 18 },
+        { key: 'B', width: 22 },
+        { key: 'C', width: 60 },
+        { key: 'D', width: 25 },
+      ];
 
-              if (colNumber === 3) cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
-              if (colNumber === 4) cell.alignment = { vertical: 'middle', horizontal: 'right' };
-            }
-          });
+      const firstDate = new Date(`${monthKey}-01T00:00:00`);
+      const periodLabel = `Tháng ${format(firstDate, 'MM/yyyy')}`;
+
+      sheet.getCell('A1').value = 'HỘ KINH DOANH ỐC BẢO KHANG';
+      sheet.getCell('A1').font = { name: 'Times New Roman', size: 12, bold: true };
+      sheet.getCell('D1').value = 'Mẫu số S2a-HKD';
+      sheet.getCell('D1').font = { name: 'Times New Roman', size: 12, bold: true };
+      sheet.getCell('D1').alignment = { horizontal: 'center', vertical: 'middle' };
+
+      sheet.getCell('A2').value = 'Địa chỉ: 167B Nguyễn Văn Luông, Phường Bình Phú, Quận 6, TP.HCM';
+      sheet.getCell('A2').font = { name: 'Times New Roman', size: 12 };
+      sheet.getCell('D2').value = '(Kèm theo Thông tư số 152/2025/TT-BTC ngày 31 tháng 12 năm 2025 của Bộ trưởng Bộ Tài chính)';
+      sheet.getCell('D2').font = { name: 'Times New Roman', size: 11, italic: true };
+      sheet.getCell('D2').alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      sheet.mergeCells('D2:D5');
+
+      sheet.getCell('A3').value = 'Mã số thuế: ';
+      sheet.getCell('A3').font = { name: 'Times New Roman', size: 12 };
+
+      sheet.getCell('A6').value = 'SỔ DOANH THU BÁN HÀNG HOÁ, DỊCH VỤ';
+      sheet.getCell('A6').font = { name: 'Times New Roman', size: 14, bold: true };
+      sheet.getCell('A6').alignment = { horizontal: 'center', vertical: 'middle' };
+      sheet.mergeCells('A6:D6');
+
+      sheet.getCell('A7').value = 'Địa điểm kinh doanh: 167B Nguyễn Văn Luông, Phường Bình Phú, Quận 6, TP.HCM';
+      sheet.getCell('A7').font = { name: 'Times New Roman', size: 12 };
+      sheet.getCell('A7').alignment = { horizontal: 'center', vertical: 'middle' };
+      sheet.mergeCells('A7:D7');
+
+      sheet.getCell('A8').value = `Kỳ kê khai: ${periodLabel}`;
+      sheet.getCell('A8').font = { name: 'Times New Roman', size: 12 };
+      sheet.getCell('A8').alignment = { horizontal: 'center', vertical: 'middle' };
+      sheet.mergeCells('A8:D8');
+
+      sheet.getCell('A9').value = 'Chứng từ';
+      sheet.mergeCells('A9:B9');
+      sheet.getCell('A10').value = 'Số hiệu';
+      sheet.getCell('B10').value = 'Ngày, tháng';
+      sheet.getCell('C9').value = 'Diễn giải';
+      sheet.mergeCells('C9:C10');
+      sheet.getCell('D9').value = 'Số tiền';
+      sheet.mergeCells('D9:D10');
+      sheet.getCell('A11').value = 'A';
+      sheet.getCell('B11').value = 'B';
+      sheet.getCell('C11').value = 'C';
+      sheet.getCell('D11').value = '1';
+
+      for (let r = 9; r <= 11; r++) {
+        const row = sheet.getRow(r);
+        row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+          if (colNum <= 4) {
+            cell.font = { name: 'Times New Roman', size: 12, bold: (r < 11), italic: (r === 11) };
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            cell.border = {
+              top: { style: 'thin' }, left: { style: 'thin' },
+              bottom: { style: 'thin' }, right: { style: 'thin' }
+            };
+          }
         });
       }
-    });
+      sheet.getCell('B9').border = { top: { style: 'thin' }, right: { style: 'thin' }, bottom: { style: 'thin' } };
+      sheet.getCell('D9').border = { top: { style: 'thin' }, right: { style: 'thin' }, left: { style: 'thin' } };
+      sheet.getCell('D10').border = { bottom: { style: 'thin' }, right: { style: 'thin' }, left: { style: 'thin' } };
 
-    // --- THÊM PHẦN TỔNG KẾT VÀ CHỮ KÝ Ở CUỐI BẢNG ---
-    const totalRow = sheet.addRow([null, null, 'Tổng cộng doanh thu:', stats.totalRevenue]);
-    totalRow.getCell(4).numFmt = '#,##0 "VND"';
-    totalRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-      if (colNumber <= 4) {
-        cell.font = { name: 'Times New Roman', size: 12, bold: true };
-        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
-        if (colNumber === 3) cell.alignment = { horizontal: 'center', vertical: 'middle' };
-        if (colNumber === 4) cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      const r12 = sheet.addRow([null, null, '1. Ngành nghề: Bán đồ ăn uống', null]);
+      styleReportRow(r12, { bold: true });
+
+      let currentDay = null;
+      let currentDayTotal = 0;
+      let monthTotal = 0;
+
+      monthOrders.forEach(order => {
+        const orderDate = new Date(order.created_at);
+        const dayKey = format(orderDate, 'yyyy-MM-dd');
+
+        if (currentDay && currentDay !== dayKey) {
+          addSummaryRow(sheet, `Tổng doanh thu ngày ${format(new Date(`${currentDay}T00:00:00`), 'dd/MM/yyyy')}:`, currentDayTotal, 'E0F2FE');
+          currentDayTotal = 0;
+        }
+
+        currentDay = dayKey;
+        const dateStr = format(orderDate, 'dd/MM/yyyy HH:mm');
+        const billId = `#${order.id.slice(0, 6).toUpperCase()}`;
+        const payment = order.payment_method === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt';
+        const totalBill = order.total_amount || 0;
+        currentDayTotal += totalBill;
+        monthTotal += totalBill;
+
+        const rowBill = sheet.addRow([null, dateStr, `${billId} - Doanh thu bán hàng (${payment})`, totalBill]);
+        rowBill.getCell(4).numFmt = '#,##0 "VND"';
+        styleReportRow(rowBill, { bold: true });
+
+        if (order.order_items && order.order_items.length > 0) {
+          order.order_items.forEach(item => {
+            const itemTotal = item.quantity * item.unit_price;
+            const priceStr = new Intl.NumberFormat('vi-VN').format(item.unit_price) + 'đ';
+            const rowItem = sheet.addRow([
+              null,
+              null,
+              `- ${item.menu_item?.name || 'Món đã xóa'} (số lượng: ${item.quantity}, đơn giá: ${priceStr})`,
+              itemTotal
+            ]);
+            rowItem.getCell(4).numFmt = '#,##0 "VND"';
+            styleReportRow(rowItem);
+          });
+        }
+      });
+
+      if (currentDay) {
+        addSummaryRow(sheet, `Tổng doanh thu ngày ${format(new Date(`${currentDay}T00:00:00`), 'dd/MM/yyyy')}:`, currentDayTotal, 'E0F2FE');
       }
-    });
 
-    const taxGtgtRow = sheet.addRow([null, null, 'Tổng số thuế GTGT phải nộp', null]);
-    taxGtgtRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-      if (colNumber <= 4) {
-        cell.font = { name: 'Times New Roman', size: 12, bold: true };
-        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
-        if (colNumber === 3) cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      }
-    });
+      addSummaryRow(sheet, `Tổng cộng doanh thu ${periodLabel}:`, monthTotal, 'DCFCE7');
+      addSummaryRow(sheet, 'Tổng số thuế GTGT phải nộp', null, 'FFFFFF');
+      addSummaryRow(sheet, 'Tổng số thuế TNCN phải nộp', null, 'FFFFFF');
 
-    const taxTncnRow = sheet.addRow([null, null, 'Tổng số thuế TNCN phải nộp', null]);
-    taxTncnRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-      if (colNumber <= 4) {
-        cell.font = { name: 'Times New Roman', size: 12, bold: true };
-        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
-        if (colNumber === 3) cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      }
-    });
+      const today = new Date();
+      const signDate = `Ngày ${today.getDate().toString().padStart(2, '0')} tháng ${today.getMonth() + 1} năm ${today.getFullYear()}`;
+      const sigDateRow = sheet.addRow([null, null, signDate, null]);
+      sheet.mergeCells(`C${sigDateRow.number}:D${sigDateRow.number}`);
+      sigDateRow.getCell(3).font = { name: 'Times New Roman', size: 12, italic: true };
+      sigDateRow.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
 
-    // Phần chữ ký (Gộp ô C và D cho căn giữa đẹp mắt)
-    const today = new Date();
-    const dateStr = `Ngày ${today.getDate().toString().padStart(2, '0')} tháng ${today.getMonth() + 1} năm ${today.getFullYear()}`;
+      const sigTitleRow1 = sheet.addRow([null, null, 'NGƯỜI ĐẠI DIỆN HỘ KINH DOANH/', null]);
+      sheet.mergeCells(`C${sigTitleRow1.number}:D${sigTitleRow1.number}`);
+      sigTitleRow1.getCell(3).font = { name: 'Times New Roman', size: 12, bold: true };
+      sigTitleRow1.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
 
-    const sigDateRow = sheet.addRow([null, null, dateStr, null]);
-    sheet.mergeCells(`C${sigDateRow.number}:D${sigDateRow.number}`);
-    sigDateRow.getCell(3).font = { name: 'Times New Roman', size: 12, italic: true };
-    sigDateRow.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+      const sigTitleRow2 = sheet.addRow([null, null, 'CÁ NHÂN KINH DOANH', null]);
+      sheet.mergeCells(`C${sigTitleRow2.number}:D${sigTitleRow2.number}`);
+      sigTitleRow2.getCell(3).font = { name: 'Times New Roman', size: 12, bold: true };
+      sigTitleRow2.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
 
-    const sigTitleRow1 = sheet.addRow([null, null, 'NGƯỜI ĐẠI DIỆN HỘ KINH DOANH/', null]);
-    sheet.mergeCells(`C${sigTitleRow1.number}:D${sigTitleRow1.number}`);
-    sigTitleRow1.getCell(3).font = { name: 'Times New Roman', size: 12, bold: true };
-    sigTitleRow1.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+      const sigDescRow = sheet.addRow([null, null, '(Ký, họ tên và đóng dấu (nếu có))', null]);
+      sheet.mergeCells(`C${sigDescRow.number}:D${sigDescRow.number}`);
+      sigDescRow.getCell(3).font = { name: 'Times New Roman', size: 12, italic: true };
+      sigDescRow.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
 
-    const sigTitleRow2 = sheet.addRow([null, null, 'CÁ NHÂN KINH DOANH', null]);
-    sheet.mergeCells(`C${sigTitleRow2.number}:D${sigTitleRow2.number}`);
-    sigTitleRow2.getCell(3).font = { name: 'Times New Roman', size: 12, bold: true };
-    sigTitleRow2.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+      return workbook;
+    };
 
-    const sigDescRow = sheet.addRow([null, null, '(Ký, họ tên và đóng dấu (nếu có))', null]);
-    sheet.mergeCells(`C${sigDescRow.number}:D${sigDescRow.number}`);
-    sigDescRow.getCell(3).font = { name: 'Times New Roman', size: 12, italic: true };
-    sigDescRow.getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+    const monthKeys = Object.keys(months).sort();
 
-    const buffer = await workbook.xlsx.writeBuffer();
-    saveAs(new Blob([buffer]), `So_S2a_HKD_BaoKhang_${format(new Date(), 'ddMMyyyy_HHmm')}.xlsx`);
+    if (monthKeys.length === 1) {
+      const monthKey = monthKeys[0];
+      const workbook = createMonthWorkbook(monthKey, months[monthKey]);
+      const buffer = await workbook.xlsx.writeBuffer();
+      saveAs(new Blob([buffer]), `So_S2a_HKD_BaoKhang_${monthKey}_${format(new Date(), 'ddMMyyyy_HHmm')}.xlsx`);
+      return;
+    }
+
+    const zip = new JSZip();
+    for (const monthKey of monthKeys) {
+      const workbook = createMonthWorkbook(monthKey, months[monthKey]);
+      const buffer = await workbook.xlsx.writeBuffer();
+      zip.file(`So_S2a_HKD_BaoKhang_${monthKey}.xlsx`, buffer);
+    }
+
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    saveAs(zipBlob, `So_S2a_HKD_BaoKhang_theo_thang_${format(new Date(), 'ddMMyyyy_HHmm')}.zip`);
   };
 
   const CustomTooltip = ({ active, payload, label }) => {
