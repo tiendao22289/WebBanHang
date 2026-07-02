@@ -391,10 +391,10 @@ export default function TablesPage() {
         console.log('[Realtime] channel status:', status);
       });
 
-    // ── Fallback: poll every 5s in case Supabase Realtime is not enabled ──
+    // ── Fallback: poll every 30s in case Supabase Realtime is not enabled ──
     const pollInterval = setInterval(() => {
       fetchTables();
-    }, 5000);
+    }, 30000);
 
     // ── Re-fetch when user switches back to this tab ──
     const handleVisibility = () => {
