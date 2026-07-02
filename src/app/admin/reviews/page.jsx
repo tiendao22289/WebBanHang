@@ -118,7 +118,7 @@ export default function ReviewsPage() {
           <p className="page-subtitle">Theo dõi sao và góp ý từ khách, bao gồm khách ẩn danh</p>
         </div>
         <button className="reviews-refresh" onClick={fetchReviews} disabled={loading}>
-          <RefreshCw size={16} /> Làm mới
+          <RefreshCw size={16} /> Đồng bộ
         </button>
       </div>
 

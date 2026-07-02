@@ -1,19 +1,15 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
   Search,
-  Eye,
   X,
   Phone,
   User,
-  Calendar,
   Receipt,
-  TrendingUp,
-  Clock,
-  DollarSign,
   Download,
+  RefreshCw,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -24,11 +20,12 @@ const SUPABASE_MAX_ROWS = 1000; // PostgREST max_rows mặc định
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const [totalCount, setTotalCount] = useState(0);
+  const [syncProgress, setSyncProgress] = useState(0);
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -55,31 +52,60 @@ export default function CustomersPage() {
     return () => clearTimeout(t);
   }, [searchTerm]);
 
-  const fetchCustomers = useCallback(async (page, search) => {
+  const syncCustomers = async () => {
+    if (loading) return;
     setLoading(true);
-    const from = (page - 1) * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
+    setSyncProgress(0);
+    try {
+      const allCustomers = [];
+      let from = 0;
 
-    let query = supabase
-      .from('customers')
-      .select('*', { count: 'exact' })
-      .order('last_visit_at', { ascending: false, nullsFirst: false })
-      .range(from, to);
+      while (true) {
+        const { data, error } = await supabase
+          .from('customers')
+          .select('id, name, phone, visit_count, total_spent, last_visit_at')
+          .order('last_visit_at', { ascending: false, nullsFirst: false })
+          .range(from, from + SUPABASE_MAX_ROWS - 1);
 
-    if (search.trim()) {
-      const s = search.trim().replace(/[%,]/g, ''); // bỏ ký tự đặc biệt PostgREST
-      query = query.or(`name.ilike.%${s}%,phone.ilike.%${s}%`);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+
+        allCustomers.push(...data);
+        setSyncProgress(allCustomers.length);
+
+        if (data.length < SUPABASE_MAX_ROWS) break;
+        from += SUPABASE_MAX_ROWS;
+      }
+
+      setCustomers(allCustomers);
+      setCurrentPage(1);
+      setLastSyncedAt(new Date());
+    } catch (error) {
+      console.error('[Customers] Error syncing customers:', error);
+      alert('Kh\u00f4ng th\u1ec3 \u0111\u1ed3ng b\u1ed9 kh\u00e1ch h\u00e0ng. Vui l\u00f2ng th\u1eed l\u1ea1i.');
+    } finally {
+      setLoading(false);
+      setSyncProgress(0);
     }
+  };
 
-    const { data, count } = await query;
-    setCustomers(data || []);
-    setTotalCount(count || 0);
-    setLoading(false);
-  }, []);
+  const filteredCustomers = useMemo(() => {
+    const keyword = debouncedSearch.trim().toLowerCase();
+    if (!keyword) return customers;
 
-  useEffect(() => {
-    fetchCustomers(currentPage, debouncedSearch);
-  }, [currentPage, debouncedSearch, fetchCustomers]);
+    return customers.filter((customer) => {
+      const name = (customer.name || '').toLowerCase();
+      const phone = (customer.phone || '').toLowerCase();
+      return name.includes(keyword) || phone.includes(keyword);
+    });
+  }, [customers, debouncedSearch]);
+
+  const totalCount = filteredCustomers.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const paginatedCustomers = filteredCustomers.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE
+  );
 
   async function viewCustomerHistory(customer) {
     setSelectedCustomer(customer);
@@ -131,36 +157,17 @@ export default function CustomersPage() {
     return formatDate(dateStr);
   }
 
-  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
-
   // Export TẤT CẢ khách hàng (vượt qua giới hạn 1000 của Supabase bằng range loop)
   const exportToExcel = async () => {
-    if (exporting) return;
+    if (exporting || customers.length === 0) return;
     setExporting(true);
-    setExportProgress(0);
+    setExportProgress(customers.length);
     try {
-      const allCustomers = [];
-      let from = 0;
-      while (true) {
-        const { data, error } = await supabase
-          .from('customers')
-          .select('name, phone, visit_count')
-          .order('last_visit_at', { ascending: false, nullsFirst: false })
-          .range(from, from + SUPABASE_MAX_ROWS - 1);
-        if (error || !data || data.length === 0) break;
-        allCustomers.push(...data);
-        setExportProgress(allCustomers.length);
-        if (data.length < SUPABASE_MAX_ROWS) break;
-        from += SUPABASE_MAX_ROWS;
-      }
-
-      // BOM UTF-8 để Excel hiển thị đúng tiếng Việt
-      let csvContent = '﻿Tên Khách Hàng,Số Điện Thoại,Số Lần Ghé\n';
-      allCustomers.forEach(c => {
-        const name = (c.name || 'Khách ẩn danh').replace(/,/g, '');
+      let csvContent = '\ufeffT\u00ean Kh\u00e1ch H\u00e0ng,S\u1ed1 \u0110i\u1ec7n Tho\u1ea1i,S\u1ed1 L\u1ea7n Gh\u00e9\n';
+      customers.forEach(c => {
+        const name = (c.name || 'Kh\u00e1ch \u1ea9n danh').replace(/,/g, '');
         const phone = c.phone || '';
         const visit = c.visit_count || 0;
-        // ="09xx" giữ số 0 đầu khi Excel mở
         csvContent += `"${name}",="${phone}","${visit}"\n`;
       });
 
@@ -202,45 +209,67 @@ export default function CustomersPage() {
             <User size={22} />
           </div>
           <div>
-            <div className="value">{totalCount.toLocaleString('vi-VN')}</div>
+            <div className="value">{customers.length.toLocaleString('vi-VN')}</div>
             <div className="label">Tổng khách hàng</div>
           </div>
         </div>
       </div>
 
       {/* Action Bar (Search & Export) */}
-      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
-        <div className="customer-search" style={{ flex: 1, marginBottom: 0 }}>
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
+        <div className="customer-search" style={{ flex: 1, minWidth: 260, marginBottom: 0 }}>
           <Search size={16} />
           <input
             className="input"
-            placeholder="Tìm theo tên hoặc số điện thoại..."
+            placeholder={'T\u00ecm theo t\u00ean ho\u1eb7c s\u1ed1 \u0111i\u1ec7n tho\u1ea1i...'}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
         <button
-          onClick={exportToExcel}
-          disabled={exporting}
+          onClick={syncCustomers}
+          disabled={loading}
           style={{
             display: 'flex', alignItems: 'center', gap: '6px',
             padding: '10px 16px',
-            background: exporting ? '#94a3b8' : '#10b981', color: 'white',
+            background: loading ? '#94a3b8' : '#3b82f6', color: 'white',
             border: 'none', borderRadius: '10px', fontSize: '0.9rem',
-            fontWeight: 600, cursor: exporting ? 'wait' : 'pointer',
+            fontWeight: 600, cursor: loading ? 'wait' : 'pointer',
+            boxShadow: '0 2px 6px rgba(59, 130, 246, 0.25)',
+            minWidth: 160, justifyContent: 'center'
+          }}
+        >
+          <RefreshCw size={16} />
+          {loading ? `\u0110ang \u0111\u1ed3ng b\u1ed9... ${syncProgress.toLocaleString('vi-VN')}` : '\u0110\u1ed3ng b\u1ed9'}
+        </button>
+        <button
+          onClick={exportToExcel}
+          disabled={exporting || customers.length === 0}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '6px',
+            padding: '10px 16px',
+            background: (exporting || customers.length === 0) ? '#94a3b8' : '#10b981', color: 'white',
+            border: 'none', borderRadius: '10px', fontSize: '0.9rem',
+            fontWeight: 600, cursor: exporting ? 'wait' : (customers.length === 0 ? 'not-allowed' : 'pointer'),
             boxShadow: '0 2px 6px rgba(16, 185, 129, 0.25)',
             minWidth: 140, justifyContent: 'center'
           }}
         >
           <Download size={16} />
-          {exporting ? `Đang xuất... ${exportProgress.toLocaleString('vi-VN')}` : 'Xuất Excel'}
+          {exporting ? `\u0110ang xu\u1ea5t... ${exportProgress.toLocaleString('vi-VN')}` : 'Xu\u1ea5t Excel'}
         </button>
       </div>
+
+      {lastSyncedAt && (
+        <div style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: 12 }}>
+          {'\u0110\u00e3 \u0111\u1ed3ng b\u1ed9'} {customers.length.toLocaleString('vi-VN')} {'kh\u00e1ch l\u00fac'} {lastSyncedAt.toLocaleTimeString('vi-VN')}.
+        </div>
+      )}
 
       {/* Customer List */}
       {loading ? (
         <div className="empty-state"><p>Đang tải...</p></div>
-      ) : customers.length > 0 ? (
+      ) : paginatedCustomers.length > 0 ? (
         <>
           <div className="card">
             <div style={{ overflowX: 'auto' }}>
@@ -255,7 +284,7 @@ export default function CustomersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {customers.map((customer) => (
+                  {paginatedCustomers.map((customer) => (
                     <tr key={customer.id}>
                       <td>
                         <div className="customer-name-cell">
