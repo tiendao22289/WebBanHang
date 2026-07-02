@@ -31,6 +31,8 @@ import {
   EyeOff,
   FolderOpen,
   ImageIcon,
+  Save,
+  RotateCcw,
 } from 'lucide-react';
 import './menu.css';
 
@@ -156,6 +158,15 @@ function MenuCard({ item, categories, getItemCategories, getItemDisplayPrice, to
 export default function MenuPage() {
   const [categories, setCategories] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
+  const [serverCategories, setServerCategories] = useState([]);
+  const [serverMenuItems, setServerMenuItems] = useState([]);
+  const [pendingChanges, setPendingChanges] = useState({
+    categoryUpserts: {},
+    categoryDeletes: {},
+    itemUpserts: {},
+    itemDeletes: {},
+    orderDirty: false,
+  });
   const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -184,6 +195,39 @@ export default function MenuPage() {
   const [promoSaving, setPromoSaving] = useState(false);
 
   // DnD sensors — hỗ trợ cả chuột (PC) và ngón tay (điện thoại)
+  const draftStorageKey = 'adminMenuDraft:v1';
+
+  const hasPendingChanges =
+    Object.keys(pendingChanges.categoryUpserts).length > 0 ||
+    Object.keys(pendingChanges.categoryDeletes).length > 0 ||
+    Object.keys(pendingChanges.itemUpserts).length > 0 ||
+    Object.keys(pendingChanges.itemDeletes).length > 0 ||
+    pendingChanges.orderDirty;
+
+  const emptyPendingChanges = () => ({
+    categoryUpserts: {},
+    categoryDeletes: {},
+    itemUpserts: {},
+    itemDeletes: {},
+    orderDirty: false,
+  });
+
+  const markItemDraft = (item) => {
+    setPendingChanges(prev => {
+      const itemDeletes = { ...prev.itemDeletes };
+      delete itemDeletes[item.id];
+      return { ...prev, itemDeletes, itemUpserts: { ...prev.itemUpserts, [item.id]: item } };
+    });
+  };
+
+  const markCategoryDraft = (cat) => {
+    setPendingChanges(prev => {
+      const categoryDeletes = { ...prev.categoryDeletes };
+      delete categoryDeletes[cat.id];
+      return { ...prev, categoryDeletes, categoryUpserts: { ...prev.categoryUpserts, [cat.id]: cat } };
+    });
+  };
+
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 8 }, // cần kéo 8px mới kích hoạt
@@ -209,6 +253,25 @@ export default function MenuPage() {
     fetchData();
     fetchPromoConfig();
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    if (hasPendingChanges) {
+      localStorage.setItem(draftStorageKey, JSON.stringify({ categories, menuItems, pendingChanges, savedAt: new Date().toISOString() }));
+    } else {
+      localStorage.removeItem(draftStorageKey);
+    }
+  }, [categories, menuItems, pendingChanges, hasPendingChanges, loading]);
+
+  useEffect(() => {
+    if (!hasPendingChanges) return;
+    const warnBeforeLeave = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeLeave);
+    return () => window.removeEventListener('beforeunload', warnBeforeLeave);
+  }, [hasPendingChanges]);
 
   async function fetchPromoConfig() {
     const { data } = await supabase.from('settings')
@@ -252,18 +315,36 @@ export default function MenuPage() {
     return cats.length > 0 ? cats : [null];
   };
 
-  async function fetchData() {
+  async function fetchData({ ignoreDraft = false } = {}) {
     const [{ data: cats }, { data: items }] = await Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
       supabase.from('menu_items').select('*, category:categories(name)').order('sort_order').order('created_at'),
     ]);
     const fetchedItems = items || [];
-    const finalCats = cats || [];
+    const finalCats = [...(cats || [])];
     if (fetchedItems.some(i => getItemCategories(i).includes(null))) {
       finalCats.push({ id: null, name: 'Chưa phân loại' });
     }
+    setServerCategories(finalCats);
+    setServerMenuItems(fetchedItems);
+
+    const savedDraft = !ignoreDraft ? localStorage.getItem(draftStorageKey) : null;
+    if (savedDraft) {
+      try {
+        const draft = JSON.parse(savedDraft);
+        if (Array.isArray(draft.categories) && Array.isArray(draft.menuItems) && draft.pendingChanges) {
+          setCategories(draft.categories);
+          setMenuItems(draft.menuItems);
+          setPendingChanges(draft.pendingChanges);
+          setLoading(false);
+          return;
+        }
+      } catch {}
+    }
+
     setCategories(finalCats);
     setMenuItems(fetchedItems);
+    setPendingChanges(emptyPendingChanges());
     setLoading(false);
   }
 
@@ -281,13 +362,10 @@ export default function MenuPage() {
 
   async function saveCat() {
     if (!catForm.name.trim()) return;
-    if (editingCat) {
-      await supabase.from('categories').update(catForm).eq('id', editingCat.id);
-    } else {
-      await supabase.from('categories').insert(catForm);
-    }
+    const cat = editingCat ? { ...editingCat, ...catForm } : { id: `draft-cat-${Date.now()}`, ...catForm };
+    setCategories(prev => editingCat ? prev.map(c => c.id === editingCat.id ? cat : c) : [...prev, cat]);
+    markCategoryDraft(cat);
     setShowCatModal(false);
-    fetchData();
   }
 
   async function deleteCat(id) {
@@ -302,9 +380,14 @@ export default function MenuPage() {
       cancelButtonText: 'Huỷ'
     });
     if (!result.isConfirmed) return;
-    await supabase.from('categories').delete().eq('id', id);
+    setCategories(prev => prev.filter(c => c.id !== id));
+    setMenuItems(prev => prev.map(item => item.category_id === id ? { ...item, category_id: null } : item));
+    setPendingChanges(prev => {
+      const categoryUpserts = { ...prev.categoryUpserts };
+      delete categoryUpserts[id];
+      return { ...prev, categoryUpserts, categoryDeletes: String(id).startsWith('draft-cat-') ? prev.categoryDeletes : { ...prev.categoryDeletes, [id]: true } };
+    });
     if (activeCategory === id) setActiveCategory(null);
-    fetchData();
   }
 
   // ─── Menu Item CRUD ─────────────────────────────────────────────────────
@@ -393,15 +476,12 @@ export default function MenuPage() {
       name_aliases: itemForm.name_aliases || '',
     };
 
-    if (editingItem) {
-      await supabase.from('menu_items').update(data).eq('id', editingItem.id);
-    } else {
-      // New item: đặt sort_order = max + 1
-      const maxOrder = menuItems.reduce((m, i) => Math.max(m, i.sort_order || 0), 0);
-      await supabase.from('menu_items').insert({ ...data, sort_order: maxOrder + 1 });
-    }
+    const item = editingItem
+      ? { ...editingItem, ...data }
+      : { ...data, id: `draft-item-${Date.now()}`, sort_order: menuItems.reduce((m, i) => Math.max(m, i.sort_order || 0), 0) + 1 };
+    setMenuItems(prev => editingItem ? prev.map(i => i.id === editingItem.id ? item : i) : [...prev, item]);
+    markItemDraft(item);
     setShowItemModal(false);
-    fetchData();
   }
 
   async function deleteItem(id) {
@@ -416,8 +496,12 @@ export default function MenuPage() {
       cancelButtonText: 'Huỷ'
     });
     if (!result.isConfirmed) return;
-    await supabase.from('menu_items').delete().eq('id', id);
-    fetchData();
+    setMenuItems(prev => prev.filter(i => i.id !== id));
+    setPendingChanges(prev => {
+      const itemUpserts = { ...prev.itemUpserts };
+      delete itemUpserts[id];
+      return { ...prev, itemUpserts, itemDeletes: String(id).startsWith('draft-item-') ? prev.itemDeletes : { ...prev.itemDeletes, [id]: true } };
+    });
   }
 
   async function toggleAvailable(item) {
@@ -464,12 +548,9 @@ export default function MenuPage() {
         updates = { is_available: true, hidden_until: time.toISOString() };
       }
 
-      const { error } = await supabase.from('menu_items').update(updates).eq('id', item.id);
-      if (error) {
-        console.error('Update error:', error);
-        await Swal.fire('Lỗi', 'Không thể cập nhật: ' + error.message, 'error');
-        return;
-      }
+      const updatedItem = { ...item, ...updates };
+      setMenuItems(prev => prev.map(i => i.id === item.id ? updatedItem : i));
+      markItemDraft(updatedItem);
     } else {
       const result = await Swal.fire({
         title: 'Hiện món ăn?',
@@ -482,9 +563,10 @@ export default function MenuPage() {
         cancelButtonText: 'Huỷ'
       });
       if (!result.isConfirmed) return;
-      await supabase.from('menu_items').update({ is_available: true, hidden_until: null }).eq('id', item.id);
+      const updatedItem = { ...item, is_available: true, hidden_until: null };
+      setMenuItems(prev => prev.map(i => i.id === item.id ? updatedItem : i));
+      markItemDraft(updatedItem);
     }
-    fetchData();
   }
 
   // ─── Option Handlers ────────────────────────────────────────────────────
@@ -661,29 +743,99 @@ export default function MenuPage() {
       return [...others, ...reordered];
     });
 
-    // Lưu sort_order mới lên Supabase
+    const updates = reordered.map((item, idx) => ({ ...item, sort_order: idx + 1 }));
+    setMenuItems(prev => {
+      const updateMap = new Map(updates.map(item => [item.id, item]));
+      return prev.map(item => updateMap.get(item.id) || item);
+    });
+    setPendingChanges(prev => ({
+      ...prev,
+      itemUpserts: { ...prev.itemUpserts, ...Object.fromEntries(updates.map(item => [item.id, item])) },
+      orderDirty: true,
+    }));
+  }
+
+  // ─── Filters ────────────────────────────────────────────────────────────
+  const ensureSupabaseOk = ({ error }) => {
+    if (error) throw error;
+  };
+
+  async function syncDraftChanges() {
+    if (!hasPendingChanges || isSaving) return;
     setIsSaving(true);
     try {
-      const updates = reordered.map((item, idx) => ({
-        id: item.id,
-        sort_order: idx + 1,
-      }));
+      for (const id of Object.keys(pendingChanges.itemDeletes)) {
+        ensureSupabaseOk(await supabase.from('menu_items').delete().eq('id', id));
+      }
 
-      // Batch update từng item
-      await Promise.all(
-        updates.map(u =>
-          supabase.from('menu_items').update({ sort_order: u.sort_order }).eq('id', u.id)
-        )
-      );
+      const categoryIdMap = {};
+      for (const cat of Object.values(pendingChanges.categoryUpserts)) {
+        const payload = { name: cat.name, sort_order: cat.sort_order };
+        if (String(cat.id).startsWith('draft-cat-')) {
+          const { data, error } = await supabase.from('categories').insert(payload).select('id').single();
+          ensureSupabaseOk({ error });
+          categoryIdMap[cat.id] = data?.id;
+        } else {
+          ensureSupabaseOk(await supabase.from('categories').update(payload).eq('id', cat.id));
+        }
+      }
+
+      for (const item of Object.values(pendingChanges.itemUpserts)) {
+        const mappedCategoryId = categoryIdMap[item.category_id] || item.category_id || null;
+        const payload = {
+          name: item.name,
+          description: item.description,
+          image_url: item.image_url,
+          is_available: item.is_available,
+          hidden_until: item.hidden_until || null,
+          counts_for_promotion: item.counts_for_promotion,
+          is_gift_item: item.is_gift_item,
+          price: item.price,
+          category_id: mappedCategoryId,
+          options: item.options || [],
+          name_aliases: item.name_aliases || '',
+          sort_order: item.sort_order || 0,
+        };
+        if (String(item.id).startsWith('draft-item-')) {
+          ensureSupabaseOk(await supabase.from('menu_items').insert(payload));
+        } else {
+          ensureSupabaseOk(await supabase.from('menu_items').update(payload).eq('id', item.id));
+        }
+      }
+
+      for (const id of Object.keys(pendingChanges.categoryDeletes)) {
+        ensureSupabaseOk(await supabase.from('categories').delete().eq('id', id));
+      }
+      localStorage.removeItem(draftStorageKey);
+      setPendingChanges(emptyPendingChanges());
+      await fetchData({ ignoreDraft: true });
+      await Swal.fire('Đã đồng bộ', 'Các thay đổi đã được lưu lên Supabase.', 'success');
     } catch (err) {
-      console.error('Lỗi cập nhật thứ tự:', err);
-      fetchData(); // rollback nếu lỗi
+      console.error('Sync menu draft error:', err);
+      await Swal.fire('Lỗi đồng bộ', err.message || 'Không thể lưu thay đổi lên Supabase.', 'error');
     } finally {
       setIsSaving(false);
     }
   }
 
-  // ─── Filters ────────────────────────────────────────────────────────────
+  async function discardDraftChanges() {
+    if (!hasPendingChanges) return;
+    const result = await Swal.fire({
+      title: 'Hủy thay đổi?',
+      text: 'Toàn bộ nháp chưa đồng bộ sẽ bị bỏ.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Hủy nháp',
+      cancelButtonText: 'Giữ lại',
+      confirmButtonColor: '#ef4444',
+    });
+    if (!result.isConfirmed) return;
+    localStorage.removeItem(draftStorageKey);
+    setCategories(serverCategories);
+    setMenuItems(serverMenuItems);
+    setPendingChanges(emptyPendingChanges());
+  }
+
   const baseItems = menuItems.filter(i => {
     const itemCats = getItemCategories(i);
     if (activeCategory !== null && !itemCats.includes(activeCategory)) return false;
@@ -721,9 +873,15 @@ export default function MenuPage() {
           <p className="page-subtitle" style={{ margin: 0, fontSize: '0.8rem' }}>Quản lý danh mục và món ăn</p>
         </div>
         <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
-          {isSaving && (
-            <span style={{ fontSize: '0.75rem', color: '#6b7280', fontStyle: 'italic' }}>Đang lưu...</span>
+          {hasPendingChanges && (
+            <span style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: 700, background: '#fef3c7', padding: '5px 8px', borderRadius: 8 }}>Có thay đổi nháp</span>
           )}
+          <button onClick={discardDraftChanges} disabled={!hasPendingChanges || isSaving} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', background: 'white', color: hasPendingChanges ? '#ef4444' : '#9ca3af', border: '1.5px solid #e5e7eb', borderRadius: 8, fontWeight: 600, fontSize: '0.78rem', cursor: hasPendingChanges && !isSaving ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
+            <RotateCcw size={13} /> Hủy
+          </button>
+          <button onClick={syncDraftChanges} disabled={!hasPendingChanges || isSaving} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', background: hasPendingChanges ? '#16a34a' : '#e5e7eb', color: hasPendingChanges ? 'white' : '#9ca3af', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: '0.78rem', cursor: hasPendingChanges && !isSaving ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
+            <Save size={13} /> {isSaving ? 'Đang đồng bộ...' : 'Đồng bộ'}
+          </button>
           <button onClick={() => setShowPromoModal(true)} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', background: promoConfig.enabled ? '#eff6ff' : 'white', color: promoConfig.enabled ? '#2563eb' : '#374151', border: `1.5px solid ${promoConfig.enabled ? '#bfdbfe' : '#e5e7eb'}`, borderRadius: 8, fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
             🎁 {promoConfig.enabled ? `KM: ${promoConfig.threshold} món` : 'Khuyến mại'}
           </button>
