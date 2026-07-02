@@ -314,9 +314,9 @@ export default function PayrollPage() {
   const requestTypeMap = { advance: { label: 'đŸ’µ á»¨ng lÆ°Æ¡ng', color: '#92400e', bg: '#fef9c3' }, absent: { label: 'đŸ– BĂ¡o nghá»‰', color: '#1e40af', bg: '#dbeafe' } };
 
   // â”€â”€ STAFF VIEW â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  if (currentUser && currentUser.role !== 'admin') {
-    const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : null;
-    return (
+  if (!currentUser) return null;
+
+  return (
       <div className="payroll-page">
         <div className="payroll-header">
         <div className="payroll-title">{'\u{1F4B0} T\u00ednh L\u01b0\u01a1ng Nh\u00e2n Vi\u00ean'}</div>
@@ -964,6 +964,5 @@ export default function PayrollPage() {
       )}
     </div>
   );
-  }
 }
 
