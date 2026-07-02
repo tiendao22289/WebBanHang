@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
@@ -13,7 +13,7 @@ const supabase = createClient(
 
 const now = new Date();
 const fmt = (n) => String(n).padStart(2, '0');
-const formatMoney = (v) => Number(v || 0).toLocaleString('vi-VN') + 'Ä‘';
+const formatMoney = (v) => Number(v || 0).toLocaleString('vi-VN') + 'đ';
 
 // Returns token that changes every 5 minutes
 function getQRToken() { return String(Math.floor(Date.now() / (5 * 60 * 1000))); }
@@ -203,6 +203,7 @@ export default function PayrollPage() {
     setLoading(false);
   }, [selMonth, selYear]);
 
+
   // Helper: compute total work hours for a set of sessions (closed only)
   const sessionsWorkH = (sessions) =>
     sessions.filter(s => s.clock_out).reduce((acc, s) => {
@@ -253,7 +254,7 @@ export default function PayrollPage() {
 
   // --- Add violation ---
   const handleAddViolation = async () => {
-    if (!vForm.staff_id || !vForm.amount || !vForm.reason) return alert('Vui lĂ²ng Ä‘iá»n Ä‘áº§y Ä‘á»§!');
+    if (!vForm.staff_id || !vForm.amount || !vForm.reason) return alert('Vui lòng điền đầy đủ!');
     await supabase.from('payroll_violations').insert({ staff_id: vForm.staff_id, amount: Number(vForm.amount.replace(/\./g, '')), reason: vForm.reason, month: selMonth, year: selYear });
     setVForm({ staff_id: '', amount: '', reason: '' });
     fetchAll();
@@ -271,39 +272,39 @@ export default function PayrollPage() {
       await supabase.from('payroll_config').insert(payload);
     }
     fetchAll();
-    alert('ÄĂ£ lÆ°u cáº¥u hĂ¬nh!');
+    alert('Đã lưu cấu hình!');
   };
 
   // --- Delete violation ---
   const handleDeleteViolation = async (id) => {
-    if (!confirm('XoĂ¡ khoáº£n pháº¡t nĂ y?')) return;
+    if (!confirm('Xoá khoản phạt này?')) return;
     await supabase.from('payroll_violations').delete().eq('id', id);
     fetchAll();
   };
 
   // --- Account management ---
   const handleCreateAccount = async () => {
-    if (!accForm.full_name || !accForm.phone || !accForm.pin) return setAccMsg('Vui lĂ²ng Ä‘iá»n Ä‘áº§y Ä‘á»§!');
-    if (accForm.pin.length < 4) return setAccMsg('PIN cáº§n Ă­t nháº¥t 4 kĂ½ tá»±!');
+    if (!accForm.full_name || !accForm.phone || !accForm.pin) return setAccMsg('Vui lòng điền đầy đủ!');
+    if (accForm.pin.length < 4) return setAccMsg('PIN cần ít nhất 4 ký tự!');
     const { error } = await supabase.from('staff').insert({ full_name: accForm.full_name.trim(), phone: accForm.phone.trim(), pin: accForm.pin, role: accForm.role });
-    if (error) { setAccMsg(error.message.includes('unique') ? 'â ï¸ Sá»‘ Ä‘iá»‡n thoáº¡i Ä‘Ă£ tá»“n táº¡i!' : error.message); return; }
+    if (error) { setAccMsg(error.message.includes('unique') ? '⚠️ Số điện thoại đã tồn tại!' : error.message); return; }
     setAccForm({ full_name: '', phone: '', pin: '', role: 'staff' });
-    setAccMsg('âœ… Táº¡o tĂ i khoáº£n thĂ nh cĂ´ng!');
+    setAccMsg('✅ Tạo tài khoản thành công!');
     fetchAll();
     setTimeout(() => setAccMsg(''), 3000);
   };
 
   const handleUpdatePin = async (staffId) => {
     const newPin = editingPin[staffId];
-    if (!newPin || newPin.length < 4) return alert('PIN cáº§n Ă­t nháº¥t 4 kĂ½ tá»±!');
+    if (!newPin || newPin.length < 4) return alert('PIN cần ít nhất 4 ký tự!');
     await supabase.from('staff').update({ pin: newPin }).eq('id', staffId);
     setEditingPin(p => ({ ...p, [staffId]: '' }));
     fetchAll();
-    alert('ÄĂ£ cáº­p nháº­t PIN!');
+    alert('Đã cập nhật PIN!');
   };
 
   const handleDeleteAccount = async (staffId, name) => {
-    if (!confirm(`XoĂ¡ tĂ i khoáº£n "${name}"? HĂ nh Ä‘á»™ng nĂ y khĂ´ng thá»ƒ hoĂ n tĂ¡c.`)) return;
+    if (!confirm(`Xoá tài khoản "${name}"? Hành động này không thể hoàn tác.`)) return;
     await supabase.from('staff').delete().eq('id', staffId);
     fetchAll();
   };
@@ -311,15 +312,260 @@ export default function PayrollPage() {
   const months = Array.from({ length: 12 }, (_, i) => i + 1);
   const years = [2025, 2026, 2027];
 
-  const requestTypeMap = { advance: { label: 'đŸ’µ á»¨ng lÆ°Æ¡ng', color: '#92400e', bg: '#fef9c3' }, absent: { label: 'đŸ– BĂ¡o nghá»‰', color: '#1e40af', bg: '#dbeafe' } };
+  const requestTypeMap = { advance: { label: '💵 Ứng lương', color: '#92400e', bg: '#fef9c3' }, absent: { label: '🏖 Báo nghỉ', color: '#1e40af', bg: '#dbeafe' } };
 
-  // â”€â”€ STAFF VIEW â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  if (!currentUser) return null;
-
-  return (
+  // ── STAFF VIEW ──────────────────────────────────────────────────────────────
+  if (currentUser && currentUser.role !== 'admin') {
+    const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : null;
+    return (
       <div className="payroll-page">
         <div className="payroll-header">
-        <div className="payroll-title">{'\u{1F4B0} T\u00ednh L\u01b0\u01a1ng Nh\u00e2n Vi\u00ean'}</div>
+          <div className="payroll-title">💰 Tính Lương của tôi</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', background: '#dbeafe', borderRadius: 20, fontSize: '0.78rem', fontWeight: 700, color: '#1d4ed8', flexShrink: 0 }}>
+            <span>👤</span>
+            <span>{currentUser.full_name}</span>
+            <button
+              onClick={() => { localStorage.removeItem('staffUser'); window.location.reload(); }}
+              title="Đăng xuất"
+              style={{ marginLeft: 4, background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1, padding: '2px 4px', borderRadius: 6, opacity: 0.7 }}
+            >🚪</button>
+          </div>
+        </div>
+
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+          {/* ⏰ Chấm công hôm nay — multi-session */}
+          {(() => {
+            const fmtTime = ts => ts ? new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
+            // Format duration from milliseconds → Vietnamese "X giờ Y phút Z giây"
+            const fmtDurMs = (ms) => {
+              if (!ms || ms < 0) return '0 giây';
+              const totalSec = Math.floor(ms / 1000);
+              const h   = Math.floor(totalSec / 3600);
+              const m   = Math.floor((totalSec % 3600) / 60);
+              const sec = totalSec % 60;
+              const parts = [];
+              if (h   > 0) parts.push(`${h} giờ`);
+              if (m   > 0) parts.push(`${m} phút`);
+              if (sec > 0 || parts.length === 0) parts.push(`${sec} giây`);
+              return parts.join(' ');
+            };
+            const fmtDurMin = (minutes) => fmtDurMs(minutes * 60000);
+
+            const openSession = todaySessions.find(s => !s.clock_out);
+            const isWorking   = !!openSession;
+            const closedCount = todaySessions.filter(s => s.clock_out).length;
+
+            // Total work ms (closed sessions only)
+            const totalWorkMs = todaySessions.filter(s => s.clock_out).reduce((acc, s) =>
+              acc + (new Date(s.clock_out) - new Date(s.clock_in)), 0);
+            const totalWorkH = Math.round((totalWorkMs / 3600000) * 10) / 10;
+
+            // Group myAllSessions by date for history
+            const byDate = {};
+            myAllSessions.forEach(s => {
+              if (!byDate[s.date]) byDate[s.date] = [];
+              byDate[s.date].push(s);
+            });
+            const histDays = Object.entries(byDate).sort((a, b) => b[0].localeCompare(a[0]));
+
+            // Header status text
+            const headerStatus = isWorking
+              ? `🟢 Đang làm từ ${fmtTime(openSession.clock_in)}`
+              : totalWorkMs > 0
+                ? `✅ Đã làm ${fmtDurMs(totalWorkMs)}`
+                : '⚪ Chưa bắt đầu';
+
+            return (
+              <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, overflow: 'hidden' }}>
+                {/* Header */}
+                <div style={{ background: isWorking ? '#dcfce7' : '#f1f5f9', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={{ fontWeight: 800, fontSize: '0.97rem' }}>⏰ Chấm công hôm nay</div>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: isWorking ? '#15803d' : '#64748b', textAlign: 'right' }}>{headerStatus}</div>
+                </div>
+
+                <div style={{ padding: '14px 18px' }}>
+                  {todaySessions.length > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      {todaySessions.map((s, i) => {
+                        const durMs   = s.clock_out ? new Date(s.clock_out) - new Date(s.clock_in) : null;
+                        const breakMs = i > 0 && todaySessions[i - 1].clock_out
+                          ? new Date(s.clock_in) - new Date(todaySessions[i - 1].clock_out) : null;
+
+                        return (
+                          <React.Fragment key={s.id}>
+                            {/* Break indicator */}
+                            {breakMs !== null && breakMs > 0 && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0 3px 6px', fontSize: '0.73rem', color: '#94a3b8' }}>
+                                <div style={{ width: 2, height: 16, background: '#e2e8f0', borderRadius: 2 }}/>
+                                ☕ Ra ngoài {fmtDurMs(breakMs)}
+                              </div>
+                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: i < todaySessions.length - 1 ? '1px solid #f1f5f9' : 'none', fontSize: '0.83rem' }}>
+                              <span style={{ minWidth: 36, color: '#94a3b8', fontWeight: 700, fontSize: '0.74rem' }}>Ca {i + 1}</span>
+                              <div style={{ flex: 1, color: '#0f172a', fontWeight: 600 }}>
+                                Vào {fmtTime(s.clock_in)}
+                                {s.clock_out
+                                  ? <> → Ra {fmtTime(s.clock_out)}</>
+                                  : <span style={{ color: '#f59e0b', fontWeight: 700 }}> → Đang làm...</span>}
+                              </div>
+                              <span style={{ fontWeight: 700, color: durMs ? '#16a34a' : '#f59e0b', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>
+                                {durMs ? fmtDurMs(durMs) : '—'}
+                              </span>
+                            </div>
+                          </React.Fragment>
+                        );
+                      })}
+
+                      {/* Summary row */}
+                      {closedCount > 0 && (() => {
+                        let totalBreakMs = 0;
+                        for (let i = 1; i < todaySessions.length; i++) {
+                          if (todaySessions[i - 1].clock_out)
+                            totalBreakMs += new Date(todaySessions[i].clock_in) - new Date(todaySessions[i - 1].clock_out);
+                        }
+                        const otMs = totalWorkMs > 8 * 3600000 ? totalWorkMs - 8 * 3600000 : 0;
+                        return (
+                          <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1.5px solid #e2e8f0', fontSize: '0.82rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: '#0f172a', marginBottom: 3 }}>
+                              <span>⏱ Tổng giờ làm việc</span>
+                              <span style={{ color: '#16a34a' }}>
+                                {fmtDurMs(totalWorkMs)}
+                                {otMs > 0 && <span style={{ color: '#f59e0b', fontWeight: 600 }}> (+{fmtDurMs(otMs)} tăng ca)</span>}
+                              </span>
+                            </div>
+                            {totalBreakMs > 0 && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94a3b8', fontSize: '0.78rem' }}>
+                                <span>☕ Tổng thời gian ra ngoài</span>
+                                <span>{fmtDurMs(totalBreakMs)}</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* Action button */}
+                  <button onClick={handleClockAction}
+                    style={{ width: '100%', padding: '13px', background: isWorking ? '#dc2626' : '#16a34a', color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer' }}>
+                    {isWorking ? '🔴 Kết thúc ca' : '🟢 Bắt đầu ca'}
+                  </button>
+                </div>
+
+                {/* Monthly history (read-only) */}
+                {histDays.length > 0 && (
+                  <details style={{ borderTop: '1px solid #e5e7eb' }}>
+                    <summary style={{ padding: '10px 18px', fontSize: '0.82rem', fontWeight: 700, color: '#64748b', cursor: 'pointer', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      📋 Lịch sử chấm công tháng {now.getMonth() + 1} ({histDays.length} ngày)
+                    </summary>
+                    <div style={{ padding: '0 18px 14px' }}>
+                      {histDays.map(([date, daySessions]) => {
+                        const dayMs = daySessions.filter(s => s.clock_out).reduce((a, s) =>
+                          a + (new Date(s.clock_out) - new Date(s.clock_in)), 0);
+                        return (
+                          <div key={date} style={{ marginBottom: 10 }}>
+                            <div style={{ fontSize: '0.79rem', fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>
+                              {new Date(date + 'T00:00:00').toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit' })}
+                              <span style={{ marginLeft: 8, color: '#16a34a', fontWeight: 600 }}>· {fmtDurMs(dayMs)}</span>
+                            </div>
+                            {daySessions.map((s, i) => {
+                              const durMs = s.clock_out ? new Date(s.clock_out) - new Date(s.clock_in) : null;
+                              return (
+                                <div key={s.id} style={{ display: 'flex', gap: 8, fontSize: '0.78rem', color: '#475569', marginLeft: 8, marginBottom: 2 }}>
+                                  <span style={{ color: '#94a3b8', minWidth: 30 }}>Ca {i + 1}:</span>
+                                  <span>Vào {fmtTime(s.clock_in)} → {s.clock_out ? `Ra ${fmtTime(s.clock_out)}` : '–'}</span>
+                                  {durMs && <span style={{ color: '#16a34a', fontWeight: 600 }}>{fmtDurMs(durMs)}</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </details>
+                )}
+              </div>
+            );
+          })()}
+
+
+          {/* Ứng lương */}
+          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showAdvForm ? 12 : 0 }}>
+              <div style={{ fontWeight: 800 }}>💵 Xin Ứng Lương</div>
+              <button onClick={() => setShowAdvForm(p => !p)} style={{ fontSize: '0.8rem', background: showAdvForm ? '#f3f4f6' : '#111827', color: showAdvForm ? '#374151' : 'white', border: 'none', borderRadius: 8, padding: '5px 12px', fontWeight: 700, cursor: 'pointer' }}>
+                {showAdvForm ? 'Huỷ' : '+ Tạo yêu cầu'}
+              </button>
+            </div>
+            {showAdvForm && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <input type="text" inputMode="numeric" placeholder="Số tiền ứng (đ)" value={advForm.amount}
+                  onChange={e => { const r = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setAdvForm(p => ({ ...p, amount: r ? Number(r).toLocaleString('vi-VN') : '' })); }}
+                  style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
+                <textarea placeholder="Lý do cần ứng..." value={advForm.reason} onChange={e => setAdvForm(p => ({ ...p, reason: e.target.value }))}
+                  style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} />
+                <button onClick={handleSubmitAdvance} style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer' }}>
+                  Gửi yêu cầu
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Báo nghỉ */}
+          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showAbsForm ? 12 : 0 }}>
+              <div style={{ fontWeight: 800 }}>🏖 Báo Nghỉ</div>
+              <button onClick={() => setShowAbsForm(p => !p)} style={{ fontSize: '0.8rem', background: showAbsForm ? '#f3f4f6' : '#111827', color: showAbsForm ? '#374151' : 'white', border: 'none', borderRadius: 8, padding: '5px 12px', fontWeight: 700, cursor: 'pointer' }}>
+                {showAbsForm ? 'Huỷ' : '+ Báo nghỉ'}
+              </button>
+            </div>
+            {showAbsForm && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <input type="number" min="0.5" max="30" step="0.5" placeholder="Số ngày nghỉ" value={absForm.days}
+                  onChange={e => setAbsForm(p => ({ ...p, days: e.target.value }))}
+                  style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
+                <textarea placeholder="Lý do nghỉ..." value={absForm.reason} onChange={e => setAbsForm(p => ({ ...p, reason: e.target.value }))}
+                  style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} />
+                <button onClick={handleSubmitAbsent} style={{ background: '#f59e0b', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer' }}>
+                  Gửi báo nghỉ
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Lịch sử yêu cầu tháng này */}
+          {empReqs.length > 0 && (
+            <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+              <div style={{ fontWeight: 800, marginBottom: 10 }}>📄 Yêu cầu tháng {now.getMonth() + 1}</div>
+              {empReqs.map(r => (
+                <div key={r.id} style={{ padding: '10px 0', borderBottom: '1px solid #f3f4f6', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>
+                      {r.request_type === 'advance' ? `💵 Ứng ${Number(r.amount || 0).toLocaleString('vi-VN')}đ` : `🏖 Nghỉ ${r.days} ngày`}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{r.reason}</div>
+                    {r.admin_note && <div style={{ fontSize: '0.73rem', color: '#9ca3af', marginTop: 2 }}>💬 {r.admin_note}</div>}
+                  </div>
+                  <span style={{ flexShrink: 0, padding: '2px 8px', borderRadius: 5, fontSize: '0.72rem', fontWeight: 700,
+                    background: r.status === 'approved' ? '#dcfce7' : r.status === 'rejected' ? '#fee2e2' : '#fef9c3',
+                    color: r.status === 'approved' ? '#15803d' : r.status === 'rejected' ? '#dc2626' : '#92400e' }}>
+                    {r.status === 'pending' ? '⏳ Chờ' : r.status === 'approved' ? '✅ Duyệt' : '❌ Từ chối'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── ADMIN VIEW ───────────────────────────────────────────────────────────────
+  return (
+    <div className="payroll-page">
+      <div className="payroll-header">
+        <div className="payroll-title">💰 Tính Lương Nhân Viên</div>
         {currentUser && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             {currentUser.role === 'admin' && (
@@ -329,18 +575,18 @@ export default function PayrollPage() {
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: loading ? '#94a3b8' : '#3b82f6', color: 'white', border: 'none', borderRadius: 10, fontSize: '0.82rem', fontWeight: 700, cursor: loading ? 'wait' : 'pointer', boxShadow: '0 2px 6px rgba(59, 130, 246, 0.25)' }}
               >
                 <RefreshCw size={15} />
-                {loading ? '\u0110ang \u0111\u1ed3ng b\u1ed9...' : '\u0110\u1ed3ng b\u1ed9'}
+                {loading ? 'Đang đồng bộ...' : 'Đồng bộ'}
               </button>
             )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', background: currentUser.role === 'admin' ? '#fef3c7' : '#dbeafe', borderRadius: 20, fontSize: '0.78rem', fontWeight: 700, color: currentUser.role === 'admin' ? '#92400e' : '#1d4ed8', flexShrink: 0 }}>
-              <span>{currentUser.role === 'admin' ? '\u{1F451}' : '\u{1F464}'}</span>
+              <span>{currentUser.role === 'admin' ? '👑' : '👤'}</span>
               <span>{currentUser.full_name}</span>
-              <span style={{ fontWeight: 400, opacity: 0.7 }}>? {currentUser.role === 'admin' ? 'Admin' : 'Nh\u00e2n vi\u00ean'}</span>
+              <span style={{ fontWeight: 400, opacity: 0.7 }}>· {currentUser.role === 'admin' ? 'Admin' : 'Nhân viên'}</span>
               <button
                 onClick={() => { localStorage.removeItem('staffUser'); window.location.reload(); }}
-                title={'\u0110\u0103ng xu\u1ea5t'}
+                title="Đăng xuất"
                 style={{ marginLeft: 4, background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1, padding: '2px 4px', borderRadius: 6, opacity: 0.6 }}
-              >{'\u{1F6AA}'}</button>
+              >🚪</button>
             </div>
           </div>
         )}
@@ -348,20 +594,20 @@ export default function PayrollPage() {
 
       {lastSyncedAt && (
         <div style={{ fontSize: '0.82rem', color: '#64748b', margin: '-6px 0 10px', textAlign: 'right' }}>
-          {'\u0110\u00e3 \u0111\u1ed3ng b\u1ed9 l\u00fac'} {lastSyncedAt.toLocaleTimeString('vi-VN')}.
+          Đã đồng bộ lúc {lastSyncedAt.toLocaleTimeString('vi-VN')}.
         </div>
       )}
 
       {/* Tabs */}
       <div className="payroll-tabs">
         {[
-          { key: 'salary', label: 'đŸ“ Báº£ng LÆ°Æ¡ng' },
-          { key: 'requests', label: 'đŸ“‹ YĂªu cáº§u', badge: pendingCount },
-          { key: 'violations', label: 'â ï¸ Vi pháº¡m' },
-          { key: 'attendance', label: 'â° Cháº¥m cĂ´ng' },
-          { key: 'qr', label: 'đŸ“± QR Cháº¥m cĂ´ng' },
-          { key: 'accounts', label: 'đŸ‘¤ TĂ i khoáº£n' },
-          { key: 'config', label: 'â™ï¸ Cáº¥u hĂ¬nh' },
+          { key: 'salary', label: '📊 Bảng Lương' },
+          { key: 'requests', label: '📋 Yêu cầu', badge: pendingCount },
+          { key: 'violations', label: '⚠️ Vi phạm' },
+          { key: 'attendance', label: '⏰ Chấm công' },
+          { key: 'qr', label: '📱 QR Chấm công' },
+          { key: 'accounts', label: '👤 Tài khoản' },
+          { key: 'config', label: '⚙️ Cấu hình' },
         ].map(tab => (
           <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)}>
             {tab.label}
@@ -370,10 +616,10 @@ export default function PayrollPage() {
         ))}
       </div>
 
-      {loading ? <div className="empty-state">{'\u0110ang t\u1ea3i...'}</div> : !hasSynced ? (
+      {loading ? <div className="empty-state">Đang tải...</div> : !hasSynced ? (
         <div className="empty-state">
-          <p>{'B\u1ea5m \u0110\u1ed3ng b\u1ed9 \u0111\u1ec3 t\u1ea3i d\u1eef li\u1ec7u t\u00ednh l\u01b0\u01a1ng t\u1eeb Supabase.'}</p>
-          <p className="text-sm text-muted">{'Trang s\u1ebd kh\u00f4ng t\u1ef1 t\u1ea3i d\u1eef li\u1ec7u admin cho t\u1edbi khi b\u1ea1n b\u1ea5m \u0111\u1ed3ng b\u1ed9.'}</p>
+          <p>Bấm Đồng bộ để tải dữ liệu tính lương từ Supabase.</p>
+          <p className="text-sm text-muted">Trang sẽ không tự tải dữ liệu admin cho tới khi bạn bấm đồng bộ.</p>
           {currentUser?.role === 'admin' && (
             <button
               onClick={fetchAll}
@@ -381,13 +627,13 @@ export default function PayrollPage() {
               style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 12, padding: '9px 16px', background: loading ? '#94a3b8' : '#3b82f6', color: 'white', border: 'none', borderRadius: 10, fontSize: '0.86rem', fontWeight: 700, cursor: loading ? 'wait' : 'pointer', boxShadow: '0 2px 6px rgba(59, 130, 246, 0.25)' }}
             >
               <RefreshCw size={15} />
-              {loading ? '\u0110ang \u0111\u1ed3ng b\u1ed9...' : '\u0110\u1ed3ng b\u1ed9 ngay'}
+              {loading ? 'Đang đồng bộ...' : 'Đồng bộ ngay'}
             </button>
           )}
         </div>
       ) : (
         <>
-          {/* === Báº¢NG LÆ¯Æ NG === */}
+          {/* === BẢNG LƯƠNG === */}
           {activeTab === 'salary' && (() => {
             const isAdmin = currentUser?.role === 'admin';
             const filtered = staffList.filter(s => !salarySearch || s.full_name === salarySearch);
@@ -396,11 +642,11 @@ export default function PayrollPage() {
                 {/* Filter bar */}
                 <div className="filter-bar">
                   <select value={salarySearch} onChange={e => setSalarySearch(e.target.value)}>
-                    <option value="">đŸ‘¥ Táº¥t cáº£ nhĂ¢n viĂªn</option>
+                    <option value="">👥 Tất cả nhân viên</option>
                     {staffList.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
                   </select>
                   <select value={selMonth} onChange={e => setSelMonth(Number(e.target.value))}>
-                    {months.map(m => <option key={m} value={m}>ThĂ¡ng {m}</option>)}
+                    {months.map(m => <option key={m} value={m}>Tháng {m}</option>)}
                   </select>
                   <select value={selYear} onChange={e => setSelYear(Number(e.target.value))}>
                     {years.map(y => <option key={y} value={y}>{y}</option>)}
@@ -409,7 +655,7 @@ export default function PayrollPage() {
 
                 {/* Mobile cards */}
                 <div className="mobile-cards">
-                  {filtered.length === 0 && <div className="empty-state">ChÆ°a cĂ³ nhĂ¢n viĂªn</div>}
+                  {filtered.length === 0 && <div className="empty-state">Chưa có nhân viên</div>}
                   {filtered.map(s => {
                     const c = calcSalary(s.id);
                     return (
@@ -423,35 +669,35 @@ export default function PayrollPage() {
                         </div>
                         <div className="salary-card-body">
                           <div className="salary-card-row">
-                            <span className="salary-card-label">LÆ°Æ¡ng cÆ¡ báº£n</span>
+                            <span className="salary-card-label">Lương cơ bản</span>
                             <span className="salary-card-value">{formatMoney(c.base)}</span>
                           </div>
                           <div className="salary-card-row">
-                            <span className="salary-card-label">NgĂ y cĂ´ng</span>
-                            <span className="salary-card-value">{c.workDays} ngĂ y</span>
+                            <span className="salary-card-label">Ngày công</span>
+                            <span className="salary-card-value">{c.workDays} ngày</span>
                           </div>
                           <div className="salary-card-row">
-                            <span className="salary-card-label">Tá»•ng giá» lĂ m</span>
+                            <span className="salary-card-label">Tổng giờ làm</span>
                             <span className="salary-card-value">{c.totalWorkH}h</span>
                           </div>
                           <div className="salary-card-row">
-                            <span className="salary-card-label">TÄƒng ca</span>
+                            <span className="salary-card-label">Tăng ca</span>
                             <span className="salary-card-value green">+{formatMoney(c.otAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({c.otHours}h)</small></span>
                           </div>
                           <div className="salary-card-row">
-                            <span className="salary-card-label">á»¨ng lÆ°Æ¡ng</span>
+                            <span className="salary-card-label">Ứng lương</span>
                             <span className="salary-card-value red">-{formatMoney(c.advAmt)}</span>
                           </div>
                           <div className="salary-card-row">
-                            <span className="salary-card-label">Nghá»‰</span>
+                            <span className="salary-card-label">Nghỉ</span>
                             <span className="salary-card-value red">-{formatMoney(c.absAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({c.absDays}d)</small></span>
                           </div>
                           <div className="salary-card-row">
-                            <span className="salary-card-label">Vi pháº¡m</span>
-                            <span className={`salary-card-value ${c.vioAmt > 0 ? 'red' : 'muted'}`}>{c.vioAmt > 0 ? `-${formatMoney(c.vioAmt)}` : 'â€”'}</span>
+                            <span className="salary-card-label">Vi phạm</span>
+                            <span className={`salary-card-value ${c.vioAmt > 0 ? 'red' : 'muted'}`}>{c.vioAmt > 0 ? `-${formatMoney(c.vioAmt)}` : '—'}</span>
                           </div>
                           <div className="salary-card-row">
-                            <span className="salary-card-label">Thá»±c lÄ©nh</span>
+                            <span className="salary-card-label">Thực lĩnh</span>
                             <span className={`salary-card-value ${c.net >= 0 ? 'green' : 'red'}`}>{formatMoney(c.net)}</span>
                           </div>
                         </div>
@@ -459,7 +705,7 @@ export default function PayrollPage() {
                           <button
                             onClick={() => setExpandedSalaryStaff(expandedSalaryStaff === s.id ? null : s.id)}
                             style={{ width: '100%', marginTop: 4, padding: '7px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f8fafc', border: '1px solid #e2e8f0', borderBottomLeftRadius: 12, borderBottomRightRadius: 12, fontSize: '0.8rem', fontWeight: 700, color: '#1d4ed8', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                            {expandedSalaryStaff === s.id ? 'â–´ áº¨n cháº¥m cĂ´ng' : 'âœï¸ Sá»­a cháº¥m cĂ´ng'}
+                            {expandedSalaryStaff === s.id ? '▴ Ẩn chấm công' : '✏️ Sửa chấm công'}
                           </button>
                         )}
                         {/* Inline attendance panel for mobile */}
@@ -468,35 +714,35 @@ export default function PayrollPage() {
                           const toLocalDT = ts => ts ? new Date(new Date(ts) - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
                           return (
                             <div style={{ background: '#f8fafc', borderTop: '1px solid #e2e8f0', borderRadius: '0 0 12px 12px', padding: '10px 14px' }}>
-                              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', marginBottom: 8 }}>Cháº¥m cĂ´ng thĂ¡ng {selMonth}/{selYear}</div>
-                              {staffAtts.length === 0 && <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>ChÆ°a cĂ³ báº£n ghi cháº¥m cĂ´ng</div>}
+                              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', marginBottom: 8 }}>Chấm công tháng {selMonth}/{selYear}</div>
+                              {staffAtts.length === 0 && <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Chưa có bản ghi chấm công</div>}
                               {staffAtts.map(a => {
                                 const isEd = editingAtt?.id === a.id;
-                                const tIn  = a.clock_in  ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'â€”';
-                                const tOut = a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'ChÆ°a ra';
+                                const tIn  = a.clock_in  ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
+                                const tOut = a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'Chưa ra';
                                 return (
                                   <div key={a.id} style={{ background: isEd ? '#eff6ff' : 'white', border: `1.5px solid ${isEd ? '#3b82f6' : '#e2e8f0'}`, borderRadius: 8, padding: '8px 10px', marginBottom: 6 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isEd ? 8 : 0 }}>
                                       <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{a.date}</span>
-                                       <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{tIn} â†’ {tOut} Â· {a.clock_out ? `${Math.round(((new Date(a.clock_out) - new Date(a.clock_in)) / 3600000) * 10) / 10}h` : '0h'}</span>
+                                       <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{tIn} → {tOut} · {a.clock_out ? `${Math.round(((new Date(a.clock_out) - new Date(a.clock_in)) / 3600000) * 10) / 10}h` : '0h'}</span>
                                       {!isEd
-                                        ? <button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })} style={{ fontSize: '0.72rem', padding: '2px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 5, cursor: 'pointer' }}>âœï¸ Sá»­a</button>
-                                        : <button onClick={() => setEditingAtt(null)} style={{ fontSize: '0.72rem', padding: '2px 8px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 5, cursor: 'pointer', color: '#dc2626' }}>âœ• Huá»·</button>
+                                        ? <button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })} style={{ fontSize: '0.72rem', padding: '2px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 5, cursor: 'pointer' }}>✏️ Sửa</button>
+                                        : <button onClick={() => setEditingAtt(null)} style={{ fontSize: '0.72rem', padding: '2px 8px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 5, cursor: 'pointer', color: '#dc2626' }}>✕ Huỷ</button>
                                       }
                                     </div>
                                     {isEd && (
                                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                        {[{label:'Giá» vĂ o',key:'clock_in',type:'datetime-local'},{label:'Giá» ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
+                                        {[{label:'Giờ vào',key:'clock_in',type:'datetime-local'},{label:'Giờ ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
                                           <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                             <span style={{ width: 65, fontSize: '0.76rem', fontWeight: 600, color: '#475569', flexShrink: 0 }}>{label}</span>
                                             <input type={type} value={editingAtt[key]||''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{ flex:1, padding:'4px 7px', border:'1.5px solid #cbd5e1', borderRadius:6, fontSize:'0.8rem' }}/>
                                           </div>
                                         ))}
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                          <span style={{ width: 65, fontSize: '0.76rem', fontWeight: 600, color: '#475569', flexShrink: 0 }}>Ghi chĂº</span>
-                                          <input type="text" value={editingAtt.note||''} placeholder="LĂ½ do sá»­a..." onChange={e=>setEditingAtt(p=>({...p,note:e.target.value}))} style={{ flex:1, padding:'4px 7px', border:'1.5px solid #cbd5e1', borderRadius:6, fontSize:'0.8rem' }}/>
+                                          <span style={{ width: 65, fontSize: '0.76rem', fontWeight: 600, color: '#475569', flexShrink: 0 }}>Ghi chú</span>
+                                          <input type="text" value={editingAtt.note||''} placeholder="Lý do sửa..." onChange={e=>setEditingAtt(p=>({...p,note:e.target.value}))} style={{ flex:1, padding:'4px 7px', border:'1.5px solid #cbd5e1', borderRadius:6, fontSize:'0.8rem' }}/>
                                         </div>
-                                        <button onClick={handleSaveAttEdit} style={{ padding:'7px', background:'#0f172a', color:'white', border:'none', borderRadius:7, fontWeight:700, fontSize:'0.82rem', cursor:'pointer' }}>đŸ’¾ LÆ°u thĂ y Ä‘á»•i</button>
+                                        <button onClick={handleSaveAttEdit} style={{ padding:'7px', background:'#0f172a', color:'white', border:'none', borderRadius:7, fontWeight:700, fontSize:'0.82rem', cursor:'pointer' }}>💾 Lưu thày đổi</button>
                                       </div>
                                     )}
                                   </div>
@@ -514,9 +760,9 @@ export default function PayrollPage() {
                 <div className="desktop-table">
                   <table className="payroll-table">
                     <thead><tr>
-                      <th>NhĂ¢n viĂªn</th><th>LÆ°Æ¡ng CB</th><th>NgĂ y cĂ´ng</th><th>Giá» lĂ m</th>
-                      <th>TÄƒng ca</th><th>á»¨ng lÆ°Æ¡ng</th><th>Nghá»‰</th><th>Vi pháº¡m</th>
-                      <th style={{color:'#16a34a'}}>Thá»±c lÄ©nh</th>
+                      <th>Nhân viên</th><th>Lương CB</th><th>Ngày công</th><th>Giờ làm</th>
+                      <th>Tăng ca</th><th>Ứng lương</th><th>Nghỉ</th><th>Vi phạm</th>
+                      <th style={{color:'#16a34a'}}>Thực lĩnh</th>
                       {isAdmin && <th></th>}
                     </tr></thead>
                     <tbody>
@@ -527,15 +773,15 @@ export default function PayrollPage() {
                             <tr>
                             <td><div style={{fontWeight:700}}>{s.full_name}</div><div style={{fontSize:'0.73rem',color:'#94a3b8'}}>{s.phone}</div></td>
                             <td>{formatMoney(c.base)}</td>
-                            <td>{c.workDays} ngĂ y</td>
+                            <td>{c.workDays} ngày</td>
                             <td>{c.totalWorkH}h</td>
                             <td><span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{c.otHours}h</div></td>
                             <td><span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span></td>
                             <td><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{c.absDays}d</div></td>
-                            <td>{c.vioAmt > 0 ? <span style={{color:'#ef4444'}}>-{formatMoney(c.vioAmt)}</span> : <span style={{color:'#94a3b8'}}>â€”</span>}</td>
+                            <td>{c.vioAmt > 0 ? <span style={{color:'#ef4444'}}>-{formatMoney(c.vioAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}</td>
                             <td><strong style={{color: c.net >= 0 ? '#16a34a' : '#ef4444', fontSize:'0.95rem'}}>{formatMoney(c.net)}</strong></td>
                             {isAdmin && <td><button onClick={() => setExpandedSalaryStaff(expandedSalaryStaff === s.id ? null : s.id)}
-                              style={{ fontSize: '0.75rem', padding: '3px 10px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#1d4ed8', whiteSpace: 'nowrap' }}>{expandedSalaryStaff === s.id ? 'â–´ á»˜n' : 'âœï¸ Sá»­a'}</button></td>}
+                              style={{ fontSize: '0.75rem', padding: '3px 10px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#1d4ed8', whiteSpace: 'nowrap' }}>{expandedSalaryStaff === s.id ? '▴ Ộn' : '✏️ Sửa'}</button></td>}
                           </tr>
                           {/* Inline attendance sub-panel for desktop */}
                           {isAdmin && expandedSalaryStaff === s.id && (() => {
@@ -544,39 +790,39 @@ export default function PayrollPage() {
                             return (
                               <tr><td colSpan="10" style={{ padding: 0, background: '#f8fafc', borderBottom: '2px solid #3b82f6' }}>
                                 <div style={{ padding: '12px 16px' }}>
-                                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b', marginBottom: 8 }}>Cháº¥m cĂ´ng thĂ¡ng {selMonth}/{selYear} â€” {s.full_name}</div>
-                                  {staffAtts.length === 0 && <div style={{ color: '#94a3b8', fontSize: '0.82rem' }}>ChÆ°a cĂ³ báº£n ghi cháº¥m cĂ´ng</div>}
+                                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b', marginBottom: 8 }}>Chấm công tháng {selMonth}/{selYear} — {s.full_name}</div>
+                                  {staffAtts.length === 0 && <div style={{ color: '#94a3b8', fontSize: '0.82rem' }}>Chưa có bản ghi chấm công</div>}
                                   {staffAtts.map(a => {
                                     const isEd = editingAtt?.id === a.id;
-                                    const tIn  = a.clock_in  ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'â€”';
-                                    const tOut = a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'ChÆ°a ra';
+                                    const tIn  = a.clock_in  ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
+                                    const tOut = a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'Chưa ra';
                                     return (
                                       <div key={a.id} style={{ background: isEd ? '#eff6ff' : 'white', border: `1px solid ${isEd ? '#3b82f6' : '#e2e8f0'}`, borderRadius: 8, padding: '8px 12px', marginBottom: 6 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                                           <span style={{ fontWeight: 700, fontSize: '0.82rem', minWidth: 90 }}>{a.date}</span>
-                                          <span style={{ fontSize: '0.8rem', color: '#64748b' }}>{tIn} â†’ {tOut}</span>
-                                          <span style={{ fontSize: '0.8rem', color: '#16a34a', fontWeight: 600 }}>{a.clock_out ? `${Math.round(((new Date(a.clock_out) - new Date(a.clock_in)) / 3600000) * 10) / 10}h lĂ m` : 'Äang lĂ m...'}</span>
+                                          <span style={{ fontSize: '0.8rem', color: '#64748b' }}>{tIn} → {tOut}</span>
+                                          <span style={{ fontSize: '0.8rem', color: '#16a34a', fontWeight: 600 }}>{a.clock_out ? `${Math.round(((new Date(a.clock_out) - new Date(a.clock_in)) / 3600000) * 10) / 10}h làm` : 'Đang làm...'}</span>
 
                                           <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
                                             {!isEd
-                                              ? <button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })} style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}>âœï¸ Sá»­a</button>
-                                              : <button onClick={() => setEditingAtt(null)} style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, cursor: 'pointer', color: '#dc2626' }}>âœ• Huá»·</button>
+                                              ? <button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })} style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}>✏️ Sửa</button>
+                                              : <button onClick={() => setEditingAtt(null)} style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, cursor: 'pointer', color: '#dc2626' }}>✕ Huỷ</button>
                                             }
                                           </div>
                                         </div>
                                         {isEd && (
                                           <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
-                                            {[{label:'Giá» vĂ o',key:'clock_in',type:'datetime-local'},{label:'Giá» ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
+                                            {[{label:'Giờ vào',key:'clock_in',type:'datetime-local'},{label:'Giờ ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
                                               <label key={key} style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
                                                 {label}<input type={type} value={editingAtt[key]||''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.8rem'}}/>
                                               </label>
                                             ))}
 
                                             <label style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
-                                              Ghi chĂº<input type="text" value={editingAtt.note||''} placeholder="LĂ½ do sá»­a..." onChange={e=>setEditingAtt(p=>({...p,note:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.8rem'}}/>
+                                              Ghi chú<input type="text" value={editingAtt.note||''} placeholder="Lý do sửa..." onChange={e=>setEditingAtt(p=>({...p,note:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.8rem'}}/>
                                             </label>
                                             <div style={{display:'flex',gap:6,alignItems:'flex-end'}}>
-                                              <button onClick={handleSaveAttEdit} style={{padding:'5px 16px',background:'#0f172a',color:'white',border:'none',borderRadius:7,fontWeight:700,fontSize:'0.8rem',cursor:'pointer'}}>đŸ’¾ LÆ°u</button>
+                                              <button onClick={handleSaveAttEdit} style={{padding:'5px 16px',background:'#0f172a',color:'white',border:'none',borderRadius:7,fontWeight:700,fontSize:'0.8rem',cursor:'pointer'}}>💾 Lưu</button>
                                             </div>
                                           </div>
                                         )}
@@ -590,7 +836,7 @@ export default function PayrollPage() {
                           </React.Fragment>
                         );
                       })}
-                      {filtered.length === 0 && <tr><td colSpan={isAdmin ? '10' : '9'} style={{textAlign:'center',color:'#94a3b8',padding:24}}>ChÆ°a cĂ³ nhĂ¢n viĂªn</td></tr>}
+                      {filtered.length === 0 && <tr><td colSpan={isAdmin ? '10' : '9'} style={{textAlign:'center',color:'#94a3b8',padding:24}}>Chưa có nhân viên</td></tr>}
                     </tbody>
                   </table>
                 </div>
@@ -598,10 +844,10 @@ export default function PayrollPage() {
             );
           })()}
 
-          {/* === YĂU Cáº¦U === */}
+          {/* === YÊU CẦU === */}
           {activeTab === 'requests' && (
             <div className="request-list">
-              {requests.length === 0 && <div className="empty-state">KhĂ´ng cĂ³ yĂªu cáº§u nĂ o</div>}
+              {requests.length === 0 && <div className="empty-state">Không có yêu cầu nào</div>}
               {requests.map(req => {
                 const typeInfo = requestTypeMap[req.request_type] || {};
                 return (
@@ -610,19 +856,19 @@ export default function PayrollPage() {
                       <div className="name">{req.staff?.full_name} <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>({req.staff?.phone})</span></div>
                       <div style={{ marginTop: 4 }}>
                         <span style={{ display: 'inline-block', background: typeInfo.bg, color: typeInfo.color, borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>{typeInfo.label}</span>
-                        <span className={`status-badge ${req.status}`}>{req.status === 'pending' ? 'â³ Chá» duyá»‡t' : req.status === 'approved' ? 'âœ… ÄĂ£ duyá»‡t' : 'âŒ Tá»« chá»‘i'}</span>
+                        <span className={`status-badge ${req.status}`}>{req.status === 'pending' ? '⏳ Chờ duyệt' : req.status === 'approved' ? '✅ Đã duyệt' : '❌ Từ chối'}</span>
                       </div>
                       <div className="meta" style={{ marginTop: 4 }}>
-                        {req.request_type === 'advance' && <span>đŸ’µ á»¨ng: <strong>{formatMoney(req.amount)}</strong> â€” </span>}
-                        {req.request_type === 'absent' && <span>đŸ—“ Nghá»‰: <strong>{req.days} ngĂ y</strong> â€” </span>}
-                        ThĂ¡ng {req.month}/{req.year} â€¢ {req.reason}
+                        {req.request_type === 'advance' && <span>💵 Ứng: <strong>{formatMoney(req.amount)}</strong> — </span>}
+                        {req.request_type === 'absent' && <span>🗓 Nghỉ: <strong>{req.days} ngày</strong> — </span>}
+                        Tháng {req.month}/{req.year} • {req.reason}
                       </div>
-                      {req.admin_note && <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 4 }}>đŸ’¬ {req.admin_note}</div>}
+                      {req.admin_note && <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 4 }}>💬 {req.admin_note}</div>}
                     </div>
                     {req.status === 'pending' && (
                       <div className="request-actions">
-                        <button className="btn-success" onClick={() => handleDecision(req.id, 'approved')}>âœ“ Duyá»‡t</button>
-                        <button className="btn-danger" onClick={() => { const note = prompt('LĂ½ do tá»« chá»‘i (tuá»³ chá»n):') || ''; handleDecision(req.id, 'rejected', note); }}>âœ— Tá»« chá»‘i</button>
+                        <button className="btn-success" onClick={() => handleDecision(req.id, 'approved')}>✓ Duyệt</button>
+                        <button className="btn-danger" onClick={() => { const note = prompt('Lý do từ chối (tuỳ chọn):') || ''; handleDecision(req.id, 'rejected', note); }}>✗ Từ chối</button>
                       </div>
                     )}
                   </div>
@@ -631,42 +877,42 @@ export default function PayrollPage() {
             </div>
           )}
 
-          {/* === VI PHáº M === */}
+          {/* === VI PHẠM === */}
           {activeTab === 'violations' && (
             <div>
               <div className="payroll-form">
-                <h3>â• ThĂªm vi pháº¡m / khoáº£n trá»«</h3>
+                <h3>➕ Thêm vi phạm / khoản trừ</h3>
                 <div className="form-grid">
                   <div className="form-group">
-                    <label>NhĂ¢n viĂªn</label>
+                    <label>Nhân viên</label>
                     <select value={vForm.staff_id} onChange={e => setVForm(p => ({ ...p, staff_id: e.target.value }))}>
-                      <option value="">-- Chá»n NV --</option>
+                      <option value="">-- Chọn NV --</option>
                       {staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
                     </select>
                   </div>
                   <div className="form-group">
-                    <label>Sá»‘ tiá»n pháº¡t (Ä‘)</label>
+                    <label>Số tiền phạt (đ)</label>
                     <input type="text" inputMode="numeric" placeholder="50.000" value={vForm.amount}
                       onChange={e => { const raw = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setVForm(p => ({ ...p, amount: raw ? Number(raw).toLocaleString('vi-VN') : '' })); }} />
                   </div>
                   <div className="form-group">
-                    <label>LĂ½ do</label>
-                    <input type="text" placeholder="Äi trá»…, trang phá»¥c..." value={vForm.reason} onChange={e => setVForm(p => ({ ...p, reason: e.target.value }))} />
+                    <label>Lý do</label>
+                    <input type="text" placeholder="Đi trễ, trang phục..." value={vForm.reason} onChange={e => setVForm(p => ({ ...p, reason: e.target.value }))} />
                   </div>
                 </div>
-                <button className="btn-primary" onClick={handleAddViolation}>ThĂªm khoáº£n pháº¡t</button>
+                <button className="btn-primary" onClick={handleAddViolation}>Thêm khoản phạt</button>
               </div>
 
-              {violations.length === 0 ? <div className="empty-state">KhĂ´ng cĂ³ vi pháº¡m nĂ o trong thĂ¡ng {selMonth}/{selYear}</div> : (
+              {violations.length === 0 ? <div className="empty-state">Không có vi phạm nào trong tháng {selMonth}/{selYear}</div> : (
                 <table className="payroll-table">
-                  <thead><tr><th>NhĂ¢n viĂªn</th><th>Sá»‘ tiá»n</th><th>LĂ½ do</th><th></th></tr></thead>
+                  <thead><tr><th>Nhân viên</th><th>Số tiền</th><th>Lý do</th><th></th></tr></thead>
                   <tbody>
                     {violations.map(v => (
                       <tr key={v.id}>
                         <td>{v.staff?.full_name}</td>
                         <td style={{ color: '#dc2626', fontWeight: 700 }}>{formatMoney(v.amount)}</td>
                         <td>{v.reason}</td>
-                        <td><button className="btn-danger" style={{ fontSize: '0.75rem', padding: '4px 10px' }} onClick={() => handleDeleteViolation(v.id)}>XoĂ¡</button></td>
+                        <td><button className="btn-danger" style={{ fontSize: '0.75rem', padding: '4px 10px' }} onClick={() => handleDeleteViolation(v.id)}>Xoá</button></td>
                       </tr>
                     ))}
                   </tbody>
@@ -675,7 +921,7 @@ export default function PayrollPage() {
             </div>
           )}
 
-          {/* === CHáº¤M CĂ”NG === */}
+          {/* === CHẤM CÔNG === */}
           {activeTab === 'attendance' && (() => {
             const filtered = attendance.filter(a => {
               const staff = staffList.find(s => s.id === a.staff_id);
@@ -688,34 +934,34 @@ export default function PayrollPage() {
                 {/* Filter bar */}
                 <div className="filter-bar">
                   <select value={attSearch} onChange={e => setAttSearch(e.target.value)}>
-                    <option value="">đŸ‘¥ Táº¥t cáº£ nhĂ¢n viĂªn</option>
+                    <option value="">👥 Tất cả nhân viên</option>
                     {staffList.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
                   </select>
                   <select value={attDayFilter} onChange={e => setAttDayFilter(e.target.value)}>
-                    <option value="">NgĂ y</option>
+                    <option value="">Ngày</option>
                     {Array.from({length: 31}, (_, i) => i + 1).map(d => <option key={d} value={String(d).padStart(2,'0')}>{d}</option>)}
                   </select>
                   <select value={selMonth} onChange={e => setSelMonth(Number(e.target.value))}>
-                    {months.map(m => <option key={m} value={m}>ThĂ¡ng {m}</option>)}
+                    {months.map(m => <option key={m} value={m}>Tháng {m}</option>)}
                   </select>
                   <select value={selYear} onChange={e => setSelYear(Number(e.target.value))}>
                     {years.map(y => <option key={y} value={y}>{y}</option>)}
                   </select>
                   {(attSearch || attDayFilter) && (
                     <button onClick={() => { setAttSearch(''); setAttDayFilter(''); }}
-                      style={{ fontSize: '0.8rem', color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0 }}>âœ• XoĂ¡</button>
+                      style={{ fontSize: '0.8rem', color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0 }}>✕ Xoá</button>
                   )}
                 </div>
 
                 {filtered.length === 0
-                  ? <div className="empty-state">KhĂ´ng cĂ³ dá»¯ liá»‡u cháº¥m cĂ´ng thĂ¡ng {selMonth}/{selYear}</div>
+                  ? <div className="empty-state">Không có dữ liệu chấm công tháng {selMonth}/{selYear}</div>
                   : <>
                       {/* Mobile cards */}
                       <div className="mobile-cards">
                         {filtered.map(a => {
                           const staff = staffList.find(s => s.id === a.staff_id);
                           const isEditing = editingAtt?.id === a.id;
-                          const timeIn  = a.clock_in  ? new Date(a.clock_in).toLocaleTimeString('vi-VN',  { hour: '2-digit', minute: '2-digit' }) : 'â€”';
+                          const timeIn  = a.clock_in  ? new Date(a.clock_in).toLocaleTimeString('vi-VN',  { hour: '2-digit', minute: '2-digit' }) : '—';
                           const timeOut = a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : null;
                           // Convert timestamps to local datetime-local input format
                           const toLocalDT = ts => ts ? new Date(new Date(ts) - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
@@ -723,24 +969,24 @@ export default function PayrollPage() {
                           return (
                             <div key={a.id} className="att-card" style={{ borderColor: isEditing ? '#3b82f6' : undefined }}>
                               <div className="att-card-header">
-                                <span className="att-card-name">{staff?.full_name || 'â€”'}</span>
+                                <span className="att-card-name">{staff?.full_name || '—'}</span>
                                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                                   <span className="att-card-date">{a.date}</span>
                                   {!isEditing
                                     ? <button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })}
-                                        style={{ fontSize: '0.75rem', padding: '2px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#475569' }}>âœï¸ Sá»­a</button>
+                                        style={{ fontSize: '0.75rem', padding: '2px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#475569' }}>✏️ Sửa</button>
                                     : <button onClick={() => setEditingAtt(null)}
-                                        style={{ fontSize: '0.75rem', padding: '2px 8px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, cursor: 'pointer', color: '#dc2626' }}>âœ• Huá»·</button>
+                                        style={{ fontSize: '0.75rem', padding: '2px 8px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, cursor: 'pointer', color: '#dc2626' }}>✕ Huỷ</button>
                                   }
                                 </div>
                               </div>
 
                               {isEditing ? (
-                                /* â”€â”€ INLINE EDIT FORM â”€â”€ */
+                                /* ── INLINE EDIT FORM ── */
                                 <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
                                   {[
-                                    { label: 'Giá» vĂ o', key: 'clock_in',  type: 'datetime-local' },
-                                    { label: 'Giá» ra',  key: 'clock_out', type: 'datetime-local' },
+                                    { label: 'Giờ vào', key: 'clock_in',  type: 'datetime-local' },
+                                    { label: 'Giờ ra',  key: 'clock_out', type: 'datetime-local' },
                                   ].map(({ label, key, type }) => (
                                     <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                       <span style={{ width: 70, fontSize: '0.78rem', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>{label}</span>
@@ -749,8 +995,8 @@ export default function PayrollPage() {
                                     </div>
                                   ))}
                                   {[
-                                    { label: 'Giá» lĂ m', key: 'work_hours',     placeholder: 'h (vd: 8)' },
-                                    { label: 'TÄƒng ca',  key: 'overtime_hours', placeholder: 'h (vd: 2)' },
+                                    { label: 'Giờ làm', key: 'work_hours',     placeholder: 'h (vd: 8)' },
+                                    { label: 'Tăng ca',  key: 'overtime_hours', placeholder: 'h (vd: 2)' },
                                   ].map(({ label, key, placeholder }) => (
                                     <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                       <span style={{ width: 70, fontSize: '0.78rem', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>{label}</span>
@@ -760,22 +1006,22 @@ export default function PayrollPage() {
                                     </div>
                                   ))}
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                    <span style={{ width: 70, fontSize: '0.78rem', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>Ghi chĂº</span>
-                                    <input type="text" value={editingAtt.note || ''} placeholder="LĂ½ do sá»­a..."
+                                    <span style={{ width: 70, fontSize: '0.78rem', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>Ghi chú</span>
+                                    <input type="text" value={editingAtt.note || ''} placeholder="Lý do sửa..."
                                       onChange={e => setEditingAtt(p => ({ ...p, note: e.target.value }))}
                                       style={{ flex: 1, padding: '5px 8px', border: '1.5px solid #cbd5e1', borderRadius: 7, fontSize: '0.82rem' }} />
                                   </div>
                                   <button onClick={handleSaveAttEdit}
                                     style={{ padding: '8px', background: '#0f172a', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}>
-                                    đŸ’¾ LÆ°u thay Ä‘á»•i
+                                    💾 Lưu thay đổi
                                   </button>
                                 </div>
                               ) : (
                                 <div className="att-card-grid">
-                                  <div className="att-card-item"><span className="att-card-item-label">VĂ o</span><span className="att-card-item-value">{timeIn}</span></div>
-                                  <div className="att-card-item"><span className="att-card-item-label">Ra</span><span className="att-card-item-value" style={!timeOut ? { color: '#f59e0b' } : {}}>{timeOut || 'ChÆ°a ra'}</span></div>
-                                  <div className="att-card-item"><span className="att-card-item-label">Giá» lĂ m</span><span className="att-card-item-value">{a.work_hours ? `${a.work_hours}h` : 'â€”'}</span></div>
-                                  <div className="att-card-item"><span className="att-card-item-label">TÄƒng ca</span><span className="att-card-item-value" style={{ color: a.overtime_hours > 0 ? '#16a34a' : '#94a3b8' }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : 'â€”'}</span></div>
+                                  <div className="att-card-item"><span className="att-card-item-label">Vào</span><span className="att-card-item-value">{timeIn}</span></div>
+                                  <div className="att-card-item"><span className="att-card-item-label">Ra</span><span className="att-card-item-value" style={!timeOut ? { color: '#f59e0b' } : {}}>{timeOut || 'Chưa ra'}</span></div>
+                                  <div className="att-card-item"><span className="att-card-item-label">Giờ làm</span><span className="att-card-item-value">{a.work_hours ? `${a.work_hours}h` : '—'}</span></div>
+                                  <div className="att-card-item"><span className="att-card-item-label">Tăng ca</span><span className="att-card-item-value" style={{ color: a.overtime_hours > 0 ? '#16a34a' : '#94a3b8' }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}</span></div>
                                 </div>
                               )}
                             </div>
@@ -786,7 +1032,7 @@ export default function PayrollPage() {
                       {/* Desktop table */}
                       <div className="desktop-table">
                         <table className="payroll-table">
-                          <thead><tr><th>NhĂ¢n viĂªn</th><th>NgĂ y</th><th>VĂ o</th><th>Ra</th><th>Giá» lĂ m</th><th>TÄƒng ca</th><th></th></tr></thead>
+                          <thead><tr><th>Nhân viên</th><th>Ngày</th><th>Vào</th><th>Ra</th><th>Giờ làm</th><th>Tăng ca</th><th></th></tr></thead>
                           <tbody>
                             {filtered.map(a => {
                               const staff = staffList.find(s => s.id === a.staff_id);
@@ -796,36 +1042,36 @@ export default function PayrollPage() {
                                 <tr key={a.id} style={{ background: '#eff6ff' }}>
                                   <td colSpan="7">
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, padding: '8px 4px' }}>
-                                      {[{label:'Giá» vĂ o',key:'clock_in',type:'datetime-local'},{label:'Giá» ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
+                                      {[{label:'Giờ vào',key:'clock_in',type:'datetime-local'},{label:'Giờ ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
                                         <label key={key} style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
                                           {label}<input type={type} value={editingAtt[key]||''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.82rem'}}/>
                                         </label>
                                       ))}
-                                      {[{label:'Giá» lĂ m',key:'work_hours'},{label:'TÄƒng ca (h)',key:'overtime_hours'}].map(({label,key})=>(
+                                      {[{label:'Giờ làm',key:'work_hours'},{label:'Tăng ca (h)',key:'overtime_hours'}].map(({label,key})=>(
                                         <label key={key} style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
                                           {label}<input type="number" step="0.1" min="0" value={editingAtt[key]??''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.82rem',width:90}}/>
                                         </label>
                                       ))}
                                       <label style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
-                                        Ghi chĂº<input type="text" value={editingAtt.note||''} placeholder="LĂ½ do sá»­a..." onChange={e=>setEditingAtt(p=>({...p,note:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.82rem'}}/>
+                                        Ghi chú<input type="text" value={editingAtt.note||''} placeholder="Lý do sửa..." onChange={e=>setEditingAtt(p=>({...p,note:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.82rem'}}/>
                                       </label>
                                     </div>
                                     <div style={{display:'flex',gap:8,padding:'0 4px 8px'}}>
-                                      <button onClick={handleSaveAttEdit} style={{padding:'6px 16px',background:'#0f172a',color:'white',border:'none',borderRadius:7,fontWeight:700,fontSize:'0.82rem',cursor:'pointer'}}>đŸ’¾ LÆ°u</button>
-                                      <button onClick={()=>setEditingAtt(null)} style={{padding:'6px 14px',background:'#f1f5f9',border:'1px solid #e2e8f0',borderRadius:7,fontWeight:600,fontSize:'0.82rem',cursor:'pointer'}}>Huá»·</button>
+                                      <button onClick={handleSaveAttEdit} style={{padding:'6px 16px',background:'#0f172a',color:'white',border:'none',borderRadius:7,fontWeight:700,fontSize:'0.82rem',cursor:'pointer'}}>💾 Lưu</button>
+                                      <button onClick={()=>setEditingAtt(null)} style={{padding:'6px 14px',background:'#f1f5f9',border:'1px solid #e2e8f0',borderRadius:7,fontWeight:600,fontSize:'0.82rem',cursor:'pointer'}}>Huỷ</button>
                                     </div>
                                   </td>
                                 </tr>
                               ) : (
                                 <tr key={a.id}>
-                                  <td>{staff?.full_name || 'â€”'}</td>
+                                  <td>{staff?.full_name || '—'}</td>
                                   <td>{a.date}</td>
-                                  <td>{a.clock_in ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'â€”'}</td>
-                                  <td>{a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : <span style={{ color: '#f59e0b' }}>ChÆ°a ra</span>}</td>
-                                  <td>{a.work_hours ? `${a.work_hours}h` : 'â€”'}</td>
-                                  <td style={{ color: '#16a34a', fontWeight: 600 }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : 'â€”'}</td>
+                                  <td>{a.clock_in ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                                  <td>{a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : <span style={{ color: '#f59e0b' }}>Chưa ra</span>}</td>
+                                  <td>{a.work_hours ? `${a.work_hours}h` : '—'}</td>
+                                  <td style={{ color: '#16a34a', fontWeight: 600 }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}</td>
                                   <td><button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })}
-                                    style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#475569' }}>âœï¸ Sá»­a</button>
+                                    style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#475569' }}>✏️ Sửa</button>
                                   </td>
                                 </tr>
                               );
@@ -839,62 +1085,62 @@ export default function PayrollPage() {
             );
           })()}
 
-          {/* === QR CHáº¤M CĂ”NG === */}
+          {/* === QR CHẤM CÔNG === */}
           {activeTab === 'qr' && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, padding: '20px 0' }}>
               <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 16, padding: 24, textAlign: 'center', maxWidth: 340, width: '100%' }}>
-                <div style={{ fontWeight: 800, fontSize: '1rem', marginBottom: 4 }}>đŸ“± QR Cháº¥m cĂ´ng</div>
-                <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: 16 }}>NhĂ¢n viĂªn quĂ©t mĂ£ Ä‘á»ƒ vĂ o/ra ca</div>
+                <div style={{ fontWeight: 800, fontSize: '1rem', marginBottom: 4 }}>📱 QR Chấm công</div>
+                <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: 16 }}>Nhân viên quét mã để vào/ra ca</div>
                 <div style={{ display: 'inline-block', padding: 12, background: 'white', border: '2px solid #111827', borderRadius: 12 }}>
                   <QRCodeSVG value={networkUrl || 'loading...'} size={200} level="M" />
                 </div>
                 <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
                   <div style={{ width: 8, height: 8, borderRadius: '50%', background: qrCountdown > 30 ? '#16a34a' : '#f59e0b', animation: 'pulse 1s infinite' }} />
-                  <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>Háº¿t háº¡n sau: <strong style={{ color: qrCountdown > 30 ? '#15803d' : '#dc2626' }}>{qrCountdown}s</strong></span>
+                  <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>Hết hạn sau: <strong style={{ color: qrCountdown > 30 ? '#15803d' : '#dc2626' }}>{qrCountdown}s</strong></span>
                 </div>
                 <div style={{ marginTop: 10, fontSize: '0.72rem', color: '#9ca3af', wordBreak: 'break-all', background: '#f9fafb', borderRadius: 8, padding: '6px 10px' }}>
                   {networkUrl}
                 </div>
               </div>
               <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 12, padding: 16, maxWidth: 340, width: '100%', fontSize: '0.82rem', color: '#0369a1' }}>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>HÆ°á»›ng dáº«n sá»­ dá»¥ng:</div>
-                <div>1ï¸âƒ£ Má»Ÿ trang nĂ y trĂªn mĂ¡y tĂ­nh / tablet táº¡i nhĂ  hĂ ng</div>
-                <div style={{ marginTop: 4 }}>2ï¸âƒ£ NhĂ¢n viĂªn dĂ¹ng Ä‘iá»‡n thoáº¡i quĂ©t mĂ£ QR</div>
-                <div style={{ marginTop: 4 }}>3ï¸âƒ£ ÄÄƒng nháº­p (náº¿u chÆ°a) vĂ  báº¥m <strong>XĂ¡c nháº­n cháº¥m cĂ´ng</strong></div>
-                <div style={{ marginTop: 4 }}>4ï¸âƒ£ MĂ£ tá»± lĂ m má»›i má»—i 5 phĂºt â€” khĂ´ng thá»ƒ dĂ¹ng mĂ£ cÅ©</div>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>Hướng dẫn sử dụng:</div>
+                <div>1️⃣ Mở trang này trên máy tính / tablet tại nhà hàng</div>
+                <div style={{ marginTop: 4 }}>2️⃣ Nhân viên dùng điện thoại quét mã QR</div>
+                <div style={{ marginTop: 4 }}>3️⃣ Đăng nhập (nếu chưa) và bấm <strong>Xác nhận chấm công</strong></div>
+                <div style={{ marginTop: 4 }}>4️⃣ Mã tự làm mới mỗi 5 phút — không thể dùng mã cũ</div>
               </div>
             </div>
           )}
 
-          {/* === TĂ€I KHOáº¢N === */}
+          {/* === TÀI KHOẢN === */}
           {activeTab === 'accounts' && (
             <div>
               {/* Create form */}
               <div className="payroll-form">
-                <h3>â• Táº¡o tĂ i khoáº£n nhĂ¢n viĂªn má»›i</h3>
-                {accMsg && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: accMsg.startsWith('âœ…') ? '#dcfce7' : '#fee2e2', color: accMsg.startsWith('âœ…') ? '#15803d' : '#dc2626', fontSize: '0.85rem', fontWeight: 600 }}>{accMsg}</div>}
+                <h3>➕ Tạo tài khoản nhân viên mới</h3>
+                {accMsg && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: accMsg.startsWith('✅') ? '#dcfce7' : '#fee2e2', color: accMsg.startsWith('✅') ? '#15803d' : '#dc2626', fontSize: '0.85rem', fontWeight: 600 }}>{accMsg}</div>}
                 <div className="form-grid">
                   <div className="form-group">
-                    <label>Há» vĂ  TĂªn</label>
-                    <input type="text" placeholder="Nguyá»…n VÄƒn A" value={accForm.full_name} onChange={e => setAccForm(p => ({ ...p, full_name: e.target.value }))} />
+                    <label>Họ và Tên</label>
+                    <input type="text" placeholder="Nguyễn Văn A" value={accForm.full_name} onChange={e => setAccForm(p => ({ ...p, full_name: e.target.value }))} />
                   </div>
                   <div className="form-group">
-                    <label>Sá»‘ Ä‘iá»‡n thoáº¡i</label>
+                    <label>Số điện thoại</label>
                     <input type="tel" placeholder="0909123456" value={accForm.phone} onChange={e => setAccForm(p => ({ ...p, phone: e.target.value }))} />
                   </div>
                   <div className="form-group">
-                    <label>MĂ£ PIN (â‰¥ 4 kĂ½ tá»±)</label>
+                    <label>Mã PIN (≥ 4 ký tự)</label>
                     <input type="text" placeholder="1234" maxLength={8} value={accForm.pin} onChange={e => setAccForm(p => ({ ...p, pin: e.target.value.replace(/\D/g, '') }))} />
                   </div>
                   <div className="form-group">
-                    <label>Vai trĂ²</label>
+                    <label>Vai trò</label>
                     <select value={accForm.role} onChange={e => setAccForm(p => ({ ...p, role: e.target.value }))}>
-                      <option value="staff">NhĂ¢n viĂªn</option>
+                      <option value="staff">Nhân viên</option>
                       <option value="admin">Admin</option>
                     </select>
                   </div>
                 </div>
-                <button className="btn-primary" onClick={handleCreateAccount}>Táº¡o tĂ i khoáº£n</button>
+                <button className="btn-primary" onClick={handleCreateAccount}>Tạo tài khoản</button>
               </div>
 
               {/* Staff list */}
@@ -905,31 +1151,31 @@ export default function PayrollPage() {
                       <div style={{ fontWeight: 700 }}>{s.full_name}</div>
                       <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div>
                       <span style={{ display: 'inline-block', marginTop: 4, fontSize: '0.7rem', fontWeight: 700, padding: '1px 7px', borderRadius: 4, background: s.role === 'admin' ? '#fef9c3' : '#f0f9ff', color: s.role === 'admin' ? '#92400e' : '#0369a1' }}>
-                        {s.role === 'admin' ? 'đŸ‘‘ Admin' : 'đŸ‘¤ NV'}
+                        {s.role === 'admin' ? '👑 Admin' : '👤 NV'}
                       </span>
                     </div>
                     <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 140 }}>
-                      <label>Äá»•i PIN má»›i</label>
+                      <label>Đổi PIN mới</label>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <input type="text" inputMode="numeric" maxLength={8} placeholder="PIN má»›i..." value={editingPin[s.id] || ''}
+                        <input type="text" inputMode="numeric" maxLength={8} placeholder="PIN mới..." value={editingPin[s.id] || ''}
                           onChange={e => setEditingPin(p => ({ ...p, [s.id]: e.target.value.replace(/\D/g, '') }))}
                           style={{ flex: 1 }} />
-                        <button className="btn-primary" style={{ padding: '6px 12px', marginTop: 0, whiteSpace: 'nowrap' }} onClick={() => handleUpdatePin(s.id)}>LÆ°u</button>
+                        <button className="btn-primary" style={{ padding: '6px 12px', marginTop: 0, whiteSpace: 'nowrap' }} onClick={() => handleUpdatePin(s.id)}>Lưu</button>
                       </div>
                     </div>
-                    <button className="btn-danger" style={{ marginTop: 18, alignSelf: 'flex-end' }} onClick={() => handleDeleteAccount(s.id, s.full_name)}>XoĂ¡</button>
+                    <button className="btn-danger" style={{ marginTop: 18, alignSelf: 'flex-end' }} onClick={() => handleDeleteAccount(s.id, s.full_name)}>Xoá</button>
                   </div>
                 ))}
-                {staffList.length === 0 && <div className="empty-state">ChÆ°a cĂ³ nhĂ¢n viĂªn nĂ o</div>}
+                {staffList.length === 0 && <div className="empty-state">Chưa có nhân viên nào</div>}
               </div>
             </div>
           )}
 
-          {/* === Cáº¤U HĂŒNH === */}
+          {/* === CẤU HÌNH === */}
           {activeTab === 'config' && (
             <div>
               <div className="payroll-form" style={{ marginBottom: 8 }}>
-                <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>đŸ’¡ Thiáº¿t láº­p lÆ°Æ¡ng cÆ¡ báº£n, giĂ¡ tÄƒng ca vĂ  ngĂ y phĂ¡t lÆ°Æ¡ng cho tá»«ng nhĂ¢n viĂªn.</p>
+                <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>💡 Thiết lập lương cơ bản, giá tăng ca và ngày phát lương cho từng nhân viên.</p>
               </div>
               <div className="config-list">
                 {staffList.map(s => {
@@ -938,22 +1184,22 @@ export default function PayrollPage() {
                     <div key={s.id} className="config-row">
                       <div className="staff-name">{s.full_name}<div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div></div>
                       <div className="form-group" style={{ margin: 0 }}>
-                        <label>LÆ°Æ¡ng cÆ¡ báº£n</label>
+                        <label>Lương cơ bản</label>
                         <input type="text" inputMode="numeric" value={edit.base_salary ? Number(edit.base_salary).toLocaleString('vi-VN') : ''}
                           onChange={e => { const raw = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setConfigEdits(p => ({ ...p, [s.id]: { ...edit, base_salary: raw || 0 } })); }}
                           placeholder="5.000.000" />
                       </div>
                       <div className="form-group" style={{ margin: 0 }}>
-                        <label>GiĂ¡ tÄƒng ca/h</label>
+                        <label>Giá tăng ca/h</label>
                         <input type="number" value={edit.overtime_rate || 25000}
                           onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value } }))} />
                       </div>
                       <div className="form-group" style={{ margin: 0 }}>
-                        <label>NgĂ y phĂ¡t lÆ°Æ¡ng</label>
+                        <label>Ngày phát lương</label>
                         <input type="number" min="1" max="31" value={edit.pay_day || 5}
                           onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, pay_day: e.target.value } }))} />
                       </div>
-                      <button className="btn-primary" style={{ marginTop: 18 }} onClick={() => handleSaveConfig(s.id)}>LÆ°u</button>
+                      <button className="btn-primary" style={{ marginTop: 18 }} onClick={() => handleSaveConfig(s.id)}>Lưu</button>
                     </div>
                   );
                 })}
@@ -965,4 +1211,3 @@ export default function PayrollPage() {
     </div>
   );
 }
-
