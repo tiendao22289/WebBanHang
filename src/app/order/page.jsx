@@ -666,12 +666,12 @@ function OrderContent() {
     return () => document.body.classList.remove('modal-open');
   }, [showInfoModal, showCart, showOrdered, showFeedbackModal]);
 
-  // Cập nhật trạng thái đơn/in bill tự động mỗi 3 giây khi khách xem "Món đã gọi"
+  // Cập nhật trạng thái đơn/in bill tự động mỗi 10 giây khi khách xem "Món đã gọi"
   useEffect(() => {
     if (!showOrdered) return;
     const interval = setInterval(() => {
       fetchPreviousOrders();
-    }, 3000);
+    }, 10000);
     return () => clearInterval(interval);
   }, [showOrdered, customerPhone]);
 
