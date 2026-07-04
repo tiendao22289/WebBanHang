@@ -2357,6 +2357,15 @@ function OrderContent() {
                 </button>
               )}
             </div>
+            <button
+              className="co-feedback-inline-btn"
+              type="button"
+              aria-label="Đánh giá quán"
+              onClick={() => setShowFeedbackModal(true)}
+            >
+              <span className="co-feedback-drop">★</span>
+              <span className="co-feedback-label">Đánh giá</span>
+            </button>
           </div>
         </div>
 
@@ -2498,10 +2507,6 @@ function OrderContent() {
             onOpenGift={() => setShowGiftModal(true)}
             callout={promoCallout}
           />
-        )}
-
-        {!showInfoModal && (
-          <DraggableFeedbackBubble onOpen={() => setShowFeedbackModal(true)} />
         )}
 
         {/* ─── Cart FAB ─── */}

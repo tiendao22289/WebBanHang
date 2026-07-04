@@ -953,14 +953,6 @@ export default function MenuPage() {
         </div>
       </div>
 
-      {/* DnD hint */}
-      {isDndEnabled && filteredItems.length > 1 && (
-        <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6, color: '#6b7280', fontSize: '0.76rem' }}>
-          <GripVertical size={13} />
-          <span>Kéo biểu tượng ⠿ trên mỗi thẻ để thay đổi thứ tự hiển thị</span>
-        </div>
-      )}
-
       {/* Menu Grid with DnD */}
       <DndContext
         sensors={sensors}

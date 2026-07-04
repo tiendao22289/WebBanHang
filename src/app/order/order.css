@@ -947,6 +947,36 @@ html, body { background: #ffffff !important; }
   0%, 100% { transform: scale(1); box-shadow: 0 2px 6px rgba(220,38,38,0.5); }
   50% { transform: scale(1.12); box-shadow: 0 3px 10px rgba(220,38,38,0.75); }
 }
+
+.co-feedback-inline-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1.5px solid #f59e0b;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fef3c7, #fbbf24);
+  color: #7c2d12;
+  padding: 7px 9px;
+  min-height: 34px;
+  font-family: 'Nunito', sans-serif;
+  font-size: 0.76rem;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(245,158,11,0.22);
+  white-space: nowrap;
+}
+.co-feedback-inline-btn:active { transform: scale(0.97); }
+.co-feedback-inline-btn .co-feedback-drop {
+  font-size: 0.9rem;
+  color: #92400e;
+  animation: none;
+}
+.co-feedback-inline-btn .co-feedback-label {
+  font-size: 0.74rem;
+  color: #7c2d12;
+}
 .co-feedback-modal {
   width: min(92vw, 420px);
   background: white;
