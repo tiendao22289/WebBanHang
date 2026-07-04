@@ -172,6 +172,21 @@
   border-color: #cbd5e1;
 }
 
+.kitchen-alert-blink {
+  animation: kitchenAlertBlink 0.65s ease-in-out infinite;
+}
+
+@keyframes kitchenAlertBlink {
+  0%, 100% {
+    filter: brightness(1);
+    outline: 0 solid rgba(239, 68, 68, 0);
+  }
+  50% {
+    filter: brightness(1.35);
+    outline: 5px solid rgba(239, 68, 68, 0.55);
+  }
+}
+
 .table-card.occupied {
   background: white;
 }

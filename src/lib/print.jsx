@@ -203,3 +203,40 @@ export async function sendTableSummaryPrintJob(supabase, orderIds) {
     return { success: false, error: err.message };
   }
 }
+
+export async function sendKitchenCallPrintJob(supabase, orderId) {
+  if (!orderId) return { success: false, error: 'Thiếu orderId báo bếp.' };
+
+  try {
+    const { data: printers, error: printerErr } = await supabase
+      .from('printers')
+      .select('id, name, is_default, is_bill_printer')
+      .eq('is_active', true)
+      .order('sort_order');
+
+    if (printerErr) throw new Error(printerErr.message);
+
+    const targetPrinter = printers?.find(p => p.is_default)
+      || printers?.find(p => !p.is_bill_printer)
+      || printers?.find(p => p.is_bill_printer)
+      || printers?.[0];
+
+    if (!targetPrinter) {
+      return { success: false, error: 'Chưa cấu hình máy in active để báo bếp.' };
+    }
+
+    const { error: insertErr } = await supabase.from('print_jobs').insert({
+      order_id: orderId,
+      printer_id: targetPrinter.id,
+      filter_category_ids: null,
+      status: 'pending',
+      printer_target: 'kitchen',
+    });
+
+    if (insertErr) throw new Error(insertErr.message);
+    return { success: true };
+  } catch (err) {
+    console.error('[Print] sendKitchenCallPrintJob lỗi:', err.message);
+    return { success: false, error: err.message };
+  }
+}

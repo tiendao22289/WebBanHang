@@ -6,7 +6,7 @@ import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
-import { sendPrintJob } from '@/lib/print';
+import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
 import {
   Search,
   Plus,
@@ -507,6 +507,7 @@ function OrderContent() {
   const [notes, setNotes] = useState({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [kitchenCalling, setKitchenCalling] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [showCart, setShowCart] = useState(false);
   const [showOrdered, setShowOrdered] = useState(false);
@@ -1234,7 +1235,7 @@ function OrderContent() {
 
       const { data: allTableBills } = await bills.order('created_at', { ascending: false });
 
-      setPreviousOrders(allTableBills || []);
+      setPreviousOrders((allTableBills || []).filter(order => order.customer_phone !== 'BAO_BEP'));
       // Đồng thời cập nhật groupOrders để tính KM chung cho nhóm (chỉ dine-in)
       fetchGroupOrders(targetIds);
       return;
@@ -1261,7 +1262,61 @@ function OrderContent() {
       myFinished = data || [];
     }
 
-    setPreviousOrders(myFinished);
+    setPreviousOrders((myFinished || []).filter(order => order.customer_phone !== 'BAO_BEP'));
+  }
+
+  async function callKitchen() {
+    if (!activeTableId || kitchenCalling) return;
+    setKitchenCalling(true);
+
+    try {
+      const tableLabel = isTakeaway ? 'Mang về' : `Bàn ${tableNumber ?? ''}`.trim();
+      const message = `Số bàn báo: ${tableLabel}`;
+
+      const { data: callOrder, error: orderErr } = await supabase
+        .from('orders')
+        .insert({
+          table_id: activeTableId,
+          customer_name: '🔔 BÁO BẾP',
+          customer_phone: 'BAO_BEP',
+          status: 'completed',
+          total_amount: 0,
+          customer_note: message,
+          is_hidden_from_stats: true,
+        })
+        .select('id')
+        .single();
+
+      if (orderErr) throw orderErr;
+
+      const { error: itemErr } = await supabase.from('order_items').insert({
+        order_id: callOrder.id,
+        menu_item_id: null,
+        quantity: 1,
+        unit_price: 0,
+        note: message,
+      });
+
+      if (itemErr) throw itemErr;
+
+      const printResult = await sendKitchenCallPrintJob(supabase, callOrder.id);
+      if (!printResult?.success) {
+        alert(`Đã gọi nhân viên nhưng chưa gửi được phiếu in bếp.\nLý do: ${printResult?.error || 'Không xác định'}`);
+        return;
+      }
+
+      setFeedbackToast({
+        type: 'success',
+        title: 'Đã báo cho nhân viên',
+        message: 'Mong quý khách chờ tí nhé. Cảm ơn quý khách đã ủng hộ quán.',
+      });
+      setTimeout(() => setFeedbackToast(null), 6500);
+    } catch (err) {
+      console.error('[callKitchen] error:', err);
+      alert('Không gọi nhân viên được. Vui lòng gọi trực tiếp nhân viên.');
+    } finally {
+      setKitchenCalling(false);
+    }
   }
 
   // Lấy orders của cả nhóm bàn gộp — chỉ dùng để tính điểm KM và slot quà
@@ -1287,7 +1342,7 @@ function OrderContent() {
     }
 
     const { data } = await query;
-    setGroupOrders(data || []);
+    setGroupOrders((data || []).filter(order => order.customer_phone !== 'BAO_BEP'));
   }
 
   function reorderBill(order) {
@@ -2301,16 +2356,8 @@ function OrderContent() {
 
         {/* ─── Top Header (compact) ─── */}
         <div className="co-topbar">
-          {/* Restaurant name row */}
-          <div className="co-header-bar" style={{ padding: '8px 12px 4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            {/* Logo & Contact */}
-            <div className="co-header-brand" style={{ flex: 1, minWidth: 0, paddingRight: 5 }}>
-              <span className="co-header-title" style={{ display: 'block', fontSize: '1.2rem', fontWeight: 800, color: '#1d4ed8' }}>
-                Ốc Bảo Khang
-              </span>
-              <span className="co-header-contact" style={{ display: 'block', fontSize: '0.65rem', marginTop: 2, color: '#4b5563', whiteSpace: 'nowrap', overflow: 'visible' }}>💬 0946.433.417 | 📞 0977.496.781</span>
-            </div>
-
+          {/* Compact table/action row */}
+          <div className="co-header-bar" style={{ padding: '6px 12px 3px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
             {/* Table Badge */}
             <div style={{ display: 'flex', alignItems: 'center', marginRight: '10px' }}>
               <span style={{ fontSize: '0.95rem', background: '#eff6ff', color: '#2563eb', padding: '4px 12px', borderRadius: '20px', fontWeight: '900', border: '1.5px solid #bfdbfe', whiteSpace: 'nowrap' }}>
@@ -2319,6 +2366,14 @@ function OrderContent() {
             </div>
 
             <div className="co-header-actions" style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+              <button
+                className="co-kitchen-call-btn"
+                style={{ padding: '5px 10px', fontSize: '0.75rem' }}
+                onClick={callKitchen}
+                disabled={kitchenCalling}
+              >
+                🔔 {kitchenCalling ? 'Đang gọi...' : 'Gọi nhân viên'}
+              </button>
               <button
                 className="co-history-btn"
                 style={{ padding: '5px 10px', fontSize: '0.75rem' }}

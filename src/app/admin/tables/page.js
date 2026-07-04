@@ -151,8 +151,28 @@ export default function TablesPage() {
   const isFirstLoad = useRef(true);
   const [isMobile, setIsMobile] = useState(true);
   const [printToast, setPrintToast] = useState(''); // '' | 'sending' | 'ok' | 'err'
+  const [kitchenAlertTables, setKitchenAlertTables] = useState({});
+  const kitchenAlertTimersRef = useRef({});
 
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+
+  const triggerKitchenAlert = useCallback((tableId) => {
+    if (!tableId) return;
+    setKitchenAlertTables(prev => ({ ...prev, [tableId]: true }));
+    if (kitchenAlertTimersRef.current[tableId]) clearTimeout(kitchenAlertTimersRef.current[tableId]);
+    kitchenAlertTimersRef.current[tableId] = setTimeout(() => {
+      setKitchenAlertTables(prev => {
+        const next = { ...prev };
+        delete next[tableId];
+        return next;
+      });
+      delete kitchenAlertTimersRef.current[tableId];
+    }, 100000);
+  }, []);
+
+  useEffect(() => () => {
+    Object.values(kitchenAlertTimersRef.current).forEach(clearTimeout);
+  }, []);
 
   // Detect mobile vs desktop
   useEffect(() => {
@@ -381,6 +401,9 @@ export default function TablesPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
         if (payload.eventType === 'INSERT' && !isFirstLoad.current) {
           ringBell();
+          if (payload.new?.customer_phone === 'BAO_BEP') {
+            triggerKitchenAlert(payload.new.table_id);
+          }
         }
         fetchTables();
       })
@@ -1492,6 +1515,7 @@ export default function TablesPage() {
           const _hostOrdersCard = orders[hostIdCard] || [];
           const _satOrdersCard = tables.filter(t => t.merged_with === hostIdCard && t.id !== hostIdCard).flatMap(t => orders[t.id] || []);
           const tableBills = [..._hostOrdersCard, ..._satOrdersCard];
+          const isKitchenAlerting = !!kitchenAlertTables[table.id] || !!kitchenAlertTables[hostIdCard];
           const groupColor = groupColorMap[hostIdCard] || null;
           const totalAmount = tableBills.reduce((s, o) => s + (o.total_amount || 0), 0);
           const guestCount = tableBills.length;
@@ -1526,16 +1550,17 @@ export default function TablesPage() {
           return (
             <div
               key={table.id}
+              className={isKitchenAlerting ? 'kitchen-alert-blink' : ''}
               onClick={() => { setSelectedTable(table); if (!isOccupied) setAddingToOrder('admin'); }}
               style={{
-                background: groupColor ? groupColor.bg : isOccupied ? '#dbeafe' : 'white',
-                border: `2px solid ${groupColor ? groupColor.border : isOccupied ? '#93c5fd' : '#e5e7eb'}`,
+                background: isKitchenAlerting ? 'linear-gradient(145deg, #ef4444, #b91c1c)' : groupColor ? groupColor.bg : isOccupied ? '#dbeafe' : 'white',
+                border: `2px solid ${isKitchenAlerting ? '#991b1b' : groupColor ? groupColor.border : isOccupied ? '#93c5fd' : '#e5e7eb'}`,
                 borderRadius: compact ? 12 : 16,
                 padding: compact ? '12px 12px 10px' : '14px 14px 12px',
                 cursor: 'pointer',
                 minHeight: compact ? 80 : 90,
                 display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
-                boxShadow: groupColor ? `0 2px 10px ${groupColor.border}40` : isOccupied ? '0 2px 8px rgba(37,99,235,0.10)' : '0 1px 4px rgba(0,0,0,0.06)',
+                boxShadow: isKitchenAlerting ? '0 0 0 4px rgba(239,68,68,0.25), 0 8px 24px rgba(185,28,28,0.45)' : groupColor ? `0 2px 10px ${groupColor.border}40` : isOccupied ? '0 2px 8px rgba(37,99,235,0.10)' : '0 1px 4px rgba(0,0,0,0.06)',
                 position: 'relative', transition: 'transform 0.1s, box-shadow 0.1s',
               }}
             >
@@ -2235,6 +2260,8 @@ export default function TablesPage() {
                           const isMergedGroup = isChild || isHost;
                           const isOccupied = table.status === 'occupied' || isMergedGroup;
                           const isSelected = selectedTable?.id === table.id;
+                          const alertHostId = table.merged_with || table.id;
+                          const isKitchenAlerting = !!kitchenAlertTables[table.id] || !!kitchenAlertTables[alertHostId];
                           const tableTotal = (orders[table.merged_with || table.id] || []).reduce((s, o) => s + (o.total_amount || 0), 0);
                           const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(pj => pj.status === 'failed'));
 
@@ -2283,18 +2310,20 @@ export default function TablesPage() {
 
                           return (
                             <div key={table.id}
+                              className={isKitchenAlerting ? 'kitchen-alert-blink' : ''}
                               onClick={() => { setSelectedTable(table); setDesktopView('menu'); }}
                               onMouseEnter={e => { if (!isSelected) { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = shadowHover; } }}
                               onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 8px 24px rgba(29,78,216,0.3)' : '0 1px 4px rgba(0,0,0,0.07)'; }}
                               style={{
                                 position: 'relative', borderRadius: 14, cursor: 'pointer',
                                 overflow: 'hidden',
-                                background: isSelected ? 'white'
+                                background: isKitchenAlerting ? 'linear-gradient(145deg, #ef4444, #b91c1c)'
+                                  : isSelected ? 'white'
                                   : isMergedGroup ? 'linear-gradient(145deg, #9333ea, #7e22ce)'
                                     : isOccupied ? 'linear-gradient(145deg, #16a34a, #15803d)'
                                       : 'white',
-                                border: `1.5px solid ${border}`,
-                                boxShadow: isSelected ? '0 8px 24px rgba(29,78,216,0.3)' : '0 1px 4px rgba(0,0,0,0.07)',
+                                border: `1.5px solid ${isKitchenAlerting ? '#991b1b' : border}`,
+                                boxShadow: isKitchenAlerting ? '0 0 0 4px rgba(239,68,68,0.25), 0 8px 24px rgba(185,28,28,0.45)' : isSelected ? '0 8px 24px rgba(29,78,216,0.3)' : '0 1px 4px rgba(0,0,0,0.07)',
                                 transition: 'all 0.18s cubic-bezier(0.4, 0, 0.2, 1)',
                               }}
                             >

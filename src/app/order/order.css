@@ -230,6 +230,27 @@ html, body { background: #ffffff !important; }
 }
 .co-history-btn:active { background: var(--red-light); }
 
+.co-kitchen-call-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 20px;
+  border: 2px solid #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.78rem;
+  font-weight: 900;
+  font-family: 'Nunito', sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.co-kitchen-call-btn:active { background: #fef3c7; }
+.co-kitchen-call-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 /* Table subtitle */
 .co-table-info {
   text-align: center;
