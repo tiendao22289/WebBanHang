@@ -2334,7 +2334,7 @@ function OrderContent() {
           <div className="co-filter-row" style={{ padding: '4px 12px 8px', gap: 6 }}>
             <select
               className="co-cat-dropdown"
-              style={{ padding: '7px 10px', fontSize: '0.8rem' }}
+              style={{ width: 72, padding: '6px 6px', fontSize: '0.78rem' }}
               value={activeCategory}
               onChange={e => handleCatClick(e.target.value)}
             >
@@ -2343,7 +2343,7 @@ function OrderContent() {
                 <option key={cat.id} value={cat.id}>{cat.name}</option>
               ))}
             </select>
-            <div className="co-search-box" style={{ padding: '7px 10px' }}>
+            <div className="co-search-box" style={{ padding: '5px 8px', minWidth: 0 }}>
               <Search size={14} />
               <input
                 placeholder="Tìm món"
