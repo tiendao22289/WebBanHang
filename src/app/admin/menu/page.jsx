@@ -867,11 +867,7 @@ export default function MenuPage() {
 
   return (
     <div className="page-content">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'nowrap', gap: 8 }}>
-        <div>
-          <h1 className="page-title" style={{ marginBottom: 2 }}>Thực đơn</h1>
-          <p className="page-subtitle" style={{ margin: 0, fontSize: '0.8rem' }}>Quản lý danh mục và món ăn</p>
-        </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: 12, flexWrap: 'nowrap', gap: 8 }}>
         <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
           {hasPendingChanges && (
             <span style={{ fontSize: '0.75rem', color: '#92400e', fontWeight: 700, background: '#fef3c7', padding: '5px 8px', borderRadius: 8 }}>Có thay đổi nháp</span>

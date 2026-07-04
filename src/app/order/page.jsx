@@ -522,6 +522,18 @@ function OrderContent() {
   const [feedbackToast, setFeedbackToast] = useState(null);
   const previousOrdersRef = useRef(previousOrders);
   useEffect(() => { previousOrdersRef.current = previousOrders; }, [previousOrders]);
+  const previousOrdersRefreshTimersRef = useRef([]);
+  function refreshPreviousOrdersReliably(phone = null) {
+    fetchPreviousOrders(phone);
+    previousOrdersRefreshTimersRef.current.forEach(clearTimeout);
+    previousOrdersRefreshTimersRef.current = [
+      setTimeout(() => fetchPreviousOrders(phone), 600),
+      setTimeout(() => fetchPreviousOrders(phone), 1800),
+    ];
+  }
+  useEffect(() => () => {
+    previousOrdersRefreshTimersRef.current.forEach(clearTimeout);
+  }, []);
   const [viewMode, setViewMode] = useState('list');
   const [orderSuccess, setOrderSuccess] = useState(false);
   const [userScrolling, setUserScrolling] = useState(false);
@@ -860,8 +872,8 @@ function OrderContent() {
         // Đồng thời re-fetch để đảm bảo dữ liệu chính xác
         try {
           const saved = getSavedSession();
-          fetchPreviousOrders(saved?.customerPhone || '');
-        } catch (e) { fetchPreviousOrders(); }
+          refreshPreviousOrdersReliably(saved?.customerPhone || '');
+        } catch (e) { refreshPreviousOrdersReliably(); }
       })
       // Watch for orders being updated (including table transfers)
       .on('postgres_changes', {
@@ -904,7 +916,7 @@ function OrderContent() {
               setShowOrdered(false);
               setOrderCancelled(true);
             } else {
-              fetchPreviousOrders();
+              refreshPreviousOrdersReliably();
             }
           } else if (payload.new?.status === 'paid' && isMyOrder) {
             justPaidRef.current = true;
@@ -912,7 +924,7 @@ function OrderContent() {
             setTimeout(() => setOrderPaid(null), 5000);
           } else {
             // Bất kỳ thay đổi nào khác (tổng tiền, status) → re-fetch
-            fetchPreviousOrders();
+            refreshPreviousOrdersReliably();
           }
         }
       })
@@ -920,13 +932,28 @@ function OrderContent() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, (payload) => {
         const orderId = payload.new?.order_id || payload.old?.order_id;
         if (!orderId) return;
-        // Chỉ re-fetch nếu item thuộc về một trong các order hiện tại của mình
+        // Re-fetch ngay nếu item thuộc về một trong các order đang hiển thị.
         if (previousOrdersRef.current.some(o => o.id === orderId)) {
-          fetchPreviousOrders();
-        } else {
-          // Order của bàn khác trong cùng nhóm gộp → chỉ cần cập nhật groupOrders để tính KM
-          fetchGroupOrders();
+          refreshPreviousOrdersReliably();
+          return;
         }
+
+        // Nếu admin vừa tạo order mới rồi thêm món, orderId chưa có trong previousOrders.
+        // Kiểm tra nhanh order đó có thuộc bàn/nhóm hiện tại không để đẩy lên khách ngay,
+        // tránh phải chờ polling hoặc chờ UPDATE tổng tiền của orders.
+        supabase
+          .from('orders')
+          .select('table_id')
+          .eq('id', orderId)
+          .maybeSingle()
+          .then(({ data }) => {
+            const targetIds = mergeGroupIdsRef.current?.length > 0 ? mergeGroupIdsRef.current : [activeTableId];
+            if (data?.table_id && targetIds.includes(data.table_id)) {
+              refreshPreviousOrdersReliably();
+            } else {
+              fetchGroupOrders();
+            }
+          });
       })
       .subscribe();
 
