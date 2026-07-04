@@ -215,13 +215,15 @@ html, body { background: #ffffff !important; }
 .co-history-btn {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
-  padding: 7px 13px;
+  min-width: 108px;
+  padding: 5px 10px;
   border-radius: 20px;
   border: 2px solid var(--red);
   background: white;
   color: var(--red);
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   font-weight: 800;
   font-family: 'Nunito', sans-serif;
   cursor: pointer;
@@ -233,12 +235,15 @@ html, body { background: #ffffff !important; }
 .co-kitchen-call-btn {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
+  min-width: 108px;
+  padding: 5px 10px;
   border-radius: 20px;
   border: 2px solid #f59e0b;
   background: #fffbeb;
   color: #92400e;
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   font-weight: 900;
   font-family: 'Nunito', sans-serif;
   cursor: pointer;

@@ -2368,7 +2368,6 @@ function OrderContent() {
             <div className="co-header-actions" style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
               <button
                 className="co-kitchen-call-btn"
-                style={{ padding: '5px 10px', fontSize: '0.75rem' }}
                 onClick={callKitchen}
                 disabled={kitchenCalling}
               >
@@ -2376,7 +2375,6 @@ function OrderContent() {
               </button>
               <button
                 className="co-history-btn"
-                style={{ padding: '5px 10px', fontSize: '0.75rem' }}
                 onClick={() => { setShowOrdered(true); fetchPreviousOrders(); }}
               >
                 📋 Đã gọi
