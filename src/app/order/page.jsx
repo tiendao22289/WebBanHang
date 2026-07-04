@@ -1185,8 +1185,12 @@ function OrderContent() {
       hasMySession = (myOrders?.length || 0) > 0;
     }
 
-    // Nếu có session tại bàn → lấy TẤT CẢ bills của toàn bộ nhóm bàn hôm nay
-    if (hasMySession) {
+    // Dine-in: mọi khách đang mở QR của bàn đều được xem bill chung của bàn/nhóm,
+    // kể cả khách chưa gửi món. Takeaway vẫn yêu cầu session/SĐT để tránh lộ bill người khác.
+    const canViewSharedTableBills = hasMySession || !isTakeawayRef.current;
+
+    // Nếu có quyền xem bill chung → lấy TẤT CẢ bills của toàn bộ nhóm bàn hôm nay
+    if (canViewSharedTableBills) {
       let bills = supabase
         .from('orders')
         .select(`*, order_items(*, menu_item:menu_items(name, price)), print_jobs(id, status, error_message)`)
@@ -1205,7 +1209,7 @@ function OrderContent() {
 
       setPreviousOrders(allTableBills || []);
       // Đồng thời cập nhật groupOrders để tính KM chung cho nhóm (chỉ dine-in)
-      fetchGroupOrders();
+      fetchGroupOrders(targetIds);
       return;
     }
 
