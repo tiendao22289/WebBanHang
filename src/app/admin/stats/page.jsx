@@ -56,10 +56,10 @@ async function fetchAllOrdersInRange(startDate, endDate) {
     const { data, error } = await supabase
       .from('orders')
       .select(`
-        *,
+        id, created_at, total_amount, payment_method,
         order_items (
-          *,
-          menu_item:menu_items(name, category_id, category:categories(name))
+          quantity, unit_price,
+          menu_item:menu_items(name, category:categories(name))
         )
       `)
       .gte('created_at', startDate.toISOString())

@@ -22,3 +22,18 @@ npm-debug.log*
 # IDE
 .vscode/
 .idea/
+
+# Claude Code
+.claude/
+
+# Dev logs
+*.log
+
+# DB backups / one-off scripts
+*_backup_*.sql
+backup_db*.js
+generate_backup.js
+run_rpc_fix.js
+fix_rpc_run_in_supabase.sql
+fix-encoding.js
+test-trigger.js

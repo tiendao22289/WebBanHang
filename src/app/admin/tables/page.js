@@ -7,6 +7,7 @@ import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { getActiveAccount, processPaymentAtomic, buildQrUrl } from '@/lib/bankAccount';
 import { sendTableSummaryPrintJob, sendSmartPrintJobs } from '@/lib/print';
+import { getMenuCached } from '@/lib/menuCache';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
 import Swal from 'sweetalert2';
@@ -257,11 +258,23 @@ export default function TablesPage() {
   };
 
   const fetchTables = useCallback(async () => {
-    const [{ data: tablesData }, { data: menuData }, { data: catsData }] = await Promise.all([
+    // Menu + categories đọc từ cache admin (adminMenuCache:v1) — không request
+    // server. Cache do admin/menu ghi khi fetchData (mount + sau "Đồng bộ").
+    // Nếu cache miss (lần đầu chưa vào admin/menu) → getMenuCached() sẽ tự fetch.
+    const [{ data: tablesData }, cachedMenu] = await Promise.all([
       supabase.from('tables').select('*').order('table_number'),
-      supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).order('name'),
-      supabase.from('categories').select('*').order('sort_order'),
+      getMenuCached().catch(err => {
+        console.error('[fetchTables] menu cache error:', err.message);
+        return { items: [], categories: [] };
+      }),
     ]);
+
+    // Lọc + sắp xếp menu client-side (giống filter cũ: is_available + order('name'))
+    const menuData = (cachedMenu.items || [])
+      .filter(i => i.is_available)
+      .slice()
+      .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi'));
+    const catsData = cachedMenu.categories || [];
 
     if (tablesData) {
       setTables(tablesData);
@@ -271,9 +284,9 @@ export default function TablesPage() {
           const { data: ordersData, error: ordErr } = await supabase
             .from('orders')
             .select(`
-              *,
+              id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at,
               order_items (
-                *,
+                id, quantity, unit_price, item_options, note, is_gift, menu_item_id,
                 menu_item:menu_items (name, price, image_url)
               ),
               print_jobs (id, status)
@@ -297,9 +310,9 @@ export default function TablesPage() {
         setOrders({});
       }
     }
-    setMenuItems(menuData || []);
-    const finalCats = catsData || [];
-    if (menuData?.some(i => !i.category_id)) finalCats.push({ id: null, name: 'Chưa phân loại' });
+    setMenuItems(menuData);
+    const finalCats = [...catsData];
+    if (menuData.some(i => !i.category_id)) finalCats.push({ id: null, name: 'Chưa phân loại' });
     setCategories(finalCats);
     setLoading(false);
   }, []);
@@ -312,9 +325,9 @@ export default function TablesPage() {
       const { data: ordersData } = await supabase
         .from('orders')
         .select(`
-          *,
+          id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at,
           order_items (
-            *,
+            id, quantity, unit_price, item_options, note, is_gift, menu_item_id,
             menu_item:menu_items (name, price, image_url)
           ),
           print_jobs (id, status)
@@ -332,6 +345,34 @@ export default function TablesPage() {
       console.error('[fetchOrdersOnly] error:', e);
     }
   }, [tables]);
+
+  // ─── Debounced refetch scheduler ───────────────────────────────────────────
+  // Khi khách gửi 1 đơn N món, Supabase Realtime bắn N+2 event (1 orders INSERT
+  // + N order_items INSERT + 1 tables UPDATE). Không debounce → fetchTables()
+  // chạy N+2 lần ⇒ (N+2) × 4 request. Gom vào 1 timer 200ms để chỉ fetch 1 lần.
+  //
+  // pendingFullRef=true khi có event trên bảng `tables` (bàn mới / status đổi)
+  // → dùng fetchTables (refetch menu/categories/tables/orders).
+  // Ngược lại (chỉ orders / order_items) → fetchOrdersOnly (rẻ hơn nhiều).
+  const fetchTablesRef = useRef(null);
+  const fetchOrdersOnlyRef = useRef(null);
+  const refetchTimerRef = useRef(null);
+  const pendingFullRef = useRef(false);
+
+  useEffect(() => { fetchTablesRef.current = fetchTables; }, [fetchTables]);
+  useEffect(() => { fetchOrdersOnlyRef.current = fetchOrdersOnly; }, [fetchOrdersOnly]);
+
+  const scheduleRefetch = useCallback((full = false) => {
+    if (full) pendingFullRef.current = true;
+    if (refetchTimerRef.current) return; // đã có timer đang chờ
+    refetchTimerRef.current = setTimeout(() => {
+      refetchTimerRef.current = null;
+      const doFull = pendingFullRef.current;
+      pendingFullRef.current = false;
+      if (doFull) fetchTablesRef.current?.();
+      else fetchOrdersOnlyRef.current?.();
+    }, 200);
+  }, []);
 
   // Payment Countdown Timer
   useEffect(() => {
@@ -396,7 +437,7 @@ export default function TablesPage() {
     const channel = supabase
       .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tables' }, () => {
-        fetchTables();
+        scheduleRefetch(true); // bàn đổi status/thêm/xoá → cần fetchTables đầy đủ
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
         if (payload.eventType === 'INSERT' && !isFirstLoad.current) {
@@ -405,10 +446,10 @@ export default function TablesPage() {
             triggerKitchenAlert(payload.new.table_id);
           }
         }
-        fetchTables();
+        scheduleRefetch(false); // orders đổi → chỉ cần fetchOrdersOnly
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
-        fetchTables();
+        scheduleRefetch(false); // items đổi → chỉ cần fetchOrdersOnly
       })
       .subscribe((status) => {
         console.log('[Realtime] channel status:', status);
@@ -417,7 +458,7 @@ export default function TablesPage() {
     // ── Fallback: poll every 30s in case Supabase Realtime is not enabled ──
     const pollInterval = setInterval(() => {
       fetchTables();
-    }, 30000);
+    }, 90000);
 
     // ── Re-fetch when user switches back to this tab ──
     const handleVisibility = () => {
@@ -479,8 +520,12 @@ export default function TablesPage() {
       clearInterval(autoExpireInterval);
       clearInterval(pollInterval);
       document.removeEventListener('visibilitychange', handleVisibility);
+      if (refetchTimerRef.current) {
+        clearTimeout(refetchTimerRef.current);
+        refetchTimerRef.current = null;
+      }
     };
-  }, [fetchTables]);
+  }, [fetchTables, scheduleRefetch]);
 
   async function addTable() {
     const num = parseInt(newTableNumber);

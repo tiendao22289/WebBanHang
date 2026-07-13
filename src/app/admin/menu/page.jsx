@@ -4,6 +4,7 @@ import { removeVietnameseTones } from '@/lib/utils';
 import { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
+import { writeMenuCache } from '@/lib/menuCache';
 import Swal from 'sweetalert2';
 import {
   DndContext,
@@ -315,13 +316,18 @@ export default function MenuPage() {
     return cats.length > 0 ? cats : [null];
   };
 
-  async function fetchData({ ignoreDraft = false } = {}) {
+  async function fetchData({ ignoreDraft = false, writeCache = false } = {}) {
     const [{ data: cats }, { data: items }] = await Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
       supabase.from('menu_items').select('*, category:categories(name)').order('sort_order').order('created_at'),
     ]);
     const fetchedItems = items || [];
-    const finalCats = [...(cats || [])];
+    const fetchedCats = cats || [];
+    // Chỉ ghi cache admin khi được yêu cầu (sau khi bấm "Đồng bộ" — syncDraftChanges).
+    // Load thường trên admin/menu KHÔNG update cache: trang này luôn hiển thị data
+    // mới nhất từ server, cache chỉ phản ánh trạng thái đã "publish" cho các trang khác.
+    if (writeCache && items) writeMenuCache(fetchedItems, fetchedCats);
+    const finalCats = [...fetchedCats];
     if (fetchedItems.some(i => getItemCategories(i).includes(null))) {
       finalCats.push({ id: null, name: 'Chưa phân loại' });
     }
@@ -808,7 +814,7 @@ export default function MenuPage() {
       }
       localStorage.removeItem(draftStorageKey);
       setPendingChanges(emptyPendingChanges());
-      await fetchData({ ignoreDraft: true });
+      await fetchData({ ignoreDraft: true, writeCache: true });
       await Swal.fire('Đã đồng bộ', 'Các thay đổi đã được lưu lên Supabase.', 'success');
     } catch (err) {
       console.error('Sync menu draft error:', err);
