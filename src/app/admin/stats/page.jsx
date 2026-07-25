@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
-import { supabase } from '@/lib/supabase';
 import {
   DollarSign,
   Award,
@@ -11,10 +10,7 @@ import {
   Landmark,
   Receipt
 } from 'lucide-react';
-import {
-  startOfDay, endOfDay, subDays, startOfMonth, endOfMonth,
-  startOfQuarter, endOfQuarter, format
-} from 'date-fns';
+import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
@@ -36,8 +32,6 @@ const Cell = dynamic(() => import('recharts').then(m => m.Cell), { ssr: false })
 const CHART_COLORS = ['#D4A574', '#C4453C', '#2DB67C', '#3B82F6', '#F5A623', '#8B5CF6', '#EC4899', '#14B8A6'];
 const PAYMENT_COLORS = ['#3B82F6', '#2DB67C']; // CK, Tiền mặt
 const VAT_RATE = 0.08; // 8% thuế suất F&B
-const ORDERS_PAGE_SIZE = 1000;
-
 function formatDateInput(date) {
   return format(date, 'dd/MM/yyyy');
 }
@@ -48,40 +42,8 @@ function parseDateInput(value) {
   return new Date(year, month - 1, day);
 }
 
-async function fetchAllOrdersInRange(startDate, endDate) {
-  const allOrders = [];
-  let from = 0;
-
-  while (true) {
-    const { data, error } = await supabase
-      .from('orders')
-      .select(`
-        id, created_at, total_amount, payment_method,
-        order_items (
-          quantity, unit_price,
-          menu_item:menu_items(name, category:categories(name))
-        )
-      `)
-      .gte('created_at', startDate.toISOString())
-      .lte('created_at', endDate.toISOString())
-      .is('is_hidden_from_stats', false)
-      .order('created_at', { ascending: true })
-      .range(from, from + ORDERS_PAGE_SIZE - 1);
-
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-
-    allOrders.push(...data);
-
-    if (data.length < ORDERS_PAGE_SIZE) break;
-    from += ORDERS_PAGE_SIZE;
-  }
-
-  return allOrders;
-}
-
 export default function StatsPage() {
-  const [period, setPeriod] = useState('today'); // today, yesterday, 7days, month, quarter, custom
+  const [period, setPeriod] = useState('7days'); // today, yesterday, 7days, month, quarter, custom
   const [customStart, setCustomStart] = useState(formatDateInput(new Date()));
   const [customEnd, setCustomEnd] = useState(formatDateInput(new Date()));
   const [stats, setStats] = useState({
@@ -101,6 +63,7 @@ export default function StatsPage() {
     validOrders: [], // for export & table
   });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [selectedBill, setSelectedBill] = useState(null);
 
   useEffect(() => {
@@ -109,145 +72,48 @@ export default function StatsPage() {
 
   async function fetchStats() {
     setLoading(true);
-    const now = new Date();
-    let startDate, endDate;
+    setError(null);
 
-    switch (period) {
-      case 'today':
-        startDate = startOfDay(now);
-        endDate = endOfDay(now);
-        break;
-      case 'yesterday':
-        startDate = startOfDay(subDays(now, 1));
-        endDate = endOfDay(subDays(now, 1));
-        break;
-      case '7days':
-        startDate = startOfDay(subDays(now, 6));
-        endDate = endOfDay(now);
-        break;
-      case 'month':
-        startDate = startOfMonth(now);
-        endDate = endOfMonth(now);
-        break;
-      case 'quarter':
-        startDate = startOfQuarter(now);
-        endDate = endOfQuarter(now);
-        break;
-      case 'custom':
-        startDate = startOfDay(parseDateInput(customStart));
-        endDate = endOfDay(parseDateInput(customEnd));
-        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
-          alert('Vui lòng nhập ngày theo định dạng dd/mm/yyyy');
-          setLoading(false);
-          return;
-        }
-        break;
-      default:
-        startDate = startOfDay(now);
-        endDate = endOfDay(now);
-    }
-
-    let ordersData = [];
     try {
-      // 1. Fetch ALL orders in period that are NOT hidden (is_hidden_from_stats = false)
-      // Sổ chính thức, giới hạn định mức đã được xử lý bởi is_hidden_from_stats lúc tạo bill
-      ordersData = await fetchAllOrdersInRange(startDate, endDate);
-    } catch (error) {
-      console.error('[Stats] Error fetching orders:', error);
-      setLoading(false);
-      return;
-    }
-
-    // 2. Lọc CỰC KỲ KHẮT KHE cho Thuế: 
-    // - Chỉ lấy bill Thành Công / Đã thanh toán (Bỏ qua Hủy)
-    // - Chỉ lấy Tiền mặt HOẶC Chuyển khoản (Bỏ qua thẻ, công nợ, khác...)
-    const validOrders = ordersData.filter(o =>
-      (o.status === 'completed' || o.status === 'paid') &&
-      (o.payment_method === 'cash' || o.payment_method === 'transfer')
-    );
-
-    // 3. Tính toán DOANH THU ĐẢM BẢO KHỚP 100%
-    let cashRevenue = 0;
-    let transferRevenue = 0;
-
-    validOrders.forEach(o => {
-      const amount = o.total_amount || 0;
-      if (o.payment_method === 'cash') cashRevenue += amount;
-      if (o.payment_method === 'transfer') transferRevenue += amount;
-    });
-
-    // Công thức tuyệt đối: Gross = Cash + Transfer
-    const totalRevenue = cashRevenue + transferRevenue;
-
-    // Công thức tuyệt đối: Net = Gross / 1.08, VAT = Gross - Net
-    const netRevenue = Math.round(totalRevenue / (1 + VAT_RATE));
-    const vatAmount = totalRevenue - netRevenue;
-
-    const totalOrders = validOrders.length;
-    const totalItemsSold = validOrders.reduce((sum, o) =>
-      sum + (o.order_items?.reduce((s, i) => s + i.quantity, 0) || 0), 0
-    );
-    const avgOrderValue = totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0;
-
-    // 4. Bảng kê hàng hóa xuất bán (Sẽ có thể chênh lệch giá trị vài đồng nếu có giảm giá trên tổng bill, nhưng quantity là chuẩn xác xuất kho)
-    const itemMap = {};
-    validOrders.forEach(order => {
-      order.order_items?.forEach(oi => {
-        const name = oi.menu_item?.name || 'Món đã xóa';
-        if (!itemMap[name]) itemMap[name] = { name, quantity: 0, revenue: 0, price: oi.unit_price };
-        itemMap[name].quantity += oi.quantity;
-        itemMap[name].revenue += oi.unit_price * oi.quantity;
-      });
-    });
-
-    const allRawItems = Object.values(itemMap).sort((a, b) => b.quantity - a.quantity);
-    const topItems = allRawItems.slice(0, 8); // UI top 8
-
-    // 5. Doanh thu theo ngày (Biểu đồ)
-    const revenueMap = {};
-    validOrders.forEach(order => {
-      const orderDate = new Date(order.created_at);
-      const key = format(orderDate, 'yyyy-MM-dd');
-      if (revenueMap[key] === undefined) {
-        revenueMap[key] = {
-          date: format(orderDate, 'dd/MM'),
-          sortTime: startOfDay(orderDate).getTime(),
-          revenue: 0,
-        };
+      const params = new URLSearchParams({ period });
+      if (period === 'custom') {
+        params.set('customStart', customStart);
+        params.set('customEnd', customEnd);
       }
-      revenueMap[key].revenue += order.total_amount || 0;
-    });
 
-    const revenueByDay = Object.values(revenueMap)
-      .sort((a, b) => a.sortTime - b.sortTime)
-      .map(({ date, revenue }) => ({ date, revenue }));
-
-    // 6. Category breakdown
-    const catMap = {};
-    validOrders.forEach(order => {
-      order.order_items?.forEach(oi => {
-        const catName = oi.menu_item?.category?.name || 'Khác';
-        if (!catMap[catName]) catMap[catName] = 0;
-        catMap[catName] += oi.unit_price * oi.quantity;
+      const response = await fetch(`/api/admin/stats?${params.toString()}`, {
+        cache: 'no-store',
       });
-    });
-    const categoryBreakdown = Object.entries(catMap).map(([name, value]) => ({ name, value }));
+      const payload = await response.json();
 
-    // 7. Payment breakdown
-    const paymentBreakdown = [
-      { name: 'Chuyển khoản', value: transferRevenue },
-      { name: 'Tiền mặt', value: cashRevenue }
-    ].filter(item => item.value > 0);
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Kh?ng th? t?i d? li?u th?ng k?');
+      }
 
-    setStats({
-      totalRevenue, netRevenue, vatAmount, cashRevenue, transferRevenue,
-      totalOrders, totalItemsSold, avgOrderValue,
-      revenueByDay, topItems, categoryBreakdown, paymentBreakdown,
-      allRawItems, validOrders, // <-- Mảng validOrders sạch 100%
-    });
-    setLoading(false);
+      setStats(payload.stats);
+    } catch (fetchError) {
+      console.error('[Stats] Error fetching stats:', fetchError);
+      setError(fetchError?.message || 'Kh?ng th? t?i d? li?u th?ng k?');
+      setStats({
+        totalRevenue: 0,
+        netRevenue: 0,
+        vatAmount: 0,
+        cashRevenue: 0,
+        transferRevenue: 0,
+        totalOrders: 0,
+        totalItemsSold: 0,
+        avgOrderValue: 0,
+        revenueByDay: [],
+        topItems: [],
+        categoryBreakdown: [],
+        paymentBreakdown: [],
+        allRawItems: [],
+        validOrders: [],
+      });
+    } finally {
+      setLoading(false);
+    }
   }
-
   function formatPrice(price) {
     return new Intl.NumberFormat('vi-VN').format(price) + 'đ';
   }
@@ -550,9 +416,15 @@ export default function StatsPage() {
       </div>
 
       {loading ? (
-        <div className="empty-state"><p>Đang tải dữ liệu báo cáo...</p></div>
+        <div className="empty-state"><p>?ang t?i d? li?u b?o c?o...</p></div>
       ) : (
         <>
+          {error && (
+            <div className="empty-state" style={{ background: '#fef2f2', color: '#b91c1c', marginBottom: '16px' }}>
+              <p>{error}</p>
+            </div>
+          )}
+
           {/* Summary Cards - Đã loại bỏ card Hủy */}
           <div className="summary-cards" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
             <div className="summary-card" style={{ borderLeft: '4px solid #D4A574' }}>
@@ -592,21 +464,27 @@ export default function StatsPage() {
               <div className="card-body">
                 <h3 className="chart-title">Biến động Doanh Thu Hợp Lệ</h3>
                 <div className="chart-container">
-                  <ResponsiveContainer width="100%" height={250}>
-                    <BarChart data={stats.revenueByDay}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis dataKey="date" fontSize={12} tick={{ fill: '#9CA3AF' }} />
-                      <YAxis fontSize={12} tick={{ fill: '#9CA3AF' }} tickFormatter={(v) => formatPrice(v)} width={80} />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Bar dataKey="revenue" fill="url(#barGradient)" radius={[4, 4, 0, 0]} maxBarSize={50} />
-                      <defs>
-                        <linearGradient id="barGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#3B82F6" />
-                          <stop offset="100%" stopColor="#1E3A8A" />
-                        </linearGradient>
-                      </defs>
-                    </BarChart>
-                  </ResponsiveContainer>
+                  {stats.revenueByDay.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={stats.revenueByDay}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="date" fontSize={12} tick={{ fill: '#9CA3AF' }} />
+                        <YAxis fontSize={12} tick={{ fill: '#9CA3AF' }} tickFormatter={(v) => formatPrice(v)} width={80} />
+                        <Tooltip content={<CustomTooltip />} />
+                        <Bar dataKey="revenue" fill="url(#barGradient)" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                        <defs>
+                          <linearGradient id="barGradient" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#3B82F6" />
+                            <stop offset="100%" stopColor="#1E3A8A" />
+                          </linearGradient>
+                        </defs>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="empty-state" style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <p>Kh?ng c? doanh thu trong k? ?? ch?n</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -616,7 +494,7 @@ export default function StatsPage() {
                 <h3 className="chart-title">Tỷ trọng Thanh toán</h3>
                 <div className="chart-container">
                   {stats.paymentBreakdown.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={250}>
+                    <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
                           data={stats.paymentBreakdown}
@@ -634,7 +512,9 @@ export default function StatsPage() {
                       </PieChart>
                     </ResponsiveContainer>
                   ) : (
-                    <div className="empty-state"><p>Chưa có giao dịch hợp lệ</p></div>
+                    <div className="empty-state" style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <p>Ch?a c? giao d?ch h?p l?</p>
+                    </div>
                   )}
                 </div>
               </div>
