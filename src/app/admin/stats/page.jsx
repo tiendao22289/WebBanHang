@@ -87,13 +87,13 @@ export default function StatsPage() {
       const payload = await response.json();
 
       if (!response.ok) {
-        throw new Error(payload?.error || 'Kh?ng th? t?i d? li?u th?ng k?');
+        throw new Error(payload?.error || 'Không thể tải dữ liệu thống kê');
       }
 
       setStats(payload.stats);
     } catch (fetchError) {
       console.error('[Stats] Error fetching stats:', fetchError);
-      setError(fetchError?.message || 'Kh?ng th? t?i d? li?u th?ng k?');
+      setError(fetchError?.message || 'Không thể tải dữ liệu thống kê');
       setStats({
         totalRevenue: 0,
         netRevenue: 0,
@@ -416,7 +416,7 @@ export default function StatsPage() {
       </div>
 
       {loading ? (
-        <div className="empty-state"><p>?ang t?i d? li?u b?o c?o...</p></div>
+        <div className="empty-state"><p>Đang tải dữ liệu báo cáo...</p></div>
       ) : (
         <>
           {error && (
@@ -482,7 +482,7 @@ export default function StatsPage() {
                     </ResponsiveContainer>
                   ) : (
                     <div className="empty-state" style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <p>Kh?ng c? doanh thu trong k? ?? ch?n</p>
+                      <p>Không có doanh thu trong kỳ đã chọn</p>
                     </div>
                   )}
                 </div>
@@ -513,7 +513,7 @@ export default function StatsPage() {
                     </ResponsiveContainer>
                   ) : (
                     <div className="empty-state" style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <p>Ch?a c? giao d?ch h?p l?</p>
+                      <p>Chưa có giao dịch hợp lệ</p>
                     </div>
                   )}
                 </div>
