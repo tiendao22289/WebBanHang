@@ -154,6 +154,23 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
   const hasGift = giftCount > 0;
   const progress = Math.min((qualifyingQty / threshold) * 100, 100);
 
+  // Icon con ốc (thay cho chiếc cúp) — trắng, hợp chủ đề quán ốc
+  const shellIcon = (
+    <svg width="42" height="42" viewBox="0 0 100 100" style={{ display: 'block' }} aria-hidden="true">
+      <g transform="translate(-2,-2)">
+        <path d="M18 74 C18 66 26 62 40 62 L70 62 C80 62 86 68 86 74 C86 78 82 80 78 80 L24 80 C20 80 18 78 18 74 Z" fill="#ffffff" />
+        <circle cx="82" cy="58" r="9" fill="#ffffff" />
+        <path d="M84 50 L88 40 M78 51 L74 42" stroke="#ffffff" strokeWidth="3" strokeLinecap="round" fill="none" />
+        <circle cx="88" cy="39" r="2.5" fill="#ffffff" />
+        <circle cx="73" cy="41" r="2.5" fill="#ffffff" />
+        <g transform="translate(45,45)">
+          <circle cx="0" cy="0" r="22" fill="#ffffff" />
+          <path d="M16 0 A16 16 0 1 1 -8 -13 A11 11 0 1 1 6 6 A6 6 0 1 1 -3 -3" fill="none" stroke="#dc2626" strokeWidth="4" strokeLinecap="round" />
+        </g>
+      </g>
+    </svg>
+  );
+
   return (
     <>
       {/* Bubble n\u1ed5i \u2014 lu\u00f4n mount (visibility:hidden) \u0111\u1ec3 bubbleRef/addEventListener lu\u00f4n h\u1ee3p l\u1ec7 */}
@@ -195,7 +212,7 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
           fontSize: '1.75rem', border: '3px solid white',
           animation: hasGift ? 'trophy-halo-pulse 1.6s infinite ease-out' : 'co-gift-pulse 2.5s infinite'
         }}>
-          {hasGift ? <div className="trophy-bounce">🏆</div> : <div className="trophy-shake">🏆</div>}
+          {hasGift ? <div className="trophy-bounce">{shellIcon}</div> : <div className="trophy-shake">{shellIcon}</div>}
         </div>
 
         {/* Badge số */}
@@ -209,7 +226,7 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
           pointerEvents: 'none', whiteSpace: 'nowrap',
           border: '2px solid white'
         }}>
-          {hasGift ? (availableGiftSlots > 0 ? `🎉 ${availableGiftSlots} Quà!` : '✅ Đã nhận') : `${qualifyingQty}/${threshold}`}
+          {hasGift ? (availableGiftSlots > 0 ? `🎉 ${availableGiftSlots} Quà!` : '✅ Đã nhận') : `${qualifyingQty % 1 === 0 ? qualifyingQty : qualifyingQty.toFixed(1)}/${threshold}`}
         </div>
 
         {/* Chữ Khuyến Mãi phía dưới */}
@@ -223,7 +240,7 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
           pointerEvents: 'none',
           letterSpacing: '0.03em'
         }}>
-          KHUYẾN MÃI
+          {threshold} TẶNG 1
         </div>
 
         {/* Speech bubble callout */}
@@ -537,6 +554,8 @@ function OrderContent() {
   }, []);
   const [viewMode, setViewMode] = useState('list');
   const [orderSuccess, setOrderSuccess] = useState(false);
+  const [thanksOpen, setThanksOpen] = useState(false); // thể lệ thử thách — ẩn, bấm mới hiện (overlay)
+  const [partyOpen, setPartyOpen] = useState(false); // đặt tiệc có quà — overlay riêng
   const [userScrolling, setUserScrolling] = useState(false);
   const [orderCancelled, setOrderCancelled] = useState(false); // admin cancelled
   const [orderPaid, setOrderPaid] = useState(null); // { total } khi admin thanh toán
@@ -547,6 +566,8 @@ function OrderContent() {
   const [giftCart, setGiftCart] = useState([]); // { id, name, price:0, is_gift:true }
   const [showGiftModal, setShowGiftModal] = useState(false);
   const [giftPromptPending, setGiftPromptPending] = useState(false); // đang chờ khách chọn quà để gửi đơn
+  const [promoNudge, setPromoNudge] = useState(null); // { item, name, unitsNeeded } — gợi ý "gần đủ" điểm
+  const nudgeDismissedRef = useRef(false); // khách đã bấm "bỏ qua" gợi ý → không hiện lại trong lần gửi này
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showPromoPopup, setShowPromoPopup] = useState(false);
   const [promoCallout, setPromoCallout] = useState(null); // { text, isGift } | null
@@ -1567,46 +1588,48 @@ function OrderContent() {
     });
   }
 
+  // Divisor (ước số quy đổi điểm) của 1 món theo lựa chọn khách chọn.
+  // Trả về số > 0 nếu món tính điểm; null nếu không tính điểm.
+  function getPromoDivisor(menuItem, itemOptions) {
+    if (!menuItem?.counts_for_promotion) return null;
+    let divisor = null;
+    // 1. Tìm divisor theo tuỳ chọn khách chọn
+    if (itemOptions && Array.isArray(itemOptions) && menuItem.options) {
+      for (const opt of itemOptions) {
+        const menuOpt = menuItem.options.find(o => o.name === opt.name);
+        if (menuOpt && menuOpt.choices && menuOpt.promoDivisors) {
+          const choiceIdx = menuOpt.choices.indexOf(opt.choice);
+          if (choiceIdx !== -1 && menuOpt.promoDivisors[choiceIdx]) {
+            divisor = Number(menuOpt.promoDivisors[choiceIdx]);
+            if (!isNaN(divisor) && divisor > 0) break;
+          }
+        }
+      }
+    }
+    // 2. Fallback về divisor mặc định của món
+    if (!divisor || isNaN(divisor) || divisor <= 0) {
+      const promoOpt = (menuItem.options || []).find(o => o.__promo_divisor);
+      divisor = promoOpt ? promoOpt.__promo_divisor : 1;
+    }
+    return divisor;
+  }
+
   // Promotion calculations
   // qualifyingQty được tính bằng cách lấy tổng số lượng / divisor của từng lựa chọn
   const qualifyingQty = (() => {
     if (!promoConfig.enabled) return 0;
-    
-    let totalPoints = 0;
 
-    const getDivisor = (menuItem, itemOptions) => {
-      if (!menuItem?.counts_for_promotion) return null;
-      let divisor = null;
-      // 1. Tìm divisor theo tuỳ chọn khách chọn
-      if (itemOptions && Array.isArray(itemOptions) && menuItem.options) {
-        for (const opt of itemOptions) {
-          const menuOpt = menuItem.options.find(o => o.name === opt.name);
-          if (menuOpt && menuOpt.choices && menuOpt.promoDivisors) {
-            const choiceIdx = menuOpt.choices.indexOf(opt.choice);
-            if (choiceIdx !== -1 && menuOpt.promoDivisors[choiceIdx]) {
-              divisor = Number(menuOpt.promoDivisors[choiceIdx]);
-              if (!isNaN(divisor) && divisor > 0) break;
-            }
-          }
-        }
-      }
-      // 2. Fallback về divisor mặc định của món
-      if (!divisor || isNaN(divisor) || divisor <= 0) {
-        const promoOpt = (menuItem.options || []).find(o => o.__promo_divisor);
-        divisor = promoOpt ? promoOpt.__promo_divisor : 1;
-      }
-      return divisor;
-    };
+    let totalPoints = 0;
 
     // 1. Từ giỏ hàng (local)
     cart.forEach(item => {
       const menuItem = menuItems.find(m => m.id === item.id);
-      const divisor = getDivisor(menuItem, item._options);
+      const divisor = getPromoDivisor(menuItem, item._options);
       if (divisor) {
         totalPoints += item.quantity / divisor;
       }
     });
-    
+
     // 2. Từ các đơn đã gửi — tính từ TOÀN BỘ nhóm bàn gộp (groupOrders)
     // Nếu chưa có groupOrders thì fallback về previousOrders của bàn mình
     const ordersForPromo = groupOrders.length > 0 ? groupOrders : (previousOrders || []);
@@ -1614,7 +1637,7 @@ function OrderContent() {
       (order.order_items || []).forEach(oi => {
         if (!oi.is_gift) {
           const menuItem = menuItems.find(m => m.id === oi.menu_item_id);
-          const divisor = getDivisor(menuItem, oi.item_options);
+          const divisor = getPromoDivisor(menuItem, oi.item_options);
           if (divisor) {
             totalPoints += (oi.quantity || 0) / divisor;
           }
@@ -1622,7 +1645,10 @@ function OrderContent() {
       });
     });
 
-    return totalPoints;
+    // Khử sai số dấu phẩy động: 1/3 + 1/3 + 1/3 = 0.9999999 → làm tròn về 1.
+    // Làm tròn tới 4 chữ số thập phân đủ để xoá noise (~1e-10) mà vẫn giữ điểm lẻ hợp lệ (0.5, 0.33...).
+    // Quan trọng: giftCount = floor(qualifyingQty/threshold) — nếu để 7.9999999 sẽ floor nhầm thành 0 quà.
+    return Math.round(totalPoints * 10000) / 10000;
   })();
 
   const giftCount = promoConfig.enabled ? Math.floor(qualifyingQty / promoConfig.threshold) : 0;
@@ -1751,6 +1777,69 @@ function OrderContent() {
 
   // submitOrder: nhận cartOverride tuỳ chọn từ ChatOrderButton để gửi trực tiếp
   // giftOverride: dùng cho gift-only flow để bypass stale closure khi vừa setGiftCart
+  // Tìm gợi ý "gần đủ điểm" khi khách sắp đủ 1 phần quà.
+  // Ưu tiên món ĐANG DỞ (divisor > 1, số lượng chưa tròn bội divisor) → báo đích danh, vd "thêm 2 Hàu nướng".
+  // Món divisor = 1 (mỗi món = 1 điểm) hoặc đã tròn → báo chung chung "thêm 1 món".
+  // Trả về { type:'named', item, name, unitsNeeded, optionKey } | { type:'generic', unitsNeeded } | null.
+  function getAlmostThereSuggestion() {
+    if (!promoConfig.enabled) return null;
+    const threshold = promoConfig.threshold;
+    if (!threshold || threshold <= 0) return null;
+    if (availableGiftSlots > 0) return null; // đã có quà chưa nhận → nhường modal chọn quà
+
+    const pts = qualifyingQty;
+    const nextGift = (Math.floor(pts / threshold) + 1) * threshold;
+    const pointsToNext = Math.round((nextGift - pts) * 10000) / 10000;
+    if (pointsToNext <= 0 || pointsToNext > 1) return null; // chỉ gợi ý khi còn trong vòng 1 điểm
+
+    // Giỏ hiện tại phải có ÍT NHẤT 1 món đang tính khuyến mãi thì gợi ý mới có nghĩa.
+    // Nếu điểm gần đủ chỉ đến từ đơn cũ còn giỏ toàn món không tính điểm → thêm món cũng
+    // không chắc đủ, báo "thêm 1 món" sẽ gây hiểu nhầm → không nudge.
+    const cartHasPromoItem = cart.some(item => {
+      const menuItem = menuItems.find(m => m.id === item.id);
+      return getPromoDivisor(menuItem, item._options) != null;
+    });
+    if (!cartHasPromoItem) return null;
+
+    // Ưu tiên: món đang dở (divisor > 1, còn số lẻ chưa tròn) → gợi ý bù cho tròn để đủ điểm.
+    let best = null;
+    cart.forEach(item => {
+      const menuItem = menuItems.find(m => m.id === item.id);
+      const divisor = getPromoDivisor(menuItem, item._options);
+      if (!divisor || divisor <= 1) return;              // divisor 1 = món nguyên → để phần "generic"
+      const remainder = (item.quantity || 0) % divisor;
+      if (remainder === 0) return;                        // đã tròn bội → không báo
+      const unitsNeeded = Math.ceil(pointsToNext * divisor - 1e-9);
+      if (unitsNeeded <= 0 || unitsNeeded > 5) return;    // phải bù quá nhiều thì thôi
+      const overshoot = unitsNeeded / divisor - pointsToNext; // dư càng ít càng khớp
+      if (!best
+        || overshoot < best.overshoot - 1e-9
+        || (Math.abs(overshoot - best.overshoot) < 1e-9 && unitsNeeded < best.unitsNeeded)) {
+        best = { type: 'named', item, name: item.name, unitsNeeded, overshoot, optionKey: item._optionKey };
+      }
+    });
+    if (best) return best;
+
+    // Không có món dở phù hợp → chỉ thiếu vài món nguyên → báo chung chung, không nêu tên.
+    const monNeeded = Math.max(1, Math.ceil(pointsToNext - 1e-9));
+    return { type: 'generic', unitsNeeded: monNeeded };
+  }
+
+  // Khách bấm "Thêm" trên gợi ý → cộng số lượng cho đúng dòng giỏ hàng đó.
+  function applyNudge(nudge) {
+    if (!nudge) return;
+    setCart(prev => prev.map(c =>
+      (c.id === nudge.item.id && c._optionKey === nudge.optionKey)
+        ? { ...c, quantity: c.quantity + nudge.unitsNeeded }
+        : c
+    ));
+    // Đã nudge 1 lần trong lượt gửi này → lần bấm gửi kế tiếp không nag lại nữa
+    // (nếu đủ điểm sẽ tự hiện modal chọn quà; ref reset sau khi gửi đơn thành công).
+    nudgeDismissedRef.current = true;
+    setPromoNudge(null);
+    setShowCart(true); // mở lại giỏ để khách xem tổng mới rồi tự bấm gửi
+  }
+
   async function submitOrder(cartOverride = null, giftOverride = null) {
     const effectiveCart = Array.isArray(cartOverride) ? cartOverride : cart;
     const effectiveGifts = Array.isArray(giftOverride) ? giftOverride : giftCart;
@@ -1764,6 +1853,18 @@ function OrderContent() {
       setShowCart(false);
       setShowGiftModal(true);
       return;
+    }
+
+    // Gợi ý "gần đủ điểm" — chỉ cho luồng giỏ thường, khách chưa bấm "bỏ qua".
+    // Không ép: chỉ hiện thông báo, khách tự chọn Thêm hoặc Bỏ qua.
+    if (!Array.isArray(cartOverride) && effectiveCart.length > 0 && promoConfig.enabled
+      && !giftPromptPending && !nudgeDismissedRef.current) {
+      const suggestion = getAlmostThereSuggestion();
+      if (suggestion) {
+        setShowCart(false);
+        setPromoNudge(suggestion);
+        return;
+      }
     }
 
     const effectiveTotal = Array.isArray(cartOverride)
@@ -1845,6 +1946,15 @@ function OrderContent() {
 
       if (itemsErr) throw itemsErr;
 
+      // Xoá giỏ NGAY sau khi món đã vào DB — TRƯỚC lệnh in (chờ ~1s).
+      // Nếu để sau, realtime listener nạp đơn vừa gửi vào groupOrders trong lúc chờ in,
+      // trong khi giỏ vẫn còn món → điểm KM bị đếm trùng (vd 8 món hiện thành "2 quà").
+      setCart([]);
+      setNotes({});
+      setGiftCart([]);
+      setCustomerNote(''); // reset ghi chú takeaway sau khi gửi thành công
+      setShowCart(false);
+
       await supabase
         .from('tables')
         .update({ status: 'occupied', occupied_at: new Date().toISOString() })
@@ -1862,13 +1972,8 @@ function OrderContent() {
         alert(`⚠ Món đã gửi vào bếp nhưng KHÔNG IN BILL ĐƯỢC.\nLý do: ${printResult?.error || 'Không xác định'}\n\nVui lòng báo nhân viên kiểm tra máy in.`);
       }
 
-      setCart([]);
-      setNotes({});
-      setGiftCart([]);
-      setCustomerNote(''); // reset ghi chú takeaway sau khi gửi thành công
-      setShowCart(false);
       setOrderSuccess(true);
-      setTimeout(() => setOrderSuccess(false), 3000);
+      setTimeout(() => setOrderSuccess(false), 6000);
       saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim(), order.id);
       setCurrentOrderId(order.id);
       fetchPreviousOrders();
@@ -1877,6 +1982,7 @@ function OrderContent() {
       console.error(err);
     } finally {
       setSubmitting(false);
+      nudgeDismissedRef.current = false; // reset để đơn tiếp theo vẫn gợi ý được
     }
   }
 
@@ -1943,7 +2049,7 @@ function OrderContent() {
         }))
       );
       setOrderSuccess(true);
-      setTimeout(() => setOrderSuccess(false), 3000);
+      setTimeout(() => setOrderSuccess(false), 6000);
       fetchPreviousOrders();
     } catch (err) {
       // Fallback: thêm vào local giftCart
@@ -2277,71 +2383,31 @@ function OrderContent() {
               <div style={{ position: 'absolute', top: -30, left: -30, fontSize: '6rem', opacity: 0.1, transform: 'rotate(-15deg)' }}>🔥</div>
               <div style={{ position: 'absolute', bottom: -20, right: -20, fontSize: '5rem', opacity: 0.1, transform: 'rotate(15deg)' }}>🎁</div>
 
-              <div style={{ position: 'relative', zIndex: 2, textAlign: 'left', padding: '24px 22px 22px' }}>
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 999, background: '#ffedd5', color: '#c2410c', fontSize: '0.72rem', fontWeight: 900, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 14 }}>
-                  Ưu đãi hôm nay
+              <div style={{ position: 'relative', zIndex: 2, textAlign: 'center', padding: '30px 24px 24px' }}>
+                {/* Badge */}
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 999, background: '#ffedd5', color: '#c2410c', fontSize: '0.72rem', fontWeight: 900, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 20 }}>
+                  Khuyến mãi
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18 }}>
-                  <div style={{ width: 58, height: 58, borderRadius: 16, background: 'linear-gradient(135deg, #f97316, #dc2626)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '1.9rem', boxShadow: '0 10px 24px rgba(249,115,22,0.28)', flexShrink: 0 }}>
-                    🎁
-                  </div>
-                  <div>
-                    <h2 style={{ margin: 0, color: '#111827', fontSize: '1.45rem', lineHeight: 1.15, fontWeight: 900, letterSpacing: 0 }}>
-                      8 món tặng 1 món
-                    </h2>
-                    <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '0.88rem', lineHeight: 1.4, fontWeight: 600 }}>
-                      Tích đủ món trong đơn để mở quà tặng từ nhà hàng.
-                    </p>
-                  </div>
+
+                {/* Hero: N TẶNG 1 */}
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 14, marginBottom: 6 }}>
+                  <span style={{ fontSize: '4.4rem', fontWeight: 900, lineHeight: 1, color: '#dc2626' }}>{promoConfig.threshold || 8}</span>
+                  <span style={{ fontSize: '1.5rem', fontWeight: 900, color: '#334155', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Tặng</span>
+                  <span style={{ fontSize: '4.4rem', fontWeight: 900, lineHeight: 1, color: '#dc2626' }}>1</span>
                 </div>
-                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 16, padding: '13px 14px', marginBottom: 16 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 9 }}>
-                    <span style={{ color: '#334155', fontSize: '0.83rem', fontWeight: 800 }}>Mốc nhận quà</span>
-                    <span style={{ color: '#ea580c', fontSize: '0.83rem', fontWeight: 900 }}>8 món</span>
-                  </div>
-                  <div style={{ height: 8, background: '#e2e8f0', borderRadius: 999, overflow: 'hidden' }}>
-                    <div style={{ width: '100%', height: '100%', background: 'linear-gradient(90deg, #f97316, #ef4444)', borderRadius: 999 }} />
-                  </div>
-                </div>
-                <p style={{ color: '#475569', fontSize: '0.94rem', fontWeight: 600, lineHeight: 1.55, margin: '0 0 18px' }}>
-                  Cứ mỗi <b style={{ color: '#0f172a' }}>8 món được tính khuyến mãi</b>, bạn được chọn 1 món quà ngẫu nhiên. Món tặng sẽ hiện trong giỏ khi đủ điều kiện.
+                <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#64748b', letterSpacing: '0.16em', textTransform: 'uppercase', marginBottom: 18 }}>Món ăn bất kỳ</div>
+
+                {/* Subtitle ngắn gọn */}
+                <p style={{ color: '#475569', fontSize: '0.95rem', fontWeight: 600, lineHeight: 1.55, margin: '0 auto 22px', maxWidth: 300 }}>
+                  Cứ đủ <b style={{ color: '#0f172a' }}>{promoConfig.threshold || 8} món</b> trong đơn, bạn được chọn <b style={{ color: '#dc2626' }}>1 món quà</b> miễn phí từ nhà hàng.
                 </p>
+
                 <button
                   onClick={() => setShowPromoPopup(false)}
-                  style={{ width: '100%', padding: '14px 16px', background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white', border: 'none', borderRadius: 14, fontSize: '1rem', fontWeight: 900, cursor: 'pointer', boxShadow: '0 10px 24px rgba(37,99,235,0.28)', letterSpacing: 0 }}
+                  style={{ width: '100%', padding: '15px 16px', background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white', border: 'none', borderRadius: 16, fontSize: '1.05rem', fontWeight: 900, cursor: 'pointer', boxShadow: '0 10px 24px rgba(37,99,235,0.3)' }}
                 >
                   Bắt đầu chọn món
                 </button>
-                <div style={{ display: 'none' }}>
-                <div style={{ fontSize: '3.5rem', marginBottom: '8px', animation: 'promo-pop 2s infinite ease-in-out' }}>🎁</div>
-                <h2 style={{ fontSize: '1.8rem', fontWeight: 900, color: '#ea580c', margin: '0 0 16px', lineHeight: 1.2, textTransform: 'uppercase' }}>Tin Vui!</h2>
-
-                <div style={{
-                  fontSize: '1.1rem', color: '#ffffff', fontWeight: 900, margin: '0 auto 24px', padding: '12px 20px',
-                  background: 'linear-gradient(90deg, #ef4444, #f59e0b, #ef4444)', backgroundSize: '200% auto',
-                  borderRadius: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '100%',
-                  animation: 'promo-pop 1.5s infinite ease-in-out, promo-shine 3s linear infinite',
-                  boxShadow: '0 6px 20px rgba(239, 68, 68, 0.4)'
-                }}>
-                  KHUYẾN MÃI 8 MÓN TẶNG 1 MÓN
-                </div>
-
-                <p style={{ color: '#4b5563', fontSize: '0.95rem', fontWeight: 600, lineHeight: 1.5, margin: '0 0 24px' }}>
-                  Cứ mỗi 8 món được đặt, bạn sẽ được tự do chọn 1 món quà ngẫu nhiên từ nhà hàng! Chúc bạn dùng bữa ngon miệng nha.
-                </p>
-
-                <button
-                  onClick={() => setShowPromoPopup(false)}
-                  style={{
-                    width: '100%', padding: '14px', background: '#3b82f6', color: 'white',
-                    border: 'none', borderRadius: '16px', fontSize: '1.05rem', fontWeight: 800,
-                    cursor: 'pointer', boxShadow: '0 4px 14px rgba(59, 130, 246, 0.3)',
-                    transition: 'background 0.2s'
-                  }}
-                >
-                  Đặt món ngay!
-                </button>
-                </div>
               </div>
 
               <button
@@ -2381,6 +2447,16 @@ function OrderContent() {
               </button>
               <button className="co-header-btn" style={{ width: 30, height: 30 }} onClick={() => setShowInfoModal(true)}>✕</button>
             </div>
+          </div>
+
+          {/* ── Hàng nút ưu đãi gọn ở góc phải (bấm mở overlay) ── */}
+          <div className="co-promo-btns">
+            <button className="co-promo-pill challenge" onClick={() => setThanksOpen(true)}>
+              🎁 Thử thách có quà
+            </button>
+            <button className="co-promo-pill party" onClick={() => setPartyOpen(true)}>
+              🎉 Đặt tiệc có quà
+            </button>
           </div>
 
           {/* Filter row: category dropdown + search */}
@@ -2679,6 +2755,48 @@ function OrderContent() {
 
 
         {/* ─── Gift Item Modal ─── */}
+        {/* ── Gợi ý "gần đủ điểm" — không ép, chỉ thông báo ── */}
+        {promoNudge && (
+          <div className="co-modal-overlay" onClick={() => { nudgeDismissedRef.current = true; setPromoNudge(null); setShowCart(true); }}>
+            <div className="co-info-modal" style={{ maxWidth: 380, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+              <div style={{ padding: '24px 20px 8px' }}>
+                <div style={{ fontSize: '3.2rem' }}>🎁</div>
+                <h2 style={{ fontSize: '1.4rem', margin: '8px 0 0', fontWeight: 900, color: '#111827' }}>Sắp được tặng quà rồi!</h2>
+                <p style={{ margin: '12px 0 0', fontSize: '1rem', color: '#374151', lineHeight: 1.6 }}>
+                  Bạn chỉ cần thêm{' '}
+                  <b style={{ color: '#dc2626', fontSize: '1.1rem' }}>
+                    {promoNudge.type === 'named' ? `${promoNudge.unitsNeeded} ${promoNudge.name}` : `${promoNudge.unitsNeeded} món`}
+                  </b>{' '}
+                  nữa là đủ điểm nhận thêm <b style={{ color: '#16a34a' }}>1 món tặng miễn phí</b>! 🎉
+                </p>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '18px 20px 22px' }}>
+                {promoNudge.type === 'named' ? (
+                  <button
+                    onClick={() => applyNudge(promoNudge)}
+                    style={{ width: '100%', padding: '14px', borderRadius: 14, border: 'none', background: 'linear-gradient(135deg, #22c55e, #16a34a)', color: 'white', fontSize: '1rem', fontWeight: 800, cursor: 'pointer', boxShadow: '0 4px 16px rgba(22,163,74,0.35)' }}
+                  >
+                    ➕ Thêm {promoNudge.unitsNeeded} {promoNudge.name}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => { nudgeDismissedRef.current = true; setPromoNudge(null); setShowCart(false); }}
+                    style={{ width: '100%', padding: '14px', borderRadius: 14, border: 'none', background: 'linear-gradient(135deg, #22c55e, #16a34a)', color: 'white', fontSize: '1rem', fontWeight: 800, cursor: 'pointer', boxShadow: '0 4px 16px rgba(22,163,74,0.35)' }}
+                  >
+                    🍽️ Chọn thêm món
+                  </button>
+                )}
+                <button
+                  onClick={() => { nudgeDismissedRef.current = true; setPromoNudge(null); submitOrder(); }}
+                  style={{ width: '100%', padding: '13px', borderRadius: 14, border: '1.5px solid #e5e7eb', background: 'white', color: '#6b7280', fontSize: '0.95rem', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Bỏ qua, gửi luôn
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {showGiftModal && (
           <div className="co-modal-overlay" onClick={() => setShowGiftModal(false)}>
             <div className="co-info-modal" style={{ maxHeight: '80vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
@@ -2774,10 +2892,109 @@ function OrderContent() {
           </div>
         )}
 
+        {/* ─── Overlay Thể lệ thử thách — đè lên tất cả (kể cả bubble khuyến mãi) ─── */}
+        {thanksOpen && (
+          <div className="co-chal-overlay" onClick={() => setThanksOpen(false)}>
+            <div className="co-chal-modal" onClick={e => e.stopPropagation()}>
+              <button className="co-chal-close" onClick={() => setThanksOpen(false)} aria-label="Đóng">
+                <X size={20} />
+              </button>
+              <div className="co-chal-modal-title">🎁 Thử thách có quà tặng tháng 8</div>
+              <div className="co-chal-scroll">
+                <div className="co-chal-hook">📸 Ăn ngon – Check-in liền tay – Nhận quà mê say!</div>
+                <div className="co-chal-intro">
+                  Đăng ảnh/video review quán lên <b>TikTok / Facebook</b> — nhận ngay ưu đãi <b>tháng 8</b>:
+                </div>
+
+                <div className="co-chal-tier">
+                  <div className="co-chal-badge co-chal-b1">🥉 Mức 1</div>
+                  <div className="co-chal-info">
+                    <div className="co-chal-name">Ủng hộ quán</div>
+                    <div className="co-chal-cond">Đăng 1 bài review (ảnh hoặc video tại quán) lên <b>Facebook / TikTok</b>.</div>
+                    <div className="co-chal-gift">
+                      🎁 Tặng nước ngọt (dưới 3 chai)<br />
+                      <span className="co-chal-apply">✅ Áp dụng ngay trên hoá đơn Quý khách đang gọi!</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="co-chal-tier">
+                  <div className="co-chal-badge co-chal-b2">🥈 Mức 2</div>
+                  <div className="co-chal-info">
+                    <div className="co-chal-name">Bài viết hút tương tác</div>
+                    <div className="co-chal-cond">Bài đạt trung bình <b>3.000 – 5.000 lượt xem</b> trên Facebook / TikTok.</div>
+                    <div className="co-chal-gift">
+                      🎁 Miễn phí nước ngọt + khăn lạnh<br />
+                      <span className="co-chal-apply">✅ Áp dụng ngay trên hoá đơn Quý khách đang gọi!</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="co-chal-tier co-chal-tier-top">
+                  <div className="co-chal-badge co-chal-b3">🥇 Mức 3</div>
+                  <div className="co-chal-info">
+                    <div className="co-chal-name">Bài viết xu hướng 🔥</div>
+                    <div className="co-chal-cond">Bài đạt <b>từ 10.000 lượt xem</b> trở lên.</div>
+                    <div className="co-chal-gift">
+                      🎁 Tặng thêm <b>3 món bất kỳ</b> (trị giá 40.000 – 50.000đ)<br />
+                      + nước ngọt miễn phí (dưới 5 lon)<br />
+                      <span className="co-chal-apply">✅ Áp dụng ngay trên hoá đơn Quý khách đang gọi!</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="co-chal-note">
+                  ✨ <b>Bài đăng bắt buộc:</b> đăng trên <b>Facebook / TikTok</b>, gắn thẻ (tag) tên quán <b>ỐC BẢO KHANG</b> kèm địa chỉ <b>167B Nguyễn Văn Luông, Phường 10, Quận 6</b>.
+                </div>
+
+                <div className="co-chal-contact">
+                  <div>🎁 Đủ tiêu chí trên, phần thưởng sẽ được <b>áp dụng cho lần ghé sau</b>.</div>
+                  <div>📞 Liên hệ <b>Zalo / gọi 0977 496 781</b>, hoặc gặp trực tiếp <b>nhân viên / chủ quán</b> để nhận ưu đãi.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Overlay Đặt tiệc có quà ─── */}
+        {partyOpen && (
+          <div className="co-chal-overlay" onClick={() => setPartyOpen(false)}>
+            <div className="co-chal-modal" onClick={e => e.stopPropagation()}>
+              <button className="co-chal-close" onClick={() => setPartyOpen(false)} aria-label="Đóng">
+                <X size={20} />
+              </button>
+              <div className="co-chal-modal-title">🎉 Đặt tiệc có quà</div>
+              <div className="co-chal-scroll">
+                <div className="co-chal-hook">🥳 Đặt tiệc tại quán — Nhận quà hấp dẫn!</div>
+                <div className="co-chal-intro">
+                  Quán nhận đặt tiệc <b>sinh nhật, họp lớp, liên hoan, tất niên, tiệc nhóm</b>... Đặt bàn trước để được sắp xếp chu đáo và nhận <b>quà tặng từ quán</b>.
+                </div>
+
+                <div className="co-chal-tier co-chal-tier-top">
+                  <div className="co-chal-badge co-chal-b3">🎁 Ưu đãi</div>
+                  <div className="co-chal-info">
+                    <div className="co-chal-name">Đặt tiệc trước — có quà</div>
+                    <div className="co-chal-cond">Liên hệ đặt bàn trước, báo số lượng khách để quán chuẩn bị.</div>
+                    <div className="co-chal-gift">🎁 Quà tặng &amp; ưu đãi theo quy mô tiệc (trao đổi khi đặt).</div>
+                  </div>
+                </div>
+
+                <div className="co-chal-contact">
+                  <div>📞 Liên hệ đặt tiệc: <b>Zalo / gọi 0977 496 781</b>.</div>
+                  <div>🏠 Hoặc gặp trực tiếp <b>nhân viên / chủ quán</b> tại <b>167B Nguyễn Văn Luông, Phường 10, Quận 6</b>.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ─── Order Success Toast ─── */}
         {orderSuccess && (
-          <div className="co-success-toast">
-            ✅ Đã gửi đơn hàng thành công!
+          <div className="co-thanks-overlay">
+            <div className="co-thanks-text">
+              Cảm ơn quý khách!
+              <span className="co-thanks-sub">Chúc quý khách ngon miệng</span>
+            </div>
           </div>
         )}
 

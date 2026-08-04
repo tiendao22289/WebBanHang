@@ -610,6 +610,360 @@ html, body { background: #ffffff !important; }
   font-family: 'Nunito', sans-serif;
 }
 
+/* ═══════════════════════════════
+   THANK-YOU FULLSCREEN (gửi đơn thành công)
+   Chữ lớn, giữa màn hình, KHÔNG nền — tự mờ dần rồi tắt sau ~3s.
+   ═══════════════════════════════ */
+.co-thanks-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: transparent;      /* không nền */
+  pointer-events: none;         /* không chặn thao tác phía sau */
+  animation: coThanksFade 6s ease-in-out forwards;
+}
+.co-thanks-overlay .co-thanks-text {
+  text-align: center;
+  font-family: 'Nunito', sans-serif;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  /* Tông đỏ-cam ấm kiểu food-app (Foody / ShopeeFood) — kích thích vị giác, chuyên nghiệp */
+  color: #ea2a17;
+  font-size: clamp(2rem, 9vw, 3.6rem);
+  /* Viền trắng dày + bóng ấm để chữ luôn nổi bật, sắc nét trên mọi nền */
+  text-shadow:
+    0 0 1px #fff, 0 0 3px #fff,
+    0 2px 4px #fff, 0 -2px 4px #fff,
+    2px 0 4px #fff, -2px 0 4px #fff,
+    0 8px 26px rgba(234, 42, 23, 0.28);
+  animation: coThanksPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+/* Dòng "chúc quý khách ngon miệng" — nhỏ hơn, tông cam, tạo phân cấp */
+.co-thanks-overlay .co-thanks-sub {
+  display: block;
+  margin-top: 10px;
+  font-size: 0.62em;
+  font-weight: 800;
+  color: #f97316;
+}
+@keyframes coThanksFade {
+  0%   { opacity: 0; }
+  10%  { opacity: 1; }
+  80%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes coThanksPop {
+  0%   { transform: scale(0.7); }
+  100% { transform: scale(1); }
+}
+
+/* ═══════════════════════════════
+   HÀNG NÚT ƯU ĐÃI (gọn góc phải)
+   ═══════════════════════════════ */
+.co-promo-btns {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 12px 4px;
+}
+.co-promo-pill {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: none;
+  font-family: 'Nunito', sans-serif;
+  font-weight: 900;
+  font-size: 0.8rem;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+  /* Nhịp phồng nhẹ để gây chú ý */
+  animation: promoPulse 1.8s ease-in-out infinite;
+}
+/* Ánh sáng quét ngang */
+.co-promo-pill::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -60%;
+  width: 45%;
+  height: 100%;
+  background: linear-gradient(115deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  transform: skewX(-20deg);
+  pointer-events: none;
+  animation: promoShine 2.8s ease-in-out infinite;
+}
+.co-promo-pill.challenge {
+  background: linear-gradient(135deg, #f59e0b, #ea580c);
+  box-shadow: 0 4px 14px rgba(234, 88, 12, 0.45);
+}
+.co-promo-pill.party {
+  background: linear-gradient(135deg, #ec4899, #a855f7);
+  box-shadow: 0 4px 14px rgba(168, 85, 247, 0.45);
+  /* Lệch pha so với nút kia cho sinh động */
+  animation-delay: 0.9s;
+}
+.co-promo-pill.party::before { animation-delay: 1.2s; }
+.co-promo-pill:active { animation-play-state: paused; transform: scale(0.95); }
+
+@keyframes promoPulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.06); }
+}
+@keyframes promoShine {
+  0%        { left: -60%; }
+  55%, 100% { left: 130%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .co-promo-pill, .co-promo-pill::before { animation: none; }
+}
+
+/* ═══════════════════════════════
+   THIỆP TRI ÂN (thu gọn / mở ra)
+   ═══════════════════════════════ */
+.co-thanks-card {
+  margin: 6px 12px 2px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #fff7ed, #fffbeb);
+  border: 1.5px solid #fed7aa;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(234, 88, 12, 0.08);
+}
+.co-thanks-card-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: 'Nunito', sans-serif;
+}
+.co-thanks-card-title {
+  font-weight: 900;
+  font-size: 0.95rem;
+  color: #c2410c;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.co-thanks-open-hint {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 900;
+  color: #fff;
+  background: linear-gradient(135deg, #f59e0b, #ea580c);
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(234, 88, 12, 0.28);
+}
+.co-thanks-card-body {
+  padding: 2px 12px 12px;
+  animation: coThanksSlide 0.3s ease;
+}
+.co-thanks-card-body p {
+  margin: 0 0 9px;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #7c2d12;
+  font-weight: 600;
+}
+.co-thanks-card-body p:first-child {
+  font-weight: 800;
+}
+.co-thanks-card-sign {
+  text-align: right;
+  font-weight: 900;
+  color: #ea580c;
+  font-size: 0.92rem;
+  margin-top: 4px;
+}
+@keyframes coThanksSlide {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Overlay thể lệ thử thách — đè lên tất cả (bubble KM z-index 100/200) ── */
+.co-chal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(26, 10, 0, 0.55);
+  backdrop-filter: blur(3px);
+  animation: coThanksFade2 0.22s ease;
+}
+@keyframes coThanksFade2 {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.co-chal-modal {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(135deg, #fff7ed, #fffbeb);
+  border: 1.5px solid #fed7aa;
+  border-radius: 20px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.35);
+  overflow: hidden;
+  animation: coChalPop 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes coChalPop {
+  from { opacity: 0; transform: scale(0.9) translateY(10px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.co-chal-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #c2410c;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  z-index: 2;
+}
+.co-chal-close:hover { background: #fff; }
+.co-chal-modal-title {
+  font-family: 'Nunito', sans-serif;
+  font-weight: 900;
+  font-size: 1.02rem;
+  color: #c2410c;
+  padding: 15px 46px 11px 16px;
+  border-bottom: 1px solid #fde3c4;
+  flex-shrink: 0;
+}
+.co-chal-scroll {
+  padding: 12px 14px 16px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── Thử thách có quà tặng — các mức ── */
+.co-chal-hook {
+  font-family: 'Nunito', sans-serif;
+  font-weight: 900;
+  font-size: 0.92rem;
+  color: #dc2626;
+  line-height: 1.3;
+  margin-bottom: 3px;
+}
+.co-chal-intro {
+  font-family: 'Nunito', sans-serif;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #7c2d12;
+  line-height: 1.45;
+  margin-bottom: 8px;
+}
+.co-chal-tier {
+  display: flex;
+  gap: 8px;
+  padding: 8px 9px;
+  border-radius: 11px;
+  background: #ffffff;
+  border: 1px solid #fde68a;
+  margin-bottom: 6px;
+}
+.co-chal-tier-top {
+  border: 1.5px solid #f59e0b;
+  background: linear-gradient(135deg, #fffbeb, #fff1f2);
+  box-shadow: 0 4px 14px rgba(234, 88, 12, 0.14);
+}
+.co-chal-badge {
+  flex-shrink: 0;
+  align-self: flex-start;
+  font-family: 'Nunito', sans-serif;
+  font-size: 0.68rem;
+  font-weight: 900;
+  padding: 4px 7px;
+  border-radius: 7px;
+  white-space: nowrap;
+  color: #fff;
+}
+.co-chal-b1 { background: linear-gradient(135deg, #a8a29e, #78716c); }
+.co-chal-b2 { background: linear-gradient(135deg, #38bdf8, #0284c7); }
+.co-chal-b3 { background: linear-gradient(135deg, #f59e0b, #dc2626); }
+.co-chal-info { min-width: 0; }
+.co-chal-name {
+  font-family: 'Nunito', sans-serif;
+  font-weight: 900;
+  font-size: 0.87rem;
+  color: #1f2937;
+  line-height: 1.25;
+}
+.co-chal-cond {
+  font-family: 'Nunito', sans-serif;
+  font-size: 0.79rem;
+  font-weight: 600;
+  color: #6b7280;
+  line-height: 1.4;
+  margin: 2px 0 4px;
+}
+.co-chal-gift {
+  font-family: 'Nunito', sans-serif;
+  font-size: 0.83rem;
+  font-weight: 800;
+  color: #15803d;
+  line-height: 1.45;
+}
+.co-chal-apply {
+  display: inline-block;
+  margin-top: 3px;
+  color: #dc2626;
+  font-weight: 900;
+}
+.co-chal-note {
+  font-family: 'Nunito', sans-serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #b45309;
+  line-height: 1.45;
+  background: #fef3c7;
+  border-radius: 9px;
+  padding: 8px 10px;
+  margin-top: 3px;
+}
+.co-chal-contact {
+  font-family: 'Nunito', sans-serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #7c2d12;
+  line-height: 1.5;
+  margin-top: 7px;
+  padding-top: 8px;
+  border-top: 1px dashed #fcd34d;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
 /* ═══════════════════
    BOTTOM SHEET
    ═══════════════════ */

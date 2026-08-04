@@ -122,6 +122,8 @@ export default function TablesPage() {
   const [editItemPrice, setEditItemPrice] = useState(null); // { orderId, itemId, value } — LEGACY, replaced by showPriceModal
   const [editingOrderItem, setEditingOrderItem] = useState(null); // { orderId, itemId } for editing options
   const [showPriceModal, setShowPriceModal] = useState(null); // { orderId, itemId, originalPrice }
+  const [priceFixModal, setPriceFixModal] = useState(null); // { items: [{ orderItemId, orderId, name, quantity, price }] } — nhập giá cho món 0đ
+  const [priceFixSaving, setPriceFixSaving] = useState(false);
   // Takeaway
   const [showTakeawayOrders, setShowTakeawayOrders] = useState(false);
   const [takeawayOrders, setTakeawayOrders] = useState([]);
@@ -554,9 +556,19 @@ export default function TablesPage() {
     try {
       const { data: ordersToPay } = await supabase
         .from('orders')
-        .select('total_amount')
+        .select('id, total_amount, order_items(id, quantity, unit_price, is_gift, menu_item:menu_items(name))')
         .in('table_id', groupTableIds)
         .in('status', ['pending', 'preparing', 'completed']);
+
+      // Chốt cuối cho TIỀN MẶT: tuyệt đối không cho qua khi còn món chưa thêm giá
+      // (0đ, không phải món tặng). Chuyển khoản không chặn ở đây vì tiền có thể đã vào tài khoản.
+      if (paymentMethod === 'cash') {
+        const unpriced = collectUnpricedItems(ordersToPay || []);
+        if (unpriced.length > 0) {
+          promptFixUnpricedItems(unpriced);
+          return false;
+        }
+      }
 
       const totalAmount = (ordersToPay || []).reduce((sum, o) => sum + (o.total_amount || 0), 0);
 
@@ -589,9 +601,80 @@ export default function TablesPage() {
 
     setSelectedTable(null);
     fetchTables();
+    return true;
   }
 
   // Lấy hoặc sinh mã Bill Code cố định cho đơn hàng
+  // Món "chưa thêm giá" = unit_price <= 0 VÀ KHÔNG phải món tặng (is_gift=false).
+  // Món tặng để giá 0 là hợp lệ nên bỏ qua. Trả về mảng chi tiết (kèm id để cập nhật).
+  function collectUnpricedItems(bills) {
+    const items = [];
+    (bills || []).forEach(o => {
+      (o.order_items || []).forEach(it => {
+        if (!it.is_gift && (Number(it.unit_price) || 0) <= 0) {
+          items.push({
+            orderItemId: it.id,
+            orderId: o.id,
+            name: it.menu_item?.name || 'Món chưa đặt tên',
+            quantity: Number(it.quantity) || 1,
+          });
+        }
+      });
+    });
+    return items;
+  }
+
+  // Nếu còn món chưa thêm giá → mở modal nhập giá cho từng món. Trả về true nếu CÓ (đã chặn).
+  function promptFixUnpricedItems(items) {
+    if (!items || items.length === 0) return false;
+    setPriceFixModal({ items: items.map(it => ({ ...it, price: '' })) });
+    return true;
+  }
+
+  // Lưu giá đã nhập cho từng món 0đ, rồi cộng dồn lại total_amount của các bill liên quan.
+  async function saveFixedPrices() {
+    const rawItems = priceFixModal?.items || [];
+    const parsed = rawItems.map(it => ({
+      ...it,
+      priceNum: Number(String(it.price).replace(/[^\d]/g, '')) || 0,
+    }));
+    if (parsed.some(p => p.priceNum <= 0)) {
+      Swal.fire('Thiếu giá', 'Vui lòng nhập giá lớn hơn 0đ cho tất cả các món.', 'warning');
+      return;
+    }
+    setPriceFixSaving(true);
+    try {
+      // 1. Cập nhật đơn giá từng món
+      for (const p of parsed) {
+        await supabase.from('order_items').update({ unit_price: p.priceNum }).eq('id', p.orderItemId);
+      }
+      // 2. Tính lại tổng tiền các bill bị ảnh hưởng (đọc lại từ DB để chắc chắn)
+      const orderIds = [...new Set(parsed.map(p => p.orderId))];
+      for (const oid of orderIds) {
+        const { data: rows } = await supabase
+          .from('order_items').select('unit_price, quantity').eq('order_id', oid);
+        const newTotal = (rows || []).reduce(
+          (s, i) => s + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0
+        );
+        await supabase.from('orders').update({ total_amount: newTotal }).eq('id', oid);
+      }
+      setPriceFixModal(null);
+      await fetchOrdersOnly();
+      Swal.fire({
+        icon: 'success',
+        title: '✅ Đã cập nhật giá',
+        text: 'Đã cộng dồn tiền các món vào bill. Bạn có thể thanh toán.',
+        timer: 2500, timerProgressBar: true, showConfirmButton: false,
+        position: 'top-end', toast: true, background: '#16a34a', color: '#fff', iconColor: '#fff',
+      });
+    } catch (err) {
+      console.error('[saveFixedPrices] error:', err);
+      Swal.fire('Lỗi', 'Không lưu được giá. Vui lòng thử lại.', 'error');
+    } finally {
+      setPriceFixSaving(false);
+    }
+  }
+
   async function getFreshPaymentSnapshot(tableObj) {
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
     const hostId = table.merged_with || table.id;
@@ -602,7 +685,7 @@ export default function TablesPage() {
 
     const { data, error } = await supabase
       .from('orders')
-      .select('id, total_amount')
+      .select('id, total_amount, order_items(id, quantity, unit_price, is_gift, menu_item:menu_items(name))')
       .in('table_id', _freshGroupIds)
       .in('status', ['pending', 'preparing', 'completed'])
       .order('created_at', { ascending: true });
@@ -613,6 +696,7 @@ export default function TablesPage() {
     return {
       hostId,
       bills,
+      unpricedItems: collectUnpricedItems(bills),
       orderIdsStr: bills.map(o => o.id).sort().join(','),
       total: bills.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0),
     };
@@ -672,6 +756,12 @@ export default function TablesPage() {
 
     try {
       const snapshot = await getFreshPaymentSnapshot(table);
+      if (snapshot.unpricedItems.length > 0) {
+        setPaymentModal(null);
+        setConfirmPayment(null);
+        promptFixUnpricedItems(snapshot.unpricedItems);
+        return;
+      }
       if (snapshot.total <= 0 || snapshot.bills.length === 0) {
         setPaymentModal(null);
         setConfirmPayment(null);
@@ -957,19 +1047,34 @@ export default function TablesPage() {
 
 
   // ─── Draft Cart helpers (0 API calls, chỉ cập nhật local state) ───────────
+  // Tính giá món theo lựa chọn hiện tại.
+  // - Chỉ NHÓM option có định giá (ít nhất 1 choice > 0đ) mới ảnh hưởng giá (vd nhóm "Loại").
+  //   Nhóm không định giá (vd "Khẩu vị") bị bỏ qua, không làm đổi giá.
+  // - Trong nhóm định giá: choice CÓ giá → dùng giá đó; choice ĐỂ TRỐNG → 0đ.
+  // - Trả về number (có thể 0) nếu có nhóm định giá; null nếu KHÔNG nhóm nào định giá (→ dùng giá gốc món).
+  function getChoiceDerivedPrice(menuItem, selectedOpts) {
+    let total = null;
+    (menuItem?.options || []).forEach(opt => {
+      if (!opt.name || !opt.choices || !Array.isArray(opt.prices)) return;
+      const groupHasPrice = opt.prices.some(p => p != null && String(p).trim() !== '' && Number(p) > 0);
+      if (!groupHasPrice) return;
+      const sel = selectedOpts?.[opt.name];
+      const cIdx = opt.choices.indexOf(sel);
+      const raw = cIdx >= 0 ? opt.prices[cIdx] : null;
+      const num = (raw != null && String(raw).trim() !== '') ? Number(raw) : 0;
+      total = (total || 0) + (isNaN(num) ? 0 : num);
+    });
+    return total;
+  }
+
   function getInitialOptionSelection(menuItem) {
     const initialOptions = {};
-    let initialPrice = null;
-
     (menuItem.options || []).forEach(opt => {
       if (opt.name && opt.choices && opt.choices.length > 0) {
         initialOptions[opt.name] = opt.choices[0];
-        if (initialPrice === null && opt.prices?.[0] != null && Number(opt.prices[0]) > 0) {
-          initialPrice = Number(opt.prices[0]);
-        }
       }
     });
-
+    const initialPrice = getChoiceDerivedPrice(menuItem, initialOptions);
     return { initialOptions, initialPrice };
   }
 
@@ -2051,6 +2156,7 @@ export default function TablesPage() {
                     if (!selectedTable) return;
                     setTransactionCode(null);
                     const snapshot = await getFreshPaymentSnapshot(selectedTable);
+                    if (promptFixUnpricedItems(snapshot.unpricedItems)) return;
                     if (snapshot.total <= 0 || snapshot.bills.length === 0) {
                       Swal.fire('Lỗi', 'Tổng tiền thanh toán đang là 0đ. Vui lòng tải lại bàn và kiểm tra món trước khi thanh toán.', 'error');
                       return;
@@ -2514,8 +2620,9 @@ export default function TablesPage() {
           const closeModal = () => { setPaymentModal(null); setQrAccount(null); setShowTransfer(false); setTransactionCode(null); setPaymentCountdown(0); setQrLoading(false); };
 
           const doCashPayment = async () => {
+            const ok = await completeTable(table, 'cash');
+            if (!ok) return;
             closeModal();
-            await completeTable(table.id, 'cash');
           };
 
           const doTransferPayment = async () => {
@@ -2565,6 +2672,7 @@ export default function TablesPage() {
             // Chỉ sinh mã nếu chưa có (thường đã tự auto-fetch ở useEffect)
             if (!transactionCode) {
               const snapshot = await getFreshPaymentSnapshot(table);
+              if (promptFixUnpricedItems(snapshot.unpricedItems)) return;
               if (snapshot.total <= 0 || snapshot.bills.length === 0) {
                 Swal.fire('Lỗi', 'Tổng tiền thanh toán đang là 0đ. Vui lòng tải lại bàn và kiểm tra món trước khi tạo QR.', 'error');
                 return;
@@ -3310,7 +3418,7 @@ export default function TablesPage() {
                     <div style={{ display: 'flex', gap: 5, width: '100%', alignItems: 'stretch' }}>
 
                       {/* Tạm tính */}
-                      <button onClick={() => setShowBillPreview(true)} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
+                      <button onClick={() => { const _u = collectUnpricedItems(getSelectedTableOrders()); if (_u.length > 0) { promptFixUnpricedItems(_u); return; } setShowBillPreview(true); }} style={{ ...smallBtnStyle, border: '1.5px solid #2563eb', color: '#2563eb' }}>
                         <Receipt size={16} strokeWidth={1.8} />
                         Tạm tính
                       </button>
@@ -3346,6 +3454,7 @@ export default function TablesPage() {
                         onClick={async () => {
                           setTransactionCode(null);
                           const snapshot = await getFreshPaymentSnapshot(selectedTable);
+                          if (promptFixUnpricedItems(snapshot.unpricedItems)) return;
                           if (snapshot.total <= 0 || snapshot.bills.length === 0) {
                             Swal.fire('Lỗi', 'Tổng tiền thanh toán đang là 0đ. Vui lòng tải lại bàn và kiểm tra món trước khi thanh toán.', 'error');
                             return;
@@ -3502,6 +3611,103 @@ export default function TablesPage() {
                   >
                     Lưu
                   </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()
+      }
+
+      {/* ── Modal nhập giá cho món chưa có giá (0đ, không phải món tặng) ── */}
+      {
+        priceFixModal && (() => {
+          const items = priceFixModal.items || [];
+          const addedTotal = items.reduce(
+            (s, it) => s + (Number(String(it.price).replace(/[^\d]/g, '')) || 0) * (it.quantity || 1), 0
+          );
+          const allFilled = items.every(it => (Number(String(it.price).replace(/[^\d]/g, '')) || 0) > 0);
+          const setPrice = (idx, raw) => {
+            const digits = String(raw).replace(/[^\d]/g, '');
+            setPriceFixModal(prev => ({
+              ...prev,
+              items: prev.items.map((it, i) => i === idx ? { ...it, price: digits } : it),
+            }));
+          };
+          return (
+            <div
+              style={{ position: 'fixed', inset: 0, zIndex: 3000, background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+              onClick={() => { if (!priceFixSaving) setPriceFixModal(null); }}
+            >
+              <div
+                style={{ background: 'white', borderRadius: 20, width: '100%', maxWidth: 440, maxHeight: '88vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.3)', overflow: 'hidden' }}
+                onClick={e => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div style={{ padding: '20px 22px 14px', borderBottom: '1px solid #f1f5f9' }}>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    ⚠️ Thêm giá cho món chưa có giá
+                  </div>
+                  <div style={{ fontSize: '0.85rem', color: '#6b7280', marginTop: 4 }}>
+                    Bill còn <b style={{ color: '#dc2626' }}>{items.length}</b> món đang để giá 0đ. Nhập giá rồi lưu để cộng vào bill.
+                  </div>
+                </div>
+
+                {/* Danh sách món */}
+                <div style={{ padding: '12px 22px', overflowY: 'auto', flex: 1 }}>
+                  {items.map((it, idx) => {
+                    const priceNum = Number(String(it.price).replace(/[^\d]/g, '')) || 0;
+                    const lineTotal = priceNum * (it.quantity || 1);
+                    return (
+                      <div key={it.orderItemId} style={{ padding: '12px 0', borderBottom: idx < items.length - 1 ? '1px dashed #e5e7eb' : 'none' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#111827' }}>{it.name}</div>
+                          <div style={{ fontSize: '0.8rem', color: '#6b7280', fontWeight: 600, whiteSpace: 'nowrap', marginLeft: 8 }}>SL: {it.quantity}</div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', flex: 1, border: '1.5px solid #2563eb', borderRadius: 12, overflow: 'hidden', background: 'white' }}>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              autoFocus={idx === 0}
+                              placeholder="Nhập đơn giá"
+                              value={priceNum ? priceNum.toLocaleString('vi-VN') : ''}
+                              onChange={e => setPrice(idx, e.target.value)}
+                              style={{ flex: 1, border: 'none', outline: 'none', padding: '12px 14px', fontSize: '16px', fontWeight: 700, textAlign: 'right', background: 'white', color: '#111827' }}
+                            />
+                            <span style={{ padding: '0 14px', color: '#9ca3af', fontWeight: 700 }}>đ</span>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '0.8rem', color: lineTotal > 0 ? '#16a34a' : '#9ca3af', fontWeight: 600, textAlign: 'right', marginTop: 6 }}>
+                          Thành tiền: {lineTotal.toLocaleString('vi-VN')}đ
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Tổng cộng dồn + nút */}
+                <div style={{ padding: '14px 22px 20px', borderTop: '1px solid #f1f5f9', background: '#f8fafc' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                    <span style={{ fontSize: '0.9rem', color: '#6b7280', fontWeight: 600 }}>Cộng vào bill:</span>
+                    <span style={{ fontSize: '1.3rem', fontWeight: 800, color: '#2563eb' }}>{addedTotal.toLocaleString('vi-VN')}đ</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button
+                      onClick={() => setPriceFixModal(null)}
+                      disabled={priceFixSaving}
+                      style={{ flex: 1, padding: '14px', borderRadius: 100, background: 'white', border: '1.5px solid #e5e7eb', color: '#6b7280', fontSize: '0.95rem', fontWeight: 700, cursor: priceFixSaving ? 'not-allowed' : 'pointer' }}
+                    >
+                      Huỷ
+                    </button>
+                    <button
+                      onClick={saveFixedPrices}
+                      disabled={priceFixSaving || !allFilled}
+                      style={{ flex: 2, padding: '14px', borderRadius: 100, background: (priceFixSaving || !allFilled) ? '#93c5fd' : '#2563eb', border: 'none', color: 'white', fontSize: '0.95rem', fontWeight: 800, cursor: (priceFixSaving || !allFilled) ? 'not-allowed' : 'pointer', boxShadow: '0 4px 16px rgba(37,99,235,0.35)' }}
+                    >
+                      {priceFixSaving ? 'Đang lưu…' : 'Lưu & cộng vào bill'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -3952,8 +4158,12 @@ export default function TablesPage() {
                           <label
                             key={cIdx}
                             onClick={() => {
-                              setSelectedOptions({ ...selectedOptions, [opt.name]: choice });
-                              if (hasPrice) setCustomPrice(Number(choiceP));
+                              const newSel = { ...selectedOptions, [opt.name]: choice };
+                              setSelectedOptions(newSel);
+                              // Giá theo lựa chọn: choice có giá → giá đó; choice để trống → 0đ.
+                              // Luôn tính lại từ toàn bộ lựa chọn → tự reset đúng khi đổi choice.
+                              // (null = không nhóm nào định giá → giữ giá gốc món qua fallback ?? bên dưới)
+                              setCustomPrice(getChoiceDerivedPrice(optionModalItem, newSel));
                             }}
                             style={{
                               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -4386,7 +4596,8 @@ export default function TablesPage() {
                 {/* completeTable() tự xử lý: check hạn mức → cộng bank_daily_totals → gán is_hidden_from_stats */}
                 <div
                   onClick={async () => {
-                    await completeTable(confirmPayment.table, 'cash');
+                    const ok = await completeTable(confirmPayment.table, 'cash');
+                    if (!ok) return;
                     setConfirmPayment(null);
                     setSelectedTable(null);
                     setDesktopView('tables');
