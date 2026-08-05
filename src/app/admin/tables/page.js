@@ -556,7 +556,7 @@ export default function TablesPage() {
     try {
       const { data: ordersToPay } = await supabase
         .from('orders')
-        .select('id, total_amount, order_items(id, quantity, unit_price, is_gift, menu_item:menu_items(name))')
+        .select('id, total_amount, customer_phone, order_items(id, quantity, unit_price, is_gift, menu_item_id, menu_item:menu_items(name))')
         .in('table_id', groupTableIds)
         .in('status', ['pending', 'preparing', 'completed']);
 
@@ -610,8 +610,11 @@ export default function TablesPage() {
   function collectUnpricedItems(bills) {
     const items = [];
     (bills || []).forEach(o => {
+      // Bỏ qua order hệ thống "Gọi nhân viên" (BAO_BEP) — món của nó là placeholder 0đ, không phải món ăn
+      if (o.customer_phone === 'BAO_BEP') return;
       (o.order_items || []).forEach(it => {
-        if (!it.is_gift && (Number(it.unit_price) || 0) <= 0) {
+        // menu_item_id == null = món hệ thống (báo bếp...), không phải món tính tiền → bỏ qua
+        if (!it.is_gift && it.menu_item_id != null && (Number(it.unit_price) || 0) <= 0) {
           items.push({
             orderItemId: it.id,
             orderId: o.id,
@@ -685,7 +688,7 @@ export default function TablesPage() {
 
     const { data, error } = await supabase
       .from('orders')
-      .select('id, total_amount, order_items(id, quantity, unit_price, is_gift, menu_item:menu_items(name))')
+      .select('id, total_amount, customer_phone, order_items(id, quantity, unit_price, is_gift, menu_item_id, menu_item:menu_items(name))')
       .in('table_id', _freshGroupIds)
       .in('status', ['pending', 'preparing', 'completed'])
       .order('created_at', { ascending: true });
