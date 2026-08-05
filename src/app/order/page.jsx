@@ -556,6 +556,7 @@ function OrderContent() {
   const [orderSuccess, setOrderSuccess] = useState(false);
   const [thanksOpen, setThanksOpen] = useState(false); // thể lệ thử thách — ẩn, bấm mới hiện (overlay)
   const [partyOpen, setPartyOpen] = useState(false); // đặt tiệc có quà — overlay riêng
+  const [featureViews, setFeatureViews] = useState({ challenge: null, party: null }); // lượt xem 2 bảng ưu đãi
   const [userScrolling, setUserScrolling] = useState(false);
   const [orderCancelled, setOrderCancelled] = useState(false); // admin cancelled
   const [orderPaid, setOrderPaid] = useState(null); // { total } khi admin thanh toán
@@ -1337,6 +1338,33 @@ function OrderContent() {
       alert('Không gọi nhân viên được. Vui lòng gọi trực tiếp nhân viên.');
     } finally {
       setKitchenCalling(false);
+    }
+  }
+
+  // ── Thống kê lượt xem 2 bảng ưu đãi (challenge / party) ──
+  // Nạp số hiện tại 1 lần khi vào trang để hiện ngay khi khách mở bảng.
+  useEffect(() => {
+    supabase.from('feature_views').select('feature, views').then(({ data }) => {
+      if (!data) return;
+      setFeatureViews(prev => {
+        const next = { ...prev };
+        data.forEach(r => { next[r.feature] = Number(r.views) || 0; });
+        return next;
+      });
+    });
+  }, []);
+
+  // Mở overlay ưu đãi + cộng 1 lượt xem (đếm tổng lượt mở).
+  async function openPromoOverlay(kind) {
+    if (kind === 'party') setPartyOpen(true); else setThanksOpen(true);
+    try {
+      const { data } = await supabase.rpc('increment_feature_view', { p_feature: kind });
+      const n = Number(data);
+      if (data != null && !isNaN(n)) {
+        setFeatureViews(prev => ({ ...prev, [kind]: n }));
+      }
+    } catch (err) {
+      console.error('[openPromoOverlay] count error:', err);
     }
   }
 
@@ -2451,10 +2479,10 @@ function OrderContent() {
 
           {/* ── Hàng nút ưu đãi gọn ở góc phải (bấm mở overlay) ── */}
           <div className="co-promo-btns">
-            <button className="co-promo-pill challenge" onClick={() => setThanksOpen(true)}>
+            <button className="co-promo-pill challenge" onClick={() => openPromoOverlay('challenge')}>
               🎁 Thử thách có quà
             </button>
-            <button className="co-promo-pill party" onClick={() => setPartyOpen(true)}>
+            <button className="co-promo-pill party" onClick={() => openPromoOverlay('party')}>
               🎉 Đặt tiệc có quà
             </button>
           </div>
@@ -2901,6 +2929,7 @@ function OrderContent() {
               </button>
               <div className="co-chal-modal-title">🎁 Thử thách có quà tặng tháng 8</div>
               <div className="co-chal-scroll">
+                <div className="co-chal-views">👁 {featureViews.challenge ?? '…'} lượt xem</div>
                 <div className="co-chal-hook">📸 Ăn ngon – Check-in liền tay – Nhận quà mê say!</div>
                 <div className="co-chal-intro">
                   Đăng ảnh/video review quán lên <b>TikTok / Facebook</b> — nhận ngay ưu đãi <b>tháng 8</b>:
@@ -2965,6 +2994,7 @@ function OrderContent() {
               </button>
               <div className="co-chal-modal-title">🎉 Đặt tiệc có quà</div>
               <div className="co-chal-scroll">
+                <div className="co-chal-views">👁 {featureViews.party ?? '…'} lượt xem</div>
                 <div className="co-chal-hook">🥳 Đặt tiệc tại quán — Nhận quà hấp dẫn!</div>
                 <div className="co-chal-intro">
                   Quán nhận đặt tiệc <b>sinh nhật, họp lớp, liên hoan, tất niên, tiệc nhóm</b>... Đặt bàn trước để được sắp xếp chu đáo và nhận <b>quà tặng từ quán</b>.
