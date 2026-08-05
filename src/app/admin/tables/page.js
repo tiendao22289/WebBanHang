@@ -97,7 +97,7 @@ export default function TablesPage() {
   const [showQR, setShowQR] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newTableNumber, setNewTableNumber] = useState('');
-  const [filterTab, setFilterTab] = useState('ALL');
+  const [filterTab, setFilterTab] = useState('OCCUPIED'); // mặc định ưu tiên tab "Sử dụng"
   const [columnsPerRow, setColumnsPerRow] = useState(5);
   const [menuItems, setMenuItems] = useState([]);
   const [categories, setCategories] = useState([]);
