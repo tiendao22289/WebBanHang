@@ -1354,14 +1354,24 @@ function OrderContent() {
     });
   }, []);
 
-  // Mở overlay ưu đãi + cộng 1 lượt xem (đếm tổng lượt mở).
+  // Mở overlay ưu đãi. Đếm THEO THIẾT BỊ: mỗi thiết bị chỉ +1 lần đầu,
+  // các lần mở sau chỉ đọc lại số để hiển thị (không cộng thêm).
   async function openPromoOverlay(kind) {
     if (kind === 'party') setPartyOpen(true); else setThanksOpen(true);
     try {
-      const { data } = await supabase.rpc('increment_feature_view', { p_feature: kind });
-      const n = Number(data);
-      if (data != null && !isNaN(n)) {
-        setFeatureViews(prev => ({ ...prev, [kind]: n }));
+      const storageKey = `promo_viewed_${kind}`;
+      const alreadyViewed = typeof window !== 'undefined' && localStorage.getItem(storageKey);
+      if (!alreadyViewed) {
+        // Thiết bị mới → cộng 1 và đánh dấu để lần sau không đếm nữa
+        const { data } = await supabase.rpc('increment_feature_view', { p_feature: kind });
+        const n = Number(data);
+        if (data != null && !isNaN(n)) setFeatureViews(prev => ({ ...prev, [kind]: n }));
+        try { localStorage.setItem(storageKey, '1'); } catch {}
+      } else {
+        // Đã đếm trên thiết bị này → chỉ đọc lại số hiện tại
+        const { data } = await supabase.from('feature_views').select('views').eq('feature', kind).maybeSingle();
+        const n = Number(data?.views);
+        if (data && !isNaN(n)) setFeatureViews(prev => ({ ...prev, [kind]: n }));
       }
     } catch (err) {
       console.error('[openPromoOverlay] count error:', err);
