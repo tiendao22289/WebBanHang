@@ -152,6 +152,9 @@ export default function TablesPage() {
 
   const invoiceRef = useRef(null);
   const isFirstLoad = useRef(true);
+  // Nhóm bàn đang chạy completeTable() — chặn bấm 2 lần / realtime đua với nút bấm
+  const completingTablesRef = useRef(new Set());
+  const [payingHostId, setPayingHostId] = useState(null); // để làm mờ & khoá nút khi đang xử lý
   const [isMobile, setIsMobile] = useState(true);
   const [printToast, setPrintToast] = useState(''); // '' | 'sending' | 'ok' | 'err'
   const [kitchenAlertTables, setKitchenAlertTables] = useState({});
@@ -545,63 +548,108 @@ export default function TablesPage() {
     fetchTables();
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // completeTable — đóng bill cho một nhóm bàn.
+  //
+  // CHỐNG CỘNG TIỀN HAI LẦN (2 lớp):
+  //   Lớp 1 — client: completingTablesRef chặn lượt gọi trùng cho cùng nhóm bàn
+  //           (nhân viên bấm nhanh 2 cái, hoặc realtime auto-confirm đua với nút).
+  //   Lớp 2 — database: GIÀNH đơn trước (update status → 'paid'), cộng tiền sau.
+  //           Postgres chỉ cho MỘT lượt update khớp status pending/preparing/completed;
+  //           lượt thứ hai khớp 0 dòng → thoát, không cộng tiền lần nữa.
+  //
+  // Thứ tự CŨ (cộng tiền → mới đánh dấu paid) để hở khoảng giữa đọc và ghi:
+  // hai lượt gọi cùng đọc được đơn chưa paid → cộng tiền 2 lần vào bank_daily_totals,
+  // đẩy thẻ chính đầy hạn mức sớm và làm đóng băng thống kê cả ngày.
+  // ═══════════════════════════════════════════════════════════════════════════
   async function completeTable(tableObj, paymentMethod = 'cash', shouldHideStats = false) {
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
     const hostId = table.merged_with || table.id;
 
-    // Lấy tất cả table ID trong nhóm gộp (host + satellites)
-    const groupTableIds = [hostId, ...tables.filter(t => t.merged_with === hostId).map(t => t.id)];
+    // ── LỚP 1: nhóm bàn này đang xử lý dở → bỏ qua lượt gọi này ───────────────
+    if (completingTablesRef.current.has(hostId)) return false;
+    completingTablesRef.current.add(hostId);
+    setPayingHostId(hostId);
 
-    // ─── Atomic: check hạn mức + ghi bank_daily_totals trong 1 Postgres transaction ───
     try {
-      const { data: ordersToPay } = await supabase
-        .from('orders')
-        .select('id, total_amount, customer_phone, order_items(id, quantity, unit_price, is_gift, menu_item_id, menu_item:menu_items(name))')
-        .in('table_id', groupTableIds)
-        .in('status', ['pending', 'preparing', 'completed']);
+      // Lấy tất cả table ID trong nhóm gộp (host + satellites)
+      const groupTableIds = [hostId, ...tables.filter(t => t.merged_with === hostId).map(t => t.id)];
 
       // Chốt cuối cho TIỀN MẶT: tuyệt đối không cho qua khi còn món chưa thêm giá
       // (0đ, không phải món tặng). Chuyển khoản không chặn ở đây vì tiền có thể đã vào tài khoản.
       if (paymentMethod === 'cash') {
-        const unpriced = collectUnpricedItems(ordersToPay || []);
+        const { data: ordersToCheck } = await supabase
+          .from('orders')
+          .select('id, order_items(id, quantity, unit_price, is_gift, menu_item_id, menu_item:menu_items(name))')
+          .in('table_id', groupTableIds)
+          .in('status', ['pending', 'preparing', 'completed']);
+
+        const unpriced = collectUnpricedItems(ordersToCheck || []);
         if (unpriced.length > 0) {
           promptFixUnpricedItems(unpriced);
           return false;
         }
       }
 
-      const totalAmount = (ordersToPay || []).reduce((sum, o) => sum + (o.total_amount || 0), 0);
+      // ── LỚP 2: GIÀNH đơn — chỉ lượt gọi đầu tiên khớp được dòng nào ──────────
+      const { data: claimed, error: claimError } = await supabase
+        .from('orders')
+        .update({
+          status: 'paid',
+          payment_method: paymentMethod,
+          created_at: new Date().toISOString(),
+        })
+        .in('table_id', groupTableIds)
+        .in('status', ['pending', 'preparing', 'completed'])
+        .select('id, total_amount');
 
-      if (totalAmount > 0) {
-        // Gọi RPC atomic — check hạn mức + ghi tiền trong 1 transaction, tránh race condition
-        const { shouldHideStats: autoHide } = await processPaymentAtomic(totalAmount);
-        if (!shouldHideStats && autoHide) shouldHideStats = autoHide;
+      if (claimError) {
+        console.error('[completeTable] Không giành được đơn:', claimError);
+        Swal.fire('Lỗi', 'Không đóng được bill. Vui lòng thử lại.', 'error');
+        return false;
       }
-    } catch (err) {
-      console.error('[completeTable] Error in processPaymentAtomic:', err);
+
+      // Lượt gọi trước đã xử lý xong nhóm bàn này → KHÔNG cộng tiền, chỉ dọn UI
+      if (!claimed || claimed.length === 0) {
+        setSelectedTable(null);
+        fetchTables();
+        return true;
+      }
+
+      // ── Cộng tiền đúng theo số đơn vừa giành được ────────────────────────────
+      const totalAmount = claimed.reduce((sum, o) => sum + (o.total_amount || 0), 0);
+      if (totalAmount > 0) {
+        try {
+          // RPC atomic — check hạn mức + ghi bank_daily_totals trong 1 transaction
+          const { shouldHideStats: autoHide } = await processPaymentAtomic(totalAmount);
+          if (!shouldHideStats && autoHide) shouldHideStats = autoHide;
+        } catch (err) {
+          console.error('[completeTable] Error in processPaymentAtomic:', err);
+        }
+      }
+
+      // Chỉ ghi cờ ẩn khi thật sự cần. Nếu bước này lỗi, bill vẫn nằm trong thống kê
+      // — nghiêng về phía KHAI ĐỦ, an toàn hơn là âm thầm giấu doanh thu.
+      if (shouldHideStats) {
+        await supabase
+          .from('orders')
+          .update({ is_hidden_from_stats: true })
+          .in('id', claimed.map(o => o.id));
+      }
+
+      // Reset toàn bộ nhóm bàn gộp
+      await supabase
+        .from('tables')
+        .update({ status: 'available', occupied_at: null, merged_with: null })
+        .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
+
+      setSelectedTable(null);
+      fetchTables();
+      return true;
+    } finally {
+      completingTablesRef.current.delete(hostId);
+      setPayingHostId(null);
     }
-    // ─────────────────────────────────────────────────────────────────────────────
-
-    await supabase
-      .from('orders')
-      .update({
-        status: 'paid',
-        payment_method: paymentMethod,
-        is_hidden_from_stats: shouldHideStats,
-        created_at: new Date().toISOString()
-      })
-      .in('table_id', groupTableIds)
-      .in('status', ['pending', 'preparing', 'completed']);
-
-    // Reset toàn bộ nhóm bàn gộp
-    await supabase
-      .from('tables')
-      .update({ status: 'available', occupied_at: null, merged_with: null })
-      .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
-
-    setSelectedTable(null);
-    fetchTables();
-    return true;
   }
 
   // Lấy hoặc sinh mã Bill Code cố định cho đơn hàng
@@ -2623,12 +2671,14 @@ export default function TablesPage() {
           const closeModal = () => { setPaymentModal(null); setQrAccount(null); setShowTransfer(false); setTransactionCode(null); setPaymentCountdown(0); setQrLoading(false); };
 
           const doCashPayment = async () => {
+            if (payingHostId) return;
             const ok = await completeTable(table, 'cash');
             if (!ok) return;
             closeModal();
           };
 
           const doTransferPayment = async () => {
+            if (payingHostId) return;
             closeModal();
             await completeTable(table.id, 'transfer', qrAccount ? qrAccount.shouldHideStats : false);
           };
@@ -2710,8 +2760,8 @@ export default function TablesPage() {
                   /* ── Step 1: Choose payment method ── */
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {/* Tiền mặt */}
-                    <button onClick={doCashPayment}
-                      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#f0fdf4', border: '1.5px solid #bbf7d0', borderRadius: 14, cursor: 'pointer', textAlign: 'left', width: '100%' }}>
+                    <button onClick={doCashPayment} disabled={!!payingHostId}
+                      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: '#f0fdf4', border: '1.5px solid #bbf7d0', borderRadius: 14, cursor: payingHostId ? 'not-allowed' : 'pointer', opacity: payingHostId ? 0.5 : 1, textAlign: 'left', width: '100%' }}>
                       <span style={{ fontSize: '1.5rem' }}>💵</span>
                       <div>
                         <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#15803d' }}>Tiền mặt</div>
@@ -2806,9 +2856,9 @@ export default function TablesPage() {
                       <div style={{ textAlign: 'center', color: '#64748b', padding: 32 }}>Chưa cấu hình tài khoản ngân hàng</div>
                     )}
 
-                    <button onClick={doTransferPayment}
-                      style={{ width: '100%', padding: '13px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 12, fontWeight: 800, fontSize: '1rem', cursor: 'pointer' }}>
-                      ✅ Xác nhận thủ công đã nhận tiền
+                    <button onClick={doTransferPayment} disabled={!!payingHostId}
+                      style={{ width: '100%', padding: '13px', background: payingHostId ? '#93c5fd' : '#2563eb', color: 'white', border: 'none', borderRadius: 12, fontWeight: 800, fontSize: '1rem', cursor: payingHostId ? 'not-allowed' : 'pointer' }}>
+                      {payingHostId ? '⏳ Đang xử lý...' : '✅ Xác nhận thủ công đã nhận tiền'}
                     </button>
                   </div>
                 )}
@@ -4597,8 +4647,10 @@ export default function TablesPage() {
 
                 {/* Tiền mặt Button */}
                 {/* completeTable() tự xử lý: check hạn mức → cộng bank_daily_totals → gán is_hidden_from_stats */}
+                {/* Khoá nút khi đang xử lý — chặn bấm 2 lần làm cộng tiền 2 lượt vào thẻ */}
                 <div
                   onClick={async () => {
+                    if (payingHostId) return;
                     const ok = await completeTable(confirmPayment.table, 'cash');
                     if (!ok) return;
                     setConfirmPayment(null);
@@ -4615,7 +4667,10 @@ export default function TablesPage() {
                   style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     padding: '16px', background: '#f0fdf4', border: '1.5px solid #bbf7d0',
-                    borderRadius: 16, cursor: 'pointer', transition: 'all 0.15s'
+                    borderRadius: 16, transition: 'all 0.15s',
+                    cursor: payingHostId ? 'not-allowed' : 'pointer',
+                    opacity: payingHostId ? 0.5 : 1,
+                    pointerEvents: payingHostId ? 'none' : 'auto',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -4716,8 +4771,9 @@ export default function TablesPage() {
                   Quay lại
                 </button>
                 <button
+                  disabled={!qrAccount || !!payingHostId}
                   onClick={async () => {
-                    if (!qrAccount) return;
+                    if (!qrAccount || payingHostId) return;
                     await completeTable(paymentModal.table, 'transfer', qrAccount.shouldHideStats);
                     setPaymentModal(null);
                     setConfirmPayment(null);
@@ -4734,8 +4790,8 @@ export default function TablesPage() {
                       position: 'top-end', toast: true, background: '#1d4ed8', color: '#fff', iconColor: '#fff',
                     });
                   }}
-                  style={{ flex: 2, padding: '12px', border: 'none', borderRadius: 12, background: qrAccount ? '#2563eb' : '#93c5fd', color: 'white', fontWeight: 800, cursor: qrAccount ? 'pointer' : 'not-allowed', fontSize: '0.95rem' }}>
-                  ✅ Đã nhận tiền
+                  style={{ flex: 2, padding: '12px', border: 'none', borderRadius: 12, background: (qrAccount && !payingHostId) ? '#2563eb' : '#93c5fd', color: 'white', fontWeight: 800, cursor: (qrAccount && !payingHostId) ? 'pointer' : 'not-allowed', fontSize: '0.95rem' }}>
+                  {payingHostId ? '⏳ Đang xử lý...' : '✅ Đã nhận tiền'}
                 </button>
               </div>
             </div>

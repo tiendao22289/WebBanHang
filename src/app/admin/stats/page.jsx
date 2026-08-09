@@ -43,7 +43,7 @@ function parseDateInput(value) {
 }
 
 export default function StatsPage() {
-  const [period, setPeriod] = useState('7days'); // today, yesterday, 7days, month, quarter, custom
+  const [period, setPeriod] = useState('today'); // today, yesterday, 7days, month, quarter, custom
   const [customStart, setCustomStart] = useState(formatDateInput(new Date()));
   const [customEnd, setCustomEnd] = useState(formatDateInput(new Date()));
   const [stats, setStats] = useState({

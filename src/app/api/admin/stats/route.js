@@ -1,29 +1,73 @@
 ﻿import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import {
-  startOfDay,
-  endOfDay,
-  subDays,
-  startOfMonth,
-  endOfMonth,
-  startOfQuarter,
-  endOfQuarter,
-  format,
-} from 'date-fns';
 
 export const dynamic = 'force-dynamic';
 
 const VAT_RATE = 0.08;
 const ORDERS_PAGE_SIZE = 1000;
 
-function formatDateInput(date) {
-  return format(date, 'dd/MM/yyyy');
+// =============================================================================
+// MÚI GIỜ VIỆT NAM (UTC+7)
+//
+// Server (Vercel) chạy UTC, nên KHÔNG được dùng startOfDay/format của date-fns
+// — chúng tính theo timezone của tiến trình. Nếu dùng, khung "Hôm nay" sẽ thành
+// 07:00 hôm qua → 07:00 hôm nay theo giờ VN, kéo bill của ngày hôm trước vào.
+// Mọi mốc ngày ở đây đều quy đổi tường minh sang giờ VN.
+//
+// Quy ước: "dayKey" là chuỗi 'YYYY-MM-DD' của ngày theo lịch Việt Nam.
+// =============================================================================
+const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
+
+function vnDayKey(date = new Date()) {
+  return new Date(date.getTime() + VN_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+function shiftDayKey(dayKey, days) {
+  const d = new Date(`${dayKey}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// Mốc UTC thật ứng với 00:00:00.000 và 23:59:59.999 giờ VN của ngày đó
+function vnStartOfDay(dayKey) {
+  return new Date(`${dayKey}T00:00:00.000+07:00`);
+}
+
+function vnEndOfDay(dayKey) {
+  return new Date(`${dayKey}T23:59:59.999+07:00`);
+}
+
+function vnStartOfMonth(dayKey) {
+  return `${dayKey.slice(0, 7)}-01`;
+}
+
+function vnEndOfMonth(dayKey) {
+  const [year, month] = dayKey.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return `${dayKey.slice(0, 7)}-${String(lastDay).padStart(2, '0')}`;
+}
+
+function vnStartOfQuarter(dayKey) {
+  const [year, month] = dayKey.split('-').map(Number);
+  const first = Math.floor((month - 1) / 3) * 3 + 1;
+  return `${year}-${String(first).padStart(2, '0')}-01`;
+}
+
+function vnEndOfQuarter(dayKey) {
+  const [year, month] = dayKey.split('-').map(Number);
+  const last = Math.floor((month - 1) / 3) * 3 + 3;
+  return vnEndOfMonth(`${year}-${String(last).padStart(2, '0')}-01`);
+}
+
+function formatDateInput(dayKey) {
+  const [year, month, day] = dayKey.split('-');
+  return `${day}/${month}/${year}`;
 }
 
 function parseDateInput(value) {
-  const [day, month, year] = value.split('/').map(Number);
-  if (!day || !month || !year) return new Date(NaN);
-  return new Date(year, month - 1, day);
+  const [day, month, year] = String(value).split('/').map(Number);
+  if (!day || !month || !year) return null;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 function getSupabaseClient() {
@@ -113,12 +157,12 @@ function buildStats(ordersData) {
 
   const revenueMap = {};
   validOrders.forEach(order => {
-    const orderDate = new Date(order.created_at);
-    const key = format(orderDate, 'yyyy-MM-dd');
+    const key = vnDayKey(new Date(order.created_at)); // gom nhóm theo ngày VN
     if (revenueMap[key] === undefined) {
+      const [, month, day] = key.split('-');
       revenueMap[key] = {
-        date: format(orderDate, 'dd/MM'),
-        sortTime: startOfDay(orderDate).getTime(),
+        date: `${day}/${month}`,
+        sortKey: key,
         revenue: 0,
       };
     }
@@ -126,7 +170,7 @@ function buildStats(ordersData) {
   });
 
   const revenueByDay = Object.values(revenueMap)
-    .sort((a, b) => a.sortTime - b.sortTime)
+    .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
     .map(({ date, revenue }) => ({ date, revenue }));
 
   const catMap = {};
@@ -163,28 +207,30 @@ function buildStats(ordersData) {
 }
 
 function resolveRange(period, customStart, customEnd) {
-  const now = new Date();
+  const today = vnDayKey();
 
   switch (period) {
-    case 'yesterday':
-      return { startDate: startOfDay(subDays(now, 1)), endDate: endOfDay(subDays(now, 1)) };
+    case 'yesterday': {
+      const yesterday = shiftDayKey(today, -1);
+      return { startDate: vnStartOfDay(yesterday), endDate: vnEndOfDay(yesterday) };
+    }
     case '7days':
-      return { startDate: startOfDay(subDays(now, 6)), endDate: endOfDay(now) };
+      return { startDate: vnStartOfDay(shiftDayKey(today, -6)), endDate: vnEndOfDay(today) };
     case 'month':
-      return { startDate: startOfMonth(now), endDate: endOfMonth(now) };
+      return { startDate: vnStartOfDay(vnStartOfMonth(today)), endDate: vnEndOfDay(vnEndOfMonth(today)) };
     case 'quarter':
-      return { startDate: startOfQuarter(now), endDate: endOfQuarter(now) };
+      return { startDate: vnStartOfDay(vnStartOfQuarter(today)), endDate: vnEndOfDay(vnEndOfQuarter(today)) };
     case 'custom': {
-      const startDate = startOfDay(parseDateInput(customStart));
-      const endDate = endOfDay(parseDateInput(customEnd));
-      if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      const start = parseDateInput(customStart);
+      const end = parseDateInput(customEnd);
+      if (!start || !end) {
         throw new Error('Vui lòng nhập ngày theo định dạng dd/mm/yyyy');
       }
-      return { startDate, endDate };
+      return { startDate: vnStartOfDay(start), endDate: vnEndOfDay(end) };
     }
     case 'today':
     default:
-      return { startDate: startOfDay(now), endDate: endOfDay(now) };
+      return { startDate: vnStartOfDay(today), endDate: vnEndOfDay(today) };
   }
 }
 
@@ -192,8 +238,8 @@ export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
     const period = searchParams.get('period') || 'today';
-    const customStart = searchParams.get('customStart') || formatDateInput(new Date());
-    const customEnd = searchParams.get('customEnd') || formatDateInput(new Date());
+    const customStart = searchParams.get('customStart') || formatDateInput(vnDayKey());
+    const customEnd = searchParams.get('customEnd') || formatDateInput(vnDayKey());
 
     const { startDate, endDate } = resolveRange(period, customStart, customEnd);
     const supabase = getSupabaseClient();
