@@ -32,6 +32,13 @@ import {
 } from 'lucide-react';
 import './tables.css';
 
+// ─── Nhận diện nước ngọt / bia / khăn (không dựa vào category vì DB để trống) ───
+const DRINK_KEYWORDS = ['bia', 'coca', 'pepsi', '7 up', '7up', 'xa xi', 'sa xi', 'sting', 'siting', '0 do', 'nuoc', 'tra', 'khan', 'sprite', 'fanta', 'mirinda', 'aquafina', 'lavie', 'la vie', 'red bull', 'redbull', 'revive'];
+function isDrinkName(name) {
+  const n = removeVietnameseTones(name || '');
+  return DRINK_KEYWORDS.some(k => n.includes(k));
+}
+
 // Tiếng chuông to vang vọng — Web Audio API, mô phỏng chuông kim loại bằng harmonic partials
 let _bellAudioCtx = null;
 function getBellAudioCtx() {
@@ -117,6 +124,7 @@ export default function TablesPage() {
   const [editingPrice, setEditingPrice] = useState(false);
   const [customPrice, setCustomPrice] = useState(null);
   const [showBillPreview, setShowBillPreview] = useState(false);
+  const [quickAddOpen, setQuickAddOpen] = useState(false); // panel chọn nhanh nước/bia/khăn
   const [tableNote, setTableNote] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null); // { orderId, itemId, itemName }
   const [editItemPrice, setEditItemPrice] = useState(null); // { orderId, itemId, value } — LEGACY, replaced by showPriceModal
@@ -2969,12 +2977,12 @@ export default function TablesPage() {
       {/* Table Detail Modal - mobile only; desktop shows inline in right panel */}
       {
         isMobile && selectedTable && !addingToOrder && (
-          <div className="modal-overlay" onClick={() => setSelectedTable(null)}>
+          <div className="modal-overlay" onClick={() => { setSelectedTable(null); setQuickAddOpen(false); }}>
             <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
               <div className="modal-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2, paddingBottom: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
                   <h3 style={{ fontSize: '1.4rem', fontWeight: 800 }}>Bàn {selectedTable.table_number}</h3>
-                  <button className="btn btn-ghost btn-icon" onClick={() => setSelectedTable(null)}>
+                  <button className="btn btn-ghost btn-icon" onClick={() => { setSelectedTable(null); setQuickAddOpen(false); }}>
                     <X size={20} />
                   </button>
                 </div>
@@ -3439,6 +3447,125 @@ export default function TablesPage() {
                   <Plus size={22} strokeWidth={2.5} />
                 </button>
               )}
+
+              {/* ─── Tab mũi tên "Chọn nhanh nước / bia / khăn" ở mép phải ─── */}
+              <button
+                onClick={() => setQuickAddOpen(v => !v)}
+                title="Chọn nhanh nước / bia / khăn"
+                style={{
+                  position: 'absolute', right: 0, top: '34%', transform: 'translateY(-50%)',
+                  zIndex: 40, width: 30, minHeight: 96,
+                  border: 'none', borderRadius: '12px 0 0 12px',
+                  background: 'linear-gradient(135deg,#2563eb,#1d4ed8)', color: 'white',
+                  cursor: 'pointer', display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 0',
+                  boxShadow: '-3px 3px 12px rgba(37,99,235,0.4)',
+                }}
+              >
+                <span style={{ fontSize: '1.05rem', lineHeight: 1, fontWeight: 800 }}>{quickAddOpen ? '›' : '‹'}</span>
+                <span style={{ fontSize: '1rem', lineHeight: 1 }}>🥤</span>
+                <span style={{ writingMode: 'vertical-rl', fontSize: '0.6rem', fontWeight: 700, letterSpacing: 1 }}>NƯỚC</span>
+              </button>
+
+              {/* Backdrop mờ khi mở drawer */}
+              {quickAddOpen && (
+                <div onClick={() => setQuickAddOpen(false)}
+                  style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.25)', zIndex: 35 }} />
+              )}
+
+              {/* Drawer danh sách nước / bia / khăn */}
+              <div style={{
+                position: 'absolute', top: 0, bottom: 0, right: 0, zIndex: 38,
+                width: 'min(80%, 300px)', background: 'white',
+                boxShadow: '-8px 0 30px rgba(0,0,0,0.18)',
+                transform: quickAddOpen ? 'translateX(0)' : 'translateX(105%)',
+                transition: 'transform 0.25s ease',
+                display: 'flex', flexDirection: 'column',
+                borderRadius: '16px 0 0 16px', overflow: 'hidden',
+              }}>
+                {(() => {
+                  const pendingQty = draftCart.reduce((s, d) => s + d.qty, 0);
+                  return (
+                    <div style={{ padding: '10px 12px', background: '#eff6ff', borderBottom: '1px solid #dbeafe', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                      <span style={{ fontWeight: 800, color: '#1d4ed8', fontSize: '0.95rem', flexShrink: 0 }}>🥤 Chọn nhanh</span>
+                      {/* Nút Gửi đi — chỉ gửi 1 lần khi bấm, tránh lag */}
+                      <button
+                        disabled={pendingQty === 0 || isConfirmingDraft}
+                        onClick={async () => {
+                          if (pendingQty === 0 || isConfirmingDraft) return;
+                          await confirmDraft();
+                          Swal.fire({ title: '✅ Đã gửi lên bill!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500 });
+                        }}
+                        style={{
+                          marginLeft: 'auto', flexShrink: 0,
+                          padding: '6px 12px', borderRadius: 100, border: 'none',
+                          background: pendingQty === 0 ? '#cbd5e1' : 'linear-gradient(135deg,#2563eb,#1d4ed8)',
+                          color: 'white', fontSize: '0.82rem', fontWeight: 800,
+                          cursor: pendingQty === 0 ? 'not-allowed' : 'pointer',
+                          display: 'flex', alignItems: 'center', gap: 5,
+                          boxShadow: pendingQty === 0 ? 'none' : '0 3px 10px rgba(37,99,235,0.35)',
+                        }}
+                      >
+                        {isConfirmingDraft ? 'Đang gửi…' : `📤 Gửi đi${pendingQty > 0 ? ` (${pendingQty})` : ''}`}
+                      </button>
+                      <button onClick={() => setQuickAddOpen(false)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, flexShrink: 0 }}>✕</button>
+                    </div>
+                  );
+                })()}
+                <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
+                  {(() => {
+                    const drinks = menuItems.filter(m => isDrinkName(m.name));
+                    if (drinks.length === 0) return <div style={{ padding: 16, color: '#9ca3af', fontSize: '0.85rem', textAlign: 'center' }}>Chưa có món nước / bia / khăn.</div>;
+                    const adminItems = getSelectedTableOrders().flatMap(o => o.order_items || []);
+                    const inBillOf = (id) => adminItems.filter(it => it.menu_item_id === id).reduce((s, it) => s + it.quantity, 0);
+                    const pendingOf = (id) => draftCart.filter(d => d.menuItemId === id).reduce((s, d) => s + d.qty, 0);
+                    return drinks.map(item => {
+                      const inBill = inBillOf(item.id);
+                      const pending = pendingOf(item.id);
+                      return (
+                        <div key={item.id}
+                          style={{
+                            width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                            padding: '8px 10px', marginBottom: 6,
+                            background: pending > 0 ? '#eff6ff' : 'white',
+                            border: `1px solid ${pending > 0 ? '#bfdbfe' : '#e5e7eb'}`, borderRadius: 10,
+                          }}
+                        >
+                          <div style={{ width: 40, height: 40, borderRadius: 8, flexShrink: 0, overflow: 'hidden', background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {item.image_url
+                              ? <img src={item.image_url} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              : <span style={{ fontSize: '1.2rem' }}>🥤</span>}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 6 }}>
+                              {item.name}
+                              {inBill > 0 && <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#6b7280', background: '#f3f4f6', borderRadius: 20, padding: '1px 6px' }}>bill ×{inBill}</span>}
+                            </div>
+                            <div style={{ fontSize: '0.78rem', color: '#6b7280' }}>{formatPrice(item.price)}</div>
+                          </div>
+                          {/* Stepper cộng dồn cục bộ — chưa gửi server */}
+                          {pending > 0 ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                              <button onClick={() => decreaseFromDraft(item.id)} style={{ width: 26, height: 26, borderRadius: '50%', border: '1.5px solid #d1d5db', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#374151' }}>
+                                <Minus size={13} strokeWidth={2.5} />
+                              </button>
+                              <span style={{ minWidth: 18, textAlign: 'center', fontSize: '0.95rem', fontWeight: 800, color: '#2563eb' }}>{pending}</span>
+                              <button onClick={() => addToDraft(item)} style={{ width: 26, height: 26, borderRadius: '50%', border: 'none', background: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}>
+                                <Plus size={13} strokeWidth={2.5} />
+                              </button>
+                            </div>
+                          ) : (
+                            <button onClick={() => addToDraft(item)} style={{ width: 30, height: 30, borderRadius: '50%', border: '1.5px solid #93c5fd', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#2563eb', flexShrink: 0 }}>
+                              <Plus size={17} strokeWidth={2.5} />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+
               <div className="modal-footer" style={{ padding: '8px 12px', gap: 6, flexDirection: 'column', alignItems: 'stretch' }}>
                 {/* Total summary row */}
                 {getSelectedTableOrders()?.length > 0 && (() => {
@@ -4420,9 +4547,6 @@ export default function TablesPage() {
           const tableBills = getSelectedTableOrders();
           const rawItems = tableBills.flatMap(b => b.order_items || []);
           const grandTotal = tableBills.reduce((s, b) => s + b.total_amount, 0);
-          const now = new Date();
-          const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-          const dateStr = now.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
           // Gộp các món giống nhau (cùng tên + options + giá + gift)
           const mergedMap = new Map();
@@ -4441,10 +4565,28 @@ export default function TablesPage() {
             }
           }
           // Sắp xếp theo alphabet
-          const allItems = [...mergedMap.values()].sort((a, b) =>
+          const sortedAll = [...mergedMap.values()].sort((a, b) =>
             (a.menu_item?.name || '').localeCompare(b.menu_item?.name || '', 'vi')
           );
+          // Phân vùng: nước ngọt / bia / khăn lên trên, món ăn ở dưới cho dễ nhìn
+          const isDrink = (it) => isDrinkName(it.menu_item?.name);
+          const drinkItems = sortedAll.filter(isDrink);
+          const foodItems = sortedAll.filter(it => !isDrink(it));
+          const allItems = [...drinkItems, ...foodItems];
           const totalQty = allItems.reduce((s, i) => s + i.quantity, 0);
+
+          // Tách số lượng theo loại:
+          // - Món chính: 🎯 Tính vào khuyến mại (counts_for_promotion)
+          // - Món phụ: không tính khuyến mại (nước ngọt, bia, khăn...)
+          // - Món tặng: is_gift
+          const promoById = new Map(menuItems.map(m => [m.id, !!m.counts_for_promotion]));
+          let mainQty = 0, subQty = 0, giftQty = 0;
+          for (const it of allItems) {
+            const q = it.quantity || 0;
+            if (it.is_gift) giftQty += q;
+            else if (promoById.get(it.menu_item_id)) mainQty += q;
+            else subQty += q;
+          }
 
           return (
             <div
@@ -4476,80 +4618,131 @@ export default function TablesPage() {
                 </span>
               </div>
 
-              {/* Timestamp */}
-              <div style={{ padding: '6px 16px 4px', fontSize: '0.75rem', color: '#9ca3af', textAlign: 'center' }}>
-                {timeStr} · {dateStr}
-              </div>
-
-              {/* Items list */}
+              {/* Items list — phân vùng nước/bia/khăn và món ăn */}
               <div style={{ flex: 1, overflowY: 'auto', padding: '4px 12px 8px' }}>
-                {allItems.map((item, idx) => {
-                  const optionText = item.item_options?.map(o => o.choice).join(' · ') || item.note || '';
-                  const subtotal = item.unit_price * item.quantity;
-                  return (
-                    <div key={idx} style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      padding: '9px 12px', marginBottom: 5,
-                      background: 'white', borderRadius: 10,
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-                      gap: 8,
-                    }}>
-                      {/* Left: name + option */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: '1.05rem', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {item.menu_item?.name || 'Món đã xoá'}
-                        </div>
-                        {optionText && (
-                          <div style={{ fontSize: '0.85rem', color: '#f59e0b', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {optionText}
+                {(() => {
+                  const renderRow = (item, idx) => {
+                    const optionText = item.item_options?.map(o => o.choice).join(' · ') || item.note || '';
+                    const subtotal = item.unit_price * item.quantity;
+                    return (
+                      <div key={idx} style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '9px 12px', marginBottom: 5,
+                        background: 'white', borderRadius: 10,
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                        gap: 8,
+                      }}>
+                        {/* Left: name + option */}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '1.05rem', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {item.menu_item?.name || 'Món đã xoá'}
                           </div>
-                        )}
+                          {optionText && (
+                            <div style={{ fontSize: '0.85rem', color: '#f59e0b', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {optionText}
+                            </div>
+                          )}
+                        </div>
+                        {/* Right: qty × price = subtotal */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                          <span style={{ fontSize: '0.9rem', color: '#9ca3af' }}>
+                            {item.unit_price.toLocaleString('vi-VN')} × {item.quantity}
+                          </span>
+                          <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#111827', minWidth: 60, textAlign: 'right' }}>
+                            {subtotal.toLocaleString('vi-VN')}
+                          </span>
+                        </div>
                       </div>
-                      {/* Right: qty × price = subtotal */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                        <span style={{ fontSize: '0.9rem', color: '#9ca3af' }}>
-                          {item.unit_price.toLocaleString('vi-VN')} × {item.quantity}
-                        </span>
-                        <span style={{ fontSize: '1.05rem', fontWeight: 700, color: '#111827', minWidth: 60, textAlign: 'right' }}>
-                          {subtotal.toLocaleString('vi-VN')}
-                        </span>
-                      </div>
-                    </div>
+                    );
+                  };
+                  const sectionHeader = (label, color, bg) => (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      margin: '6px 2px 6px', padding: '5px 12px',
+                      background: bg, borderRadius: 8,
+                      fontSize: '0.78rem', fontWeight: 800, color,
+                      textTransform: 'uppercase', letterSpacing: 0.3,
+                    }}>{label}</div>
                   );
-                })}
+                  return (
+                    <>
+                      {drinkItems.length > 0 && sectionHeader('🥤 Nước · Bia · Khăn', '#0369a1', '#e0f2fe')}
+                      {drinkItems.map((item, i) => renderRow(item, `d${i}`))}
+                      {foodItems.length > 0 && sectionHeader('🍽️ Món ăn', '#b45309', '#fef3c7')}
+                      {foodItems.map((item, i) => renderRow(item, `f${i}`))}
+                    </>
+                  );
+                })()}
               </div>
 
-              {/* Summary section */}
-              <div style={{ background: 'white', borderTop: '1px solid #e5e7eb', padding: '10px 16px 6px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0' }}>
-                  <span style={{ fontSize: '0.95rem', color: '#6b7280' }}>
-                    Tổng cộng
-                    <span style={{ fontSize: '0.8rem', background: '#f3f4f6', color: '#6b7280', borderRadius: 4, padding: '2px 6px', fontWeight: 600, marginLeft: 8 }}>
-                      {totalQty} món
-                    </span>
-                  </span>
-                  <span style={{ fontSize: '1rem', color: '#374151', fontWeight: 600 }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
+              {/* Summary section — gọn */}
+              <div style={{ background: 'white', borderTop: '1px solid #e5e7eb', padding: '6px 16px 4px' }}>
+                {/* Phân loại gọn 1 hàng: chính · phụ · tổng */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0', fontSize: '0.8rem', flexWrap: 'wrap' }}>
+                  <span style={{ color: '#6b7280' }}>🎯 Chính <b style={{ color: '#b45309' }}>{mainQty}</b></span>
+                  <span style={{ color: '#d1d5db' }}>·</span>
+                  <span style={{ color: '#6b7280' }}>🥤 Phụ <b style={{ color: '#0369a1' }}>{subQty}</b></span>
+                  <span style={{ color: '#d1d5db' }}>·</span>
+                  <span style={{ color: '#6b7280', marginLeft: 'auto' }}>Tổng <b style={{ color: '#111827' }}>{totalQty} món</b></span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0 8px', borderTop: '1px dashed #e5e7eb', marginTop: 6 }}>
-                  <span style={{ fontSize: '1.15rem', fontWeight: 700, color: '#111827' }}>Khách cần trả</span>
-                  <span style={{ fontSize: '1.4rem', fontWeight: 800, color: '#2563eb' }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0 4px', borderTop: '1px dashed #e5e7eb', marginTop: 4 }}>
+                  <span style={{ fontSize: '1rem', fontWeight: 700, color: '#111827' }}>Khách cần trả</span>
+                  <span style={{ fontSize: '1.2rem', fontWeight: 800, color: '#2563eb' }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
                 </div>
               </div>
 
-              {/* Print button */}
-              <div style={{ padding: '10px 16px calc(16px + env(safe-area-inset-bottom))', background: 'white' }}>
+              {/* Action buttons — 3 nút cùng 1 hàng cho gọn */}
+              <div style={{ padding: '6px 16px calc(10px + env(safe-area-inset-bottom))', background: 'white', display: 'flex', gap: 6 }}>
+                {/* Print — secondary outline */}
                 <button
                   onClick={handlePrintInvoice}
                   style={{
-                    width: '100%', padding: '13px 0',
-                    borderRadius: 100, border: 'none',
-                    background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white',
-                    fontSize: '0.95rem', fontWeight: 700,
-                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                    boxShadow: '0 4px 12px rgba(37,99,235,0.35)',
+                    flex: 1, padding: '8px 0',
+                    borderRadius: 100, border: '1.5px solid #2563eb',
+                    background: 'white', color: '#2563eb',
+                    fontSize: '0.78rem', fontWeight: 700,
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
                   }}
                 >
-                  🖨️ In phiếu tạm tính
+                  🖨️ In tạm tính
+                </button>
+
+                {/* Huỷ đơn — same handler as the table action bar */}
+                <button
+                  onClick={() => setCancelConfirm(selectedTable)}
+                  style={{
+                    flex: 1, padding: '8px 0',
+                    borderRadius: 100, border: '1.5px solid #fca5a5',
+                    background: 'white', color: '#dc2626',
+                    fontSize: '0.78rem', fontWeight: 700,
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
+                  }}
+                >
+                  🗑️ Huỷ đơn
+                </button>
+
+                {/* Thanh toán — same handler as the table action bar */}
+                <button
+                  onClick={async () => {
+                    setTransactionCode(null);
+                    const snapshot = await getFreshPaymentSnapshot(selectedTable);
+                    if (promptFixUnpricedItems(snapshot.unpricedItems)) return;
+                    if (snapshot.total <= 0 || snapshot.bills.length === 0) {
+                      Swal.fire('Lỗi', 'Tổng tiền thanh toán đang là 0đ. Vui lòng tải lại bàn và kiểm tra món trước khi thanh toán.', 'error');
+                      return;
+                    }
+                    setConfirmPayment({ table: selectedTable, totalAmount: snapshot.total, transactionCode: null });
+                  }}
+                  style={{
+                    flex: 1, padding: '8px 0',
+                    borderRadius: 100, border: 'none',
+                    background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white',
+                    fontSize: '0.78rem', fontWeight: 700,
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
+                    boxShadow: '0 3px 10px rgba(37,99,235,0.3)',
+                  }}
+                >
+                  💵 Thanh toán
                 </button>
               </div>
             </div>
