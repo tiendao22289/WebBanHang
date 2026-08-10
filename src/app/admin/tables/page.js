@@ -3486,7 +3486,7 @@ export default function TablesPage() {
                 {(() => {
                   const pendingQty = draftCart.reduce((s, d) => s + d.qty, 0);
                   return (
-                    <div style={{ padding: '10px 12px', background: '#eff6ff', borderBottom: '1px solid #dbeafe', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    <div style={{ padding: 'calc(10px + env(safe-area-inset-top)) 12px 10px', background: '#eff6ff', borderBottom: '1px solid #dbeafe', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                       <span style={{ fontWeight: 800, color: '#1d4ed8', fontSize: '0.95rem', flexShrink: 0 }}>🥤 Chọn nhanh</span>
                       {/* Nút Gửi đi — chỉ gửi 1 lần khi bấm, tránh lag */}
                       <button
@@ -3512,7 +3512,7 @@ export default function TablesPage() {
                     </div>
                   );
                 })()}
-                <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
+                <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px calc(8px + env(safe-area-inset-bottom))' }}>
                   {(() => {
                     const drinks = menuItems.filter(m => isDrinkName(m.name));
                     if (drinks.length === 0) return <div style={{ padding: 16, color: '#9ca3af', fontSize: '0.85rem', textAlign: 'center' }}>Chưa có món nước / bia / khăn.</div>;
