@@ -158,6 +158,7 @@ export default function TablesPage() {
   const [historyTab, setHistoryTab] = useState('bills'); // 'bills' | 'opens' — tab trong modal lịch sử
   const [tableOpenLog, setTableOpenLog] = useState([]); // nhật ký mở bàn (6 tiếng)
   const [tableOpenLogLoading, setTableOpenLogLoading] = useState(false);
+  const [historySynced, setHistorySynced] = useState(false); // đã bấm Đồng bộ tải lịch sử chưa
   const lastLoggedOpenRef = useRef(null); // chống ghi trùng khi re-render
   const [transactionCode, setTransactionCode] = useState(null);
   const [paymentCountdown, setPaymentCountdown] = useState(0);
@@ -237,26 +238,48 @@ export default function TablesPage() {
   // reset dấu vết khi đóng bàn để lần mở sau ghi lại
   useEffect(() => { if (!selectedTable) lastLoggedOpenRef.current = null; }, [selectedTable]);
 
-  // Tải nhật ký mở bàn (6 tiếng) khi mở modal lịch sử
-  useEffect(() => {
-    if (!showTableHistory) return;
-    let cancelled = false;
-    setHistoryTab('bills'); // mặc định mở tab hoá đơn
-    setTableOpenLogLoading(true);
+  // Mở modal lịch sử — KHÔNG tự tải, chờ bấm "Đồng bộ" mới tải (tiết kiệm data)
+  function openTableHistory(table) {
+    setShowTableHistory(table);
+    setHistoryTab('bills');
+    setTableHistoryData([]);
     setTableOpenLog([]);
-    const since = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
-    supabase.from('table_open_log')
-      .select('*')
-      .eq('table_id', showTableHistory.id)
-      .gte('opened_at', since)
-      .order('opened_at', { ascending: false })
-      .then(({ data }) => {
-        if (cancelled) return;
-        setTableOpenLog(data || []);
-        setTableOpenLogLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [showTableHistory]);
+    setHistorySynced(false);
+  }
+
+  // Tải lịch sử (hoá đơn 8h + lượt mở bàn 6h) khi bấm Đồng bộ
+  async function syncTableHistory() {
+    const table = showTableHistory;
+    if (!table) return;
+    setTableHistoryLoading(true);
+    setTableOpenLogLoading(true);
+    const hId = table.merged_with || table.id;
+    const since8 = new Date(Date.now() - 8 * 3600 * 1000).toISOString();
+    const since6 = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
+    try {
+      const [billsRes, opensRes] = await Promise.all([
+        supabase.from('orders')
+          .select('*, order_items(*, menu_item:menu_items(name))')
+          .eq('table_id', hId)
+          .in('status', ['paid', 'cancelled'])
+          .gte('created_at', since8)
+          .order('created_at', { ascending: false }),
+        supabase.from('table_open_log')
+          .select('*')
+          .eq('table_id', table.id)
+          .gte('opened_at', since6)
+          .order('opened_at', { ascending: false }),
+      ]);
+      setTableHistoryData(billsRes.data || []);
+      setTableOpenLog(opensRes.data || []);
+      setHistorySynced(true);
+    } catch (err) {
+      console.error('[syncTableHistory]', err);
+    } finally {
+      setTableHistoryLoading(false);
+      setTableOpenLogLoading(false);
+    }
+  }
 
   // Detect mobile vs desktop
   useEffect(() => {
@@ -1817,22 +1840,9 @@ export default function TablesPage() {
           }
           const hostTableCard = isMergedSatellite ? tables.find(t => t.id === table.merged_with) : null;
 
-          const openHistory = async (e) => {
+          const openHistory = (e) => {
             e.stopPropagation();
-            setShowTableHistory(table);
-            setTableHistoryLoading(true);
-            setTableHistoryData([]);
-            const since = new Date(Date.now() - 8 * 3600 * 1000).toISOString();
-            const hId = table.merged_with || table.id;
-            const { data } = await supabase
-              .from('orders')
-              .select('*, order_items(*, menu_item:menu_items(name))')
-              .eq('table_id', hId)
-              .in('status', ['paid', 'cancelled'])
-              .gte('created_at', since)
-              .order('created_at', { ascending: false });
-            setTableHistoryData(data || []);
-            setTableHistoryLoading(false);
+            openTableHistory(table);
           };
 
           return (
@@ -2257,23 +2267,7 @@ export default function TablesPage() {
               {/* Action buttons */}
               <div style={{ display: 'flex', gap: 8, padding: '10px 12px', borderTop: '1px solid #e5e7eb', background: 'white', flexShrink: 0 }}>
                 <button
-                  onClick={async () => {
-                    if (!selectedTable) return;
-                    setShowTableHistory(selectedTable);
-                    setTableHistoryLoading(true);
-                    setTableHistoryData([]);
-                    const since = new Date(Date.now() - 8 * 3600 * 1000).toISOString();
-                    const hId = selectedTable.merged_with || selectedTable.id;
-                    const { data } = await supabase
-                      .from('orders')
-                      .select('*, order_items(*, menu_item:menu_items(name))')
-                      .eq('table_id', hId)
-                      .in('status', ['paid', 'cancelled'])
-                      .gte('created_at', since)
-                      .order('created_at', { ascending: false });
-                    setTableHistoryData(data || []);
-                    setTableHistoryLoading(false);
-                  }}
+                  onClick={() => { if (selectedTable) openTableHistory(selectedTable); }}
                   style={{ flex: 1, padding: '10px', border: '1.5px solid #2563eb', borderRadius: 8, background: '#eff6ff', color: '#1d4ed8', fontWeight: 600, cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
                   🕐 Lịch sử
                 </button>
@@ -2684,22 +2678,9 @@ export default function TablesPage() {
 
                               {/* History button */}
                               <div
-                                onClick={async (e) => {
+                                onClick={(e) => {
                                   e.stopPropagation();
-                                  setShowTableHistory(table);
-                                  setTableHistoryLoading(true);
-                                  setTableHistoryData([]);
-                                  const since = new Date(Date.now() - 8 * 3600 * 1000).toISOString();
-                                  const hId = table.merged_with || table.id;
-                                  const { data } = await supabase
-                                    .from('orders')
-                                    .select('*, order_items(*, menu_item:menu_items(name))')
-                                    .eq('table_id', hId)
-                                    .in('status', ['paid', 'cancelled'])
-                                    .gte('created_at', since)
-                                    .order('created_at', { ascending: false });
-                                  setTableHistoryData(data || []);
-                                  setTableHistoryLoading(false);
+                                  openTableHistory(table);
                                 }}
                                 style={{ position: 'absolute', top: 8, right: 7, opacity: 0.45, cursor: 'pointer', zIndex: 5, padding: 3 }}
                                 title="Lịch sử bàn 8H"
@@ -5194,8 +5175,35 @@ export default function TablesPage() {
                     }}>{t.label}</button>
                 ))}
               </div>
+              {/* Nút Đồng bộ — chỉ tải lịch sử khi bấm (tiết kiệm data) */}
+              <div style={{ padding: '10px 14px', borderBottom: '1px solid #f3f4f6' }}>
+                <button
+                  onClick={syncTableHistory}
+                  disabled={tableHistoryLoading || tableOpenLogLoading}
+                  style={{
+                    width: '100%', padding: '10px 0', borderRadius: 100, border: 'none',
+                    background: (tableHistoryLoading || tableOpenLogLoading) ? '#cbd5e1' : 'linear-gradient(135deg,#2563eb,#1d4ed8)',
+                    color: 'white', fontSize: '0.9rem', fontWeight: 800,
+                    cursor: (tableHistoryLoading || tableOpenLogLoading) ? 'not-allowed' : 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                    boxShadow: (tableHistoryLoading || tableOpenLogLoading) ? 'none' : '0 3px 10px rgba(37,99,235,0.3)',
+                  }}
+                >
+                  {(tableHistoryLoading || tableOpenLogLoading) ? '⏳ Đang tải...' : (historySynced ? '🔄 Đồng bộ lại' : '🔄 Đồng bộ để xem lịch sử')}
+                </button>
+              </div>
               <div style={{ overflowY: 'auto', flex: 1, padding: '10px 14px 20px' }}>
-                {historyTab === 'opens' ? (
+                {!historySynced ? (
+                  (tableHistoryLoading || tableOpenLogLoading) ? (
+                    <div style={{ textAlign: 'center', padding: '30px 0', color: '#9ca3af', fontSize: '0.85rem' }}>Đang tải...</div>
+                  ) : (
+                    <div style={{ textAlign: 'center', padding: '44px 16px', color: '#9ca3af' }}>
+                      <div style={{ fontSize: '2.4rem', marginBottom: 10 }}>🔄</div>
+                      <div style={{ fontSize: '0.92rem', fontWeight: 700, color: '#6b7280' }}>Bấm &quot;Đồng bộ&quot; để tải lịch sử</div>
+                      <div style={{ fontSize: '0.75rem', color: '#d1d5db', marginTop: 4 }}>Không tự tải để tiết kiệm dữ liệu</div>
+                    </div>
+                  )
+                ) : historyTab === 'opens' ? (
                   tableOpenLogLoading ? (
                     <div style={{ textAlign: 'center', padding: '30px 0', color: '#9ca3af', fontSize: '0.85rem' }}>Đang tải...</div>
                   ) : tableOpenLog.length === 0 ? (
