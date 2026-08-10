@@ -155,6 +155,10 @@ export default function TablesPage() {
   const [tableHistoryData, setTableHistoryData] = useState([]);
   const [tableHistoryLoading, setTableHistoryLoading] = useState(false);
   const [currentStaff, setCurrentStaff] = useState(null); // nhân viên đang đăng nhập (từ localStorage)
+  const [historyTab, setHistoryTab] = useState('bills'); // 'bills' | 'opens' — tab trong modal lịch sử
+  const [tableOpenLog, setTableOpenLog] = useState([]); // nhật ký mở bàn (6 tiếng)
+  const [tableOpenLogLoading, setTableOpenLogLoading] = useState(false);
+  const lastLoggedOpenRef = useRef(null); // chống ghi trùng khi re-render
   const [transactionCode, setTransactionCode] = useState(null);
   const [paymentCountdown, setPaymentCountdown] = useState(0);
   const [qrLoading, setQrLoading] = useState(false);
@@ -216,6 +220,43 @@ export default function TablesPage() {
     if (order?.customer_phone === 'Quản lý' || order?.customer_name === 'Admin') return `NV: ${order.customer_name}`;
     return `KHÁCH: ${order?.customer_name || 'Khách'}`;
   };
+
+  // Ghi nhật ký MỞ BÀN — mỗi lần nhân viên mở 1 bàn (để biết ai xem cuối cùng)
+  useEffect(() => {
+    if (!selectedTable) return;
+    // chống ghi trùng khi component re-render mà vẫn cùng 1 lượt mở bàn
+    if (lastLoggedOpenRef.current === selectedTable.id) return;
+    lastLoggedOpenRef.current = selectedTable.id;
+    supabase.from('table_open_log').insert({
+      table_id: selectedTable.id,
+      table_number: String(selectedTable.table_number ?? ''),
+      staff_id: currentStaff?.id || null,
+      staff_name: currentStaff?.full_name || null,
+    }).then(({ error }) => { if (error) console.error('[table_open_log]', error.message); });
+  }, [selectedTable, currentStaff]);
+  // reset dấu vết khi đóng bàn để lần mở sau ghi lại
+  useEffect(() => { if (!selectedTable) lastLoggedOpenRef.current = null; }, [selectedTable]);
+
+  // Tải nhật ký mở bàn (6 tiếng) khi mở modal lịch sử
+  useEffect(() => {
+    if (!showTableHistory) return;
+    let cancelled = false;
+    setHistoryTab('bills'); // mặc định mở tab hoá đơn
+    setTableOpenLogLoading(true);
+    setTableOpenLog([]);
+    const since = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
+    supabase.from('table_open_log')
+      .select('*')
+      .eq('table_id', showTableHistory.id)
+      .gte('opened_at', since)
+      .order('opened_at', { ascending: false })
+      .then(({ data }) => {
+        if (cancelled) return;
+        setTableOpenLog(data || []);
+        setTableOpenLogLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [showTableHistory]);
 
   // Detect mobile vs desktop
   useEffect(() => {
@@ -5136,12 +5177,48 @@ export default function TablesPage() {
               <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #f3f4f6', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 800, fontSize: '1rem', color: '#1f2937' }}>🕐 Lịch sử Bàn {showTableHistory.table_number}</div>
-                  <div style={{ fontSize: '0.72rem', color: '#9ca3af', marginTop: 1 }}>8 tiếng gần nhất</div>
+                  <div style={{ fontSize: '0.72rem', color: '#9ca3af', marginTop: 1 }}>{historyTab === 'opens' ? 'Lượt mở bàn · 6 tiếng gần nhất' : 'Hoá đơn · 8 tiếng gần nhất'}</div>
                 </div>
                 <button onClick={() => setShowTableHistory(null)} style={{ background: '#f3f4f6', border: 'none', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
               </div>
+              {/* Tabs: Hoá đơn / Lượt mở bàn */}
+              <div style={{ display: 'flex', gap: 6, padding: '8px 14px 10px', borderBottom: '1px solid #f3f4f6' }}>
+                {[{ k: 'bills', label: '🧾 Hoá đơn' }, { k: 'opens', label: '🔎 Lượt mở bàn' }].map(t => (
+                  <button key={t.k} onClick={() => setHistoryTab(t.k)}
+                    style={{
+                      flex: 1, padding: '8px 0', borderRadius: 8, cursor: 'pointer',
+                      border: historyTab === t.k ? '1.5px solid #2563eb' : '1.5px solid #e5e7eb',
+                      background: historyTab === t.k ? '#eff6ff' : 'white',
+                      color: historyTab === t.k ? '#1d4ed8' : '#6b7280',
+                      fontSize: '0.8rem', fontWeight: 700,
+                    }}>{t.label}</button>
+                ))}
+              </div>
               <div style={{ overflowY: 'auto', flex: 1, padding: '10px 14px 20px' }}>
-                {tableHistoryLoading ? (
+                {historyTab === 'opens' ? (
+                  tableOpenLogLoading ? (
+                    <div style={{ textAlign: 'center', padding: '30px 0', color: '#9ca3af', fontSize: '0.85rem' }}>Đang tải...</div>
+                  ) : tableOpenLog.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '30px 0', color: '#d1d5db', fontSize: '0.85rem' }}>
+                      <div style={{ fontSize: '2rem', marginBottom: 6 }}>📭</div>Chưa có lượt mở bàn trong 6 tiếng qua
+                    </div>
+                  ) : tableOpenLog.map((log, i) => {
+                    const t = new Date(log.opened_at);
+                    const timeStr = t.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+                    const dateStr = t.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+                    const isLatest = i === 0;
+                    return (
+                      <div key={log.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', marginBottom: 6, background: isLatest ? '#eff6ff' : 'white', border: `1px solid ${isLatest ? '#bfdbfe' : '#f3f4f6'}`, borderRadius: 10 }}>
+                        <div style={{ fontSize: '1.1rem' }}>{isLatest ? '🟢' : '👤'}</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#111827' }}>{log.staff_name ? `NV: ${log.staff_name}` : 'Không rõ'}</div>
+                          <div style={{ fontSize: '0.7rem', color: '#9ca3af' }}>{timeStr} · {dateStr}</div>
+                        </div>
+                        {isLatest && <span style={{ fontSize: '0.58rem', fontWeight: 800, color: '#2563eb', background: '#dbeafe', borderRadius: 20, padding: '2px 8px', flexShrink: 0 }}>MỞ GẦN NHẤT</span>}
+                      </div>
+                    );
+                  })
+                ) : tableHistoryLoading ? (
                   <div style={{ textAlign: 'center', padding: '30px 0', color: '#9ca3af', fontSize: '0.85rem' }}>Đang tải...</div>
                 ) : tableHistoryData.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '30px 0', color: '#d1d5db', fontSize: '0.85rem' }}>
