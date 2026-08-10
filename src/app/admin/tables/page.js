@@ -321,7 +321,7 @@ export default function TablesPage() {
             .select(`
               id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
               order_items (
-                id, quantity, unit_price, item_options, note, is_gift, menu_item_id,
+                id, quantity, unit_price, item_options, note, is_gift, menu_item_id, added_by_name,
                 menu_item:menu_items (name, price, image_url)
               ),
               print_jobs (id, status)
@@ -362,7 +362,7 @@ export default function TablesPage() {
         .select(`
           id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
           order_items (
-            id, quantity, unit_price, item_options, note, is_gift, menu_item_id,
+            id, quantity, unit_price, item_options, note, is_gift, menu_item_id, added_by_name,
             menu_item:menu_items (name, price, image_url)
           ),
           print_jobs (id, status)
@@ -1265,12 +1265,15 @@ export default function TablesPage() {
         .from('order_items').select('*').eq('order_id', targetOrderId);
 
       // 3. Batch upsert tất cả draft items song song
+      // Chỉ cộng dồn vào dòng CÙNG nhân viên thêm → mỗi người 1 dòng riêng để biết ai gọi món nào
+      const staffId = currentStaff?.id || null;
       await Promise.all(draftCart.map(draft => {
         const optsJsonb = draft.options || [];
         const existing = (currentItems || []).find(item =>
           item.menu_item_id === draft.menuItemId &&
           JSON.stringify(item.item_options || []) === JSON.stringify(optsJsonb) &&
-          (item.note || '') === (draft.note || '')
+          (item.note || '') === (draft.note || '') &&
+          (item.added_by_id || null) === staffId
         );
         if (existing) {
           return supabase.from('order_items')
@@ -1284,6 +1287,7 @@ export default function TablesPage() {
           unit_price: draft.price,
           item_options: optsJsonb,
           note: draft.note || '',
+          ...(currentStaff ? { added_by_id: currentStaff.id, added_by_name: currentStaff.full_name } : {}),
         });
       }));
 
@@ -1320,11 +1324,13 @@ export default function TablesPage() {
     const { data: existingItems } = await supabase
       .from('order_items').select('*')
       .eq('order_id', orderId).eq('menu_item_id', menuItem.id);
+    const staffId = currentStaff?.id || null;
     let existing = null;
     if (existingItems?.length > 0) {
       existing = existingItems.find(item => {
         return JSON.stringify(item.item_options || []) === JSON.stringify(optionsJsonb) &&
-          (item.note || '') === note;
+          (item.note || '') === note &&
+          (item.added_by_id || null) === staffId;
       });
     }
     if (existing) {
@@ -1333,6 +1339,7 @@ export default function TablesPage() {
       await supabase.from('order_items').insert({
         order_id: orderId, menu_item_id: menuItem.id, quantity: qty,
         unit_price: menuItem.price, item_options: optionsJsonb, note,
+        ...(currentStaff ? { added_by_id: currentStaff.id, added_by_name: currentStaff.full_name } : {}),
       });
     }
     const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
@@ -2057,7 +2064,10 @@ export default function TablesPage() {
 
                             {/* Name + option + note */}
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#111827' }}>{item.menu_item?.name || item.name}</div>
+                              <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#111827', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                {item.menu_item?.name || item.name}
+                                {item.added_by_name && <span style={{ fontSize: '0.62rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700 }}>👤 {item.added_by_name}</span>}
+                              </div>
                               {optionText ? (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
                                   <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>{optionText}</span>
@@ -3271,6 +3281,7 @@ export default function TablesPage() {
                                 <span style={{ fontSize: '0.97rem', fontWeight: 600, color: '#111827', lineHeight: 1.3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                   {item.menu_item?.name || 'Món đã xoá'}
                                   {item.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700, lineHeight: 1 }}>🎁 Món Tặng</span>}
+                                  {item.added_by_name && <span style={{ fontSize: '0.62rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700, lineHeight: 1.3 }}>👤 {item.added_by_name}</span>}
                                 </span>
                                 <button
                                   title="Xóa món"
@@ -5155,6 +5166,7 @@ export default function TablesPage() {
                             <span style={{ flex: 1, minWidth: 0 }}>
                               <span style={{ fontWeight: 600, color: '#374151' }}>{item.quantity}x</span> {item.menu_item?.name || item.item_name || 'Món đã xoá'}
                               {item.is_gift && <span style={{ fontSize: '0.6rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '0 4px', fontWeight: 700, marginLeft: 4 }}>🎁</span>}
+                              {item.added_by_name && <span style={{ fontSize: '0.6rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '0 5px', fontWeight: 700, marginLeft: 4 }}>👤 {item.added_by_name}</span>}
                               {optionText && <span style={{ display: 'block', fontSize: '0.68rem', color: '#f59e0b' }}>{optionText}</span>}
                             </span>
                             <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
