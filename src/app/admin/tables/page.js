@@ -210,6 +210,13 @@ export default function TablesPage() {
     ...(currentStaff ? { paid_by_id: currentStaff.id, paid_by_name: currentStaff.full_name } : {}),
   });
 
+  // Nhãn tên hiển thị: nhân viên → "NV: ...", khách → "KHÁCH: ..."
+  const orderWhoLabel = (order) => {
+    if (order?.created_by_name) return `NV: ${order.created_by_name}`;
+    if (order?.customer_phone === 'Quản lý' || order?.customer_name === 'Admin') return `NV: ${order.customer_name}`;
+    return `KHÁCH: ${order?.customer_name || 'Khách'}`;
+  };
+
   // Detect mobile vs desktop
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth <= 768);
@@ -1949,7 +1956,7 @@ export default function TablesPage() {
                       {(
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: '#f8fafc', borderBottom: '1px solid #e5e7eb', borderTop: billIdx > 0 ? '2px solid #e5e7eb' : 'none' }}>
                           <span style={{ background: '#2563eb', color: 'white', borderRadius: 10, padding: '1px 8px', fontSize: '0.7rem', fontWeight: 700 }}>#{billIdx + 1}</span>
-                          <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#111827' }}>👤 {order.created_by_name || order.customer_name}</span>
+                          <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#111827' }}>👤 {orderWhoLabel(order)}</span>
                           <span style={{
                             fontSize: '0.68rem', fontWeight: 700, padding: '2px 7px', borderRadius: 20,
                             background: order.status === 'pending' ? '#fef3c7' : '#dbeafe',
@@ -2066,7 +2073,7 @@ export default function TablesPage() {
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#111827', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                 {item.menu_item?.name || item.name}
-                                {item.added_by_name && <span style={{ fontSize: '0.62rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700 }}>👤 {item.added_by_name}</span>}
+                                {item.added_by_name && <span style={{ fontSize: '0.62rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700 }}>👤 NV: {item.added_by_name}</span>}
                               </div>
                               {optionText ? (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
@@ -3100,7 +3107,7 @@ export default function TablesPage() {
                             </span>
                           )}
                           <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>
-                            👤 {order.created_by_name || order.customer_name}
+                            👤 {orderWhoLabel(order)}
                           </span>
                           {order.customer_phone && order.customer_phone !== 'Quản lý' && (
                             <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>· {order.customer_phone}</span>
@@ -3281,7 +3288,7 @@ export default function TablesPage() {
                                 <span style={{ fontSize: '0.97rem', fontWeight: 600, color: '#111827', lineHeight: 1.3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                   {item.menu_item?.name || 'Món đã xoá'}
                                   {item.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700, lineHeight: 1 }}>🎁 Món Tặng</span>}
-                                  {item.added_by_name && <span style={{ fontSize: '0.62rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700, lineHeight: 1.3 }}>👤 {item.added_by_name}</span>}
+                                  {item.added_by_name && <span style={{ fontSize: '0.62rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700, lineHeight: 1.3 }}>👤 NV: {item.added_by_name}</span>}
                                 </span>
                                 <button
                                   title="Xóa món"
@@ -5148,7 +5155,7 @@ export default function TablesPage() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                         <span style={{ fontSize: '0.68rem', color: '#9ca3af' }}>{timeStr}</span>
                         <span style={{ fontSize: '0.68rem', fontWeight: 600, color: '#6b7280' }}>•</span>
-                        <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#374151' }}>{order.created_by_name || order.customer_name || 'Khách'}</span>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#374151' }}>{orderWhoLabel(order)}</span>
                         <span style={{ marginLeft: 'auto', fontSize: '0.62rem', fontWeight: 700, borderRadius: 100, padding: '2px 8px', background: isPaid ? '#dcfce7' : '#fee2e2', color: isPaid ? '#16a34a' : '#dc2626' }}>
                           {isPaid ? '✓ Đã TT' : '✗ Đã huỷ'}
                         </span>
@@ -5166,7 +5173,7 @@ export default function TablesPage() {
                             <span style={{ flex: 1, minWidth: 0 }}>
                               <span style={{ fontWeight: 600, color: '#374151' }}>{item.quantity}x</span> {item.menu_item?.name || item.item_name || 'Món đã xoá'}
                               {item.is_gift && <span style={{ fontSize: '0.6rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '0 4px', fontWeight: 700, marginLeft: 4 }}>🎁</span>}
-                              {item.added_by_name && <span style={{ fontSize: '0.6rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '0 5px', fontWeight: 700, marginLeft: 4 }}>👤 {item.added_by_name}</span>}
+                              {item.added_by_name && <span style={{ fontSize: '0.6rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '0 5px', fontWeight: 700, marginLeft: 4 }}>👤 NV: {item.added_by_name}</span>}
                               {optionText && <span style={{ display: 'block', fontSize: '0.68rem', color: '#f59e0b' }}>{optionText}</span>}
                             </span>
                             <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
