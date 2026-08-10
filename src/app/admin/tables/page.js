@@ -154,6 +154,7 @@ export default function TablesPage() {
   const [showTableHistory, setShowTableHistory] = useState(null); // table object
   const [tableHistoryData, setTableHistoryData] = useState([]);
   const [tableHistoryLoading, setTableHistoryLoading] = useState(false);
+  const [currentStaff, setCurrentStaff] = useState(null); // nhân viên đang đăng nhập (từ localStorage)
   const [transactionCode, setTransactionCode] = useState(null);
   const [paymentCountdown, setPaymentCountdown] = useState(0);
   const [qrLoading, setQrLoading] = useState(false);
@@ -187,6 +188,27 @@ export default function TablesPage() {
   useEffect(() => () => {
     Object.values(kitchenAlertTimersRef.current).forEach(clearTimeout);
   }, []);
+
+  // Nhân viên đang đăng nhập — đọc từ localStorage (do admin/layout.js lưu khi login)
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('staffUser');
+      if (saved) setCurrentStaff(JSON.parse(saved));
+    } catch { }
+  }, []);
+
+  // Đóng dấu tên nhân viên vào thao tác (gộp vào payload update/insert)
+  const createdStamp = () => currentStaff
+    ? { created_by_id: currentStaff.id, created_by_name: currentStaff.full_name }
+    : {};
+  const cancelStamp = () => ({
+    cancelled_at: new Date().toISOString(),
+    ...(currentStaff ? { cancelled_by_id: currentStaff.id, cancelled_by_name: currentStaff.full_name } : {}),
+  });
+  const paidStamp = () => ({
+    paid_at: new Date().toISOString(),
+    ...(currentStaff ? { paid_by_id: currentStaff.id, paid_by_name: currentStaff.full_name } : {}),
+  });
 
   // Detect mobile vs desktop
   useEffect(() => {
@@ -297,7 +319,7 @@ export default function TablesPage() {
           const { data: ordersData, error: ordErr } = await supabase
             .from('orders')
             .select(`
-              id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at,
+              id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
               order_items (
                 id, quantity, unit_price, item_options, note, is_gift, menu_item_id,
                 menu_item:menu_items (name, price, image_url)
@@ -338,7 +360,7 @@ export default function TablesPage() {
       const { data: ordersData } = await supabase
         .from('orders')
         .select(`
-          id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at,
+          id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
           order_items (
             id, quantity, unit_price, item_options, note, is_gift, menu_item_id,
             menu_item:menu_items (name, price, image_url)
@@ -606,6 +628,7 @@ export default function TablesPage() {
           status: 'paid',
           payment_method: paymentMethod,
           created_at: new Date().toISOString(),
+          ...paidStamp(),
         })
         .in('table_id', groupTableIds)
         .in('status', ['pending', 'preparing', 'completed'])
@@ -1225,6 +1248,7 @@ export default function TablesPage() {
             customer_phone: 'Quản lý',
             status: 'pending',
             total_amount: 0,
+            ...createdStamp(),
           })
           .select().single();
         if (error || !newOrder) return;
@@ -1672,7 +1696,7 @@ export default function TablesPage() {
     if (!confirmed) return;
     await supabase
       .from('orders')
-      .update({ kitchen_completed: true, status: 'cancelled', payment_method: 'cancelled' })
+      .update({ kitchen_completed: true, status: 'cancelled', payment_method: 'cancelled', ...cancelStamp() })
       .in('id', ids);
     setTakeawayOrders(prev => prev.filter(o => !o.orderIds?.some(id => ids.includes(id))));
   };
@@ -1918,7 +1942,7 @@ export default function TablesPage() {
                       {(
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: '#f8fafc', borderBottom: '1px solid #e5e7eb', borderTop: billIdx > 0 ? '2px solid #e5e7eb' : 'none' }}>
                           <span style={{ background: '#2563eb', color: 'white', borderRadius: 10, padding: '1px 8px', fontSize: '0.7rem', fontWeight: 700 }}>#{billIdx + 1}</span>
-                          <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#111827' }}>👤 {order.customer_name}</span>
+                          <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#111827' }}>👤 {order.created_by_name || order.customer_name}</span>
                           <span style={{
                             fontSize: '0.68rem', fontWeight: 700, padding: '2px 7px', borderRadius: 20,
                             background: order.status === 'pending' ? '#fef3c7' : '#dbeafe',
@@ -1974,7 +1998,7 @@ export default function TablesPage() {
                                   confirmButtonColor: '#ef4444', reverseButtons: true,
                                 });
                                 if (!confirm.isConfirmed) return;
-                                await supabase.from('orders').update({ status: 'cancelled', total_amount: 0 }).eq('id', order.id);
+                                await supabase.from('orders').update({ status: 'cancelled', total_amount: 0, ...cancelStamp() }).eq('id', order.id);
                                 const remaining = tableBills.filter(o => o.id !== order.id && o.status !== 'cancelled');
                                 if (remaining.length === 0) {
                                   const hId = selectedTable.merged_with || selectedTable.id;
@@ -2696,7 +2720,7 @@ export default function TablesPage() {
             const hostId = table.merged_with || table.id;
             // Hủy tất cả đơn của host (kể cả đơn từ bàn satellite đã được chuyển sang)
             await supabase.from('orders')
-              .update({ status: 'cancelled', payment_method: 'cancelled' })
+              .update({ status: 'cancelled', payment_method: 'cancelled', ...cancelStamp() })
               .eq('table_id', hostId)
               .in('status', ['pending', 'preparing', 'completed']);
             // Reset toàn bộ nhóm gộp (host + all satellites)
@@ -3066,7 +3090,7 @@ export default function TablesPage() {
                             </span>
                           )}
                           <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#111827' }}>
-                            👤 {order.customer_name}
+                            👤 {order.created_by_name || order.customer_name}
                           </span>
                           {order.customer_phone && order.customer_phone !== 'Quản lý' && (
                             <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>· {order.customer_phone}</span>
@@ -3198,7 +3222,7 @@ export default function TablesPage() {
                                 reverseButtons: true,
                               });
                               if (!result.isConfirmed) return;
-                              await supabase.from('orders').update({ status: 'cancelled' }).eq('id', order.id);
+                              await supabase.from('orders').update({ status: 'cancelled', ...cancelStamp() }).eq('id', order.id);
                               // If all orders at this table are now cancelled, reset the table
                               const remaining = getSelectedTableOrders().filter(o => o.id !== order.id && o.status !== 'cancelled');
                               if (remaining.length === 0) {
@@ -5061,7 +5085,7 @@ export default function TablesPage() {
                     const hostId = t.merged_with || t.id;
                     // Hủy tất cả đơn của host (kể cả đơn từ bàn satellite đã được chuyển sang)
                     await supabase.from('orders')
-                      .update({ status: 'cancelled', payment_method: 'cancelled' })
+                      .update({ status: 'cancelled', payment_method: 'cancelled', ...cancelStamp() })
                       .eq('table_id', hostId)
                       .in('status', ['pending', 'preparing', 'completed']);
                     // Reset toàn bộ nhóm gộp (host + all satellites)
@@ -5113,11 +5137,17 @@ export default function TablesPage() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                         <span style={{ fontSize: '0.68rem', color: '#9ca3af' }}>{timeStr}</span>
                         <span style={{ fontSize: '0.68rem', fontWeight: 600, color: '#6b7280' }}>•</span>
-                        <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#374151' }}>{order.customer_name || 'Khách'}</span>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#374151' }}>{order.created_by_name || order.customer_name || 'Khách'}</span>
                         <span style={{ marginLeft: 'auto', fontSize: '0.62rem', fontWeight: 700, borderRadius: 100, padding: '2px 8px', background: isPaid ? '#dcfce7' : '#fee2e2', color: isPaid ? '#16a34a' : '#dc2626' }}>
                           {isPaid ? '✓ Đã TT' : '✗ Đã huỷ'}
                         </span>
                       </div>
+                      {/* Ai thực hiện thao tác */}
+                      {(isPaid ? order.paid_by_name : order.cancelled_by_name) && (
+                        <div style={{ fontSize: '0.66rem', color: '#9ca3af', paddingLeft: 4, marginBottom: 4 }}>
+                          {isPaid ? `💵 Thanh toán bởi ${order.paid_by_name}` : `🗑️ Huỷ bởi ${order.cancelled_by_name}`}
+                        </div>
+                      )}
                       {(order.order_items || []).map(item => {
                         const optionText = (item.item_options || []).map(o => o.choice).join(' · ') || item.note || '';
                         return (
