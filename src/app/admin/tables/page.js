@@ -5118,13 +5118,20 @@ export default function TablesPage() {
                           {isPaid ? '✓ Đã TT' : '✗ Đã huỷ'}
                         </span>
                       </div>
-                      {(order.order_items || []).slice(0, 4).map(item => (
-                        <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#6b7280', paddingLeft: 4, marginBottom: 2 }}>
-                          <span>{item.quantity}x {item.menu_item?.name || item.item_name}</span>
-                          <span style={{ fontWeight: 600 }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
-                        </div>
-                      ))}
-                      {(order.order_items || []).length > 4 && <div style={{ fontSize: '0.68rem', color: '#9ca3af', paddingLeft: 4 }}>...+{order.order_items.length - 4} món khác</div>}
+                      {(order.order_items || []).map(item => {
+                        const optionText = (item.item_options || []).map(o => o.choice).join(' · ') || item.note || '';
+                        return (
+                          <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: '0.75rem', color: '#6b7280', paddingLeft: 4, marginBottom: 3 }}>
+                            <span style={{ flex: 1, minWidth: 0 }}>
+                              <span style={{ fontWeight: 600, color: '#374151' }}>{item.quantity}x</span> {item.menu_item?.name || item.item_name || 'Món đã xoá'}
+                              {item.is_gift && <span style={{ fontSize: '0.6rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '0 4px', fontWeight: 700, marginLeft: 4 }}>🎁</span>}
+                              {optionText && <span style={{ display: 'block', fontSize: '0.68rem', color: '#f59e0b' }}>{optionText}</span>}
+                            </span>
+                            <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
+                          </div>
+                        );
+                      })}
+                      <div style={{ fontSize: '0.66rem', color: '#9ca3af', paddingLeft: 4, marginTop: 1 }}>{(order.order_items || []).length} món</div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, paddingTop: 4, borderTop: '1px dashed #f3f4f6' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <span style={{ fontSize: '0.72rem', color: '#9ca3af' }}>Tổng</span>
