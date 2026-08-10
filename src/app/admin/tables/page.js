@@ -3555,7 +3555,8 @@ export default function TablesPage() {
                   );
                 })()}
                 <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px calc(8px + env(safe-area-inset-bottom))' }}>
-                  {(() => {
+                  {/* Chỉ dựng danh sách (và tải ảnh) khi drawer mở → không tốn data lúc chỉ mở bàn */}
+                  {quickAddOpen && (() => {
                     const drinks = menuItems.filter(m => isDrinkName(m.name));
                     if (drinks.length === 0) return <div style={{ padding: 16, color: '#9ca3af', fontSize: '0.85rem', textAlign: 'center' }}>Chưa có món nước / bia / khăn.</div>;
                     const adminItems = getSelectedTableOrders().flatMap(o => o.order_items || []);
@@ -3575,7 +3576,7 @@ export default function TablesPage() {
                         >
                           <div style={{ width: 40, height: 40, borderRadius: 8, flexShrink: 0, overflow: 'hidden', background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                             {item.image_url
-                              ? <img src={item.image_url} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              ? <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                               : <span style={{ fontSize: '1.2rem' }}>🥤</span>}
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
