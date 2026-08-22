@@ -96,7 +96,7 @@ async function fetchAllOrdersInRange(supabase, startDate, endDate) {
       .select(`
         id, created_at, total_amount, payment_method, status,
         order_items (
-          quantity, unit_price,
+          quantity, unit_price, menu_item_id, item_name,
           menu_item:menu_items(name, category:categories(name))
         )
       `)
@@ -137,14 +137,20 @@ function buildStats(ordersData) {
   const netRevenue = Math.round(totalRevenue / (1 + VAT_RATE));
   const vatAmount = totalRevenue - netRevenue;
   const totalOrders = validOrders.length;
+  // Dòng giảm giá (menu_item_id null + giá âm) không phải món ăn → bỏ khỏi thống kê món
+  const isDiscountLine = (i) => i.menu_item_id == null && (Number(i.unit_price) || 0) < 0;
+
+  // Gộp filter vào thẳng reduce — tránh cấp phát 1 mảng tạm cho MỖI đơn
+  // (bảng orders đang ~9.7k dòng, chạy full khi xem thống kê theo tháng)
   const totalItemsSold = validOrders.reduce((sum, o) =>
-    sum + (o.order_items?.reduce((subSum, item) => subSum + item.quantity, 0) || 0), 0
+    sum + (o.order_items?.reduce((subSum, item) => isDiscountLine(item) ? subSum : subSum + item.quantity, 0) || 0), 0
   );
   const avgOrderValue = totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0;
 
   const itemMap = {};
   validOrders.forEach(order => {
     order.order_items?.forEach(oi => {
+      if (isDiscountLine(oi)) return;
       const name = oi.menu_item?.name || 'Deleted item';
       if (!itemMap[name]) itemMap[name] = { name, quantity: 0, revenue: 0, price: oi.unit_price };
       itemMap[name].quantity += oi.quantity;

@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { getActiveAccount } from '@/lib/bankAccount';
+import { REWARD_CHANNELS, ALL_SETTING_KEYS, calcReviewDiscount } from '@/lib/reviewReward';
 
 const BANKS = [
   'Vietcombank', 'MB Bank', 'Techcombank', 'Agribank', 'Vietinbank',
@@ -28,6 +29,16 @@ export default function SettingsPage() {
   const [locSaving, setLocSaving] = useState(false);
   const [locGetting, setLocGetting] = useState(false);
 
+  // Ưu đãi mạng xã hội (Google / TikTok / Facebook)
+  const CHANNEL_DEFAULTS = { enabled: false, url: '', percent: '5', max: '50000', minBill: '100000', cooldown: '30', wait: '20' };
+  const [channelForms, setChannelForms] = useState(
+    () => Object.fromEntries(REWARD_CHANNELS.map(c => [c.key, { ...CHANNEL_DEFAULTS }]))
+  );
+  const [channelSaving, setChannelSaving] = useState(null); // key của kênh đang lưu
+
+  const setChannelField = (key, field, value) =>
+    setChannelForms(prev => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
+
   // QR Download
   const [downloadingQR, setDownloadingQR] = useState(false);
   const [qrProgress, setQrProgress] = useState('');
@@ -46,6 +57,7 @@ export default function SettingsPage() {
   useEffect(() => {
     fetchAccounts();
     fetchRestaurantLocation();
+    fetchRewardChannelConfigs();
     fetchPrinters();
     fetchCategories();
   }, []);
@@ -87,6 +99,55 @@ export default function SettingsPage() {
     flash('Đã lưu vị trí nhà hàng!');
     // Re-fetch to confirm saved
     fetchRestaurantLocation();
+  }
+
+  async function fetchRewardChannelConfigs() {
+    const { data, error } = await supabase.from('settings').select('key, value').in('key', ALL_SETTING_KEYS);
+    if (error) { console.warn('reward channel settings error:', error.message); return; }
+    const map = Object.fromEntries((data || []).map(r => [r.key, r.value]));
+    setChannelForms(
+      Object.fromEntries(REWARD_CHANNELS.map(c => {
+        const g = (f) => map[`${c.prefix}_${f}`];
+        return [c.key, {
+          enabled: g('enabled') === 'true',
+          url: g('url') || '',
+          percent: g('percent') ?? '5',
+          max: g('max') ?? '50000',
+          minBill: g('min_bill') ?? '100000',
+          cooldown: g('cooldown_days') ?? '30',
+          wait: g('wait_seconds') ?? '20',
+        }];
+      }))
+    );
+  }
+
+  async function saveRewardChannel(ch) {
+    const form = channelForms[ch.key];
+    const percent = Number(form.percent);
+    if (!(percent > 0 && percent <= 100)) { flash('% giảm phải trong khoảng 1 – 100', true); return; }
+    if (form.enabled && !form.url.trim()) { flash(`Cần nhập link ${ch.short} trước khi bật`, true); return; }
+
+    setChannelSaving(ch.key);
+    const pairs = [
+      [`${ch.prefix}_enabled`, String(form.enabled)],
+      [`${ch.prefix}_url`, form.url.trim()],
+      [`${ch.prefix}_percent`, String(percent)],
+      [`${ch.prefix}_max`, String(Number(form.max) || 0)],
+      [`${ch.prefix}_min_bill`, String(Number(form.minBill) || 0)],
+      [`${ch.prefix}_cooldown_days`, String(Number(form.cooldown) || 0)],
+      [`${ch.prefix}_wait_seconds`, String(Number(form.wait) || 0)],
+    ];
+    for (const [key, value] of pairs) {
+      const { error } = await supabase.from('settings').upsert({ key, value }, { onConflict: 'key' });
+      if (error) {
+        // Fallback giống các chỗ khác: settings có thể chưa có unique trên key
+        await supabase.from('settings').delete().eq('key', key);
+        const { error: insErr } = await supabase.from('settings').insert({ key, value });
+        if (insErr) { setChannelSaving(null); flash('Lỗi: ' + insErr.message, true); return; }
+      }
+    }
+    setChannelSaving(null);
+    flash(`Đã lưu cấu hình ${ch.name}!`);
   }
 
   function getCurrentLocation() {
@@ -589,6 +650,91 @@ export default function SettingsPage() {
           </button>
         </div>
       </div>
+      {/* ── Ưu đãi mạng xã hội (Google / TikTok / Facebook) ── */}
+      <div style={{ marginTop: 28 }}>
+        <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#0f172a', marginBottom: 2 }}>
+          🎁 Ưu đãi mạng xã hội
+        </div>
+        <p style={{ margin: '0 0 6px', fontSize: '0.8rem', color: '#6b7280' }}>
+          Khách bấm ở trang gọi món → nhân viên duyệt ở màn hình bàn → tự trừ tiền vào bill của <b>cả bàn</b>.
+          Mỗi kênh tính riêng, mỗi bàn được <b>1 lần/ngày/kênh</b>.
+        </p>
+        {(() => {
+          const on = REWARD_CHANNELS.filter(c => channelForms[c.key]?.enabled);
+          const tong = on.reduce((sum, c) => sum + (Number(channelForms[c.key]?.percent) || 0), 0);
+          return on.length > 1 ? (
+            <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '8px 11px', fontSize: '0.78rem', color: '#9a3412', marginBottom: 12 }}>
+              ⚠️ Đang bật <b>{on.length}</b> kênh — một bàn có thể làm đủ cả {on.length} kênh trong ngày,
+              tổng giảm tối đa khoảng <b>{tong}%</b> bill. Cân nhắc hạ % từng kênh hoặc đặt trần "Giảm tối đa".
+            </div>
+          ) : null;
+        })()}
+
+        {REWARD_CHANNELS.map(ch => {
+          const form = channelForms[ch.key] || {};
+          // Màu lấy từ registry để 3 nơi (Cài đặt / màn bàn / trang khách) luôn khớp nhau
+          const theme = { main: ch.color, dark: ch.colorDark, soft: ch.colorSoft, border: ch.colorBorder };
+          const saving = channelSaving === ch.key;
+          const preview = calcReviewDiscount(Number(form.minBill) || 0, { percent: Number(form.percent) || 0, max: Number(form.max) || 0 });
+
+          return (
+            <div key={ch.key} style={{ background: 'white', border: `1.5px solid ${theme.border}`, borderRadius: 14, padding: '16px', marginBottom: 12, boxShadow: '0 2px 10px rgba(15,23,42,0.05)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+                <div style={{ fontWeight: 800, fontSize: '0.98rem', color: theme.dark }}>
+                  {ch.icon} {ch.name}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div
+                    onClick={() => setChannelField(ch.key, 'enabled', !form.enabled)}
+                    style={{ position: 'relative', width: 44, height: 24, background: form.enabled ? theme.main : '#d1d5db', borderRadius: 12, cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0 }}
+                  >
+                    <div style={{ position: 'absolute', top: 2, left: form.enabled ? 22 : 2, width: 20, height: 20, background: 'white', borderRadius: '50%', transition: 'left 0.2s' }} />
+                  </div>
+                  <span style={{ fontWeight: 700, fontSize: '0.8rem', color: form.enabled ? theme.dark : '#6b7280' }}>
+                    {form.enabled ? 'Đang bật' : 'Đang tắt'}
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#374151' }}>Link {ch.short} *</label>
+                <input value={form.url || ''} onChange={e => setChannelField(ch.key, 'url', e.target.value)}
+                  placeholder={ch.key === 'google' ? 'https://search.google.com/local/writereview?placeid=...' : ch.key === 'tiktok' ? 'https://www.tiktok.com/@tenquan' : 'https://www.facebook.com/tenquan'}
+                  style={{ padding: '8px 10px', border: `1.5px solid ${theme.border}`, borderRadius: 8, fontSize: '0.85rem' }} />
+                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>{ch.urlHint}</span>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+                {[
+                  { f: 'percent', label: '% giảm trên tổng bill bàn', min: 1, max: 100, step: 1 },
+                  { f: 'max', label: 'Giảm tối đa (đ)', min: 0, step: 1000 },
+                  { f: 'minBill', label: 'Bill tối thiểu (đ)', min: 0, step: 10000 },
+                  { f: 'cooldown', label: 'Mỗi SĐT cách nhau (ngày)', min: 0, step: 1 },
+                  { f: 'wait', label: 'Chờ tối thiểu (giây)', min: 0, step: 1 },
+                ].map(fld => (
+                  <div key={fld.f} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#374151' }}>{fld.label}</label>
+                    <input type="number" min={fld.min} max={fld.max} step={fld.step}
+                      value={form[fld.f] ?? ''}
+                      onChange={e => setChannelField(ch.key, fld.f, e.target.value)}
+                      style={{ padding: '8px 10px', border: `1.5px solid ${theme.border}`, borderRadius: 8, fontSize: '0.85rem' }} />
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ background: theme.soft, border: `1px solid ${theme.border}`, borderRadius: 8, padding: '9px 11px', fontSize: '0.76rem', color: theme.dark, marginBottom: 12, lineHeight: 1.55 }}>
+                Ví dụ: bill bàn <b>{(Number(form.minBill) || 0).toLocaleString('vi-VN')}đ</b> → giảm <b>{preview.toLocaleString('vi-VN')}đ</b>.
+              </div>
+
+              <button onClick={() => saveRewardChannel(ch)} disabled={saving}
+                style={{ padding: '8px 16px', background: theme.main, color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 700, opacity: saving ? 0.7 : 1 }}>
+                {saving ? 'Đang lưu...' : '💾 Lưu cấu hình'}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
       {/* ── Máy in ── */}
       <div style={{ marginTop: 28, background: 'white', border: '1.5px solid #e9d5ff', borderRadius: 14, padding: '18px 16px', boxShadow: '0 2px 10px rgba(124,58,237,0.06)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>

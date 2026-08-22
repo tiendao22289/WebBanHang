@@ -7,6 +7,7 @@ import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
+import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, fetchGroupBillTotal, startOfTodayISO, isReviewDiscountItem } from '@/lib/reviewReward';
 import {
   Search,
   Plus,
@@ -490,10 +491,10 @@ const DraggableFeedbackBubble = ({ onOpen }) => {
       onMouseDown={handleMouseDown}
       onClick={handleTap}
       type="button"
-      aria-label="Đánh giá quán"
+      aria-label="Góp ý cho quán"
     >
       <span className="co-feedback-drop">★</span>
-      <span className="co-feedback-label">Đánh giá</span>
+      <span className="co-feedback-label">Góp ý</span>
       <span className="co-feedback-badge">Mới!</span>
     </button>
   );
@@ -561,6 +562,30 @@ function OrderContent() {
   const [orderCancelled, setOrderCancelled] = useState(false); // admin cancelled
   const [orderPaid, setOrderPaid] = useState(null); // { total } khi admin thanh toán
   const [locationWarning, setLocationWarning] = useState(false); // khách không ở nhà hàng
+  // ── Ưu đãi đánh giá Google Maps ──
+  const [channelCfgs, setChannelCfgs] = useState([]);    // cấu hình mọi kênh, lấy từ settings
+  const [reviewOpen, setReviewOpen] = useState(false);   // overlay
+  const [reviewChannel, setReviewChannel] = useState(null); // kênh đang thao tác; null = màn hình chọn kênh
+  const [reviewStep, setReviewStep] = useState('intro'); // intro | waiting | awaiting_staff | approved | rejected
+  const [reviewWaitLeft, setReviewWaitLeft] = useState(0);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewErr, setReviewErr] = useState('');
+  const [reviewReward, setReviewReward] = useState(null); // bản ghi review_rewards hiện tại
+  const [reviewBillTotal, setReviewBillTotal] = useState(0);
+  const [reviewEligible, setReviewEligible] = useState(false);
+  const [reviewChecking, setReviewChecking] = useState(false);
+  const [channelStates, setChannelStates] = useState({}); // { [key]: 'approved' | 'awaiting_staff' }
+  const [reviewSessionStart, setReviewSessionStart] = useState(null); // tables.occupied_at của lượt hiện tại
+  const [reviewBlockCode, setReviewBlockCode] = useState(null);       // 'no_session' | 'no_phone' | 'off_site'
+  const [reviewInfoForm, setReviewInfoForm] = useState({ name: '', phone: '' });
+  const [reviewInfoSaving, setReviewInfoSaving] = useState(false);
+  // Lượt mở xem: 'all' = bảng quà, còn lại theo key kênh. null = chưa tải xong.
+  const [rewardViews, setRewardViews] = useState({});
+
+  // Các kênh đang bật — dùng cho nút pill và bảng chọn kênh
+  const activeChannels = channelCfgs.filter(c => c.enabled);
+  const totalPercent = activeChannels.reduce((sum, c) => sum + (Number(c.percent) || 0), 0);
+
   // Promotion
   const [promoConfig, setPromoConfig] = useState({ enabled: false, threshold: 8 });
   const [giftItems, setGiftItems] = useState([]); // is_gift_item items
@@ -1196,12 +1221,13 @@ function OrderContent() {
       setMergeGroupIds(gIds);
       mergeGroupIdsRef.current = gIds;
     }
-    // Load promotion config
+    // Load promotion config + cấu hình ưu đãi đánh giá Google
     const { data: settings } = await supabase.from('settings').select('key, value')
-      .in('key', ['promotion_enabled', 'promotion_threshold']);
+      .in('key', ['promotion_enabled', 'promotion_threshold', ...ALL_SETTING_KEYS]);
     if (settings) {
       const map = Object.fromEntries(settings.map(r => [r.key, r.value]));
       setPromoConfig({ enabled: map.promotion_enabled === 'true', threshold: parseInt(map.promotion_threshold) || 8 });
+      setChannelCfgs(parseAllChannelConfigs(settings));
     }
     const { data: gifts } = await supabase.from('menu_items').select('id, name, price, image_url, options').eq('is_gift_item', true).eq('is_available', true);
     setGiftItems(gifts || []);
@@ -1356,6 +1382,389 @@ function OrderContent() {
 
   // Mở overlay ưu đãi. Đếm THEO THIẾT BỊ: mỗi thiết bị chỉ +1 lần đầu,
   // các lần mở sau chỉ đọc lại số để hiển thị (không cộng thêm).
+  // ══════════════════════════════════════════════════════════
+  //  ƯU ĐÃI MẠNG XÃ HỘI (Google / TikTok / Facebook)
+  //  Khách làm → nhân viên duyệt → trừ tiền vào bill cả bàn.
+  //  Mỗi kênh tính riêng: 1 bàn có thể nhận nhiều kênh trong ngày.
+  // ══════════════════════════════════════════════════════════
+  function reviewStorageKey(channelKey) {
+    return `reward_${channelKey}_${activeTableId || urlTableId || 'x'}`;
+  }
+
+  function reviewGroupIds() {
+    return mergeGroupIdsRef.current?.length > 0 ? mergeGroupIdsRef.current : [activeTableId];
+  }
+
+  // Takeaway dùng chung 1 "bàn" ảo cho mọi khách → phải lọc theo SĐT,
+  // nếu không thì tổng bill (và ưu đãi) bị gộp chung của người khác.
+  function reviewPhoneFilter() {
+    return isTakeawayRef.current ? (customerPhoneRef.current || '').trim() || null : null;
+  }
+
+  // ── Lượt mở xem (dùng chung bảng feature_views với 2 bảng ưu đãi cũ) ──
+  const REWARD_VIEW_KEYS = ['reward_all', ...REWARD_CHANNELS.map(c => `reward_${c.key}`)];
+
+  async function fetchRewardViews() {
+    const { data } = await supabase
+      .from('feature_views').select('feature, views').in('feature', REWARD_VIEW_KEYS);
+    const map = {};
+    (data || []).forEach(r => { map[r.feature] = Number(r.views) || 0; });
+    // Key chưa có dòng nào trong DB thì coi là 0 (RPC sẽ tự tạo khi có người bấm)
+    REWARD_VIEW_KEYS.forEach(k => { if (map[k] == null) map[k] = 0; });
+    setRewardViews(map);
+  }
+
+  /**
+   * Cộng 1 lượt xem, mỗi thiết bị chỉ tính 1 lần — giống cách 2 bảng
+   * "Thử thách có quà" / "Đặt tiệc có quà" đang làm, để số liệu so sánh được.
+   */
+  async function bumpRewardView(feature) {
+    try {
+      const storageKey = `promo_viewed_${feature}`;
+      let already = false;
+      try { already = !!localStorage.getItem(storageKey); } catch { }
+      if (already) return;
+
+      const { data } = await supabase.rpc('increment_feature_view', { p_feature: feature });
+      const n = Number(data);
+      if (data != null && !isNaN(n)) setRewardViews(prev => ({ ...prev, [feature]: n }));
+      try { localStorage.setItem(storageKey, '1'); } catch { }
+    } catch (err) {
+      console.error('[bumpRewardView]', feature, err);
+    }
+  }
+
+  // Mốc bắt đầu LƯỢT KHÁCH hiện tại của bàn (tables.occupied_at).
+  // Thanh toán xong occupied_at bị xoá → lượt sau là lượt hoàn toàn mới,
+  // nên khách sau không bị chặn bởi ưu đãi của khách trước cùng bàn.
+  async function fetchSessionStart() {
+    if (!activeTableId) return null;
+    const { data } = await supabase
+      .from('tables').select('occupied_at').eq('id', activeTableId).maybeSingle();
+    return data?.occupied_at || null;
+  }
+
+  /**
+   * Query "bàn/khách này đã nhận ưu đãi chưa".
+   * - Dine-in : theo bàn, chỉ tính trong lượt khách hiện tại
+   * - Takeaway: theo SĐT trong ngày (mọi khách mang về dùng chung 1 bàn ảo,
+   *             lọc theo bàn sẽ khiến họ chặn nhau)
+   */
+  function claimedQuery(sessionStart) {
+    let q = supabase.from('review_rewards').select('id, channel, status');
+    if (isTakeawayRef.current) {
+      const phone = (customerPhoneRef.current || '').trim();
+      return q.eq('customer_phone', phone).gte('created_at', startOfTodayISO());
+    }
+    return q.eq('host_table_id', activeTableId).gte('created_at', sessionStart);
+  }
+
+  const REVIEW_BLOCK_TEXT = {
+    no_session: 'Quý khách gọi vài món trước nha, rồi quán bớt tiền ngay vào hoá đơn 😊',
+    off_site: 'Quà này quán chỉ dành cho Quý khách đang ngồi tại quán thôi ạ 😊',
+  };
+
+  /**
+   * Mã lý do không đủ điều kiện, dùng chung cho mọi kênh. null = hợp lệ.
+   * 'no_phone' được xử lý riêng: hiện khung nhập tên/SĐT ngay tại chỗ
+   * thay vì bắt khách thoát ra gọi món rồi quay lại.
+   */
+  function commonBlockReason(sessionStart) {
+    if (!isTakeawayRef.current && !sessionStart) return 'no_session';
+    if (!(customerPhoneRef.current || '').trim()) return 'no_phone';
+    if (locationWarning) return 'off_site';
+    return null;
+  }
+
+  /** Lưu tên + SĐT khách vào data khách hàng (giống lúc gửi đơn). */
+  async function upsertCustomerInfo(name, phone) {
+    const { data: existing } = await supabase
+      .from('customers')
+      .select('id, name')
+      .eq('phone', phone)
+      .maybeSingle();
+
+    if (existing) {
+      await supabase.from('customers')
+        .update({ name: name || existing.name, last_visit_at: new Date().toISOString() })
+        .eq('id', existing.id);
+      return existing.id;
+    }
+    const { data: created } = await supabase.from('customers')
+      .insert({ name: name || 'Khách mới', phone, last_visit_at: new Date().toISOString() })
+      .select('id')
+      .maybeSingle();
+    return created?.id || null;
+  }
+
+  /** Khách điền tên/SĐT ngay trong bảng ưu đãi rồi tiếp tục luôn. */
+  async function submitReviewInfo(cfg) {
+    const name = (reviewInfoForm.name || '').trim();
+    const phone = (reviewInfoForm.phone || '').trim().replace(/[\s.-]/g, '');
+
+    if (!name) { setReviewErr('Quý khách cho quán xin tên với ạ 😊'); return; }
+    if (!/^(0\d{9}|(\+?84)\d{9})$/.test(phone)) {
+      setReviewErr('Số này chưa đúng rồi ạ — Quý khách nhập 10 số giúp quán nhé (vd 0977496781).');
+      return;
+    }
+    // Chuẩn hoá về dạng 0xxxxxxxxx để không tạo 2 bản ghi khách cho cùng 1 số
+    const normalized = phone.replace(/^(\+?84)/, '0');
+
+    setReviewInfoSaving(true);
+    setReviewErr('');
+    try {
+      setCustomerName(name);
+      setCustomerPhone(normalized);
+      customerPhoneRef.current = normalized; // set tay: setState chưa kịp cập nhật ref
+
+      const saved = getSavedSession();
+      saveSession(name, normalized, saved?.deliveryAddress || deliveryAddress || '', saved?.orderId || null, cart);
+
+      await upsertCustomerInfo(name, normalized);
+    } catch (err) {
+      console.error('[submitReviewInfo]', err);
+      setReviewInfoSaving(false);
+      setReviewErr('Quán chưa lưu được, Quý khách thử lại giúp ạ.');
+      return;
+    }
+    setReviewInfoSaving(false);
+    await selectReviewChannel(cfg); // kiểm lại điều kiện, giờ đã có SĐT
+  }
+
+  // Mở bảng chọn kênh: lấy tổng bill + trạng thái từng kênh của bàn hôm nay
+  async function openReviewOverlay() {
+    if (activeChannels.length === 0) return;
+    setReviewOpen(true);
+    setReviewChannel(null);
+    setReviewErr('');
+    setReviewChecking(true);
+    fetchRewardViews();
+    bumpRewardView('reward_all');
+
+    try {
+      const total = await fetchGroupBillTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
+      setReviewBillTotal(total);
+
+      const sessionStart = await fetchSessionStart();
+      setReviewSessionStart(sessionStart);
+      // Cố tình KHÔNG chặn ở đây: khách chưa gọi món vẫn được xem đủ ưu đãi
+      // cho biết mà cân nhắc. Điều kiện chỉ kiểm khi bấm vào từng kênh.
+      setReviewErr('');
+      setReviewBlockCode(null);
+
+      const { data: rows } = await claimedQuery(sessionStart)
+        .in('status', ['awaiting_staff', 'approved']);
+
+      // approved thắng awaiting_staff nếu vì lý do nào đó có cả hai
+      const map = {};
+      (rows || []).forEach(r => {
+        if (map[r.channel] !== 'approved') map[r.channel] = r.status;
+      });
+      setChannelStates(map);
+    } catch (err) {
+      console.error('[openReviewOverlay]', err);
+      setReviewErr('Quán chưa tải được danh sách quà. Quý khách thử lại hoặc gọi nhân viên nhé!');
+    }
+    setReviewChecking(false);
+  }
+
+  // Chọn 1 kênh → kiểm tra điều kiện của riêng kênh đó
+  async function selectReviewChannel(cfg) {
+    setReviewChannel(cfg.key);
+    bumpRewardView(`reward_${cfg.key}`);
+    setReviewErr('');
+    setReviewChecking(true);
+    setReviewEligible(false);
+    setReviewStep('intro');
+    setReviewReward(null);
+    setReviewBlockCode(null);
+
+    try {
+      const total = await fetchGroupBillTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
+      setReviewBillTotal(total);
+
+      // 1) Khôi phục yêu cầu đang treo (khách F5 hoặc quay lại từ tab ngoài)
+      let savedId = null;
+      try { savedId = localStorage.getItem(reviewStorageKey(cfg.key)); } catch { }
+      if (savedId) {
+        const { data: saved } = await supabase
+          .from('review_rewards').select('*').eq('id', savedId).maybeSingle();
+        if (saved && ['pending', 'awaiting_staff', 'approved'].includes(saved.status)) {
+          setReviewReward(saved);
+          setReviewStep(saved.status === 'pending' ? 'waiting' : saved.status);
+          if (saved.status === 'pending') setReviewWaitLeft(0); // đã rời trang → cho xác nhận ngay
+          setReviewChecking(false);
+          return;
+        }
+        if (saved && saved.status === 'rejected') {
+          setReviewReward(saved);
+          setReviewStep('rejected');
+          setReviewChecking(false);
+          return;
+        }
+        try { localStorage.removeItem(reviewStorageKey(cfg.key)); } catch { }
+      }
+
+      // 2) Kiểm tra điều kiện
+      const sessionStart = await fetchSessionStart();
+      setReviewSessionStart(sessionStart);
+      const blocked = commonBlockReason(sessionStart);
+      setReviewBlockCode(blocked);
+      if (blocked === 'no_phone') {
+        // Không phải lỗi — chỉ là thiếu thông tin, hiện khung nhập ngay tại chỗ
+        const saved = getSavedSession();
+        setReviewInfoForm({
+          name: (customerName || saved?.customerName || '').trim(),
+          phone: (saved?.customerPhone || '').trim(),
+        });
+        setReviewChecking(false);
+        return;
+      }
+      if (blocked) {
+        setReviewErr(REVIEW_BLOCK_TEXT[blocked] || 'Chưa áp dụng được ưu đãi.');
+        setReviewChecking(false);
+        return;
+      }
+
+      if (cfg.minBill > 0 && total < cfg.minBill) {
+        setReviewErr(`Quà này dành cho hoá đơn từ ${formatPrice(cfg.minBill)}. Quý khách gọi thêm chút nữa là có liền 😋`);
+        setReviewChecking(false);
+        return;
+      }
+
+      const { data: todayRows } = await claimedQuery(sessionStart)
+        .eq('channel', cfg.key)
+        .in('status', ['awaiting_staff', 'approved']);
+
+      if ((todayRows || []).some(r => r.status === 'approved')) {
+        setReviewErr(`Bàn mình nhận quà ${cfg.short} rồi ạ. Cảm ơn Quý khách nhiều nha! 🥰`);
+        setReviewChecking(false);
+        return;
+      }
+      if ((todayRows || []).some(r => r.status === 'awaiting_staff')) {
+        setReviewErr('Quán đang kiểm cái này cho bàn mình, Quý khách chờ chút nhé 😊');
+        setReviewChecking(false);
+        return;
+      }
+
+      const phone = (customerPhoneRef.current || '').trim();
+      if (cfg.cooldownDays > 0 && phone) {
+        const cutoff = new Date(Date.now() - cfg.cooldownDays * 86400000).toISOString();
+        const { data: recent } = await supabase
+          .from('review_rewards')
+          .select('id')
+          .eq('customer_phone', phone)
+          .eq('channel', cfg.key)
+          .eq('status', 'approved')
+          .gte('created_at', cutoff)
+          .limit(1);
+        if (recent?.length) {
+          setReviewErr(`Số này vừa nhận quà ${cfg.short} gần đây rồi ạ. Hẹn Quý khách lần ghé sau nha! 👋`);
+          setReviewChecking(false);
+          return;
+        }
+      }
+
+      setReviewEligible(true);
+    } catch (err) {
+      console.error('[selectReviewChannel]', err);
+      setReviewErr('Quán chưa kiểm được, Quý khách thử lại hoặc gọi nhân viên nhé!');
+    }
+    setReviewChecking(false);
+  }
+
+  // Gọi khi khách bấm link mở Google/TikTok/Facebook. KHÔNG chặn điều hướng
+  // (tránh bị chặn popup), bản ghi được tạo song song ở nền.
+  function handleReviewLinkClick(cfg) {
+    setReviewStep('waiting');
+    setReviewWaitLeft(cfg?.waitSeconds || 0);
+
+    (async () => {
+      const { data, error } = await supabase.from('review_rewards').insert({
+        table_id: urlTableId || activeTableId,
+        host_table_id: activeTableId,
+        order_id: getSavedSession()?.orderId || null,
+        customer_name: (customerName || '').trim() || null,
+        customer_phone: (customerPhoneRef.current || '').trim() || null,
+        channel: cfg.key,
+        status: 'pending',
+        bill_total: reviewBillTotal,
+      }).select().maybeSingle();
+
+      if (error || !data) {
+        console.error('[review reward insert]', error);
+        setReviewErr('Quán chưa ghi nhận được, Quý khách gọi nhân viên giúp ạ!');
+        return;
+      }
+      setReviewReward(data);
+      try { localStorage.setItem(reviewStorageKey(cfg.key), data.id); } catch { }
+    })();
+  }
+
+  async function confirmReviewDone() {
+    if (!reviewReward?.id) {
+      setReviewErr('Quán chưa ghi nhận được, Quý khách gọi nhân viên giúp ạ!');
+      return;
+    }
+    setReviewBusy(true);
+    setReviewErr('');
+    const { data, error } = await supabase
+      .from('review_rewards')
+      .update({ status: 'awaiting_staff', requested_at: new Date().toISOString() })
+      .eq('id', reviewReward.id)
+      .eq('status', 'pending')
+      .select()
+      .maybeSingle();
+    setReviewBusy(false);
+
+    if (error || !data) {
+      setReviewErr('Gửi chưa được ạ, Quý khách bấm lại giúp quán nhé!');
+      return;
+    }
+    setReviewReward(data);
+    setReviewStep('awaiting_staff');
+    setChannelStates(prev => ({ ...prev, [data.channel]: 'awaiting_staff' }));
+  }
+
+  // Đếm ngược trước khi cho phép bấm "Tôi đã xong"
+  useEffect(() => {
+    if (reviewStep !== 'waiting' || reviewWaitLeft <= 0) return;
+    const t = setTimeout(() => setReviewWaitLeft(n => Math.max(0, n - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [reviewStep, reviewWaitLeft]);
+
+  // Theo dõi kết quả duyệt của nhân viên — chạy kể cả khi overlay đã đóng
+  useEffect(() => {
+    const rewardId = reviewReward?.id;
+    if (!rewardId) return;
+    if (['approved', 'rejected'].includes(reviewReward.status)) return;
+
+    const channel = supabase
+      .channel(`review-reward-${rewardId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'review_rewards',
+        filter: `id=eq.${rewardId}`,
+      }, (payload) => {
+        const row = payload.new;
+        const ch = getChannel(row.channel);
+        setReviewReward(row);
+        setChannelStates(prev => ({ ...prev, [row.channel]: row.status }));
+        if (row.status === 'approved') {
+          setReviewStep('approved');
+          showFeedbackToast('success', 'Cảm ơn Quý khách nha! 🎉', `${ch.short}: hoá đơn vừa bớt ${formatPrice(row.discount_amount || 0)} rồi ạ.`);
+          refreshPreviousOrdersReliably();
+          try { localStorage.removeItem(reviewStorageKey(row.channel)); } catch { }
+        } else if (row.status === 'rejected') {
+          setReviewStep('rejected');
+          showFeedbackToast('warning', 'Quà chưa vào được ạ', row.reject_reason || 'Quý khách gọi nhân viên một tiếng nhé!');
+          try { localStorage.removeItem(reviewStorageKey(row.channel)); } catch { }
+        }
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [reviewReward?.id, reviewReward?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function openPromoOverlay(kind) {
     if (kind === 'party') setPartyOpen(true); else setThanksOpen(true);
     try {
@@ -1456,7 +1865,7 @@ function OrderContent() {
 
     if (error) {
       if (error.code === '42703') {
-        showFeedbackToast('error', 'Chưa lưu được', 'Database chưa có cột đánh giá. Vui lòng chạy file SQL trên Supabase.');
+        showFeedbackToast('error', 'Chưa lưu được', 'Database chưa có cột góp ý. Vui lòng chạy file SQL trên Supabase.');
       } else {
         showFeedbackToast('error', 'Chưa lưu được', error.message || 'Vui lòng thử lại sau!');
       }
@@ -2490,11 +2899,18 @@ function OrderContent() {
           {/* ── Hàng nút ưu đãi gọn ở góc phải (bấm mở overlay) ── */}
           <div className="co-promo-btns">
             <button className="co-promo-pill challenge" onClick={() => openPromoOverlay('challenge')}>
-              🎁 Thử thách có quà
+              🎁 Thử thách
             </button>
             <button className="co-promo-pill party" onClick={() => openPromoOverlay('party')}>
-              🎉 Đặt tiệc có quà
+              🎉 Đặt tiệc
             </button>
+            {activeChannels.length > 0 && (
+              <button className="co-promo-pill gmap" onClick={openReviewOverlay}>
+                {activeChannels.length === 1
+                  ? `${activeChannels[0].icon} ${activeChannels[0].short} −${activeChannels[0].percent}%`
+                  : `🎁 Có quà −${totalPercent}%`}
+              </button>
+            )}
           </div>
 
           {/* Filter row: category dropdown + search */}
@@ -2527,11 +2943,11 @@ function OrderContent() {
             <button
               className="co-feedback-inline-btn"
               type="button"
-              aria-label="Đánh giá quán"
+              aria-label="Góp ý cho quán"
               onClick={() => setShowFeedbackModal(true)}
             >
               <span className="co-feedback-drop">★</span>
-              <span className="co-feedback-label">Đánh giá</span>
+              <span className="co-feedback-label">Góp ý</span>
             </button>
           </div>
         </div>
@@ -2929,6 +3345,219 @@ function OrderContent() {
             </div>
           </div>
         )}
+
+        {/* ─── Overlay Ưu đãi mạng xã hội ─── */}
+        {reviewOpen && activeChannels.length > 0 && (() => {
+          const cfg = reviewChannel ? activeChannels.find(c => c.key === reviewChannel) : null;
+          return (
+            <div className="co-chal-overlay" onClick={() => setReviewOpen(false)}>
+              <div className="co-chal-modal" onClick={e => e.stopPropagation()}>
+                <button className="co-chal-close" onClick={() => setReviewOpen(false)} aria-label="Đóng">
+                  <X size={20} />
+                </button>
+                <div className="co-chal-modal-title">
+                  {cfg ? `${cfg.icon} ${cfg.custName}` : `🎁 Quán có quà cho Quý khách`}
+                </div>
+                <div className="co-chal-scroll">
+
+                  {/* ─── Màn hình chọn kênh ─── */}
+                  {!cfg && (
+                    <>
+                      <div className="co-chal-views">👁 {rewardViews.reward_all ?? '…'} lượt xem</div>
+                      <div className="co-gmap-amount">
+                        {reviewBillTotal > 0 ? (
+                          <>
+                            <div className="co-gmap-amount-label">Hoá đơn của bàn mình</div>
+                            <div className="co-gmap-amount-total">{formatPrice(reviewBillTotal)}</div>
+                          </>
+                        ) : (
+                          <div className="co-gmap-amount-total" style={{ fontSize: '1.05rem' }}>
+                            Nay quán có quà 🎁
+                          </div>
+                        )}
+                        <div className="co-gmap-amount-save">
+                          Làm được mục nào quán tặng mục đó — đủ {activeChannels.length} mục là bớt tới <b>{totalPercent}%</b> hoá đơn
+                        </div>
+                      </div>
+
+                      {reviewChecking && <div className="co-gmap-state">⏳ Đang tải ưu đãi...</div>}
+                      {!reviewChecking && reviewErr && <div className="co-gmap-state co-gmap-warn">{reviewErr}</div>}
+
+                      {!reviewChecking && activeChannels.map(c => {
+                        const st = channelStates[c.key];
+                        const money = calcReviewDiscount(reviewBillTotal, c);
+                        return (
+                          <button
+                            key={c.key}
+                            className={`co-gmap-channel ${st === 'approved' ? 'done' : st === 'awaiting_staff' ? 'pending' : ''}`}
+                            onClick={() => selectReviewChannel(c)}
+                            style={{ borderLeft: `5px solid ${c.color}` }}
+                          >
+                            <span className="co-gmap-channel-icon" style={{ background: c.color }}>{c.icon}</span>
+                            <span className="co-gmap-channel-body">
+                              <span className="co-gmap-channel-name">{c.custName}</span>
+                              <span className="co-gmap-channel-subrow">
+                                <span className="co-gmap-channel-sub">
+                                  {st === 'approved'
+                                    ? '🎉 Nhận rồi, cảm ơn Quý khách!'
+                                    : st === 'awaiting_staff'
+                                      ? '⏳ Quán đang kiểm, chờ chút nhé'
+                                      : money > 0
+                                        ? `Bớt ngay ${formatPrice(money)} (${c.percent}%)`
+                                        : `Quán bớt ${c.percent}% hoá đơn`}
+                                </span>
+                                <span className="co-gmap-channel-views">
+                                  👁 {rewardViews[`reward_${c.key}`] ?? '…'}
+                                </span>
+                              </span>
+                            </span>
+                            {st !== 'approved' && <span className="co-gmap-channel-go">›</span>}
+                          </button>
+                        );
+                      })}
+
+                      <div className="co-gmap-note">
+                        Quán thích nghe thật lòng hơn nghe lời hay 😊 Quý khách cứ nói đúng
+                        cảm nhận, quà vẫn nhận đủ nha!
+                      </div>
+                    </>
+                  )}
+
+                  {/* ─── Màn hình 1 kênh ─── */}
+                  {cfg && (
+                    <>
+                      {activeChannels.length > 1 && (
+                        <button className="co-gmap-back" onClick={() => { setReviewChannel(null); setReviewErr(''); }}>
+                          ‹ Xem quà khác
+                        </button>
+                      )}
+
+                      {reviewChecking && <div className="co-gmap-state">⏳ Đang kiểm tra ưu đãi...</div>}
+                      {!reviewChecking && reviewErr && <div className="co-gmap-state co-gmap-warn">{reviewErr}</div>}
+
+                      {/* Thiếu tên/SĐT — cho điền ngay tại đây rồi đi tiếp,
+                          không bắt khách thoát ra gọi món rồi quay lại */}
+                      {!reviewChecking && reviewBlockCode === 'no_phone' && (
+                        <div className="co-gmap-info-form">
+                          <div className="co-gmap-info-title">
+                            Quán chưa biết tên Quý khách 😅 Cho quán xin tên với số điện thoại để ghi nhận quà nha!
+                          </div>
+                          <input
+                            className="co-gmap-input"
+                            type="text"
+                            placeholder="Quý khách tên gì ạ?"
+                            value={reviewInfoForm.name}
+                            onChange={e => setReviewInfoForm(p => ({ ...p, name: e.target.value }))}
+                          />
+                          <input
+                            className="co-gmap-input"
+                            type="tel"
+                            inputMode="numeric"
+                            placeholder="Số điện thoại (vd 0977496781)"
+                            value={reviewInfoForm.phone}
+                            onChange={e => setReviewInfoForm(p => ({ ...p, phone: e.target.value }))}
+                          />
+                          <button
+                            className="co-gmap-cta"
+                            disabled={reviewInfoSaving}
+                            onClick={() => submitReviewInfo(cfg)}
+                          >
+                            {reviewInfoSaving ? 'Đang lưu...' : 'Xong, đi nhận quà →'}
+                          </button>
+                          <div className="co-gmap-info-note">
+                            Quán chỉ dùng để ghi quà và tích điểm, không nhắn tin quảng cáo đâu ạ.
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Bước 1 — giới thiệu + mở link */}
+                      {!reviewChecking && !reviewErr && !reviewBlockCode && reviewEligible && reviewStep === 'intro' && (
+                        <>
+                          <div className="co-gmap-amount">
+                            <div className="co-gmap-amount-label">Hoá đơn của bàn mình</div>
+                            <div className="co-gmap-amount-total">{formatPrice(reviewBillTotal)}</div>
+                            <div className="co-gmap-amount-save">
+                              Làm xong là bớt ngay <b>{formatPrice(calcReviewDiscount(reviewBillTotal, cfg))}</b> 🎉
+                            </div>
+                          </div>
+                          <ol className="co-gmap-steps">
+                            {cfg.steps.map((t, i) => <li key={i}>{t}</li>)}
+                            <li>Quay lại đây bấm <b>“Xong rồi nha”</b>.</li>
+                            <li>Nhân viên ghé xác nhận một cái là tiền bớt liền.</li>
+                          </ol>
+                          <a
+                            className="co-gmap-cta"
+                            href={cfg.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() => handleReviewLinkClick(cfg)}
+                          >
+                            {cfg.icon} {cfg.cta}
+                          </a>
+                        </>
+                      )}
+
+                      {/* Bước 2 — chờ khách quay lại */}
+                      {reviewStep === 'waiting' && (
+                        <>
+                          <div className="co-gmap-state">
+                            Xong bên {cfg.short} rồi thì bấm nút dưới, quán ghi nhận liền 😊
+                          </div>
+                          <button
+                            className="co-gmap-cta"
+                            disabled={reviewWaitLeft > 0 || reviewBusy}
+                            onClick={confirmReviewDone}
+                          >
+                            {reviewWaitLeft > 0
+                              ? `Chờ ${reviewWaitLeft} giây nữa nhé...`
+                              : reviewBusy ? 'Đang gửi...' : '✌️ Xong rồi nha!'}
+                          </button>
+                          <a className="co-gmap-link" href={cfg.url} target="_blank" rel="noopener noreferrer">
+                            Mở lại {cfg.short} một lần nữa
+                          </a>
+                        </>
+                      )}
+
+                      {/* Bước 3 — chờ nhân viên duyệt (khách cứ đóng, không phải ngồi chờ) */}
+                      {reviewStep === 'awaiting_staff' && (
+                        <>
+                          <div className="co-gmap-state co-gmap-pending">
+                            <div className="co-gmap-big">⏳</div>
+                            <div><b>Quán nhận được rồi ạ!</b></div>
+                            <div>
+                              Quý khách cứ đóng bảng này, gọi món tiếp cho vui.
+                              Nhân viên xác nhận xong là tiền <b>tự bớt vào hoá đơn</b>, có thông báo hiện lên liền.
+                            </div>
+                          </div>
+                          <button className="co-gmap-cta" onClick={() => setReviewOpen(false)}>
+                            Đóng, gọi món tiếp 😋
+                          </button>
+                        </>
+                      )}
+
+                      {/* Bước 4 — xong */}
+                      {reviewStep === 'approved' && (
+                        <div className="co-gmap-state co-gmap-ok">
+                          <div className="co-gmap-big">🎉</div>
+                          <div><b>Cảm ơn Quý khách nhiều nha!</b></div>
+                          <div>Hoá đơn của bàn vừa bớt <b>{formatPrice(reviewReward?.discount_amount || 0)}</b> rồi ạ.</div>
+                        </div>
+                      )}
+
+                      {reviewStep === 'rejected' && (
+                        <div className="co-gmap-state co-gmap-warn">
+                          <div><b>Quà chưa vào được ạ</b></div>
+                          <div>{reviewReward?.reject_reason || 'Quý khách gọi nhân viên một tiếng, quán xử lý ngay nhé!'}</div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ─── Overlay Thể lệ thử thách — đè lên tất cả (kể cả bubble khuyến mãi) ─── */}
         {thanksOpen && (
@@ -3436,7 +4065,7 @@ function OrderContent() {
               <div className="co-feedback-modal" onClick={e => e.stopPropagation()}>
                 <div className="co-feedback-modal-header">
                   <div>
-                    <h3>Đánh giá quán</h3>
+                    <h3>Góp ý cho quán</h3>
                     <p>Góp ý của quý khách giúp quán phục vụ tốt hơn.</p>
                   </div>
                   <button onClick={() => setShowFeedbackModal(false)}><X size={18} /></button>
@@ -3468,7 +4097,7 @@ function OrderContent() {
                   }}
                   disabled={feedbackOrder ? !!feedbackSaving[feedbackOrder.id] : !!feedbackSaving.general}
                 >
-                  {(feedbackOrder ? feedbackSaving[feedbackOrder.id] : feedbackSaving.general) ? 'Đang gửi...' : 'Gửi đánh giá'}
+                  {(feedbackOrder ? feedbackSaving[feedbackOrder.id] : feedbackSaving.general) ? 'Đang gửi...' : 'Gửi góp ý'}
                 </button>
               </div>
             </div>
@@ -3621,11 +4250,20 @@ function OrderContent() {
                           );
                         })()}
                       </div>
-                      {order.order_items?.map(oi => (
+                      {order.order_items?.map(oi => isReviewDiscountItem(oi) ? (
+                        <div key={oi.id} className="co-prev-item co-prev-discount">
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            ⭐ {oi.item_name || 'Giảm giá ưu đãi'}
+                          </span>
+                          <span style={{ color: '#047857', fontWeight: 800 }}>
+                            {formatPrice(oi.unit_price * oi.quantity)}
+                          </span>
+                        </div>
+                      ) : (
                         <div key={oi.id} className="co-prev-item">
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                              {oi.quantity}x {oi.menu_item?.name || '—'}
+                              {oi.quantity}x {oi.menu_item?.name || oi.item_name || '—'}
                               {oi.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>🎁 Món Tặng</span>}
                             </span>
                             {oi.item_options && oi.item_options.length > 0 && (
@@ -3653,7 +4291,7 @@ function OrderContent() {
                         )}
                       </div>
                       <div className="co-feedback-box">
-                        <div className="co-feedback-title">Đánh giá & góp ý</div>
+                        <div className="co-feedback-title">Góp ý của Quý khách</div>
                         <div className="co-rating-stars">
                           {[1, 2, 3, 4, 5].map(star => {
                             const activeRating = feedbackForms[order.id]?.rating ?? order.customer_rating ?? 0;

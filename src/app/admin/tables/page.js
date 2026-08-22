@@ -7,6 +7,10 @@ import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { getActiveAccount, processPaymentAtomic, buildQrUrl } from '@/lib/bankAccount';
 import { sendTableSummaryPrintJob, sendSmartPrintJobs } from '@/lib/print';
+import {
+  getChannel, fetchChannelConfig, calcReviewDiscount, startOfTodayISO,
+  isReviewDiscountItem,
+} from '@/lib/reviewReward';
 import { getMenuCached } from '@/lib/menuCache';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
@@ -171,6 +175,12 @@ export default function TablesPage() {
   const [payingHostId, setPayingHostId] = useState(null); // để làm mờ & khoá nút khi đang xử lý
   const [isMobile, setIsMobile] = useState(true);
   const [printToast, setPrintToast] = useState(''); // '' | 'sending' | 'ok' | 'err'
+  // ── Ưu đãi đánh giá Google Maps ──
+  const [reviewRequests, setReviewRequests] = useState([]); // các yêu cầu đang chờ duyệt hôm nay
+  const [reviewModal, setReviewModal] = useState(null);     // bản ghi đang xem
+  const [reviewPreview, setReviewPreview] = useState(null); // { total, discount, percent }
+  const [reviewBusy, setReviewBusy] = useState(false);
+
   const [kitchenAlertTables, setKitchenAlertTables] = useState({});
   const kitchenAlertTimersRef = useRef({});
 
@@ -537,6 +547,7 @@ export default function TablesPage() {
 
   useEffect(() => {
     fetchTables();
+    fetchReviewRequests();
 
     // Use a unique channel name each mount to avoid stale channel on HMR
     const channelName = `tables-realtime-${Date.now()}`;
@@ -556,6 +567,11 @@ export default function TablesPage() {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
         scheduleRefetch(false); // items đổi → chỉ cần fetchOrdersOnly
+      })
+      // Khách xin ưu đãi đánh giá Google → kêu chuông + hiện badge trên thẻ bàn
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'review_rewards' }, (payload) => {
+        if (payload.new?.status === 'awaiting_staff' && !isFirstLoad.current) ringBell();
+        fetchReviewRequests();
       })
       .subscribe((status) => {
         console.log('[Realtime] channel status:', status);
@@ -768,7 +784,7 @@ export default function TablesPage() {
           items.push({
             orderItemId: it.id,
             orderId: o.id,
-            name: it.menu_item?.name || 'Món chưa đặt tên',
+            name: it.menu_item?.name || it.item_name || 'Món chưa đặt tên',
             quantity: Number(it.quantity) || 1,
           });
         }
@@ -851,7 +867,9 @@ export default function TablesPage() {
       bills,
       unpricedItems: collectUnpricedItems(bills),
       orderIdsStr: bills.map(o => o.id).sort().join(','),
-      total: bills.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0),
+      // Chặn âm: nếu NV xoá hết món sau khi ưu đãi đã được duyệt, dòng giảm giá
+      // còn lại sẽ làm tổng nhóm âm → QR mất số tiền, giao dịch ghi số âm.
+      total: Math.max(0, bills.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0)),
     };
   }
 
@@ -990,6 +1008,180 @@ export default function TablesPage() {
   }
 
   // Sync khuyến mãi trên TOÀN BỘ đơn của bàn (không chỉ 1 order)
+  // ══════════════════════════════════════════════════════════
+  //  ƯU ĐÃI ĐÁNH GIÁ GOOGLE MAPS — nhân viên duyệt
+  // ══════════════════════════════════════════════════════════
+  const fetchReviewRequests = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('review_rewards')
+      .select('*')
+      .eq('status', 'awaiting_staff')
+      .gte('created_at', startOfTodayISO())
+      .order('requested_at', { ascending: true });
+    if (error) {
+      // Chưa chạy migration thì im lặng bỏ qua, không làm hỏng màn hình bàn
+      if (error.code !== '42P01') console.error('[fetchReviewRequests]', error.message);
+      return;
+    }
+    setReviewRequests(data || []);
+  }, []);
+
+  // Toàn bộ table id của nhóm gộp (host + satellites)
+  function groupTableIds(hostId) {
+    return [hostId, ...tables.filter(t => t.merged_with === hostId).map(t => t.id)];
+  }
+
+  async function openReviewModal(reward) {
+    setReviewModal(reward);
+    setReviewPreview(null);
+    const cfg = await fetchChannelConfig(supabase, reward.channel);
+    const { data } = await supabase
+      .from('orders')
+      .select('id, total_amount, customer_phone')
+      .in('table_id', groupTableIds(reward.host_table_id))
+      .in('status', ['pending', 'preparing', 'completed'])
+      .gte('created_at', startOfTodayISO());
+    const total = (data || [])
+      .filter(o => o.customer_phone !== 'BAO_BEP')
+      .reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+    setReviewPreview({ total, discount: calcReviewDiscount(total, cfg), percent: cfg.percent, cfg });
+  }
+
+  async function approveReviewReward(reward) {
+    setReviewBusy(true);
+    try {
+      const cfg = await fetchChannelConfig(supabase, reward.channel);
+      const ids = groupTableIds(reward.host_table_id);
+
+      const { data: groupOrders } = await supabase
+        .from('orders')
+        .select('id, total_amount, customer_phone, created_at')
+        .in('table_id', ids)
+        .in('status', ['pending', 'preparing', 'completed'])
+        .gte('created_at', startOfTodayISO())
+        .order('created_at', { ascending: true });
+
+      const bills = (groupOrders || []).filter(o => o.customer_phone !== 'BAO_BEP');
+      if (bills.length === 0) {
+        Swal.fire({ icon: 'warning', title: 'Bàn chưa có bill', text: 'Không có hoá đơn nào để giảm giá.' });
+        setReviewBusy(false);
+        return;
+      }
+
+      const total = bills.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+      const discount = calcReviewDiscount(total, cfg);
+      if (discount <= 0) {
+        Swal.fire({ icon: 'warning', title: 'Không tính được mức giảm', text: 'Kiểm tra lại % giảm trong Cài đặt hoặc tổng bill của bàn.' });
+        setReviewBusy(false);
+        return;
+      }
+
+      // Chốt trạng thái TRƯỚC khi chèn dòng giảm giá — unique index trong DB
+      // sẽ chặn nếu bàn này đã được duyệt hôm nay (2 máy bấm cùng lúc).
+      const { data: locked, error: lockErr } = await supabase
+        .from('review_rewards')
+        .update({
+          status: 'approved',
+          bill_total: total,
+          discount_percent: cfg.percent,
+          discount_amount: discount,
+          approved_by: currentStaff?.full_name || null,
+          decided_at: new Date().toISOString(),
+        })
+        .eq('id', reward.id)
+        .eq('status', 'awaiting_staff')
+        .select()
+        .maybeSingle();
+
+      if (lockErr || !locked) {
+        Swal.fire({
+          icon: 'info', title: 'Không duyệt được',
+          text: lockErr?.code === '23505'
+            ? `Bàn này đã được duyệt ưu đãi "${cfg.name}" hôm nay rồi.`
+            : 'Yêu cầu đã được xử lý ở máy khác.',
+        });
+        await fetchReviewRequests();
+        setReviewModal(null);
+        setReviewBusy(false);
+        return;
+      }
+
+      // Chèn dòng giảm giá (giá âm) vào bill cũ nhất của nhóm
+      const targetOrderId = bills[0].id;
+      const { data: item, error: itemErr } = await supabase
+        .from('order_items')
+        .insert({
+          order_id: targetOrderId,
+          menu_item_id: null,
+          item_name: cfg.discountLabel,
+          quantity: 1,
+          unit_price: -discount,
+          is_gift: false,
+          ...(currentStaff ? { added_by_id: currentStaff.id, added_by_name: currentStaff.full_name } : {}),
+        })
+        .select()
+        .maybeSingle();
+
+      if (itemErr || !item) {
+        // Trả lại trạng thái để không "duyệt rồi mà không trừ tiền"
+        await supabase.from('review_rewards')
+          .update({ status: 'awaiting_staff', decided_at: null, approved_by: null })
+          .eq('id', reward.id);
+        Swal.fire({ icon: 'error', title: 'Chưa trừ được tiền', text: itemErr?.message || 'Vui lòng thử lại.' });
+        setReviewBusy(false);
+        return;
+      }
+
+      // Tính lại tổng của bill vừa chèn — đọc từ DB cho chắc
+      const { data: itemsNow } = await supabase
+        .from('order_items').select('unit_price, quantity').eq('order_id', targetOrderId);
+      const newTotal = (itemsNow || []).reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
+      await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
+
+      await supabase.from('review_rewards')
+        .update({ applied_order_id: targetOrderId, applied_item_id: item.id })
+        .eq('id', reward.id);
+
+      setReviewModal(null);
+      await fetchReviewRequests();
+      fetchOrdersOnly();
+
+      Swal.fire({
+        icon: 'success', title: 'Đã duyệt',
+        text: `Đã giảm ${discount.toLocaleString('vi-VN')}đ vào bill của bàn.`,
+        timer: 2200, showConfirmButton: false, toast: true, position: 'top-end',
+      });
+    } catch (err) {
+      console.error('[approveReviewReward]', err);
+      Swal.fire({ icon: 'error', title: 'Lỗi', text: err.message || 'Không duyệt được yêu cầu.' });
+    }
+    setReviewBusy(false);
+  }
+
+  async function rejectReviewReward(reward) {
+    const { value: reason, isConfirmed } = await Swal.fire({
+      title: 'Từ chối yêu cầu?',
+      input: 'text',
+      inputPlaceholder: 'Lý do (khách sẽ thấy) — có thể bỏ trống',
+      showCancelButton: true,
+      confirmButtonText: 'Từ chối',
+      cancelButtonText: 'Huỷ',
+      confirmButtonColor: '#dc2626',
+    });
+    if (!isConfirmed) return;
+
+    setReviewBusy(true);
+    await supabase.from('review_rewards').update({
+      status: 'rejected',
+      reject_reason: (reason || '').trim() || 'Nhân viên chưa xác nhận được lượt đánh giá.',
+      approved_by: currentStaff?.full_name || null,
+      decided_at: new Date().toISOString(),
+    }).eq('id', reward.id).eq('status', 'awaiting_staff');
+    setReviewBusy(false);
+    setReviewModal(null);
+    await fetchReviewRequests();
+  }
+
   async function syncTablePromotions(tableId) {
     try {
       const { data: settings } = await supabase.from('settings').select('key, value').in('key', ['promotion_enabled', 'promotion_threshold']);
@@ -1607,7 +1799,10 @@ export default function TablesPage() {
     const groupedMap = {};
     allItems.forEach(item => {
       const optsString = item.item_options ? JSON.stringify(item.item_options) : '[]';
-      const key = `${item.menu_item_id}_${item.unit_price}_${optsString}_${item.note || ''}_${item.is_gift ? 'gift' : 'normal'}`;
+      // item_name nằm trong key: các dòng giảm giá ưu đãi (menu_item_id null)
+      // của 2 kênh khác nhau mà tình cờ cùng số tiền sẽ KHÔNG bị gộp làm một,
+      // để bill vẫn ghi rõ giảm vì kênh nào.
+      const key = `${item.menu_item_id}_${item.unit_price}_${optsString}_${item.note || ''}_${item.is_gift ? 'gift' : 'normal'}_${item.item_name || ''}`;
 
       if (!groupedMap[key]) {
         groupedMap[key] = {
@@ -1617,7 +1812,8 @@ export default function TablesPage() {
           unit_price: item.unit_price,
           item_options: item.item_options,
           note: item.note,
-          is_gift: item.is_gift
+          is_gift: item.is_gift,
+          item_name: item.item_name || null
         };
       }
       groupedMap[key].quantity += item.quantity;
@@ -1827,6 +2023,10 @@ export default function TablesPage() {
           const _satOrdersCard = tables.filter(t => t.merged_with === hostIdCard && t.id !== hostIdCard).flatMap(t => orders[t.id] || []);
           const tableBills = [..._hostOrdersCard, ..._satOrdersCard];
           const isKitchenAlerting = !!kitchenAlertTables[table.id] || !!kitchenAlertTables[hostIdCard];
+          // Yêu cầu ưu đãi — hiện ĐỦ mọi kênh đang chờ, chỉ trên thẻ bàn host của nhóm
+          const tableReviewReqs = isMergedSatellite
+            ? []
+            : reviewRequests.filter(r => r.host_table_id === hostIdCard);
           const groupColor = groupColorMap[hostIdCard] || null;
           const totalAmount = tableBills.reduce((s, o) => s + (o.total_amount || 0), 0);
           const guestCount = tableBills.length;
@@ -1886,6 +2086,30 @@ export default function TablesPage() {
                   </div>
                 )}
               </div>
+              {tableReviewReqs.length > 0 && (
+                <div style={{ display: 'flex', gap: 3, marginTop: 4, flexWrap: 'wrap' }}>
+                  {tableReviewReqs.map(req => {
+                    const c = getChannel(req.channel);
+                    return (
+                      <div
+                        key={req.id}
+                        className="review-req-blink"
+                        onClick={e => { e.stopPropagation(); openReviewModal(req); }}
+                        title={`${req.customer_name || 'Khách'} xin ưu đãi ${c.name}`}
+                        style={{
+                          background: c.color, color: 'white', borderRadius: 6,
+                          minWidth: 22, height: 20, padding: '0 5px',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: '0.68rem', fontWeight: 800, cursor: 'pointer',
+                          boxShadow: '0 1px 4px rgba(15,23,42,0.3)',
+                        }}
+                      >
+                        {c.icon}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               {isOccupied ? (
                 <div style={{ marginTop: 6 }}>
                   <div style={{ fontSize: '0.7rem', color: groupColor ? groupColor.sub : '#3b82f6', fontWeight: 500, marginBottom: 2 }}>
@@ -2123,7 +2347,7 @@ export default function TablesPage() {
                             {/* Name + option + note */}
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#111827', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                {item.menu_item?.name || item.name}
+                                {item.menu_item?.name || item.item_name || item.name}
                                 {item.added_by_name && <span style={{ fontSize: '0.62rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700 }}>👤 NV: {item.added_by_name}</span>}
                               </div>
                               {optionText ? (
@@ -2346,6 +2570,27 @@ export default function TablesPage() {
                 })}
               </div>
 
+              {/* Chuông ưu đãi đánh giá — luôn hiện trên thanh nav, kể cả khi đang ở tab Thực đơn */}
+              {reviewRequests.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 10, flexShrink: 0 }}>
+                  {reviewRequests.map(req => (
+                    <button
+                      key={req.id}
+                      className="review-req-blink"
+                      onClick={() => openReviewModal(req)}
+                      title={`${req.customer_name || 'Khách'} xin ưu đãi đánh giá Google`}
+                      style={{
+                        background: getChannel(req.channel).color, color: 'white', border: 'none',
+                        borderRadius: 100, padding: '6px 14px', cursor: 'pointer',
+                        fontSize: '0.8rem', fontWeight: 800, whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {getChannel(req.channel).icon} B{tables.find(t => t.id === req.host_table_id)?.table_number ?? '?'} · {getChannel(req.channel).short}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {/* Search Bar & Actions */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 10, flex: 1 }}>
                 <div style={{ position: 'relative', width: '100%', maxWidth: 350 }}>
@@ -2539,6 +2784,31 @@ export default function TablesPage() {
                           </button>
                         </div>
                       )}
+                      {reviewRequests.length > 0 && (
+                        <div className="review-req-banner" style={{
+                          display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8,
+                          background: '#eff6ff', border: '1.5px solid #93c5fd', borderRadius: 12,
+                          padding: '10px 12px', marginBottom: 12,
+                        }}>
+                          <span style={{ fontWeight: 800, fontSize: '0.85rem', color: '#1d4ed8' }}>
+                            🎁 {reviewRequests.length} khách xin ưu đãi mạng xã hội
+                          </span>
+                          {reviewRequests.map(req => (
+                            <button
+                              key={req.id}
+                              onClick={() => openReviewModal(req)}
+                              style={{
+                                padding: '5px 12px', background: getChannel(req.channel).color, color: 'white', border: 'none',
+                                borderRadius: 100, fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {getChannel(req.channel).icon} B{tables.find(t => t.id === req.host_table_id)?.table_number ?? '?'}
+                              {req.customer_name ? ` · ${req.customer_name}` : ''} · {getChannel(req.channel).short} → Duyệt
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 14 }}>
                         {filteredTables.map(table => {
                           const isChild = !!table.merged_with;
@@ -2548,6 +2818,10 @@ export default function TablesPage() {
                           const isSelected = selectedTable?.id === table.id;
                           const alertHostId = table.merged_with || table.id;
                           const isKitchenAlerting = !!kitchenAlertTables[table.id] || !!kitchenAlertTables[alertHostId];
+                          // Yêu cầu ưu đãi — hiện đủ mọi kênh, chỉ gắn lên thẻ bàn host của nhóm
+                          const tableReviewReqs = isChild
+                            ? []
+                            : reviewRequests.filter(r => r.host_table_id === alertHostId);
                           const tableTotal = (orders[table.merged_with || table.id] || []).reduce((s, o) => s + (o.total_amount || 0), 0);
                           const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(pj => pj.status === 'failed'));
 
@@ -2676,6 +2950,31 @@ export default function TablesPage() {
                                 )}
                               </div>
 
+                              {tableReviewReqs.length > 0 && (
+                                <div
+                                  className="review-req-blink"
+                                  style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 8, display: 'flex' }}
+                                >
+                                  {tableReviewReqs.map(req => {
+                                    const c = getChannel(req.channel);
+                                    return (
+                                      <div
+                                        key={req.id}
+                                        onClick={(e) => { e.stopPropagation(); openReviewModal(req); }}
+                                        title={`${req.customer_name || 'Khách'} xin ưu đãi ${c.name}`}
+                                        style={{
+                                          flex: 1, background: c.color, color: 'white', textAlign: 'center',
+                                          padding: '3px 0', fontSize: '0.62rem', fontWeight: 800,
+                                          cursor: 'pointer', letterSpacing: '0.02em',
+                                          borderLeft: '1px solid rgba(255,255,255,0.35)',
+                                        }}
+                                      >
+                                        {c.icon}{tableReviewReqs.length === 1 ? ' Duyệt ưu đãi' : ''}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
                               {/* History button */}
                               <div
                                 onClick={(e) => {
@@ -3078,7 +3377,7 @@ export default function TablesPage() {
                               {order.order_items?.map((item) => (
                                 <tr key={item.id}>
                                   <td>
-                                    {item.menu_item?.name || 'Món đã xoá'}
+                                    {item.menu_item?.name || item.item_name || 'Món đã xoá'}
                                     {item.item_options?.length > 0 && (() => {
                                       const loai = item.item_options.find(o => o.name?.toLowerCase() === 'loại' && o.choice?.toLowerCase() !== 'bình thường');
                                       const others = item.item_options.filter(o => o.name?.toLowerCase() !== 'loại' && o.choice?.toLowerCase() !== 'bình thường');
@@ -3280,7 +3579,37 @@ export default function TablesPage() {
                         </div>
                       </div>
                       <div className="order-items-list">
-                        {order.order_items?.map((item) => (
+                        {order.order_items?.map((item) => isReviewDiscountItem(item) ? (
+                          // Dòng ưu đãi đánh giá Google — không phải món ăn, không cho sửa giá/số lượng
+                          <div key={item.id} style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            gap: 10, padding: '10px 12px', margin: '8px 0',
+                            background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10,
+                          }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: '0.92rem', fontWeight: 700, color: '#1d4ed8' }}>
+                                ⭐ {item.item_name || 'Giảm giá ưu đãi'}
+                              </div>
+                              {item.added_by_name && (
+                                <div style={{ fontSize: '0.72rem', color: '#3b82f6', marginTop: 2 }}>
+                                  Duyệt bởi NV: {item.added_by_name}
+                                </div>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                              <span style={{ fontSize: '0.95rem', fontWeight: 800, color: '#047857' }}>
+                                {(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ
+                              </span>
+                              <button
+                                title="Gỡ ưu đãi"
+                                onClick={() => removeItemFromOrder(order.id, item.id, item.item_name || 'Giảm giá ưu đãi')}
+                                style={{ background: 'none', border: 'none', color: '#93c5fd', cursor: 'pointer', padding: '0 2px', fontSize: '1.1rem', lineHeight: 1 }}
+                              >
+                                ···
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
                           <div key={item.id} style={{
                             display: 'flex', gap: 12, padding: '10px 0',
                             borderBottom: '1px solid #f3f4f6', alignItems: 'flex-start'
@@ -3308,7 +3637,7 @@ export default function TablesPage() {
                               {/* Row 1: Name + delete button */}
                               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 4 }}>
                                 <span style={{ fontSize: '0.97rem', fontWeight: 600, color: '#111827', lineHeight: 1.3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                  {item.menu_item?.name || 'Món đã xoá'}
+                                  {item.menu_item?.name || item.item_name || 'Món đã xoá'}
                                   {item.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700, lineHeight: 1 }}>🎁 Món Tặng</span>}
                                   {item.added_by_name && <span style={{ fontSize: '0.62rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700, lineHeight: 1.3 }}>👤 NV: {item.added_by_name}</span>}
                                 </span>
@@ -4519,7 +4848,7 @@ export default function TablesPage() {
                     <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 8, marginBottom: 10 }}>
                       {(order.order_items || []).map((item, idx) => (
                         <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#374151', paddingBottom: 4 }}>
-                          <span>{item.menu_item?.name || 'Món đã xoá'} × {item.quantity}</span>
+                          <span>{item.menu_item?.name || item.item_name || 'Món đã xoá'} × {item.quantity}</span>
                           <span style={{ fontWeight: 600 }}>{(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ</span>
                         </div>
                       ))}
@@ -4616,7 +4945,7 @@ export default function TablesPage() {
           // Gộp các món giống nhau (cùng tên + options + giá + gift)
           const mergedMap = new Map();
           for (const item of rawItems) {
-            const name = item.menu_item?.name || '?';
+            const name = item.menu_item?.name || item.item_name || '?';
             const optionsKey = (item.item_options || [])
               .map(o => `${o.name}:${o.choice}`)
               .sort()
@@ -4700,7 +5029,7 @@ export default function TablesPage() {
                         {/* Left: name + option */}
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: '1.05rem', fontWeight: 600, color: '#111827', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {item.menu_item?.name || 'Món đã xoá'}
+                            {item.menu_item?.name || item.item_name || 'Món đã xoá'}
                           </div>
                           {optionText && (
                             <div style={{ fontSize: '0.85rem', color: '#f59e0b', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -5290,6 +5619,74 @@ export default function TablesPage() {
                   );
                 })}
               </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* ─── Duyệt ưu đãi đánh giá Google Maps ─── */}
+      {
+        reviewModal && (
+          <div
+            onClick={() => !reviewBusy && setReviewModal(null)}
+            style={{ position: 'fixed', inset: 0, zIndex: 999999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(3px)', padding: 16 }}
+          >
+            <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 400, padding: 20, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)' }}>
+              <div style={{ fontWeight: 800, fontSize: '1.05rem', color: getChannel(reviewModal.channel).colorDark, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{
+                  background: getChannel(reviewModal.channel).color, color: 'white',
+                  borderRadius: 8, width: 28, height: 28,
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.95rem',
+                }}>{getChannel(reviewModal.channel).icon}</span>
+                {getChannel(reviewModal.channel).name}
+              </div>
+              <div style={{ fontSize: '0.82rem', color: '#64748b', marginBottom: 14 }}>
+                Nhìn màn hình điện thoại của khách để xác nhận, rồi bấm Duyệt.
+              </div>
+
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '11px 13px', fontSize: '0.86rem', color: '#334155', lineHeight: 1.75, marginBottom: 14 }}>
+                <div>Khách: <b>{reviewModal.customer_name || '—'}</b></div>
+                <div>SĐT: <b>{reviewModal.customer_phone || '—'}</b></div>
+                <div>
+                  Bàn: <b>B{tables.find(t => t.id === reviewModal.host_table_id)?.table_number ?? '?'}</b>
+                </div>
+                <div style={{ borderTop: '1px dashed #cbd5e1', marginTop: 8, paddingTop: 8 }}>
+                  Tổng bill bàn:{' '}
+                  <b>{reviewPreview ? `${reviewPreview.total.toLocaleString('vi-VN')}đ` : 'đang tính...'}</b>
+                </div>
+                <div style={{ color: '#047857' }}>
+                  Sẽ giảm{' '}
+                  <b style={{ fontSize: '1.05rem' }}>
+                    {reviewPreview ? `${reviewPreview.discount.toLocaleString('vi-VN')}đ` : '...'}
+                  </b>
+                  {reviewPreview ? ` (${reviewPreview.percent}%)` : ''}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => rejectReviewReward(reviewModal)}
+                  disabled={reviewBusy}
+                  style={{ flex: 1, padding: '11px 12px', background: '#fff7f7', color: '#dc2626', border: '1.5px solid #fecaca', borderRadius: 10, fontWeight: 700, fontSize: '0.88rem', cursor: 'pointer', opacity: reviewBusy ? 0.6 : 1 }}
+                >
+                  Từ chối
+                </button>
+                <button
+                  onClick={() => approveReviewReward(reviewModal)}
+                  disabled={reviewBusy || !reviewPreview || reviewPreview.discount <= 0}
+                  style={{ flex: 1.4, padding: '11px 12px', background: getChannel(reviewModal.channel).color, color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.88rem', cursor: 'pointer', opacity: (reviewBusy || !reviewPreview || reviewPreview.discount <= 0) ? 0.6 : 1 }}
+                >
+                  {reviewBusy ? 'Đang xử lý...' : '✅ Duyệt & trừ tiền'}
+                </button>
+              </div>
+
+              <button
+                onClick={() => setReviewModal(null)}
+                disabled={reviewBusy}
+                style={{ width: '100%', marginTop: 8, padding: '8px', background: 'transparent', border: 'none', color: '#64748b', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer' }}
+              >
+                Để sau
+              </button>
             </div>
           </div>
         )

@@ -1235,3 +1235,31 @@
 input[placeholder="Tìm món ăn..."] {
   font-size: 16px !important;
 }
+
+/* Badge "xin duyệt ưu đãi đánh giá Google" trên thẻ bàn */
+.review-req-blink {
+  animation: reviewReqBlink 1s ease-in-out infinite;
+}
+
+@keyframes reviewReqBlink {
+  0%, 100% { transform: scale(1); box-shadow: 0 2px 8px rgba(37, 99, 235, 0.5); }
+  50%      { transform: scale(1.12); box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.25), 0 2px 10px rgba(37, 99, 235, 0.6); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-req-blink { animation: none; }
+}
+
+/* Banner nhắc duyệt ưu đãi đánh giá (màn hình PC) */
+.review-req-banner {
+  animation: reviewBannerGlow 1.6s ease-in-out infinite;
+}
+
+@keyframes reviewBannerGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+  50%      { box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.18); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-req-banner { animation: none; }
+}

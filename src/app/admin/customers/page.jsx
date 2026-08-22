@@ -422,7 +422,7 @@ export default function CustomersPage() {
                         <div className="timeline-items">
                           {order.order_items?.map((item) => (
                             <span key={item.id} className="timeline-menu-item">
-                              {item.quantity}x {item.menu_item?.name || 'Đã xoá'}
+                              {item.quantity}x {item.menu_item?.name || item.item_name || 'Đã xoá'}
                             </span>
                           ))}
                         </div>
