@@ -29,7 +29,7 @@ export async function sendSmartPrintJobs(supabase, orderId) {
     // 1. Fetch order_items kèm category_id của menu_item
     const { data: items, error: itemsErr } = await supabase
       .from('order_items')
-      .select('id, item_options, menu_item:menu_items(id, category_id, options)')
+      .select('id, menu_item_id, unit_price, item_options, menu_item:menu_items(id, category_id, options)')
       .eq('order_id', orderId);
 
     if (itemsErr) throw new Error('Không lấy được order_items: ' + itemsErr.message);
@@ -67,6 +67,9 @@ export async function sendSmartPrintJobs(supabase, orderId) {
     const printerCategoryMap = {}; // { [printer_id]: { printer, categoryIds: Set } }
 
     for (const item of items) {
+      // Dòng giảm giá (menu_item_id null + giá âm) không phải món ăn → không in xuống bếp
+      if (item.menu_item_id == null && (Number(item.unit_price) || 0) < 0) continue;
+
       let resolvedCategoryId = item.menu_item?.category_id;
 
       // Tính categoryId động nếu có

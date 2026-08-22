@@ -281,7 +281,7 @@ export default function StatsPage() {
             const rowItem = sheet.addRow([
               null,
               null,
-              `- ${item.menu_item?.name || 'Món đã xóa'} (số lượng: ${item.quantity}, đơn giá: ${priceStr})`,
+              `- ${item.menu_item?.name || item.item_name || 'Món đã xóa'} (số lượng: ${item.quantity}, đơn giá: ${priceStr})`,
               itemTotal
             ]);
             rowItem.getCell(4).numFmt = '#,##0 "VND"';
@@ -540,7 +540,7 @@ export default function StatsPage() {
                   <tbody>
                     {stats.validOrders.sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).map(order => {
                       const totalItems = order.order_items?.reduce((sum, item) => sum + item.quantity, 0) || 0;
-                      const itemNames = order.order_items?.map(item => `${item.menu_item?.name || 'Món xóa'} (x${item.quantity})`).join(', ');
+                      const itemNames = order.order_items?.map(item => `${item.menu_item?.name || item.item_name || 'Món xóa'} (x${item.quantity})`).join(', ');
                       return (
                         <tr
                           key={order.id}
@@ -628,7 +628,7 @@ export default function StatsPage() {
                 <tbody>
                   {selectedBill.order_items?.map((item, idx) => (
                     <tr key={idx} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                      <td style={{ padding: '12px', color: '#0f172a', fontWeight: 500 }}>{item.menu_item?.name || 'Món đã xóa'}</td>
+                      <td style={{ padding: '12px', color: '#0f172a', fontWeight: 500 }}>{item.menu_item?.name || item.item_name || 'Món đã xóa'}</td>
                       <td style={{ padding: '12px', textAlign: 'center', color: '#475569' }}>{item.quantity}</td>
                       <td style={{ padding: '12px', textAlign: 'right', color: '#475569' }}>{formatPrice(item.unit_price)}</td>
                       <td style={{ padding: '12px', textAlign: 'right', color: '#0f172a', fontWeight: 600 }}>{formatPrice(item.quantity * item.unit_price)}</td>

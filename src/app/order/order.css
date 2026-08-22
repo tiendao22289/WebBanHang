@@ -668,8 +668,9 @@ html, body { background: #ffffff !important; }
 .co-promo-btns {
   display: flex;
   justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
+  /* Luôn 1 hàng — không cho rớt dòng */
+  flex-wrap: nowrap;
+  gap: 6px;
   padding: 6px 12px 4px;
 }
 .co-promo-pill {
@@ -678,12 +679,13 @@ html, body { background: #ffffff !important; }
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 7px 13px;
+  padding: 6px 11px;
   border-radius: 999px;
   border: none;
+  flex-shrink: 0;
   font-family: 'Nunito', sans-serif;
   font-weight: 900;
-  font-size: 0.8rem;
+  font-size: 0.74rem;
   color: #fff;
   cursor: pointer;
   white-space: nowrap;
@@ -714,7 +716,97 @@ html, body { background: #ffffff !important; }
   animation-delay: 0.9s;
 }
 .co-promo-pill.party::before { animation-delay: 1.2s; }
+.co-promo-pill.gmap {
+  background: linear-gradient(135deg, #0ea5e9, #2563eb);
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.45);
+  animation-delay: 1.8s;
+}
+.co-promo-pill.gmap::before { animation-delay: 2.1s; }
 .co-promo-pill:active { animation-play-state: paused; transform: scale(0.95); }
+
+/* ═══════════════════════════════
+   ƯU ĐÃI ĐÁNH GIÁ GOOGLE MAPS
+   ═══════════════════════════════ */
+.co-gmap-amount {
+  background: linear-gradient(135deg, #eff6ff, #f0f9ff);
+  border: 1.5px solid #bfdbfe;
+  border-radius: 14px;
+  padding: 14px;
+  text-align: center;
+  margin-bottom: 14px;
+}
+.co-gmap-amount-label { font-size: 0.78rem; color: #64748b; font-weight: 600; }
+.co-gmap-amount-total { font-size: 1.35rem; font-weight: 900; color: #1d4ed8; margin: 2px 0 6px; }
+.co-gmap-amount-save { font-size: 0.9rem; color: #0f766e; font-weight: 700; }
+.co-gmap-amount-save b { color: #047857; font-size: 1.05rem; }
+
+.co-gmap-steps {
+  margin: 0 0 14px;
+  padding-left: 20px;
+  font-size: 0.86rem;
+  color: #334155;
+  line-height: 1.7;
+}
+.co-gmap-steps li { margin-bottom: 2px; }
+
+.co-gmap-cta {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: center;
+  text-decoration: none;
+  padding: 13px 14px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #0ea5e9, #2563eb);
+  color: white;
+  font-family: 'Nunito', sans-serif;
+  font-weight: 800;
+  font-size: 0.95rem;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.35);
+}
+.co-gmap-cta:disabled {
+  background: #cbd5e1;
+  color: #64748b;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+.co-gmap-cta:active:not(:disabled) { transform: scale(0.98); }
+
+.co-gmap-link {
+  display: block;
+  text-align: center;
+  margin-top: 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.co-gmap-note {
+  margin-top: 12px;
+  font-size: 0.78rem;
+  color: #64748b;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.co-gmap-state {
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 0.87rem;
+  color: #334155;
+  line-height: 1.65;
+  text-align: center;
+  margin-bottom: 12px;
+}
+.co-gmap-state.co-gmap-warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+.co-gmap-state.co-gmap-pending { background: #eff6ff; border-color: #bfdbfe; color: #1e40af; }
+.co-gmap-state.co-gmap-ok { background: #f0fdf4; border-color: #bbf7d0; color: #15803d; }
+.co-gmap-big { font-size: 2rem; margin-bottom: 4px; }
 
 @keyframes promoPulse {
   0%, 100% { transform: scale(1); }
@@ -726,6 +818,11 @@ html, body { background: #ffffff !important; }
 }
 @media (prefers-reduced-motion: reduce) {
   .co-promo-pill, .co-promo-pill::before { animation: none; }
+}
+/* Máy màn hình hẹp (iPhone SE...) — thu nhỏ thêm để vẫn đủ 1 hàng */
+@media (max-width: 360px) {
+  .co-promo-btns { gap: 5px; padding-left: 8px; padding-right: 8px; }
+  .co-promo-pill { font-size: 0.68rem; padding: 6px 9px; gap: 4px; }
 }
 
 /* ═══════════════════════════════
@@ -1654,3 +1751,125 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
 .co-cat-btn {
   display: none;
 }
+
+/* Dòng ưu đãi đánh giá Google trong bill của khách */
+.co-prev-item.co-prev-discount {
+  background: #eff6ff;
+  border-radius: 8px;
+  padding: 6px 8px;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+/* ── Bảng chọn kênh ưu đãi ── */
+.co-gmap-channel {
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 13px;
+  margin-bottom: 9px;
+  background: white;
+  border: 1.5px solid #dbeafe;
+  border-radius: 13px;
+  cursor: pointer;
+  text-align: left;
+  font-family: 'Nunito', sans-serif;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.07);
+}
+.co-gmap-channel:active { transform: scale(0.985); }
+.co-gmap-channel.done {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  cursor: default;
+  box-shadow: none;
+}
+.co-gmap-channel.pending { background: #fffbeb; border-color: #fde68a; }
+
+.co-gmap-channel-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.co-gmap-channel-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.co-gmap-channel-name { font-weight: 800; font-size: 0.92rem; color: #0f172a; }
+.co-gmap-channel-sub { font-size: 0.79rem; color: #2563eb; font-weight: 700; }
+.co-gmap-channel.done .co-gmap-channel-sub { color: #15803d; }
+.co-gmap-channel.pending .co-gmap-channel-sub { color: #b45309; }
+.co-gmap-channel-go { font-size: 1.5rem; color: #93c5fd; flex-shrink: 0; line-height: 1; }
+
+.co-gmap-back {
+  background: none;
+  border: none;
+  padding: 0 0 10px;
+  color: #2563eb;
+  font-family: 'Nunito', sans-serif;
+  font-weight: 800;
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+/* ── Khung khách tự điền tên/SĐT trong bảng ưu đãi ── */
+.co-gmap-info-form {
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 13px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.co-gmap-info-title {
+  font-size: 0.87rem;
+  font-weight: 700;
+  color: #334155;
+  line-height: 1.55;
+  margin-bottom: 11px;
+}
+.co-gmap-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 12px;
+  margin-bottom: 9px;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 10px;
+  font-family: 'Nunito', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #0f172a;
+  background: white;
+}
+.co-gmap-input:focus {
+  outline: none;
+  border-color: #2563eb;
+}
+.co-gmap-input::placeholder { font-weight: 500; color: #94a3b8; }
+.co-gmap-info-note {
+  margin-top: 9px;
+  font-size: 0.74rem;
+  color: #94a3b8;
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* Lượt xem của từng kênh — cùng hàng với "Quán bớt ..%", đẩy sát mép phải */
+.co-gmap-channel-subrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+.co-gmap-channel-views {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+.co-gmap-channel.done .co-gmap-channel-views { color: #86efac; }
+.co-gmap-channel.pending .co-gmap-channel-views { color: #fcd34d; }
