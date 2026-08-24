@@ -402,7 +402,7 @@ export default function TablesPage() {
             .select(`
               id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
               order_items (
-                id, quantity, unit_price, item_options, note, is_gift, menu_item_id, added_by_name,
+                id, quantity, unit_price, item_options, note, is_gift, menu_item_id, item_name, added_by_name,
                 menu_item:menu_items (name, price, image_url)
               ),
               print_jobs (id, status)
@@ -443,7 +443,7 @@ export default function TablesPage() {
         .select(`
           id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
           order_items (
-            id, quantity, unit_price, item_options, note, is_gift, menu_item_id, added_by_name,
+            id, quantity, unit_price, item_options, note, is_gift, menu_item_id, item_name, added_by_name,
             menu_item:menu_items (name, price, image_url)
           ),
           print_jobs (id, status)
@@ -4942,9 +4942,15 @@ export default function TablesPage() {
           const rawItems = tableBills.flatMap(b => b.order_items || []);
           const grandTotal = tableBills.reduce((s, b) => s + b.total_amount, 0);
 
+          // Dòng ưu đãi (giá âm, không gắn menu_item) hiện thành mục riêng,
+          // không lẫn vào danh sách món và không tính vào số lượng món
+          const discountItems = rawItems.filter(isReviewDiscountItem);
+          const discountTotal = discountItems.reduce((s, i) => s + i.unit_price * (i.quantity || 1), 0);
+
           // Gộp các món giống nhau (cùng tên + options + giá + gift)
           const mergedMap = new Map();
           for (const item of rawItems) {
+            if (isReviewDiscountItem(item)) continue;
             const name = item.menu_item?.name || item.item_name || '?';
             const optionsKey = (item.item_options || [])
               .map(o => `${o.name}:${o.choice}`)
@@ -5064,6 +5070,28 @@ export default function TablesPage() {
                       {drinkItems.map((item, i) => renderRow(item, `d${i}`))}
                       {foodItems.length > 0 && sectionHeader('🍽️ Món ăn', '#b45309', '#fef3c7')}
                       {foodItems.map((item, i) => renderRow(item, `f${i}`))}
+                      {discountItems.length > 0 && sectionHeader('⭐ Ưu đãi · Giảm giá', '#1d4ed8', '#eff6ff')}
+                      {discountItems.map((item, i) => (
+                        <div key={`kt${i}`} style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          padding: '9px 12px', marginBottom: 5, gap: 8,
+                          background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10,
+                        }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: '1rem', fontWeight: 700, color: '#1d4ed8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              ⭐ {item.item_name || 'Giảm giá ưu đãi'}
+                            </div>
+                            {item.added_by_name && (
+                              <div style={{ fontSize: '0.78rem', color: '#3b82f6', marginTop: 2 }}>
+                                Duyệt bởi NV: {item.added_by_name}
+                              </div>
+                            )}
+                          </div>
+                          <span style={{ fontSize: '1.05rem', fontWeight: 800, color: '#047857', flexShrink: 0 }}>
+                            {(item.unit_price * item.quantity).toLocaleString('vi-VN')}đ
+                          </span>
+                        </div>
+                      ))}
                     </>
                   );
                 })()}
@@ -5079,6 +5107,18 @@ export default function TablesPage() {
                   <span style={{ color: '#d1d5db' }}>·</span>
                   <span style={{ color: '#6b7280', marginLeft: 'auto' }}>Tổng <b style={{ color: '#111827' }}>{totalQty} món</b></span>
                 </div>
+                {discountTotal < 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0 0', borderTop: '1px dashed #e5e7eb', marginTop: 4, fontSize: '0.85rem' }}>
+                    <span style={{ color: '#6b7280' }}>Tạm tính món</span>
+                    <span style={{ fontWeight: 700, color: '#374151' }}>{(grandTotal - discountTotal).toLocaleString('vi-VN')}đ</span>
+                  </div>
+                )}
+                {discountTotal < 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0', fontSize: '0.85rem' }}>
+                    <span style={{ color: '#1d4ed8', fontWeight: 600 }}>⭐ Ưu đãi đã duyệt</span>
+                    <span style={{ fontWeight: 800, color: '#047857' }}>{discountTotal.toLocaleString('vi-VN')}đ</span>
+                  </div>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0 4px', borderTop: '1px dashed #e5e7eb', marginTop: 4 }}>
                   <span style={{ fontSize: '1rem', fontWeight: 700, color: '#111827' }}>Khách cần trả</span>
                   <span style={{ fontSize: '1.2rem', fontWeight: 800, color: '#2563eb' }}>{grandTotal.toLocaleString('vi-VN')}đ</span>
