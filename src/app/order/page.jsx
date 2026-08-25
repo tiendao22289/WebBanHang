@@ -1773,8 +1773,37 @@ function OrderContent() {
       }
       setZaloClaim(data);
       try { localStorage.setItem(zaloStorageKey(), data.id); } catch { }
+      // Khách có thể đã Quan tâm + nhắn SĐT TRƯỚC khi bấm nút — nhờ server
+      // kiểm ngay, nếu không sẽ chẳng còn event nào để khớp nữa.
+      pingZaloClaimReady(data.id);
     })();
   }
+
+  /**
+   * Nhờ server đối chiếu yêu cầu với danh sách đã Quan tâm.
+   * Gọi lúc vừa tạo yêu cầu và mỗi lần khách quay lại từ app Zalo.
+   */
+  async function pingZaloClaimReady(claimId) {
+    if (!claimId) return;
+    try {
+      await fetch('/api/zalo/claim-ready', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ claimId }),
+      });
+      // Kết quả (nếu có) về qua realtime — không cần đọc response
+    } catch (err) {
+      console.error('[pingZaloClaimReady]', err);
+    }
+  }
+
+  // Khách từ app Zalo quay lại tab web → kiểm lại một lần nữa
+  useEffect(() => {
+    if (reviewStep !== 'zalo_waiting' || !zaloClaim?.id) return;
+    const onVisible = () => { if (!document.hidden) pingZaloClaimReady(zaloClaim.id); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [reviewStep, zaloClaim?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Theo dõi webhook xác nhận — chạy kể cả khi overlay đã đóng
   useEffect(() => {
@@ -3790,6 +3819,13 @@ function OrderContent() {
                               Mở bằng app Zalo
                             </a>
                           )}
+                          <button
+                            className="co-gmap-link"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+                            onClick={() => pingZaloClaimReady(zaloClaim?.id)}
+                          >
+                            Đã làm xong rồi? Bấm để quán kiểm lại
+                          </button>
                           <button className="co-gmap-link" onClick={() => setReviewOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
                             Đóng bảng này, gọi món tiếp (quà vẫn tự vào)
                           </button>
