@@ -606,6 +606,8 @@ function OrderContent() {
   const [promoNudge, setPromoNudge] = useState(null); // { item, name, unitsNeeded } — gợi ý "gần đủ" điểm
   const nudgeDismissedRef = useRef(false); // khách đã bấm "bỏ qua" gợi ý → không hiện lại trong lần gửi này
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showExitConfirm, setShowExitConfirm] = useState(false); // back → hỏi trước khi rời trang
+  const exitAllowedRef = useRef(false);                          // khách đã đồng ý thoát
   const [showPromoPopup, setShowPromoPopup] = useState(false);
   const [promoCallout, setPromoCallout] = useState(null); // { text, isGift } | null
   const promoCalloutTimerRef = useRef(null);
@@ -712,6 +714,56 @@ function OrderContent() {
       if (!raw) return null;
       return JSON.parse(raw);
     } catch { return null; }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  CHẶN BACK NGOÀI Ý MUỐN
+  //  Khách lỡ tay bấm back là mất giỏ hàng + phải quét QR lại.
+  //  Xử lý 2 tầng: đang mở cửa sổ nào thì back ĐÓNG cửa sổ đó;
+  //  không còn gì mở mới hỏi "có thoát không?".
+  // ══════════════════════════════════════════════════════════
+  /** Đóng lớp trên cùng đang mở. true = đã đóng được cái gì đó. */
+  function closeTopOverlay() {
+    // Thứ tự = từ lớp nằm trên cùng xuống dưới.
+    // KHÔNG đóng showInfoModal (bắt buộc nhập tên/SĐT mới dùng được).
+    if (optionModal) { setOptionModal(null); return true; }
+    if (showExitConfirm) { setShowExitConfirm(false); return true; }
+    if (showResetConfirm) { setShowResetConfirm(false); return true; }
+    if (showGiftModal) { setShowGiftModal(false); return true; }
+    if (reviewOpen) { setReviewOpen(false); return true; }
+    if (thanksOpen) { setThanksOpen(false); return true; }
+    if (partyOpen) { setPartyOpen(false); return true; }
+    if (showFeedbackModal) { setShowFeedbackModal(false); return true; }
+    if (showPromoPopup) { setShowPromoPopup(false); return true; }
+    if (showCart) { setShowCart(false); return true; }
+    if (showOrdered) { setShowOrdered(false); return true; }
+    return false;
+  }
+
+  // Đặt 1 "chốt" vào lịch sử trình duyệt để lần back đầu không rời trang
+  useEffect(() => {
+    try { window.history.pushState({ __orderGuard: true }, ''); } catch { }
+  }, []);
+
+  useEffect(() => {
+    const onPop = () => {
+      if (exitAllowedRef.current) return; // khách đã đồng ý thoát → để back chạy bình thường
+      // Đẩy chốt trở lại NGAY để trang không bị rời
+      try { window.history.pushState({ __orderGuard: true }, ''); } catch { }
+      if (closeTopOverlay()) return;
+      setShowExitConfirm(true);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [optionModal, showExitConfirm, showResetConfirm, showGiftModal, reviewOpen,
+      thanksOpen, partyOpen, showFeedbackModal, showPromoPopup, showCart, showOrdered]);
+
+  function confirmExitOrderPage() {
+    exitAllowedRef.current = true;
+    setShowExitConfirm(false);
+    // Lùi qua cả chốt để về trang trước. Tab mở mới từ QR thì không có
+    // trang nào phía trước — khách tự đóng tab, và lần back sau sẽ thoát.
+    try { window.history.go(-2); } catch { }
   }
 
   /**
@@ -3446,6 +3498,37 @@ function OrderContent() {
         )}
 
         {/* ─── Reset Confirm Modal ─── */}
+        {/* ─── Hỏi trước khi rời trang gọi món (khách bấm back) ─── */}
+        {showExitConfirm && (
+          <div className="co-modal-overlay" onClick={() => setShowExitConfirm(false)} style={{ zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div className="co-info-modal" style={{ borderRadius: '24px', padding: '24px', margin: '0 20px', animation: 'coSlideUp 0.3s ease', maxWidth: '340px' }} onClick={e => e.stopPropagation()}>
+              <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+                <div style={{ fontSize: '3rem', lineHeight: 1, marginBottom: 12 }}>🤔</div>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 900, color: '#111827', margin: '0 0 8px' }}>
+                  Quý khách muốn thoát ạ?
+                </h3>
+                <p style={{ color: '#6b7280', fontSize: '0.9rem', fontWeight: 600, lineHeight: 1.5, margin: 0 }}>
+                  Thoát ra là mất giỏ hàng đang chọn, muốn gọi món lại phải quét mã QR trên bàn.
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button
+                  onClick={confirmExitOrderPage}
+                  style={{ flex: 1, padding: '14px', background: '#f3f4f6', color: '#4b5563', border: 'none', borderRadius: '16px', fontSize: '0.95rem', fontWeight: 800, cursor: 'pointer' }}
+                >
+                  Thoát
+                </button>
+                <button
+                  onClick={() => setShowExitConfirm(false)}
+                  style={{ flex: 1.3, padding: '14px', background: '#2563eb', color: 'white', border: 'none', borderRadius: '16px', fontSize: '0.95rem', fontWeight: 800, cursor: 'pointer', boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)' }}
+                >
+                  Ở lại gọi món 😋
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {showResetConfirm && (
           <div className="co-modal-overlay" onClick={() => setShowResetConfirm(false)} style={{ zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <div className="co-info-modal" style={{ borderRadius: '24px', padding: '24px', margin: '0 20px', animation: 'coSlideUp 0.3s ease', maxWidth: '340px' }} onClick={e => e.stopPropagation()}>
