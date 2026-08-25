@@ -50,16 +50,20 @@ export const REWARD_CHANNELS = [
     color: '#0d9488', colorDark: '#0f766e', colorSoft: '#f0fdfa', colorBorder: '#99f6e4',
     prefix: 'zalo_follow',
     icon: '💬',
-    name: 'Kết bạn Zalo',
-    custName: 'Kết bạn Zalo với quán',
+    name: 'Quan tâm Zalo OA',
+    custName: 'Quan tâm Zalo của quán',
     short: 'Zalo',
-    cta: 'Mở Zalo, kết bạn nhé!',
+    cta: 'Mở Zalo, bấm Quan tâm!',
+    // auto: kênh này KHÔNG qua nhân viên duyệt — webhook Zalo xác nhận
+    // follow thật rồi server tự trừ tiền (xem /api/zalo/webhook).
+    auto: true,
     steps: [
-      'Bấm nút dưới để mở Zalo của quán.',
-      'Bấm Kết bạn (hoặc Quan tâm) là được ạ.',
+      'Bấm nút dưới để mở Zalo OA của quán.',
+      'Bấm QUAN TÂM ở đầu trang.',
+      'Nhắn số điện thoại của mình vào khung chat là xong!',
     ],
     discountLabel: 'Giảm giá kết bạn Zalo',
-    urlHint: 'Zalo OA: lấy link "Quan tâm". Zalo cá nhân: Trang cá nhân → Chia sẻ → Sao chép liên kết (zalo.me/...).',
+    urlHint: 'Dán link Zalo OA (zalo.me/<id OA>) — lấy trong oa.zalo.me → Thông tin OA.',
   },
   {
     key: 'facebook',

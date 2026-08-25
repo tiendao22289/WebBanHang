@@ -571,6 +571,7 @@ function OrderContent() {
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewErr, setReviewErr] = useState('');
   const [reviewReward, setReviewReward] = useState(null); // bản ghi review_rewards hiện tại
+  const [zaloClaim, setZaloClaim] = useState(null); // bản ghi zalo_reward_claims (kênh Zalo tự động, không cần NV duyệt)
   const [reviewBillTotal, setReviewBillTotal] = useState(0);
   const [reviewEligible, setReviewEligible] = useState(false);
   const [reviewChecking, setReviewChecking] = useState(false);
@@ -1560,6 +1561,22 @@ function OrderContent() {
       (rows || []).forEach(r => {
         if (map[r.channel] !== 'approved') map[r.channel] = r.status;
       });
+
+      // Kênh Zalo tự động nằm ở bảng riêng (zalo_reward_claims)
+      try {
+        let zq = supabase.from('zalo_reward_claims').select('id').eq('status', 'verified').limit(1);
+        if (isTakeawayRef.current) {
+          const ph = (customerPhoneRef.current || '').trim();
+          zq = ph ? zq.eq('customer_phone', ph).gte('created_at', startOfTodayISO()) : null;
+        } else {
+          zq = sessionStart ? zq.eq('host_table_id', activeTableId).gte('created_at', sessionStart) : null;
+        }
+        if (zq) {
+          const { data: zrows } = await zq;
+          if (zrows?.length) map.zalo = 'approved';
+        }
+      } catch { /* bảng chưa migrate thì bỏ qua, kênh vẫn hiện bình thường */ }
+
       setChannelStates(map);
     } catch (err) {
       console.error('[openReviewOverlay]', err);
@@ -1568,8 +1585,177 @@ function OrderContent() {
     setReviewChecking(false);
   }
 
+  // ══════════════════════════════════════════════════════════
+  //  KÊNH ZALO TỰ ĐỘNG (cfg.auto) — tách riêng khỏi flow duyệt tay.
+  //  Khách bấm Quan tâm OA + nhắn SĐT vào chat → webhook Zalo xác
+  //  nhận → server tự trừ tiền. Bảng zalo_reward_claims chặn anon
+  //  UPDATE nên khách không tự duyệt được.
+  // ══════════════════════════════════════════════════════════
+  function zaloStorageKey() {
+    return `zalo_auto_${activeTableId || urlTableId || 'x'}`;
+  }
+
+  async function selectZaloChannel(cfg) {
+    setReviewChannel(cfg.key);
+    bumpRewardView(`reward_${cfg.key}`);
+    setReviewErr('');
+    setReviewChecking(true);
+    setReviewEligible(false);
+    setReviewStep('intro');
+    setZaloClaim(null);
+    setReviewBlockCode(null);
+
+    try {
+      const total = await fetchGroupBillTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
+      setReviewBillTotal(total);
+
+      // 1) Khôi phục yêu cầu đang treo (khách F5 / quay lại từ app Zalo)
+      let savedId = null;
+      try { savedId = localStorage.getItem(zaloStorageKey()); } catch { }
+      if (savedId) {
+        const { data: saved } = await supabase
+          .from('zalo_reward_claims').select('*').eq('id', savedId).maybeSingle();
+        if (saved && saved.status === 'waiting_follow') {
+          setZaloClaim(saved);
+          setReviewStep('zalo_waiting');
+          setReviewChecking(false);
+          return;
+        }
+        if (saved && saved.status === 'verified') {
+          setZaloClaim(saved);
+          setReviewStep('zalo_done');
+          setReviewChecking(false);
+          return;
+        }
+        // blocked hoặc không tìm thấy → bỏ để khách thử lại từ đầu
+        try { localStorage.removeItem(zaloStorageKey()); } catch { }
+      }
+
+      // 2) Điều kiện chung (cần phiên bàn + SĐT, như các kênh khác)
+      const sessionStart = await fetchSessionStart();
+      setReviewSessionStart(sessionStart);
+      const blocked = commonBlockReason(sessionStart);
+      setReviewBlockCode(blocked);
+      if (blocked === 'no_phone') {
+        const saved = getSavedSession();
+        setReviewInfoForm({
+          name: (customerName || saved?.customerName || '').trim(),
+          phone: (saved?.customerPhone || '').trim(),
+        });
+        setReviewChecking(false);
+        return;
+      }
+      if (blocked) {
+        setReviewErr(REVIEW_BLOCK_TEXT[blocked] || 'Chưa áp dụng được ưu đãi.');
+        setReviewChecking(false);
+        return;
+      }
+
+      if (cfg.minBill > 0 && total < cfg.minBill) {
+        setReviewErr(`Quà này dành cho hoá đơn từ ${formatPrice(cfg.minBill)}. Quý khách gọi thêm chút nữa là có liền 😋`);
+        setReviewChecking(false);
+        return;
+      }
+
+      // 3) Bàn/lượt này (hoặc SĐT này nếu mang về) đã nhận chưa
+      let claimedQ = supabase.from('zalo_reward_claims').select('id').eq('status', 'verified').limit(1);
+      if (isTakeawayRef.current) {
+        claimedQ = claimedQ.eq('customer_phone', (customerPhoneRef.current || '').trim())
+          .gte('created_at', startOfTodayISO());
+      } else {
+        claimedQ = claimedQ.eq('host_table_id', activeTableId).gte('created_at', sessionStart);
+      }
+      const { data: claimedRows } = await claimedQ;
+      if (claimedRows?.length) {
+        setReviewErr('Bàn mình nhận quà Zalo rồi ạ. Cảm ơn Quý khách nhiều nha! 🥰');
+        setReviewChecking(false);
+        return;
+      }
+
+      // 4) Cooldown theo SĐT (server sẽ kiểm lại lần nữa, kèm cả tài khoản Zalo)
+      const phone = (customerPhoneRef.current || '').trim();
+      if (cfg.cooldownDays > 0 && phone) {
+        const cutoff = new Date(Date.now() - cfg.cooldownDays * 86400000).toISOString();
+        const { data: recent } = await supabase
+          .from('zalo_reward_claims')
+          .select('id')
+          .eq('customer_phone', phone)
+          .eq('status', 'verified')
+          .gte('verified_at', cutoff)
+          .limit(1);
+        if (recent?.length) {
+          setReviewErr(`Số này vừa nhận quà ${cfg.short} gần đây rồi ạ. Hẹn Quý khách lần ghé sau nha! 👋`);
+          setReviewChecking(false);
+          return;
+        }
+      }
+
+      setReviewEligible(true);
+    } catch (err) {
+      console.error('[selectZaloChannel]', err);
+      setReviewErr('Quán chưa kiểm được, Quý khách thử lại hoặc gọi nhân viên nhé!');
+    }
+    setReviewChecking(false);
+  }
+
+  // Khách bấm nút mở OA — tạo claim chờ webhook, KHÔNG chặn điều hướng
+  function handleZaloLinkClick(cfg) {
+    setReviewStep('zalo_waiting');
+
+    (async () => {
+      const { data, error } = await supabase.from('zalo_reward_claims').insert({
+        table_id: urlTableId || activeTableId,
+        host_table_id: activeTableId,
+        customer_name: (customerName || '').trim() || null,
+        customer_phone: (customerPhoneRef.current || '').trim(),
+        bill_total: reviewBillTotal,
+      }).select().maybeSingle();
+
+      if (error || !data) {
+        console.error('[zalo claim insert]', error);
+        setReviewErr('Quán chưa ghi nhận được, Quý khách thử lại giúp ạ!');
+        setReviewStep('intro');
+        return;
+      }
+      setZaloClaim(data);
+      try { localStorage.setItem(zaloStorageKey(), data.id); } catch { }
+    })();
+  }
+
+  // Theo dõi webhook xác nhận — chạy kể cả khi overlay đã đóng
+  useEffect(() => {
+    const claimId = zaloClaim?.id;
+    if (!claimId) return;
+    if (['verified', 'blocked'].includes(zaloClaim.status)) return;
+
+    const channel = supabase
+      .channel(`zalo-claim-${claimId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'zalo_reward_claims',
+        filter: `id=eq.${claimId}`,
+      }, (payload) => {
+        const row = payload.new;
+        setZaloClaim(row);
+        if (row.status === 'verified') {
+          setChannelStates(prev => ({ ...prev, zalo: 'approved' }));
+          if (reviewChannel === 'zalo' || !reviewChannel) setReviewStep('zalo_done');
+          showFeedbackToast('success', 'Cảm ơn Quý khách nha! 🎉', `Zalo: hoá đơn vừa bớt ${formatPrice(row.discount_amount || 0)} rồi ạ.`);
+          refreshPreviousOrdersReliably();
+          try { localStorage.removeItem(zaloStorageKey()); } catch { }
+        } else if (row.status === 'blocked') {
+          if (reviewChannel === 'zalo') setReviewStep('zalo_blocked');
+          showFeedbackToast('warning', 'Quà chưa vào được ạ', row.block_reason || 'Quý khách gọi nhân viên một tiếng nhé!');
+          try { localStorage.removeItem(zaloStorageKey()); } catch { }
+        }
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [zaloClaim?.id, zaloClaim?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Chọn 1 kênh → kiểm tra điều kiện của riêng kênh đó
   async function selectReviewChannel(cfg) {
+    if (cfg.auto) return selectZaloChannel(cfg); // kênh Zalo đi luồng tự động riêng
     setReviewChannel(cfg.key);
     bumpRewardView(`reward_${cfg.key}`);
     setReviewErr('');
@@ -3482,19 +3668,63 @@ function OrderContent() {
                           </div>
                           <ol className="co-gmap-steps">
                             {cfg.steps.map((t, i) => <li key={i}>{t}</li>)}
-                            <li>Quay lại đây bấm <b>“Xong rồi nha”</b>.</li>
-                            <li>Nhân viên ghé xác nhận một cái là tiền bớt liền.</li>
+                            {cfg.auto ? (
+                              <li>Tiền <b>tự bớt vào hoá đơn</b> ngay khi Zalo báo về — không phải chờ ai duyệt!</li>
+                            ) : (
+                              <>
+                                <li>Quay lại đây bấm <b>“Xong rồi nha”</b>.</li>
+                                <li>Nhân viên ghé xác nhận một cái là tiền bớt liền.</li>
+                              </>
+                            )}
                           </ol>
                           <a
                             className="co-gmap-cta"
                             href={cfg.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            onClick={() => handleReviewLinkClick(cfg)}
+                            onClick={() => cfg.auto ? handleZaloLinkClick(cfg) : handleReviewLinkClick(cfg)}
                           >
                             {cfg.icon} {cfg.cta}
                           </a>
                         </>
+                      )}
+
+                      {/* ── Kênh Zalo tự động: chờ webhook xác nhận ── */}
+                      {reviewStep === 'zalo_waiting' && (
+                        <>
+                          <div className="co-gmap-state co-gmap-pending">
+                            <div className="co-gmap-big">💬</div>
+                            <div><b>Còn 2 bước nhỏ bên Zalo thôi ạ:</b></div>
+                            <div style={{ textAlign: 'left', marginTop: 8 }}>
+                              1️⃣ Bấm <b>QUAN TÂM</b> ở đầu trang OA.<br />
+                              2️⃣ Nhắn số <b>{(customerPhoneRef.current || '').trim() || 'điện thoại của mình'}</b> vào khung chat của quán.
+                            </div>
+                            <div style={{ marginTop: 10, fontSize: '0.85rem' }}>
+                              Xong là tiền <b>tự bớt vào hoá đơn liền</b>, quán báo ngay trên màn hình này 🎉
+                            </div>
+                          </div>
+                          <a className="co-gmap-cta" href={cfg.url} target="_blank" rel="noopener noreferrer">
+                            {cfg.icon} Mở lại Zalo của quán
+                          </a>
+                          <button className="co-gmap-link" onClick={() => setReviewOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+                            Đóng bảng này, gọi món tiếp (quà vẫn tự vào)
+                          </button>
+                        </>
+                      )}
+
+                      {reviewStep === 'zalo_done' && (
+                        <div className="co-gmap-state co-gmap-ok">
+                          <div className="co-gmap-big">🎉</div>
+                          <div><b>Cảm ơn Quý khách đã quan tâm quán!</b></div>
+                          <div>Hoá đơn của bàn vừa bớt <b>{formatPrice(zaloClaim?.discount_amount || 0)}</b> rồi ạ.</div>
+                        </div>
+                      )}
+
+                      {reviewStep === 'zalo_blocked' && (
+                        <div className="co-gmap-state co-gmap-warn">
+                          <div><b>Quà chưa vào được ạ</b></div>
+                          <div>{zaloClaim?.block_reason || 'Quý khách gọi nhân viên một tiếng, quán xử lý ngay nhé!'}</div>
+                        </div>
                       )}
 
                       {/* Bước 2 — chờ khách quay lại */}
