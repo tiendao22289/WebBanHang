@@ -576,9 +576,11 @@ function OrderContent() {
   // Safari chặn) → phải biết hệ máy để đặt href cho đúng. Set trong useEffect
   // để không lệch giữa HTML server và client.
   const [isIOS, setIsIOS] = useState(false);
+  const [isAndroid, setIsAndroid] = useState(false);
   useEffect(() => {
     const ua = navigator.userAgent || '';
     setIsIOS(/iphone|ipad|ipod/i.test(ua) || (/Mac/.test(ua) && 'ontouchend' in document));
+    setIsAndroid(/android/i.test(ua));
   }, []);
   const [reviewBillTotal, setReviewBillTotal] = useState(0);
   const [reviewEligible, setReviewEligible] = useState(false);
@@ -711,6 +713,19 @@ function OrderContent() {
       return JSON.parse(raw);
     } catch { return null; }
   }
+
+  /**
+   * Khách mở lại web mà không có ?table= (bấm back từ app Zalo, mở lại từ
+   * lịch sử, tab bị hệ thống thu hồi...) → lấy lại bàn từ phiên đã lưu
+   * trong ngày, khỏi phải quét QR lần nữa.
+   */
+  useEffect(() => {
+    if (urlTableId || activeTableId) return;
+    const saved = getSavedSession();
+    if (saved?.tableId && saved.date === getTodayStr()) {
+      setActiveTableId(saved.tableId);
+    }
+  }, [urlTableId, activeTableId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isSessionRestored = useRef(false);
   useEffect(() => {
@@ -1719,37 +1734,24 @@ function OrderContent() {
     return oaid ? `zalo://conversation?oaid=${oaid}` : null;
   }
 
-  function openZaloApp(cfg) {
-    const webUrl = cfg.url;
-    const m = (webUrl || '').match(/zalo\.me\/(\d{6,})/);
-    const oaid = m?.[1];
-    if (!oaid) {
-      window.location.href = webUrl;
-      return;
-    }
-
-    const ua = navigator.userAgent || '';
-    const isAndroid = /android/i.test(ua);
-
+  /**
+   * Địa chỉ đặt vào href của nút mở Zalo, theo từng hệ máy.
+   *
+   * QUAN TRỌNG: nút LUÔN dùng href + target="_blank", KHÔNG điều hướng bằng
+   * JS trên cùng tab. Điều hướng cùng tab làm trang order bị thay thế —
+   * khách nhắn tin xong bấm back là mất trang, phải quét QR lại.
+   */
+  function zaloOpenHref(cfg) {
+    const oaid = (cfg?.url || '').match(/zalo\.me\/(\d{6,})/)?.[1];
+    if (!oaid) return cfg?.url || '#';
+    // Android: intent:// mở thẳng app, kèm địa chỉ dự phòng nếu máy chưa có app
     if (isAndroid) {
-      // Chrome Android không nhận scheme lạ qua location.href — phải dùng
-      // intent://. Không mở được app thì Chrome TỰ chuyển sang link web
-      // (S.browser_fallback_url), không cần hẹn giờ.
-      window.location.href =
-        `intent://conversation?oaid=${oaid}` +
+      return `intent://conversation?oaid=${oaid}` +
         `#Intent;scheme=zalo;package=com.zing.zalo;` +
-        `S.browser_fallback_url=${encodeURIComponent(webUrl)};end`;
-      return;
+        `S.browser_fallback_url=${encodeURIComponent(cfg.url)};end`;
     }
-
-    // iOS/khác: thử scheme zalo://, sau 1.6s chưa rời trang thì về link web.
-    // Fallback phải điều hướng CÙNG TAB (location.href) — window.open sau
-    // setTimeout bị chặn popup vì không còn nằm trong thao tác bấm của khách.
-    const fallback = setTimeout(() => { window.location.href = webUrl; }, 1600);
-    const cancel = () => clearTimeout(fallback);
-    window.addEventListener('pagehide', cancel, { once: true });
-    document.addEventListener('visibilitychange', () => { if (document.hidden) cancel(); }, { once: true });
-    window.location.href = `zalo://conversation?oaid=${oaid}`;
+    // iOS/khác: link web của Zalo (trang này có nút MỞ để vào app)
+    return cfg.url;
   }
 
   // Khách bấm nút mở OA — tạo claim chờ webhook, KHÔNG chặn điều hướng
@@ -3760,27 +3762,15 @@ function OrderContent() {
                               </>
                             )}
                           </ol>
-                          {(() => {
-                            // iOS: để Safari điều hướng THẲNG tới link https của Zalo
-                            // (universal link) — không target=_blank, không chặn bằng JS,
-                            // vì cả hai đều làm iOS bỏ qua việc mở app.
-                            // Android: chặn mặc định rồi đi qua intent:// (đã chạy tốt).
-                            const iosPlain = cfg.auto && isIOS;
-                            return (
-                              <a
-                                className="co-gmap-cta"
-                                href={cfg.url}
-                                {...(iosPlain ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
-                                onClick={(e) => {
-                                  if (!cfg.auto) { handleReviewLinkClick(cfg); return; }
-                                  handleZaloLinkClick(cfg);
-                                  if (!iosPlain) { e.preventDefault(); openZaloApp(cfg); }
-                                }}
-                              >
-                                {cfg.icon} {cfg.cta}
-                              </a>
-                            );
-                          })()}
+                          <a
+                            className="co-gmap-cta"
+                            href={cfg.auto ? zaloOpenHref(cfg) : cfg.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() => cfg.auto ? handleZaloLinkClick(cfg) : handleReviewLinkClick(cfg)}
+                          >
+                            {cfg.icon} {cfg.cta}
+                          </a>
                         </>
                       )}
 
@@ -3799,23 +3789,19 @@ function OrderContent() {
                             </div>
                             <div style={{ marginTop: 8, fontSize: '0.8rem', color: '#64748b' }}>
                               Nếu hiện trang web của Zalo, bấm nút <b>MỞ</b> màu xanh để vào app nhé.
+                              Nhắn xong Quý khách quay lại tab này là thấy quà liền, không cần quét mã lại ạ.
                             </div>
                           </div>
-                          {(() => {
-                            const iosPlain = isIOS;
-                            return (
-                              <a
-                                className="co-gmap-cta"
-                                href={cfg.url}
-                                {...(iosPlain ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
-                                onClick={(e) => { if (!iosPlain) { e.preventDefault(); openZaloApp(cfg); } }}
-                              >
-                                {cfg.icon} Mở lại Zalo của quán
-                              </a>
-                            );
-                          })()}
+                          <a
+                            className="co-gmap-cta"
+                            href={zaloOpenHref(cfg)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {cfg.icon} Mở lại Zalo của quán
+                          </a>
                           {isIOS && zaloDeepLink(cfg) && (
-                            <a className="co-gmap-link" href={zaloDeepLink(cfg)}>
+                            <a className="co-gmap-link" href={zaloDeepLink(cfg)} target="_blank" rel="noopener noreferrer">
                               Mở bằng app Zalo
                             </a>
                           )}
