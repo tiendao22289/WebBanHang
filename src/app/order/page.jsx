@@ -572,6 +572,14 @@ function OrderContent() {
   const [reviewErr, setReviewErr] = useState('');
   const [reviewReward, setReviewReward] = useState(null); // bản ghi review_rewards hiện tại
   const [zaloClaim, setZaloClaim] = useState(null); // bản ghi zalo_reward_claims (kênh Zalo tự động, không cần NV duyệt)
+  // iOS chỉ mở app khi khách bấm TRỰC TIẾP link có scheme zalo:// (JS gọi thì
+  // Safari chặn) → phải biết hệ máy để đặt href cho đúng. Set trong useEffect
+  // để không lệch giữa HTML server và client.
+  const [isIOS, setIsIOS] = useState(false);
+  useEffect(() => {
+    const ua = navigator.userAgent || '';
+    setIsIOS(/iphone|ipad|ipod/i.test(ua) || (/Mac/.test(ua) && 'ontouchend' in document));
+  }, []);
   const [reviewBillTotal, setReviewBillTotal] = useState(0);
   const [reviewEligible, setReviewEligible] = useState(false);
   const [reviewChecking, setReviewChecking] = useState(false);
@@ -1705,6 +1713,12 @@ function OrderContent() {
    * nơi khách nhắn SĐT → một màn hình làm được cả 2 bước.
    * Máy không mở được app (không cài Zalo...) → fallback về link web.
    */
+  /** Deep link vào khung chat OA; null nếu link cấu hình không phải dạng zalo.me/<id>. */
+  function zaloDeepLink(cfg) {
+    const oaid = (cfg?.url || '').match(/zalo\.me\/(\d{6,})/)?.[1];
+    return oaid ? `zalo://conversation?oaid=${oaid}` : null;
+  }
+
   function openZaloApp(cfg) {
     const webUrl = cfg.url;
     const m = (webUrl || '').match(/zalo\.me\/(\d{6,})/);
@@ -3717,24 +3731,25 @@ function OrderContent() {
                               </>
                             )}
                           </ol>
-                          <a
-                            className="co-gmap-cta"
-                            href={cfg.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => {
-                              if (cfg.auto) {
-                                // Zalo: mở thẳng app (deep link), không qua trang web trung gian
-                                e.preventDefault();
-                                handleZaloLinkClick(cfg);
-                                openZaloApp(cfg);
-                              } else {
-                                handleReviewLinkClick(cfg);
-                              }
-                            }}
-                          >
-                            {cfg.icon} {cfg.cta}
-                          </a>
+                          {(() => {
+                            // iOS: href PHẢI là zalo:// để Safari mở app (JS gọi sẽ bị chặn).
+                            // Android: giữ href web, chặn mặc định rồi đi qua intent://.
+                            const iosDeep = cfg.auto && isIOS ? zaloDeepLink(cfg) : null;
+                            return (
+                              <a
+                                className="co-gmap-cta"
+                                href={iosDeep || cfg.url}
+                                {...(iosDeep ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
+                                onClick={(e) => {
+                                  if (!cfg.auto) { handleReviewLinkClick(cfg); return; }
+                                  handleZaloLinkClick(cfg);
+                                  if (!iosDeep) { e.preventDefault(); openZaloApp(cfg); }
+                                }}
+                              >
+                                {cfg.icon} {cfg.cta}
+                              </a>
+                            );
+                          })()}
                         </>
                       )}
 
@@ -3755,15 +3770,19 @@ function OrderContent() {
                               Nếu hiện trang web của Zalo, bấm nút <b>MỞ</b> màu xanh để vào app nhé.
                             </div>
                           </div>
-                          <a
-                            className="co-gmap-cta"
-                            href={cfg.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => { e.preventDefault(); openZaloApp(cfg); }}
-                          >
-                            {cfg.icon} Mở lại Zalo của quán
-                          </a>
+                          {(() => {
+                            const iosDeep = isIOS ? zaloDeepLink(cfg) : null;
+                            return (
+                              <a
+                                className="co-gmap-cta"
+                                href={iosDeep || cfg.url}
+                                {...(iosDeep ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
+                                onClick={(e) => { if (!iosDeep) { e.preventDefault(); openZaloApp(cfg); } }}
+                              >
+                                {cfg.icon} Mở lại Zalo của quán
+                              </a>
+                            );
+                          })()}
                           <a className="co-gmap-link" href={cfg.url} target="_blank" rel="noopener noreferrer">
                             Không mở được app? Bấm vào đây
                           </a>
