@@ -3732,18 +3732,20 @@ function OrderContent() {
                             )}
                           </ol>
                           {(() => {
-                            // iOS: href PHẢI là zalo:// để Safari mở app (JS gọi sẽ bị chặn).
-                            // Android: giữ href web, chặn mặc định rồi đi qua intent://.
-                            const iosDeep = cfg.auto && isIOS ? zaloDeepLink(cfg) : null;
+                            // iOS: để Safari điều hướng THẲNG tới link https của Zalo
+                            // (universal link) — không target=_blank, không chặn bằng JS,
+                            // vì cả hai đều làm iOS bỏ qua việc mở app.
+                            // Android: chặn mặc định rồi đi qua intent:// (đã chạy tốt).
+                            const iosPlain = cfg.auto && isIOS;
                             return (
                               <a
                                 className="co-gmap-cta"
-                                href={iosDeep || cfg.url}
-                                {...(iosDeep ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
+                                href={cfg.url}
+                                {...(iosPlain ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
                                 onClick={(e) => {
                                   if (!cfg.auto) { handleReviewLinkClick(cfg); return; }
                                   handleZaloLinkClick(cfg);
-                                  if (!iosDeep) { e.preventDefault(); openZaloApp(cfg); }
+                                  if (!iosPlain) { e.preventDefault(); openZaloApp(cfg); }
                                 }}
                               >
                                 {cfg.icon} {cfg.cta}
@@ -3771,21 +3773,23 @@ function OrderContent() {
                             </div>
                           </div>
                           {(() => {
-                            const iosDeep = isIOS ? zaloDeepLink(cfg) : null;
+                            const iosPlain = isIOS;
                             return (
                               <a
                                 className="co-gmap-cta"
-                                href={iosDeep || cfg.url}
-                                {...(iosDeep ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
-                                onClick={(e) => { if (!iosDeep) { e.preventDefault(); openZaloApp(cfg); } }}
+                                href={cfg.url}
+                                {...(iosPlain ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
+                                onClick={(e) => { if (!iosPlain) { e.preventDefault(); openZaloApp(cfg); } }}
                               >
                                 {cfg.icon} Mở lại Zalo của quán
                               </a>
                             );
                           })()}
-                          <a className="co-gmap-link" href={cfg.url} target="_blank" rel="noopener noreferrer">
-                            Không mở được app? Bấm vào đây
-                          </a>
+                          {isIOS && zaloDeepLink(cfg) && (
+                            <a className="co-gmap-link" href={zaloDeepLink(cfg)}>
+                              Mở bằng app Zalo
+                            </a>
+                          )}
                           <button className="co-gmap-link" onClick={() => setReviewOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
                             Đóng bảng này, gọi món tiếp (quà vẫn tự vào)
                           </button>
