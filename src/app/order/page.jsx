@@ -1713,11 +1713,26 @@ function OrderContent() {
       window.location.href = webUrl;
       return;
     }
+
+    const ua = navigator.userAgent || '';
+    const isAndroid = /android/i.test(ua);
+
+    if (isAndroid) {
+      // Chrome Android không nhận scheme lạ qua location.href — phải dùng
+      // intent://. Không mở được app thì Chrome TỰ chuyển sang link web
+      // (S.browser_fallback_url), không cần hẹn giờ.
+      window.location.href =
+        `intent://conversation?oaid=${oaid}` +
+        `#Intent;scheme=zalo;package=com.zing.zalo;` +
+        `S.browser_fallback_url=${encodeURIComponent(webUrl)};end`;
+      return;
+    }
+
+    // iOS/khác: thử scheme zalo://, sau 1.6s chưa rời trang thì về link web.
     // Fallback phải điều hướng CÙNG TAB (location.href) — window.open sau
     // setTimeout bị chặn popup vì không còn nằm trong thao tác bấm của khách.
     const fallback = setTimeout(() => { window.location.href = webUrl; }, 1600);
     const cancel = () => clearTimeout(fallback);
-    // App mở được thì trang này bị ẩn đi → huỷ fallback
     window.addEventListener('pagehide', cancel, { once: true });
     document.addEventListener('visibilitychange', () => { if (document.hidden) cancel(); }, { once: true });
     window.location.href = `zalo://conversation?oaid=${oaid}`;
@@ -3735,6 +3750,9 @@ function OrderContent() {
                             </div>
                             <div style={{ marginTop: 10, fontSize: '0.85rem' }}>
                               Xong là tiền <b>tự bớt vào hoá đơn liền</b>, quán báo ngay trên màn hình này 🎉
+                            </div>
+                            <div style={{ marginTop: 8, fontSize: '0.8rem', color: '#64748b' }}>
+                              Nếu hiện trang web của Zalo, bấm nút <b>MỞ</b> màu xanh để vào app nhé.
                             </div>
                           </div>
                           <a
