@@ -14,6 +14,9 @@ export const metadata = {
     'apple-mobile-web-app-capable': 'yes',
     'apple-mobile-web-app-status-bar-style': 'black-translucent',
     'format-detection': 'telephone=no',
+    // Xác thực domain với Zalo Platform — khai ở đây (không phải JSX <head>)
+    // để Next render thành thẻ <meta> thật trên MỌI trang, kể cả trang chủ.
+    'zalo-platform-site-verification': 'FTAJ1zdl7prV-fnbeSGxPbt7aM2niKivDJKu',
   },
 };
 
@@ -56,9 +59,6 @@ export default function RootLayout({ children }) {
         {/* ── Friendly với mọi mobile browser ── */}
         <meta name="HandheldFriendly" content="true" />
         <meta name="MobileOptimized" content="width" />
-
-        {/* ── Xác thực domain với Zalo Platform (developers.zalo.me) ── */}
-        <meta name="zalo-platform-site-verification" content="FTAJ1zdl7prV-fnbeSGxPbt7aM2niKivDJKu" />
 
         {/* ── Zalo share preview card ── */}
         <meta property="og:title" content="Gọi Món - Nhà Hàng" />
