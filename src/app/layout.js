@@ -57,6 +57,9 @@ export default function RootLayout({ children }) {
         <meta name="HandheldFriendly" content="true" />
         <meta name="MobileOptimized" content="width" />
 
+        {/* ── Xác thực domain với Zalo Platform (developers.zalo.me) ── */}
+        <meta name="zalo-platform-site-verification" content="FTAJ1zdl7prV-fnbeSGxPbt7aM2niKivDJKu" />
+
         {/* ── Zalo share preview card ── */}
         <meta property="og:title" content="Gọi Món - Nhà Hàng" />
         <meta property="og:description" content="Quét QR để gọi món ngay tại bàn" />
