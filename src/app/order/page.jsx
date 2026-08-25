@@ -1698,6 +1698,29 @@ function OrderContent() {
     setReviewChecking(false);
   }
 
+  /**
+   * Mở THẲNG app Zalo vào khung chat của OA (deep link) thay vì trang
+   * web zalo.me — bản web không có nút Quan tâm nên khách bị kẹt.
+   * Khung chat trong app có sẵn nút "Quan tâm" trên đầu, và cũng là
+   * nơi khách nhắn SĐT → một màn hình làm được cả 2 bước.
+   * Máy không mở được app (không cài Zalo...) → fallback về link web.
+   */
+  function openZaloApp(cfg) {
+    const webUrl = cfg.url;
+    const m = (webUrl || '').match(/zalo\.me\/(\d{6,})/);
+    const oaid = m?.[1];
+    if (!oaid) {
+      window.open(webUrl, '_blank', 'noopener');
+      return;
+    }
+    const fallback = setTimeout(() => { window.open(webUrl, '_blank', 'noopener'); }, 1800);
+    const cancel = () => clearTimeout(fallback);
+    // App mở được thì trang này bị ẩn đi → huỷ fallback
+    window.addEventListener('pagehide', cancel, { once: true });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) cancel(); }, { once: true });
+    window.location.href = `zalo://conversation?oaid=${oaid}`;
+  }
+
   // Khách bấm nút mở OA — tạo claim chờ webhook, KHÔNG chặn điều hướng
   function handleZaloLinkClick(cfg) {
     setReviewStep('zalo_waiting');
@@ -3682,7 +3705,16 @@ function OrderContent() {
                             href={cfg.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            onClick={() => cfg.auto ? handleZaloLinkClick(cfg) : handleReviewLinkClick(cfg)}
+                            onClick={(e) => {
+                              if (cfg.auto) {
+                                // Zalo: mở thẳng app (deep link), không qua trang web trung gian
+                                e.preventDefault();
+                                handleZaloLinkClick(cfg);
+                                openZaloApp(cfg);
+                              } else {
+                                handleReviewLinkClick(cfg);
+                              }
+                            }}
                           >
                             {cfg.icon} {cfg.cta}
                           </a>
@@ -3703,7 +3735,13 @@ function OrderContent() {
                               Xong là tiền <b>tự bớt vào hoá đơn liền</b>, quán báo ngay trên màn hình này 🎉
                             </div>
                           </div>
-                          <a className="co-gmap-cta" href={cfg.url} target="_blank" rel="noopener noreferrer">
+                          <a
+                            className="co-gmap-cta"
+                            href={cfg.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => { e.preventDefault(); openZaloApp(cfg); }}
+                          >
                             {cfg.icon} Mở lại Zalo của quán
                           </a>
                           <button className="co-gmap-link" onClick={() => setReviewOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
