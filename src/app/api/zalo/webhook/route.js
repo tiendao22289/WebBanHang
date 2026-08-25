@@ -29,7 +29,7 @@
  *  Webhook URL khai trên developers.zalo.me: https://<domain>/api/zalo/webhook
  */
 
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 import { parseChannelConfig, calcReviewDiscount, getChannel } from '@/lib/reviewReward';
@@ -328,7 +328,15 @@ export async function POST(request) {
     }
 
     log(`event: ${body.event_name}`);
-    await handleEvent(supabase, body, log);
+    // Trả 200 NGAY cho Zalo (yêu cầu phản hồi < 2s), phần xử lý
+    // (khớp SĐT, trừ tiền) chạy nền sau khi response đã gửi.
+    after(async () => {
+      try {
+        await handleEvent(supabase, body, log);
+      } catch (err) {
+        console.error('[Zalo Webhook] xử lý nền lỗi:', err);
+      }
+    });
 
     return NextResponse.json({ ok: true });
   } catch (err) {
