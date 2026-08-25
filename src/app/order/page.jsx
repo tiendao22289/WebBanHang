@@ -1710,10 +1710,12 @@ function OrderContent() {
     const m = (webUrl || '').match(/zalo\.me\/(\d{6,})/);
     const oaid = m?.[1];
     if (!oaid) {
-      window.open(webUrl, '_blank', 'noopener');
+      window.location.href = webUrl;
       return;
     }
-    const fallback = setTimeout(() => { window.open(webUrl, '_blank', 'noopener'); }, 1800);
+    // Fallback phải điều hướng CÙNG TAB (location.href) — window.open sau
+    // setTimeout bị chặn popup vì không còn nằm trong thao tác bấm của khách.
+    const fallback = setTimeout(() => { window.location.href = webUrl; }, 1600);
     const cancel = () => clearTimeout(fallback);
     // App mở được thì trang này bị ẩn đi → huỷ fallback
     window.addEventListener('pagehide', cancel, { once: true });
@@ -3743,6 +3745,9 @@ function OrderContent() {
                             onClick={(e) => { e.preventDefault(); openZaloApp(cfg); }}
                           >
                             {cfg.icon} Mở lại Zalo của quán
+                          </a>
+                          <a className="co-gmap-link" href={cfg.url} target="_blank" rel="noopener noreferrer">
+                            Không mở được app? Bấm vào đây
                           </a>
                           <button className="co-gmap-link" onClick={() => setReviewOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
                             Đóng bảng này, gọi món tiếp (quà vẫn tự vào)
