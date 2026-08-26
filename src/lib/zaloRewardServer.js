@@ -319,24 +319,35 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
   }
 
   if (name === 'user_send_text' || name === 'user_submit_info') {
-    // user_submit_info: SĐT do Zalo xác thực (khách bấm nút chia sẻ)
-    // user_send_text : khách tự gõ SĐT vào chat — vẫn an toàn vì phải
-    //                  ĐANG follow + khớp yêu cầu + cooldown theo tài khoản
+    // KHÁCH ĐÃ QUAN TÂM TỪ TRƯỚC: Zalo chỉ bắn `follow` đúng lần đầu bấm
+    // Quan tâm, nên khách quen không sinh event nào — không thể ghép. Đường
+    // duy nhất còn lại là họ NHẮN MỘT TIN cho OA: tin nào cũng được, không
+    // cần là số điện thoại.
     const phone = name === 'user_submit_info'
       ? normalizePhone(ev.info?.phone)
       : extractPhoneFromText(ev.message?.text);
-    if (!phone) return;
 
     const { data: existing } = await supabase
-      .from('zalo_followers').select('zalo_user_id').eq('zalo_user_id', uid).maybeSingle();
+      .from('zalo_followers').select('zalo_user_id, phone, followed_at').eq('zalo_user_id', uid).maybeSingle();
+
     if (existing) {
       await supabase.from('zalo_followers')
-        .update({ phone, last_event_at: now }).eq('zalo_user_id', uid);
+        .update({ last_event_at: now, ...(phone ? { phone } : {}) })
+        .eq('zalo_user_id', uid);
     } else {
-      // Nhắn tin nhưng chưa từng follow → lưu SĐT chờ, followed_at để trống
+      // Nhắn tin mà chưa có trong bảng: khách quan tâm từ lâu (trước khi quán
+      // bật webhook) nên chưa từng có event follow. Coi như đang quan tâm —
+      // Zalo chỉ chuyển tin nhắn của người đã vào chat với OA.
       await supabase.from('zalo_followers')
-        .insert({ zalo_user_id: uid, phone, followed_at: null, last_event_at: now });
+        .insert({ zalo_user_id: uid, phone: phone || null, followed_at: now, last_event_at: now });
     }
-    await tryApplyReward(supabase, uid, phone, log);
+
+    if (phone) {
+      // Có SĐT trong tin nhắn → khớp chắc chắn nhất
+      await tryApplyReward(supabase, uid, phone, log);
+      return;
+    }
+    // Tin nhắn bất kỳ (“chào quán”, sticker chữ...) → khớp theo thời gian
+    await tryApplyRewardByTiming(supabase, uid, log);
   }
 }

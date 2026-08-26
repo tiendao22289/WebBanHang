@@ -1963,7 +1963,7 @@ function OrderContent() {
   // Chờ quá 25 giây mà quán chưa nhận ra → hiện cách dự phòng (nhắn SĐT)
   useEffect(() => {
     if (reviewStep !== 'zalo_waiting') { setZaloWaitedLong(false); return; }
-    const t = setTimeout(() => setZaloWaitedLong(true), 25000);
+    const t = setTimeout(() => setZaloWaitedLong(true), 15000);
     return () => clearTimeout(t);
   }, [reviewStep]);
 
@@ -4011,11 +4011,16 @@ function OrderContent() {
                               Bấm <b>Quan tâm</b> ở đầu trang Zalo của quán — tiền <b>tự bớt vào hoá đơn</b> ngay,
                               Quý khách không cần nhập gì thêm 🎉
                             </div>
-                            {/* Chờ hơi lâu: chỉ nhắc bấm lại, KHÔNG bắt khách nhắn tin */}
+                            <div style={{ marginTop: 8, fontSize: '0.82rem', color: '#0f766e', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: 10, padding: '8px 10px' }}>
+                              Đã quan tâm quán từ trước rồi ạ? Quý khách <b>nhắn cho quán một tin</b> bất kỳ
+                              (kiểu “chào quán”) là quán nhận ra ngay 😊
+                            </div>
+                            {/* Chờ hơi lâu → nhắc đúng 2 tình huống thường gặp */}
                             {zaloWaitedLong && (
-                              <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #cbd5e1', fontSize: '0.85rem' }}>
-                                Quán chưa nhận được ạ 😥 Quý khách kiểm lại đã bấm <b>Quan tâm</b> chưa,
-                                rồi bấm <b>“Bấm để quán kiểm lại”</b> ở dưới giúp quán nhé.
+                              <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #cbd5e1', fontSize: '0.85rem', textAlign: 'left' }}>
+                                <div style={{ fontWeight: 800, marginBottom: 4 }}>Quán chưa nhận được ạ 😥</div>
+                                • Chưa bấm <b>Quan tâm</b> thì Quý khách bấm nút trên rồi bấm Quan tâm nhé.<br />
+                                • <b>Đã quan tâm từ trước</b> thì nhắn cho quán một tin bất kỳ trong khung chat Zalo là được ạ.
                               </div>
                             )}
                             <div style={{ marginTop: 8, fontSize: '0.8rem', color: '#64748b' }}>
