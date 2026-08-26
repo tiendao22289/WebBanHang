@@ -8,7 +8,7 @@ import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, fetchGroupBillTotal, startOfTodayISO, isReviewDiscountItem } from '@/lib/reviewReward';
-import { LUCKY_PRIZES, getLuckyPrize } from '@/lib/luckyWheel';
+import { fetchLuckyPrizes } from '@/lib/luckyWheel';
 import {
   Search,
   Plus,
@@ -580,6 +580,7 @@ function OrderContent() {
   const [wheelAngle, setWheelAngle] = useState(0);
   const [wheelPrize, setWheelPrize] = useState(null);
   const [wheelErr, setWheelErr] = useState('');
+  const [wheelPrizes, setWheelPrizes] = useState([]); // cơ cấu quà từ bảng lucky_prizes
   const [wheelSpin, setWheelSpin] = useState(null);   // ban ghi lucky_spins
   const wheelSpinRef = useRef(null);
   const zaloClaimRef = useRef(null);                // bản sao đọc ngay, không đợi setState
@@ -1715,7 +1716,7 @@ function OrderContent() {
   //  Bắt buộc có tên + SĐT mới được quay. Kết quả do SERVER quyết định
   //  (/api/lucky/spin) — máy khách chỉ chạy hoạt ảnh theo kết quả đó.
   // ══════════════════════════════════════════════════════════
-  const WHEEL_SLICE = 360 / LUCKY_PRIZES.length;
+  const WHEEL_SLICE = wheelPrizes.length > 0 ? 360 / wheelPrizes.length : 360;
 
   function wheelStorageKey() {
     return `lucky_spin_${activeTableId || urlTableId || 'x'}`;
@@ -1723,6 +1724,8 @@ function OrderContent() {
 
   async function openWheel() {
     setWheelOpen(true);
+    // Cơ cấu quà do Admin cấu hình → luôn đọc lại khi mở
+    fetchLuckyPrizes(supabase).then(setWheelPrizes);
     setWheelErr('');
     setWheelPrize(null);
     setWheelAngle(0);
@@ -1741,8 +1744,11 @@ function OrderContent() {
         const { data } = await supabase
           .from('lucky_spins').select('*').eq('id', id).maybeSingle();
         if (data) {
-          const idx = LUCKY_PRIZES.findIndex(p => p.key === data.prize_key);
-          if (idx >= 0) setWheelAngle(360 - (idx * WHEEL_SLICE + WHEEL_SLICE / 2));
+          const prizeList = await fetchLuckyPrizes(supabase);
+          setWheelPrizes(prizeList);
+          const slice = prizeList.length > 0 ? 360 / prizeList.length : 360;
+          const idx = prizeList.findIndex(p => String(p.id) === String(data.prize_key));
+          if (idx >= 0) setWheelAngle(360 - (idx * slice + slice / 2));
           setWheelSpin(data);
           wheelSpinRef.current = data;
           setWheelPrize({
@@ -1795,8 +1801,9 @@ function OrderContent() {
       try { localStorage.setItem(wheelStorageKey(), data.spinId); } catch { }
 
       // Quay 5 vòng rồi dừng đúng ô trúng
-      const idx = LUCKY_PRIZES.findIndex(p => p.key === data.prizeKey);
-      const target = 360 * 5 + (360 - (idx * WHEEL_SLICE + WHEEL_SLICE / 2));
+      const idx = wheelPrizes.findIndex(p => String(p.id) === String(data.prizeKey));
+      const slice = wheelPrizes.length > 0 ? 360 / wheelPrizes.length : 360;
+      const target = 360 * 5 + (360 - (Math.max(0, idx) * slice + slice / 2));
       setWheelAngle(target);
 
       // Chờ hết hoạt ảnh (4.2s trong CSS) mới công bố
@@ -4078,13 +4085,13 @@ function OrderContent() {
                     className="co-wheel"
                     style={{
                       transform: `rotate(${wheelAngle}deg)`,
-                      background: `conic-gradient(${LUCKY_PRIZES.map((p, i) =>
+                      background: `conic-gradient(${wheelPrizes.map((p, i) =>
                         `${p.color} ${i * WHEEL_SLICE}deg ${(i + 1) * WHEEL_SLICE}deg`).join(', ')})`,
                     }}
                   >
-                    {LUCKY_PRIZES.map((p, i) => (
+                    {wheelPrizes.map((p, i) => (
                       <span
-                        key={p.key}
+                        key={p.id}
                         className="co-wheel-label"
                         style={{
                           transform: `rotate(${i * WHEEL_SLICE + WHEEL_SLICE / 2}deg) translate(0, -46%) translateY(-92px) rotate(90deg)`,

@@ -15,7 +15,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import {
-  drawLuckyPrize, calcLuckyDiscount,
+  drawLuckyPrize, calcLuckyDiscount, fetchLuckyPrizes,
   LUCKY_SETTING_KEYS, parseLuckyConfig,
 } from '@/lib/luckyWheel';
 
@@ -144,10 +144,11 @@ export async function POST(request) {
     } catch (_) { /* không để lỗi CRM cản việc quay */ }
 
     // ── QUAY ────────────────────────────────────────────────────
-    const prize = drawLuckyPrize();
-    const discount = prize.type === 'percent'
-      ? calcLuckyDiscount(total, prize.value, cfg.max)
-      : 0;
+    // Cơ cấu quà lấy từ bảng lucky_prizes (Admin > Cài đặt sửa được)
+    const prizes = await fetchLuckyPrizes(supabase);
+    const prize = drawLuckyPrize(prizes);
+    if (!prize) return fail('Quán chưa cài phần quà nào, Quý khách gọi nhân viên giúp ạ!');
+    const discount = calcLuckyDiscount(total, prize, cfg.max);
 
     // Chốt lượt quay TRƯỚC khi ghi vào bill — unique index (bàn + lượt
     // khách) chặn hai máy bấm cùng lúc.
@@ -158,12 +159,14 @@ export async function POST(request) {
         host_table_id: hostId,
         customer_name: name,
         customer_phone: phone,
-        prize_key: prize.key,
+        prize_key: String(prize.id),
         prize_type: prize.type,
         prize_value: prize.value,
         prize_label: prize.label,
         bill_total: total,
         discount_amount: discount,
+        // Tắt yêu cầu quan tâm Zalo trong Cài đặt thì áp quà ngay
+        status: cfg.requireFollow ? 'waiting_follow' : 'pending_apply',
       })
       .select()
       .maybeSingle();
@@ -176,9 +179,18 @@ export async function POST(request) {
       return fail('Quán chưa ghi nhận được, Quý khách thử lại giúp ạ!');
     }
 
-    // Quà CHƯA vào hoá đơn ở bước này. Khách phải Quan tâm Zalo OA trước —
-    // webhook Zalo xác nhận rồi server mới áp quà (xem applyLuckySpin trong
-    // lib/zaloRewardServer.js). Nhờ vậy quà luôn đi kèm một lượt quan tâm thật.
+    // Không yêu cầu quan tâm Zalo → áp quà vào hoá đơn ngay tại đây
+    if (!cfg.requireFollow) {
+      await supabase.from('lucky_spins')
+        .update({ status: 'waiting_follow' }).eq('id', spin.id);
+      const { applyLuckySpin } = await import('@/lib/zaloRewardServer');
+      await applyLuckySpin(supabase, { ...spin, status: 'waiting_follow' }, null,
+        (m) => console.log('[Lucky]', m));
+    }
+
+    // Còn lại: quà CHƯA vào hoá đơn. Khách phải Quan tâm Zalo OA trước —
+    // webhook Zalo xác nhận rồi server mới áp quà (applyLuckySpin trong
+    // lib/zaloRewardServer.js). Nhờ vậy quà luôn đi kèm lượt quan tâm thật.
     return NextResponse.json({
       ok: true,
       spinId: spin.id,
@@ -187,7 +199,7 @@ export async function POST(request) {
       prizeLabel: prize.label,
       discountAmount: discount,   // số tiền dự kiến, chốt lại lúc áp
       billTotal: total,
-      needFollow: true,
+      needFollow: cfg.requireFollow,
     });
   } catch (err) {
     console.error('[Lucky] lỗi:', err);

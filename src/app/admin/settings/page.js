@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { getActiveAccount } from '@/lib/bankAccount';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, calcReviewDiscount } from '@/lib/reviewReward';
+import { LUCKY_SETTING_KEYS, parseLuckyConfig, PRIZE_TYPES, prizeChance, totalWeight } from '@/lib/luckyWheel';
 
 const BANKS = [
   'Vietcombank', 'MB Bank', 'Techcombank', 'Agribank', 'Vietinbank',
@@ -39,6 +40,17 @@ export default function SettingsPage() {
   const setChannelField = (key, field, value) =>
     setChannelForms(prev => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
 
+  // Vòng xoay may mắn
+  const WHEEL_DEFAULTS = { enabled: false, minBill: '0', max: '50000', cooldown: '1', requireFollow: true };
+  const [wheelCfg, setWheelCfg] = useState({ ...WHEEL_DEFAULTS });
+  const [wheelCfgSaving, setWheelCfgSaving] = useState(false);
+  const [prizes, setPrizes] = useState([]);
+  const [prizeSaving, setPrizeSaving] = useState(false);
+
+  const setWheelField = (field, value) => setWheelCfg(prev => ({ ...prev, [field]: value }));
+  const setPrizeField = (id, field, value) =>
+    setPrizes(prev => prev.map(p => (p.id === id ? { ...p, [field]: value, _dirty: true } : p)));
+
   // QR Download
   const [downloadingQR, setDownloadingQR] = useState(false);
   const [qrProgress, setQrProgress] = useState('');
@@ -58,6 +70,8 @@ export default function SettingsPage() {
     fetchAccounts();
     fetchRestaurantLocation();
     fetchRewardChannelConfigs();
+    fetchWheelConfig();
+    fetchPrizes();
     fetchPrinters();
     fetchCategories();
   }, []);
@@ -99,6 +113,102 @@ export default function SettingsPage() {
     flash('Đã lưu vị trí nhà hàng!');
     // Re-fetch to confirm saved
     fetchRestaurantLocation();
+  }
+
+  async function fetchWheelConfig() {
+    const { data } = await supabase.from('settings').select('key, value').in('key', LUCKY_SETTING_KEYS);
+    const cfg = parseLuckyConfig(data);
+    setWheelCfg({
+      enabled: cfg.enabled,
+      minBill: String(cfg.minBill),
+      max: String(cfg.max),
+      cooldown: String(cfg.cooldownDays),
+      requireFollow: cfg.requireFollow,
+    });
+  }
+
+  async function fetchPrizes() {
+    const { data, error } = await supabase
+      .from('lucky_prizes').select('*').order('sort_order', { ascending: true });
+    if (error) { console.warn('lucky_prizes:', error.message); return; }
+    setPrizes((data || []).map(r => ({ ...r, value: String(r.value ?? 0), weight: String(r.weight ?? 0) })));
+  }
+
+  /** Ghi 1 khoá vào bảng settings (kèm fallback như các chỗ khác). */
+  async function putSetting(key, value) {
+    const { error } = await supabase.from('settings').upsert({ key, value }, { onConflict: 'key' });
+    if (error) {
+      await supabase.from('settings').delete().eq('key', key);
+      const { error: insErr } = await supabase.from('settings').insert({ key, value });
+      if (insErr) throw insErr;
+    }
+  }
+
+  async function saveWheelConfig() {
+    setWheelCfgSaving(true);
+    try {
+      await putSetting('lucky_wheel_enabled', String(!!wheelCfg.enabled));
+      await putSetting('lucky_wheel_min_bill', String(Number(wheelCfg.minBill) || 0));
+      await putSetting('lucky_wheel_max', String(Number(wheelCfg.max) || 0));
+      await putSetting('lucky_wheel_cooldown_days', String(Number(wheelCfg.cooldown) || 0));
+      await putSetting('lucky_wheel_require_follow', String(!!wheelCfg.requireFollow));
+      flash('Đã lưu cấu hình vòng xoay!');
+    } catch (err) {
+      flash('Lỗi: ' + err.message, true);
+    }
+    setWheelCfgSaving(false);
+  }
+
+  async function addPrize() {
+    const nextOrder = prizes.reduce((m, p) => Math.max(m, Number(p.sort_order) || 0), 0) + 1;
+    const { data, error } = await supabase.from('lucky_prizes').insert({
+      label: 'Phần quà mới',
+      short: 'Quà',
+      type: 'percent',
+      value: 1,
+      weight: 10,
+      color: '#94a3b8',
+      is_active: false,          // tạo ở trạng thái tắt để sửa xong mới bật
+      sort_order: nextOrder,
+    }).select().maybeSingle();
+    if (error) { flash('Lỗi: ' + error.message, true); return; }
+    setPrizes(prev => [...prev, { ...data, value: String(data.value), weight: String(data.weight) }]);
+    flash('Đã thêm phần quà — sửa xong nhớ bật lên nhé!');
+  }
+
+  async function savePrize(prize) {
+    const label = (prize.label || '').trim();
+    if (!label) { flash('Phần quà cần có tên', true); return; }
+    const weight = Number(prize.weight);
+    if (!(weight >= 0)) { flash('Tỉ lệ phải là số không âm', true); return; }
+    if (prize.type === 'percent') {
+      const v = Number(prize.value);
+      if (!(v > 0 && v <= 100)) { flash('% giảm phải trong khoảng 1 – 100', true); return; }
+    }
+
+    setPrizeSaving(true);
+    const { error } = await supabase.from('lucky_prizes').update({
+      label,
+      short: (prize.short || label).slice(0, 14),
+      type: prize.type,
+      value: Number(prize.value) || 0,
+      weight,
+      color: prize.color || '#94a3b8',
+      is_active: !!prize.is_active,
+      sort_order: Number(prize.sort_order) || 0,
+    }).eq('id', prize.id);
+    setPrizeSaving(false);
+    if (error) { flash('Lỗi: ' + error.message, true); return; }
+    setPrizes(prev => prev.map(p => (p.id === prize.id ? { ...p, _dirty: false } : p)));
+    flash('Đã lưu phần quà!');
+  }
+
+  async function deletePrize(prize) {
+    if (!window.confirm(`Xoá phần quà "${prize.label}"?`)) return;
+    const { error } = await supabase.from('lucky_prizes').delete().eq('id', prize.id);
+    if (error) { flash('Lỗi: ' + error.message, true); return; }
+    setPrizes(prev => prev.filter(p => p.id !== prize.id));
+    flash('Đã xoá phần quà.');
   }
 
   async function fetchRewardChannelConfigs() {
@@ -650,6 +760,217 @@ export default function SettingsPage() {
           </button>
         </div>
       </div>
+      {/* ── Vòng xoay may mắn ── */}
+      <div style={{ marginTop: 28 }}>
+        <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#0f172a', marginBottom: 2 }}>
+          🎰 Vòng xoay may mắn
+        </div>
+        <p style={{ margin: '0 0 12px', fontSize: '0.8rem', color: '#6b7280' }}>
+          Khách điền tên + SĐT rồi quay, <b>chắc chắn có quà</b>. Mỗi bàn quay 1 lượt
+          mỗi lượt khách. Quà % tự trừ vào bill; quà là món được ghi thành dòng tặng
+          để nhân viên mang ra.
+        </p>
+
+        {/* Cấu hình chung */}
+        <div style={{ background: 'white', border: '1.5px solid #fed7aa', borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 10px rgba(15,23,42,0.05)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
+            <div style={{ fontWeight: 800, fontSize: '0.98rem', color: '#b45309' }}>Cấu hình chung</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div
+                onClick={() => setWheelField('enabled', !wheelCfg.enabled)}
+                style={{ position: 'relative', width: 44, height: 24, background: wheelCfg.enabled ? '#f59e0b' : '#d1d5db', borderRadius: 12, cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0 }}
+              >
+                <div style={{ position: 'absolute', top: 2, left: wheelCfg.enabled ? 22 : 2, width: 20, height: 20, background: 'white', borderRadius: '50%', transition: 'left 0.2s' }} />
+              </div>
+              <span style={{ fontWeight: 700, fontSize: '0.8rem', color: wheelCfg.enabled ? '#b45309' : '#6b7280' }}>
+                {wheelCfg.enabled ? 'Đang bật' : 'Đang tắt'}
+              </span>
+            </div>
+          </div>
+
+          <div
+            onClick={() => setWheelField('requireFollow', !wheelCfg.requireFollow)}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: 10, padding: '10px 12px', marginBottom: 14 }}
+          >
+            <div style={{ position: 'relative', width: 40, height: 22, background: wheelCfg.requireFollow ? '#0d9488' : '#d1d5db', borderRadius: 11, flexShrink: 0, transition: 'background .2s' }}>
+              <div style={{ position: 'absolute', top: 2, left: wheelCfg.requireFollow ? 20 : 2, width: 18, height: 18, background: 'white', borderRadius: '50%', transition: 'left .2s' }} />
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.84rem', color: '#0f766e' }}>
+                Phải quan tâm Zalo mới nhận quà
+              </div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                Bật: quay xong khách phải Quan tâm Zalo OA, quà mới vào hoá đơn.
+                Tắt: quà vào hoá đơn ngay khi quay.
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+            {[
+              { f: 'minBill', label: 'Hoá đơn tối thiểu (đ)', hint: '0 = không yêu cầu' },
+              { f: 'max', label: 'Giảm tối đa (đ)', hint: 'trần cho quà giảm %' },
+              { f: 'cooldown', label: 'Mỗi SĐT cách nhau (ngày)', hint: '0 = không giới hạn' },
+            ].map(({ f, label, hint }) => (
+              <div key={f} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#374151' }}>{label}</label>
+                <input
+                  type="number"
+                  value={wheelCfg[f]}
+                  onChange={e => setWheelField(f, e.target.value)}
+                  style={{ padding: '9px 11px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.86rem' }}
+                />
+                <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>{hint}</span>
+              </div>
+            ))}
+          </div>
+
+          <button
+            onClick={saveWheelConfig}
+            disabled={wheelCfgSaving}
+            style={{ marginTop: 14, padding: '9px 18px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.84rem', fontWeight: 700, opacity: wheelCfgSaving ? 0.7 : 1 }}
+          >
+            {wheelCfgSaving ? 'Đang lưu...' : '💾 Lưu cấu hình'}
+          </button>
+        </div>
+
+        {/* Cơ cấu quà */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+          <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#0f172a' }}>
+            Cơ cấu quà ({prizes.filter(p => p.is_active).length} đang bật)
+          </div>
+          <button
+            onClick={addPrize}
+            style={{ padding: '8px 14px', background: '#ecfdf5', border: '1.5px solid #6ee7b7', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', fontWeight: 700, color: '#065f46' }}
+          >
+            ➕ Thêm quà
+          </button>
+        </div>
+
+        {prizes.length === 0 ? (
+          <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '12px 14px', fontSize: '0.8rem', color: '#9a3412' }}>
+            Chưa có phần quà nào. Bấm <b>Thêm quà</b> để tạo, hoặc chạy file
+            <code style={{ margin: '0 4px' }}>lucky_prizes_table.sql</code> để nạp cơ cấu mặc định.
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: 8 }}>
+              Tỉ lệ tính theo tổng trọng số của các quà <b>đang bật</b> (tổng hiện tại: {totalWeight(prizes.filter(p => p.is_active))}).
+              Đặt trọng số lớn hơn = ra nhiều hơn.
+            </div>
+            {prizes.map(prize => {
+              const active = prizes.filter(p => p.is_active);
+              const chance = prize.is_active ? prizeChance(prize, active) : 0;
+              return (
+                <div key={prize.id} style={{ background: 'white', border: `1.5px solid ${prize.is_active ? '#e5e7eb' : '#f1f5f9'}`, borderRadius: 12, padding: 14, marginBottom: 10, opacity: prize.is_active ? 1 : 0.7 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                    <span style={{ width: 18, height: 18, borderRadius: '50%', background: prize.color, border: '1px solid rgba(0,0,0,.1)', flexShrink: 0 }} />
+                    <input
+                      value={prize.label}
+                      onChange={e => setPrizeField(prize.id, 'label', e.target.value)}
+                      placeholder="Tên phần quà"
+                      style={{ flex: 1, minWidth: 120, padding: '8px 10px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.86rem', fontWeight: 700 }}
+                    />
+                    <div
+                      onClick={() => setPrizeField(prize.id, 'is_active', !prize.is_active)}
+                      style={{ position: 'relative', width: 40, height: 22, background: prize.is_active ? '#10b981' : '#d1d5db', borderRadius: 11, cursor: 'pointer', flexShrink: 0 }}
+                    >
+                      <div style={{ position: 'absolute', top: 2, left: prize.is_active ? 20 : 2, width: 18, height: 18, background: 'white', borderRadius: '50%', transition: 'left .2s' }} />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#374151' }}>Loại quà</label>
+                      <select
+                        value={prize.type}
+                        onChange={e => setPrizeField(prize.id, 'type', e.target.value)}
+                        style={{ padding: '8px 8px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.82rem' }}
+                      >
+                        {PRIZE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                      </select>
+                    </div>
+
+                    {prize.type !== 'gift' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#374151' }}>
+                          {prize.type === 'percent' ? '% giảm' : 'Số tiền giảm (đ)'}
+                        </label>
+                        <input
+                          type="number"
+                          value={prize.value}
+                          onChange={e => setPrizeField(prize.id, 'value', e.target.value)}
+                          style={{ padding: '8px 10px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.82rem' }}
+                        />
+                      </div>
+                    )}
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#374151' }}>Trọng số</label>
+                      <input
+                        type="number"
+                        value={prize.weight}
+                        onChange={e => setPrizeField(prize.id, 'weight', e.target.value)}
+                        style={{ padding: '8px 10px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.82rem' }}
+                      />
+                      <span style={{ fontSize: '0.7rem', fontWeight: 700, color: prize.is_active ? '#0f766e' : '#9ca3af' }}>
+                        {prize.is_active ? `≈ ${chance.toFixed(1)}% trúng` : 'đang tắt'}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#374151' }}>Chữ trên múi</label>
+                      <input
+                        value={prize.short || ''}
+                        onChange={e => setPrizeField(prize.id, 'short', e.target.value)}
+                        placeholder="vd 5%"
+                        style={{ padding: '8px 10px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.82rem' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#374151' }}>Màu múi</label>
+                      <input
+                        type="color"
+                        value={prize.color || '#94a3b8'}
+                        onChange={e => setPrizeField(prize.id, 'color', e.target.value)}
+                        style={{ padding: 2, border: '1.5px solid #e5e7eb', borderRadius: 8, height: 36, cursor: 'pointer' }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#374151' }}>Thứ tự</label>
+                      <input
+                        type="number"
+                        value={prize.sort_order ?? 0}
+                        onChange={e => setPrizeField(prize.id, 'sort_order', e.target.value)}
+                        style={{ padding: '8px 10px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.82rem' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                    <button
+                      onClick={() => savePrize(prize)}
+                      disabled={prizeSaving}
+                      style={{ padding: '8px 16px', background: prize._dirty ? '#2563eb' : '#e5e7eb', color: prize._dirty ? 'white' : '#6b7280', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', fontWeight: 700 }}
+                    >
+                      {prizeSaving ? 'Đang lưu...' : prize._dirty ? '💾 Lưu thay đổi' : '💾 Lưu'}
+                    </button>
+                    <button
+                      onClick={() => deletePrize(prize)}
+                      style={{ padding: '8px 14px', background: '#fef2f2', border: '1.5px solid #fecaca', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', fontWeight: 700, color: '#b91c1c' }}
+                    >
+                      🗑 Xoá
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
+      </div>
+
       {/* ── Ưu đãi mạng xã hội (Google / TikTok / Facebook) ── */}
       <div style={{ marginTop: 28 }}>
         <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#0f172a', marginBottom: 2 }}>
