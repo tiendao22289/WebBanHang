@@ -8,6 +8,7 @@ import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, fetchGroupBillTotal, startOfTodayISO, isReviewDiscountItem } from '@/lib/reviewReward';
+import { LUCKY_PRIZES, getLuckyPrize } from '@/lib/luckyWheel';
 import {
   Search,
   Plus,
@@ -572,6 +573,13 @@ function OrderContent() {
   const [reviewErr, setReviewErr] = useState('');
   const [reviewReward, setReviewReward] = useState(null); // bản ghi review_rewards hiện tại
   const [zaloClaim, setZaloClaim] = useState(null); // bản ghi zalo_reward_claims (kênh Zalo tự động, không cần NV duyệt)
+  // ── Vòng xoay may mắn ──
+  const [wheelOpen, setWheelOpen] = useState(false);
+  const [wheelForm, setWheelForm] = useState({ name: '', phone: '' });
+  const [wheelSpinning, setWheelSpinning] = useState(false);
+  const [wheelAngle, setWheelAngle] = useState(0);
+  const [wheelPrize, setWheelPrize] = useState(null);
+  const [wheelErr, setWheelErr] = useState('');
   const zaloClaimRef = useRef(null);                // bản sao đọc ngay, không đợi setState
   const [zaloWaitedLong, setZaloWaitedLong] = useState(false); // chờ lâu → gợi ý nhắn SĐT
   // iOS chỉ mở app khi khách bấm TRỰC TIẾP link có scheme zalo:// (JS gọi thì
@@ -1696,6 +1704,105 @@ function OrderContent() {
       setReviewErr('Quán chưa tải được danh sách quà. Quý khách thử lại hoặc gọi nhân viên nhé!');
     }
     setReviewChecking(false);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  VÒNG XOAY MAY MẮN
+  //  Bắt buộc có tên + SĐT mới được quay. Kết quả do SERVER quyết định
+  //  (/api/lucky/spin) — máy khách chỉ chạy hoạt ảnh theo kết quả đó.
+  // ══════════════════════════════════════════════════════════
+  const WHEEL_SLICE = 360 / LUCKY_PRIZES.length;
+
+  function wheelStorageKey() {
+    return `lucky_spin_${activeTableId || urlTableId || 'x'}`;
+  }
+
+  async function openWheel() {
+    setWheelOpen(true);
+    setWheelErr('');
+    setWheelPrize(null);
+    setWheelAngle(0);
+    setWheelSpinning(false);
+
+    const saved = getSavedSession();
+    setWheelForm({
+      name: (customerName || saved?.customerName || '').trim(),
+      phone: (customerPhone || saved?.customerPhone || '').trim(),
+    });
+
+    // Đã quay trong lượt này thì hiện lại kết quả cũ
+    try {
+      const id = localStorage.getItem(wheelStorageKey());
+      if (id) {
+        const { data } = await supabase
+          .from('lucky_spins').select('*').eq('id', id).maybeSingle();
+        if (data) {
+          const idx = LUCKY_PRIZES.findIndex(p => p.key === data.prize_key);
+          if (idx >= 0) setWheelAngle(360 - (idx * WHEEL_SLICE + WHEEL_SLICE / 2));
+          setWheelPrize({
+            prizeKey: data.prize_key,
+            prizeType: data.prize_type,
+            prizeLabel: data.prize_label,
+            discountAmount: data.discount_amount,
+          });
+        }
+      }
+    } catch { }
+  }
+
+  async function spinWheel() {
+    const name = (wheelForm.name || '').trim();
+    const phone = (wheelForm.phone || '').trim().replace(/[\s.-]/g, '');
+
+    if (!name) { setWheelErr('Quý khách cho quán xin tên với ạ 😊'); return; }
+    if (!/^(0\d{9}|(\+?84)\d{9})$/.test(phone)) {
+      setWheelErr('Số này chưa đúng rồi ạ — Quý khách nhập 10 số giúp quán nhé (vd 0977496781).');
+      return;
+    }
+    const normalized = phone.replace(/^(\+?84)/, '0');
+
+    setWheelErr('');
+    setWheelSpinning(true);
+
+    try {
+      const res = await fetch('/api/lucky/spin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tableId: activeTableId || urlTableId, name, phone: normalized }),
+      });
+      const data = await res.json();
+
+      if (!data.ok) {
+        setWheelErr(data.message || 'Quán chưa quay được, Quý khách thử lại giúp ạ!');
+        setWheelSpinning(false);
+        return;
+      }
+
+      // Lưu tên/SĐT vào phiên như lúc gọi món (đây là data quán cần)
+      setCustomerName(name);
+      setCustomerPhone(normalized);
+      customerPhoneRef.current = normalized;
+      const saved = getSavedSession();
+      saveSession(name, normalized, saved?.deliveryAddress || deliveryAddress || '', saved?.orderId || null, cart);
+      try { localStorage.setItem(wheelStorageKey(), data.spinId); } catch { }
+
+      // Quay 5 vòng rồi dừng đúng ô trúng
+      const idx = LUCKY_PRIZES.findIndex(p => p.key === data.prizeKey);
+      const target = 360 * 5 + (360 - (idx * WHEEL_SLICE + WHEEL_SLICE / 2));
+      setWheelAngle(target);
+
+      // Chờ hết hoạt ảnh (4.2s trong CSS) mới công bố
+      setTimeout(() => {
+        setWheelPrize(data);
+        setWheelSpinning(false);
+        refreshPreviousOrdersReliably();
+        showFeedbackToast('success', 'Chúc mừng Quý khách! 🎉', data.prizeLabel);
+      }, 4300);
+    } catch (err) {
+      console.error('[spinWheel]', err);
+      setWheelErr('Quán chưa quay được, Quý khách thử lại giúp ạ!');
+      setWheelSpinning(false);
+    }
   }
 
   // ══════════════════════════════════════════════════════════
@@ -3395,6 +3502,9 @@ function OrderContent() {
             <button className="co-promo-pill party" onClick={() => openPromoOverlay('party')}>
               🎉 Đặt tiệc
             </button>
+            <button className="co-promo-pill wheel" onClick={openWheel}>
+              🎰 Vòng xoay
+            </button>
             {activeChannels.length > 0 && (
               <button className="co-promo-pill gmap" onClick={openReviewOverlay}>
                 {activeChannels.length === 1
@@ -3863,6 +3973,109 @@ function OrderContent() {
                 >
                   {giftPromptPending ? 'Bỏ qua, gửi không cần quà' : 'Đóng'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Overlay Vòng xoay may mắn ─── */}
+        {wheelOpen && (
+          <div className="co-chal-overlay" onClick={() => { if (!wheelSpinning) setWheelOpen(false); }}>
+            <div className="co-chal-modal" onClick={e => e.stopPropagation()}>
+              {!wheelSpinning && (
+                <button className="co-chal-close" onClick={() => setWheelOpen(false)} aria-label="Đóng">
+                  <X size={20} />
+                </button>
+              )}
+              <div className="co-chal-modal-title">🎰 Vòng xoay may mắn</div>
+              <div className="co-chal-scroll">
+
+                {/* Vòng xoay */}
+                <div className="co-wheel-wrap">
+                  <div className="co-wheel-pin" />
+                  <div
+                    className="co-wheel"
+                    style={{
+                      transform: `rotate(${wheelAngle}deg)`,
+                      background: `conic-gradient(${LUCKY_PRIZES.map((p, i) =>
+                        `${p.color} ${i * WHEEL_SLICE}deg ${(i + 1) * WHEEL_SLICE}deg`).join(', ')})`,
+                    }}
+                  >
+                    {LUCKY_PRIZES.map((p, i) => (
+                      <span
+                        key={p.key}
+                        className="co-wheel-label"
+                        style={{
+                          transform: `rotate(${i * WHEEL_SLICE + WHEEL_SLICE / 2}deg) translate(0, -46%) translateY(-92px) rotate(90deg)`,
+                        }}
+                      >
+                        {p.short}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="co-wheel-hub">🎁</div>
+                </div>
+
+                {/* Đã có kết quả */}
+                {wheelPrize ? (
+                  <>
+                    <div className="co-wheel-prize">
+                      <div style={{ fontSize: '2.2rem' }}>🎉</div>
+                      <div className="co-wheel-prize-name">{wheelPrize.prizeLabel}</div>
+                      {wheelPrize.prizeType === 'percent' ? (
+                        <div style={{ fontWeight: 800, color: '#0f766e' }}>
+                          Hoá đơn vừa bớt {formatPrice(wheelPrize.discountAmount || 0)} rồi ạ!
+                        </div>
+                      ) : (
+                        <div style={{ fontWeight: 800, color: '#0f766e' }}>
+                          Quán ghi vào hoá đơn rồi — nhân viên mang ra ngay ạ!
+                        </div>
+                      )}
+                    </div>
+                    <button className="co-gmap-cta" onClick={() => setWheelOpen(false)}>
+                      Tuyệt vời, gọi món tiếp 😋
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="co-gmap-note" style={{ textAlign: 'center' }}>
+                      Quay là <b>chắc chắn có quà</b> — giảm tới <b>5% hoá đơn</b>,
+                      nước ngọt hoặc một món 40–50k 🎁
+                    </div>
+
+                    {wheelErr && <div className="co-gmap-state co-gmap-warn">{wheelErr}</div>}
+
+                    <div className="co-gmap-info-form">
+                      <div className="co-gmap-info-title">
+                        Quán xin tên và số điện thoại để ghi quà cho Quý khách nha!
+                      </div>
+                      <input
+                        className="co-gmap-input"
+                        type="text"
+                        placeholder="Quý khách tên gì ạ?"
+                        value={wheelForm.name}
+                        disabled={wheelSpinning}
+                        onChange={e => setWheelForm(f => ({ ...f, name: e.target.value }))}
+                      />
+                      <input
+                        className="co-gmap-input"
+                        type="tel"
+                        inputMode="numeric"
+                        placeholder="Số điện thoại (vd 0977496781)"
+                        value={wheelForm.phone}
+                        disabled={wheelSpinning}
+                        onChange={e => setWheelForm(f => ({ ...f, phone: e.target.value }))}
+                      />
+                      <button className="co-gmap-cta" onClick={spinWheel} disabled={wheelSpinning}>
+                        {wheelSpinning ? 'Đang quay... 🎰' : 'QUAY NGAY! 🎡'}
+                      </button>
+                      <div className="co-wheel-note">
+                        Mỗi bàn quay 1 lượt. Quán chỉ dùng thông tin để ghi quà và
+                        tích điểm, không nhắn tin quảng cáo đâu ạ.
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>
