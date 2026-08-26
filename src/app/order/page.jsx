@@ -572,6 +572,7 @@ function OrderContent() {
   const [reviewErr, setReviewErr] = useState('');
   const [reviewReward, setReviewReward] = useState(null); // bản ghi review_rewards hiện tại
   const [zaloClaim, setZaloClaim] = useState(null); // bản ghi zalo_reward_claims (kênh Zalo tự động, không cần NV duyệt)
+  const zaloClaimRef = useRef(null);                // bản sao đọc ngay, không đợi setState
   // iOS chỉ mở app khi khách bấm TRỰC TIẾP link có scheme zalo:// (JS gọi thì
   // Safari chặn) → phải biết hệ máy để đặt href cho đúng. Set trong useEffect
   // để không lệch giữa HTML server và client.
@@ -1678,6 +1679,7 @@ function OrderContent() {
     setReviewEligible(false);
     setReviewStep('intro');
     setZaloClaim(null);
+    zaloClaimRef.current = null;
     setReviewBlockCode(null);
 
     try {
@@ -1692,6 +1694,7 @@ function OrderContent() {
           .from('zalo_reward_claims').select('*').eq('id', savedId).maybeSingle();
         if (saved && saved.status === 'waiting_follow') {
           setZaloClaim(saved);
+          zaloClaimRef.current = saved;
           setReviewStep('zalo_waiting');
           setReviewChecking(false);
           return;
@@ -1766,6 +1769,8 @@ function OrderContent() {
       }
 
       setReviewEligible(true);
+      // Tạo sẵn yêu cầu để nút mở Zalo là link trần (xem ensureZaloClaim)
+      ensureZaloClaim();
     } catch (err) {
       console.error('[selectZaloChannel]', err);
       setReviewErr('Quán chưa kiểm được, Quý khách thử lại hoặc gọi nhân viên nhé!');
@@ -1817,31 +1822,43 @@ function OrderContent() {
     return !isIOS;
   }
 
-  // Khách bấm nút mở OA — tạo claim chờ webhook, KHÔNG chặn điều hướng
-  function handleZaloLinkClick(cfg) {
+  /**
+   * Tạo yêu cầu nhận quà (bản ghi chờ webhook Zalo xác nhận).
+   *
+   * Cố tình gọi NGAY khi khách đủ điều kiện, KHÔNG chờ tới lúc bấm nút:
+   * trên iPhone, mọi thay đổi giao diện xảy ra trong cú bấm sẽ tháo thẻ
+   * link ra khỏi trang, khiến iOS coi đó không còn là "khách bấm link" và
+   * bỏ qua việc mở app Zalo. Nhờ tạo trước, nút mở Zalo là link trần.
+   */
+  async function ensureZaloClaim() {
+    if (zaloClaimRef.current) return zaloClaimRef.current;
+
+    const { data, error } = await supabase.from('zalo_reward_claims').insert({
+      table_id: urlTableId || activeTableId,
+      host_table_id: activeTableId,
+      customer_name: (customerName || '').trim() || null,
+      customer_phone: (customerPhoneRef.current || '').trim(),
+      bill_total: reviewBillTotal,
+    }).select().maybeSingle();
+
+    if (error || !data) {
+      console.error('[zalo claim insert]', error);
+      setReviewErr('Quán chưa ghi nhận được, Quý khách thử lại giúp ạ!');
+      return null;
+    }
+    zaloClaimRef.current = data;
+    setZaloClaim(data);
+    try { localStorage.setItem(zaloStorageKey(), data.id); } catch { }
+    // Khách có thể đã Quan tâm + nhắn SĐT từ trước — nhờ server kiểm ngay,
+    // nếu không sẽ chẳng còn event nào để khớp nữa.
+    pingZaloClaimReady(data.id);
+    return data;
+  }
+
+  /** Chuyển sang màn hình chờ. KHÔNG gắn vào onClick của nút trên iPhone. */
+  function markZaloWaiting() {
     setReviewStep('zalo_waiting');
-
-    (async () => {
-      const { data, error } = await supabase.from('zalo_reward_claims').insert({
-        table_id: urlTableId || activeTableId,
-        host_table_id: activeTableId,
-        customer_name: (customerName || '').trim() || null,
-        customer_phone: (customerPhoneRef.current || '').trim(),
-        bill_total: reviewBillTotal,
-      }).select().maybeSingle();
-
-      if (error || !data) {
-        console.error('[zalo claim insert]', error);
-        setReviewErr('Quán chưa ghi nhận được, Quý khách thử lại giúp ạ!');
-        setReviewStep('intro');
-        return;
-      }
-      setZaloClaim(data);
-      try { localStorage.setItem(zaloStorageKey(), data.id); } catch { }
-      // Khách có thể đã Quan tâm + nhắn SĐT TRƯỚC khi bấm nút — nhờ server
-      // kiểm ngay, nếu không sẽ chẳng còn event nào để khớp nữa.
-      pingZaloClaimReady(data.id);
-    })();
+    ensureZaloClaim();
   }
 
   /**
@@ -1861,6 +1878,27 @@ function OrderContent() {
       console.error('[pingZaloClaimReady]', err);
     }
   }
+
+  /**
+   * iPhone: nút mở Zalo là link trần nên không tự chuyển bước được.
+   * Khi khách rời trang (sang app Zalo) rồi quay lại, chuyển sang màn hình
+   * chờ và nhờ server kiểm tra luôn.
+   */
+  const zaloLeftPageRef = useRef(false);
+  useEffect(() => {
+    if (reviewChannel !== 'zalo' || reviewStep !== 'intro') return;
+    const onChange = () => {
+      if (document.hidden) { zaloLeftPageRef.current = true; return; }
+      if (!zaloLeftPageRef.current) return;
+      zaloLeftPageRef.current = false;
+      const id = zaloClaimRef.current?.id;
+      if (!id) return;
+      setReviewStep('zalo_waiting');
+      pingZaloClaimReady(id);
+    };
+    document.addEventListener('visibilitychange', onChange);
+    return () => document.removeEventListener('visibilitychange', onChange);
+  }, [reviewChannel, reviewStep]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Khách từ app Zalo quay lại tab web → kiểm lại một lần nữa
   useEffect(() => {
@@ -3862,7 +3900,13 @@ function OrderContent() {
                             {...((cfg.auto && !zaloOpenNewTab())
                               ? {}
                               : { target: '_blank', rel: 'noopener noreferrer' })}
-                            onClick={() => cfg.auto ? handleZaloLinkClick(cfg) : handleReviewLinkClick(cfg)}
+                            {...((cfg.auto && isIOS)
+                              // iPhone: KHÔNG gắn onClick — mọi thay đổi giao diện
+                              // trong cú bấm làm iOS bỏ qua universal link (không
+                              // mở được app). Yêu cầu đã tạo sẵn từ trước; màn hình
+                              // chờ tự hiện khi khách quay lại (useEffect bên dưới).
+                              ? {}
+                              : { onClick: () => cfg.auto ? markZaloWaiting() : handleReviewLinkClick(cfg) })}
                           >
                             {cfg.icon} {cfg.cta}
                           </a>
