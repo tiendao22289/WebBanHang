@@ -23,6 +23,14 @@ CREATE TABLE IF NOT EXISTS public.lucky_spins (
   bill_total      INTEGER DEFAULT 0,
   discount_amount INTEGER DEFAULT 0,  -- tiền đã bớt (quà món = 0)
 
+  -- waiting_follow : đã quay, CHỜ khách quan tâm Zalo mới được nhận
+  -- applied        : đã quan tâm, quà đã vào hoá đơn
+  -- blocked        : không đủ điều kiện (hết bill, hết hạn...)
+  status       TEXT NOT NULL DEFAULT 'waiting_follow',
+  zalo_user_id TEXT,
+  block_reason TEXT,
+  verified_at  TIMESTAMPTZ,
+
   -- Dòng đã ghi vào bill
   applied_order_id UUID REFERENCES public.orders(id) ON DELETE SET NULL,
   applied_item_id  UUID,
@@ -32,6 +40,12 @@ CREATE TABLE IF NOT EXISTS public.lucky_spins (
 
   created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Nâng cấp bảng đã tạo từ bản trước (chạy lại file này vẫn an toàn)
+ALTER TABLE public.lucky_spins ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'waiting_follow';
+ALTER TABLE public.lucky_spins ADD COLUMN IF NOT EXISTS zalo_user_id TEXT;
+ALTER TABLE public.lucky_spins ADD COLUMN IF NOT EXISTS block_reason TEXT;
+ALTER TABLE public.lucky_spins ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
 
 -- Dùng lại trigger của ưu đãi Zalo (cùng cột host_table_id)
 DROP TRIGGER IF EXISTS trg_lucky_spin_session ON public.lucky_spins;
@@ -45,6 +59,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS lucky_spins_one_per_session
 
 CREATE INDEX IF NOT EXISTS lucky_spins_phone_idx
   ON public.lucky_spins (customer_phone, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS lucky_spins_waiting_idx
+  ON public.lucky_spins (status, created_at);
+
+-- Realtime để máy khách biết ngay khi quà được áp vào hoá đơn
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.lucky_spins;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+  WHEN undefined_object THEN NULL;
+END $$;
 
 ALTER TABLE public.lucky_spins ENABLE ROW LEVEL SECURITY;
 

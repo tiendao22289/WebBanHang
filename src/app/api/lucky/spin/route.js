@@ -7,14 +7,15 @@
  * quay, tự chọn giải nhất hay tự bớt tiền.
  *
  * Client gửi lên: { tableId, name, phone }
- * Server tự làm: kiểm tra điều kiện → quay theo trọng số → ghi quà vào
- * bill → trả kết quả để máy khách chạy hoạt ảnh.
+ * Server tự làm: kiểm tra điều kiện → quay theo trọng số → LƯU lượt quay ở
+ * trạng thái chờ. Quà chỉ vào hoá đơn sau khi khách Quan tâm Zalo OA và
+ * webhook Zalo xác nhận (giống ưu đãi Quan tâm Zalo).
  */
 
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import {
-  drawLuckyPrize, luckyItemName, calcLuckyDiscount,
+  drawLuckyPrize, calcLuckyDiscount,
   LUCKY_SETTING_KEYS, parseLuckyConfig,
 } from '@/lib/luckyWheel';
 
@@ -175,51 +176,18 @@ export async function POST(request) {
       return fail('Quán chưa ghi nhận được, Quý khách thử lại giúp ạ!');
     }
 
-    // ── Ghi quà vào bill cũ nhất của nhóm ───────────────────────
-    // Quà là món thì ghi dòng giá 0 kèm cờ tặng — nhân viên thấy ngay trên
-    // bill của bàn (và trên phiếu in) để mang ra cho khách.
-    const targetOrderId = bills[0].id;
-    const isGift = prize.type !== 'percent';
-    const { data: item, error: itemErr } = await supabase
-      .from('order_items')
-      .insert({
-        order_id: targetOrderId,
-        menu_item_id: null,
-        item_name: luckyItemName(prize),
-        quantity: 1,
-        unit_price: isGift ? 0 : -discount,
-        is_gift: isGift,
-      })
-      .select()
-      .maybeSingle();
-
-    if (itemErr || !item) {
-      // Không ghi được → xoá lượt quay để khách quay lại, không mất lượt oan
-      await supabase.from('lucky_spins').delete().eq('id', spin.id);
-      console.error('[Lucky] ghi bill lỗi:', itemErr);
-      return fail('Quán chưa ghi được quà vào hoá đơn, Quý khách thử lại giúp ạ!');
-    }
-
-    // Chỉ phần % làm thay đổi tổng tiền
-    if (!isGift) {
-      const { data: itemsNow } = await supabase
-        .from('order_items').select('unit_price, quantity').eq('order_id', targetOrderId);
-      const newTotal = (itemsNow || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
-      await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
-    }
-
-    await supabase.from('lucky_spins')
-      .update({ applied_order_id: targetOrderId, applied_item_id: item.id })
-      .eq('id', spin.id);
-
+    // Quà CHƯA vào hoá đơn ở bước này. Khách phải Quan tâm Zalo OA trước —
+    // webhook Zalo xác nhận rồi server mới áp quà (xem applyLuckySpin trong
+    // lib/zaloRewardServer.js). Nhờ vậy quà luôn đi kèm một lượt quan tâm thật.
     return NextResponse.json({
       ok: true,
       spinId: spin.id,
       prizeKey: prize.key,
       prizeType: prize.type,
       prizeLabel: prize.label,
-      discountAmount: discount,
+      discountAmount: discount,   // số tiền dự kiến, chốt lại lúc áp
       billTotal: total,
+      needFollow: true,
     });
   } catch (err) {
     console.error('[Lucky] lỗi:', err);

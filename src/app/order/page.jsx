@@ -580,6 +580,8 @@ function OrderContent() {
   const [wheelAngle, setWheelAngle] = useState(0);
   const [wheelPrize, setWheelPrize] = useState(null);
   const [wheelErr, setWheelErr] = useState('');
+  const [wheelSpin, setWheelSpin] = useState(null);   // ban ghi lucky_spins
+  const wheelSpinRef = useRef(null);
   const zaloClaimRef = useRef(null);                // bản sao đọc ngay, không đợi setState
   const [zaloWaitedLong, setZaloWaitedLong] = useState(false); // chờ lâu → gợi ý nhắn SĐT
   // iOS chỉ mở app khi khách bấm TRỰC TIẾP link có scheme zalo:// (JS gọi thì
@@ -610,6 +612,8 @@ function OrderContent() {
 
   // Các kênh đang bật — dùng cho nút pill và bảng chọn kênh
   const activeChannels = channelCfgs.filter(c => c.enabled);
+  // Kênh Zalo dùng cho bước "quan tâm để nhận quà" của vòng xoay
+  const zaloChannelCfg = activeChannels.find(c => c.key === 'zalo') || null;
   const totalPercent = activeChannels.reduce((sum, c) => sum + (Number(c.percent) || 0), 0);
 
   // Promotion
@@ -1739,12 +1743,16 @@ function OrderContent() {
         if (data) {
           const idx = LUCKY_PRIZES.findIndex(p => p.key === data.prize_key);
           if (idx >= 0) setWheelAngle(360 - (idx * WHEEL_SLICE + WHEEL_SLICE / 2));
+          setWheelSpin(data);
+          wheelSpinRef.current = data;
           setWheelPrize({
+            spinId: data.id,
             prizeKey: data.prize_key,
             prizeType: data.prize_type,
             prizeLabel: data.prize_label,
             discountAmount: data.discount_amount,
           });
+          if (data.status === 'waiting_follow') pingLuckyReady(data.id);
         }
       }
     } catch { }
@@ -1795,8 +1803,9 @@ function OrderContent() {
       setTimeout(() => {
         setWheelPrize(data);
         setWheelSpinning(false);
-        refreshPreviousOrdersReliably();
         showFeedbackToast('success', 'Chúc mừng Quý khách! 🎉', data.prizeLabel);
+        // Quà chưa vào hoá đơn: còn chờ khách Quan tâm Zalo (theo dõi ở useEffect dưới)
+        pingLuckyReady(data.spinId);
       }, 4300);
     } catch (err) {
       console.error('[spinWheel]', err);
@@ -1804,6 +1813,78 @@ function OrderContent() {
       setWheelSpinning(false);
     }
   }
+
+  /** Nhờ server đối chiếu lượt quay với danh sách đã Quan tâm OA. */
+  async function pingLuckyReady(spinId) {
+    if (!spinId) return;
+    try {
+      await fetch('/api/lucky/claim-ready', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spinId }),
+      });
+    } catch (err) {
+      console.error('[pingLuckyReady]', err);
+    }
+  }
+
+  /** Đọc lại lượt quay để biết quà đã vào hoá đơn chưa. */
+  async function refreshLuckySpin(spinId) {
+    if (!spinId) return null;
+    const { data } = await supabase.from('lucky_spins').select('*').eq('id', spinId).maybeSingle();
+    if (!data) return null;
+    setWheelSpin(data);
+    wheelSpinRef.current = data;
+    return data;
+  }
+
+  // Realtime: quà được áp vào hoá đơn → cập nhật ngay cho khách
+  useEffect(() => {
+    const spinId = wheelPrize?.spinId || wheelSpin?.id;
+    if (!spinId) return;
+    if (wheelSpin?.status === 'applied' || wheelSpin?.status === 'blocked') return;
+
+    const channel = supabase
+      .channel(`lucky-spin-${spinId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'lucky_spins',
+        filter: `id=eq.${spinId}`,
+      }, (payload) => {
+        const row = payload.new;
+        setWheelSpin(row);
+        wheelSpinRef.current = row;
+        if (row.status === 'applied') {
+          refreshPreviousOrdersReliably();
+          showFeedbackToast('success', 'Quà đã vào hoá đơn! 🎉',
+            row.discount_amount > 0
+              ? `Hoá đơn vừa bớt ${formatPrice(row.discount_amount)} rồi ạ.`
+              : (row.prize_label || 'Nhân viên mang ra ngay ạ!'));
+        } else if (row.status === 'blocked') {
+          showFeedbackToast('warning', 'Quà chưa vào được ạ', row.block_reason || 'Quý khách gọi nhân viên giúp ạ!');
+        }
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [wheelPrize?.spinId, wheelSpin?.id, wheelSpin?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Khách từ Zalo quay lại → hỏi lại server + đọc lại trạng thái
+  useEffect(() => {
+    if (!wheelOpen) return;
+    const spinId = wheelPrize?.spinId || wheelSpin?.id;
+    if (!spinId || wheelSpin?.status === 'applied') return;
+    const onVisible = () => {
+      if (document.hidden) return;
+      pingLuckyReady(spinId);
+      refreshLuckySpin(spinId);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    const timer = setInterval(() => { pingLuckyReady(spinId); refreshLuckySpin(spinId); }, 7000);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      clearInterval(timer);
+    };
+  }, [wheelOpen, wheelPrize?.spinId, wheelSpin?.id, wheelSpin?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ══════════════════════════════════════════════════════════
   //  KÊNH ZALO TỰ ĐỘNG (cfg.auto) — tách riêng khỏi flow duyệt tay.
@@ -4022,19 +4103,59 @@ function OrderContent() {
                     <div className="co-wheel-prize">
                       <div style={{ fontSize: '2.2rem' }}>🎉</div>
                       <div className="co-wheel-prize-name">{wheelPrize.prizeLabel}</div>
-                      {wheelPrize.prizeType === 'percent' ? (
+                      {wheelSpin?.status === 'applied' ? (
                         <div style={{ fontWeight: 800, color: '#0f766e' }}>
-                          Hoá đơn vừa bớt {formatPrice(wheelPrize.discountAmount || 0)} rồi ạ!
+                          {wheelSpin.discount_amount > 0
+                            ? `Hoá đơn vừa bớt ${formatPrice(wheelSpin.discount_amount)} rồi ạ!`
+                            : 'Quán ghi vào hoá đơn rồi — nhân viên mang ra ngay ạ!'}
+                        </div>
+                      ) : wheelSpin?.status === 'blocked' ? (
+                        <div style={{ fontWeight: 800, color: '#b45309' }}>
+                          {wheelSpin.block_reason || 'Quán chưa áp được quà, Quý khách gọi nhân viên giúp ạ!'}
                         </div>
                       ) : (
-                        <div style={{ fontWeight: 800, color: '#0f766e' }}>
-                          Quán ghi vào hoá đơn rồi — nhân viên mang ra ngay ạ!
+                        <div style={{ fontWeight: 700, color: '#0f766e' }}>
+                          Còn một bước nhỏ nữa là quà vào hoá đơn ạ 👇
                         </div>
                       )}
                     </div>
-                    <button className="co-gmap-cta" onClick={() => setWheelOpen(false)}>
-                      Tuyệt vời, gọi món tiếp 😋
-                    </button>
+
+                    {/* Chưa xác nhận Quan tâm Zalo → chưa trừ tiền */}
+                    {wheelSpin?.status !== 'applied' && wheelSpin?.status !== 'blocked' && zaloChannelCfg && (
+                      <>
+                        <div className="co-gmap-state co-gmap-pending" style={{ marginTop: 10 }}>
+                          <div className="co-gmap-big">💬</div>
+                          <div><b>Quan tâm Zalo của quán để nhận quà nha!</b></div>
+                          <div style={{ marginTop: 6, fontSize: '0.88rem' }}>
+                            Bấm nút dưới rồi bấm <b>Quan tâm</b> — quà tự vào hoá đơn liền ạ.
+                          </div>
+                          <div style={{ marginTop: 6, fontSize: '0.82rem', color: '#64748b' }}>
+                            Đã quan tâm quán từ trước rồi ạ? Quý khách nhắn cho quán một tin
+                            bất kỳ là quán nhận ra ngay 😊
+                          </div>
+                        </div>
+                        <a
+                          className="co-gmap-cta"
+                          href={zaloOpenHref(zaloChannelCfg)}
+                          {...(zaloOpenNewTab() ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+                        >
+                          💬 Mở Zalo, bấm Quan tâm!
+                        </a>
+                        <button
+                          className="co-gmap-link"
+                          style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+                          onClick={() => { pingLuckyReady(wheelPrize.spinId); refreshLuckySpin(wheelPrize.spinId); }}
+                        >
+                          Đã quan tâm rồi? Bấm để quán kiểm lại
+                        </button>
+                      </>
+                    )}
+
+                    {(wheelSpin?.status === 'applied' || wheelSpin?.status === 'blocked' || !zaloChannelCfg) && (
+                      <button className="co-gmap-cta" onClick={() => setWheelOpen(false)}>
+                        Tuyệt vời, gọi món tiếp 😋
+                      </button>
+                    )}
                   </>
                 ) : (
                   <>

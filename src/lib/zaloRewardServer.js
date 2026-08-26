@@ -13,6 +13,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { parseChannelConfig, calcReviewDiscount, getChannel } from '@/lib/reviewReward';
+import { luckyItemName, calcLuckyDiscount, getLuckyPrize, LUCKY_SETTING_KEYS, parseLuckyConfig } from '@/lib/luckyWheel';
 
 // Yêu cầu quá 30 phút không hoàn tất thì bỏ qua (khách đã rời quán / thử nghịch)
 export const CLAIM_FRESH_MINUTES = 30;
@@ -300,6 +301,166 @@ async function applyRewardToClaim(supabase, claim, zaloUserId, log = () => {}) {
   log(`✅ đã giảm ${discount}đ cho SĐT ${phone} (yêu cầu ${claim.id}, order ${targetOrderId})`);
 }
 
+// ==============================================================
+//  VONG XOAY MAY MAN - qua chi vao hoa don sau khi khach quan tam OA
+// ==============================================================
+
+/** Danh dau luot quay khong dung duoc, kem ly do khach doc. */
+async function blockSpin(supabase, spinId, reason) {
+  await supabase.from('lucky_spins')
+    .update({ status: 'blocked', block_reason: reason })
+    .eq('id', spinId)
+    .eq('status', 'waiting_follow');
+}
+
+/** Ghi qua cua mot luot quay vao hoa don. Idempotent. */
+export async function applyLuckySpin(supabase, spin, zaloUserId, log = () => {}) {
+  const prize = getLuckyPrize(spin.prize_key);
+  if (!prize) { log(`luot quay ${spin.id} co ma qua la: ${spin.prize_key}`); return; }
+
+  const { data: settingRows } = await supabase
+    .from('settings').select('key, value').in('key', LUCKY_SETTING_KEYS);
+  const cfg = parseLuckyConfig(settingRows);
+
+  // Bill cua nhom ban, tinh lai tu dau (khong tin so cu luc quay)
+  const { data: groupTables } = await supabase
+    .from('tables').select('id, table_type')
+    .or(`id.eq.${spin.host_table_id},merged_with.eq.${spin.host_table_id}`);
+  const groupIds = (groupTables || []).map(t => t.id);
+  if (groupIds.length === 0) groupIds.push(spin.host_table_id);
+  const isTakeaway = (groupTables || []).find(t => t.id === spin.host_table_id)?.table_type === 'takeaway';
+
+  const vnDayKey = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+  const startOfToday = new Date(`${vnDayKey}T00:00:00.000+07:00`);
+  let billsQuery = supabase
+    .from('orders')
+    .select('id, total_amount, customer_phone, created_at')
+    .in('table_id', groupIds)
+    .in('status', ['pending', 'preparing', 'completed'])
+    .gte('created_at', startOfToday.toISOString())
+    .order('created_at', { ascending: true });
+  if (isTakeaway) billsQuery = billsQuery.eq('customer_phone', spin.customer_phone);
+
+  const { data: orders } = await billsQuery;
+  const bills = (orders || []).filter(o => o.customer_phone !== 'BAO_BEP');
+  if (bills.length === 0) {
+    return blockSpin(supabase, spin.id, 'Hoa don cua ban da thanh toan nen quan chua ap qua duoc a.');
+  }
+
+  const total = bills.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+  const isGift = prize.type !== 'percent';
+  const discount = isGift ? 0 : calcLuckyDiscount(total, prize.value, cfg.max);
+  if (!isGift && discount <= 0) {
+    return blockSpin(supabase, spin.id, 'Quan chua tinh duoc muc giam, Quy khach goi nhan vien giup a!');
+  }
+
+  // Chan trung dua tren chinh bill (khong phu thuoc bang luot quay)
+  const { data: dup } = await supabase
+    .from('order_items').select('id')
+    .in('order_id', bills.map(b => b.id))
+    .ilike('item_name', '%VONG XOAY%')
+    .limit(1);
+  if (dup?.length) {
+    return blockSpin(supabase, spin.id, 'Ban minh da nhan qua vong xoay cho hoa don nay roi a!');
+  }
+
+  // Chot trang thai truoc khi ghi bill
+  const { data: locked, error: lockErr } = await supabase
+    .from('lucky_spins')
+    .update({
+      status: 'applied',
+      zalo_user_id: zaloUserId,
+      bill_total: total,
+      discount_amount: discount,
+      verified_at: new Date().toISOString(),
+    })
+    .eq('id', spin.id)
+    .eq('status', 'waiting_follow')
+    .select()
+    .maybeSingle();
+  if (lockErr || !locked) { log(`khong chot duoc luot quay ${spin.id}`); return; }
+
+  const targetOrderId = bills[0].id;
+  const { data: item, error: itemErr } = await supabase
+    .from('order_items')
+    .insert({
+      order_id: targetOrderId,
+      menu_item_id: null,
+      item_name: luckyItemName(prize),
+      quantity: 1,
+      unit_price: isGift ? 0 : -discount,
+      is_gift: isGift,
+    })
+    .select()
+    .maybeSingle();
+
+  if (itemErr || !item) {
+    await supabase.from('lucky_spins')
+      .update({ status: 'waiting_follow', verified_at: null }).eq('id', spin.id);
+    log(`ghi qua vong xoay that bai: ${itemErr?.message}`);
+    return;
+  }
+
+  if (!isGift) {
+    const { data: itemsNow } = await supabase
+      .from('order_items').select('unit_price, quantity').eq('order_id', targetOrderId);
+    const newTotal = (itemsNow || []).reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
+    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
+  }
+
+  await supabase.from('lucky_spins')
+    .update({ applied_order_id: targetOrderId, applied_item_id: item.id })
+    .eq('id', spin.id);
+
+  try {
+    await supabase.from('customers')
+      .update({ zalo_user_id: zaloUserId, last_visit_at: new Date().toISOString() })
+      .eq('phone', spin.customer_phone);
+    await supabase.from('zalo_followers')
+      .update({ phone: spin.customer_phone }).eq('zalo_user_id', zaloUserId).is('phone', null);
+  } catch (_) { }
+
+  log(`da ap qua vong xoay "${prize.label}" cho luot quay ${spin.id}`);
+}
+
+/**
+ * Nguoi nay vua quan tam OA -> tim luot quay dang cho de ap qua.
+ * Cung nguyen tac truoc/sau nhu uu dai Zalo: luot cho lau nhat duoc ap truoc.
+ */
+export async function tryApplyLuckyByTiming(supabase, zaloUserId, log = () => {}) {
+  if (!(await isFollowing(supabase, zaloUserId))) return { matched: false };
+
+  const cutoff = new Date(Date.now() - TIMING_MATCH_MINUTES * 60000).toISOString();
+  const { data: spins } = await supabase
+    .from('lucky_spins')
+    .select('*')
+    .eq('status', 'waiting_follow')
+    .gte('created_at', cutoff)
+    .order('created_at', { ascending: true })
+    .limit(1);
+
+  if (!spins?.length) return { matched: false };
+  await applyLuckySpin(supabase, spins[0], zaloUserId, log);
+  return { matched: true };
+}
+
+/** Chieu nguoc: co luot quay cu the, tim nguoi vua quan tam de ghep. */
+export async function tryApplyLuckyForSpin(supabase, spin, log = () => {}) {
+  const cutoff = new Date(Date.now() - TIMING_MATCH_MINUTES * 60000).toISOString();
+  const { data: followers } = await supabase
+    .from('zalo_followers')
+    .select('zalo_user_id')
+    .is('unfollowed_at', null)
+    .not('followed_at', 'is', null)
+    .gte('last_event_at', cutoff)
+    .order('last_event_at', { ascending: true })
+    .limit(1);
+
+  if (!followers?.length) return { matched: false };
+  await applyLuckySpin(supabase, spin, followers[0].zalo_user_id, log);
+  return { matched: true };
+}
+
 /** Xử lý 1 event webhook của Zalo OA. */
 export async function handleZaloEvent(supabase, ev, log = () => {}) {
   const name = ev.event_name;
@@ -324,7 +485,8 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
       return;
     }
     // Chưa biết SĐT → khớp theo thời gian: khách chỉ cần bấm Quan tâm
-    await tryApplyRewardByTiming(supabase, uid, log);
+    const r = await tryApplyRewardByTiming(supabase, uid, log);
+    if (!r.matched) await tryApplyLuckyByTiming(supabase, uid, log);
     return;
   }
 
@@ -362,9 +524,16 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
     if (phone) {
       // Có SĐT trong tin nhắn → khớp chắc chắn nhất
       await tryApplyReward(supabase, uid, phone, log);
+      // Luot quay cua chinh SDT nay (neu co) cung duoc ap
+      const { data: spins } = await supabase
+        .from('lucky_spins').select('*')
+        .eq('customer_phone', phone).eq('status', 'waiting_follow')
+        .order('created_at', { ascending: false }).limit(1);
+      if (spins?.length) await applyLuckySpin(supabase, spins[0], uid, log);
       return;
     }
     // Tin nhắn bất kỳ (“chào quán”, sticker chữ...) → khớp theo thời gian
-    await tryApplyRewardByTiming(supabase, uid, log);
+    const r2 = await tryApplyRewardByTiming(supabase, uid, log);
+    if (!r2.matched) await tryApplyLuckyByTiming(supabase, uid, log);
   }
 }
