@@ -747,9 +747,34 @@ function OrderContent() {
     return false;
   }
 
-  // Đặt 1 "chốt" vào lịch sử trình duyệt để lần back đầu không rời trang
+  /**
+   * Đảm bảo LUÔN có 1 "chốt" trong lịch sử để lần back đầu không rời trang.
+   *
+   * Phải kiểm tra lại nhiều lúc, không chỉ khi mở trang: khách đi sang Zalo
+   * rồi back về, trang thường được trình duyệt lấy lại từ bộ nhớ đệm (không
+   * chạy lại từ đầu) trong khi chốt cũ đã bị dùng mất — đó là lý do trước
+   * đây back lúc thì giữ được trang, lúc thì thoát hẳn.
+   */
+  function ensureBackGuard() {
+    try {
+      if (!window.history.state?.__orderGuard) {
+        window.history.pushState({ __orderGuard: true }, '');
+      }
+    } catch { }
+  }
+
   useEffect(() => {
-    try { window.history.pushState({ __orderGuard: true }, ''); } catch { }
+    ensureBackGuard();
+    const recheck = () => ensureBackGuard();
+    const onVisible = () => { if (!document.hidden) ensureBackGuard(); };
+    window.addEventListener('pageshow', recheck);   // kể cả khi lấy lại từ đệm
+    window.addEventListener('focus', recheck);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('pageshow', recheck);
+      window.removeEventListener('focus', recheck);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   useEffect(() => {
@@ -768,9 +793,15 @@ function OrderContent() {
   function confirmExitOrderPage() {
     exitAllowedRef.current = true;
     setShowExitConfirm(false);
-    // Lùi qua cả chốt để về trang trước. Tab mở mới từ QR thì không có
-    // trang nào phía trước — khách tự đóng tab, và lần back sau sẽ thoát.
+    // Lùi qua cả chốt để về trang trước.
     try { window.history.go(-2); } catch { }
+    // Tab mở mới từ QR thì không có trang nào phía trước → lùi không đi đâu
+    // cả. Bật lại bảo vệ, nếu không thì mọi lần back sau đều thoát thẳng
+    // (đúng lỗi "lúc thì thoát hẳn" trước đây).
+    setTimeout(() => {
+      exitAllowedRef.current = false;
+      ensureBackGuard();
+    }, 1200);
   }
 
   /**
