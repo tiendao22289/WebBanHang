@@ -1893,6 +1893,73 @@ function OrderContent() {
     }
   }
 
+  /**
+   * KHÔI PHỤC SAU KHI KHÁCH RỜI TRANG ĐI QUAN TÂM ZALO.
+   *
+   * Khách bấm Quan tâm xong hay bấm back trong Zalo là trang order thường bị
+   * mở lại từ đầu → mất hết trạng thái, khách không thấy quà đâu cả. Ở đây
+   * đọc lại yêu cầu đã lưu trong máy, mở đúng bảng ưu đãi và báo kết quả.
+   */
+  const zaloResumedRef = useRef(false);
+  useEffect(() => {
+    if (zaloResumedRef.current) return;
+    if (!activeTableId) return;
+    const zaloCfg = activeChannels.find(c => c.key === 'zalo');
+    if (!zaloCfg) return; // chờ cấu hình kênh tải xong
+
+    let savedId = null;
+    try { savedId = localStorage.getItem(zaloStorageKey()); } catch { }
+    if (!savedId) return;
+    zaloResumedRef.current = true;
+
+    (async () => {
+      const { data } = await supabase
+        .from('zalo_reward_claims').select('*').eq('id', savedId).maybeSingle();
+      if (!data) { try { localStorage.removeItem(zaloStorageKey()); } catch { } return; }
+
+      setZaloClaim(data);
+      zaloClaimRef.current = data;
+      setReviewChannel('zalo');
+      setReviewEligible(true);
+      setReviewBillTotal(Number(data.bill_total) || 0);
+
+      if (data.status === 'verified') {
+        setChannelStates(prev => ({ ...prev, zalo: 'approved' }));
+        setReviewStep('zalo_done');
+        setReviewOpen(true);
+        showFeedbackToast('success', 'Cảm ơn Quý khách nha! 🎉', `Hoá đơn vừa bớt ${formatPrice(data.discount_amount || 0)} rồi ạ.`);
+        refreshPreviousOrdersReliably();
+        try { localStorage.removeItem(zaloStorageKey()); } catch { }
+      } else if (data.status === 'blocked') {
+        setReviewStep('zalo_blocked');
+        setReviewOpen(true);
+        try { localStorage.removeItem(zaloStorageKey()); } catch { }
+      } else {
+        // Vẫn đang chờ → mở lại màn hình chờ và nhờ server kiểm ngay
+        setReviewStep('zalo_waiting');
+        setReviewOpen(true);
+        pingZaloClaimReady(data.id);
+      }
+    })();
+  }, [activeTableId, activeChannels.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * Trong lúc chờ, hỏi lại server vài giây một lần. Bắt trường hợp lượt Quan
+   * tâm về sau khi khách đã quay lại trang, hoặc realtime bị nghẽn.
+   */
+  useEffect(() => {
+    if (reviewStep !== 'zalo_waiting') return;
+    const id = zaloClaim?.id || zaloClaimRef.current?.id;
+    if (!id) return;
+    let n = 0;
+    const timer = setInterval(() => {
+      n += 1;
+      if (n > 20) { clearInterval(timer); return; } // ~2 phút là đủ
+      pingZaloClaimReady(id);
+    }, 6000);
+    return () => clearInterval(timer);
+  }, [reviewStep, zaloClaim?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Chờ quá 25 giây mà quán chưa nhận ra → hiện cách dự phòng (nhắn SĐT)
   useEffect(() => {
     if (reviewStep !== 'zalo_waiting') { setZaloWaitedLong(false); return; }
