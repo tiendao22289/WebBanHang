@@ -18,7 +18,9 @@
  */
 
 import { NextResponse } from 'next/server';
-import { getServiceClient, tryApplyReward, CLAIM_FRESH_MINUTES } from '@/lib/zaloRewardServer';
+import {
+  getServiceClient, tryApplyReward, tryApplyRewardForClaim, CLAIM_FRESH_MINUTES,
+} from '@/lib/zaloRewardServer';
 
 export const dynamic = 'force-dynamic';
 
@@ -61,17 +63,18 @@ export async function POST(request) {
       .order('last_event_at', { ascending: false })
       .limit(1);
 
+    const log = (m) => console.log('[Zalo claim-ready]', m);
     const follower = followers?.[0];
-    if (!follower) return NextResponse.json({ ok: true, matched: false });
 
-    await tryApplyReward(
-      supabase,
-      follower.zalo_user_id,
-      claim.customer_phone,
-      (m) => console.log('[Zalo claim-ready]', m),
-    );
+    if (follower) {
+      // Đã biết SĐT (khách từng nhắn cho OA) → khớp chắc chắn
+      await tryApplyReward(supabase, follower.zalo_user_id, claim.customer_phone, log);
+      return NextResponse.json({ ok: true, matched: true });
+    }
 
-    return NextResponse.json({ ok: true, matched: true });
+    // Khách chỉ bấm Quan tâm, không nhắn gì → ghép với người vừa quan tâm
+    const r = await tryApplyRewardForClaim(supabase, claim, log);
+    return NextResponse.json({ ok: true, matched: !!r.matched });
   } catch (err) {
     console.error('[Zalo claim-ready] lỗi:', err);
     return NextResponse.json({ ok: false }, { status: 500 });

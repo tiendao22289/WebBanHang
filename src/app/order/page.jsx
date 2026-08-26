@@ -574,6 +574,7 @@ function OrderContent() {
   const [zaloClaim, setZaloClaim] = useState(null); // bản ghi zalo_reward_claims (kênh Zalo tự động, không cần NV duyệt)
   const zaloClaimRef = useRef(null);                // bản sao đọc ngay, không đợi setState
   const [zaloPhoneCopied, setZaloPhoneCopied] = useState(false);
+  const [zaloWaitedLong, setZaloWaitedLong] = useState(false); // chờ lâu → gợi ý nhắn SĐT
   // iOS chỉ mở app khi khách bấm TRỰC TIẾP link có scheme zalo:// (JS gọi thì
   // Safari chặn) → phải biết hệ máy để đặt href cho đúng. Set trong useEffect
   // để không lệch giữa HTML server và client.
@@ -1913,6 +1914,13 @@ function OrderContent() {
       console.error('[pingZaloClaimReady]', err);
     }
   }
+
+  // Chờ quá 25 giây mà quán chưa nhận ra → hiện cách dự phòng (nhắn SĐT)
+  useEffect(() => {
+    if (reviewStep !== 'zalo_waiting') { setZaloWaitedLong(false); return; }
+    const t = setTimeout(() => setZaloWaitedLong(true), 25000);
+    return () => clearTimeout(t);
+  }, [reviewStep]);
 
   /**
    * iPhone: nút mở Zalo là link trần nên không tự chuyển bước được.
@@ -3953,31 +3961,34 @@ function OrderContent() {
                         <>
                           <div className="co-gmap-state co-gmap-pending">
                             <div className="co-gmap-big">💬</div>
-                            <div><b>Còn 2 bước nhỏ bên Zalo thôi ạ:</b></div>
-                            <div style={{ textAlign: 'left', marginTop: 8 }}>
-                              1️⃣ Bấm <b>QUAN TÂM</b> ở đầu trang quán.<br />
-                              2️⃣ Nhắn số <b>{zaloPhoneToSend || 'điện thoại của mình'}</b> vào khung chat của quán.
+                            <div><b>Chỉ cần bấm QUAN TÂM là xong ạ!</b></div>
+                            <div style={{ marginTop: 8, fontSize: '0.9rem' }}>
+                              Bấm <b>Quan tâm</b> ở đầu trang Zalo của quán — tiền <b>tự bớt vào hoá đơn</b> ngay,
+                              Quý khách không cần nhập gì thêm 🎉
                             </div>
-                            {zaloPhoneToSend && (
-                              <button
-                                onClick={copyZaloPhone}
-                                style={{
-                                  marginTop: 10, padding: '8px 14px', borderRadius: 10, cursor: 'pointer',
-                                  border: '1.5px solid #99f6e4', background: '#f0fdfa', color: '#0f766e', fontWeight: 800,
-                                }}
-                              >
-                                {zaloPhoneCopied ? '✅ Đã copy, dán vào Zalo nhé!' : `📋 Copy số ${zaloPhoneToSend}`}
-                              </button>
+                            {/* Cách dự phòng: quán không tự nhận ra được (2 bàn bấm cùng lúc...) */}
+                            {zaloWaitedLong && (
+                              <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #cbd5e1', fontSize: '0.85rem' }}>
+                                <div>Quán chưa nhận được ạ 😥 Quý khách nhắn giúp quán số điện thoại vào khung chat Zalo nhé:</div>
+                                {zaloPhoneToSend && (
+                                  <button
+                                    onClick={copyZaloPhone}
+                                    style={{
+                                      marginTop: 8, padding: '8px 14px', borderRadius: 10, cursor: 'pointer',
+                                      border: '1.5px solid #99f6e4', background: '#f0fdfa', color: '#0f766e', fontWeight: 800,
+                                    }}
+                                  >
+                                    {zaloPhoneCopied ? '✅ Đã copy, dán vào Zalo nhé!' : `📋 Copy số ${zaloPhoneToSend}`}
+                                  </button>
+                                )}
+                              </div>
                             )}
-                            <div style={{ marginTop: 10, fontSize: '0.85rem' }}>
-                              Xong là tiền <b>tự bớt vào hoá đơn liền</b> — Quý khách <b>không cần quay lại đây</b> ạ 🎉
-                            </div>
                             <div style={{ marginTop: 8, fontSize: '0.8rem', color: '#64748b' }}>
                               {isIOS && inZaloBrowser ? (
                                 <>
                                   Quý khách đang mở trang này <b>bên trong Zalo</b> nên nút trên chỉ ra trang web
-                                  của quán. Cách nhanh nhất: bấm <b>✕</b> góc trên để về Zalo, mở lại khung chat
-                                  của quán, bấm <b>Quan tâm</b> rồi dán số điện thoại vào là xong ạ.
+                                  của quán. Cách nhanh nhất: bấm <b>✕</b> góc trên để về Zalo, mở khung chat
+                                  của quán rồi bấm <b>Quan tâm</b> là xong ạ.
                                 </>
                               ) : (
                                 <>

@@ -58,9 +58,8 @@ export const REWARD_CHANNELS = [
     // follow thật rồi server tự trừ tiền (xem /api/zalo/webhook).
     auto: true,
     steps: [
-      'Bấm nút dưới để mở Zalo OA của quán.',
-      'Bấm QUAN TÂM ở đầu trang.',
-      'Nhắn số điện thoại của mình vào khung chat là xong!',
+      'Bấm nút dưới để mở Zalo của quán.',
+      'Bấm QUAN TÂM ở đầu trang — xong luôn ạ!',
     ],
     discountLabel: 'Giảm giá kết bạn Zalo',
     urlHint: 'Dán link Zalo OA (zalo.me/<id OA>) — lấy trong oa.zalo.me → Thông tin OA.',

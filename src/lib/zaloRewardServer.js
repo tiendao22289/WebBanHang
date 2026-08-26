@@ -17,6 +17,10 @@ import { parseChannelConfig, calcReviewDiscount, getChannel } from '@/lib/review
 // Yêu cầu quá 30 phút không hoàn tất thì bỏ qua (khách đã rời quán / thử nghịch)
 export const CLAIM_FRESH_MINUTES = 30;
 
+// Khớp tự động "vừa bấm nút → vừa quan tâm" trong khung này. Ngắn để hạn chế
+// trùng giữa các bàn; dài hơn 3 phút thì khách đã đi làm việc khác.
+export const TIMING_MATCH_MINUTES = 3;
+
 export function getServiceClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -59,20 +63,24 @@ export async function blockClaim(supabase, claimId, reason) {
     .eq('status', 'waiting_follow');
 }
 
+/** Tài khoản Zalo này có đang quan tâm OA không? */
+async function isFollowing(supabase, zaloUserId) {
+  const { data } = await supabase
+    .from('zalo_followers').select('followed_at, unfollowed_at')
+    .eq('zalo_user_id', zaloUserId).maybeSingle();
+  return !!data?.followed_at && !data.unfollowed_at;
+}
+
 /**
- * Tìm yêu cầu đang chờ khớp với SĐT này và trả quà nếu đủ điều kiện.
- * Mọi bước đều idempotent — Zalo có thể gửi lại event, không sao.
+ * Tìm yêu cầu đang chờ khớp với SĐT này rồi trả quà.
+ * Dùng khi khách nhắn SĐT cho OA (cách khớp chắc chắn nhất).
  */
 export async function tryApplyReward(supabase, zaloUserId, phone, log = () => {}) {
-  // 0) Bắt buộc: tài khoản này ĐANG follow (nguồn: event follow của Zalo)
-  const { data: follower } = await supabase
-    .from('zalo_followers').select('*').eq('zalo_user_id', zaloUserId).maybeSingle();
-  if (!follower?.followed_at || follower.unfollowed_at) {
+  if (!(await isFollowing(supabase, zaloUserId))) {
     log(`bỏ qua: ${zaloUserId} chưa/không còn quan tâm OA`);
     return;
   }
 
-  // 1) Yêu cầu mới nhất đang chờ của SĐT này
   const freshCutoff = new Date(Date.now() - CLAIM_FRESH_MINUTES * 60000).toISOString();
   const { data: claims } = await supabase
     .from('zalo_reward_claims')
@@ -85,6 +93,73 @@ export async function tryApplyReward(supabase, zaloUserId, phone, log = () => {}
   const claim = claims?.[0];
   if (!claim) { log(`không có yêu cầu chờ cho SĐT ${phone}`); return; }
 
+  return applyRewardToClaim(supabase, claim, zaloUserId, log);
+}
+
+/**
+ * KHỚP TỰ ĐỘNG THEO THỜI GIAN — khách chỉ cần bấm Quan tâm, không phải nhắn SĐT.
+ *
+ * Chỉ khớp khi trong khung thời gian ngắn có ĐÚNG MỘT yêu cầu đang chờ:
+ * lúc đó "người vừa quan tâm" chắc chắn là "người vừa bấm nút trên web".
+ * Có 2 yêu cầu cùng lúc (2 bàn bấm gần nhau) thì KHÔNG đoán — để khách nhắn
+ * SĐT cho chắc, tránh trừ tiền sai bàn.
+ */
+export async function tryApplyRewardByTiming(supabase, zaloUserId, log = () => {}) {
+  if (!(await isFollowing(supabase, zaloUserId))) return { matched: false, reason: 'chưa quan tâm' };
+
+  const cutoff = new Date(Date.now() - TIMING_MATCH_MINUTES * 60000).toISOString();
+  const { data: claims } = await supabase
+    .from('zalo_reward_claims')
+    .select('*')
+    .eq('status', 'waiting_follow')
+    .gte('created_at', cutoff)
+    .order('created_at', { ascending: false })
+    .limit(3);
+
+  if (!claims?.length) { log('không có yêu cầu nào đang chờ để khớp theo thời gian'); return { matched: false, reason: 'không có yêu cầu' }; }
+  if (claims.length > 1) {
+    log(`${claims.length} yêu cầu cùng lúc → không đoán, chờ khách nhắn SĐT`);
+    return { matched: false, reason: 'nhiều yêu cầu cùng lúc' };
+  }
+
+  await applyRewardToClaim(supabase, claims[0], zaloUserId, log);
+  return { matched: true };
+}
+
+/**
+ * Chiều ngược lại của khớp theo thời gian: đã có yêu cầu cụ thể (khách vừa
+ * bấm nút / vừa quay lại web), đi tìm người VỪA quan tâm OA để ghép.
+ *
+ * Cũng chỉ ghép khi có ĐÚNG MỘT người vừa quan tâm và chưa gắn SĐT nào —
+ * nhiều người cùng lúc thì không đoán.
+ */
+export async function tryApplyRewardForClaim(supabase, claim, log = () => {}) {
+  const cutoff = new Date(Date.now() - TIMING_MATCH_MINUTES * 60000).toISOString();
+  const { data: followers } = await supabase
+    .from('zalo_followers')
+    .select('zalo_user_id, phone, followed_at')
+    .is('unfollowed_at', null)
+    .is('phone', null)                 // chưa gắn SĐT = chưa từng ghép với ai
+    .gte('followed_at', cutoff)
+    .order('followed_at', { ascending: false })
+    .limit(3);
+
+  if (!followers?.length) { log('chưa thấy ai vừa quan tâm OA'); return { matched: false }; }
+  if (followers.length > 1) {
+    log(`${followers.length} người vừa quan tâm cùng lúc → không đoán`);
+    return { matched: false, reason: 'nhiều người cùng lúc' };
+  }
+
+  await applyRewardToClaim(supabase, claim, followers[0].zalo_user_id, log);
+  return { matched: true };
+}
+
+/**
+ * Kiểm tra điều kiện rồi trừ tiền cho MỘT yêu cầu cụ thể.
+ * Idempotent — Zalo gửi lại event cũng không trừ hai lần.
+ */
+async function applyRewardToClaim(supabase, claim, zaloUserId, log = () => {}) {
+  const phone = claim.customer_phone;
   const cfg = await loadZaloConfig(supabase);
   if (!cfg.autoEnabled || !cfg.enabled) {
     return blockClaim(supabase, claim.id, 'Chương trình tạm ngưng, Quý khách thông cảm nhé!');
@@ -198,11 +273,15 @@ export async function tryApplyReward(supabase, zaloUserId, phone, log = () => {}
     .update({ applied_order_id: targetOrderId, applied_item_id: item.id })
     .eq('id', claim.id);
 
-  // 7) CRM: gắn zalo_user_id vào hồ sơ khách (best-effort)
+  // 7) CRM: nối tài khoản Zalo ↔ SĐT khách (cả 2 bảng) để sau này gửi
+  //    tin chăm sóc đích danh. Khớp theo thời gian thì đây là chỗ DUY NHẤT
+  //    biết được SĐT của người vừa quan tâm.
   try {
     await supabase.from('customers')
       .update({ zalo_user_id: zaloUserId, last_visit_at: new Date().toISOString() })
       .eq('phone', phone);
+    await supabase.from('zalo_followers')
+      .update({ phone }).eq('zalo_user_id', zaloUserId).is('phone', null);
   } catch (_) { /* không quan trọng bằng việc quà đã vào */ }
 
   log(`✅ đã giảm ${discount}đ cho SĐT ${phone} (yêu cầu ${claim.id}, order ${targetOrderId})`);
@@ -227,7 +306,12 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
       last_event_at: now,
     }, { onConflict: 'zalo_user_id' });
     // Nhắn SĐT trước, follow sau → khớp luôn không bắt khách nhắn lại
-    if (existing?.phone) await tryApplyReward(supabase, uid, existing.phone, log);
+    if (existing?.phone) {
+      await tryApplyReward(supabase, uid, existing.phone, log);
+      return;
+    }
+    // Chưa biết SĐT → khớp theo thời gian: khách chỉ cần bấm Quan tâm
+    await tryApplyRewardByTiming(supabase, uid, log);
     return;
   }
 
