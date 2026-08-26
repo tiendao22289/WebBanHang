@@ -214,6 +214,23 @@ async function applyRewardToClaim(supabase, claim, zaloUserId, log = () => {}) {
     return blockClaim(supabase, claim.id, 'Quán chưa tính được mức giảm, Quý khách gọi nhân viên giúp ạ!');
   }
 
+  // ── CHẶN TRÙNG DỰA TRÊN CHÍNH BILL ─────────────────────────────
+  // Đây là lớp chặn cuối và chắc nhất: dù bảng yêu cầu bị xoá (lúc thử
+  // nghiệm), mốc lượt khách bị trống làm ràng buộc trong DB vô hiệu, hay
+  // hai luồng xử lý chạy song song — nếu bill của bàn ĐÃ có dòng giảm giá
+  // Zalo thì không giảm thêm lần nữa.
+  const { data: dupLines } = await supabase
+    .from('order_items')
+    .select('id')
+    .in('order_id', bills.map(b => b.id))
+    .ilike('item_name', '%Zalo%')
+    .lt('unit_price', 0)
+    .limit(1);
+  if (dupLines?.length) {
+    log(`bàn đã có dòng giảm giá Zalo trong bill → bỏ qua yêu cầu ${claim.id}`);
+    return blockClaim(supabase, claim.id, 'Bàn mình đã nhận quà Zalo cho hoá đơn này rồi ạ. Cảm ơn Quý khách nhiều nha! 🥰');
+  }
+
   // 4) Chốt trạng thái TRƯỚC khi trừ tiền — unique index (bàn + lượt khách)
   //    chặn nhận trùng nếu 2 event tới cùng lúc.
   const { data: locked, error: lockErr } = await supabase
