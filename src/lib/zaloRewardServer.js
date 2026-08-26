@@ -99,10 +99,14 @@ export async function tryApplyReward(supabase, zaloUserId, phone, log = () => {}
 /**
  * KHỚP TỰ ĐỘNG THEO THỜI GIAN — khách chỉ cần bấm Quan tâm, không phải nhắn SĐT.
  *
- * Chỉ khớp khi trong khung thời gian ngắn có ĐÚNG MỘT yêu cầu đang chờ:
- * lúc đó "người vừa quan tâm" chắc chắn là "người vừa bấm nút trên web".
- * Có 2 yêu cầu cùng lúc (2 bàn bấm gần nhau) thì KHÔNG đoán — để khách nhắn
- * SĐT cho chắc, tránh trừ tiền sai bàn.
+ * Zalo chỉ cho biết TÀI KHOẢN vừa quan tâm, không cho SĐT, nên phải suy ra
+ * "ai vừa bấm nút trên web" bằng thời gian: ghép với yêu cầu đang chờ LÂU
+ * NHẤT trong khung TIMING_MATCH_MINUTES (ai bấm trước phục vụ trước).
+ *
+ * Vì sao ghép theo thứ tự vẫn công bằng khi 2 bàn bấm gần nhau: mỗi lượt
+ * quan tâm thật chỉ trả đúng MỘT phần quà, nên tổng quà trao ra luôn bằng
+ * tổng lượt quan tâm — không phát thừa. Bàn còn lại nhận ngay khi khách của
+ * họ bấm quan tâm.
  */
 export async function tryApplyRewardByTiming(supabase, zaloUserId, log = () => {}) {
   if (!(await isFollowing(supabase, zaloUserId))) return { matched: false, reason: 'chưa quan tâm' };
@@ -113,14 +117,10 @@ export async function tryApplyRewardByTiming(supabase, zaloUserId, log = () => {
     .select('*')
     .eq('status', 'waiting_follow')
     .gte('created_at', cutoff)
-    .order('created_at', { ascending: false })
-    .limit(3);
+    .order('created_at', { ascending: true })   // chờ lâu nhất được ghép trước
+    .limit(1);
 
   if (!claims?.length) { log('không có yêu cầu nào đang chờ để khớp theo thời gian'); return { matched: false, reason: 'không có yêu cầu' }; }
-  if (claims.length > 1) {
-    log(`${claims.length} yêu cầu cùng lúc → không đoán, chờ khách nhắn SĐT`);
-    return { matched: false, reason: 'nhiều yêu cầu cùng lúc' };
-  }
 
   await applyRewardToClaim(supabase, claims[0], zaloUserId, log);
   return { matched: true };
@@ -130,8 +130,8 @@ export async function tryApplyRewardByTiming(supabase, zaloUserId, log = () => {
  * Chiều ngược lại của khớp theo thời gian: đã có yêu cầu cụ thể (khách vừa
  * bấm nút / vừa quay lại web), đi tìm người VỪA quan tâm OA để ghép.
  *
- * Cũng chỉ ghép khi có ĐÚNG MỘT người vừa quan tâm và chưa gắn SĐT nào —
- * nhiều người cùng lúc thì không đoán.
+ * Chỉ xét người CHƯA gắn SĐT (tức chưa từng được ghép với yêu cầu nào), và
+ * lấy người quan tâm sớm nhất — cùng nguyên tắc trước/sau như chiều kia.
  */
 export async function tryApplyRewardForClaim(supabase, claim, log = () => {}) {
   const cutoff = new Date(Date.now() - TIMING_MATCH_MINUTES * 60000).toISOString();
@@ -141,14 +141,10 @@ export async function tryApplyRewardForClaim(supabase, claim, log = () => {}) {
     .is('unfollowed_at', null)
     .is('phone', null)                 // chưa gắn SĐT = chưa từng ghép với ai
     .gte('followed_at', cutoff)
-    .order('followed_at', { ascending: false })
-    .limit(3);
+    .order('followed_at', { ascending: true })  // quan tâm sớm nhất ghép trước
+    .limit(1);
 
   if (!followers?.length) { log('chưa thấy ai vừa quan tâm OA'); return { matched: false }; }
-  if (followers.length > 1) {
-    log(`${followers.length} người vừa quan tâm cùng lúc → không đoán`);
-    return { matched: false, reason: 'nhiều người cùng lúc' };
-  }
 
   await applyRewardToClaim(supabase, claim, followers[0].zalo_user_id, log);
   return { matched: true };

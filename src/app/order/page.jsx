@@ -573,7 +573,6 @@ function OrderContent() {
   const [reviewReward, setReviewReward] = useState(null); // bản ghi review_rewards hiện tại
   const [zaloClaim, setZaloClaim] = useState(null); // bản ghi zalo_reward_claims (kênh Zalo tự động, không cần NV duyệt)
   const zaloClaimRef = useRef(null);                // bản sao đọc ngay, không đợi setState
-  const [zaloPhoneCopied, setZaloPhoneCopied] = useState(false);
   const [zaloWaitedLong, setZaloWaitedLong] = useState(false); // chờ lâu → gợi ý nhắn SĐT
   // iOS chỉ mở app khi khách bấm TRỰC TIẾP link có scheme zalo:// (JS gọi thì
   // Safari chặn) → phải biết hệ máy để đặt href cho đúng. Set trong useEffect
@@ -1868,27 +1867,6 @@ function OrderContent() {
     // nếu không sẽ chẳng còn event nào để khớp nữa.
     pingZaloClaimReady(data.id);
     return data;
-  }
-
-  /** SĐT khách cần nhắn cho OA — hiện trên màn hình chờ để copy cho nhanh. */
-  const zaloPhoneToSend = (customerPhone || '').trim() || (zaloClaim?.customer_phone || '').trim();
-
-  async function copyZaloPhone() {
-    const phone = zaloPhoneToSend;
-    if (!phone) return;
-    try {
-      await navigator.clipboard.writeText(phone);
-    } catch {
-      // Trình duyệt cũ / webview chặn clipboard → chọn sẵn để khách copy tay
-      const el = document.createElement('textarea');
-      el.value = phone;
-      document.body.appendChild(el);
-      el.select();
-      try { document.execCommand('copy'); } catch { }
-      document.body.removeChild(el);
-    }
-    setZaloPhoneCopied(true);
-    setTimeout(() => setZaloPhoneCopied(false), 2500);
   }
 
   /** Chuyển sang màn hình chờ. KHÔNG gắn vào onClick của nút trên iPhone. */
@@ -3966,21 +3944,11 @@ function OrderContent() {
                               Bấm <b>Quan tâm</b> ở đầu trang Zalo của quán — tiền <b>tự bớt vào hoá đơn</b> ngay,
                               Quý khách không cần nhập gì thêm 🎉
                             </div>
-                            {/* Cách dự phòng: quán không tự nhận ra được (2 bàn bấm cùng lúc...) */}
+                            {/* Chờ hơi lâu: chỉ nhắc bấm lại, KHÔNG bắt khách nhắn tin */}
                             {zaloWaitedLong && (
                               <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #cbd5e1', fontSize: '0.85rem' }}>
-                                <div>Quán chưa nhận được ạ 😥 Quý khách nhắn giúp quán số điện thoại vào khung chat Zalo nhé:</div>
-                                {zaloPhoneToSend && (
-                                  <button
-                                    onClick={copyZaloPhone}
-                                    style={{
-                                      marginTop: 8, padding: '8px 14px', borderRadius: 10, cursor: 'pointer',
-                                      border: '1.5px solid #99f6e4', background: '#f0fdfa', color: '#0f766e', fontWeight: 800,
-                                    }}
-                                  >
-                                    {zaloPhoneCopied ? '✅ Đã copy, dán vào Zalo nhé!' : `📋 Copy số ${zaloPhoneToSend}`}
-                                  </button>
-                                )}
+                                Quán chưa nhận được ạ 😥 Quý khách kiểm lại đã bấm <b>Quan tâm</b> chưa,
+                                rồi bấm <b>“Bấm để quán kiểm lại”</b> ở dưới giúp quán nhé.
                               </div>
                             )}
                             <div style={{ marginTop: 8, fontSize: '0.8rem', color: '#64748b' }}>
