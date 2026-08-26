@@ -573,6 +573,7 @@ function OrderContent() {
   const [reviewReward, setReviewReward] = useState(null); // bản ghi review_rewards hiện tại
   const [zaloClaim, setZaloClaim] = useState(null); // bản ghi zalo_reward_claims (kênh Zalo tự động, không cần NV duyệt)
   const zaloClaimRef = useRef(null);                // bản sao đọc ngay, không đợi setState
+  const [zaloPhoneCopied, setZaloPhoneCopied] = useState(false);
   // iOS chỉ mở app khi khách bấm TRỰC TIẾP link có scheme zalo:// (JS gọi thì
   // Safari chặn) → phải biết hệ máy để đặt href cho đúng. Set trong useEffect
   // để không lệch giữa HTML server và client.
@@ -1811,9 +1812,10 @@ function OrderContent() {
         `#Intent;scheme=zalo;package=com.zing.zalo;` +
         `S.browser_fallback_url=${encodeURIComponent(cfg.url)};end`;
     }
-    // iPhone + đang trong cửa sổ web của Zalo: universal link vô hiệu ở đây,
-    // nhưng chính app Zalo đang chạy nên nhờ nó mở khung chat bằng scheme riêng.
-    if (isIOS && inZaloBrowser) return `zalo://conversation?oaid=${oaid}`;
+    // iPhone + trong cửa sổ web của Zalo: universal link vô hiệu, và Zalo cũng
+    // CHẶN scheme zalo:// của chính nó (bấm không phản hồi gì) → đành mở trang
+    // web zalo.me, ở đó còn nút MỞ. Không sao: khách không cần quay lại web,
+    // server tự trừ tiền khi họ nhắn SĐT cho OA.
     // iPhone ở Safari: link https — iOS tự chuyển sang app (universal link)
     return cfg.url;
   }
@@ -1827,7 +1829,11 @@ function OrderContent() {
    * Android/khác: CÓ — intent:// điều hướng thật, cần tab riêng để giữ trang.
    */
   function zaloOpenNewTab() {
-    return !isIOS;
+    // iPhone ở Safari: KHÔNG mở tab mới (universal link cần cú bấm cùng tab).
+    // Trong cửa sổ web của Zalo thì universal link vô hiệu sẵn → mở tab mới
+    // để trang order không bị thay thế.
+    if (isIOS) return inZaloBrowser;
+    return true;
   }
 
   /**
@@ -1861,6 +1867,27 @@ function OrderContent() {
     // nếu không sẽ chẳng còn event nào để khớp nữa.
     pingZaloClaimReady(data.id);
     return data;
+  }
+
+  /** SĐT khách cần nhắn cho OA — hiện trên màn hình chờ để copy cho nhanh. */
+  const zaloPhoneToSend = (customerPhone || '').trim() || (zaloClaim?.customer_phone || '').trim();
+
+  async function copyZaloPhone() {
+    const phone = zaloPhoneToSend;
+    if (!phone) return;
+    try {
+      await navigator.clipboard.writeText(phone);
+    } catch {
+      // Trình duyệt cũ / webview chặn clipboard → chọn sẵn để khách copy tay
+      const el = document.createElement('textarea');
+      el.value = phone;
+      document.body.appendChild(el);
+      el.select();
+      try { document.execCommand('copy'); } catch { }
+      document.body.removeChild(el);
+    }
+    setZaloPhoneCopied(true);
+    setTimeout(() => setZaloPhoneCopied(false), 2500);
   }
 
   /** Chuyển sang màn hình chờ. KHÔNG gắn vào onClick của nút trên iPhone. */
@@ -3928,23 +3955,33 @@ function OrderContent() {
                             <div className="co-gmap-big">💬</div>
                             <div><b>Còn 2 bước nhỏ bên Zalo thôi ạ:</b></div>
                             <div style={{ textAlign: 'left', marginTop: 8 }}>
-                              1️⃣ Bấm <b>QUAN TÂM</b> ở đầu trang OA.<br />
-                              2️⃣ Nhắn số <b>{(customerPhoneRef.current || '').trim() || 'điện thoại của mình'}</b> vào khung chat của quán.
+                              1️⃣ Bấm <b>QUAN TÂM</b> ở đầu trang quán.<br />
+                              2️⃣ Nhắn số <b>{zaloPhoneToSend || 'điện thoại của mình'}</b> vào khung chat của quán.
                             </div>
+                            {zaloPhoneToSend && (
+                              <button
+                                onClick={copyZaloPhone}
+                                style={{
+                                  marginTop: 10, padding: '8px 14px', borderRadius: 10, cursor: 'pointer',
+                                  border: '1.5px solid #99f6e4', background: '#f0fdfa', color: '#0f766e', fontWeight: 800,
+                                }}
+                              >
+                                {zaloPhoneCopied ? '✅ Đã copy, dán vào Zalo nhé!' : `📋 Copy số ${zaloPhoneToSend}`}
+                              </button>
+                            )}
                             <div style={{ marginTop: 10, fontSize: '0.85rem' }}>
-                              Xong là tiền <b>tự bớt vào hoá đơn liền</b>, quán báo ngay trên màn hình này 🎉
+                              Xong là tiền <b>tự bớt vào hoá đơn liền</b> — Quý khách <b>không cần quay lại đây</b> ạ 🎉
                             </div>
                             <div style={{ marginTop: 8, fontSize: '0.8rem', color: '#64748b' }}>
                               {isIOS && inZaloBrowser ? (
                                 <>
-                                  Quý khách đang xem trang này <b>trong Zalo</b>. Nếu nút trên chưa mở được
-                                  khung chat, bấm <b>✕</b> góc trên để về Zalo, tìm <b>{tableNumber ? 'quán' : 'quán'}</b> rồi
-                                  bấm <b>Quan tâm</b> và nhắn số điện thoại. Xong quét lại mã trên bàn là thấy quà ngay ạ.
+                                  Quý khách đang mở trang này <b>bên trong Zalo</b> nên nút trên chỉ ra trang web
+                                  của quán. Cách nhanh nhất: bấm <b>✕</b> góc trên để về Zalo, mở lại khung chat
+                                  của quán, bấm <b>Quan tâm</b> rồi dán số điện thoại vào là xong ạ.
                                 </>
                               ) : (
                                 <>
                                   Nếu hiện trang web của Zalo, bấm nút <b>MỞ</b> màu xanh để vào app nhé.
-                                  Nhắn xong Quý khách quay lại tab này là thấy quà liền, không cần quét mã lại ạ.
                                 </>
                               )}
                             </div>
