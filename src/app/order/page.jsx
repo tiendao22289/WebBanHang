@@ -578,10 +578,15 @@ function OrderContent() {
   // để không lệch giữa HTML server và client.
   const [isIOS, setIsIOS] = useState(false);
   const [isAndroid, setIsAndroid] = useState(false);
+  // Khách quét QR bằng app Zalo → trang mở trong cửa sổ web CỦA ZALO, không
+  // phải Safari. Universal link (link https tự mở app) KHÔNG hoạt động ở đây,
+  // nên iPhone luôn ra trang web. Phải dùng cách khác cho trường hợp này.
+  const [inZaloBrowser, setInZaloBrowser] = useState(false);
   useEffect(() => {
     const ua = navigator.userAgent || '';
     setIsIOS(/iphone|ipad|ipod/i.test(ua) || (/Mac/.test(ua) && 'ontouchend' in document));
     setIsAndroid(/android/i.test(ua));
+    setInZaloBrowser(/zalo/i.test(ua));
   }, []);
   const [reviewBillTotal, setReviewBillTotal] = useState(0);
   const [reviewEligible, setReviewEligible] = useState(false);
@@ -1806,7 +1811,10 @@ function OrderContent() {
         `#Intent;scheme=zalo;package=com.zing.zalo;` +
         `S.browser_fallback_url=${encodeURIComponent(cfg.url)};end`;
     }
-    // iOS/khác: link https của Zalo — iOS tự nhận ra và mở app (universal link)
+    // iPhone + đang trong cửa sổ web của Zalo: universal link vô hiệu ở đây,
+    // nhưng chính app Zalo đang chạy nên nhờ nó mở khung chat bằng scheme riêng.
+    if (isIOS && inZaloBrowser) return `zalo://conversation?oaid=${oaid}`;
+    // iPhone ở Safari: link https — iOS tự chuyển sang app (universal link)
     return cfg.url;
   }
 
@@ -3927,8 +3935,18 @@ function OrderContent() {
                               Xong là tiền <b>tự bớt vào hoá đơn liền</b>, quán báo ngay trên màn hình này 🎉
                             </div>
                             <div style={{ marginTop: 8, fontSize: '0.8rem', color: '#64748b' }}>
-                              Nếu hiện trang web của Zalo, bấm nút <b>MỞ</b> màu xanh để vào app nhé.
-                              Nhắn xong Quý khách quay lại tab này là thấy quà liền, không cần quét mã lại ạ.
+                              {isIOS && inZaloBrowser ? (
+                                <>
+                                  Quý khách đang xem trang này <b>trong Zalo</b>. Nếu nút trên chưa mở được
+                                  khung chat, bấm <b>✕</b> góc trên để về Zalo, tìm <b>{tableNumber ? 'quán' : 'quán'}</b> rồi
+                                  bấm <b>Quan tâm</b> và nhắn số điện thoại. Xong quét lại mã trên bàn là thấy quà ngay ạ.
+                                </>
+                              ) : (
+                                <>
+                                  Nếu hiện trang web của Zalo, bấm nút <b>MỞ</b> màu xanh để vào app nhé.
+                                  Nhắn xong Quý khách quay lại tab này là thấy quà liền, không cần quét mã lại ạ.
+                                </>
+                              )}
                             </div>
                           </div>
                           <a
