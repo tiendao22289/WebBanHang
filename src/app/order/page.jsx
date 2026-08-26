@@ -1780,18 +1780,17 @@ function OrderContent() {
    * nơi khách nhắn SĐT → một màn hình làm được cả 2 bước.
    * Máy không mở được app (không cài Zalo...) → fallback về link web.
    */
-  /** Deep link vào khung chat OA; null nếu link cấu hình không phải dạng zalo.me/<id>. */
-  function zaloDeepLink(cfg) {
-    const oaid = (cfg?.url || '').match(/zalo\.me\/(\d{6,})/)?.[1];
-    return oaid ? `zalo://conversation?oaid=${oaid}` : null;
-  }
-
   /**
    * Địa chỉ đặt vào href của nút mở Zalo, theo từng hệ máy.
    *
-   * QUAN TRỌNG: nút LUÔN dùng href + target="_blank", KHÔNG điều hướng bằng
-   * JS trên cùng tab. Điều hướng cùng tab làm trang order bị thay thế —
-   * khách nhắn tin xong bấm back là mất trang, phải quét QR lại.
+   * KHÔNG điều hướng bằng JS — iOS chỉ chuyển link https sang app khi khách
+   * bấm trực tiếp thẻ <a>, còn JS gọi thì bị bỏ qua.
+   *
+   * iOS  : giữ nguyên link https của Zalo và KHÔNG đặt target="_blank"
+   *        (xem zaloOpenNewTab) — universal link không áp dụng cho link mở
+   *        tab mới, đó là lý do trước đây iPhone luôn ra trang web.
+   *        Universal link chuyển thẳng sang app nên tab order vẫn còn.
+   * Android: intent:// mở app, mở ở tab riêng để giữ trang order.
    */
   function zaloOpenHref(cfg) {
     const oaid = (cfg?.url || '').match(/zalo\.me\/(\d{6,})/)?.[1];
@@ -1802,8 +1801,20 @@ function OrderContent() {
         `#Intent;scheme=zalo;package=com.zing.zalo;` +
         `S.browser_fallback_url=${encodeURIComponent(cfg.url)};end`;
     }
-    // iOS/khác: link web của Zalo (trang này có nút MỞ để vào app)
+    // iOS/khác: link https của Zalo — iOS tự nhận ra và mở app (universal link)
     return cfg.url;
+  }
+
+  /**
+   * Có mở nút Zalo ở tab mới không?
+   * iOS: KHÔNG — target="_blank" làm iOS bỏ qua universal link (mất khả năng
+   *      mở app). Bù lại universal link không điều hướng tab nên trang order
+   *      vẫn nguyên; nếu máy chưa cài Zalo thì rơi về web, lúc đó phiên đã
+   *      lưu sẽ tự khôi phục bàn.
+   * Android/khác: CÓ — intent:// điều hướng thật, cần tab riêng để giữ trang.
+   */
+  function zaloOpenNewTab() {
+    return !isIOS;
   }
 
   // Khách bấm nút mở OA — tạo claim chờ webhook, KHÔNG chặn điều hướng
@@ -3848,8 +3859,9 @@ function OrderContent() {
                           <a
                             className="co-gmap-cta"
                             href={cfg.auto ? zaloOpenHref(cfg) : cfg.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                            {...((cfg.auto && !zaloOpenNewTab())
+                              ? {}
+                              : { target: '_blank', rel: 'noopener noreferrer' })}
                             onClick={() => cfg.auto ? handleZaloLinkClick(cfg) : handleReviewLinkClick(cfg)}
                           >
                             {cfg.icon} {cfg.cta}
@@ -3878,16 +3890,10 @@ function OrderContent() {
                           <a
                             className="co-gmap-cta"
                             href={zaloOpenHref(cfg)}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                            {...(zaloOpenNewTab() ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
                           >
                             {cfg.icon} Mở lại Zalo của quán
                           </a>
-                          {isIOS && zaloDeepLink(cfg) && (
-                            <a className="co-gmap-link" href={zaloDeepLink(cfg)} target="_blank" rel="noopener noreferrer">
-                              Mở bằng app Zalo
-                            </a>
-                          )}
                           <button
                             className="co-gmap-link"
                             style={{ background: 'none', border: 'none', cursor: 'pointer' }}
