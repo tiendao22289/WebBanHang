@@ -494,9 +494,19 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
       unfollowed_at: null,
       last_event_at: now,
     }, { onConflict: 'zalo_user_id' });
-    // Nhắn SĐT trước, follow sau → khớp luôn không bắt khách nhắn lại
+    // Nhắn SĐT trước, follow sau → khớp luôn không bắt khách nhắn lại.
+    // Kiểm tra CẢ 2 loại thưởng (Quan tâm Zalo thường + vòng xoay) — thiếu
+    // dòng lucky_spins ở đây từng khiến khách có SĐT đã gắn Zalo từ trước
+    // (vd đã test/nhận ưu đãi Zalo thường 1 lần) quay vòng xoay xong follow
+    // lại không bao giờ được áp quà, vì nhánh này return sớm sau khi chỉ
+    // check tryApplyReward.
     if (existing?.phone) {
       await tryApplyReward(supabase, uid, existing.phone, log);
+      const { data: spins } = await supabase
+        .from('lucky_spins').select('*')
+        .eq('customer_phone', existing.phone).eq('status', 'waiting_follow')
+        .order('created_at', { ascending: false }).limit(1);
+      if (spins?.length) await applyLuckySpin(supabase, spins[0], uid, log);
       return;
     }
     // Chưa biết SĐT → khớp theo thời gian: khách chỉ cần bấm Quan tâm
