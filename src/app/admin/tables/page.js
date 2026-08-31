@@ -127,6 +127,8 @@ export default function TablesPage() {
   const [giftItems, setGiftItems] = useState([]); // is_gift_item=true, còn hiện trên thực đơn
   const [giftPickerHostId, setGiftPickerHostId] = useState(null); // host_table_id đang mở modal chọn quà
   const [giftPickerSaving, setGiftPickerSaving] = useState(null); // id món đang ghi (disable nút khi đang lưu)
+  const [giftOptionItem, setGiftOptionItem] = useState(null); // món tặng có LOẠI/KHẨU VỊ đang chọn tuỳ chọn
+  const [giftSelectedOptions, setGiftSelectedOptions] = useState({});
   const [addingToOrder, setAddingToOrder] = useState(null); // order id being added to
   const [activeMenuCategory, setActiveMenuCategory] = useState('all');
   const [addItemSearch, setAddItemSearch] = useState('');
@@ -1379,7 +1381,7 @@ export default function TablesPage() {
   }
 
   /** Admin chọn quà thay khách — ghi thẳng 1 dòng is_gift=true vào bill cũ nhất của nhóm bàn. */
-  async function addGiftToTable(hostId, giftItem) {
+  async function addGiftToTable(hostId, giftItem, itemOptions = []) {
     setGiftPickerSaving(giftItem.id);
     try {
       const groupBills = [
@@ -1401,7 +1403,7 @@ export default function TablesPage() {
         menu_item_id: giftItem.id,
         quantity: 1,
         unit_price: 0,
-        item_options: [],
+        item_options: itemOptions,
         note: null,
         is_gift: true,
         ...(currentStaff ? { added_by_id: currentStaff.id, added_by_name: currentStaff.full_name } : {}),
@@ -5086,63 +5088,123 @@ export default function TablesPage() {
           ];
           const elig = giftEligibilityFor(groupBills);
           const hostTable = tables.find(t => t.id === giftPickerHostId);
+          const optionGroups = (giftOptionItem?.options || []).filter(o => o.name && o.choices?.length);
+          const closeAll = () => { setGiftPickerHostId(null); setGiftOptionItem(null); setGiftSelectedOptions({}); };
+          const backToList = () => { setGiftOptionItem(null); setGiftSelectedOptions({}); };
           return (
             <div
               style={{ position: 'fixed', inset: 0, zIndex: 2100, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
-              onClick={() => setGiftPickerHostId(null)}
+              onClick={closeAll}
             >
               <div
                 onClick={e => e.stopPropagation()}
                 style={{ background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 480, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
               >
                 <div style={{ padding: '16px 18px 12px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ fontSize: '1.5rem' }}>🎁</div>
+                  {giftOptionItem ? (
+                    <button onClick={backToList} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#374151', padding: 0, display: 'flex' }}>
+                      <ChevronRight size={20} style={{ transform: 'rotate(180deg)' }} />
+                    </button>
+                  ) : (
+                    <div style={{ fontSize: '1.5rem' }}>🎁</div>
+                  )}
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 800, fontSize: '1rem' }}>Chọn quà cho bàn {hostTable?.table_number ?? ''}</div>
+                    <div style={{ fontWeight: 800, fontSize: '1rem' }}>
+                      {giftOptionItem ? `Chọn loại — ${giftOptionItem.name}` : `Chọn quà cho bàn ${hostTable?.table_number ?? ''}`}
+                    </div>
                     <div style={{ fontSize: '0.82rem', color: elig.availableGiftSlots > 0 ? '#b45309' : '#6b7280', fontWeight: 700 }}>
                       Còn {elig.availableGiftSlots} lượt chọn miễn phí
                     </div>
                   </div>
-                  <button onClick={() => setGiftPickerHostId(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}>
+                  <button onClick={closeAll} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}>
                     <X size={20} />
                   </button>
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
-                  {giftItems.length === 0 && (
-                    <div style={{ padding: 16, color: '#9ca3af', fontSize: '0.85rem', textAlign: 'center' }}>Chưa có món tặng nào được cấu hình.</div>
-                  )}
-                  {giftItems.map(g => {
-                    const addedQty = groupBills.reduce((s, o) => s + (o.order_items || []).filter(oi => oi.is_gift && oi.menu_item_id === g.id).reduce((s2, oi) => s2 + (oi.quantity || 1), 0), 0);
-                    return (
-                      <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 6px', borderBottom: '1px solid #f8fafc' }}>
-                        <div style={{ width: 44, height: 44, borderRadius: 8, flexShrink: 0, overflow: 'hidden', background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                          {g.image_url
-                            ? <img src={g.image_url} alt={g.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                            : <span style={{ fontSize: '1.2rem' }}>🍽️</span>}
+                  {giftOptionItem ? (
+                    optionGroups.map((opt, idx) => (
+                      <div key={idx} style={{ marginBottom: 14 }}>
+                        <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#374151', marginBottom: 4 }}>{opt.name}</div>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          {opt.choices.map((choice, cIdx) => {
+                            const isSelected = giftSelectedOptions[opt.name] === choice;
+                            return (
+                              <label
+                                key={cIdx}
+                                onClick={() => setGiftSelectedOptions(prev => ({ ...prev, [opt.name]: choice }))}
+                                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 4px', cursor: 'pointer', borderBottom: cIdx < opt.choices.length - 1 ? '1px solid #f3f4f6' : 'none' }}
+                              >
+                                <div style={{ width: 16, height: 16, borderRadius: '50%', flexShrink: 0, border: isSelected ? '5px solid #16a34a' : '1.5px solid #d1d5db', background: 'white' }} />
+                                <span style={{ fontSize: '0.86rem', fontWeight: isSelected ? 700 : 500, color: isSelected ? '#15803d' : '#374151' }}>{choice}</span>
+                              </label>
+                            );
+                          })}
                         </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{g.name}</div>
-                          <div style={{ fontSize: '0.78rem', color: '#16a34a', fontWeight: 700 }}>Miễn phí 🎁{addedQty > 0 ? ` — đã tặng ${addedQty}` : ''}</div>
-                        </div>
-                        <button
-                          onClick={() => addGiftToTable(giftPickerHostId, g)}
-                          disabled={elig.availableGiftSlots <= 0 || giftPickerSaving === g.id}
-                          style={{
-                            flexShrink: 0, padding: '7px 14px', borderRadius: 100, border: 'none',
-                            background: elig.availableGiftSlots > 0 ? '#16a34a' : '#e5e7eb',
-                            color: elig.availableGiftSlots > 0 ? 'white' : '#9ca3af',
-                            fontWeight: 700, fontSize: '0.8rem',
-                            cursor: elig.availableGiftSlots > 0 && giftPickerSaving !== g.id ? 'pointer' : 'not-allowed',
-                          }}
-                        >
-                          {giftPickerSaving === g.id ? 'Đang lưu...' : '+ Tặng'}
-                        </button>
                       </div>
-                    );
-                  })}
+                    ))
+                  ) : (
+                    <>
+                      {giftItems.length === 0 && (
+                        <div style={{ padding: 16, color: '#9ca3af', fontSize: '0.85rem', textAlign: 'center' }}>Chưa có món tặng nào được cấu hình.</div>
+                      )}
+                      {giftItems.map(g => {
+                        const addedQty = groupBills.reduce((s, o) => s + (o.order_items || []).filter(oi => oi.is_gift && oi.menu_item_id === g.id).reduce((s2, oi) => s2 + (oi.quantity || 1), 0), 0);
+                        const hasOptions = (g.options || []).some(o => o.name && o.choices?.length);
+                        return (
+                          <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 6px', borderBottom: '1px solid #f8fafc' }}>
+                            <div style={{ width: 44, height: 44, borderRadius: 8, flexShrink: 0, overflow: 'hidden', background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              {g.image_url
+                                ? <img src={g.image_url} alt={g.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                : <span style={{ fontSize: '1.2rem' }}>🍽️</span>}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{g.name}</div>
+                              <div style={{ fontSize: '0.78rem', color: '#16a34a', fontWeight: 700 }}>Miễn phí 🎁{addedQty > 0 ? ` — đã tặng ${addedQty}` : ''}</div>
+                            </div>
+                            <button
+                              onClick={() => {
+                                if (hasOptions) {
+                                  const { initialOptions } = getInitialOptionSelection(g);
+                                  setGiftOptionItem(g);
+                                  setGiftSelectedOptions(initialOptions);
+                                } else {
+                                  addGiftToTable(giftPickerHostId, g);
+                                }
+                              }}
+                              disabled={elig.availableGiftSlots <= 0 || giftPickerSaving === g.id}
+                              style={{
+                                flexShrink: 0, padding: '7px 14px', borderRadius: 100, border: 'none',
+                                background: elig.availableGiftSlots > 0 ? '#16a34a' : '#e5e7eb',
+                                color: elig.availableGiftSlots > 0 ? 'white' : '#9ca3af',
+                                fontWeight: 700, fontSize: '0.8rem',
+                                cursor: elig.availableGiftSlots > 0 && giftPickerSaving !== g.id ? 'pointer' : 'not-allowed',
+                              }}
+                            >
+                              {giftPickerSaving === g.id ? 'Đang lưu...' : '+ Tặng'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
                 </div>
                 <div style={{ padding: 12, borderTop: '1px solid #f1f5f9' }}>
-                  <button className="btn btn-outline" style={{ width: '100%' }} onClick={() => setGiftPickerHostId(null)}>Đóng</button>
+                  {giftOptionItem ? (
+                    <button
+                      className="btn-add-to-order"
+                      disabled={giftPickerSaving === giftOptionItem.id}
+                      onClick={async () => {
+                        const optionsData = Object.keys(giftSelectedOptions).map(name => ({ name, choice: giftSelectedOptions[name] }));
+                        await addGiftToTable(giftPickerHostId, giftOptionItem, optionsData);
+                        backToList();
+                      }}
+                      style={{ width: '100%' }}
+                    >
+                      {giftPickerSaving === giftOptionItem.id ? 'Đang lưu...' : `Xác nhận tặng ${giftOptionItem.name}`}
+                    </button>
+                  ) : (
+                    <button className="btn btn-outline" style={{ width: '100%' }} onClick={closeAll}>Đóng</button>
+                  )}
                 </div>
               </div>
             </div>
