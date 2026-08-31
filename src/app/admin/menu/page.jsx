@@ -873,6 +873,29 @@ export default function MenuPage() {
 
   return (
     <div className="page-content">
+      {/* Nhắc đồng bộ — nổi cố định để không bị lướt mất khi danh sách món dài,
+          chỉ hiện khi CÓ thay đổi nháp thật (hasPendingChanges), tự ẩn khi đã
+          đồng bộ xong hoặc bấm Hủy — tránh quên bấm Đồng bộ sau khi sửa/ẩn/xoá món. */}
+      {hasPendingChanges && (
+        <div style={{
+          position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 500, display: 'flex', alignItems: 'center', gap: 10,
+          background: '#fef3c7', border: '1.5px solid #fbbf24', borderRadius: 100,
+          padding: '10px 10px 10px 16px', boxShadow: '0 8px 24px rgba(217,119,6,0.25)',
+          maxWidth: 'calc(100vw - 32px)',
+        }}>
+          <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#92400e', whiteSpace: 'nowrap' }}>
+            ⚠️ Có thay đổi chưa đồng bộ!
+          </span>
+          <button
+            onClick={syncDraftChanges}
+            disabled={isSaving}
+            style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '7px 14px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 100, fontWeight: 700, fontSize: '0.8rem', cursor: isSaving ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
+          >
+            <Save size={13} /> {isSaving ? 'Đang đồng bộ...' : 'Đồng bộ ngay'}
+          </button>
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: 12, flexWrap: 'nowrap', gap: 8 }}>
         <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
           {hasPendingChanges && (
