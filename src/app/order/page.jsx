@@ -591,6 +591,7 @@ function OrderContent() {
   const [wheelErr, setWheelErr] = useState('');
   const [wheelPrizes, setWheelPrizes] = useState([]); // cơ cấu quà từ bảng lucky_prizes
   const [wheelSpin, setWheelSpin] = useState(null);   // ban ghi lucky_spins
+  const [wheelStats, setWheelStats] = useState({ totalSpins: null, recentWinners: [] }); // khoe lượt quay + 10 người trúng gần nhất (ẩn danh, lấy từ RPC)
   const wheelSpinRef = useRef(null);
   const zaloClaimRef = useRef(null);                // bản sao đọc ngay, không đợi setState
   const [zaloWaitedLong, setZaloWaitedLong] = useState(false); // chờ lâu → gợi ý nhắn SĐT
@@ -1788,6 +1789,24 @@ function OrderContent() {
     setWheelPrize(null);
     setWheelAngle(0);
     setWheelSpinning(false);
+
+    // Lượt xem popup (đếm 1 lần/thiết bị) + lịch sử quay để khoe cho khách
+    // hứng thú — giống kiểu "👁 X lượt xem" của 2 bảng Thử thách/Đặt tiệc.
+    try {
+      const storageKey = 'promo_viewed_wheel';
+      let alreadyViewed = false;
+      try { alreadyViewed = !!localStorage.getItem('promo_viewed_wheel'); } catch { }
+      if (!alreadyViewed) {
+        const { data } = await supabase.rpc('increment_feature_view', { p_feature: 'wheel' });
+        const n = Number(data);
+        if (data != null && !isNaN(n)) setFeatureViews(prev => ({ ...prev, wheel: n }));
+        try { localStorage.setItem(storageKey, '1'); } catch { }
+      }
+    } catch { }
+    try {
+      const { data } = await supabase.rpc('get_lucky_wheel_public_stats');
+      if (data) setWheelStats({ totalSpins: Number(data.totalSpins) || 0, recentWinners: data.recentWinners || [] });
+    } catch { }
 
     const saved = getSavedSession();
     setWheelForm({
@@ -4185,6 +4204,31 @@ function OrderContent() {
               )}
               <div className="co-chal-modal-title">🎰 Vòng xoay may mắn</div>
               <div className="co-chal-scroll">
+
+                <div className="co-chal-views">
+                  👁 {featureViews.wheel ?? '…'} lượt xem
+                  {wheelStats.totalSpins != null && <> · 🎰 {wheelStats.totalSpins} lượt quay</>}
+                </div>
+
+                {/* Khoe 10 người trúng gần nhất — ẩn danh tên, kích thích khách quay */}
+                {wheelStats.recentWinners.length > 0 && (
+                  <div style={{
+                    marginBottom: 10, padding: '8px 12px', borderRadius: 10,
+                    background: '#fff7ed', border: '1px solid #fed7aa',
+                  }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#9a3412', marginBottom: 4 }}>
+                      🏆 Trúng thưởng gần đây
+                    </div>
+                    <div style={{ maxHeight: 96, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      {wheelStats.recentWinners.map((w, i) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: '0.8rem', color: '#78716c' }}>
+                          <span>{w.name}</span>
+                          <span style={{ fontWeight: 700, color: '#c2410c' }}>{w.prize_label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Vòng xoay */}
                 <div className="co-wheel-wrap">
