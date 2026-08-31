@@ -8,7 +8,7 @@ import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, fetchGroupBillTotal, startOfTodayISO, isReviewDiscountItem } from '@/lib/reviewReward';
-import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem } from '@/lib/luckyWheel';
+import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem, isGiftPrizeType } from '@/lib/luckyWheel';
 import {
   Search,
   Plus,
@@ -592,6 +592,11 @@ function OrderContent() {
   const [wheelPrizes, setWheelPrizes] = useState([]); // cơ cấu quà từ bảng lucky_prizes
   const [wheelSpin, setWheelSpin] = useState(null);   // ban ghi lucky_spins
   const [wheelStats, setWheelStats] = useState({ totalSpins: null, recentWinners: [] }); // khoe lượt quay + 10 người trúng gần nhất (ẩn danh, lấy từ RPC)
+  // ── Quà "Tặng nước"/"Tặng món" — khách tự chọn món cụ thể sau khi trúng ──
+  const [wheelDrinkItems, setWheelDrinkItems] = useState([]); // pool nước tặng, admin cấu hình ở Cài đặt
+  const [wheelGiftOptionItem, setWheelGiftOptionItem] = useState(null); // món đang chọn LOẠI/KHẨU VỊ (null = đang ở màn hình danh sách)
+  const [wheelGiftSelectedOptions, setWheelGiftSelectedOptions] = useState({});
+  const [wheelGiftPicking, setWheelGiftPicking] = useState(false);
   const wheelSpinRef = useRef(null);
   const zaloClaimRef = useRef(null);                // bản sao đọc ngay, không đợi setState
   const [zaloWaitedLong, setZaloWaitedLong] = useState(false); // chờ lâu → gợi ý nhắn SĐT
@@ -626,6 +631,12 @@ function OrderContent() {
   // Kênh Zalo dùng cho bước "quan tâm để nhận quà" của vòng xoay
   const zaloChannelCfg = activeChannels.find(c => c.key === 'zalo') || null;
   const totalPercent = activeChannels.reduce((sum, c) => sum + (Number(c.percent) || 0), 0);
+
+  // Quà "Tặng nước"/"Tặng món" — còn thiếu bước khách chọn món cụ thể thì
+  // chưa tính là xong, dù Zalo đã xác nhận (status='applied') hay chưa.
+  const wheelNeedsGiftPick = isGiftPrizeType(wheelPrize?.prizeType) && !wheelSpin?.applied_item_id;
+  const wheelGiftActiveList = wheelPrize?.prizeType === 'gift_dish' ? giftItems
+    : wheelPrize?.prizeType === 'gift_drink' ? wheelDrinkItems : [];
 
   // Promotion
   const [promoConfig, setPromoConfig] = useState({ enabled: false, threshold: 8 });
@@ -1781,14 +1792,73 @@ function OrderContent() {
     setShowLuckyNudge(true);
   }
 
+  /** Pool "nước tặng" — admin cấu hình ở Cài đặt > Vòng xoay, khách chọn khi trúng quà gift_drink. */
+  async function fetchWheelDrinkItems() {
+    const { data: setting } = await supabase
+      .from('settings').select('value').eq('key', 'lucky_wheel_drink_item_ids').maybeSingle();
+    let ids = [];
+    try { ids = JSON.parse(setting?.value || '[]'); } catch { }
+    if (!ids.length) { setWheelDrinkItems([]); return; }
+    const { data: items } = await supabase
+      .from('menu_items').select('id, name, price, image_url, options, hidden_until')
+      .in('id', ids).eq('is_available', true);
+    const now = new Date();
+    setWheelDrinkItems((items || []).filter(g => !g.hidden_until || new Date(g.hidden_until) < now));
+  }
+
+  function getWheelGiftInitialOptions(item) {
+    const sel = {};
+    (item.options || []).forEach(opt => {
+      if (opt.name && opt.choices?.length) sel[opt.name] = opt.choices[0];
+    });
+    return sel;
+  }
+
+  function selectWheelGiftItem(item) {
+    if (item.options && item.options.length > 0) {
+      setWheelGiftOptionItem(item);
+      setWheelGiftSelectedOptions(getWheelGiftInitialOptions(item));
+    } else {
+      confirmWheelGiftPick(item, []);
+    }
+  }
+
+  async function confirmWheelGiftPick(item, itemOptions) {
+    if (!wheelPrize?.spinId) return;
+    setWheelGiftPicking(true);
+    try {
+      const res = await fetch('/api/lucky/pick-gift', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spinId: wheelPrize.spinId, menuItemId: item.id, itemOptions }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        setWheelErr(data.message || 'Quán chưa ghi nhận được, Quý khách thử lại giúp ạ!');
+        setWheelGiftPicking(false);
+        return;
+      }
+      setWheelGiftOptionItem(null);
+      await refreshLuckySpin(wheelPrize.spinId);
+      if (data.applied) refreshPreviousOrdersReliably();
+    } catch (err) {
+      console.error('[confirmWheelGiftPick]', err);
+      setWheelErr('Quán chưa ghi nhận được, Quý khách thử lại giúp ạ!');
+    }
+    setWheelGiftPicking(false);
+  }
+
   async function openWheel() {
     setWheelOpen(true);
     // Cơ cấu quà do Admin cấu hình → luôn đọc lại khi mở
     fetchLuckyPrizes(supabase).then(setWheelPrizes);
+    fetchWheelDrinkItems();
     setWheelErr('');
     setWheelPrize(null);
     setWheelAngle(0);
     setWheelSpinning(false);
+    setWheelGiftOptionItem(null);
+    setWheelGiftSelectedOptions({});
 
     // Lượt xem popup (đếm 1 lần/thiết bị) + lịch sử quay để khoe cho khách
     // hứng thú — giống kiểu "👁 X lượt xem" của 2 bảng Thử thách/Đặt tiệc.
@@ -1925,8 +1995,12 @@ function OrderContent() {
     // lucky_spins đã gỡ khỏi Realtime (xem lucky_wheel_security_fixes.sql) để
     // không lộ tên/SĐT khách qua kênh không lọc được — polling ở dưới thay
     // hẳn cho việc lắng nghe UPDATE, nên phải tự bắn toast khi status đổi ở đây.
+    // Quà tặng (gift_drink/gift_dish) status='applied' chỉ thực sự XONG khi
+    // đã có applied_item_id — trước đó vẫn còn thiếu bước khách chọn món,
+    // báo "đã vào hoá đơn" sớm hơn là báo nhầm.
+    const trulyDone = data.status === 'applied' && (!isGiftPrizeType(data.prize_type) || !!data.applied_item_id);
     if (data.status !== prevStatus) {
-      if (data.status === 'applied') {
+      if (trulyDone) {
         refreshPreviousOrdersReliably();
         showFeedbackToast('success', 'Quà đã vào hoá đơn! 🎉',
           data.discount_amount > 0
@@ -4242,7 +4316,7 @@ function OrderContent() {
                     <div className="co-wheel-prize">
                       <div style={{ fontSize: '2.2rem' }}>🎉</div>
                       <div className="co-wheel-prize-name">{wheelPrize.prizeLabel}</div>
-                      {wheelSpin?.status === 'applied' ? (
+                      {wheelSpin?.status === 'applied' && !wheelNeedsGiftPick ? (
                         <div style={{ fontWeight: 800, color: '#0f766e' }}>
                           {wheelSpin.discount_amount > 0
                             ? `Hoá đơn vừa bớt ${formatPrice(wheelSpin.discount_amount)} rồi ạ!`
@@ -4252,6 +4326,10 @@ function OrderContent() {
                         <div style={{ fontWeight: 800, color: '#b45309' }}>
                           {wheelSpin.block_reason || 'Quán chưa áp được quà, Quý khách gọi nhân viên giúp ạ!'}
                         </div>
+                      ) : wheelNeedsGiftPick ? (
+                        <div style={{ fontWeight: 700, color: '#0f766e' }}>
+                          Chọn {wheelPrize.prizeType === 'gift_drink' ? 'nước' : 'món'} Quý khách muốn nhận nha 👇
+                        </div>
                       ) : (
                         <div style={{ fontWeight: 700, color: '#0f766e' }}>
                           Còn một bước nhỏ nữa là quà vào hoá đơn ạ 👇
@@ -4259,8 +4337,87 @@ function OrderContent() {
                       )}
                     </div>
 
+                    {/* Quà Tặng nước/Tặng món — khách chọn món cụ thể trước khi qua bước Zalo */}
+                    {wheelNeedsGiftPick && (
+                      wheelGiftOptionItem ? (
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: 8, textAlign: 'center' }}>
+                            Chọn loại — {wheelGiftOptionItem.name}
+                          </div>
+                          {(wheelGiftOptionItem.options || []).filter(o => o.name && o.choices?.length).map(opt => (
+                            <div key={opt.name} style={{ marginBottom: 10 }}>
+                              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#374151', marginBottom: 5 }}>{opt.name}</div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                {opt.choices.map(choice => {
+                                  const isSelected = wheelGiftSelectedOptions[opt.name] === choice;
+                                  return (
+                                    <button
+                                      key={choice}
+                                      onClick={() => setWheelGiftSelectedOptions(prev => ({ ...prev, [opt.name]: choice }))}
+                                      style={{
+                                        padding: '6px 12px', borderRadius: 20, cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+                                        background: isSelected ? '#0f766e' : '#f1f5f9',
+                                        color: isSelected ? 'white' : '#374151',
+                                        border: `1.5px solid ${isSelected ? '#0f766e' : '#e2e8f0'}`,
+                                      }}
+                                    >
+                                      {choice}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                            <button
+                              onClick={() => setWheelGiftOptionItem(null)}
+                              disabled={wheelGiftPicking}
+                              style={{ padding: '10px 14px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}
+                            >
+                              ‹ Quay lại
+                            </button>
+                            <button
+                              className="co-gmap-cta"
+                              style={{ flex: 1, margin: 0 }}
+                              disabled={wheelGiftPicking}
+                              onClick={() => {
+                                const optionsData = Object.keys(wheelGiftSelectedOptions).map(name => ({ name, choice: wheelGiftSelectedOptions[name] }));
+                                confirmWheelGiftPick(wheelGiftOptionItem, optionsData);
+                              }}
+                            >
+                              {wheelGiftPicking ? 'Đang lưu...' : `Xác nhận ${wheelGiftOptionItem.name}`}
+                            </button>
+                          </div>
+                        </div>
+                      ) : wheelGiftActiveList.length === 0 ? (
+                        <div className="co-gmap-state co-gmap-warn">
+                          Quán chưa cấu hình danh sách {wheelPrize.prizeType === 'gift_drink' ? 'nước' : 'món'} tặng — Quý khách gọi nhân viên giúp ạ!
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 260, overflowY: 'auto' }}>
+                          {wheelGiftActiveList.map(item => (
+                            <button
+                              key={item.id}
+                              onClick={() => selectWheelGiftItem(item)}
+                              disabled={wheelGiftPicking}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px',
+                                background: 'white', border: '1.5px solid #e5e7eb', borderRadius: 10, cursor: 'pointer', textAlign: 'left',
+                              }}
+                            >
+                              {item.image_url && (
+                                <img src={item.image_url} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} />
+                              )}
+                              <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#0f172a' }}>{item.name}</span>
+                              <span style={{ marginLeft: 'auto', fontSize: '0.78rem', fontWeight: 700, color: '#0f766e' }}>Miễn phí</span>
+                            </button>
+                          ))}
+                        </div>
+                      )
+                    )}
+
                     {/* Chưa xác nhận Quan tâm Zalo → chưa trừ tiền */}
-                    {wheelSpin?.status !== 'applied' && wheelSpin?.status !== 'blocked' && zaloChannelCfg && (
+                    {!wheelNeedsGiftPick && wheelSpin?.status !== 'applied' && wheelSpin?.status !== 'blocked' && zaloChannelCfg && (
                       <>
                         <div className="co-gmap-state co-gmap-pending" style={{ marginTop: 10 }}>
                           <div className="co-gmap-big">💬</div>
@@ -4302,7 +4459,7 @@ function OrderContent() {
                       </>
                     )}
 
-                    {(wheelSpin?.status === 'applied' || wheelSpin?.status === 'blocked' || !zaloChannelCfg) && (
+                    {!wheelNeedsGiftPick && (wheelSpin?.status === 'applied' || wheelSpin?.status === 'blocked' || !zaloChannelCfg) && (
                       <button className="co-gmap-cta" onClick={() => setWheelOpen(false)}>
                         Tuyệt vời, gọi món tiếp 😋
                       </button>

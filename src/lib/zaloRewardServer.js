@@ -13,7 +13,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { parseChannelConfig, calcReviewDiscount, getChannel } from '@/lib/reviewReward';
-import { luckyItemName, calcLuckyDiscount, LUCKY_SETTING_KEYS, parseLuckyConfig } from '@/lib/luckyWheel';
+import { luckyItemName, calcLuckyDiscount, LUCKY_SETTING_KEYS, parseLuckyConfig, isGiftPrizeType } from '@/lib/luckyWheel';
 
 // Yêu cầu quá 30 phút không hoàn tất thì bỏ qua (khách đã rời quán / thử nghịch)
 export const CLAIM_FRESH_MINUTES = 30;
@@ -313,6 +313,118 @@ async function blockSpin(supabase, spinId, reason) {
     .eq('status', 'waiting_follow');
 }
 
+/** Lay cac bill (orders) hom nay cua nhom ban ung voi 1 luot quay — dung
+ * chung cho ca buoc tinh tong bill lan buoc chot qua cu the sau nay. */
+async function getSpinBills(supabase, spin) {
+  const { data: groupTables } = await supabase
+    .from('tables').select('id, table_type')
+    .or(`id.eq.${spin.host_table_id},merged_with.eq.${spin.host_table_id}`);
+  const groupIds = (groupTables || []).map(t => t.id);
+  if (groupIds.length === 0) groupIds.push(spin.host_table_id);
+  const isTakeaway = (groupTables || []).find(t => t.id === spin.host_table_id)?.table_type === 'takeaway';
+
+  const vnDayKey = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+  const startOfToday = new Date(`${vnDayKey}T00:00:00.000+07:00`);
+  let billsQuery = supabase
+    .from('orders')
+    .select('id, total_amount, customer_phone, created_at')
+    .in('table_id', groupIds)
+    .in('status', ['pending', 'preparing', 'completed'])
+    .gte('created_at', startOfToday.toISOString())
+    .order('created_at', { ascending: true });
+  if (isTakeaway) billsQuery = billsQuery.eq('customer_phone', spin.customer_phone);
+
+  const { data: orders } = await billsQuery;
+  return (orders || []).filter(o => o.customer_phone !== 'BAO_BEP');
+}
+
+/**
+ * Chen dong qua THAT vao bill cho mon/nuoc khach da chon cu the
+ * (spin.gift_menu_item_id) — dung cho qua loai gift_drink/gift_dish. Neu
+ * khach CHUA chon xong (gift_menu_item_id van null) thi bo qua, khong lam
+ * gi ca — pickGiftItem() se goi lai ham nay ngay khi khach chon. Co the bi
+ * goi tu 2 huong (webhook Zalo xac nhan truoc, hoac khach chon mon truoc)
+ * nhung khong bao gio ghi 2 lan vi applied_item_id chi duoc set dung 1 lan.
+ */
+export async function finalizeGiftItem(supabase, spin, targetOrderId, log = () => {}) {
+  if (!spin.gift_menu_item_id || spin.applied_item_id) return null;
+
+  const { data: item, error: itemErr } = await supabase
+    .from('order_items')
+    .insert({
+      order_id: targetOrderId,
+      menu_item_id: spin.gift_menu_item_id,
+      item_options: spin.gift_item_options || [],
+      quantity: 1,
+      unit_price: 0,
+      is_gift: true,
+    })
+    .select()
+    .maybeSingle();
+
+  if (itemErr || !item) {
+    log(`ghi mon qua vong xoay that bai: ${itemErr?.message}`);
+    return null;
+  }
+
+  await supabase.from('lucky_spins').update({ applied_item_id: item.id }).eq('id', spin.id);
+  return item;
+}
+
+/**
+ * Khach chon xong mon/nuoc cu the cho qua gift_drink/gift_dish — luu lua
+ * chon, roi neu Zalo da xac nhan xong tu truoc (status da 'applied' nhung
+ * applied_item_id con trong vi luc do chua co lua chon) thi ghi luon vao
+ * bill tai day. Goi tu route /api/lucky/pick-gift.
+ */
+export async function pickGiftItem(supabase, spinId, menuItemId, itemOptions, log = () => {}) {
+  const { data: spin } = await supabase.from('lucky_spins').select('*').eq('id', spinId).maybeSingle();
+  if (!spin) return { ok: false, message: 'Không tìm thấy lượt quay, Quý khách quay lại giúp ạ!' };
+  if (!isGiftPrizeType(spin.prize_type)) return { ok: false, message: 'Quà này không cần chọn món ạ.' };
+  if (spin.applied_item_id) return { ok: false, message: 'Quà đã vào hoá đơn rồi ạ, cảm ơn Quý khách!' };
+  if (spin.status === 'blocked') return { ok: false, message: spin.block_reason || 'Lượt quay này không dùng được nữa ạ.' };
+
+  // Tu tinh lai danh sach hop le o server — khong tin menuItemId client gui
+  // len nam dung danh sach khach nhin thay (chan sua request chon mon khac).
+  let allowedIds;
+  if (spin.prize_type === 'gift_dish') {
+    const { data: giftItems } = await supabase
+      .from('menu_items').select('id').eq('is_gift_item', true).eq('is_available', true);
+    allowedIds = new Set((giftItems || []).map(i => i.id));
+  } else {
+    const { data: setting } = await supabase
+      .from('settings').select('value').eq('key', 'lucky_wheel_drink_item_ids').maybeSingle();
+    try { allowedIds = new Set(JSON.parse(setting?.value || '[]')); } catch { allowedIds = new Set(); }
+  }
+  if (!allowedIds.has(menuItemId)) {
+    return { ok: false, message: 'Món này không nằm trong danh sách được tặng ạ.' };
+  }
+
+  const cleanOptions = Array.isArray(itemOptions) ? itemOptions : [];
+  const { error: updErr } = await supabase.from('lucky_spins')
+    .update({ gift_menu_item_id: menuItemId, gift_item_options: cleanOptions })
+    .eq('id', spinId);
+  if (updErr) return { ok: false, message: 'Quán chưa lưu được, Quý khách thử lại giúp ạ!' };
+
+  // Zalo da xac nhan tu truoc (status='applied' do claim_lucky_wheel_slot),
+  // chi con thieu dung buoc chon mon — ghi vao bill ngay bay gio.
+  if (spin.status === 'applied') {
+    const bills = await getSpinBills(supabase, spin);
+    if (bills.length === 0) {
+      return { ok: false, message: 'Hoá đơn của bàn đã thanh toán nên quán chưa áp quà được ạ.' };
+    }
+    const targetOrderId = spin.applied_order_id || bills[0].id;
+    const item = await finalizeGiftItem(
+      supabase,
+      { ...spin, gift_menu_item_id: menuItemId, gift_item_options: cleanOptions },
+      targetOrderId, log
+    );
+    return { ok: true, applied: !!item };
+  }
+
+  return { ok: true, applied: false };
+}
+
 /** Ghi qua cua mot luot quay vao hoa don. Idempotent. */
 export async function applyLuckySpin(supabase, spin, zaloUserId, log = () => {}) {
   // Quà đã chốt lúc quay — đọc lại từ chính lượt quay để cơ cấu quà có
@@ -343,32 +455,13 @@ export async function applyLuckySpin(supabase, spin, zaloUserId, log = () => {})
   }
 
   // Bill cua nhom ban, tinh lai tu dau (khong tin so cu luc quay)
-  const { data: groupTables } = await supabase
-    .from('tables').select('id, table_type')
-    .or(`id.eq.${spin.host_table_id},merged_with.eq.${spin.host_table_id}`);
-  const groupIds = (groupTables || []).map(t => t.id);
-  if (groupIds.length === 0) groupIds.push(spin.host_table_id);
-  const isTakeaway = (groupTables || []).find(t => t.id === spin.host_table_id)?.table_type === 'takeaway';
-
-  const vnDayKey = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
-  const startOfToday = new Date(`${vnDayKey}T00:00:00.000+07:00`);
-  let billsQuery = supabase
-    .from('orders')
-    .select('id, total_amount, customer_phone, created_at')
-    .in('table_id', groupIds)
-    .in('status', ['pending', 'preparing', 'completed'])
-    .gte('created_at', startOfToday.toISOString())
-    .order('created_at', { ascending: true });
-  if (isTakeaway) billsQuery = billsQuery.eq('customer_phone', spin.customer_phone);
-
-  const { data: orders } = await billsQuery;
-  const bills = (orders || []).filter(o => o.customer_phone !== 'BAO_BEP');
+  const bills = await getSpinBills(supabase, spin);
   if (bills.length === 0) {
     return blockSpin(supabase, spin.id, 'Hoa don cua ban da thanh toan nen quan chua ap qua duoc a.');
   }
 
   const total = bills.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
-  const isGift = prize.type === 'gift';
+  const isGift = isGiftPrizeType(prize.type);
   const discount = calcLuckyDiscount(total, prize, cfg.max);
   if (!isGift && discount <= 0) {
     return blockSpin(supabase, spin.id, 'Quan chua tinh duoc muc giam, Quy khach goi nhan vien giup a!');
@@ -395,37 +488,45 @@ export async function applyLuckySpin(supabase, spin, zaloUserId, log = () => {})
     return blockSpin(supabase, spin.id, '1 hoa don chi duoc nhan 1 lan qua vong xoay - ban minh da nhan roi a!');
   }
 
-  const { data: item, error: itemErr } = await supabase
-    .from('order_items')
-    .insert({
-      order_id: targetOrderId,
-      menu_item_id: null,
-      item_name: luckyItemName(prize),
-      quantity: 1,
-      unit_price: isGift ? 0 : -discount,
-      is_gift: isGift,
-    })
-    .select()
-    .maybeSingle();
+  if (isGift) {
+    // Slot da chot (status='applied', khong ai khac gianh duoc nua) — nhung
+    // CHI ghi dong bill neu khach da chon xong mon/nuoc cu the. Neu Zalo xac
+    // nhan nhanh hon luc khach chon (hay gap khi tat "phai Quan tam Zalo" —
+    // ap qua chay NGAY luc quay, truoc khi khach kip thay man hinh chon mon),
+    // cu de trong — pickGiftItem() se ghi bill ngay khi khach chon xong, KHONG
+    // mat qua, KHONG ghi nhan chung chung nua.
+    await finalizeGiftItem(supabase, spin, targetOrderId, log);
+  } else {
+    const { data: item, error: itemErr } = await supabase
+      .from('order_items')
+      .insert({
+        order_id: targetOrderId,
+        menu_item_id: null,
+        item_name: luckyItemName(prize),
+        quantity: 1,
+        unit_price: -discount,
+        is_gift: false,
+      })
+      .select()
+      .maybeSingle();
 
-  if (itemErr || !item) {
-    // Tra lai slot vua chot — khong "applied" ma khong co dong tien nao ca
-    await supabase.from('lucky_spins')
-      .update({ status: 'waiting_follow', verified_at: null, applied_order_id: null }).eq('id', spin.id);
-    log(`ghi qua vong xoay that bai: ${itemErr?.message}`);
-    return;
-  }
+    if (itemErr || !item) {
+      // Tra lai slot vua chot — khong "applied" ma khong co dong tien nao ca
+      await supabase.from('lucky_spins')
+        .update({ status: 'waiting_follow', verified_at: null, applied_order_id: null }).eq('id', spin.id);
+      log(`ghi qua vong xoay that bai: ${itemErr?.message}`);
+      return;
+    }
 
-  if (!isGift) {
     const { data: itemsNow } = await supabase
       .from('order_items').select('unit_price, quantity').eq('order_id', targetOrderId);
     const newTotal = (itemsNow || []).reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
-  }
 
-  await supabase.from('lucky_spins')
-    .update({ applied_item_id: item.id })
-    .eq('id', spin.id);
+    await supabase.from('lucky_spins')
+      .update({ applied_item_id: item.id })
+      .eq('id', spin.id);
+  }
 
   try {
     await supabase.from('customers')

@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { getActiveAccount } from '@/lib/bankAccount';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, calcReviewDiscount } from '@/lib/reviewReward';
-import { LUCKY_SETTING_KEYS, parseLuckyConfig, PRIZE_TYPES, prizeChance, totalWeight } from '@/lib/luckyWheel';
+import { LUCKY_SETTING_KEYS, parseLuckyConfig, PRIZE_TYPES, prizeChance, totalWeight, isGiftPrizeType } from '@/lib/luckyWheel';
 
 const BANKS = [
   'Vietcombank', 'MB Bank', 'Techcombank', 'Agribank', 'Vietinbank',
@@ -46,6 +46,11 @@ export default function SettingsPage() {
   const [wheelCfgSaving, setWheelCfgSaving] = useState(false);
   const [prizes, setPrizes] = useState([]);
   const [prizeSaving, setPrizeSaving] = useState(false);
+  // Danh sách "nước tặng" — món khách được chọn khi quay trúng quà gift_drink
+  const [wheelMenuItems, setWheelMenuItems] = useState([]);
+  const [wheelDrinkIds, setWheelDrinkIds] = useState([]);
+  const [wheelDrinkSearch, setWheelDrinkSearch] = useState('');
+  const [wheelDrinkSaving, setWheelDrinkSaving] = useState(false);
 
   const setWheelField = (field, value) => setWheelCfg(prev => ({ ...prev, [field]: value }));
   const setPrizeField = (id, field, value) =>
@@ -72,6 +77,7 @@ export default function SettingsPage() {
     fetchRewardChannelConfigs();
     fetchWheelConfig();
     fetchPrizes();
+    fetchWheelDrinkItems();
     fetchPrinters();
     fetchCategories();
   }, []);
@@ -132,6 +138,34 @@ export default function SettingsPage() {
       .from('lucky_prizes').select('*').order('sort_order', { ascending: true });
     if (error) { console.warn('lucky_prizes:', error.message); return; }
     setPrizes((data || []).map(r => ({ ...r, value: String(r.value ?? 0), weight: String(r.weight ?? 0) })));
+  }
+
+  /** Danh sách món để tick chọn "nước tặng" + số đang được chọn (setting riêng, không đụng is_gift_item). */
+  async function fetchWheelDrinkItems() {
+    const [{ data: items }, { data: setting }] = await Promise.all([
+      supabase.from('menu_items').select('id, name, price, image_url').eq('is_available', true).order('name'),
+      supabase.from('settings').select('value').eq('key', 'lucky_wheel_drink_item_ids').maybeSingle(),
+    ]);
+    setWheelMenuItems(items || []);
+    try {
+      const ids = JSON.parse(setting?.value || '[]');
+      setWheelDrinkIds(Array.isArray(ids) ? ids : []);
+    } catch { setWheelDrinkIds([]); }
+  }
+
+  function toggleWheelDrinkId(id) {
+    setWheelDrinkIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  async function saveWheelDrinkItems() {
+    setWheelDrinkSaving(true);
+    try {
+      await putSetting('lucky_wheel_drink_item_ids', JSON.stringify(wheelDrinkIds));
+      flash('Đã lưu danh sách nước tặng!');
+    } catch (err) {
+      flash('Lỗi: ' + err.message, true);
+    }
+    setWheelDrinkSaving(false);
   }
 
   /** Ghi 1 khoá vào bảng settings (kèm fallback như các chỗ khác). */
@@ -895,7 +929,7 @@ export default function SettingsPage() {
                       </select>
                     </div>
 
-                    {prize.type !== 'gift' && (
+                    {!isGiftPrizeType(prize.type) && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                         <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#374151' }}>
                           {prize.type === 'percent' ? '% giảm' : 'Số tiền giảm (đ)'}
@@ -973,6 +1007,53 @@ export default function SettingsPage() {
             })}
           </>
         )}
+
+        {/* Danh sách "nước tặng" — khách quay trúng quà Tặng nước sẽ chọn trong đây */}
+        <div style={{ marginTop: 18 }}>
+          <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#0f172a', marginBottom: 4 }}>
+            🥤 Danh sách nước được tặng ({wheelDrinkIds.length} món)
+          </div>
+          <p style={{ margin: '0 0 10px', fontSize: '0.8rem', color: '#6b7280' }}>
+            Khách quay trúng quà <b>Tặng nước</b> sẽ được chọn 1 món trong danh sách này.
+            Món tặng (Tặng món) vẫn dùng đúng danh sách "món tặng" ở trang Thực đơn, không cần chọn lại ở đây.
+          </p>
+          <input
+            type="text"
+            value={wheelDrinkSearch}
+            onChange={e => setWheelDrinkSearch(e.target.value)}
+            placeholder="Tìm món..."
+            style={{ width: '100%', padding: '9px 11px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.86rem', marginBottom: 10 }}
+          />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 220, overflowY: 'auto', padding: 4 }}>
+            {wheelMenuItems
+              .filter(it => it.name.toUpperCase().includes(wheelDrinkSearch.trim().toUpperCase()))
+              .map(it => {
+                const checked = wheelDrinkIds.includes(it.id);
+                return (
+                  <label key={it.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 5, padding: '5px 10px',
+                    background: checked ? '#fff7ed' : '#f8fafc',
+                    border: `1.5px solid ${checked ? '#fb923c' : '#e2e8f0'}`,
+                    borderRadius: 20, cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+                    color: checked ? '#9a3412' : '#64748b', userSelect: 'none',
+                  }}>
+                    <input type="checkbox" checked={checked} onChange={() => toggleWheelDrinkId(it.id)} style={{ margin: 0 }} />
+                    {it.name}
+                  </label>
+                );
+              })}
+            {wheelMenuItems.length === 0 && (
+              <div style={{ fontSize: '0.8rem', color: '#9ca3af' }}>Chưa tải được menu.</div>
+            )}
+          </div>
+          <button
+            onClick={saveWheelDrinkItems}
+            disabled={wheelDrinkSaving}
+            style={{ marginTop: 10, padding: '9px 18px', background: '#fb923c', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.84rem', fontWeight: 700, opacity: wheelDrinkSaving ? 0.7 : 1 }}
+          >
+            {wheelDrinkSaving ? 'Đang lưu...' : '💾 Lưu danh sách nước'}
+          </button>
+        </div>
       </div>
 
       {/* ── Ưu đãi mạng xã hội (Google / TikTok / Facebook) ── */}

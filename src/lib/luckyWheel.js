@@ -13,15 +13,26 @@ export const FALLBACK_PRIZES = [
   { id: 'f3', label: 'Giảm 3% hoá đơn', short: '3%', type: 'percent', value: 3, weight: 18, color: '#4ade80' },
   { id: 'f4', label: 'Giảm 4% hoá đơn', short: '4%', type: 'percent', value: 4, weight: 12, color: '#38bdf8' },
   { id: 'f5', label: 'Giảm 5% hoá đơn', short: '5%', type: 'percent', value: 5, weight: 9, color: '#a78bfa' },
-  { id: 'f6', label: 'Tặng 1 nước ngọt tuỳ chọn', short: '🥤 Nước', type: 'gift', value: 0, weight: 5, color: '#fb923c' },
-  { id: 'f7', label: 'Tặng 1 món 40.000 – 50.000đ', short: '🍤 Món', type: 'gift', value: 0, weight: 2, color: '#f87171' },
+  { id: 'f6', label: 'Tặng 1 nước ngọt tuỳ chọn', short: '🥤 Nước', type: 'gift_drink', value: 0, weight: 5, color: '#fb923c' },
+  { id: 'f7', label: 'Tặng 1 món 40.000 – 50.000đ', short: '🍤 Món', type: 'gift_dish', value: 0, weight: 2, color: '#f87171' },
 ];
 
 export const PRIZE_TYPES = [
   { value: 'percent', label: 'Giảm % hoá đơn' },
   { value: 'amount', label: 'Giảm số tiền' },
-  { value: 'gift', label: 'Tặng món / nước' },
+  { value: 'gift_drink', label: 'Tặng nước' },
+  { value: 'gift_dish', label: 'Tặng món' },
 ];
+
+/**
+ * Quà loại "tặng" (khách chọn món/nước cụ thể sau khi trúng) — khác với
+ * percent/amount (tự trừ tiền, không cần chọn gì). Giữ kiểu 'gift' cũ trong
+ * check này để dữ liệu chưa migrate (nếu có) vẫn được xử lý như quà tặng
+ * chung chung, không vỡ luồng cũ.
+ */
+export function isGiftPrizeType(type) {
+  return type === 'gift_drink' || type === 'gift_dish' || type === 'gift';
+}
 
 /** Đọc cơ cấu quà đang bật, đã sắp thứ tự. */
 export async function fetchLuckyPrizes(supabase) {
