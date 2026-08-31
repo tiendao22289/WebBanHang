@@ -231,6 +231,14 @@ export default function QrGeneratorPage() {
     try {
       const numAmount = parseInt(amount.replace(/\D/g, ''), 10) || 0;
 
+      // Huỷ subscription TRƯỚC khi tự update status — nếu để sau, chính update
+      // này kích lại listener realtime bên dưới (đang lắng nghe đúng sự kiện
+      // này) và cộng tiền thêm 1 lần nữa cho cùng 1 lần xác nhận (double credit).
+      if (subscriptionRef.current) {
+        await supabase.removeChannel(subscriptionRef.current);
+        subscriptionRef.current = null;
+      }
+
       await supabase.from('payment_transactions').update({ status: 'completed' }).eq('transaction_code', transactionCode);
 
       // Cộng tiền vào thẻ Ẩn
@@ -240,7 +248,6 @@ export default function QrGeneratorPage() {
 
       setPaymentStatus('completed');
       Swal.fire({ title: 'Thành công!', text: 'Đã xác nhận thanh toán thủ công.', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 3000 });
-      if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
 
     } catch (err) {
       console.error(err);

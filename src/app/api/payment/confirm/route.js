@@ -10,21 +10,37 @@ export async function POST(req) {
       return NextResponse.json({ error: 'Missing transactionCode' }, { status: 400 });
     }
 
-    // 1. Lấy thông tin giao dịch từ database
-    const { data: tx, error: txError } = await supabase
+    // 1. Chốt giao dịch TRƯỚC khi cộng tiền — chặn webhook gọi trùng (khá phổ
+    // biến với webhook ngân hàng/trung gian) cộng tiền 2 lần cho cùng 1 giao
+    // dịch. Trước đây đọc status rồi mới xử lý, để hở khoảng giữa: 2 lượt gọi
+    // gần nhau cùng đọc thấy "chưa completed" → cả 2 đều cộng bank_daily_totals.
+    // Giờ CHỈ lượt gọi đầu tiên khớp được dòng (status khác 'completed'); lượt
+    // gọi trùng sau đó khớp 0 dòng → biết ngay đã xử lý, không cộng tiền lại.
+    const { data: claimed, error: claimError } = await supabase
       .from('payment_transactions')
-      .select('*')
+      .update({ status: 'completed' })
       .eq('transaction_code', transactionCode)
+      .neq('status', 'completed')
+      .select()
       .maybeSingle();
 
-    if (txError || !tx) {
-      return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
+    if (claimError) {
+      console.error('Webhook claim error:', claimError);
+      return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
 
-    if (tx.status === 'completed') {
+    if (!claimed) {
+      // Không giành được dòng nào: hoặc mã không tồn tại, hoặc đã completed
+      // từ trước (webhook gọi trùng) — không cộng tiền lại trong cả 2 trường hợp.
+      const { data: existingTx } = await supabase
+        .from('payment_transactions').select('status').eq('transaction_code', transactionCode).maybeSingle();
+      if (!existingTx) {
+        return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
+      }
       return NextResponse.json({ message: 'Transaction already completed' }, { status: 200 });
     }
 
+    const tx = claimed;
     const { order_ids, account_id, total_amount } = tx;
     if (!order_ids) {
       return NextResponse.json({ error: 'No orders associated' }, { status: 400 });
@@ -84,11 +100,7 @@ export async function POST(req) {
       }
     }
 
-    // Cập nhật trạng thái transaction thành completed
-    await supabase
-      .from('payment_transactions')
-      .update({ status: 'completed' })
-      .eq('transaction_code', transactionCode);
+    // Transaction đã được chốt 'completed' ngay từ bước giành ở trên.
 
     return NextResponse.json({ success: true, message: 'Payment confirmed successfully' }, { status: 200 });
 
