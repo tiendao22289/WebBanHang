@@ -130,6 +130,76 @@ export async function sendSmartPrintJobs(supabase, orderId) {
 }
 
 /**
+ * Gửi lệnh in RIÊNG cho đúng 1 order_item — dùng cho món được thêm vào
+ * bill SAU KHI đơn đã in xong lần đầu (vd: quà vòng xoay Tặng nước/Tặng
+ * món). KHÔNG dùng sendSmartPrintJobs() cho việc này — hàm đó lọc in lại
+ * theo category, sẽ in trùng mọi món khác cùng category đã in trước đó.
+ *
+ * Routing dùng lại đúng cơ chế category → printer đang có (printer_categories),
+ * fallback về máy in mặc định — không cần cấu hình gì thêm.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} orderId
+ * @param {string} orderItemId
+ * @returns {Promise<{ success: boolean, error?: string }>}
+ */
+export async function sendGiftItemPrintJob(supabase, orderId, orderItemId) {
+  try {
+    const { data: item, error: itemErr } = await supabase
+      .from('order_items')
+      .select('id, menu_item:menu_items(category_id)')
+      .eq('id', orderItemId)
+      .maybeSingle();
+
+    if (itemErr) throw new Error('Không lấy được order_item: ' + itemErr.message);
+    if (!item) return { success: false, error: 'Không tìm thấy order_item để in.' };
+
+    const { data: printers, error: printersErr } = await supabase
+      .from('printers')
+      .select('id, is_default, printer_categories(category_id)')
+      .eq('is_active', true)
+      .order('sort_order');
+
+    if (printersErr) throw new Error('Không lấy được printers: ' + printersErr.message);
+    if (!printers || printers.length === 0) {
+      return { success: false, error: 'Chưa cấu hình máy in active nào.' };
+    }
+
+    const categoryToPrinter = {};
+    const defaultPrinter = printers.find(p => p.is_default) || null;
+    for (const printer of printers) {
+      for (const pc of (printer.printer_categories || [])) {
+        if (!categoryToPrinter[pc.category_id]) categoryToPrinter[pc.category_id] = printer;
+      }
+    }
+
+    const categoryId = item.menu_item?.category_id;
+    const assignedPrinter = (categoryId ? categoryToPrinter[categoryId] : null) || defaultPrinter;
+
+    if (!assignedPrinter) {
+      return { success: false, error: 'Không có máy in phù hợp và không có máy mặc định.' };
+    }
+
+    const { error: insertErr } = await supabase.from('print_jobs').insert({
+      order_id: orderId,
+      printer_id: assignedPrinter.id,
+      filter_category_ids: null,
+      only_item_ids: [orderItemId],
+      status: 'pending',
+    });
+
+    if (insertErr) throw new Error('Lỗi insert print_jobs: ' + insertErr.message);
+
+    console.log(`[Print] Đã gửi lệnh in riêng cho order_item ${orderItemId} → máy ${assignedPrinter.id}`);
+    return { success: true };
+
+  } catch (err) {
+    console.error('[Print] sendGiftItemPrintJob lỗi:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
  * Gửi lệnh in thông minh cho nhiều đơn cùng lúc (ví dụ: toàn bàn).
  * Mỗi order gọi sendSmartPrintJobs riêng → 1 job/máy/order.
  */

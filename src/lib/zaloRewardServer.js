@@ -14,6 +14,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { parseChannelConfig, calcReviewDiscount, getChannel } from '@/lib/reviewReward';
 import { luckyItemName, calcLuckyDiscount, LUCKY_SETTING_KEYS, parseLuckyConfig, isGiftPrizeType } from '@/lib/luckyWheel';
+import { sendGiftItemPrintJob } from '@/lib/print';
 
 // Yêu cầu quá 30 phút không hoàn tất thì bỏ qua (khách đã rời quán / thử nghịch)
 export const CLAIM_FRESH_MINUTES = 30;
@@ -373,6 +374,17 @@ export async function finalizeGiftItem(supabase, spin, targetOrderId, log = () =
   }
 
   await supabase.from('lucky_spins').update({ applied_item_id: item.id }).eq('id', spin.id);
+
+  // In riêng đúng dòng quà này (nước → máy nước, món → bếp, theo category
+  // có sẵn) — lỗi in không được làm mất/hỏng phần quà đã ghi vào bill ở
+  // trên, nên bọc try/catch riêng, chỉ log chứ không throw.
+  try {
+    const printResult = await sendGiftItemPrintJob(supabase, targetOrderId, item.id);
+    if (!printResult.success) log(`in qua vong xoay that bai (khong anh huong bill): ${printResult.error}`);
+  } catch (printErr) {
+    log(`in qua vong xoay loi (khong anh huong bill): ${printErr.message}`);
+  }
+
   return item;
 }
 
