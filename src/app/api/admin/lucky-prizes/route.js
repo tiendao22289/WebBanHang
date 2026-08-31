@@ -10,6 +10,7 @@
  */
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isGiftPrizeType } from '@/lib/luckyWheel';
 
 function getServiceClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -59,6 +60,10 @@ export async function PATCH(request) {
   if (type === 'percent') {
     const numValue = Number(value);
     if (!(numValue > 0 && numValue <= 100)) return fail('% giảm phải trong khoảng 1 – 100');
+  }
+  if (isGiftPrizeType(type)) {
+    const numValue = Number(value);
+    if (!(numValue >= 1)) return fail('Số lượng tặng phải từ 1 trở lên');
   }
 
   const { error } = await supabase.from('lucky_prizes').update({

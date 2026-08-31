@@ -349,15 +349,20 @@ async function getSpinBills(supabase, spin) {
 export async function finalizeGiftItem(supabase, spin, targetOrderId, log = () => {}) {
   if (!spin.gift_menu_item_id || spin.applied_item_id) return null;
 
+  // Số lượng tặng do Admin cấu hình trên chính phần quà (Cài đặt > Vòng
+  // xoay > Số lượng tặng) — chốt lúc quay (spin.prize_value), không đổi
+  // theo cấu hình sau này. Ghi chú rõ nguồn gốc để bếp/thu ngân không nhầm
+  // với món tặng của khuyến mãi khác.
   const { data: item, error: itemErr } = await supabase
     .from('order_items')
     .insert({
       order_id: targetOrderId,
       menu_item_id: spin.gift_menu_item_id,
       item_options: spin.gift_item_options || [],
-      quantity: 1,
+      quantity: Number(spin.prize_value) || 1,
       unit_price: 0,
       is_gift: true,
+      note: 'Quà tặng từ vòng quay may mắn',
     })
     .select()
     .maybeSingle();

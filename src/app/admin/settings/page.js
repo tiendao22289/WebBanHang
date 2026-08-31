@@ -218,6 +218,10 @@ export default function SettingsPage() {
       const v = Number(prize.value);
       if (!(v > 0 && v <= 100)) { flash('% giảm phải trong khoảng 1 – 100', true); return; }
     }
+    if (isGiftPrizeType(prize.type)) {
+      const v = Number(prize.value);
+      if (!(v >= 1)) { flash('Số lượng tặng phải từ 1 trở lên', true); return; }
+    }
 
     setPrizeSaving(true);
     try {
@@ -929,19 +933,24 @@ export default function SettingsPage() {
                       </select>
                     </div>
 
-                    {!isGiftPrizeType(prize.type) && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                        <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#374151' }}>
-                          {prize.type === 'percent' ? '% giảm' : 'Số tiền giảm (đ)'}
-                        </label>
-                        <input
-                          type="number"
-                          value={prize.value}
-                          onChange={e => setPrizeField(prize.id, 'value', e.target.value)}
-                          style={{ padding: '8px 10px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.82rem' }}
-                        />
-                      </div>
-                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#374151' }}>
+                        {prize.type === 'percent' ? '% giảm' : prize.type === 'amount' ? 'Số tiền giảm (đ)' : 'Số lượng tặng'}
+                      </label>
+                      <input
+                        type="number"
+                        min={isGiftPrizeType(prize.type) ? 1 : undefined}
+                        step={isGiftPrizeType(prize.type) ? 1 : undefined}
+                        value={prize.value}
+                        onChange={e => setPrizeField(prize.id, 'value', e.target.value)}
+                        style={{ padding: '8px 10px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.82rem' }}
+                      />
+                      {isGiftPrizeType(prize.type) && (
+                        <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>
+                          vd 1 = tặng 1 {prize.type === 'gift_drink' ? 'chai/lon' : 'phần'}
+                        </span>
+                      )}
+                    </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                       <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#374151' }}>Trọng số</label>
