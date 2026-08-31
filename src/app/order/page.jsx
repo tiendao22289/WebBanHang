@@ -636,12 +636,18 @@ function OrderContent() {
   const [promoConfig, setPromoConfig] = useState({ enabled: false, threshold: 8 });
   const [giftItems, setGiftItems] = useState([]); // is_gift_item items
 
-  // Quà "Tặng nước"/"Tặng món" — còn thiếu bước khách chọn món cụ thể thì
-  // chưa tính là xong, dù Zalo đã xác nhận (status='applied') hay chưa.
+  // Quà "Tặng nước"/"Tặng món" — còn cần hiện bước chọn món hay không.
   // Đặt SAU khai báo giftItems ở trên — tham chiếu trước khi khai báo (dù
   // trong nhánh ternary chỉ thật sự chạy tới khi trúng gift_dish) vẫn bị lỗi
   // "Cannot access before initialization" và sập trắng trang.
-  const wheelNeedsGiftPick = isGiftPrizeType(wheelPrize?.prizeType) && !wheelSpin?.applied_item_id;
+  //
+  // QUAN TRỌNG: dựa theo gift_menu_item_id (khách ĐÃ CHỌN) chứ không phải
+  // applied_item_id (đã CHỌN VÀ đã vào bill) — nếu dùng applied_item_id thì
+  // với cấu hình thật (phải Quan tâm Zalo mới áp quà), sau khi khách chọn
+  // xong món nhưng chưa Quan tâm Zalo, applied_item_id vẫn null nên màn
+  // hình chọn món cứ hiện lại mãi, khách không biết đã chọn xong, không có
+  // đường sang bước Quan tâm Zalo.
+  const wheelNeedsGiftPick = isGiftPrizeType(wheelPrize?.prizeType) && !wheelSpin?.gift_menu_item_id;
   const wheelGiftActiveList = wheelPrize?.prizeType === 'gift_dish' ? giftItems
     : wheelPrize?.prizeType === 'gift_drink' ? wheelDrinkItems : [];
 
