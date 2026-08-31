@@ -51,6 +51,7 @@ export default function SettingsPage() {
   const [wheelDrinkIds, setWheelDrinkIds] = useState([]);
   const [wheelDrinkSearch, setWheelDrinkSearch] = useState('');
   const [wheelDrinkSaving, setWheelDrinkSaving] = useState(false);
+  const [showDrinkPicker, setShowDrinkPicker] = useState(false);
 
   const setWheelField = (field, value) => setWheelCfg(prev => ({ ...prev, [field]: value }));
   const setPrizeField = (id, field, value) =>
@@ -996,6 +997,15 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
+                  {prize.type === 'gift_drink' && (
+                    <button
+                      onClick={() => setShowDrinkPicker(true)}
+                      style={{ width: '100%', marginTop: 10, padding: '9px 12px', background: '#fff7ed', border: '1.5px solid #fed7aa', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', fontWeight: 700, color: '#9a3412', textAlign: 'left' }}
+                    >
+                      🥤 Danh sách nước được tặng ({wheelDrinkIds.length} món) ›
+                    </button>
+                  )}
+
                   <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                     <button
                       onClick={() => savePrize(prize)}
@@ -1016,23 +1026,38 @@ export default function SettingsPage() {
             })}
           </>
         )}
+      </div>
 
-        {/* Danh sách "nước tặng" — khách quay trúng quà Tặng nước sẽ chọn trong đây */}
-        <div style={{ marginTop: 18 }}>
-          <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#0f172a', marginBottom: 4 }}>
-            🥤 Danh sách nước được tặng ({wheelDrinkIds.length} món)
-          </div>
-          <p style={{ margin: '0 0 10px', fontSize: '0.8rem', color: '#6b7280' }}>
-            Khách quay trúng quà <b>Tặng nước</b> sẽ được chọn 1 món trong danh sách này.
-            Món tặng (Tặng món) vẫn dùng đúng danh sách "món tặng" ở trang Thực đơn, không cần chọn lại ở đây.
-          </p>
-          <input
-            type="text"
-            value={wheelDrinkSearch}
-            onChange={e => setWheelDrinkSearch(e.target.value)}
-            placeholder="Tìm món..."
-            style={{ width: '100%', padding: '9px 11px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.86rem', marginBottom: 10 }}
-          />
+      {/* Modal chọn danh sách "nước tặng" — chỉ mở khi bấm nút trên quà Tặng nước */}
+      {showDrinkPicker && (
+        <div
+          onClick={() => setShowDrinkPicker(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,23,42,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: 'white', borderRadius: 14, padding: 18, maxWidth: 480, width: '100%', maxHeight: '85vh', overflowY: 'auto', position: 'relative' }}
+          >
+            <button
+              onClick={() => setShowDrinkPicker(false)}
+              style={{ position: 'absolute', top: 12, right: 12, width: 30, height: 30, borderRadius: '50%', border: 'none', background: '#f1f5f9', cursor: 'pointer', fontSize: '0.9rem' }}
+            >
+              ✕
+            </button>
+            <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#0f172a', marginBottom: 4 }}>
+              🥤 Danh sách nước được tặng ({wheelDrinkIds.length} món)
+            </div>
+            <p style={{ margin: '0 0 10px', fontSize: '0.8rem', color: '#6b7280' }}>
+              Khách quay trúng quà <b>Tặng nước</b> sẽ được chọn 1 món trong danh sách này.
+              Món tặng (Tặng món) vẫn dùng đúng danh sách "món tặng" ở trang Thực đơn, không cần chọn lại ở đây.
+            </p>
+            <input
+              type="text"
+              value={wheelDrinkSearch}
+              onChange={e => setWheelDrinkSearch(e.target.value)}
+              placeholder="Tìm món..."
+              style={{ width: '100%', padding: '9px 11px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.86rem', marginBottom: 10 }}
+            />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 220, overflowY: 'auto', padding: 4 }}>
             {wheelMenuItems
               .filter(it => it.name.toUpperCase().includes(wheelDrinkSearch.trim().toUpperCase()))
@@ -1056,14 +1081,15 @@ export default function SettingsPage() {
             )}
           </div>
           <button
-            onClick={saveWheelDrinkItems}
+            onClick={async () => { await saveWheelDrinkItems(); setShowDrinkPicker(false); }}
             disabled={wheelDrinkSaving}
             style={{ marginTop: 10, padding: '9px 18px', background: '#fb923c', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.84rem', fontWeight: 700, opacity: wheelDrinkSaving ? 0.7 : 1 }}
           >
             {wheelDrinkSaving ? 'Đang lưu...' : '💾 Lưu danh sách nước'}
           </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ── Ưu đãi mạng xã hội (Google / TikTok / Facebook) ── */}
       <div style={{ marginTop: 28 }}>
