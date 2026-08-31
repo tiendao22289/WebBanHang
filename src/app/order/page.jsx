@@ -4300,7 +4300,7 @@ function OrderContent() {
                         key={p.id}
                         className="co-wheel-label"
                         style={{
-                          transform: `rotate(${i * WHEEL_SLICE + WHEEL_SLICE / 2}deg) translate(0, -46%) translateY(-55px) rotate(90deg)`,
+                          transform: `rotate(${i * WHEEL_SLICE + WHEEL_SLICE / 2}deg) translate(0, -46%) translateY(-95px) rotate(90deg)`,
                         }}
                       >
                         {p.short}
