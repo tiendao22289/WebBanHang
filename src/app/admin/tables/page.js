@@ -2809,6 +2809,7 @@ export default function TablesPage() {
                             : reviewRequests.filter(r => r.host_table_id === alertHostId);
                           const tableTotal = sumOrderItems(orders[table.merged_with || table.id] || []);
                           const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(isPrintJobBad));
+                          const hasLuckyWheel = (orders[table.merged_with || table.id] || []).some(o => (o.order_items || []).some(isLuckyWheelItem));
 
                           // Style derivation: Merged group is Purple, Normal Occupied is Blue, Empty is White
                           const bgColors = {
