@@ -159,21 +159,20 @@ export default function SettingsPage() {
     setWheelCfgSaving(false);
   }
 
+  // Ghi qua /api/admin/lucky-prizes (server, SERVICE_ROLE_KEY) — không ghi
+  // thẳng bằng anon key nữa, vì đó là khoá public ai cũng lấy được từ JS gửi
+  // cho khách, để RLS cho anon ghi tự do là lỗ hổng cho phép ai cũng tự đổi
+  // tỉ lệ/giá trị quà mà không cần vào được trang admin.
   async function addPrize() {
-    const nextOrder = prizes.reduce((m, p) => Math.max(m, Number(p.sort_order) || 0), 0) + 1;
-    const { data, error } = await supabase.from('lucky_prizes').insert({
-      label: 'Phần quà mới',
-      short: 'Quà',
-      type: 'percent',
-      value: 1,
-      weight: 10,
-      color: '#94a3b8',
-      is_active: false,          // tạo ở trạng thái tắt để sửa xong mới bật
-      sort_order: nextOrder,
-    }).select().maybeSingle();
-    if (error) { flash('Lỗi: ' + error.message, true); return; }
-    setPrizes(prev => [...prev, { ...data, value: String(data.value), weight: String(data.weight) }]);
-    flash('Đã thêm phần quà — sửa xong nhớ bật lên nhé!');
+    try {
+      const res = await fetch('/api/admin/lucky-prizes', { method: 'POST' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Lỗi không xác định');
+      setPrizes(prev => [...prev, { ...json.prize, value: String(json.prize.value), weight: String(json.prize.weight) }]);
+      flash('Đã thêm phần quà — sửa xong nhớ bật lên nhé!');
+    } catch (err) {
+      flash('Lỗi: ' + err.message, true);
+    }
   }
 
   async function savePrize(prize) {
@@ -187,28 +186,33 @@ export default function SettingsPage() {
     }
 
     setPrizeSaving(true);
-    const { error } = await supabase.from('lucky_prizes').update({
-      label,
-      short: (prize.short || label).slice(0, 14),
-      type: prize.type,
-      value: Number(prize.value) || 0,
-      weight,
-      color: prize.color || '#94a3b8',
-      is_active: !!prize.is_active,
-      sort_order: Number(prize.sort_order) || 0,
-    }).eq('id', prize.id);
+    try {
+      const res = await fetch('/api/admin/lucky-prizes', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...prize, label }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Lỗi không xác định');
+      setPrizes(prev => prev.map(p => (p.id === prize.id ? { ...p, _dirty: false } : p)));
+      flash('Đã lưu phần quà!');
+    } catch (err) {
+      flash('Lỗi: ' + err.message, true);
+    }
     setPrizeSaving(false);
-    if (error) { flash('Lỗi: ' + error.message, true); return; }
-    setPrizes(prev => prev.map(p => (p.id === prize.id ? { ...p, _dirty: false } : p)));
-    flash('Đã lưu phần quà!');
   }
 
   async function deletePrize(prize) {
     if (!window.confirm(`Xoá phần quà "${prize.label}"?`)) return;
-    const { error } = await supabase.from('lucky_prizes').delete().eq('id', prize.id);
-    if (error) { flash('Lỗi: ' + error.message, true); return; }
-    setPrizes(prev => prev.filter(p => p.id !== prize.id));
-    flash('Đã xoá phần quà.');
+    try {
+      const res = await fetch(`/api/admin/lucky-prizes?id=${encodeURIComponent(prize.id)}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Lỗi không xác định');
+      setPrizes(prev => prev.filter(p => p.id !== prize.id));
+      flash('Đã xoá phần quà.');
+    } catch (err) {
+      flash('Lỗi: ' + err.message, true);
+    }
   }
 
   async function fetchRewardChannelConfigs() {

@@ -327,6 +327,21 @@ export async function applyLuckySpin(supabase, spin, zaloUserId, log = () => {})
     .from('settings').select('key, value').in('key', LUCKY_SETTING_KEYS);
   const cfg = parseLuckyConfig(settingRows);
 
+  // Tai khoan Zalo nay da nhan qua vong xoay gan day chua — chan viec dung
+  // nhieu SDT khac nhau nhung cung 1 tai khoan Zalo that de quay/nhan lap lai.
+  if (zaloUserId && cfg.cooldownDays > 0) {
+    const zaloCutoff = new Date(Date.now() - cfg.cooldownDays * 86400000).toISOString();
+    const { data: recentZalo } = await supabase
+      .from('lucky_spins').select('id')
+      .eq('zalo_user_id', zaloUserId)
+      .eq('status', 'applied')
+      .gte('verified_at', zaloCutoff)
+      .limit(1);
+    if (recentZalo?.length) {
+      return blockSpin(supabase, spin.id, 'Tai khoan Zalo nay da nhan qua vong xoay gan day roi a, hen Quy khach lan sau nha! 👋');
+    }
+  }
+
   // Bill cua nhom ban, tinh lai tu dau (khong tin so cu luc quay)
   const { data: groupTables } = await supabase
     .from('tables').select('id, table_type')
@@ -359,33 +374,27 @@ export async function applyLuckySpin(supabase, spin, zaloUserId, log = () => {})
     return blockSpin(supabase, spin.id, 'Quan chua tinh duoc muc giam, Quy khach goi nhan vien giup a!');
   }
 
-  // Chan trung dua tren chinh bill (khong phu thuoc bang luot quay)
-  const { data: dup } = await supabase
-    .from('order_items').select('id')
-    .in('order_id', bills.map(b => b.id))
-    .ilike('item_name', '%VONG XOAY%')
-    .limit(1);
-  if (dup?.length) {
-    return blockSpin(supabase, spin.id, 'Ban minh da nhan qua vong xoay cho hoa don nay roi a!');
+  // Chot 1 SLOT duy nhat cho bill nay — RPC co pg_advisory_xact_lock theo
+  // host_table_id, gop lam 2 viec trong CUNG 1 khoa: (1) kiem tra bill da co
+  // luot quay nao khac 'applied' chua (dua tren applied_order_id, quan he
+  // that, khong con dua vao so khop chu 'VONG XOAY' de tranh loi dau cau),
+  // (2) chot trang thai waiting_follow -> applied. Nho co khoa, 2 khach
+  // cung ban bam Quan tam Zalo dung 1 luc cung KHONG the ca 2 deu qua duoc
+  // buoc kiem tra roi cung ghi tien vao bill — chi 1 nguoi thang.
+  const targetOrderId = bills[0].id;
+  const { data: claimed } = await supabase.rpc('claim_lucky_wheel_slot', {
+    p_spin_id: spin.id,
+    p_host_table_id: spin.host_table_id,
+    p_check_order_ids: bills.map(b => b.id),
+    p_target_order_id: targetOrderId,
+    p_zalo_user_id: zaloUserId,
+    p_bill_total: total,
+    p_discount_amount: discount,
+  });
+  if (!claimed) {
+    return blockSpin(supabase, spin.id, '1 hoa don chi duoc nhan 1 lan qua vong xoay - ban minh da nhan roi a!');
   }
 
-  // Chot trang thai truoc khi ghi bill
-  const { data: locked, error: lockErr } = await supabase
-    .from('lucky_spins')
-    .update({
-      status: 'applied',
-      zalo_user_id: zaloUserId,
-      bill_total: total,
-      discount_amount: discount,
-      verified_at: new Date().toISOString(),
-    })
-    .eq('id', spin.id)
-    .eq('status', 'waiting_follow')
-    .select()
-    .maybeSingle();
-  if (lockErr || !locked) { log(`khong chot duoc luot quay ${spin.id}`); return; }
-
-  const targetOrderId = bills[0].id;
   const { data: item, error: itemErr } = await supabase
     .from('order_items')
     .insert({
@@ -400,8 +409,9 @@ export async function applyLuckySpin(supabase, spin, zaloUserId, log = () => {})
     .maybeSingle();
 
   if (itemErr || !item) {
+    // Tra lai slot vua chot — khong "applied" ma khong co dong tien nao ca
     await supabase.from('lucky_spins')
-      .update({ status: 'waiting_follow', verified_at: null }).eq('id', spin.id);
+      .update({ status: 'waiting_follow', verified_at: null, applied_order_id: null }).eq('id', spin.id);
     log(`ghi qua vong xoay that bai: ${itemErr?.message}`);
     return;
   }
@@ -414,7 +424,7 @@ export async function applyLuckySpin(supabase, spin, zaloUserId, log = () => {})
   }
 
   await supabase.from('lucky_spins')
-    .update({ applied_order_id: targetOrderId, applied_item_id: item.id })
+    .update({ applied_item_id: item.id })
     .eq('id', spin.id);
 
   try {

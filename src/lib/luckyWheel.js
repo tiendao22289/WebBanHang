@@ -83,6 +83,16 @@ export function luckyItemName(prize) {
   return `QUÀ VÒNG XOAY: ${prize.label}`;
 }
 
+/**
+ * 1 order_item có phải dòng quà vòng xoay không — dùng để chặn 1 bill nhận
+ * quà 2 lần. So khớp bằng JS (uppercase có dấu) thay vì SQL ilike: chuỗi
+ * thật luôn có dấu ("Vòng xoay"/"VÒNG XOAY"), còn ilike '%VONG XOAY%' (không
+ * dấu) không bao giờ khớp — JS .toUpperCase() xử lý dấu tiếng Việt đúng.
+ */
+export function isLuckyWheelItem(item) {
+  return typeof item?.item_name === 'string' && item.item_name.toUpperCase().includes('VÒNG XOAY');
+}
+
 /** Số tiền giảm của một phần quà: làm tròn XUỐNG bội 1.000đ, chặn trần. */
 export function calcLuckyDiscount(billTotal, prize, maxAmount = 0) {
   const total = Number(billTotal) || 0;

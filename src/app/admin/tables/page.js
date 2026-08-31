@@ -12,6 +12,7 @@ import {
   isReviewDiscountItem,
 } from '@/lib/reviewReward';
 import { getMenuCached } from '@/lib/menuCache';
+import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
 import Swal from 'sweetalert2';
@@ -2007,6 +2008,9 @@ export default function TablesPage() {
           const totalAmount = sumOrderItems(tableBills);
           const guestCount = tableBills.length;
           const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(isPrintJobBad));
+          // Bill của bàn đã dùng vòng xoay may mắn chưa — báo cho nhân viên biết,
+          // vì mỗi bill chỉ được nhận 1 lần quà (xem /api/lucky/spin).
+          const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelItem));
           let timeElapsed = '';
           if (isOccupied && table.occupied_at) {
             const diffMs = Date.now() - new Date(table.occupied_at).getTime();
@@ -2059,6 +2063,11 @@ export default function TablesPage() {
                 {hasPrintError && (
                   <div style={{ background: '#fef2f2', color: '#dc2626', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #fecaca' }}>
                     <Printer size={12} strokeWidth={2} />
+                  </div>
+                )}
+                {hasLuckyWheel && (
+                  <div title="Bill đã dùng vòng xoay may mắn" style={{ background: '#fdf4ff', color: '#a21caf', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #f5d0fe', fontSize: '0.7rem' }}>
+                    🎰
                   </div>
                 )}
               </div>
@@ -2887,6 +2896,11 @@ export default function TablesPage() {
                                 {hasPrintError && (
                                   <div style={{ position: 'absolute', top: -1, right: -1, background: '#ef4444', color: 'white', borderRadius: '0 14px 0 8px', padding: '2px 5px', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
                                     <Printer size={9} strokeWidth={2.5} />
+                                  </div>
+                                )}
+                                {hasLuckyWheel && (
+                                  <div title="Bill đã dùng vòng xoay may mắn" style={{ position: 'absolute', top: -1, left: -1, background: '#a21caf', color: 'white', borderRadius: '14px 0 8px 0', padding: '2px 5px', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, fontSize: '0.6rem' }}>
+                                    🎰
                                   </div>
                                 )}
 

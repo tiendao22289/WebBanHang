@@ -579,6 +579,7 @@ function OrderContent() {
   const [reviewReward, setReviewReward] = useState(null); // bản ghi review_rewards hiện tại
   const [zaloClaim, setZaloClaim] = useState(null); // bản ghi zalo_reward_claims (kênh Zalo tự động, không cần NV duyệt)
   // ── Vòng xoay may mắn ──
+  const [luckyWheelEnabled, setLuckyWheelEnabled] = useState(false); // admin bật/tắt — mặc định ẩn tới khi đọc xong settings
   const [wheelOpen, setWheelOpen] = useState(false);
   const [wheelForm, setWheelForm] = useState({ name: '', phone: '' });
   const [wheelSpinning, setWheelSpinning] = useState(false);
@@ -1360,11 +1361,13 @@ function OrderContent() {
     }
     // Load promotion config + cấu hình ưu đãi đánh giá Google
     const { data: settings } = await supabase.from('settings').select('key, value')
-      .in('key', ['promotion_enabled', 'promotion_threshold', ...ALL_SETTING_KEYS]);
+      .in('key', ['promotion_enabled', 'promotion_threshold', 'lucky_wheel_enabled', ...ALL_SETTING_KEYS]);
     if (settings) {
       const map = Object.fromEntries(settings.map(r => [r.key, r.value]));
       setPromoConfig({ enabled: map.promotion_enabled === 'true', threshold: parseInt(map.promotion_threshold) || 8 });
       setChannelCfgs(parseAllChannelConfigs(settings));
+      // Admin tắt vòng xoay → ẩn hẳn nút ngoài trang khách, không chỉ chặn lúc quay
+      setLuckyWheelEnabled(map.lucky_wheel_enabled === 'true');
     }
     const { data: gifts } = await supabase.from('menu_items').select('id, name, price, image_url, options').eq('is_gift_item', true).eq('is_available', true);
     setGiftItems(gifts || []);
@@ -1751,8 +1754,10 @@ function OrderContent() {
     try {
       const id = localStorage.getItem(wheelStorageKey());
       if (id) {
-        const { data } = await supabase
-          .from('lucky_spins').select('*').eq('id', id).maybeSingle();
+        // Qua RPC get_my_lucky_spin thay vì đọc thẳng bảng — bảng này không
+        // còn policy SELECT công khai nữa (xem lucky_wheel_security_fixes.sql),
+        // để tránh 1 câu SELECT không lọc gì lấy được tên/SĐT mọi khách đã quay.
+        const { data } = await supabase.rpc('get_my_lucky_spin', { p_spin_id: id }).maybeSingle();
         if (data) {
           const prizeList = await fetchLuckyPrizes(supabase);
           setWheelPrizes(prizeList);
@@ -1845,51 +1850,37 @@ function OrderContent() {
     }
   }
 
-  /** Đọc lại lượt quay để biết quà đã vào hoá đơn chưa. */
+  /** Đọc lại lượt quay để biết quà đã vào hoá đơn chưa — qua RPC, không đọc thẳng bảng. */
   async function refreshLuckySpin(spinId) {
     if (!spinId) return null;
-    const { data } = await supabase.from('lucky_spins').select('*').eq('id', spinId).maybeSingle();
+    const { data } = await supabase.rpc('get_my_lucky_spin', { p_spin_id: spinId }).maybeSingle();
     if (!data) return null;
+    const prevStatus = wheelSpinRef.current?.id === spinId ? wheelSpinRef.current?.status : null;
     setWheelSpin(data);
     wheelSpinRef.current = data;
+    // lucky_spins đã gỡ khỏi Realtime (xem lucky_wheel_security_fixes.sql) để
+    // không lộ tên/SĐT khách qua kênh không lọc được — polling ở dưới thay
+    // hẳn cho việc lắng nghe UPDATE, nên phải tự bắn toast khi status đổi ở đây.
+    if (data.status !== prevStatus) {
+      if (data.status === 'applied') {
+        refreshPreviousOrdersReliably();
+        showFeedbackToast('success', 'Quà đã vào hoá đơn! 🎉',
+          data.discount_amount > 0
+            ? `Hoá đơn vừa bớt ${formatPrice(data.discount_amount)} rồi ạ.`
+            : (data.prize_label || 'Nhân viên mang ra ngay ạ!'));
+      } else if (data.status === 'blocked') {
+        showFeedbackToast('warning', 'Quà chưa vào được ạ', data.block_reason || 'Quý khách gọi nhân viên giúp ạ!');
+      }
+    }
     return data;
   }
 
-  // Realtime: quà được áp vào hoá đơn → cập nhật ngay cho khách
+  // Còn lượt quay đang chờ (chưa applied/blocked) → hỏi lại server + đọc lại
+  // trạng thái mỗi 7s, kể cả khi khách đã đóng overlay vòng xoay và đang xem
+  // menu — để vẫn báo được lúc quà vào hoá đơn dù không đứng nhìn màn hình quay.
   useEffect(() => {
     const spinId = wheelPrize?.spinId || wheelSpin?.id;
-    if (!spinId) return;
-    if (wheelSpin?.status === 'applied' || wheelSpin?.status === 'blocked') return;
-
-    const channel = supabase
-      .channel(`lucky-spin-${spinId}`)
-      .on('postgres_changes', {
-        event: 'UPDATE', schema: 'public', table: 'lucky_spins',
-        filter: `id=eq.${spinId}`,
-      }, (payload) => {
-        const row = payload.new;
-        setWheelSpin(row);
-        wheelSpinRef.current = row;
-        if (row.status === 'applied') {
-          refreshPreviousOrdersReliably();
-          showFeedbackToast('success', 'Quà đã vào hoá đơn! 🎉',
-            row.discount_amount > 0
-              ? `Hoá đơn vừa bớt ${formatPrice(row.discount_amount)} rồi ạ.`
-              : (row.prize_label || 'Nhân viên mang ra ngay ạ!'));
-        } else if (row.status === 'blocked') {
-          showFeedbackToast('warning', 'Quà chưa vào được ạ', row.block_reason || 'Quý khách gọi nhân viên giúp ạ!');
-        }
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, [wheelPrize?.spinId, wheelSpin?.id, wheelSpin?.status]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Khách từ Zalo quay lại → hỏi lại server + đọc lại trạng thái
-  useEffect(() => {
-    if (!wheelOpen) return;
-    const spinId = wheelPrize?.spinId || wheelSpin?.id;
-    if (!spinId || wheelSpin?.status === 'applied') return;
+    if (!spinId || wheelSpin?.status === 'applied' || wheelSpin?.status === 'blocked') return;
     const onVisible = () => {
       if (document.hidden) return;
       pingLuckyReady(spinId);
@@ -1901,7 +1892,7 @@ function OrderContent() {
       document.removeEventListener('visibilitychange', onVisible);
       clearInterval(timer);
     };
-  }, [wheelOpen, wheelPrize?.spinId, wheelSpin?.id, wheelSpin?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [wheelPrize?.spinId, wheelSpin?.id, wheelSpin?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ══════════════════════════════════════════════════════════
   //  KÊNH ZALO TỰ ĐỘNG (cfg.auto) — tách riêng khỏi flow duyệt tay.
@@ -3614,9 +3605,11 @@ function OrderContent() {
             <button className="co-promo-pill party" onClick={() => openPromoOverlay('party')}>
               🎉 Đặt tiệc
             </button>
-            <button className="co-promo-pill wheel" onClick={openWheel}>
-              🎰 Vòng xoay
-            </button>
+            {luckyWheelEnabled && (
+              <button className="co-promo-pill wheel" onClick={openWheel}>
+                🎰 Vòng xoay
+              </button>
+            )}
             {activeChannels.length > 0 && (
               <button className="co-promo-pill gmap" onClick={openReviewOverlay}>
                 {activeChannels.length === 1

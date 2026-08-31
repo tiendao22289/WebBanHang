@@ -16,7 +16,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import {
   drawLuckyPrize, calcLuckyDiscount, fetchLuckyPrizes,
-  LUCKY_SETTING_KEYS, parseLuckyConfig,
+  LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem,
 } from '@/lib/luckyWheel';
 
 export const dynamic = 'force-dynamic';
@@ -78,40 +78,10 @@ export async function POST(request) {
     const vnDayKey = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
     const startOfToday = new Date(`${vnDayKey}T00:00:00.000+07:00`);
 
-    // ── Đã quay trong lượt khách này chưa ───────────────────────
-    // Mang về: mọi khách dùng chung 1 bàn ảo → xét theo SĐT trong ngày.
-    if (isTakeaway) {
-      const { data: spun } = await supabase
-        .from('lucky_spins').select('id')
-        .eq('customer_phone', phone)
-        .gte('created_at', startOfToday.toISOString())
-        .limit(1);
-      if (spun?.length) return fail('Quý khách đã quay hôm nay rồi ạ. Hẹn lần ghé sau nha! 👋');
-    } else {
-      const sessionStart = table.occupied_at || startOfToday.toISOString();
-      const { data: spun } = await supabase
-        .from('lucky_spins').select('id')
-        .eq('host_table_id', hostId)
-        .gte('created_at', sessionStart)
-        .limit(1);
-      if (spun?.length) return fail('Bàn mình đã quay một lượt rồi ạ. Cảm ơn Quý khách nhiều nha! 🥰');
-    }
-
-    // ── Cooldown theo số điện thoại ─────────────────────────────
-    if (cfg.cooldownDays > 0) {
-      const cutoff = new Date(Date.now() - cfg.cooldownDays * 86400000).toISOString();
-      const { data: recent } = await supabase
-        .from('lucky_spins').select('id')
-        .eq('customer_phone', phone)
-        .gte('created_at', cutoff)
-        .limit(1);
-      if (recent?.length) return fail('Số này vừa quay gần đây rồi ạ. Hẹn Quý khách lần sau nha! 👋');
-    }
-
     // ── Tổng bill hôm nay của nhóm bàn ──────────────────────────
     let billsQuery = supabase
       .from('orders')
-      .select('id, total_amount, customer_phone, created_at')
+      .select('id, total_amount, customer_phone, created_at, order_items(item_name)')
       .in('table_id', groupIds)
       .in('status', ['pending', 'preparing', 'completed'])
       .gte('created_at', startOfToday.toISOString())
@@ -127,6 +97,29 @@ export async function POST(request) {
     }
     if (cfg.minBill > 0 && total < cfg.minBill) {
       return fail(`Vòng xoay dành cho hoá đơn từ ${cfg.minBill.toLocaleString('vi-VN')}đ ạ. Quý khách gọi thêm chút nữa nhé 😋`);
+    }
+
+    // ── 1 hoá đơn chỉ được nhận 1 lần quà vòng xoay ──────────────
+    // Chặn theo chính bill đang mở (thay cho kiểu chặn "1 lần/phiên theo
+    // mốc giờ" cũ — unique index (host_table_id, session_started_at) không
+    // có tác dụng vì cột đó không được ghi, luôn NULL nên không khoá được
+    // gì). Bill đã thanh toán xong (status='paid') không còn nằm trong
+    // `bills` ở trên, nên khách lượt sau của cùng bàn vẫn quay được bình
+    // thường — chỉ chặn khi CHÍNH bill đang mở này đã có quà rồi.
+    const hasWheelItem = bills.some(o => (o.order_items || []).some(isLuckyWheelItem));
+    if (hasWheelItem) {
+      return fail('Hoá đơn này đã nhận quà vòng xoay rồi ạ. Cảm ơn Quý khách nhiều nha! 🥰');
+    }
+
+    // ── Cooldown theo số điện thoại ─────────────────────────────
+    if (cfg.cooldownDays > 0) {
+      const cutoff = new Date(Date.now() - cfg.cooldownDays * 86400000).toISOString();
+      const { data: recent } = await supabase
+        .from('lucky_spins').select('id')
+        .eq('customer_phone', phone)
+        .gte('created_at', cutoff)
+        .limit(1);
+      if (recent?.length) return fail('Số này vừa quay gần đây rồi ạ. Hẹn Quý khách lần sau nha! 👋');
     }
 
     // ── Lưu thông tin khách (mục tiêu chính: có data để chăm sóc) ──
@@ -150,8 +143,10 @@ export async function POST(request) {
     if (!prize) return fail('Quán chưa cài phần quà nào, Quý khách gọi nhân viên giúp ạ!');
     const discount = calcLuckyDiscount(total, prize, cfg.max);
 
-    // Chốt lượt quay TRƯỚC khi ghi vào bill — unique index (bàn + lượt
-    // khách) chặn hai máy bấm cùng lúc.
+    // Ghi lượt quay — "1 hoá đơn 1 lần" đã được chốt lại ở applyLuckySpin
+    // (lib/zaloRewardServer.js) ngay trước khi ghi quà vào bill, đó mới là
+    // chỗ chặn thật sự an toàn với 2 request cùng lúc (chốt trạng thái từng
+    // lượt quay trước khi trừ tiền).
     const { data: spin, error: spinErr } = await supabase
       .from('lucky_spins')
       .insert({
