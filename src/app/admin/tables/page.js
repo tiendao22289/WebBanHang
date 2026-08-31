@@ -122,6 +122,11 @@ export default function TablesPage() {
   const [columnsPerRow, setColumnsPerRow] = useState(5);
   const [menuItems, setMenuItems] = useState([]);
   const [categories, setCategories] = useState([]);
+  // ─── Khuyến mãi "mua N tặng 1" — cho admin chọn quà thay khách ───
+  const [promoConfig, setPromoConfig] = useState({ enabled: false, threshold: 8 });
+  const [giftItems, setGiftItems] = useState([]); // is_gift_item=true, còn hiện trên thực đơn
+  const [giftPickerHostId, setGiftPickerHostId] = useState(null); // host_table_id đang mở modal chọn quà
+  const [giftPickerSaving, setGiftPickerSaving] = useState(null); // id món đang ghi (disable nút khi đang lưu)
   const [addingToOrder, setAddingToOrder] = useState(null); // order id being added to
   const [activeMenuCategory, setActiveMenuCategory] = useState('all');
   const [addItemSearch, setAddItemSearch] = useState('');
@@ -333,6 +338,59 @@ export default function TablesPage() {
   const sumOrderItems = (ordersList) =>
     (ordersList || []).reduce((sum, o) =>
       sum + (o.order_items || []).reduce((s, i) => s + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0), 0);
+
+  // ─── Khuyến mãi "mua N tặng 1" — CÙNG công thức với trang khách (order/page.jsx)
+  // để admin và khách luôn thấy khớp số lượt quà, không lệch nhau. ───
+  function getPromoDivisor(menuItem, itemOptions) {
+    if (!menuItem?.counts_for_promotion) return null;
+    let divisor = null;
+    if (itemOptions && Array.isArray(itemOptions) && menuItem.options) {
+      for (const opt of itemOptions) {
+        const menuOpt = menuItem.options.find(o => o.name === opt.name);
+        if (menuOpt && menuOpt.choices && menuOpt.promoDivisors) {
+          const choiceIdx = menuOpt.choices.indexOf(opt.choice);
+          if (choiceIdx !== -1 && menuOpt.promoDivisors[choiceIdx]) {
+            divisor = Number(menuOpt.promoDivisors[choiceIdx]);
+            if (!isNaN(divisor) && divisor > 0) break;
+          }
+        }
+      }
+    }
+    if (!divisor || isNaN(divisor) || divisor <= 0) {
+      const promoOpt = (menuItem.options || []).find(o => o.__promo_divisor);
+      divisor = promoOpt ? promoOpt.__promo_divisor : 1;
+    }
+    return divisor;
+  }
+
+  /**
+   * Số lượt quà còn lại + đã có quà trong bill chưa, cho 1 nhóm bill (bills).
+   * CHỈ dùng cho bàn thường — Mang về dồn nhiều khách khác nhau vào 1 "bàn ảo",
+   * gộp chung sẽ tính sai điểm khuyến mãi giữa các khách không liên quan tới
+   * nhau (trang khách phải lọc riêng theo SĐT vì lý do này — xem order/page.jsx).
+   */
+  function giftEligibilityFor(bills) {
+    if (!promoConfig.enabled) return { availableGiftSlots: 0, hasGiftInBill: false };
+    let totalPoints = 0;
+    let usedGiftSlots = 0;
+    let hasGiftInBill = false;
+    (bills || []).forEach(order => {
+      (order.order_items || []).forEach(oi => {
+        if (oi.is_gift) {
+          usedGiftSlots += Number(oi.quantity) || 1;
+          hasGiftInBill = true;
+        } else {
+          const menuItem = menuItems.find(m => m.id === oi.menu_item_id);
+          const divisor = getPromoDivisor(menuItem, oi.item_options);
+          if (divisor) totalPoints += (Number(oi.quantity) || 0) / divisor;
+        }
+      });
+    });
+    const qualifyingQty = Math.round(totalPoints * 10000) / 10000;
+    const giftCount = Math.floor(qualifyingQty / promoConfig.threshold);
+    const availableGiftSlots = Math.max(0, giftCount - usedGiftSlots);
+    return { availableGiftSlots, hasGiftInBill };
+  }
 
   // ─── Gửi lệnh in tới PrintAgent — gộp orders của bàn → 1 phiếu → máy mặc định ───
   const handlePrintInvoice = async () => {
@@ -567,6 +625,7 @@ export default function TablesPage() {
   useEffect(() => {
     fetchTables();
     fetchReviewRequests();
+    fetchPromoAndGifts();
 
     // Use a unique channel name each mount to avoid stale channel on HMR
     const channelName = `tables-realtime-${Date.now()}`;
@@ -1057,6 +1116,25 @@ export default function TablesPage() {
     setReviewRequests(data || []);
   }, []);
 
+  // Cấu hình KM "mua N tặng 1" + danh sách món tặng — tải 1 lần lúc vào trang,
+  // để tính "bàn đã đủ điều kiện nhận quà chưa" ngay trên lưới bàn.
+  const fetchPromoAndGifts = useCallback(async () => {
+    const { data: settings } = await supabase.from('settings')
+      .select('key, value').in('key', ['promotion_enabled', 'promotion_threshold']);
+    if (settings) {
+      const map = Object.fromEntries(settings.map(r => [r.key, r.value]));
+      setPromoConfig({
+        enabled: map.promotion_enabled === 'true',
+        threshold: parseInt(map.promotion_threshold) || 8,
+      });
+    }
+    const { data: gifts } = await supabase.from('menu_items')
+      .select('id, name, price, image_url, options, hidden_until')
+      .eq('is_gift_item', true).eq('is_available', true);
+    const now = new Date();
+    setGiftItems((gifts || []).filter(g => !g.hidden_until || new Date(g.hidden_until) < now));
+  }, []);
+
   // Toàn bộ table id của nhóm gộp (host + satellites)
   function groupTableIds(hostId) {
     return [hostId, ...tables.filter(t => t.merged_with === hostId).map(t => t.id)];
@@ -1297,6 +1375,46 @@ export default function TablesPage() {
 
     } catch (err) {
       console.error('Error syncing table promotions:', err);
+    }
+  }
+
+  /** Admin chọn quà thay khách — ghi thẳng 1 dòng is_gift=true vào bill cũ nhất của nhóm bàn. */
+  async function addGiftToTable(hostId, giftItem) {
+    setGiftPickerSaving(giftItem.id);
+    try {
+      const groupBills = [
+        ...(orders[hostId] || []),
+        ...tables.filter(t => t.merged_with === hostId).flatMap(t => orders[t.id] || []),
+      ];
+      const elig = giftEligibilityFor(groupBills);
+      if (elig.availableGiftSlots <= 0) {
+        Swal.fire('Hết lượt', 'Bàn này không còn lượt chọn quà miễn phí nào ạ.', 'warning');
+        return;
+      }
+      // Ghi vào bill CŨ NHẤT của nhóm — cùng quy ước với các chỗ khác trong code
+      // (Zalo, vòng xoay...) khi cần chọn 1 bill đại diện cho cả nhóm bàn gộp.
+      const targetOrderId = [...groupBills].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0]?.id;
+      if (!targetOrderId) return;
+
+      const { error } = await supabase.from('order_items').insert({
+        order_id: targetOrderId,
+        menu_item_id: giftItem.id,
+        quantity: 1,
+        unit_price: 0,
+        item_options: [],
+        note: null,
+        is_gift: true,
+        ...(currentStaff ? { added_by_id: currentStaff.id, added_by_name: currentStaff.full_name } : {}),
+      });
+      if (error) {
+        Swal.fire('Lỗi', 'Không ghi được món tặng: ' + error.message, 'error');
+        return;
+      }
+
+      syncOrderPromotions(targetOrderId); // đồng bộ promo_gift_unlocked cho trang khách — không cần đợi
+      await fetchOrdersOnly();
+    } finally {
+      setGiftPickerSaving(null);
     }
   }
 
@@ -2011,6 +2129,8 @@ export default function TablesPage() {
           // Bill của bàn đã dùng vòng xoay may mắn chưa — báo cho nhân viên biết,
           // vì mỗi bill chỉ được nhận 1 lần quà (xem /api/lucky/spin).
           const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelItem));
+          // KM mua N tặng 1 — Mang về gộp nhiều khách khác nhau nên bỏ qua ở đây
+          const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(tableBills) : { availableGiftSlots: 0, hasGiftInBill: false };
           let timeElapsed = '';
           if (isOccupied && table.occupied_at) {
             const diffMs = Date.now() - new Date(table.occupied_at).getTime();
@@ -2068,6 +2188,20 @@ export default function TablesPage() {
                 {hasLuckyWheel && (
                   <div title="Bill đã dùng vòng xoay may mắn" style={{ background: '#fdf4ff', color: '#a21caf', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #f5d0fe', fontSize: '0.7rem' }}>
                     🎰
+                  </div>
+                )}
+                {giftElig.availableGiftSlots > 0 && (
+                  <div
+                    title="Đủ điều kiện nhận quà — bấm để chọn quà cho khách"
+                    onClick={(e) => { e.stopPropagation(); setSelectedTable(table); setGiftPickerHostId(hostIdCard); }}
+                    style={{ background: '#fef3c7', color: '#b45309', borderRadius: 100, padding: '3px 7px', display: 'flex', alignItems: 'center', gap: 3, border: '1px solid #fde68a', fontSize: '0.65rem', fontWeight: 800, cursor: 'pointer' }}
+                  >
+                    🎁 {giftElig.availableGiftSlots}
+                  </div>
+                )}
+                {giftElig.hasGiftInBill && (
+                  <div title="Bill đã có món tặng — nhớ mang ra cho khách" style={{ background: '#f0fdf4', color: '#15803d', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #bbf7d0', fontSize: '0.7rem' }}>
+                    🎁
                   </div>
                 )}
               </div>
@@ -2810,6 +2944,7 @@ export default function TablesPage() {
                           const tableTotal = sumOrderItems(orders[table.merged_with || table.id] || []);
                           const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(isPrintJobBad));
                           const hasLuckyWheel = (orders[table.merged_with || table.id] || []).some(o => (o.order_items || []).some(isLuckyWheelItem));
+                          const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(orders[table.merged_with || table.id] || []) : { availableGiftSlots: 0, hasGiftInBill: false };
 
                           // Style derivation: Merged group is Purple, Normal Occupied is Blue, Empty is White
                           const bgColors = {
@@ -2902,6 +3037,20 @@ export default function TablesPage() {
                                 {hasLuckyWheel && (
                                   <div title="Bill đã dùng vòng xoay may mắn" style={{ position: 'absolute', top: -1, left: -1, background: '#a21caf', color: 'white', borderRadius: '14px 0 8px 0', padding: '2px 5px', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, fontSize: '0.6rem' }}>
                                     🎰
+                                  </div>
+                                )}
+                                {giftElig.availableGiftSlots > 0 && (
+                                  <div
+                                    title="Đủ điều kiện nhận quà — bấm để chọn quà cho khách"
+                                    onClick={(e) => { e.stopPropagation(); setSelectedTable(table); setGiftPickerHostId(table.merged_with || table.id); }}
+                                    style={{ position: 'absolute', bottom: -1, right: -1, background: '#fbbf24', color: '#78350f', borderRadius: '8px 0 14px 0', padding: '2px 5px', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, fontSize: '0.6rem', fontWeight: 800, cursor: 'pointer' }}
+                                  >
+                                    🎁{giftElig.availableGiftSlots}
+                                  </div>
+                                )}
+                                {giftElig.hasGiftInBill && (
+                                  <div title="Bill đã có món tặng" style={{ position: 'absolute', bottom: -1, left: -1, background: '#16a34a', color: 'white', borderRadius: '0 8px 0 14px', padding: '2px 5px', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, fontSize: '0.6rem' }}>
+                                    🎁
                                   </div>
                                 )}
 
@@ -4927,6 +5076,78 @@ export default function TablesPage() {
             </div>
           </div>
         )
+      }
+      {/* Chọn quà thay khách — KM "mua N tặng 1" */}
+      {
+        giftPickerHostId && (() => {
+          const groupBills = [
+            ...(orders[giftPickerHostId] || []),
+            ...tables.filter(t => t.merged_with === giftPickerHostId).flatMap(t => orders[t.id] || []),
+          ];
+          const elig = giftEligibilityFor(groupBills);
+          const hostTable = tables.find(t => t.id === giftPickerHostId);
+          return (
+            <div
+              style={{ position: 'fixed', inset: 0, zIndex: 2100, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
+              onClick={() => setGiftPickerHostId(null)}
+            >
+              <div
+                onClick={e => e.stopPropagation()}
+                style={{ background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 480, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
+              >
+                <div style={{ padding: '16px 18px 12px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ fontSize: '1.5rem' }}>🎁</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 800, fontSize: '1rem' }}>Chọn quà cho bàn {hostTable?.table_number ?? ''}</div>
+                    <div style={{ fontSize: '0.82rem', color: elig.availableGiftSlots > 0 ? '#b45309' : '#6b7280', fontWeight: 700 }}>
+                      Còn {elig.availableGiftSlots} lượt chọn miễn phí
+                    </div>
+                  </div>
+                  <button onClick={() => setGiftPickerHostId(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}>
+                    <X size={20} />
+                  </button>
+                </div>
+                <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
+                  {giftItems.length === 0 && (
+                    <div style={{ padding: 16, color: '#9ca3af', fontSize: '0.85rem', textAlign: 'center' }}>Chưa có món tặng nào được cấu hình.</div>
+                  )}
+                  {giftItems.map(g => {
+                    const addedQty = groupBills.reduce((s, o) => s + (o.order_items || []).filter(oi => oi.is_gift && oi.menu_item_id === g.id).reduce((s2, oi) => s2 + (oi.quantity || 1), 0), 0);
+                    return (
+                      <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 6px', borderBottom: '1px solid #f8fafc' }}>
+                        <div style={{ width: 44, height: 44, borderRadius: 8, flexShrink: 0, overflow: 'hidden', background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {g.image_url
+                            ? <img src={g.image_url} alt={g.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            : <span style={{ fontSize: '1.2rem' }}>🍽️</span>}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{g.name}</div>
+                          <div style={{ fontSize: '0.78rem', color: '#16a34a', fontWeight: 700 }}>Miễn phí 🎁{addedQty > 0 ? ` — đã tặng ${addedQty}` : ''}</div>
+                        </div>
+                        <button
+                          onClick={() => addGiftToTable(giftPickerHostId, g)}
+                          disabled={elig.availableGiftSlots <= 0 || giftPickerSaving === g.id}
+                          style={{
+                            flexShrink: 0, padding: '7px 14px', borderRadius: 100, border: 'none',
+                            background: elig.availableGiftSlots > 0 ? '#16a34a' : '#e5e7eb',
+                            color: elig.availableGiftSlots > 0 ? 'white' : '#9ca3af',
+                            fontWeight: 700, fontSize: '0.8rem',
+                            cursor: elig.availableGiftSlots > 0 && giftPickerSaving !== g.id ? 'pointer' : 'not-allowed',
+                          }}
+                        >
+                          {giftPickerSaving === g.id ? 'Đang lưu...' : '+ Tặng'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ padding: 12, borderTop: '1px solid #f1f5f9' }}>
+                  <button className="btn btn-outline" style={{ width: '100%' }} onClick={() => setGiftPickerHostId(null)}>Đóng</button>
+                </div>
+              </div>
+            </div>
+          );
+        })()
       }
       {/* Full-screen Bill Preview Modal */}
       {
