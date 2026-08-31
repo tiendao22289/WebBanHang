@@ -582,6 +582,7 @@ function OrderContent() {
   const [luckyWheelEnabled, setLuckyWheelEnabled] = useState(false); // admin bật/tắt — mặc định ẩn tới khi đọc xong settings
   const [luckyWheelMinBill, setLuckyWheelMinBill] = useState(0); // hoá đơn tối thiểu để mời quay (Cài đặt > Vòng xoay)
   const [showLuckyNudge, setShowLuckyNudge] = useState(false); // "Chúc mừng, có 1 lượt quay!" sau khi gửi đơn đủ điều kiện
+  const [luckyNudgeMaxPercent, setLuckyNudgeMaxPercent] = useState(0); // % giảm cao nhất đang có trên vòng quay — khoe trong thông báo mời quay cho hấp dẫn
   const [wheelOpen, setWheelOpen] = useState(false);
   const [wheelForm, setWheelForm] = useState({ name: '', phone: '' });
   const [wheelSpinning, setWheelSpinning] = useState(false);
@@ -1766,6 +1767,14 @@ function OrderContent() {
     const ordersForCheck = groupOrders.length > 0 ? groupOrders : (previousOrders || []);
     const alreadyHasWheelGift = ordersForCheck.some(o => (o.order_items || []).some(isLuckyWheelItem));
     if (alreadyHasWheelGift) return;
+
+    // Khoe giải % cao nhất đang có trên vòng quay (đọc lại mỗi lần — Admin có
+    // thể đổi cơ cấu quà bất cứ lúc nào trong Cài đặt) để lời mời hấp dẫn hơn.
+    try {
+      const prizeList = await fetchLuckyPrizes(supabase);
+      const maxPercent = Math.max(0, ...prizeList.filter(p => p.type === 'percent').map(p => p.value));
+      setLuckyNudgeMaxPercent(maxPercent);
+    } catch { }
 
     try { localStorage.setItem(luckyNudgeStorageKey(), '1'); } catch { }
     setShowLuckyNudge(true);
@@ -4132,12 +4141,24 @@ function OrderContent() {
               <div style={{ marginTop: 6, fontSize: '0.95rem', color: '#374151' }}>
                 Chúc mừng Quý khách có <b>1 lượt quay vòng xoay may mắn</b> 🎰
               </div>
+              {luckyNudgeMaxPercent > 0 && (
+                <div style={{
+                  marginTop: 12, padding: '10px 14px', borderRadius: 10,
+                  background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
+                  border: '1px solid #f59e0b', fontWeight: 700, color: '#92400e',
+                }}>
+                  🔥 Có cơ hội trúng ngay ưu đãi giảm tới <span style={{ color: '#b91c1c', fontSize: '1.1em' }}>{luckyNudgeMaxPercent}%</span> hoá đơn!
+                </div>
+              )}
+              <div style={{ marginTop: 10, fontSize: '0.85rem', color: '#64748b' }}>
+                Quay là có quà liền tay — nhanh tay kẻo lỡ lượt của mình nha!
+              </div>
               <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <button
                   className="co-gmap-cta"
                   onClick={() => { setShowLuckyNudge(false); openWheel(); }}
                 >
-                  🎰 Quay ngay
+                  🎰 Quay ngay nhận quà!
                 </button>
                 <button
                   onClick={() => setShowLuckyNudge(false)}
