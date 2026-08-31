@@ -4157,6 +4157,18 @@ function OrderContent() {
                             Đã quan tâm quán từ trước rồi ạ? Quý khách nhắn cho quán một tin
                             bất kỳ là quán nhận ra ngay 😊
                           </div>
+                          {/* Mở trang bằng cách quét QR trong chính app Zalo → link mở app
+                              không hoạt động được (Zalo tự chặn app khác mở từ webview của
+                              nó), nút dưới chỉ ra trang web — chỉ đường tay cho khách thay
+                              vì để nút chết không giải thích gì (đã xác nhận qua thực tế). */}
+                          {isIOS && inZaloBrowser && (
+                            <div style={{ marginTop: 6, fontSize: '0.82rem', color: '#64748b' }}>
+                              Quý khách đang mở trang này <b>bên trong Zalo</b> nên nút dưới chỉ ra
+                              trang web của quán. Cách nhanh nhất: bấm <b>✕</b> góc trên để về Zalo,
+                              mở khung chat của quán rồi bấm <b>Quan tâm</b> (hoặc nhắn 1 tin bất kỳ)
+                              là xong ạ.
+                            </div>
+                          )}
                         </div>
                         <a
                           className="co-gmap-cta"
