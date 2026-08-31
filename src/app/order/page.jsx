@@ -4210,26 +4210,6 @@ function OrderContent() {
                   {wheelStats.totalSpins != null && <> · 🎰 {wheelStats.totalSpins} lượt quay</>}
                 </div>
 
-                {/* Khoe 10 người trúng gần nhất — ẩn danh tên, kích thích khách quay */}
-                {wheelStats.recentWinners.length > 0 && (
-                  <div style={{
-                    marginBottom: 10, padding: '8px 12px', borderRadius: 10,
-                    background: '#fff7ed', border: '1px solid #fed7aa',
-                  }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#9a3412', marginBottom: 4 }}>
-                      🏆 Trúng thưởng gần đây
-                    </div>
-                    <div style={{ maxHeight: 96, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      {wheelStats.recentWinners.map((w, i) => (
-                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: '0.8rem', color: '#78716c' }}>
-                          <span>{w.name}</span>
-                          <span style={{ fontWeight: 700, color: '#c2410c' }}>{w.prize_label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
                 {/* Vòng xoay */}
                 <div className="co-wheel-wrap">
                   <div className="co-wheel-pin" />
@@ -4246,7 +4226,7 @@ function OrderContent() {
                         key={p.id}
                         className="co-wheel-label"
                         style={{
-                          transform: `rotate(${i * WHEEL_SLICE + WHEEL_SLICE / 2}deg) translate(0, -46%) translateY(-92px) rotate(90deg)`,
+                          transform: `rotate(${i * WHEEL_SLICE + WHEEL_SLICE / 2}deg) translate(0, -46%) translateY(-75px) rotate(90deg)`,
                         }}
                       >
                         {p.short}
@@ -4367,6 +4347,26 @@ function OrderContent() {
                       </div>
                     </div>
                   </>
+                )}
+
+                {/* Khoe 10 người trúng gần nhất — ẩn danh tên, kích thích khách quay */}
+                {wheelStats.recentWinners.length > 0 && (
+                  <div style={{
+                    marginTop: 14, padding: '8px 12px', borderRadius: 10,
+                    background: '#fff7ed', border: '1px solid #fed7aa',
+                  }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#9a3412', marginBottom: 4 }}>
+                      🏆 Trúng thưởng gần đây
+                    </div>
+                    <div style={{ maxHeight: 96, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      {wheelStats.recentWinners.map((w, i) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: '0.8rem', color: '#78716c' }}>
+                          <span>{w.name}</span>
+                          <span style={{ fontWeight: 700, color: '#c2410c' }}>{w.prize_label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>

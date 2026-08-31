@@ -1947,8 +1947,8 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
 
 .co-wheel-wrap {
   position: relative;
-  width: min(76vw, 300px);
-  height: min(76vw, 300px);
+  width: min(62vw, 245px);
+  height: min(62vw, 245px);
   margin: 6px auto 14px;
 }
 .co-wheel {
