@@ -4131,7 +4131,10 @@ function OrderContent() {
 
         {/* ─── Thông báo mời quay vòng xoay sau khi đủ hoá đơn tối thiểu ─── */}
         {showLuckyNudge && (
-          <div className="co-chal-overlay" onClick={() => setShowLuckyNudge(false)}>
+          // z-index cao hơn co-thanks-overlay (4000, toast "Cảm ơn quý khách" tự
+          // tắt sau ~6s) — 2 thứ này hiện gần như cùng lúc sau khi gửi đơn, nếu
+          // không thì cái toast đỏ mờ sẽ đè lên che mất thông báo mời quay.
+          <div className="co-chal-overlay" style={{ zIndex: 4200 }} onClick={() => setShowLuckyNudge(false)}>
             <div className="co-chal-modal" onClick={e => e.stopPropagation()} style={{ textAlign: 'center' }}>
               <button className="co-chal-close" onClick={() => setShowLuckyNudge(false)} aria-label="Đóng">
                 <X size={20} />
