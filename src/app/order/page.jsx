@@ -632,15 +632,19 @@ function OrderContent() {
   const zaloChannelCfg = activeChannels.find(c => c.key === 'zalo') || null;
   const totalPercent = activeChannels.reduce((sum, c) => sum + (Number(c.percent) || 0), 0);
 
+  // Promotion
+  const [promoConfig, setPromoConfig] = useState({ enabled: false, threshold: 8 });
+  const [giftItems, setGiftItems] = useState([]); // is_gift_item items
+
   // Quà "Tặng nước"/"Tặng món" — còn thiếu bước khách chọn món cụ thể thì
   // chưa tính là xong, dù Zalo đã xác nhận (status='applied') hay chưa.
+  // Đặt SAU khai báo giftItems ở trên — tham chiếu trước khi khai báo (dù
+  // trong nhánh ternary chỉ thật sự chạy tới khi trúng gift_dish) vẫn bị lỗi
+  // "Cannot access before initialization" và sập trắng trang.
   const wheelNeedsGiftPick = isGiftPrizeType(wheelPrize?.prizeType) && !wheelSpin?.applied_item_id;
   const wheelGiftActiveList = wheelPrize?.prizeType === 'gift_dish' ? giftItems
     : wheelPrize?.prizeType === 'gift_drink' ? wheelDrinkItems : [];
 
-  // Promotion
-  const [promoConfig, setPromoConfig] = useState({ enabled: false, threshold: 8 });
-  const [giftItems, setGiftItems] = useState([]); // is_gift_item items
   const [giftCart, setGiftCart] = useState([]); // { id, name, price:0, is_gift:true }
   const [showGiftModal, setShowGiftModal] = useState(false);
   const [giftPromptPending, setGiftPromptPending] = useState(false); // đang chờ khách chọn quà để gửi đơn

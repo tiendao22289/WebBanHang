@@ -147,7 +147,7 @@ export async function sendGiftItemPrintJob(supabase, orderId, orderItemId) {
   try {
     const { data: item, error: itemErr } = await supabase
       .from('order_items')
-      .select('id, menu_item:menu_items(category_id)')
+      .select('id, item_options, menu_item:menu_items(category_id, options)')
       .eq('id', orderItemId)
       .maybeSingle();
 
@@ -173,8 +173,25 @@ export async function sendGiftItemPrintJob(supabase, orderId, orderItemId) {
       }
     }
 
-    const categoryId = item.menu_item?.category_id;
-    const assignedPrinter = (categoryId ? categoryToPrinter[categoryId] : null) || defaultPrinter;
+    // Nhiều món (đặc biệt "món tặng") không gán category gốc — category thật
+    // nằm ở từng lựa chọn LOẠI cụ thể (choiceCategories), giống hệt cách
+    // sendSmartPrintJobs() đã xử lý. Thiếu bước này thì món tặng chọn LOẠI
+    // "Nướng..." sẽ bị rơi về máy mặc định (thường là máy nước) thay vì bếp.
+    let resolvedCategoryId = item.menu_item?.category_id;
+    if (item.item_options && Array.isArray(item.item_options)) {
+      const menuOptions = item.menu_item?.options || [];
+      for (const opt of item.item_options) {
+        const mo = menuOptions.find(o => o.name === opt.name);
+        if (mo && Array.isArray(mo.choiceCategories) && Array.isArray(mo.choices)) {
+          const idx = mo.choices.indexOf(opt.choice);
+          if (idx >= 0 && mo.choiceCategories[idx]) {
+            resolvedCategoryId = mo.choiceCategories[idx];
+          }
+        }
+      }
+    }
+
+    const assignedPrinter = (resolvedCategoryId ? categoryToPrinter[resolvedCategoryId] : null) || defaultPrinter;
 
     if (!assignedPrinter) {
       return { success: false, error: 'Không có máy in phù hợp và không có máy mặc định.' };
