@@ -1369,8 +1369,11 @@ function OrderContent() {
       // Admin tắt vòng xoay → ẩn hẳn nút ngoài trang khách, không chỉ chặn lúc quay
       setLuckyWheelEnabled(map.lucky_wheel_enabled === 'true');
     }
-    const { data: gifts } = await supabase.from('menu_items').select('id, name, price, image_url, options').eq('is_gift_item', true).eq('is_available', true);
-    setGiftItems(gifts || []);
+    const { data: gifts } = await supabase.from('menu_items').select('id, name, price, image_url, options, hidden_until').eq('is_gift_item', true).eq('is_available', true);
+    // Cùng kiểu lọc ẩn tạm thời với menu chính (dòng ~1323) — trước đây thiếu
+    // dòng này nên món bị "ẩn tạm thời" (còn is_available=true, chỉ set
+    // hidden_until) biến mất khỏi thực đơn nhưng vẫn còn trong danh sách quà.
+    setGiftItems((gifts || []).filter(g => !g.hidden_until || new Date(g.hidden_until) < now));
     setLoading(false);
     return { isTW, items: items || [] };
   }
