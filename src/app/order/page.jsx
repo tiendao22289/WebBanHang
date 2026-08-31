@@ -8,7 +8,7 @@ import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, fetchGroupBillTotal, startOfTodayISO, isReviewDiscountItem } from '@/lib/reviewReward';
-import { fetchLuckyPrizes } from '@/lib/luckyWheel';
+import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem } from '@/lib/luckyWheel';
 import {
   Search,
   Plus,
@@ -580,6 +580,8 @@ function OrderContent() {
   const [zaloClaim, setZaloClaim] = useState(null); // bản ghi zalo_reward_claims (kênh Zalo tự động, không cần NV duyệt)
   // ── Vòng xoay may mắn ──
   const [luckyWheelEnabled, setLuckyWheelEnabled] = useState(false); // admin bật/tắt — mặc định ẩn tới khi đọc xong settings
+  const [luckyWheelMinBill, setLuckyWheelMinBill] = useState(0); // hoá đơn tối thiểu để mời quay (Cài đặt > Vòng xoay)
+  const [showLuckyNudge, setShowLuckyNudge] = useState(false); // "Chúc mừng, có 1 lượt quay!" sau khi gửi đơn đủ điều kiện
   const [wheelOpen, setWheelOpen] = useState(false);
   const [wheelForm, setWheelForm] = useState({ name: '', phone: '' });
   const [wheelSpinning, setWheelSpinning] = useState(false);
@@ -1361,13 +1363,15 @@ function OrderContent() {
     }
     // Load promotion config + cấu hình ưu đãi đánh giá Google
     const { data: settings } = await supabase.from('settings').select('key, value')
-      .in('key', ['promotion_enabled', 'promotion_threshold', 'lucky_wheel_enabled', ...ALL_SETTING_KEYS]);
+      .in('key', ['promotion_enabled', 'promotion_threshold', ...LUCKY_SETTING_KEYS, ...ALL_SETTING_KEYS]);
     if (settings) {
       const map = Object.fromEntries(settings.map(r => [r.key, r.value]));
       setPromoConfig({ enabled: map.promotion_enabled === 'true', threshold: parseInt(map.promotion_threshold) || 8 });
       setChannelCfgs(parseAllChannelConfigs(settings));
       // Admin tắt vòng xoay → ẩn hẳn nút ngoài trang khách, không chỉ chặn lúc quay
-      setLuckyWheelEnabled(map.lucky_wheel_enabled === 'true');
+      const luckyCfg = parseLuckyConfig(settings);
+      setLuckyWheelEnabled(luckyCfg.enabled);
+      setLuckyWheelMinBill(luckyCfg.minBill);
     }
     const { data: gifts } = await supabase.from('menu_items').select('id, name, price, image_url, options, hidden_until').eq('is_gift_item', true).eq('is_available', true);
     // Cùng kiểu lọc ẩn tạm thời với menu chính (dòng ~1323) — trước đây thiếu
@@ -1736,6 +1740,35 @@ function OrderContent() {
 
   function wheelStorageKey() {
     return `lucky_spin_${activeTableId || urlTableId || 'x'}`;
+  }
+
+  function luckyNudgeStorageKey() {
+    return `lucky_nudge_shown_${activeTableId || urlTableId || 'x'}`;
+  }
+
+  /**
+   * Sau khi gửi đơn — mời quay vòng xoay NẾU vừa đủ hoá đơn tối thiểu, CHỈ 1
+   * LẦN DUY NHẤT cho cả lượt khách (không lặp lại mỗi lần order thêm), và
+   * không mời nữa nếu bàn/bill này đã quay (kể cả đang chờ Quan tâm Zalo,
+   * chưa cần vào bill) hoặc đã có quà vòng xoay trong bill rồi.
+   */
+  async function checkLuckyNudge() {
+    if (!luckyWheelEnabled || luckyWheelMinBill <= 0) return;
+    try { if (localStorage.getItem(luckyNudgeStorageKey())) return; } catch { }
+    // Đã có lượt quay đang chờ/đã dùng cho bàn này (kể cả chưa vào bill) → thôi
+    try { if (localStorage.getItem(wheelStorageKey())) return; } catch { }
+
+    const total = await fetchGroupBillTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
+    if (total < luckyWheelMinBill) return;
+
+    // Chốt chặn cuối dựa trên chính bill — phòng trường hợp đã quay xong và
+    // quà đã vào bill nhưng vì lý do gì đó cờ lucky_spin_ ở trên bị mất.
+    const ordersForCheck = groupOrders.length > 0 ? groupOrders : (previousOrders || []);
+    const alreadyHasWheelGift = ordersForCheck.some(o => (o.order_items || []).some(isLuckyWheelItem));
+    if (alreadyHasWheelGift) return;
+
+    try { localStorage.setItem(luckyNudgeStorageKey(), '1'); } catch { }
+    setShowLuckyNudge(true);
   }
 
   async function openWheel() {
@@ -2487,7 +2520,7 @@ function OrderContent() {
 
     let query = supabase
       .from('orders')
-      .select('id, table_id, customer_phone, order_items(id, menu_item_id, quantity, unit_price, is_gift, item_options, menu_item:menu_items(id, counts_for_promotion, options))')
+      .select('id, table_id, customer_phone, order_items(id, menu_item_id, quantity, unit_price, is_gift, item_options, item_name, menu_item:menu_items(id, counts_for_promotion, options))')
       .in('table_id', ids)
       .gte('created_at', startOfDay)
       .lt('created_at', endOfDay)
@@ -3126,6 +3159,7 @@ function OrderContent() {
       saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim(), order.id);
       setCurrentOrderId(order.id);
       fetchPreviousOrders();
+      checkLuckyNudge();
     } catch (err) {
       alert('Có lỗi xảy ra. Vui lòng thử lại.');
       console.error(err);
@@ -4080,6 +4114,36 @@ function OrderContent() {
                   style={{ width: '100%', padding: '11px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}
                 >
                   {giftPromptPending ? 'Bỏ qua, gửi không cần quà' : 'Đóng'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Thông báo mời quay vòng xoay sau khi đủ hoá đơn tối thiểu ─── */}
+        {showLuckyNudge && (
+          <div className="co-chal-overlay" onClick={() => setShowLuckyNudge(false)}>
+            <div className="co-chal-modal" onClick={e => e.stopPropagation()} style={{ textAlign: 'center' }}>
+              <button className="co-chal-close" onClick={() => setShowLuckyNudge(false)} aria-label="Đóng">
+                <X size={20} />
+              </button>
+              <div style={{ fontSize: '2.6rem' }}>🎉</div>
+              <div className="co-chal-modal-title">Cảm ơn Quý khách!</div>
+              <div style={{ marginTop: 6, fontSize: '0.95rem', color: '#374151' }}>
+                Chúc mừng Quý khách có <b>1 lượt quay vòng xoay may mắn</b> 🎰
+              </div>
+              <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <button
+                  className="co-gmap-cta"
+                  onClick={() => { setShowLuckyNudge(false); openWheel(); }}
+                >
+                  🎰 Quay ngay
+                </button>
+                <button
+                  onClick={() => setShowLuckyNudge(false)}
+                  style={{ width: '100%', padding: '11px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}
+                >
+                  Bỏ qua
                 </button>
               </div>
             </div>
