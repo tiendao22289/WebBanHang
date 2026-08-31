@@ -13,7 +13,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { parseChannelConfig, calcReviewDiscount, getChannel } from '@/lib/reviewReward';
-import { luckyItemName, calcLuckyDiscount, getLuckyPrize, LUCKY_SETTING_KEYS, parseLuckyConfig } from '@/lib/luckyWheel';
+import { luckyItemName, calcLuckyDiscount, LUCKY_SETTING_KEYS, parseLuckyConfig } from '@/lib/luckyWheel';
 
 // Yêu cầu quá 30 phút không hoàn tất thì bỏ qua (khách đã rời quán / thử nghịch)
 export const CLAIM_FRESH_MINUTES = 30;
@@ -315,8 +315,13 @@ async function blockSpin(supabase, spinId, reason) {
 
 /** Ghi qua cua mot luot quay vao hoa don. Idempotent. */
 export async function applyLuckySpin(supabase, spin, zaloUserId, log = () => {}) {
-  const prize = getLuckyPrize(spin.prize_key);
-  if (!prize) { log(`luot quay ${spin.id} co ma qua la: ${spin.prize_key}`); return; }
+  // Quà đã chốt lúc quay — đọc lại từ chính lượt quay để cơ cấu quà có
+  // thay đổi sau đó cũng không làm sai phần khách đã trúng.
+  const prize = {
+    label: spin.prize_label,
+    type: spin.prize_type,
+    value: Number(spin.prize_value) || 0,
+  };
 
   const { data: settingRows } = await supabase
     .from('settings').select('key, value').in('key', LUCKY_SETTING_KEYS);
@@ -348,8 +353,8 @@ export async function applyLuckySpin(supabase, spin, zaloUserId, log = () => {})
   }
 
   const total = bills.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
-  const isGift = prize.type !== 'percent';
-  const discount = isGift ? 0 : calcLuckyDiscount(total, prize.value, cfg.max);
+  const isGift = prize.type === 'gift';
+  const discount = calcLuckyDiscount(total, prize, cfg.max);
   if (!isGift && discount <= 0) {
     return blockSpin(supabase, spin.id, 'Quan chua tinh duoc muc giam, Quy khach goi nhan vien giup a!');
   }
