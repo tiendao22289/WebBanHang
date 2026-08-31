@@ -38,6 +38,15 @@ import './tables.css';
 
 // ─── Nhận diện nước ngọt / bia / khăn (không dựa vào category vì DB để trống) ───
 const DRINK_KEYWORDS = ['bia', 'coca', 'pepsi', '7 up', '7up', 'xa xi', 'sa xi', 'sting', 'siting', '0 do', 'nuoc', 'tra', 'khan', 'sprite', 'fanta', 'mirinda', 'aquafina', 'lavie', 'la vie', 'red bull', 'redbull', 'revive'];
+
+// Job in còn 'pending' quá 60s coi như treo (PrintAgent tắt/rớt mạng) — job
+// dạng này không bao giờ tự chuyển 'failed' nên phải tự tính theo tuổi job,
+// nếu không thẻ bàn sẽ không báo gì dù bill chưa in ra máy nào cả.
+const STALE_PRINT_JOB_MS = 60000;
+function isPrintJobBad(pj) {
+  if (pj.status === 'failed') return true;
+  return pj.status === 'pending' && pj.created_at && (Date.now() - new Date(pj.created_at).getTime()) > STALE_PRINT_JOB_MS;
+}
 function isDrinkName(name) {
   const n = removeVietnameseTones(name || '');
   return DRINK_KEYWORDS.some(k => n.includes(k));
@@ -315,6 +324,15 @@ export default function TablesPage() {
     };
   }, [selectedTable, showQR, showAddModal, optionModalItem]);
 
+  // Tính thẳng từ order_items — KHÔNG dùng cột total_amount cache sẵn trên
+  // orders, vì cột đó ghi theo kiểu "đọc rồi ghi" không khoá ở nhiều nơi
+  // (thêm/xoá món, áp ưu đãi...) nên có thể lệch thấp hơn số PrintAgent in ra
+  // (PrintAgent tự đọc order_items tươi để in). Đây chính là chỗ khiến admin
+  // hiện số ít hơn bill in ra tạm tính nếu không tính lại kiểu này.
+  const sumOrderItems = (ordersList) =>
+    (ordersList || []).reduce((sum, o) =>
+      sum + (o.order_items || []).reduce((s, i) => s + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0), 0);
+
   // ─── Gửi lệnh in tới PrintAgent — gộp orders của bàn → 1 phiếu → máy mặc định ───
   const handlePrintInvoice = async () => {
     if (!selectedTable) return;
@@ -322,7 +340,7 @@ export default function TablesPage() {
       .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
     if (tableOrders.length === 0) { alert('Không có đơn hàng để in!'); return; }
 
-    const total = tableOrders.reduce((s, o) => s + (o.total_amount || 0), 0);
+    const total = sumOrderItems(tableOrders);
     const { isConfirmed } = await Swal.fire({
       title: '🖨️ In hoá đơn?',
       html: `In hoá đơn bàn <b>${selectedTable.table_number}</b>?<br/><span style="color:#c53b3b;font-weight:700;font-size:1.05rem">Tổng: ${new Intl.NumberFormat('vi-VN').format(total)}đ</span>`,
@@ -351,7 +369,7 @@ export default function TablesPage() {
       .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
     if (tableOrders.length === 0) { alert('Không có đơn hàng để in!'); return; }
 
-    const total = tableOrders.reduce((s, o) => s + (o.total_amount || 0), 0);
+    const total = sumOrderItems(tableOrders);
     const { isConfirmed } = await Swal.fire({
       title: '🧾 In tạm tính?',
       html: `In phiếu tạm tính bàn <b>${selectedTable.table_number}</b>?<br/><span style="color:#c53b3b;font-weight:700;font-size:1.05rem">Tổng tạm: ${new Intl.NumberFormat('vi-VN').format(total)}đ</span>`,
@@ -405,7 +423,7 @@ export default function TablesPage() {
                 id, quantity, unit_price, item_options, note, is_gift, menu_item_id, item_name, added_by_name,
                 menu_item:menu_items (name, price, image_url)
               ),
-              print_jobs (id, status)
+              print_jobs (id, status, created_at)
             `)
             .in('table_id', allTableIds)
             .in('status', ['pending', 'preparing'])
@@ -446,7 +464,7 @@ export default function TablesPage() {
             id, quantity, unit_price, item_options, note, is_gift, menu_item_id, item_name, added_by_name,
             menu_item:menu_items (name, price, image_url)
           ),
-          print_jobs (id, status)
+          print_jobs (id, status, created_at)
         `)
         .in('table_id', currentTableIds)
         .in('status', ['pending', 'preparing'])
@@ -719,7 +737,12 @@ export default function TablesPage() {
         })
         .in('table_id', groupTableIds)
         .in('status', ['pending', 'preparing', 'completed'])
-        .select('id, total_amount');
+        // Trả về order_items chứ KHÔNG dùng cột total_amount cache sẵn — cột này
+        // được ghi lại bằng kiểu "đọc rồi ghi" ở nhiều chỗ khác (thêm món, xoá
+        // món, áp ưu đãi...) không có khoá, nên có thể bị lệch (thấp hơn thực tế)
+        // nếu 2 thao tác đụng cùng lúc trên cùng 1 order. Cộng tiền doanh thu ở
+        // ĐÂY — sau khi đã khoá order bằng status='paid' — mới là số đúng 100%.
+        .select('id, order_items(unit_price, quantity)');
 
       if (claimError) {
         console.error('[completeTable] Không giành được đơn:', claimError);
@@ -734,8 +757,9 @@ export default function TablesPage() {
         return true;
       }
 
-      // ── Cộng tiền đúng theo số đơn vừa giành được ────────────────────────────
-      const totalAmount = claimed.reduce((sum, o) => sum + (o.total_amount || 0), 0);
+      // ── Cộng tiền đúng theo số đơn vừa giành được (tính thẳng từ order_items) ──
+      const totalAmount = claimed.reduce((sum, o) =>
+        sum + (o.order_items || []).reduce((s, i) => s + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0), 0);
       if (totalAmount > 0) {
         try {
           // RPC atomic — check hạn mức + ghi bank_daily_totals trong 1 transaction
@@ -867,9 +891,15 @@ export default function TablesPage() {
       bills,
       unpricedItems: collectUnpricedItems(bills),
       orderIdsStr: bills.map(o => o.id).sort().join(','),
+      // Tính THẲNG từ order_items vừa fetch — KHÔNG dùng cột total_amount cache
+      // sẵn trên orders. Cột đó được ghi kiểu "đọc rồi ghi" không khoá ở nhiều
+      // nơi (thêm/xoá món, áp ưu đãi...), nên có thể bị lệch THẤP hơn thực tế
+      // nếu 2 thao tác đụng cùng lúc trên cùng order — số tiền yêu cầu chuyển
+      // khoản QR/tiền mặt phải đúng 100% nên không được tin cột cache ở đây.
       // Chặn âm: nếu NV xoá hết món sau khi ưu đãi đã được duyệt, dòng giảm giá
       // còn lại sẽ làm tổng nhóm âm → QR mất số tiền, giao dịch ghi số âm.
-      total: Math.max(0, bills.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0)),
+      total: Math.max(0, bills.reduce((sum, o) =>
+        sum + (o.order_items || []).reduce((s, i) => s + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0), 0)),
     };
   }
 
@@ -1037,13 +1067,11 @@ export default function TablesPage() {
     const cfg = await fetchChannelConfig(supabase, reward.channel);
     const { data } = await supabase
       .from('orders')
-      .select('id, total_amount, customer_phone')
+      .select('id, customer_phone, order_items(unit_price, quantity)')
       .in('table_id', groupTableIds(reward.host_table_id))
       .in('status', ['pending', 'preparing', 'completed'])
       .gte('created_at', startOfTodayISO());
-    const total = (data || [])
-      .filter(o => o.customer_phone !== 'BAO_BEP')
-      .reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+    const total = sumOrderItems((data || []).filter(o => o.customer_phone !== 'BAO_BEP'));
     setReviewPreview({ total, discount: calcReviewDiscount(total, cfg), percent: cfg.percent, cfg });
   }
 
@@ -1055,7 +1083,7 @@ export default function TablesPage() {
 
       const { data: groupOrders } = await supabase
         .from('orders')
-        .select('id, total_amount, customer_phone, created_at')
+        .select('id, customer_phone, created_at, order_items(unit_price, quantity)')
         .in('table_id', ids)
         .in('status', ['pending', 'preparing', 'completed'])
         .gte('created_at', startOfTodayISO())
@@ -1068,7 +1096,7 @@ export default function TablesPage() {
         return;
       }
 
-      const total = bills.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
+      const total = sumOrderItems(bills);
       const discount = calcReviewDiscount(total, cfg);
       if (discount <= 0) {
         Swal.fire({ icon: 'warning', title: 'Không tính được mức giảm', text: 'Kiểm tra lại % giảm trong Cài đặt hoặc tổng bill của bàn.' });
@@ -1491,79 +1519,27 @@ export default function TablesPage() {
     if (draftCart.length === 0 || !selectedTable) return;
     setIsConfirmingDraft(true);
     try {
-      // 1. Tìm hoặc tạo Admin order
-      let targetOrderId;
-      const { data: adminOrder } = await supabase
-        .from('orders').select('id')
-        .eq('table_id', selectedTable.merged_with || selectedTable.id)
-        .eq('customer_name', 'Admin')
-        .in('status', ['pending', 'preparing', 'completed'])
-        .maybeSingle();
-
-      if (adminOrder) {
-        targetOrderId = adminOrder.id;
-      } else {
-        const { data: newOrder, error } = await supabase
-          .from('orders')
-          .insert({
-            table_id: selectedTable.merged_with || selectedTable.id,
-            customer_name: 'Admin',
-            customer_phone: 'Quản lý',
-            status: 'pending',
-            total_amount: 0,
-            ...createdStamp(),
-          })
-          .select().single();
-        if (error || !newOrder) return;
-        targetOrderId = newOrder.id;
-        if (selectedTable.status === 'available') {
-          await supabase.from('tables')
-            .update({ status: 'occupied', occupied_at: new Date().toISOString() })
-            .eq('id', selectedTable.id);
-        }
-      }
-
-      // 2. Lấy items hiện có trong order
-      const { data: currentItems } = await supabase
-        .from('order_items').select('*').eq('order_id', targetOrderId);
-
-      // 3. Batch upsert tất cả draft items song song
-      // Chỉ cộng dồn vào dòng CÙNG nhân viên thêm → mỗi người 1 dòng riêng để biết ai gọi món nào
-      const staffId = currentStaff?.id || null;
-      await Promise.all(draftCart.map(draft => {
-        const optsJsonb = draft.options || [];
-        const existing = (currentItems || []).find(item =>
-          item.menu_item_id === draft.menuItemId &&
-          JSON.stringify(item.item_options || []) === JSON.stringify(optsJsonb) &&
-          (item.note || '') === (draft.note || '') &&
-          (item.added_by_id || null) === staffId
-        );
-        if (existing) {
-          return supabase.from('order_items')
-            .update({ quantity: existing.quantity + draft.qty })
-            .eq('id', existing.id);
-        }
-        return supabase.from('order_items').insert({
-          order_id: targetOrderId,
+      // Gộp toàn bộ luồng (tìm/tạo order Admin → ghi món → tính lại tổng) thành
+      // 1 lệnh RPC duy nhất — trước đây 5 round-trip tuần tự, mạng quán chập
+      // chờn làm độ trễ từng round-trip cộng dồn lại (xem confirm_draft_order_rpc.sql).
+      const { data, error } = await supabase.rpc('confirm_draft_order', {
+        p_table_id: selectedTable.merged_with || selectedTable.id,
+        p_items: draftCart.map(draft => ({
           menu_item_id: draft.menuItemId,
           quantity: draft.qty,
           unit_price: draft.price,
-          item_options: optsJsonb,
+          item_options: draft.options || [],
           note: draft.note || '',
-          ...(currentStaff ? { added_by_id: currentStaff.id, added_by_name: currentStaff.full_name } : {}),
-        });
-      }));
+        })),
+        p_staff_id: currentStaff?.id || null,
+        p_staff_name: currentStaff?.full_name || null,
+      });
+      if (error) throw error;
 
-      // 4. Tính lại tổng tiền từ DB
-      const { data: allItems } = await supabase
-        .from('order_items').select('unit_price, quantity').eq('order_id', targetOrderId);
-      const newTotal = (allItems || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
-      await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
+      // Sync khuyến mãi (không await — chạy ngầm)
+      if (data?.order_id) syncOrderPromotions(data.order_id);
 
-      // 5. Sync khuyến mãi (không await — chạy ngầm)
-      syncOrderPromotions(targetOrderId);
-
-      // 6. Clear draft, đóng modal, refresh
+      // Clear draft, đóng modal, refresh
       setDraftCart([]);
       setAddingToOrder(null);
       setAddItemSearch('');
@@ -2028,9 +2004,9 @@ export default function TablesPage() {
             ? []
             : reviewRequests.filter(r => r.host_table_id === hostIdCard);
           const groupColor = groupColorMap[hostIdCard] || null;
-          const totalAmount = tableBills.reduce((s, o) => s + (o.total_amount || 0), 0);
+          const totalAmount = sumOrderItems(tableBills);
           const guestCount = tableBills.length;
-          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => pj.status === 'failed'));
+          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(isPrintJobBad));
           let timeElapsed = '';
           if (isOccupied && table.occupied_at) {
             const diffMs = Date.now() - new Date(table.occupied_at).getTime();
@@ -2205,8 +2181,8 @@ export default function TablesPage() {
           const allOrderItems = tableBills.flatMap(order =>
             (order.order_items || []).map(item => ({ ...item, _orderId: order.id }))
           );
-          // Total = sum of all orders' total_amount (consistent with mobile bill total)
-          const totalAmount = tableBills.reduce((s, o) => s + (o.total_amount || 0), 0);
+          // Tính thẳng từ order_items đã gom ở trên — không dùng cột total_amount cache
+          const totalAmount = allOrderItems.reduce((s, i) => s + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0);
           return (
             <>
               {/* Order header */}
@@ -2822,8 +2798,8 @@ export default function TablesPage() {
                           const tableReviewReqs = isChild
                             ? []
                             : reviewRequests.filter(r => r.host_table_id === alertHostId);
-                          const tableTotal = (orders[table.merged_with || table.id] || []).reduce((s, o) => s + (o.total_amount || 0), 0);
-                          const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(pj => pj.status === 'failed'));
+                          const tableTotal = sumOrderItems(orders[table.merged_with || table.id] || []);
+                          const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(isPrintJobBad));
 
                           // Style derivation: Merged group is Purple, Normal Occupied is Blue, Empty is White
                           const bgColors = {
@@ -3399,12 +3375,14 @@ export default function TablesPage() {
                             </tbody>
                           </table>
                           <div style={{ textAlign: 'right', fontWeight: 'bold', marginTop: '8px' }}>
-                            Tổng bill #{idx + 1}: {formatPrice(order.total_amount)}
+                            {/* Cộng thẳng từng dòng order_items — khớp với bảng món in ngay phía trên,
+                                không dùng total_amount cache (có thể lệch, xem sumOrderItems) */}
+                            Tổng bill #{idx + 1}: {formatPrice(sumOrderItems([order]))}
                           </div>
                         </div>
                       ))}
                       <div style={{ textAlign: 'right', fontSize: '1.1rem', fontWeight: 'bold', borderTop: '2px solid #333', paddingTop: '8px' }}>
-                        TỔNG CỘNG: {formatPrice(getSelectedTableOrders().reduce((s, o) => s + (o.total_amount || 0), 0))}
+                        TỔNG CỘNG: {formatPrice(sumOrderItems(getSelectedTableOrders()))}
                       </div>
                       <div className="invoice-footer">
                         <p>Cảm ơn quý khách! 🙏</p>
@@ -3963,7 +3941,7 @@ export default function TablesPage() {
               <div className="modal-footer" style={{ padding: '8px 12px', gap: 6, flexDirection: 'column', alignItems: 'stretch' }}>
                 {/* Total summary row */}
                 {getSelectedTableOrders()?.length > 0 && (() => {
-                  const total = getSelectedTableOrders().reduce((s, o) => s + (o.total_amount || 0), 0);
+                  const total = sumOrderItems(getSelectedTableOrders());
                   return (
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid #f3f4f6' }}>
                       <span style={{ fontSize: '0.88rem', color: '#6b7280', fontWeight: 500 }}>Tổng cộng:</span>
@@ -4854,7 +4832,7 @@ export default function TablesPage() {
                       ))}
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, paddingTop: 6, borderTop: '1px dashed #d1d5db', color: '#111827' }}>
                         <span>Tổng cộng</span>
-                        <span style={{ color: '#1d4ed8' }}>{order.total_amount?.toLocaleString('vi-VN')}đ</span>
+                        <span style={{ color: '#1d4ed8' }}>{sumOrderItems([order]).toLocaleString('vi-VN')}đ</span>
                       </div>
                     </div>
                     {/* Ghi chú khách gửi cho bếp */}
@@ -4940,7 +4918,9 @@ export default function TablesPage() {
         showBillPreview && selectedTable && (() => {
           const tableBills = getSelectedTableOrders();
           const rawItems = tableBills.flatMap(b => b.order_items || []);
-          const grandTotal = tableBills.reduce((s, b) => s + b.total_amount, 0);
+          // Tính thẳng từ order_items (không dùng total_amount cache) — đây là
+          // phiếu Tạm tính khách sẽ đối chiếu để trả tiền, phải khớp bill in ra.
+          const grandTotal = rawItems.reduce((s, i) => s + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0);
 
           // Dòng ưu đãi (giá âm, không gắn menu_item) hiện thành mục riêng,
           // không lẫn vào danh sách món và không tính vào số lượng món
@@ -5639,7 +5619,7 @@ export default function TablesPage() {
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, paddingTop: 4, borderTop: '1px dashed #f3f4f6' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <span style={{ fontSize: '0.72rem', color: '#9ca3af' }}>Tổng</span>
-                          <span style={{ fontSize: '0.82rem', fontWeight: 800, color: isPaid ? '#16a34a' : '#dc2626' }}>{(order.total_amount || 0).toLocaleString('vi-VN')}đ</span>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 800, color: isPaid ? '#16a34a' : '#dc2626' }}>{sumOrderItems([order]).toLocaleString('vi-VN')}đ</span>
                         </div>
                         <button
                           onClick={async (e) => {

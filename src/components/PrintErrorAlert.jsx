@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { AlertCircle, X, CheckCircle2, Printer, BellOff } from 'lucide-react';
 
@@ -89,9 +89,50 @@ function playPrinterRecovered() {
   }
 }
 
+// Job còn 'pending' quá lâu nghĩa là PrintAgent không nhận/không xử lý được
+// (crash, mất mạng, rớt Realtime...) — job dạng này KHÔNG BAO GIỜ tự chuyển
+// sang 'failed' nên phải chủ động dò, nếu không nhân viên sẽ không biết gì.
+const STALE_PENDING_SECONDS = 60;
+const STALE_POLL_INTERVAL_MS = 15000;
+
+/** Lấy tên bàn + món (để hiện trong card lỗi) và tên máy in của 1 print_job. */
+async function fetchJobDisplayInfo(job) {
+  let orderInfo = '';
+  const targetIds = job.order_ids?.length ? job.order_ids : [job.order_id].filter(Boolean);
+
+  if (targetIds.length > 0) {
+    const { data: oData } = await supabase.from('orders')
+      .select('table:tables(table_number), order_items(quantity, menu_item:menu_items(name))')
+      .in('id', targetIds);
+
+    if (oData && oData.length > 0) {
+      const tableNumbers = [...new Set(oData.map(o => o.table?.table_number).filter(Boolean))].join(', ');
+      const items = [];
+      oData.forEach(o => {
+        (o.order_items || []).forEach(oi => {
+          if (oi.menu_item) items.push(`${oi.quantity}x ${oi.menu_item.name}`);
+        });
+      });
+      const displayItems = items.slice(0, 3).join(', ') + (items.length > 3 ? ', ...' : '');
+      orderInfo = `Bàn ${tableNumbers}: ${displayItems}`;
+    }
+  }
+
+  let printerName = 'Máy in Bếp';
+  if (job.printer_id) {
+    const { data: pData } = await supabase.from('printers').select('name').eq('id', job.printer_id).maybeSingle();
+    if (pData) printerName = pData.name;
+  }
+
+  return { orderInfo, printerName };
+}
+
 export default function PrintErrorAlert({ isAdmin = false, customerOrderId = null, customerOrderIds = [], onRecovered = null }) {
   const [errors, setErrors] = useState([]);
   const [mutedErrorIds, setMutedErrorIds] = useState(() => new Set());
+  // Job bị khách/nhân viên bấm X bỏ qua — không cho lần poll sau "hồi sinh" lại
+  // (job vẫn pending thật trong DB, nhưng người dùng đã chủ động ẩn rồi).
+  const dismissedIdsRef = useRef(new Set());
 
   useEffect(() => {
     // Customer mode: chỉ cần có tableId là đủ, hoặc isAdmin
@@ -134,32 +175,7 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
         }
 
         // Fetch Order Info for BOTH failed and recovered workflows
-        let orderInfo = '';
-        const targetIds = job.order_ids?.length ? job.order_ids : [job.order_id].filter(Boolean);
-        
-        if (targetIds.length > 0) {
-           const { data: oData } = await supabase.from('orders')
-              .select('table:tables(table_number), order_items(quantity, menu_item:menu_items(name))')
-              .in('id', targetIds);
-           
-           if (oData && oData.length > 0) {
-               const tableNumbers = [...new Set(oData.map(o => o.table?.table_number).filter(Boolean))].join(', ');
-               const items = [];
-               oData.forEach(o => {
-                  (o.order_items || []).forEach(oi => {
-                      if (oi.menu_item) items.push(`${oi.quantity}x ${oi.menu_item.name}`);
-                  })
-               });
-               const displayItems = items.slice(0, 3).join(', ') + (items.length > 3 ? ', ...' : '');
-               orderInfo = `Bàn ${tableNumbers}: ${displayItems}`;
-           }
-        }
-
-        let printerName = 'Máy in Bếp';
-        if (job.printer_id) {
-           const { data: pData } = await supabase.from('printers').select('name').eq('id', job.printer_id).maybeSingle();
-           if (pData) printerName = pData.name;
-        }
+        const { orderInfo, printerName } = await fetchJobDisplayInfo(job);
 
         // ── XỬ LÝ FAILED ──
         if (job.status === 'failed') {
@@ -203,6 +219,54 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
       
     return () => { supabase.removeChannel(channel); }
   }, [isAdmin, customerOrderId, customerOrderIds.length]); // Re-run khi có thêm orders
+
+  // ── Dò job 'pending' bị treo — Realtime UPDATE ở trên chỉ bắt được job đã
+  // CHUYỂN sang failed/done; nếu PrintAgent tắt/rớt mạng, job nằm im ở pending
+  // mãi mãi và không có UPDATE nào bắn ra cả, nên phải chủ động poll. ──
+  const staleSeenRef = useRef(new Set());
+  useEffect(() => {
+    const allKnownIds = [customerOrderId, ...customerOrderIds].filter(Boolean);
+    if (!isAdmin && allKnownIds.length === 0) return;
+
+    const checkStalePending = async () => {
+      const cutoff = new Date(Date.now() - STALE_PENDING_SECONDS * 1000).toISOString();
+      let query = supabase
+        .from('print_jobs')
+        .select('id, order_id, order_ids, printer_id, status, created_at')
+        .eq('status', 'pending')
+        .lt('created_at', cutoff)
+        .limit(20);
+
+      if (!isAdmin) {
+        query = query.or(`order_id.in.(${allKnownIds.join(',')}),order_ids.ov.{${allKnownIds.join(',')}}`);
+      }
+
+      const { data: staleJobs, error } = await query;
+      if (error || !staleJobs?.length) return;
+
+      for (const job of staleJobs) {
+        if (dismissedIdsRef.current.has(job.id) || staleSeenRef.current.has(job.id)) continue;
+        staleSeenRef.current.add(job.id);
+
+        const { orderInfo, printerName } = await fetchJobDisplayInfo(job);
+        setErrors(prev => {
+          if (prev.some(e => e.id === job.id)) return prev;
+          return [{
+            id: job.id,
+            isDone: false,
+            msg: `Máy in không phản hồi sau ${STALE_PENDING_SECONDS}s — có thể PrintAgent tại quán đang tắt hoặc mất mạng.`,
+            orderInfo,
+            printerName,
+            time: new Date(),
+          }, ...prev];
+        });
+      }
+    };
+
+    checkStalePending();
+    const interval = setInterval(checkStalePending, STALE_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [isAdmin, customerOrderId, customerOrderIds.length]);
 
   // ── Alarm interval: kêu cycle 20s (10s ring + 10s im) khi có lỗi chưa được giải quyết ──
   const hasActiveError = errors.some(e => !e.isDone && !mutedErrorIds.has(e.id));
@@ -255,7 +319,10 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
                 <button
-                   onClick={() => setErrors(prev => prev.filter(e => e.id !== err.id))}
+                   onClick={() => {
+                     dismissedIdsRef.current.add(err.id);
+                     setErrors(prev => prev.filter(e => e.id !== err.id));
+                   }}
                    style={{ background:'none', border:'none', cursor:'pointer', padding: 4, color: isDone ? '#16a34a' : '#ef4444', transition: 'all 0.2s', marginTop: 2 }}>
                    <X size={18} />
                 </button>
