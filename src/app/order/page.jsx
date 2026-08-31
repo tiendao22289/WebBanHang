@@ -526,6 +526,11 @@ function OrderContent() {
   const [notes, setNotes] = useState({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  // Bật sau vài giây nếu submitOrder() vẫn chưa xong — báo khách mạng đang yếu
+  // thay vì để trạng thái "Đang gửi..." im lìm trông như bị treo. KHÔNG huỷ
+  // hay tự ý coi là thất bại — request vẫn tiếp tục chờ, xong lúc nào tự hoàn
+  // tất lúc đó, khách không cần bấm gửi lại (tránh gửi trùng đơn).
+  const [submitSlow, setSubmitSlow] = useState(false);
   const [kitchenCalling, setKitchenCalling] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [showCart, setShowCart] = useState(false);
@@ -1307,11 +1312,10 @@ function OrderContent() {
 
   async function fetchMenu() {
     const now = new Date();
-    const [{ data: cats }, { data: items }, { data: tableData }, { data: salesStats }] = await Promise.all([
+    const [{ data: cats }, { data: items }, { data: tableData }] = await Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
       supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).order('sort_order').order('created_at'),
       activeTableId ? supabase.from('tables').select('table_number, status, table_type, table_name').eq('id', activeTableId).single() : { data: null },
-      supabase.rpc('get_menu_sales_stats')
     ]);
     // Lọc client-side: loại các món đang trong thời gian ẩn tạm thời
     // (an toàn ngay cả khi cột hidden_until chưa tồn tại trong DB)
@@ -1322,14 +1326,20 @@ function OrderContent() {
       finalCats.push({ id: null, name: 'Chưa phân loại' });
     }
 
-    if (salesStats && visibleItems.length > 0) {
-      const salesMap = {};
-      salesStats.forEach(s => { salesMap[s.menu_item_id] = Number(s.total_sold) || 0 });
-      visibleItems.forEach(item => { item.total_sold = salesMap[item.id] || 0 });
-    }
-
     setCategories(finalCats);
     setMenuItems(visibleItems);
+    // Huy hiệu "🔥 Đã bán X" — KHÔNG chặn menu hiện ra để chờ số này. Trước đây
+    // gọi get_menu_sales_stats() (quét TOÀN BỘ order_items từ trước đến giờ,
+    // xem src/lib/get_menu_sales_stats.sql) ngay trong Promise.all này, nên mọi
+    // khách mở /order đều phải đợi 1 câu quét toàn bộ lịch sử đơn hàng mới thấy
+    // menu — giờ cao điểm nhiều bàn mở cùng lúc thì cùng đập DB, gây lag/không
+    // vào được web. Tải riêng qua route có cache sau khi menu đã hiện xong.
+    fetch('/api/menu/sales-stats').then(r => r.json()).then(salesStats => {
+      if (!Array.isArray(salesStats) || salesStats.length === 0) return;
+      const salesMap = {};
+      salesStats.forEach(s => { salesMap[s.menu_item_id] = Number(s.total_sold) || 0 });
+      setMenuItems(prev => prev.map(item => salesMap[item.id] ? { ...item, total_sold: salesMap[item.id] } : item));
+    }).catch(() => { /* huy hiệu trang trí, lỗi thì bỏ qua */ });
     const isTW = tableData?.table_type === 'takeaway';
     if (tableData) {
       setTableNumber(isTW ? (tableData.table_name || 'Mang về') : tableData.table_number);
@@ -3006,6 +3016,10 @@ function OrderContent() {
 
     setGiftPromptPending(false);
     setSubmitting(true);
+    setSubmitSlow(false);
+    // Sau 5s vẫn chưa xong → báo mạng yếu, KHÔNG huỷ request đang chờ. Request
+    // vẫn tiếp tục chạy ngầm, xong lúc nào tự hiện thành công lúc đó.
+    const slowTimer = setTimeout(() => setSubmitSlow(true), 5000);
 
     try {
       let customerId = null;
@@ -3098,7 +3112,15 @@ function OrderContent() {
       if (!printResult?.success) {
         console.warn('[submitOrder] sendPrintJob lần 1 fail:', printResult?.error);
         await new Promise(r => setTimeout(r, 500));
-        printResult = await sendPrintJob(supabase, order.id);
+        // Có thể lần 1 ĐÃ chèn print_jobs thành công, chỉ là phản hồi về máy
+        // khách bị rớt mạng giữa chừng (trông như fail). Kiểm tra lại trước khi
+        // gửi lần 2 — order này vừa tạo ở trên nên có job nghĩa là lần 1 đã ăn,
+        // gửi lại mù quáng sẽ tạo thêm 1 bộ print_jobs nữa → bếp nhận 2 phiếu.
+        const { data: existingJobs } = await supabase
+          .from('print_jobs').select('id').eq('order_id', order.id).limit(1);
+        printResult = existingJobs?.length > 0
+          ? { success: true }
+          : await sendPrintJob(supabase, order.id);
       }
       if (!printResult?.success) {
         console.error('[submitOrder] sendPrintJob fail sau retry:', printResult?.error);
@@ -3114,7 +3136,9 @@ function OrderContent() {
       alert('Có lỗi xảy ra. Vui lòng thử lại.');
       console.error(err);
     } finally {
+      clearTimeout(slowTimer);
       setSubmitting(false);
+      setSubmitSlow(false);
       nudgeDismissedRef.current = false; // reset để đơn tiếp theo vẫn gợi ý được
     }
   }
@@ -4604,12 +4628,25 @@ function OrderContent() {
           </div>
         )}
 
+        {/* ─── Đang gửi đơn — nhắc khách chờ, đừng tắt màn hình/thoát trang giữa chừng ─── */}
+        {submitting && (
+          <div className="co-sending-overlay">
+            <div className="co-sending-box">
+              <div className="co-sending-spinner" />
+              <div className="co-sending-text">
+                {submitSlow ? '📶 Mạng đang yếu, đơn vẫn đang được gửi...' : '⏳ Đang gửi đơn đến bếp...'}
+              </div>
+              <div className="co-sending-sub">Quý khách vui lòng đợi, đừng tắt màn hình hoặc thoát trang lúc này nhé!</div>
+            </div>
+          </div>
+        )}
+
         {/* ─── Order Success Toast ─── */}
         {orderSuccess && (
           <div className="co-thanks-overlay">
             <div className="co-thanks-text">
               Cảm ơn quý khách!
-              <span className="co-thanks-sub">Chúc quý khách ngon miệng</span>
+              <span className="co-thanks-sub">Đã gửi xong — quý khách tắt màn hình được rồi ạ 👍</span>
             </div>
           </div>
         )}
@@ -4995,7 +5032,7 @@ function OrderContent() {
                   style={{ position: 'relative', zIndex: 1, boxShadow: cart.length > 0 ? '0 4px 15px rgba(37, 99, 235, 0.35)' : 'none', animation: cart.length > 0 ? 'co-gift-pulse 2.5s infinite' : 'none' }}
                 >
                   <Send size={18} />
-                  {submitting ? 'Đang gửi...' : 'Gửi đơn hàng'}
+                  {submitting ? (submitSlow ? '📶 Mạng yếu, đang gửi...' : 'Đang gửi...') : 'Gửi đơn hàng'}
                 </button>
               </div>
             </div>

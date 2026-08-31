@@ -663,6 +663,62 @@ html, body { background: #ffffff !important; }
 }
 
 /* ═══════════════════════════════
+   ĐANG GỬI ĐƠN — che màn hình, nhắc khách chờ + đừng tắt màn hình/thoát trang.
+   Ở nguyên (không tự tắt) suốt lúc submitOrder() đang chạy, kể cả khi mạng
+   chậm — chỉ biến mất khi submitting=false (thành công hoặc lỗi thật sự).
+   ═══════════════════════════════ */
+.co-sending-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.55);
+  animation: coSendingFadeIn 0.25s ease-out;
+}
+.co-sending-box {
+  background: white;
+  border-radius: 20px;
+  padding: 28px 26px;
+  max-width: 320px;
+  text-align: center;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+}
+.co-sending-spinner {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 16px;
+  border: 4px solid #dbeafe;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: coSendingSpin 0.8s linear infinite;
+}
+.co-sending-text {
+  font-family: 'Nunito', sans-serif;
+  font-weight: 800;
+  font-size: 1.05rem;
+  color: #0f172a;
+  margin-bottom: 6px;
+}
+.co-sending-sub {
+  font-family: 'Nunito', sans-serif;
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #64748b;
+  line-height: 1.4;
+}
+@keyframes coSendingFadeIn {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes coSendingSpin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* ═══════════════════════════════
    HÀNG NÚT ƯU ĐÃI (gọn góc phải)
    ═══════════════════════════════ */
 .co-promo-btns {
