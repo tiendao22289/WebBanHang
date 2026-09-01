@@ -4304,31 +4304,36 @@ function OrderContent() {
                   {wheelStats.totalSpins != null && <> · 🎰 {wheelStats.totalSpins} lượt quay</>}
                 </div>
 
-                {/* Vòng xoay */}
-                <div className="co-wheel-wrap">
-                  <div className="co-wheel-pin" />
-                  <div
-                    className="co-wheel"
-                    style={{
-                      transform: `rotate(${wheelAngle}deg)`,
-                      background: `conic-gradient(${wheelPrizes.map((p, i) =>
-                        `${p.color} ${i * WHEEL_SLICE}deg ${(i + 1) * WHEEL_SLICE}deg`).join(', ')})`,
-                    }}
-                  >
-                    {wheelPrizes.map((p, i) => (
-                      <span
-                        key={p.id}
-                        className="co-wheel-label"
-                        style={{
-                          transform: `rotate(${i * WHEEL_SLICE + WHEEL_SLICE / 2}deg) translate(0, -46%) translateY(-95px) rotate(90deg)`,
-                        }}
-                      >
-                        {p.short}
-                      </span>
-                    ))}
+                {/* Vòng xoay — ẩn ngay khi đã có kết quả, nhường chỗ cho khối
+                    kết quả/Quan tâm Zalo hiện NGAY phía trên, không cần cuộn
+                    xuống mới thấy (trước đây khách quay xong không thấy nút
+                    Quan tâm Zalo nằm khuất dưới hình vòng xoay, bỏ qua luôn). */}
+                {!wheelPrize && (
+                  <div className="co-wheel-wrap">
+                    <div className="co-wheel-pin" />
+                    <div
+                      className="co-wheel"
+                      style={{
+                        transform: `rotate(${wheelAngle}deg)`,
+                        background: `conic-gradient(${wheelPrizes.map((p, i) =>
+                          `${p.color} ${i * WHEEL_SLICE}deg ${(i + 1) * WHEEL_SLICE}deg`).join(', ')})`,
+                      }}
+                    >
+                      {wheelPrizes.map((p, i) => (
+                        <span
+                          key={p.id}
+                          className="co-wheel-label"
+                          style={{
+                            transform: `rotate(${i * WHEEL_SLICE + WHEEL_SLICE / 2}deg) translate(0, -46%) translateY(-95px) rotate(90deg)`,
+                          }}
+                        >
+                          {p.short}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="co-wheel-hub">🎁</div>
                   </div>
-                  <div className="co-wheel-hub">🎁</div>
-                </div>
+                )}
 
                 {/* Đã có kết quả */}
                 {wheelPrize ? (
