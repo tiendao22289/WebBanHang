@@ -379,6 +379,10 @@ export default function TablesPage() {
     (bills || []).forEach(order => {
       (order.order_items || []).forEach(oi => {
         if (oi.is_gift) {
+          // Quà vòng xoay không phải quà "8 tặng 1" → không tính vào lượt đã
+          // dùng, nếu không khách trúng nước vòng xoay sẽ bị trừ oan lượt quà
+          // khuyến mãi (và làm sai badge "🎁 còn X lượt").
+          if (oi.note === 'Quà tặng từ vòng quay may mắn') return;
           usedGiftSlots += Number(oi.quantity) || 1;
           hasGiftInBill = true;
         } else {
@@ -1308,7 +1312,7 @@ export default function TablesPage() {
       // Lấy tất cả orders + items của bàn hôm nay
       const { data: tableOrders } = await supabase
         .from('orders')
-        .select(`id, order_items( id, quantity, is_gift, created_at, item_options, menu_items( id, counts_for_promotion, options ) )`)
+        .select(`id, order_items( id, quantity, is_gift, note, created_at, item_options, menu_items( id, counts_for_promotion, options ) )`)
         .eq('table_id', tableId)
         .gte('created_at', startOfDay)
         .in('status', ['pending', 'preparing', 'completed']);
@@ -1321,6 +1325,13 @@ export default function TablesPage() {
       for (const ord of tableOrders) {
         for (const it of (ord.order_items || [])) {
           if (it.is_gift) {
+            // Quà VÒNG XOAY (nước/món tặng khi quay trúng) cũng là is_gift=true
+            // nhưng KHÔNG thuộc khuyến mãi "8 tặng 1" — phải loại ra, nếu không
+            // nó bị tính là "quà dư" rồi bị xoá/giảm số lượng mỗi khi nhân viên
+            // thêm/sửa món (khách trúng 2 chai còn 1 chai, hoặc mất hẳn phần quà).
+            // Nhận diện bằng đúng ghi chú finalizeGiftItem ghi vào — quà vòng
+            // xoay có item_name=null nên isLuckyWheelItem không bắt được.
+            if (it.note === 'Quà tặng từ vòng quay may mắn') continue;
             allGiftItems.push(it);
           } else if (it.menu_items?.counts_for_promotion) {
             let divisor = null;

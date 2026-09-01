@@ -2658,7 +2658,7 @@ function OrderContent() {
 
     let query = supabase
       .from('orders')
-      .select('id, table_id, customer_phone, order_items(id, menu_item_id, quantity, unit_price, is_gift, item_options, item_name, menu_item:menu_items(id, counts_for_promotion, options))')
+      .select('id, table_id, customer_phone, order_items(id, menu_item_id, quantity, unit_price, is_gift, note, item_options, item_name, menu_item:menu_items(id, counts_for_promotion, options))')
       .in('table_id', ids)
       .gte('created_at', startOfDay)
       .lt('created_at', endOfDay)
@@ -2964,7 +2964,13 @@ function OrderContent() {
   // → Ngăn nhiều bàn trong cùng nhóm chọn quà vượt quá quota
   const ordersForGiftCount = groupOrders.length > 0 ? groupOrders : (previousOrders || []);
   const submittedGiftSlots = ordersForGiftCount.reduce((sum, order) => {
-    return sum + (order.order_items || []).reduce((s, oi) => s + (oi.is_gift ? (oi.quantity || 1) : 0), 0);
+    return sum + (order.order_items || []).reduce((s, oi) => {
+      if (!oi.is_gift) return s;
+      // Quà vòng xoay (nước/món tặng khi quay trúng) không phải quà "8 tặng 1"
+      // → không trừ vào lượt quà khuyến mãi của khách.
+      if (oi.note === 'Quà tặng từ vòng quay may mắn') return s;
+      return s + (oi.quantity || 1);
+    }, 0);
   }, 0);
   const usedGiftSlots = submittedGiftSlots + giftCart.length;
   const availableGiftSlots = Math.max(0, giftCount - usedGiftSlots);
