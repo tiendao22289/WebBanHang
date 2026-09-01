@@ -1909,7 +1909,14 @@ function OrderContent() {
       phone: (customerPhone || saved?.customerPhone || '').trim(),
     });
 
-    // Đã quay trong lượt này thì hiện lại kết quả cũ
+    // Đã quay trong lượt này thì hiện lại kết quả cũ — NHƯNG chỉ khi lượt quay
+    // đó còn thuộc PHIÊN HIỆN TẠI của bàn. Kết quả lưu trong localStorage theo
+    // bàn (lucky_spin_<tableId>) không có hạn, nên nếu không kiểm tra thì mở
+    // lại vòng xoay ở bàn đã dọn / qua ngày mới vẫn thấy "đã bớt Xđ" của lượt
+    // cũ (khách/nhân viên tưởng bàn trống mà đã có quà). Điều kiện giữ lại:
+    //   (1) lượt quay tạo trong HÔM NAY, và
+    //   (2) bàn đang còn HOÁ ĐƠN MỞ (đã thanh toán/bàn trống → tổng = 0).
+    // Không thoả → xoá cache, coi như chưa quay.
     try {
       const id = localStorage.getItem(wheelStorageKey());
       if (id) {
@@ -1917,7 +1924,16 @@ function OrderContent() {
         // còn policy SELECT công khai nữa (xem lucky_wheel_security_fixes.sql),
         // để tránh 1 câu SELECT không lọc gì lấy được tên/SĐT mọi khách đã quay.
         const { data } = await supabase.rpc('get_my_lucky_spin', { p_spin_id: id }).maybeSingle();
-        if (data) {
+        let keep = false;
+        if (data?.created_at) {
+          const d = new Date(data.created_at);
+          const spinDay = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          if (spinDay === getTodayStr()) {
+            const total = await fetchGroupBillTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
+            keep = total > 0;
+          }
+        }
+        if (data && keep) {
           const prizeList = await fetchLuckyPrizes(supabase);
           setWheelPrizes(prizeList);
           const slice = prizeList.length > 0 ? 360 / prizeList.length : 360;
@@ -1933,6 +1949,9 @@ function OrderContent() {
             discountAmount: data.discount_amount,
           });
           if (data.status === 'waiting_follow') pingLuckyReady(data.id);
+        } else {
+          // Cache cũ đã hết hạn phiên → dọn để không hiện lại lần sau.
+          try { localStorage.removeItem(wheelStorageKey()); } catch { }
         }
       }
     } catch { }
