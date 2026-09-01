@@ -203,7 +203,11 @@ export async function POST(request) {
     return NextResponse.json({
       ok: true,
       spinId: spin.id,
-      prizeKey: prize.key,
+      // prize.id (KHÔNG phải prize.key — normalizePrize không có trường
+      // 'key'). Client dùng prizeKey này tìm đúng ô để dừng kim; trả sai
+      // (undefined) thì findIndex = -1 → kim luôn dừng ở ô đầu ("Giảm 1%")
+      // dù quà thật là gì → khách thấy kim chỉ 1% nhưng báo trúng quà khác.
+      prizeKey: prize.id,
       prizeType: prize.type,
       prizeLabel: prize.label,
       discountAmount: discount,   // số tiền dự kiến, chốt lại lúc áp
