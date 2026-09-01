@@ -16,7 +16,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import {
   drawLuckyPrize, calcLuckyDiscount, fetchLuckyPrizes,
-  LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem,
+  LUCKY_SETTING_KEYS, parseLuckyConfig,
 } from '@/lib/luckyWheel';
 
 export const dynamic = 'force-dynamic';
@@ -81,7 +81,7 @@ export async function POST(request) {
     // ── Tổng bill hôm nay của nhóm bàn ──────────────────────────
     let billsQuery = supabase
       .from('orders')
-      .select('id, total_amount, customer_phone, created_at, order_items(item_name)')
+      .select('id, total_amount, customer_phone, created_at')
       .in('table_id', groupIds)
       .in('status', ['pending', 'preparing', 'completed'])
       .gte('created_at', startOfToday.toISOString())
@@ -99,16 +99,30 @@ export async function POST(request) {
       return fail(`Vòng xoay dành cho hoá đơn từ ${cfg.minBill.toLocaleString('vi-VN')}đ ạ. Quý khách gọi thêm chút nữa nhé 😋`);
     }
 
-    // ── 1 hoá đơn chỉ được nhận 1 lần quà vòng xoay ──────────────
-    // Chặn theo chính bill đang mở (thay cho kiểu chặn "1 lần/phiên theo
-    // mốc giờ" cũ — unique index (host_table_id, session_started_at) không
-    // có tác dụng vì cột đó không được ghi, luôn NULL nên không khoá được
-    // gì). Bill đã thanh toán xong (status='paid') không còn nằm trong
-    // `bills` ở trên, nên khách lượt sau của cùng bàn vẫn quay được bình
-    // thường — chỉ chặn khi CHÍNH bill đang mở này đã có quà rồi.
-    const hasWheelItem = bills.some(o => (o.order_items || []).some(isLuckyWheelItem));
-    if (hasWheelItem) {
-      return fail('Hoá đơn này đã nhận quà vòng xoay rồi ạ. Cảm ơn Quý khách nhiều nha! 🥰');
+    // ── 1 lượt khách của bàn chỉ nhận 1 lần quà vòng xoay ─────────
+    // Chặn ngay từ lúc quay nếu nhóm bàn ĐÃ CÓ 1 lượt quay được ÁP QUÀ
+    // vào chính các hoá đơn đang mở này — bất kể giảm % hay tặng nước/món.
+    //
+    // Dựa trên lucky_spins.status='applied' + applied_order_id (đúng nguồn
+    // sự thật, giống hệt claim_lucky_wheel_slot) thay vì dò chữ trong
+    // item_name: quà TẶNG nước/món có item_name = null nên cách cũ
+    // (isLuckyWheelItem) bỏ sót → người sau vẫn quay được rồi mới bị chặn
+    // ở bước cuối, dễ tưởng bàn được 2 phần quà.
+    //
+    // CHỈ chặn khi ĐÃ NHẬN (applied). Người trước mới quay mà chưa nhận
+    // xong (waiting_follow) thì người sau vẫn quay "thay" được — ai hoàn
+    // tất trước thì nhận, claim_lucky_wheel_slot chốt đúng 1 người.
+    // Hoá đơn đã thanh toán/huỷ (status ngoài pending/preparing/completed)
+    // không nằm trong `bills`, nên LƯỢT KHÁCH SAU của cùng bàn quay lại
+    // bình thường.
+    const billIds = bills.map(b => b.id);
+    const { data: appliedSpins } = await supabase
+      .from('lucky_spins').select('id')
+      .eq('status', 'applied')
+      .in('applied_order_id', billIds)
+      .limit(1);
+    if (appliedSpins?.length) {
+      return fail('Bàn mình đã nhận quà vòng xoay cho lượt khách này rồi ạ. Cảm ơn Quý khách nhiều nha! 🥰');
     }
 
     // ── Cooldown theo số điện thoại ─────────────────────────────
