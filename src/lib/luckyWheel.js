@@ -130,6 +130,7 @@ export const LUCKY_SETTING_KEYS = [
   'lucky_wheel_max',
   'lucky_wheel_cooldown_days',
   'lucky_wheel_require_follow',
+  'lucky_wheel_auto_nudge',
 ];
 
 export function parseLuckyConfig(rows) {
@@ -141,5 +142,9 @@ export function parseLuckyConfig(rows) {
     cooldownDays: Number(map.lucky_wheel_cooldown_days) || 0,
     // Mặc định BẬT: chưa cấu hình thì vẫn yêu cầu quan tâm Zalo mới nhận quà
     requireFollow: map.lucky_wheel_require_follow !== 'false',
+    // Mặc định BẬT: sau khi khách gửi đơn đủ điều kiện thì tự hiện lời mời
+    // quay. Tắt: KHÔNG tự bật popup nữa, khách chỉ quay khi tự bấm nút
+    // "🎰 Vòng xoay" (nút vẫn luôn hiển thị khi vòng xoay đang bật).
+    autoNudge: map.lucky_wheel_auto_nudge !== 'false',
   };
 }

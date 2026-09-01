@@ -582,6 +582,7 @@ function OrderContent() {
   const [luckyWheelEnabled, setLuckyWheelEnabled] = useState(false); // admin bật/tắt — mặc định ẩn tới khi đọc xong settings
   const [luckyWheelMinBill, setLuckyWheelMinBill] = useState(0); // hoá đơn tối thiểu để mời quay (Cài đặt > Vòng xoay)
   const [luckyWheelRequireFollow, setLuckyWheelRequireFollow] = useState(true); // Cài đặt > Vòng xoay > "Phải quan tâm Zalo mới nhận quà" — RIÊNG với kênh "Ưu đãi mạng xã hội > Zalo"
+  const [luckyWheelAutoNudge, setLuckyWheelAutoNudge] = useState(true); // Cài đặt > Vòng xoay > "Tự mời quay sau khi khách gửi đơn" — tắt thì nút 🎰 vẫn còn, chỉ không tự bật popup
   const [showLuckyNudge, setShowLuckyNudge] = useState(false); // "Chúc mừng, có 1 lượt quay!" sau khi gửi đơn đủ điều kiện
   const [luckyNudgeMaxPercent, setLuckyNudgeMaxPercent] = useState(0); // % giảm cao nhất đang có trên vòng quay — khoe trong thông báo mời quay cho hấp dẫn
   const [wheelOpen, setWheelOpen] = useState(false);
@@ -1405,6 +1406,7 @@ function OrderContent() {
       setLuckyWheelEnabled(luckyCfg.enabled);
       setLuckyWheelMinBill(luckyCfg.minBill);
       setLuckyWheelRequireFollow(luckyCfg.requireFollow);
+      setLuckyWheelAutoNudge(luckyCfg.autoNudge);
     }
     const { data: gifts } = await supabase.from('menu_items').select('id, name, price, image_url, options, hidden_until').eq('is_gift_item', true).eq('is_available', true);
     // Cùng kiểu lọc ẩn tạm thời với menu chính (dòng ~1323) — trước đây thiếu
@@ -1787,6 +1789,9 @@ function OrderContent() {
    */
   async function checkLuckyNudge() {
     if (!luckyWheelEnabled || luckyWheelMinBill <= 0) return;
+    // Admin tắt "tự mời quay" → không tự bật popup nữa; nút 🎰 Vòng xoay
+    // vẫn hiển thị bình thường để khách tự bấm quay.
+    if (!luckyWheelAutoNudge) return;
     try { if (localStorage.getItem(luckyNudgeStorageKey())) return; } catch { }
     // Đã có lượt quay đang chờ/đã dùng cho bàn này (kể cả chưa vào bill) → thôi
     try { if (localStorage.getItem(wheelStorageKey())) return; } catch { }

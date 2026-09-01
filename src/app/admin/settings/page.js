@@ -41,7 +41,7 @@ export default function SettingsPage() {
     setChannelForms(prev => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
 
   // Vòng xoay may mắn
-  const WHEEL_DEFAULTS = { enabled: false, minBill: '0', max: '50000', cooldown: '1', requireFollow: true };
+  const WHEEL_DEFAULTS = { enabled: false, minBill: '0', max: '50000', cooldown: '1', requireFollow: true, autoNudge: true };
   const [wheelCfg, setWheelCfg] = useState({ ...WHEEL_DEFAULTS });
   const [wheelCfgSaving, setWheelCfgSaving] = useState(false);
   const [prizes, setPrizes] = useState([]);
@@ -131,6 +131,7 @@ export default function SettingsPage() {
       max: String(cfg.max),
       cooldown: String(cfg.cooldownDays),
       requireFollow: cfg.requireFollow,
+      autoNudge: cfg.autoNudge,
     });
   }
 
@@ -187,6 +188,7 @@ export default function SettingsPage() {
       await putSetting('lucky_wheel_max', String(Number(wheelCfg.max) || 0));
       await putSetting('lucky_wheel_cooldown_days', String(Number(wheelCfg.cooldown) || 0));
       await putSetting('lucky_wheel_require_follow', String(!!wheelCfg.requireFollow));
+      await putSetting('lucky_wheel_auto_nudge', String(!!wheelCfg.autoNudge));
       flash('Đã lưu cấu hình vòng xoay!');
     } catch (err) {
       flash('Lỗi: ' + err.message, true);
@@ -845,6 +847,24 @@ export default function SettingsPage() {
               <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
                 Bật: quay xong khách phải Quan tâm Zalo OA, quà mới vào hoá đơn.
                 Tắt: quà vào hoá đơn ngay khi quay.
+              </div>
+            </div>
+          </div>
+
+          <div
+            onClick={() => setWheelField('autoNudge', !wheelCfg.autoNudge)}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '10px 12px', marginBottom: 14 }}
+          >
+            <div style={{ position: 'relative', width: 40, height: 22, background: wheelCfg.autoNudge ? '#f59e0b' : '#d1d5db', borderRadius: 11, flexShrink: 0, transition: 'background .2s' }}>
+              <div style={{ position: 'absolute', top: 2, left: wheelCfg.autoNudge ? 20 : 2, width: 18, height: 18, background: 'white', borderRadius: '50%', transition: 'left .2s' }} />
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.84rem', color: '#b45309' }}>
+                Tự mời quay sau khi khách gửi đơn
+              </div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                Bật: khách gửi đơn đủ hoá đơn tối thiểu thì tự hiện lời mời quay.
+                Tắt: KHÔNG tự hiện nữa — nút 🎰 Vòng xoay vẫn còn để khách tự bấm quay.
               </div>
             </div>
           </div>
