@@ -2050,7 +2050,18 @@ function OrderContent() {
       refreshLuckySpin(spinId);
     };
     document.addEventListener('visibilitychange', onVisible);
-    const timer = setInterval(() => { pingLuckyReady(spinId); refreshLuckySpin(spinId); }, 7000);
+    // Tự tắt sau ~2,5 phút (giống phần chờ Zalo cap ~2 phút) — khách trúng
+    // mà không bấm Quan tâm rồi để tab mở thì không ping mãi. Nếu quay lại
+    // tab thì onVisible ở trên vẫn kiểm lại 1 lần, và realtime/webhook vẫn
+    // cập nhật khi quà thật sự vào hoá đơn.
+    let ticks = 0;
+    const timer = setInterval(() => {
+      ticks += 1;
+      if (ticks > 21) { clearInterval(timer); return; }
+      if (document.hidden) return; // tab ẩn thì nghỉ, đỡ tốn pin/data khách
+      pingLuckyReady(spinId);
+      refreshLuckySpin(spinId);
+    }, 7000);
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
       clearInterval(timer);
