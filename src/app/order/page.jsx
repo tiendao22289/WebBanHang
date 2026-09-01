@@ -581,6 +581,7 @@ function OrderContent() {
   // ── Vòng xoay may mắn ──
   const [luckyWheelEnabled, setLuckyWheelEnabled] = useState(false); // admin bật/tắt — mặc định ẩn tới khi đọc xong settings
   const [luckyWheelMinBill, setLuckyWheelMinBill] = useState(0); // hoá đơn tối thiểu để mời quay (Cài đặt > Vòng xoay)
+  const [luckyWheelRequireFollow, setLuckyWheelRequireFollow] = useState(true); // Cài đặt > Vòng xoay > "Phải quan tâm Zalo mới nhận quà" — RIÊNG với kênh "Ưu đãi mạng xã hội > Zalo"
   const [showLuckyNudge, setShowLuckyNudge] = useState(false); // "Chúc mừng, có 1 lượt quay!" sau khi gửi đơn đủ điều kiện
   const [luckyNudgeMaxPercent, setLuckyNudgeMaxPercent] = useState(0); // % giảm cao nhất đang có trên vòng quay — khoe trong thông báo mời quay cho hấp dẫn
   const [wheelOpen, setWheelOpen] = useState(false);
@@ -626,11 +627,19 @@ function OrderContent() {
   // Lượt mở xem: 'all' = bảng quà, còn lại theo key kênh. null = chưa tải xong.
   const [rewardViews, setRewardViews] = useState({});
 
-  // Các kênh đang bật — dùng cho nút pill và bảng chọn kênh
+  // Các kênh đang bật — dùng cho nút pill và bảng chọn kênh (ƯU ĐÃI MẠNG XÃ HỘI)
   const activeChannels = channelCfgs.filter(c => c.enabled);
-  // Kênh Zalo dùng cho bước "quan tâm để nhận quà" của vòng xoay
   const zaloChannelCfg = activeChannels.find(c => c.key === 'zalo') || null;
   const totalPercent = activeChannels.reduce((sum, c) => sum + (Number(c.percent) || 0), 0);
+
+  // Link Zalo OA để mời khách bấm Quan tâm sau khi quay trúng — CHỈ lấy đúng
+  // link (zalo_follow_url), KHÔNG lọc theo "kênh Zalo trong Ưu đãi mạng xã
+  // hội có đang bật hay không" — đây là 2 tính năng độc lập, admin có thể
+  // tắt hẳn ưu đãi review Zalo mà vòng xoay vẫn cần khách Quan tâm để nhận
+  // quà. Trước đây dùng chung zaloChannelCfg (đã lọc theo .enabled) khiến
+  // vòng xoay im lặng bỏ qua bước mời Quan tâm Zalo khi kênh kia đang tắt —
+  // khách tưởng xong nhưng quà chưa hề vào bill vì server vẫn đang chờ follow.
+  const wheelZaloCfg = channelCfgs.find(c => c.key === 'zalo' && c.url) || null;
 
   // Promotion
   const [promoConfig, setPromoConfig] = useState({ enabled: false, threshold: 8 });
@@ -1395,6 +1404,7 @@ function OrderContent() {
       const luckyCfg = parseLuckyConfig(settings);
       setLuckyWheelEnabled(luckyCfg.enabled);
       setLuckyWheelMinBill(luckyCfg.minBill);
+      setLuckyWheelRequireFollow(luckyCfg.requireFollow);
     }
     const { data: gifts } = await supabase.from('menu_items').select('id, name, price, image_url, options, hidden_until').eq('is_gift_item', true).eq('is_available', true);
     // Cùng kiểu lọc ẩn tạm thời với menu chính (dòng ~1323) — trước đây thiếu
@@ -4426,8 +4436,11 @@ function OrderContent() {
                       )
                     )}
 
-                    {/* Chưa xác nhận Quan tâm Zalo → chưa trừ tiền */}
-                    {!wheelNeedsGiftPick && wheelSpin?.status !== 'applied' && wheelSpin?.status !== 'blocked' && zaloChannelCfg && (
+                    {/* Chưa xác nhận Quan tâm Zalo → chưa trừ tiền. Dựa theo
+                        luckyWheelRequireFollow (Cài đặt > Vòng xoay) — RIÊNG
+                        với việc kênh "Ưu đãi mạng xã hội > Zalo" có bật hay
+                        không, 2 tính năng độc lập nhau. */}
+                    {!wheelNeedsGiftPick && wheelSpin?.status !== 'applied' && wheelSpin?.status !== 'blocked' && luckyWheelRequireFollow && wheelZaloCfg && (
                       <>
                         <div className="co-gmap-state co-gmap-pending" style={{ marginTop: 10 }}>
                           <div className="co-gmap-big">💬</div>
@@ -4454,7 +4467,7 @@ function OrderContent() {
                         </div>
                         <a
                           className="co-gmap-cta"
-                          href={zaloOpenHref(zaloChannelCfg)}
+                          href={zaloOpenHref(wheelZaloCfg)}
                           {...(zaloOpenNewTab() ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
                         >
                           💬 Mở Zalo, bấm Quan tâm!
@@ -4469,7 +4482,7 @@ function OrderContent() {
                       </>
                     )}
 
-                    {!wheelNeedsGiftPick && (wheelSpin?.status === 'applied' || wheelSpin?.status === 'blocked' || !zaloChannelCfg) && (
+                    {!wheelNeedsGiftPick && (wheelSpin?.status === 'applied' || wheelSpin?.status === 'blocked' || !luckyWheelRequireFollow || !wheelZaloCfg) && (
                       <button className="co-gmap-cta" onClick={() => setWheelOpen(false)}>
                         Tuyệt vời, gọi món tiếp 😋
                       </button>
