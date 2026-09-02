@@ -500,6 +500,21 @@ const DraggableFeedbackBubble = ({ onOpen }) => {
     </button>
   );
 };
+
+// Pháo giấy (confetti) cho popup mời quay — giá trị cố định (không random) để
+// tránh lệch SSR và giữ hiệu ứng nhất quán.
+const NUDGE_CONFETTI = Array.from({ length: 30 }, (_, i) => {
+  const colors = ['#ef4444', '#f59e0b', '#facc15', '#22c55e', '#3b82f6', '#ec4899', '#a855f7', '#fb923c'];
+  return {
+    left: (i * 37) % 100,
+    delay: ((i * 13) % 30) / 10,       // 0 – 2.9s
+    dur: 2.6 + ((i * 7) % 22) / 10,    // 2.6 – 4.7s
+    size: 7 + (i % 4) * 2,             // 7 – 13px
+    color: colors[i % colors.length],
+    round: i % 3 === 0,                // xen kẽ tròn / vuông
+  };
+});
+
 function OrderContent() {
   const searchParams = useSearchParams();
   const urlTableId = searchParams.get('table');
@@ -4288,42 +4303,69 @@ function OrderContent() {
           // z-index cao hơn co-thanks-overlay (4000, toast "Cảm ơn quý khách" tự
           // tắt sau ~6s) — 2 thứ này hiện gần như cùng lúc sau khi gửi đơn, nếu
           // không thì cái toast đỏ mờ sẽ đè lên che mất thông báo mời quay.
-          <div className="co-chal-overlay" style={{ zIndex: 4200 }} onClick={() => setShowLuckyNudge(false)}>
-            <div className="co-chal-modal" onClick={e => e.stopPropagation()} style={{ textAlign: 'center' }}>
-              <button className="co-chal-close" onClick={() => setShowLuckyNudge(false)} aria-label="Đóng">
+          <div className="co-chal-overlay conudge-overlay" style={{ zIndex: 4200 }} onClick={() => setShowLuckyNudge(false)}>
+            <style>{`
+              .conudge-confetti { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+              .conudge-confetti i { position: absolute; top: -24px; display: block; opacity: 0; animation-name: conudge-fall; animation-timing-function: linear; animation-iteration-count: infinite; }
+              @keyframes conudge-fall {
+                0% { transform: translateY(-24px) rotate(0deg); opacity: 0; }
+                8% { opacity: 1; }
+                100% { transform: translateY(102vh) rotate(680deg); opacity: 0; }
+              }
+              .conudge-card { position: relative; z-index: 1; text-align: center; overflow: hidden; animation: conudge-pop .42s cubic-bezier(.18,.89,.32,1.28) both; }
+              @keyframes conudge-pop { 0% { transform: scale(.7) translateY(10px); opacity: 0; } 100% { transform: scale(1) translateY(0); opacity: 1; } }
+              .conudge-top { margin: -20px -20px 0; padding: 22px 20px 16px; background: linear-gradient(135deg,#f97316 0%,#ef4444 55%,#db2777 100%); position: relative; overflow: hidden; }
+              .conudge-top::after { content:''; position:absolute; inset:0; background: radial-gradient(circle at 50% 0%, rgba(255,255,255,.35), transparent 60%); }
+              .conudge-badge { width: 78px; height: 78px; margin: 0 auto; border-radius: 50%; background: rgba(255,255,255,.18); border: 2px solid rgba(255,255,255,.6); display: flex; align-items: center; justify-content: center; font-size: 2.5rem; position: relative; z-index: 1; animation: conudge-bob 1.8s ease-in-out infinite; }
+              @keyframes conudge-bob { 0%,100%{ transform: translateY(0) rotate(-4deg);} 50%{ transform: translateY(-7px) rotate(4deg);} }
+              .conudge-title { position: relative; z-index: 1; margin-top: 12px; color: #fff; font-size: 1.42rem; font-weight: 900; letter-spacing: .2px; text-shadow: 0 2px 8px rgba(0,0,0,.18); }
+              .conudge-sub { position: relative; z-index: 1; margin-top: 4px; color: rgba(255,255,255,.95); font-size: .92rem; font-weight: 600; }
+              .conudge-prize { margin: 16px 4px 0; padding: 13px 14px; border-radius: 14px; background: linear-gradient(135deg,#fffbeb,#fef3c7); border: 1.5px solid #f59e0b; font-weight: 800; color: #92400e; font-size: .98rem; line-height: 1.35; box-shadow: 0 4px 14px rgba(245,158,11,.18); }
+              .conudge-urgency { margin-top: 12px; font-size: .82rem; color: #64748b; }
+              .conudge-cta { width: 100%; margin-top: 16px; padding: 15px; border: none; border-radius: 14px; background: linear-gradient(135deg,#f59e0b,#ef4444); color: #fff; font-size: 1.06rem; font-weight: 900; cursor: pointer; box-shadow: 0 8px 22px rgba(239,68,68,.4); animation: conudge-glow 1.8s ease-in-out infinite; }
+              .conudge-cta:active { transform: scale(.98); }
+              @keyframes conudge-glow { 0%,100%{ box-shadow: 0 8px 22px rgba(239,68,68,.38);} 50%{ box-shadow: 0 10px 30px rgba(245,158,11,.6);} }
+              .conudge-skip { width: 100%; margin-top: 9px; padding: 9px; background: none; border: none; color: #94a3b8; font-size: .85rem; font-weight: 600; cursor: pointer; }
+            `}</style>
+
+            {/* Pháo giấy tung ra chúc mừng */}
+            <div className="conudge-confetti" aria-hidden="true">
+              {NUDGE_CONFETTI.map((c, i) => (
+                <i key={i} style={{
+                  left: `${c.left}%`,
+                  width: c.size, height: c.round ? c.size : Math.round(c.size * 1.4),
+                  background: c.color,
+                  borderRadius: c.round ? '50%' : 2,
+                  animationDelay: `${c.delay}s`,
+                  animationDuration: `${c.dur}s`,
+                }} />
+              ))}
+            </div>
+
+            <div className="co-chal-modal conudge-card" onClick={e => e.stopPropagation()}>
+              <button className="co-chal-close" onClick={() => setShowLuckyNudge(false)} aria-label="Đóng" style={{ zIndex: 2 }}>
                 <X size={20} />
               </button>
-              <div style={{ fontSize: '2.6rem' }}>🎉</div>
-              <div className="co-chal-modal-title">Cảm ơn Quý khách!</div>
-              <div style={{ marginTop: 6, fontSize: '0.95rem', color: '#374151' }}>
-                Chúc mừng Quý khách có <b>1 lượt quay vòng xoay may mắn</b> 🎰
+              <div className="conudge-top">
+                <div className="conudge-badge">🎁</div>
+                <div className="conudge-title">🎉 Chúc mừng Quý khách!</div>
+                <div className="conudge-sub">Quý khách vừa nhận <b>1 lượt Vòng Xoay May Mắn</b></div>
               </div>
-              {luckyNudgeMaxPercent > 0 && (
-                <div style={{
-                  marginTop: 12, padding: '10px 14px', borderRadius: 10,
-                  background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
-                  border: '1px solid #f59e0b', fontWeight: 700, color: '#92400e',
-                }}>
-                  🔥 Có cơ hội trúng ngay ưu đãi giảm tới <span style={{ color: '#b91c1c', fontSize: '1.1em' }}>{luckyNudgeMaxPercent}%</span> hoá đơn!
-                </div>
-              )}
-              <div style={{ marginTop: 10, fontSize: '0.85rem', color: '#64748b' }}>
-                Quay là có quà liền tay — nhanh tay kẻo lỡ lượt của mình nha!
+
+              <div className="conudge-prize">
+                {luckyNudgeMaxPercent > 0
+                  ? <>🔥 Cơ hội trúng ưu đãi giảm tới <span style={{ color: '#dc2626', fontSize: '1.15em' }}>{luckyNudgeMaxPercent}%</span> hoá đơn!</>
+                  : <>🎁 Quay là <span style={{ color: '#dc2626' }}>chắc chắn có quà</span> — giảm giá, nước hoặc món tặng!</>}
               </div>
-              <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <button
-                  className="co-gmap-cta"
-                  onClick={() => { setShowLuckyNudge(false); openWheel(); }}
-                >
-                  🎰 Quay ngay nhận quà!
-                </button>
-                <button
-                  onClick={() => setShowLuckyNudge(false)}
-                  style={{ width: '100%', padding: '11px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}
-                >
-                  Bỏ qua
-                </button>
-              </div>
+
+              <div className="conudge-urgency">Quay liền tay — nhanh kẻo lỡ lượt của mình nha! ✨</div>
+
+              <button className="conudge-cta" onClick={() => { setShowLuckyNudge(false); openWheel(); }}>
+                🎰 QUAY NGAY NHẬN QUÀ
+              </button>
+              <button className="conudge-skip" onClick={() => setShowLuckyNudge(false)}>
+                Để sau
+              </button>
             </div>
           </div>
         )}
