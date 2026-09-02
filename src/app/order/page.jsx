@@ -3645,6 +3645,27 @@ function OrderContent() {
     return (rows || []).filter(r => r.match && (r.match.kind === 'plain' || r.chosenChoice)).length;
   }
 
+  // Gợi ý cho DÒNG đang gõ (dòng cuối) — gõ tới đâu gợi ý tới đó.
+  function currentLineSuggestions() {
+    const cur = ((batchText || '').split('\n').pop() || '').trim();
+    if (cur.length < 2) return { cur, list: [] };
+    const { text } = splitQtyFromLine(cur);
+    const m = matchOneLine(text);
+    if (m && m.kind === 'specific') return { cur, list: [] }; // dòng đã rõ → khỏi gợi ý
+    return { cur, list: getQuickSuggestions(text).slice(0, 6) };
+  }
+
+  // Bấm 1 gợi ý → hoàn tất dòng đang gõ + xuống dòng cho món kế.
+  function pickLineSuggestion(s) {
+    const lines = (batchText || '').split('\n');
+    const resolved = s.kind === 'specific' ? `${s.item.name} ${s.choice}` : s.item.name;
+    lines[lines.length - 1] = resolved;
+    const nt = lines.join('\n') + '\n';
+    setBatchText(nt);
+    setParsedLines(prev => buildParsedLines(nt, prev));
+    saveQuickDraft(nt);
+  }
+
   // Xoá 1 dòng: bỏ khỏi danh sách VÀ bỏ dòng đó khỏi ô nhập (để không hiện lại).
   function deleteParsedRow(row) {
     setParsedLines(prev => (prev || []).filter(r => r.id !== row.id));
@@ -5696,10 +5717,6 @@ function OrderContent() {
                 <button className="co-chal-close" onClick={closeQuick} aria-label="Đóng"><X size={20} /></button>
                 <div className="co-chal-modal-title">⚡ Gọi món nhanh</div>
                 <div className="co-chal-scroll">
-                    <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 8 }}>
-                      Mỗi dòng 1 món (thêm số lượng ở cuối). Vd:<br />
-                      <span style={{ color: '#334155' }}>sò sữa nướng hành · chem chép lá quế 2 · ốc hương xào bơ cay</span>
-                    </div>
                     <textarea
                       autoFocus
                       value={batchText}
@@ -5709,13 +5726,32 @@ function OrderContent() {
                       style={{ width: '100%', padding: '10px 12px', border: '1.5px solid #fdba74', borderRadius: 12, fontSize: '0.9rem', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
                     />
 
+                    {(() => {
+                      const { cur, list } = currentLineSuggestions();
+                      if (!cur || list.length === 0) return null;
+                      return (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                          {list.map((s, si) => (
+                            <button
+                              key={si}
+                              type="button"
+                              onClick={() => pickLineSuggestion(s)}
+                              style={{ padding: '7px 11px', borderRadius: 999, border: '1.5px solid #fdba74', background: '#fff7ed', color: '#c2410c', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                            >
+                              {s.kind === 'specific' ? `${s.item.name} · ${s.choice}` : s.item.name}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
+
                     {parsedLines && parsedLines.length > 0 && (
                       <div style={{ marginTop: 12 }}>
-                        <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#0f172a', marginBottom: 6 }}>Kiểm tra lại — sửa số lượng / chọn loại / xoá nếu sai:</div>
                         {[...parsedLines].reverse().map((row) => {
                           const m = row.match;
                           const loaiOpt = m ? (m.item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại')) : null;
                           const ok = m && (m.kind === 'plain' || row.chosenChoice);
+                          const linePrice = (m && ok) ? computeModalPrice(m.item.price, m.item.options, loaiOpt ? { [loaiOpt.name]: row.chosenChoice } : {}) * row.qty : 0;
                           return (
                             <div key={row.id} style={{ border: `1px solid ${ok ? '#bbf7d0' : '#fed7aa'}`, background: ok ? '#f0fdf4' : '#fff7ed', borderRadius: 10, padding: '8px 10px', marginBottom: 6 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -5728,6 +5764,9 @@ function OrderContent() {
                                     <div style={{ fontWeight: 700, fontSize: '0.86rem', color: '#c2410c' }}>❓ Không nhận ra</div>
                                   )}
                                   <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Bạn gõ: {row.raw}</div>
+                                  {ok && linePrice > 0 && (
+                                    <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#16a34a', marginTop: 2 }}>{linePrice.toLocaleString('vi-VN')}đ</div>
+                                  )}
                                 </div>
                                 {m && (
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
@@ -5748,7 +5787,6 @@ function OrderContent() {
                             </div>
                           );
                         })}
-                        <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: 6, textAlign: 'center' }}>Dòng chưa chọn loại hoặc không nhận ra sẽ được bỏ qua.</div>
                       </div>
                     )}
 
