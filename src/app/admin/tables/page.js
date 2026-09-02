@@ -783,8 +783,8 @@ export default function TablesPage() {
           if (row.status === 'failed') {
             // Lỗi "kẹt hàng đợi Windows" TỰ PHỤC HỒI (PrintAgent in lại khi
             // hàng đợi thông) → KHÔNG nảy popup đỏ cho khỏi làm phiền: phiếu
-            // vẫn in ra, chỉ trễ vài giây. Badge đỏ trên bàn vẫn hiện tạm rồi
-            // tự tắt. Chỉ báo popup với lỗi THẬT (không tự phục hồi được).
+            // vẫn in ra sau vài giây, và sẽ có thông báo "đã in lại xong" ở
+            // dưới. Chỉ báo popup ĐỎ với lỗi THẬT (không tự phục hồi được).
             const msg = (row.error_message || '').toLowerCase();
             const willAutoRecover = msg.includes('kẹt') || msg.includes('ket trong hang doi')
               || msg.includes('hàng đợi') || msg.includes('hang doi') || msg.includes('offline');
@@ -792,8 +792,10 @@ export default function TablesPage() {
               ringBell();
               Swal.fire({ title: '⚠️ Máy in lỗi!', text: 'Có món chưa in được — kiểm tra bàn có dấu 🖨️ đỏ để in lại.', icon: 'error', toast: true, position: 'top-end', showConfirmButton: false, timer: 5000 });
             }
+          } else if (row.status === 'done' && row.error_message === 'Đã tự động in khi có giấy') {
+            // Máy in đã thông hàng đợi, PrintAgent TỰ IN LẠI xong → báo OK.
+            Swal.fire({ title: '✅ Máy in OK', text: 'Phiếu bị kẹt đã tự in lại xong rồi ạ.', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 4000 });
           }
-          // Bỏ popup "đã hoạt động lại" cho gọn — không cần báo khi tự khỏi.
         }
         scheduleRefetch(false); // cập nhật badge lỗi trên thẻ bàn
       })
