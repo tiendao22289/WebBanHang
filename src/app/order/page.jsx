@@ -3822,7 +3822,7 @@ function OrderContent() {
             </button>
             {luckyWheelEnabled && (
               <button className="co-promo-pill wheel" onClick={openWheel}>
-                🎰 Vòng xoay
+                🎁 Vòng xoay
               </button>
             )}
             {activeChannels.length > 0 && (
@@ -4361,7 +4361,7 @@ function OrderContent() {
               <div className="conudge-urgency">Quay liền tay — nhanh kẻo lỡ lượt của mình nha! ✨</div>
 
               <button className="conudge-cta" onClick={() => { setShowLuckyNudge(false); openWheel(); }}>
-                🎰 QUAY NGAY NHẬN QUÀ
+                🎁 QUAY NGAY NHẬN QUÀ
               </button>
               <button className="conudge-skip" onClick={() => setShowLuckyNudge(false)}>
                 Để sau
@@ -4379,12 +4379,12 @@ function OrderContent() {
                   <X size={20} />
                 </button>
               )}
-              <div className="co-chal-modal-title">🎰 Vòng xoay may mắn</div>
+              <div className="co-chal-modal-title">🎁 Vòng xoay may mắn</div>
               <div className="co-chal-scroll">
 
                 <div className="co-chal-views">
                   👁 {featureViews.wheel ?? '…'} lượt xem
-                  {wheelStats.totalSpins != null && <> · 🎰 {wheelStats.totalSpins} lượt quay</>}
+                  {wheelStats.totalSpins != null && <> · 🎁 {wheelStats.totalSpins} lượt quay</>}
                 </div>
 
                 {/* Vòng xoay — ẩn ngay khi đã có kết quả, nhường chỗ cho khối
@@ -4607,7 +4607,7 @@ function OrderContent() {
                         onChange={e => setWheelForm(f => ({ ...f, phone: e.target.value }))}
                       />
                       <button className="co-gmap-cta" onClick={spinWheel} disabled={wheelSpinning}>
-                        {wheelSpinning ? 'Đang quay... 🎰' : 'QUAY NGAY! 🎡'}
+                        {wheelSpinning ? 'Đang quay...' : 'QUAY NGAY! 🎁'}
                       </button>
                       <div className="co-wheel-note">
                         Mỗi bàn quay 1 lượt. Quán chỉ dùng thông tin để ghi quà và
