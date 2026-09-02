@@ -487,7 +487,7 @@ export default function TablesPage() {
               id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
               order_items (
                 id, quantity, unit_price, item_options, note, is_gift, menu_item_id, item_name, added_by_name,
-                menu_item:menu_items (name, price, image_url, category_id)
+                menu_item:menu_items (name, price, image_url, category_id, options)
               ),
               print_jobs (id, status, created_at, printer_id, error_message, filter_category_ids, only_item_ids, order_ids)
             `)
@@ -534,7 +534,7 @@ export default function TablesPage() {
           id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
           order_items (
             id, quantity, unit_price, item_options, note, is_gift, menu_item_id, item_name, added_by_name,
-            menu_item:menu_items (name, price, image_url, category_id)
+            menu_item:menu_items (name, price, image_url, category_id, options)
           ),
           print_jobs (id, status, created_at, printer_id, error_message, filter_category_ids, only_item_ids, order_ids)
         `)
@@ -564,9 +564,27 @@ export default function TablesPage() {
     }
     if (Array.isArray(job.filter_category_ids) && job.filter_category_ids.length) {
       const set = new Set(job.filter_category_ids);
-      return items.filter(i => i.menu_item?.category_id && set.has(i.menu_item.category_id));
+      // Khớp ĐÚNG cách PrintAgent định tuyến: category của món ưu tiên lấy theo
+      // LOẠI đã chọn (item_options → choiceCategories), fallback về category gốc.
+      return items.filter(i => set.has(resolveItemCategory(i)));
     }
     return items; // không lọc → cả đơn
+  }
+
+  // Category thực tế để định tuyến máy in của 1 món (giống printer.js).
+  function resolveItemCategory(item) {
+    let cat = item.menu_item?.category_id ?? null;
+    const opts = item.menu_item?.options || menuItems.find(m => m.id === item.menu_item_id)?.options || [];
+    if (Array.isArray(item.item_options)) {
+      for (const opt of item.item_options) {
+        const mo = opts.find(o => o.name === opt.name);
+        if (mo && Array.isArray(mo.choiceCategories) && Array.isArray(mo.choices)) {
+          const idx = mo.choices.indexOf(opt.choice);
+          if (idx >= 0 && mo.choiceCategories[idx]) cat = mo.choiceCategories[idx];
+        }
+      }
+    }
+    return cat;
   }
 
   // Tập id các món CHƯA IN ĐƯỢC của 1 đơn (thuộc lệnh in lỗi/treo) — để đánh
