@@ -541,6 +541,7 @@ function OrderContent() {
   const [notes, setNotes] = useState({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false); // khoá đồng bộ chống bấm "Gửi đơn" 2 lần cực nhanh (state React cập nhật chậm hơn)
   // Bật sau vài giây nếu submitOrder() vẫn chưa xong — báo khách mạng đang yếu
   // thay vì để trạng thái "Đang gửi..." im lìm trông như bị treo. KHÔNG huỷ
   // hay tự ý coi là thất bại — request vẫn tiếp tục chờ, xong lúc nào tự hoàn
@@ -3197,7 +3198,7 @@ function OrderContent() {
     const effectiveCart = Array.isArray(cartOverride) ? cartOverride : cart;
     const effectiveGifts = Array.isArray(giftOverride) ? giftOverride : giftCart;
     // Cho phép gửi gift-only (cart rỗng nhưng giftCart/giftOverride có món)
-    if ((effectiveCart.length === 0 && effectiveGifts.length === 0) || submitting) return;
+    if ((effectiveCart.length === 0 && effectiveGifts.length === 0) || submitting || submittingRef.current) return;
 
     // Chỉ kiểm tra quà khi gọi từ giỏ hàng thông thường (có món trong cart)
     // Bỏ qua check nếu là gift-only flow (effectiveCart rỗng) — khách đang chốt quà
@@ -3225,6 +3226,7 @@ function OrderContent() {
       : totalAmount;
 
     setGiftPromptPending(false);
+    submittingRef.current = true; // khoá NGAY (đồng bộ) trước mọi await để cú bấm thứ 2 bị chặn
     setSubmitting(true);
     setSubmitSlow(false);
     // Sau 5s vẫn chưa xong → báo mạng yếu, KHÔNG huỷ request đang chờ. Request
@@ -3348,6 +3350,7 @@ function OrderContent() {
       console.error(err);
     } finally {
       clearTimeout(slowTimer);
+      submittingRef.current = false; // mở khoá cho đơn tiếp theo
       setSubmitting(false);
       setSubmitSlow(false);
       nudgeDismissedRef.current = false; // reset để đơn tiếp theo vẫn gợi ý được
