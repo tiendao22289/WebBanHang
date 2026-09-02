@@ -3909,7 +3909,9 @@ function OrderContent() {
               data-cat-id={catId}
               ref={el => { sectionRefs.current[catId] = el; }}
             >
-              <h3 className="co-cat-title">{catName} ({items.length})</h3>
+              {!(catId === 'all' && !searchTerm) && (
+                <h3 className="co-cat-title">{catName} ({items.length})</h3>
+              )}
               <div className={viewMode === 'grid' ? 'co-items-grid' : 'co-items-list'}>
                 {items.map(item => {
                   const qty = getCartQty(item.id);
