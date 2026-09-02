@@ -954,11 +954,17 @@ html, body { background: #ffffff !important; }
 .co-chal-overlay {
   position: fixed;
   inset: 0;
+  /* iOS Safari: 100vh tính cả phần bị thanh công cụ che → dùng dvh (vùng
+     nhìn thấy thật) để modal không bị tràn/cắt khúc dưới. */
+  height: 100vh;
+  height: 100dvh;
   z-index: 2500;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 18px;
+  padding: 14px;
+  padding-top: calc(14px + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
   background: rgba(26, 10, 0, 0.55);
   backdrop-filter: blur(3px);
   animation: coThanksFade2 0.22s ease;
@@ -972,6 +978,7 @@ html, body { background: #ffffff !important; }
   width: 100%;
   max-width: 420px;
   max-height: 86vh;
+  max-height: 92dvh;
   display: flex;
   flex-direction: column;
   background: linear-gradient(135deg, #fff7ed, #fffbeb);
@@ -1014,8 +1021,10 @@ html, body { background: #ffffff !important; }
 }
 .co-chal-scroll {
   padding: 12px 14px 16px;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 /* ── Badge lượt xem (thống kê nhỏ trong bảng) ── */
@@ -1947,9 +1956,12 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
 
 .co-wheel-wrap {
   position: relative;
-  width: min(62vw, 245px);
-  height: min(62vw, 245px);
+  width: min(72vw, 300px);
+  height: min(72vw, 300px);
   margin: 6px auto 14px;
+  /* Khoảng cách nhãn ra khỏi tâm — co giãn theo cỡ vòng xoay để luôn nằm
+     sát vành dù màn hình to/nhỏ (iOS/Android). */
+  --co-wheel-label-r: min(28.5vw, 118px);
 }
 .co-wheel {
   width: 100%;
