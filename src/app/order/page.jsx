@@ -3634,8 +3634,14 @@ function OrderContent() {
         let hasDistinct = false;
         for (const w of nameWords) {
           if (!qSet.has(w)) continue;
-          if (isDistinctiveNameWord(w)) { hasDistinct = true; score += 10; }
-          else score += 1;
+          if (isDistinctiveNameWord(w)) {
+            hasDistinct = true;
+            // Chữ càng HIẾM (ít món dùng) càng nặng điểm: "hương" (chỉ Ốc
+            // Hương) thắng "tỏi" (có ở Ốc Tỏi + Ốc Tỏi Giấy). Nhờ vậy "hương
+            // tỏi" ra Ốc Hương, còn "tỏi" coi là cách làm (xào tỏi).
+            const dfw = menuWordIndex.df.get(w) || 3;
+            score += 12 - Math.min(dfw, 3) * 2; // df1→10, df2→8, df3→6
+          } else score += 1;
         }
         if (!hasDistinct) score = 0;
       }
