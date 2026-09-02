@@ -555,6 +555,9 @@ function OrderContent() {
   const [showQuickOrder, setShowQuickOrder] = useState(false); // bảng gọi món nhanh (gõ → gợi ý)
   const [quickQuery, setQuickQuery] = useState('');
   const [quickAddedFlash, setQuickAddedFlash] = useState(''); // tên món vừa thêm (báo nhanh)
+  const [quickMode, setQuickMode] = useState('single'); // 'single' = gõ 1 món; 'batch' = ghi nhiều món
+  const [batchText, setBatchText] = useState('');
+  const [parsedLines, setParsedLines] = useState(null); // kết quả phân tích nhiều dòng để khách xem/sửa
   const [previousOrders, setPreviousOrders] = useState([]);
   const [takeawaySeqMap, setTakeawaySeqMap] = useState({}); // { orderId: seqNo } cho takeaway
   const [editingAddress, setEditingAddress] = useState(false);
@@ -3555,6 +3558,101 @@ function OrderContent() {
     addToCart(s.item);
   }
 
+  // ── GHI NHIỀU MÓN: tìm MÓN khớp nhất cho 1 dòng chữ (đã bỏ số lượng) ──
+  function matchOneLine(text) {
+    const q = removeVietnameseTones((text || '').trim().toLowerCase());
+    if (q.length < 2) return null;
+    const qWords = q.split(/\s+/).filter(Boolean);
+    let bestItem = null, bestScore = 0, bestRemainder = '';
+    for (const item of menuItems) {
+      if (item.is_available === false) continue;
+      const normName = removeVietnameseTones((item.name || '').toLowerCase());
+      if (!normName) continue;
+      const nameWords = normName.split(/[^a-z0-9]+/).filter(w => w.length >= 2);
+      if (nameWords.length === 0) continue;
+      let score = 0, remainder = q;
+      if (q.includes(normName)) {
+        // cả tên món xuất hiện liền trong câu → khớp mạnh nhất
+        score = normName.length + 10;
+        remainder = q.replace(normName, ' ').replace(/\s+/g, ' ').trim();
+      } else if (nameWords.every(w => qWords.includes(w))) {
+        // TẤT CẢ từ của tên món có trong câu (không cần liền) → khớp chắc.
+        // Bắt buộc đủ hết để tránh khớp bừa qua 1 từ chung ("nướng", "món"...).
+        score = nameWords.join('').length;
+        remainder = qWords.filter(w => !nameWords.includes(w)).join(' ');
+      }
+      if (score > bestScore) { bestScore = score; bestItem = item; bestRemainder = remainder; }
+    }
+    if (!bestItem) return null;
+    const loaiOpt = (bestItem.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
+    if (loaiOpt && Array.isArray(loaiOpt.choices) && loaiOpt.choices.length) {
+      const words = bestRemainder.split(/\s+/).filter(w => w.length >= 2);
+      const scored = words.length ? loaiOpt.choices.map(c => {
+        const nc = removeVietnameseTones((c || '').toLowerCase());
+        return { c, s: words.reduce((n, w) => n + ((nc.includes(w) || w.includes(nc)) ? 1 : 0), 0) };
+      }).filter(x => x.s > 0).sort((a, b) => b.s - a.s) : [];
+      if (scored.length) return { item: bestItem, choice: scored[0].c, kind: 'specific' };
+      return { item: bestItem, kind: 'pick' };
+    }
+    return { item: bestItem, kind: 'plain' };
+  }
+
+  // Tách số lượng khỏi dòng: "sò mai nướng phô mai 2 con" → {qty:2, text:"sò mai nướng phô mai"}
+  function splitQtyFromLine(line) {
+    let raw = (line || '').trim();
+    let qty = 1;
+    const mTrail = raw.match(/[\s]+(\d{1,2})\s*(con|ph[aầ]n|d[iĩ]a|d)?\.?$/i);
+    const mLead = raw.match(/^(\d{1,2})\s+/);
+    if (mTrail) { qty = parseInt(mTrail[1]) || 1; raw = raw.slice(0, mTrail.index).trim(); }
+    else if (mLead) { qty = parseInt(mLead[1]) || 1; raw = raw.slice(mLead[0].length).trim(); }
+    return { qty: Math.min(Math.max(qty, 1), 50), text: raw };
+  }
+
+  // Phân tích ô nhiều dòng → danh sách để khách xem/sửa.
+  function parseBatch() {
+    const lines = (batchText || '').split('\n').map(l => l.trim()).filter(Boolean);
+    const rows = lines.map((line, i) => {
+      const { qty, text } = splitQtyFromLine(line);
+      const match = matchOneLine(text);
+      return { id: `${i}-${line}`, raw: line, qty, match, chosenChoice: match?.kind === 'specific' ? match.choice : '' };
+    });
+    setParsedLines(rows);
+  }
+
+  // Thêm số lượng tuỳ ý 1 món (đã xác định LOẠI) vào giỏ.
+  function addResolvedToCart(item, choice, qty) {
+    const loaiOpt = (item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
+    const selectedOpts = {};
+    if (loaiOpt && choice) selectedOpts[loaiOpt.name] = choice;
+    const price = computeModalPrice(item.price, item.options, selectedOpts);
+    const optionsArr = choice ? [{ name: loaiOpt?.name || 'LOẠI', choice }] : [];
+    const cartItem = { ...item, price, _optionKey: `${item.id}-${choice || ''}-`, _options: optionsArr, _note: '', quantity: qty };
+    setCart(prev => {
+      const ex = prev.find(c => c._optionKey === cartItem._optionKey);
+      if (ex) return prev.map(c => c._optionKey === cartItem._optionKey ? { ...c, quantity: c.quantity + qty } : c);
+      return [...prev, cartItem];
+    });
+  }
+
+  // Thêm TẤT CẢ dòng đã nhận diện được (đã chọn loại xong) vào giỏ.
+  function addAllParsed() {
+    let added = 0;
+    (parsedLines || []).forEach(row => {
+      if (!row.match) return;
+      const needChoice = row.match.kind !== 'plain';
+      const choice = needChoice ? row.chosenChoice : null;
+      if (needChoice && !choice) return; // chưa chọn loại → bỏ qua
+      addResolvedToCart(row.match.item, choice, row.qty);
+      added++;
+    });
+    if (added > 0) {
+      setBatchText('');
+      setParsedLines(null);
+      setShowQuickOrder(false);
+      setShowCart(true);
+    }
+  }
+
   // Lấy tất cả choices của item để hiển thị dạng tags
   function getItemOptionTags(item) {
     if (!item.options || item.options.length === 0) return [];
@@ -5561,6 +5659,19 @@ function OrderContent() {
                 <button className="co-chal-close" onClick={() => { setShowQuickOrder(false); setQuickQuery(''); }} aria-label="Đóng"><X size={20} /></button>
                 <div className="co-chal-modal-title">⚡ Gọi món nhanh</div>
                 <div className="co-chal-scroll">
+                  {/* Chuyển chế độ: gõ 1 món / ghi nhiều món */}
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                    <button onClick={() => setQuickMode('single')}
+                      style={{ flex: 1, padding: '8px', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: '0.82rem', background: quickMode === 'single' ? '#f59e0b' : '#f1f5f9', color: quickMode === 'single' ? 'white' : '#64748b' }}>
+                      ⚡ Gõ 1 món
+                    </button>
+                    <button onClick={() => setQuickMode('batch')}
+                      style={{ flex: 1, padding: '8px', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: '0.82rem', background: quickMode === 'batch' ? '#f59e0b' : '#f1f5f9', color: quickMode === 'batch' ? 'white' : '#64748b' }}>
+                      📝 Ghi nhiều món
+                    </button>
+                  </div>
+
+                  {quickMode === 'single' && (<>
                   <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 8 }}>
                     Gõ tên món (có dấu hay không đều được), vd: <b>oc huong toi</b> — bấm gợi ý để thêm.
                   </div>
@@ -5601,6 +5712,73 @@ function OrderContent() {
                       <div style={{ color: '#9ca3af', fontSize: '0.82rem', padding: '8px 2px' }}>Không tìm thấy món khớp. Thử gõ khác hoặc chọn trong thực đơn nhé.</div>
                     )}
                   </div>
+                  </>)}
+
+                  {quickMode === 'batch' && (<>
+                    <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 8 }}>
+                      Mỗi dòng 1 món (thêm số lượng ở cuối). Vd:<br />
+                      <span style={{ color: '#334155' }}>sò sữa nướng hành · chem chép lá quế 2 · ốc hương xào bơ cay</span>
+                    </div>
+                    <textarea
+                      value={batchText}
+                      onChange={e => setBatchText(e.target.value)}
+                      rows={5}
+                      placeholder={"sò sữa nướng hành\nchem chép lá quế 2\nốc hương xào bơ cay\ncàng ghẹ rang muối 2"}
+                      style={{ width: '100%', padding: '10px 12px', border: '1.5px solid #fdba74', borderRadius: 12, fontSize: '0.9rem', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
+                    />
+                    <button onClick={parseBatch} disabled={!batchText.trim()}
+                      style={{ width: '100%', marginTop: 8, padding: '11px', background: batchText.trim() ? '#2563eb' : '#cbd5e1', color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.9rem', cursor: batchText.trim() ? 'pointer' : 'not-allowed' }}>
+                      🔎 Phân tích {parsedLines ? 'lại' : ''}
+                    </button>
+
+                    {parsedLines && (
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#0f172a', marginBottom: 6 }}>Kiểm tra lại — sửa số lượng / chọn loại / xoá nếu sai:</div>
+                        {parsedLines.length === 0 && <div style={{ color: '#9ca3af', fontSize: '0.82rem' }}>Chưa có dòng nào.</div>}
+                        {parsedLines.map((row) => {
+                          const m = row.match;
+                          const loaiOpt = m ? (m.item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại')) : null;
+                          const ok = m && (m.kind === 'plain' || row.chosenChoice);
+                          return (
+                            <div key={row.id} style={{ border: `1px solid ${ok ? '#bbf7d0' : '#fed7aa'}`, background: ok ? '#f0fdf4' : '#fff7ed', borderRadius: 10, padding: '8px 10px', marginBottom: 6 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  {m ? (
+                                    <div style={{ fontWeight: 700, fontSize: '0.86rem', color: '#111827' }}>
+                                      {m.item.name}{row.chosenChoice ? <span style={{ color: '#ea580c' }}> · {row.chosenChoice}</span> : (m.kind === 'plain' ? '' : <span style={{ color: '#c2410c' }}> · (chọn loại)</span>)}
+                                    </div>
+                                  ) : (
+                                    <div style={{ fontWeight: 700, fontSize: '0.86rem', color: '#c2410c' }}>❓ Không nhận ra</div>
+                                  )}
+                                  <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Bạn gõ: {row.raw}</div>
+                                </div>
+                                {m && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                                    <button onClick={() => setParsedLines(p => p.map(r => r.id === row.id ? { ...r, qty: Math.max(1, r.qty - 1) } : r))} style={{ width: 24, height: 24, borderRadius: 6, border: '1px solid #d1d5db', background: 'white', cursor: 'pointer' }}>−</button>
+                                    <span style={{ minWidth: 18, textAlign: 'center', fontWeight: 800, fontSize: '0.85rem' }}>{row.qty}</span>
+                                    <button onClick={() => setParsedLines(p => p.map(r => r.id === row.id ? { ...r, qty: Math.min(50, r.qty + 1) } : r))} style={{ width: 24, height: 24, borderRadius: 6, border: '1px solid #d1d5db', background: 'white', cursor: 'pointer' }}>+</button>
+                                  </div>
+                                )}
+                                <button onClick={() => setParsedLines(p => p.filter(r => r.id !== row.id))} aria-label="Xoá dòng" style={{ width: 26, height: 26, borderRadius: 6, border: 'none', background: '#fee2e2', color: '#dc2626', cursor: 'pointer', flexShrink: 0, fontWeight: 800 }}>✕</button>
+                              </div>
+                              {m && loaiOpt && Array.isArray(loaiOpt.choices) && (
+                                <select value={row.chosenChoice} onChange={e => setParsedLines(p => p.map(r => r.id === row.id ? { ...r, chosenChoice: e.target.value } : r))}
+                                  style={{ marginTop: 6, width: '100%', padding: '6px 8px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: '0.82rem', background: 'white' }}>
+                                  <option value="">— Chọn loại —</option>
+                                  {loaiOpt.choices.map((c, ci) => <option key={ci} value={c}>{c}</option>)}
+                                </select>
+                              )}
+                            </div>
+                          );
+                        })}
+                        <button onClick={addAllParsed}
+                          style={{ width: '100%', marginTop: 8, padding: '12px', background: 'linear-gradient(135deg,#16a34a,#15803d)', color: 'white', border: 'none', borderRadius: 12, fontWeight: 900, fontSize: '0.92rem', cursor: 'pointer' }}>
+                          ✓ Thêm tất cả vào giỏ
+                        </button>
+                        <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: 6, textAlign: 'center' }}>Dòng chưa chọn loại hoặc không nhận ra sẽ được bỏ qua.</div>
+                      </div>
+                    )}
+                  </>)}
 
                   {cart.length > 0 && (
                     <div style={{ marginTop: 14, borderTop: '1px dashed #e5e7eb', paddingTop: 10 }}>
