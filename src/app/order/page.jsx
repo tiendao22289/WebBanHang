@@ -2,7 +2,7 @@
 import { removeVietnameseTones } from '@/lib/utils';
 
 
-import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
@@ -3495,6 +3495,42 @@ function OrderContent() {
     return hasExplicitOptionPrice ? sum : Number(basePrice || 0);
   }
 
+  // Chỉ mục từ khóa của thực đơn: phân biệt "từ đặc trưng của TÊN món"
+  // (ghẹ, lông, hương…) với "từ cách chế biến / LOẠI" (nướng, rang, muối,
+  // hành, bơ…). Khách hay ghi tắt bỏ chữ đầu ("ghẹ rang muối" = càng ghẹ
+  // rang muối, "long hành" = sò lông nướng mỡ hành) nên phải nhận diện món
+  // qua từ đặc trưng, không lệ thuộc đủ tên.
+  // Động từ chế biến — không bao giờ là "tên món", chỉ là cách làm. Dù có
+  // món nào lỡ có chữ này trong tên ("HÀU nướng") cũng không cho các chữ này
+  // tự khớp món, tránh "sò sữa nướng hành" nhảy bừa sang "Hàu nướng".
+  const COOKING_WORDS = new Set([
+    'nuong', 'xao', 'hap', 'rang', 'luoc', 'chien', 'sot', 'ham', 'kho', 'chao', 'sup', 'lau',
+    // từ chung / đơn vị — không phải tên con hải sản
+    'mon', 'con', 'cai', 'dia', 'phan', 'ly', 'chai', 'ban', 'nay', 'cho', 'giup', 'them', 'phan',
+  ]);
+  const menuWordIndex = useMemo(() => {
+    const df = new Map(); // từ trong TÊN món → xuất hiện ở bao nhiêu món
+    for (const item of menuItems) {
+      if (item.is_available === false) continue;
+      const nameWords = new Set(removeVietnameseTones((item.name || '').toLowerCase()).split(/[^a-z0-9]+/).filter(w => w.length >= 2));
+      nameWords.forEach(w => df.set(w, (df.get(w) || 0) + 1));
+    }
+    return { df };
+  }, [menuItems]);
+
+  // Từ có phải "đặc trưng" cho tên món không: hiếm (chỉ ít món dùng, tức là
+  // chữ chỉ đúng con hải sản đó — "ghẹ", "lông", "hương", "mai") và không
+  // phải động từ chế biến. Chữ "chi" chung nhiều món ("sò", "ốc") KHÔNG đặc
+  // trưng vì ghi mỗi "sò"/"ốc" thì chưa rõ con gì.
+  function isDistinctiveNameWord(w) {
+    // ≥ 3 ký tự: bỏ các chữ chung 2 ký tự ("có", "sò", "ốc") thường trùng
+    // với từ đệm trong câu.
+    if (!w || w.length < 3) return false;
+    if (COOKING_WORDS.has(w)) return false;
+    const dfCount = menuWordIndex.df.get(w) || 0;
+    return dfCount >= 1 && dfCount <= 3;
+  }
+
   // ── Gọi món nhanh: gõ chữ → gợi ý món (bỏ dấu, khớp gần đúng) ──
   function getQuickSuggestions(query) {
     const q = removeVietnameseTones((query || '').trim().toLowerCase());
@@ -3504,14 +3540,18 @@ function OrderContent() {
       if (item.is_available === false) continue;
       const normName = removeVietnameseTones((item.name || '').toLowerCase());
       if (!normName) continue;
+      const qWords = q.split(/\s+/).filter(Boolean);
+      const nameWords = normName.split(/[^a-z0-9]+/).filter(w => w.length >= 2);
       const nameInQuery = q.includes(normName);
       const queryInName = normName.includes(q);
       const firstWordMatch = q.split(' ')[0] === normName.split(' ')[0];
-      if (!nameInQuery && !queryInName && !firstWordMatch) continue;
+      // Khách ghi tắt: chỉ cần 1 từ ĐẶC TRƯNG của tên món khớp ("ghẹ", "lông").
+      const distinctiveMatch = nameWords.some(w => qWords.includes(w) && isDistinctiveNameWord(w));
+      if (!nameInQuery && !queryInName && !firstWordMatch && !distinctiveMatch) continue;
 
       const loaiOpt = (item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
       if (loaiOpt && Array.isArray(loaiOpt.choices) && loaiOpt.choices.length > 0) {
-        const remainder = nameInQuery ? q.replace(normName, ' ').trim() : (queryInName ? '' : q.replace(normName.split(' ')[0], ' ').trim());
+        const remainder = nameInQuery ? q.replace(normName, ' ').trim() : (queryInName ? '' : qWords.filter(w => !nameWords.includes(w)).join(' '));
         const words = remainder.split(/\s+/).filter(w => w.length >= 2);
         // Xếp hạng LOẠI theo SỐ TỪ khớp — loại khớp nhiều từ nhất (vd "xào lá
         // quế" khớp cả 3 từ) lên trước, không để từ chung "xào" lấn át.
@@ -3571,25 +3611,39 @@ function OrderContent() {
     const q = removeVietnameseTones((text || '').trim().toLowerCase());
     if (q.length < 2) return null;
     const qWords = q.split(/\s+/).filter(Boolean);
-    let bestItem = null, bestScore = 0, bestRemainder = '';
+    const qSet = new Set(qWords);
+    let bestItem = null, bestScore = 0, bestRemainder = '', bestNameLen = 0;
     for (const item of menuItems) {
       if (item.is_available === false) continue;
       const normName = removeVietnameseTones((item.name || '').toLowerCase());
       if (!normName) continue;
       const nameWords = normName.split(/[^a-z0-9]+/).filter(w => w.length >= 2);
       if (nameWords.length === 0) continue;
-      let score = 0, remainder = q;
+      let score = 0;
       if (q.includes(normName)) {
         // cả tên món xuất hiện liền trong câu → khớp mạnh nhất
-        score = normName.length + 10;
-        remainder = q.replace(normName, ' ').replace(/\s+/g, ' ').trim();
-      } else if (nameWords.every(w => qWords.includes(w))) {
+        score = 1000 + normName.length;
+      } else if (nameWords.every(w => qSet.has(w))) {
         // TẤT CẢ từ của tên món có trong câu (không cần liền) → khớp chắc.
-        // Bắt buộc đủ hết để tránh khớp bừa qua 1 từ chung ("nướng", "món"...).
-        score = nameWords.join('').length;
-        remainder = qWords.filter(w => !nameWords.includes(w)).join(' ');
+        score = 500 + nameWords.join('').length;
+      } else {
+        // Khớp TẮT: khách bỏ chữ đầu ("ghẹ rang muối", "long hành"). Cộng
+        // điểm theo từ TÊN có trong câu, ưu tiên từ đặc trưng. BẮT BUỘC ít
+        // nhất 1 từ đặc trưng để tránh khớp bừa qua từ chung ("nướng", "ốc",
+        // "sò", "món"...).
+        let hasDistinct = false;
+        for (const w of nameWords) {
+          if (!qSet.has(w)) continue;
+          if (isDistinctiveNameWord(w)) { hasDistinct = true; score += 10; }
+          else score += 1;
+        }
+        if (!hasDistinct) score = 0;
       }
-      if (score > bestScore) { bestScore = score; bestItem = item; bestRemainder = remainder; }
+      // Điểm cao thắng; hoà điểm thì tên dài hơn (cụ thể hơn) thắng.
+      if (score > bestScore || (score > 0 && score === bestScore && normName.length > bestNameLen)) {
+        bestScore = score; bestItem = item; bestNameLen = normName.length;
+        bestRemainder = qWords.filter(w => !nameWords.includes(w)).join(' ');
+      }
     }
     if (!bestItem) return null;
     const loaiOpt = (bestItem.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
