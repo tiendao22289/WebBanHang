@@ -3502,13 +3502,18 @@ function OrderContent() {
       if (loaiOpt && Array.isArray(loaiOpt.choices) && loaiOpt.choices.length > 0) {
         const remainder = nameInQuery ? q.replace(normName, ' ').trim() : (queryInName ? '' : q.replace(normName.split(' ')[0], ' ').trim());
         const words = remainder.split(/\s+/).filter(w => w.length >= 2);
-        const matched = words.length > 0
-          ? loaiOpt.choices.filter(c => {
+        // Xếp hạng LOẠI theo SỐ TỪ khớp — loại khớp nhiều từ nhất (vd "xào lá
+        // quế" khớp cả 3 từ) lên trước, không để từ chung "xào" lấn át.
+        const scored = words.length > 0
+          ? loaiOpt.choices.map(c => {
               const nc = removeVietnameseTones((c || '').toLowerCase());
-              return words.some(w => nc.includes(w) || w.includes(nc));
-            })
+              const score = words.reduce((n, w) => n + (nc.includes(w) || w.includes(nc) ? 1 : 0), 0);
+              return { c, score };
+            }).filter(x => x.score > 0).sort((a, b) => b.score - a.score)
           : [];
-        if (matched.length > 0) matched.slice(0, 4).forEach(c => out.push({ item, choice: c, kind: 'specific' }));
+        const maxScore = scored.length ? scored[0].score : 0;
+        const matched = scored.filter(x => x.score === maxScore).map(x => x.c);
+        if (matched.length > 0) matched.slice(0, 5).forEach(c => out.push({ item, choice: c, kind: 'specific' }));
         else out.push({ item, kind: 'pick' });
       } else {
         out.push({ item, kind: 'plain' });
