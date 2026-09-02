@@ -603,33 +603,35 @@ export default function TablesPage() {
     }
   }
 
-  // Khối báo "món chưa in được" + nút In lại cho 1 đơn (dùng chung desktop/mobile).
+  // Lý do lỗi in — rút gọn cho dễ đọc (giấu đoạn lỗi kỹ thuật dài vào tooltip).
+  function shortPrintError(job) {
+    if (job.status === 'pending') return 'máy in chưa nhận';
+    const m = (job.error_message || '').toLowerCase();
+    if (m.includes('offline') || m.includes('phản hồi') || m.includes('phan hoi') || m.includes('mất kết nối') || m.includes('mat ket noi')) return 'máy in mất kết nối';
+    if (m.includes('kẹt') || m.includes('ket trong hang doi') || m.includes('giấy') || m.includes('giay')) return 'kẹt / hết giấy';
+    return 'chưa in được';
+  }
+
+  // Khối báo "món chưa in được" + nút In lại cho 1 đơn (gọn: icon + tên máy + lý do).
   function renderPrintErrorPanel(order) {
     const bad = (order?.print_jobs || []).filter(isPrintJobBad);
     if (bad.length === 0) return null;
     return (
-      <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 10px', margin: '6px 12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, color: '#dc2626', fontSize: '0.8rem', marginBottom: 4 }}>
-          🖨️ Món chưa in được — bấm để in lại
-        </div>
+      <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '6px 8px', margin: '6px 12px', display: 'flex', flexDirection: 'column', gap: 4 }}>
         {bad.map((job) => {
           const items = itemsOfPrintJob(job, order);
-          const names = items.map(i => `${i.quantity}× ${i.item_name || i.menu_item?.name || 'Món'}`).join(', ');
+          const names = items.map(i => `${i.quantity}× ${i.item_name || i.menu_item?.name || 'Món'}`).join(', ') || 'Toàn bộ món của đơn';
           return (
-            <div key={job.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: '1px dashed #fecaca' }}>
-              <div style={{ flex: 1, fontSize: '0.76rem', color: '#7f1d1d', minWidth: 0 }}>
-                <div><b>{printerNameOf(job.printer_id)}</b></div>
-                <div style={{ color: '#991b1b' }}>{names || 'Toàn bộ món của đơn'}</div>
-                {job.status === 'failed' && job.error_message && (
-                  <div style={{ color: '#b91c1c', fontSize: '0.7rem', opacity: 0.85 }}>Lý do: {job.error_message}</div>
-                )}
-                {job.status === 'pending' && (
-                  <div style={{ color: '#b45309', fontSize: '0.7rem' }}>Máy in chưa nhận (PrintAgent có thể đang tắt/mất mạng)</div>
-                )}
-              </div>
+            <div key={job.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span
+                title={`${names}${job.error_message ? '\nLý do: ' + job.error_message : ''}`}
+                style={{ flex: 1, minWidth: 0, fontSize: '0.76rem', color: '#b91c1c', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+              >
+                🖨️ <b>{printerNameOf(job.printer_id)}</b> · {shortPrintError(job)}
+              </span>
               <button onClick={() => reprintFailedJob(job)}
-                style={{ background: '#dc2626', color: 'white', border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: '0.76rem', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                🖨️ In lại
+                style={{ background: '#dc2626', color: 'white', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                In lại
               </button>
             </div>
           );
