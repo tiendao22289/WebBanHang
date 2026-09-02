@@ -611,10 +611,14 @@ export default function TablesPage() {
 
   // In lại đúng 1 lệnh lỗi: TẠO lệnh in MỚI copy đúng máy + đúng món (không đụng
   // luồng in đang chạy, không in trùng món khác), rồi đánh dấu lệnh cũ đã xử lý.
-  async function reprintFailedJob(job) {
+  async function reprintFailedJob(job, orderId) {
+    // order_id: câu fetch admin lấy print_jobs LỒNG trong order nên mỗi job
+    // không có sẵn cột order_id → phải truyền order.id từ chỗ render vào,
+    // nếu không INSERT thiếu order_id (cột NOT NULL) → "In lại" báo lỗi.
+    const targetOrderId = orderId || job.order_id;
     try {
       const { error } = await supabase.from('print_jobs').insert({
-        order_id: job.order_id,
+        order_id: targetOrderId,
         printer_id: job.printer_id,
         filter_category_ids: job.filter_category_ids ?? null,
         only_item_ids: job.only_item_ids ?? null,
@@ -658,7 +662,7 @@ export default function TablesPage() {
               >
                 🖨️ <b>{printerNameOf(job.printer_id)}</b> · {shortPrintError(job)}
               </span>
-              <button onClick={() => reprintFailedJob(job)}
+              <button onClick={() => reprintFailedJob(job, order.id)}
                 style={{ background: '#dc2626', color: 'white', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                 In lại
               </button>
