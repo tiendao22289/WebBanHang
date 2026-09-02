@@ -569,6 +569,17 @@ export default function TablesPage() {
     return items; // không lọc → cả đơn
   }
 
+  // Tập id các món CHƯA IN ĐƯỢC của 1 đơn (thuộc lệnh in lỗi/treo) — để đánh
+  // dấu ngay trên từng dòng món.
+  function unprintedItemIds(order) {
+    const set = new Set();
+    (order?.print_jobs || []).forEach(pj => {
+      if (!isPrintJobBad(pj)) return;
+      itemsOfPrintJob(pj, order).forEach(i => set.add(i.id));
+    });
+    return set;
+  }
+
   // Danh sách lệnh in lỗi/treo của 1 nhóm bill (kèm order để tra món).
   function badPrintJobsFor(bills) {
     const out = [];
@@ -2467,6 +2478,7 @@ export default function TablesPage() {
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#9ca3af', fontSize: '0.9rem' }}>Chưa có món nào</div>
                 ) : tableBills.map((order, billIdx) => {
                   const billItems = (order.order_items || []).map(item => ({ ...item, _orderId: order.id }));
+                  const unprintedIds = unprintedItemIds(order); // món chưa in được → đánh dấu
                   return (
                     <div key={order.id}>
                       {/* Bill Header Row */}
@@ -2592,6 +2604,7 @@ export default function TablesPage() {
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#111827', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                 {item.menu_item?.name || item.item_name || item.name}
+                                {unprintedIds.has(item.id) && <span title="Món này chưa in được" style={{ fontSize: '0.62rem', background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 6px', fontWeight: 800 }}>🖨️ chưa in</span>}
                                 {item.added_by_name && <span style={{ fontSize: '0.62rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700 }}>👤 NV: {item.added_by_name}</span>}
                               </div>
                               {optionText ? (
@@ -3907,6 +3920,7 @@ export default function TablesPage() {
                               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 4 }}>
                                 <span style={{ fontSize: '0.97rem', fontWeight: 600, color: '#111827', lineHeight: 1.3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                   {item.menu_item?.name || item.item_name || 'Món đã xoá'}
+                                  {unprintedItemIds(order).has(item.id) && <span title="Món này chưa in được" style={{ fontSize: '0.62rem', background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 6px', fontWeight: 800, lineHeight: 1.3 }}>🖨️ chưa in</span>}
                                   {item.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700, lineHeight: 1 }}>🎁 Món Tặng</span>}
                                   {item.added_by_name && <span style={{ fontSize: '0.62rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700, lineHeight: 1.3 }}>👤 NV: {item.added_by_name}</span>}
                                 </span>
