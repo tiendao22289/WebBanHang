@@ -122,6 +122,7 @@ export default function TablesPage() {
   const [columnsPerRow, setColumnsPerRow] = useState(5);
   const [menuItems, setMenuItems] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [printers, setPrinters] = useState([]); // để hiển thị tên máy in khi báo lỗi in
   // ─── Khuyến mãi "mua N tặng 1" — cho admin chọn quà thay khách ───
   const [promoConfig, setPromoConfig] = useState({ enabled: false, threshold: 8 });
   const [giftItems, setGiftItems] = useState([]); // is_gift_item=true, còn hiện trên thực đơn
@@ -486,9 +487,9 @@ export default function TablesPage() {
               id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
               order_items (
                 id, quantity, unit_price, item_options, note, is_gift, menu_item_id, item_name, added_by_name,
-                menu_item:menu_items (name, price, image_url)
+                menu_item:menu_items (name, price, image_url, category_id)
               ),
-              print_jobs (id, status, created_at)
+              print_jobs (id, status, created_at, printer_id, error_message, filter_category_ids, only_item_ids, order_ids)
             `)
             .in('table_id', allTableIds)
             .in('status', ['pending', 'preparing'])
@@ -516,6 +517,12 @@ export default function TablesPage() {
     setLoading(false);
   }, []);
 
+  // ─── Danh sách máy in (để hiển thị tên máy khi báo lỗi in) ───
+  useEffect(() => {
+    supabase.from('printers').select('id, name, target, type, interface')
+      .then(({ data }) => { if (data) setPrinters(data); });
+  }, []);
+
   // ─── Chỉ refresh orders (không fetch lại menu/tables/categories) ───
   const fetchOrdersOnly = useCallback(async () => {
     const currentTableIds = tables.map(t => t.id);
@@ -527,9 +534,9 @@ export default function TablesPage() {
           id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
           order_items (
             id, quantity, unit_price, item_options, note, is_gift, menu_item_id, item_name, added_by_name,
-            menu_item:menu_items (name, price, image_url)
+            menu_item:menu_items (name, price, image_url, category_id)
           ),
-          print_jobs (id, status, created_at)
+          print_jobs (id, status, created_at, printer_id, error_message, filter_category_ids, only_item_ids, order_ids)
         `)
         .in('table_id', currentTableIds)
         .in('status', ['pending', 'preparing'])
@@ -544,6 +551,92 @@ export default function TablesPage() {
       console.error('[fetchOrdersOnly] error:', e);
     }
   }, [tables]);
+
+  // ─── Lỗi in: gom job lỗi/treo + biết máy nào, món nào, để in lại ────────────
+  const printerNameOf = (id) => printers.find(p => p.id === id)?.name || 'Máy in';
+
+  // Các món của 1 lệnh in (để báo "món nào chưa in").
+  function itemsOfPrintJob(job, order) {
+    const items = order?.order_items || [];
+    if (Array.isArray(job.only_item_ids) && job.only_item_ids.length) {
+      const set = new Set(job.only_item_ids);
+      return items.filter(i => set.has(i.id));
+    }
+    if (Array.isArray(job.filter_category_ids) && job.filter_category_ids.length) {
+      const set = new Set(job.filter_category_ids);
+      return items.filter(i => i.menu_item?.category_id && set.has(i.menu_item.category_id));
+    }
+    return items; // không lọc → cả đơn
+  }
+
+  // Danh sách lệnh in lỗi/treo của 1 nhóm bill (kèm order để tra món).
+  function badPrintJobsFor(bills) {
+    const out = [];
+    (bills || []).forEach(o => {
+      (o.print_jobs || []).forEach(pj => {
+        if (isPrintJobBad(pj)) out.push({ job: pj, order: o });
+      });
+    });
+    return out;
+  }
+
+  // In lại đúng 1 lệnh lỗi: TẠO lệnh in MỚI copy đúng máy + đúng món (không đụng
+  // luồng in đang chạy, không in trùng món khác), rồi đánh dấu lệnh cũ đã xử lý.
+  async function reprintFailedJob(job) {
+    try {
+      const { error } = await supabase.from('print_jobs').insert({
+        order_id: job.order_id,
+        printer_id: job.printer_id,
+        filter_category_ids: job.filter_category_ids ?? null,
+        only_item_ids: job.only_item_ids ?? null,
+        order_ids: job.order_ids ?? null,
+        status: 'pending',
+      });
+      if (error) { Swal.fire('Lỗi', 'Không tạo được lệnh in lại: ' + error.message, 'error'); return; }
+      // Lệnh cũ: đánh dấu đã xử lý để hết báo đỏ (lệnh mới quyết định trạng thái tiếp)
+      await supabase.from('print_jobs')
+        .update({ status: 'done', error_message: 'Đã tạo lệnh in lại' }).eq('id', job.id);
+      fetchOrdersOnly();
+      Swal.fire({ title: 'Đã gửi in lại!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
+    } catch (e) {
+      Swal.fire('Lỗi', 'Không gửi được lệnh in lại: ' + e.message, 'error');
+    }
+  }
+
+  // Khối báo "món chưa in được" + nút In lại cho 1 đơn (dùng chung desktop/mobile).
+  function renderPrintErrorPanel(order) {
+    const bad = (order?.print_jobs || []).filter(isPrintJobBad);
+    if (bad.length === 0) return null;
+    return (
+      <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 10px', margin: '6px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, color: '#dc2626', fontSize: '0.8rem', marginBottom: 4 }}>
+          🖨️ Món chưa in được — bấm để in lại
+        </div>
+        {bad.map((job) => {
+          const items = itemsOfPrintJob(job, order);
+          const names = items.map(i => `${i.quantity}× ${i.item_name || i.menu_item?.name || 'Món'}`).join(', ');
+          return (
+            <div key={job.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: '1px dashed #fecaca' }}>
+              <div style={{ flex: 1, fontSize: '0.76rem', color: '#7f1d1d', minWidth: 0 }}>
+                <div><b>{printerNameOf(job.printer_id)}</b></div>
+                <div style={{ color: '#991b1b' }}>{names || 'Toàn bộ món của đơn'}</div>
+                {job.status === 'failed' && job.error_message && (
+                  <div style={{ color: '#b91c1c', fontSize: '0.7rem', opacity: 0.85 }}>Lý do: {job.error_message}</div>
+                )}
+                {job.status === 'pending' && (
+                  <div style={{ color: '#b45309', fontSize: '0.7rem' }}>Máy in chưa nhận (PrintAgent có thể đang tắt/mất mạng)</div>
+                )}
+              </div>
+              <button onClick={() => reprintFailedJob(job)}
+                style={{ background: '#dc2626', color: 'white', border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: '0.76rem', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                🖨️ In lại
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
 
   // ─── Debounced refetch scheduler ───────────────────────────────────────────
   // Khi khách gửi 1 đơn N món, Supabase Realtime bắn N+2 event (1 orders INSERT
@@ -651,6 +744,21 @@ export default function TablesPage() {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
         scheduleRefetch(false); // items đổi → chỉ cần fetchOrdersOnly
+      })
+      // Lệnh in đổi trạng thái → cập nhật badge lỗi TỨC THÌ + báo nhân viên biết.
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'print_jobs' }, (payload) => {
+        const row = payload.new || {};
+        if (!isFirstLoad.current) {
+          if (row.status === 'failed') {
+            // Có máy in lỗi → kêu chuông + báo (badge đỏ trên bàn tự hiện nhờ refetch bên dưới)
+            ringBell();
+            Swal.fire({ title: '⚠️ Máy in lỗi!', text: 'Có món chưa in được — kiểm tra bàn có dấu 🖨️ đỏ để in lại.', icon: 'error', toast: true, position: 'top-end', showConfirmButton: false, timer: 5000 });
+          } else if (row.status === 'done' && row.error_message === 'Đã tự động in khi có giấy') {
+            // startQueueMonitor bên PrintAgent vừa tự in lại được khi máy in hoạt động lại
+            Swal.fire({ title: '✅ Máy in đã hoạt động lại', text: 'Món bị kẹt đã tự in ra rồi ạ.', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 4000 });
+          }
+        }
+        scheduleRefetch(false); // cập nhật badge lỗi trên thẻ bàn
       })
       // Khách xin ưu đãi đánh giá Google → kêu chuông + hiện badge trên thẻ bàn
       .on('postgres_changes', { event: '*', schema: 'public', table: 'review_rewards' }, (payload) => {
@@ -2466,6 +2574,8 @@ export default function TablesPage() {
                           </div>
                         </div>
                       )}
+                      {/* Báo món chưa in được + nút In lại (nếu có) */}
+                      {renderPrintErrorPanel(order)}
                       {/* Items in this bill */}
                       {billItems.map((item, idx) => {
                         const optionText = item.item_options?.map(o => o.choice).join(', ') || '';
@@ -3733,6 +3843,8 @@ export default function TablesPage() {
                           </button>
                         </div>
                       </div>
+                      {/* Báo món chưa in được + nút In lại (nếu có) */}
+                      {renderPrintErrorPanel(order)}
                       <div className="order-items-list">
                         {order.order_items?.map((item) => isReviewDiscountItem(item) ? (
                           // Dòng ưu đãi đánh giá Google — không phải món ăn, không cho sửa giá/số lượng
