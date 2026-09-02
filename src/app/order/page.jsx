@@ -552,6 +552,9 @@ function OrderContent() {
   const [showCart, setShowCart] = useState(false);
   const [showOrdered, setShowOrdered] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [showQuickOrder, setShowQuickOrder] = useState(false); // bảng gọi món nhanh (gõ → gợi ý)
+  const [quickQuery, setQuickQuery] = useState('');
+  const [quickAddedFlash, setQuickAddedFlash] = useState(''); // tên món vừa thêm (báo nhanh)
   const [previousOrders, setPreviousOrders] = useState([]);
   const [takeawaySeqMap, setTakeawaySeqMap] = useState({}); // { orderId: seqNo } cho takeaway
   const [editingAddress, setEditingAddress] = useState(false);
@@ -3481,6 +3484,72 @@ function OrderContent() {
     return hasExplicitOptionPrice ? sum : Number(basePrice || 0);
   }
 
+  // ── Gọi món nhanh: gõ chữ → gợi ý món (bỏ dấu, khớp gần đúng) ──
+  function getQuickSuggestions(query) {
+    const q = removeVietnameseTones((query || '').trim().toLowerCase());
+    if (q.length < 2) return [];
+    const out = [];
+    for (const item of menuItems) {
+      if (item.is_available === false) continue;
+      const normName = removeVietnameseTones((item.name || '').toLowerCase());
+      if (!normName) continue;
+      const nameInQuery = q.includes(normName);
+      const queryInName = normName.includes(q);
+      const firstWordMatch = q.split(' ')[0] === normName.split(' ')[0];
+      if (!nameInQuery && !queryInName && !firstWordMatch) continue;
+
+      const loaiOpt = (item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
+      if (loaiOpt && Array.isArray(loaiOpt.choices) && loaiOpt.choices.length > 0) {
+        const remainder = nameInQuery ? q.replace(normName, ' ').trim() : (queryInName ? '' : q.replace(normName.split(' ')[0], ' ').trim());
+        const words = remainder.split(/\s+/).filter(w => w.length >= 2);
+        const matched = words.length > 0
+          ? loaiOpt.choices.filter(c => {
+              const nc = removeVietnameseTones((c || '').toLowerCase());
+              return words.some(w => nc.includes(w) || w.includes(nc));
+            })
+          : [];
+        if (matched.length > 0) matched.slice(0, 4).forEach(c => out.push({ item, choice: c, kind: 'specific' }));
+        else out.push({ item, kind: 'pick' });
+      } else {
+        out.push({ item, kind: 'plain' });
+      }
+      if (out.length >= 8) break;
+    }
+    return out.slice(0, 8);
+  }
+
+  // Thêm nhanh 1 món đã xác định LOẠI vào giỏ (tính giá đúng, chia máy in tự động).
+  function quickAddResolved(item, choice) {
+    const loaiOpt = (item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
+    const selectedOpts = {};
+    if (loaiOpt && choice) selectedOpts[loaiOpt.name] = choice;
+    const price = computeModalPrice(item.price, item.options, selectedOpts);
+    const optionsArr = choice ? [{ name: loaiOpt?.name || 'LOẠI', choice }] : [];
+    const cartItem = {
+      ...item, price,
+      _optionKey: `${item.id}-${choice || ''}-`,
+      _options: optionsArr, _note: '', quantity: 1,
+    };
+    setCart(prev => {
+      const existing = prev.find(c => c._optionKey === cartItem._optionKey);
+      if (existing) return prev.map(c => c._optionKey === cartItem._optionKey ? { ...c, quantity: c.quantity + 1 } : c);
+      return [...prev, cartItem];
+    });
+    setQuickAddedFlash(`${item.name}${choice ? ' · ' + choice : ''}`);
+    setTimeout(() => setQuickAddedFlash(''), 1500);
+    setQuickQuery('');
+  }
+
+  // Bấm 1 gợi ý trong bảng gọi nhanh.
+  function pickQuickSuggestion(s) {
+    if (s.kind === 'specific') { quickAddResolved(s.item, s.choice); return; }
+    if (s.kind === 'plain') { addToCart(s.item); setQuickAddedFlash(s.item.name); setTimeout(() => setQuickAddedFlash(''), 1500); setQuickQuery(''); return; }
+    // kind 'pick' → cần chọn LOẠI: đóng bảng gọi nhanh, mở bảng chọn loại có sẵn
+    setShowQuickOrder(false);
+    setQuickQuery('');
+    addToCart(s.item);
+  }
+
   // Lấy tất cả choices của item để hiển thị dạng tags
   function getItemOptionTags(item) {
     if (!item.options || item.options.length === 0) return [];
@@ -5454,18 +5523,101 @@ function OrderContent() {
           </div>
         )}
 
-        {/* Nút Góp ý thu gọn — dính sát mép phải, giữa màn hình, chỉ ló ngôi sao.
-            Bấm vào mở bảng đánh giá. Ẩn khi đang mở modal/giỏ khác. */}
-        {!showFeedbackModal && !showCart && !showOrdered && !wheelOpen && !showInfoModal && !showLuckyNudge && (
-          <button
-            className="co-feedback-edge"
-            type="button"
-            aria-label="Góp ý cho quán"
-            onClick={() => setShowFeedbackModal(true)}
-          >
-            <span className="co-feedback-edge-star">★</span>
-          </button>
+        {/* Cụm nút dính mép trái, giữa màn hình: Gọi nhanh + Góp ý (chỉ ló icon).
+            Ẩn khi đang mở modal/giỏ khác. */}
+        {!showFeedbackModal && !showQuickOrder && !showCart && !showOrdered && !wheelOpen && !showInfoModal && !showLuckyNudge && (
+          <div className="co-edge-stack">
+            <button
+              className="co-edge-tab quick"
+              type="button"
+              aria-label="Gọi món nhanh"
+              onClick={() => { setShowQuickOrder(true); setQuickQuery(''); }}
+            >
+              <span className="co-edge-icon">⚡</span>
+            </button>
+            <button
+              className="co-edge-tab star"
+              type="button"
+              aria-label="Góp ý cho quán"
+              onClick={() => setShowFeedbackModal(true)}
+            >
+              <span className="co-edge-icon">★</span>
+            </button>
+          </div>
         )}
+
+        {/* ─── Bảng gọi món nhanh (gõ → gợi ý → thêm) ─── */}
+        {showQuickOrder && (() => {
+          const sugg = getQuickSuggestions(quickQuery);
+          const cartQty = cart.reduce((s, c) => s + c.quantity, 0);
+          return (
+            <div className="co-chal-overlay" style={{ zIndex: 4300 }} onClick={() => { setShowQuickOrder(false); setQuickQuery(''); }}>
+              <div className="co-chal-modal" onClick={e => e.stopPropagation()}>
+                <button className="co-chal-close" onClick={() => { setShowQuickOrder(false); setQuickQuery(''); }} aria-label="Đóng"><X size={20} /></button>
+                <div className="co-chal-modal-title">⚡ Gọi món nhanh</div>
+                <div className="co-chal-scroll">
+                  <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 8 }}>
+                    Gõ tên món (có dấu hay không đều được), vd: <b>oc huong toi</b> — bấm gợi ý để thêm.
+                  </div>
+                  <input
+                    autoFocus
+                    value={quickQuery}
+                    onChange={e => setQuickQuery(e.target.value)}
+                    placeholder="Gõ món: ốc hương tỏi, càng ghẹ rang muối..."
+                    style={{ width: '100%', padding: '12px 14px', border: '1.5px solid #fdba74', borderRadius: 12, fontSize: '0.95rem', outline: 'none', boxSizing: 'border-box' }}
+                  />
+                  {quickAddedFlash && (
+                    <div style={{ marginTop: 8, color: '#16a34a', fontWeight: 700, fontSize: '0.85rem' }}>✓ Đã thêm: {quickAddedFlash}</div>
+                  )}
+
+                  <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {sugg.map((s, i) => {
+                      const loaiOpt = (s.item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
+                      const priceForChoice = s.choice ? computeModalPrice(s.item.price, s.item.options, { [loaiOpt?.name || 'LOẠI']: s.choice }) : s.item.price;
+                      return (
+                        <button key={i} onClick={() => pickQuickSuggestion(s)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', width: '100%', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: 12, background: 'white', cursor: 'pointer' }}>
+                          <span style={{ fontSize: '1.2rem' }}>🦪</span>
+                          <span style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>
+                              {s.item.name}{s.choice ? <span style={{ color: '#ea580c' }}> · {s.choice}</span> : ''}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                              {s.kind === 'pick' ? 'Bấm để chọn loại' : `${(priceForChoice || 0).toLocaleString('vi-VN')}đ`}
+                            </div>
+                          </span>
+                          <span style={{ background: '#f59e0b', color: 'white', borderRadius: 8, padding: '5px 11px', fontWeight: 800, fontSize: '0.8rem', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                            {s.kind === 'pick' ? 'Chọn' : '+ Thêm'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                    {quickQuery.trim().length >= 2 && sugg.length === 0 && (
+                      <div style={{ color: '#9ca3af', fontSize: '0.82rem', padding: '8px 2px' }}>Không tìm thấy món khớp. Thử gõ khác hoặc chọn trong thực đơn nhé.</div>
+                    )}
+                  </div>
+
+                  {cart.length > 0 && (
+                    <div style={{ marginTop: 14, borderTop: '1px dashed #e5e7eb', paddingTop: 10 }}>
+                      <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#b45309', marginBottom: 6 }}>🛒 Đã thêm ({cartQty} món)</div>
+                      {cart.map((c, i) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', padding: '3px 0', color: '#374151', gap: 8 }}>
+                          <span style={{ minWidth: 0 }}>{c.quantity}× {c.name}{c._options?.length ? ' · ' + c._options.map(o => o.choice).join(', ') : ''}</span>
+                          <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{((c.price || 0) * c.quantity).toLocaleString('vi-VN')}đ</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <button onClick={() => { setShowQuickOrder(false); setQuickQuery(''); if (cartQty > 0) setShowCart(true); }}
+                    style={{ width: '100%', marginTop: 14, padding: '13px', background: 'linear-gradient(135deg,#f59e0b,#ef4444)', color: 'white', border: 'none', borderRadius: 12, fontWeight: 900, fontSize: '0.95rem', cursor: 'pointer' }}>
+                    {cartQty > 0 ? `Xong — xem giỏ (${cartQty})` : 'Đóng'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {showFeedbackModal && (() => {
           const feedbackOrder = previousOrders[0];
