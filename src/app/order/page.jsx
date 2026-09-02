@@ -3508,6 +3508,20 @@ function OrderContent() {
     // từ chung / đơn vị — không phải tên con hải sản
     'mon', 'con', 'cai', 'dia', 'phan', 'ly', 'chai', 'ban', 'nay', 'cho', 'giup', 'them', 'phan',
   ]);
+  // Từ đồng nghĩa khi chọn LOẠI: khách hay gõ "luộc" (ý là "hấp" vì nhiều
+  // món chỉ có "Hấp sả / Hấp thái"), và "xã"/"xả" thay cho "sả".
+  const LOAI_SYNONYMS = { luoc: ['hap'], hap: ['luoc'], xa: ['sa'], sa: ['xa'] };
+  // Điểm khớp 1 từ khách gõ với 1 lựa chọn LOẠI: khớp thẳng = 2, qua từ đồng
+  // nghĩa = 1 (để "Luộc" vẫn thắng khi món có sẵn "Luộc").
+  function loaiWordScore(choiceNorm, w) {
+    // Khớp theo TỪ nguyên vẹn, không phải chuỗi con — tránh "xã" (xa) khớp
+    // bậy vào "xanh", "me" vào "phô mai"...
+    const cwords = choiceNorm.split(/[^a-z0-9]+/).filter(Boolean);
+    if (cwords.includes(w)) return 2;
+    const syns = LOAI_SYNONYMS[w];
+    if (syns && syns.some(s => cwords.includes(s))) return 1;
+    return 0;
+  }
   const menuWordIndex = useMemo(() => {
     const df = new Map(); // từ trong TÊN món → xuất hiện ở bao nhiêu món
     for (const item of menuItems) {
@@ -3558,7 +3572,7 @@ function OrderContent() {
         const scored = words.length > 0
           ? loaiOpt.choices.map(c => {
               const nc = removeVietnameseTones((c || '').toLowerCase());
-              const score = words.reduce((n, w) => n + (nc.includes(w) || w.includes(nc) ? 1 : 0), 0);
+              const score = words.reduce((n, w) => n + loaiWordScore(nc, w), 0);
               return { c, score };
             }).filter(x => x.score > 0).sort((a, b) => b.score - a.score)
           : [];
@@ -3657,7 +3671,7 @@ function OrderContent() {
       const words = bestRemainder.split(/\s+/).filter(w => w.length >= 2);
       const scored = words.length ? loaiOpt.choices.map(c => {
         const nc = removeVietnameseTones((c || '').toLowerCase());
-        return { c, s: words.reduce((n, w) => n + ((nc.includes(w) || w.includes(nc)) ? 1 : 0), 0) };
+        return { c, s: words.reduce((n, w) => n + loaiWordScore(nc, w), 0) };
       }).filter(x => x.s > 0).sort((a, b) => b.s - a.s) : [];
       if (scored.length) return { item: bestItem, choice: scored[0].c, kind: 'specific' };
       return { item: bestItem, kind: 'pick' };
