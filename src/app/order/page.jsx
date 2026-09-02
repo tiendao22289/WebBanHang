@@ -595,6 +595,8 @@ function OrderContent() {
   const [zaloClaim, setZaloClaim] = useState(null); // bản ghi zalo_reward_claims (kênh Zalo tự động, không cần NV duyệt)
   // ── Vòng xoay may mắn ──
   const [luckyWheelEnabled, setLuckyWheelEnabled] = useState(false); // admin bật/tắt — mặc định ẩn tới khi đọc xong settings
+  const [challengeEnabled, setChallengeEnabled] = useState(true); // nút "Thử thách" — admin bật/tắt (mặc định bật)
+  const [partyEnabled, setPartyEnabled] = useState(true); // nút "Đặt tiệc" — admin bật/tắt (mặc định bật)
   const [luckyWheelMinBill, setLuckyWheelMinBill] = useState(0); // hoá đơn tối thiểu để mời quay (Cài đặt > Vòng xoay)
   const [luckyWheelRequireFollow, setLuckyWheelRequireFollow] = useState(true); // Cài đặt > Vòng xoay > "Phải quan tâm Zalo mới nhận quà" — RIÊNG với kênh "Ưu đãi mạng xã hội > Zalo"
   const [luckyWheelAutoNudge, setLuckyWheelAutoNudge] = useState(true); // Cài đặt > Vòng xoay > "Tự mời quay sau khi khách gửi đơn" — tắt thì nút 🎰 vẫn còn, chỉ không tự bật popup
@@ -1411,11 +1413,14 @@ function OrderContent() {
     }
     // Load promotion config + cấu hình ưu đãi đánh giá Google
     const { data: settings } = await supabase.from('settings').select('key, value')
-      .in('key', ['promotion_enabled', 'promotion_threshold', ...LUCKY_SETTING_KEYS, ...ALL_SETTING_KEYS]);
+      .in('key', ['promotion_enabled', 'promotion_threshold', 'challenge_enabled', 'party_enabled', ...LUCKY_SETTING_KEYS, ...ALL_SETTING_KEYS]);
     if (settings) {
       const map = Object.fromEntries(settings.map(r => [r.key, r.value]));
       setPromoConfig({ enabled: map.promotion_enabled === 'true', threshold: parseInt(map.promotion_threshold) || 8 });
       setChannelCfgs(parseAllChannelConfigs(settings));
+      // Nút Thử thách / Đặt tiệc — mặc định BẬT nếu chưa cấu hình
+      setChallengeEnabled(map.challenge_enabled !== 'false');
+      setPartyEnabled(map.party_enabled !== 'false');
       // Admin tắt vòng xoay → ẩn hẳn nút ngoài trang khách, không chỉ chặn lúc quay
       const luckyCfg = parseLuckyConfig(settings);
       setLuckyWheelEnabled(luckyCfg.enabled);
@@ -3814,12 +3819,16 @@ function OrderContent() {
 
           {/* ── Hàng nút ưu đãi gọn ở góc phải (bấm mở overlay) ── */}
           <div className="co-promo-btns">
-            <button className="co-promo-pill challenge" onClick={() => openPromoOverlay('challenge')}>
-              🎁 Thử thách
-            </button>
-            <button className="co-promo-pill party" onClick={() => openPromoOverlay('party')}>
-              🎉 Đặt tiệc
-            </button>
+            {challengeEnabled && (
+              <button className="co-promo-pill challenge" onClick={() => openPromoOverlay('challenge')}>
+                🎁 Thử thách
+              </button>
+            )}
+            {partyEnabled && (
+              <button className="co-promo-pill party" onClick={() => openPromoOverlay('party')}>
+                🎉 Đặt tiệc
+              </button>
+            )}
             {luckyWheelEnabled && (
               <button className="co-promo-pill wheel" onClick={openWheel}>
                 🎁 Vòng xoay

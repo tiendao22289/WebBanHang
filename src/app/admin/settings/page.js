@@ -53,6 +53,10 @@ export default function SettingsPage() {
   const [wheelDrinkSaving, setWheelDrinkSaving] = useState(false);
   const [showDrinkPicker, setShowDrinkPicker] = useState(false);
 
+  // Nút ưu đãi trang khách (Thử thách / Đặt tiệc) — bật/tắt
+  const [featureCfg, setFeatureCfg] = useState({ challenge: true, party: true });
+  const [featureCfgSaving, setFeatureCfgSaving] = useState(false);
+
   const setWheelField = (field, value) => setWheelCfg(prev => ({ ...prev, [field]: value }));
   const setPrizeField = (id, field, value) =>
     setPrizes(prev => prev.map(p => (p.id === id ? { ...p, [field]: value, _dirty: true } : p)));
@@ -81,7 +85,29 @@ export default function SettingsPage() {
     fetchWheelDrinkItems();
     fetchPrinters();
     fetchCategories();
+    fetchFeatureToggles();
   }, []);
+
+  async function fetchFeatureToggles() {
+    const { data } = await supabase.from('settings').select('key, value').in('key', ['challenge_enabled', 'party_enabled']);
+    const map = Object.fromEntries((data || []).map(r => [r.key, r.value]));
+    setFeatureCfg({
+      challenge: map.challenge_enabled !== 'false', // mặc định bật
+      party: map.party_enabled !== 'false',
+    });
+  }
+
+  async function saveFeatureToggles() {
+    setFeatureCfgSaving(true);
+    try {
+      await putSetting('challenge_enabled', String(!!featureCfg.challenge));
+      await putSetting('party_enabled', String(!!featureCfg.party));
+      flash('Đã lưu nút ưu đãi!');
+    } catch (err) {
+      flash('Lỗi: ' + err.message, true);
+    }
+    setFeatureCfgSaving(false);
+  }
 
   async function fetchRestaurantLocation() {
     const { data, error } = await supabase
@@ -805,6 +831,39 @@ export default function SettingsPage() {
           </button>
         </div>
       </div>
+      {/* ── Nút ưu đãi trang khách (Thử thách / Đặt tiệc) ── */}
+      <div style={{ marginTop: 28 }}>
+        <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#0f172a', marginBottom: 2 }}>
+          🎁 Nút ưu đãi trang khách
+        </div>
+        <p style={{ margin: '0 0 12px', fontSize: '0.8rem', color: '#6b7280' }}>
+          Bật/tắt nút <b>Thử thách</b> và <b>Đặt tiệc</b> hiện trên trang gọi món của khách.
+        </p>
+        <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: 14 }}>
+          {[
+            { f: 'challenge', label: '🎁 Thử thách', desc: 'Nút "Thử thách" trên trang khách' },
+            { f: 'party', label: '🎉 Đặt tiệc', desc: 'Nút "Đặt tiệc" trên trang khách' },
+          ].map(({ f, label, desc }) => (
+            <div key={f}
+              onClick={() => setFeatureCfg(prev => ({ ...prev, [f]: !prev[f] }))}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '8px 4px' }}
+            >
+              <div style={{ position: 'relative', width: 44, height: 24, background: featureCfg[f] ? '#f59e0b' : '#d1d5db', borderRadius: 12, flexShrink: 0, transition: 'background .2s' }}>
+                <div style={{ position: 'absolute', top: 2, left: featureCfg[f] ? 22 : 2, width: 20, height: 20, background: 'white', borderRadius: '50%', transition: 'left .2s' }} />
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{label}</div>
+                <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>{desc} — {featureCfg[f] ? 'đang hiện' : 'đang ẩn'}</div>
+              </div>
+            </div>
+          ))}
+          <button onClick={saveFeatureToggles} disabled={featureCfgSaving}
+            style={{ marginTop: 12, padding: '9px 18px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.84rem', fontWeight: 700, opacity: featureCfgSaving ? 0.7 : 1 }}>
+            {featureCfgSaving ? 'Đang lưu...' : '💾 Lưu'}
+          </button>
+        </div>
+      </div>
+
       {/* ── Vòng xoay may mắn ── */}
       <div style={{ marginTop: 28 }}>
         <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#0f172a', marginBottom: 2 }}>
