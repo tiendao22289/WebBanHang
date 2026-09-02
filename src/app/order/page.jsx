@@ -4326,6 +4326,8 @@ function OrderContent() {
               .conudge-cta:active { transform: scale(.98); }
               @keyframes conudge-glow { 0%,100%{ box-shadow: 0 8px 22px rgba(239,68,68,.38);} 50%{ box-shadow: 0 10px 30px rgba(245,158,11,.6);} }
               .conudge-skip { width: 100%; margin-top: 9px; padding: 9px; background: none; border: none; color: #94a3b8; font-size: .85rem; font-weight: 600; cursor: pointer; }
+              .conudge-close { position: absolute; top: 10px; right: 10px; z-index: 5; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 999px; background: #fff; color: #dc2626; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+              .conudge-close:active { transform: scale(.92); }
             `}</style>
 
             {/* Pháo giấy tung ra chúc mừng */}
@@ -4343,8 +4345,8 @@ function OrderContent() {
             </div>
 
             <div className="co-chal-modal conudge-card" onClick={e => e.stopPropagation()}>
-              <button className="co-chal-close" onClick={() => setShowLuckyNudge(false)} aria-label="Đóng" style={{ zIndex: 2 }}>
-                <X size={20} />
+              <button className="conudge-close" onClick={() => setShowLuckyNudge(false)} aria-label="Đóng, để sau">
+                <X size={20} strokeWidth={2.6} />
               </button>
               <div className="conudge-top">
                 <div className="conudge-badge">🎁</div>
