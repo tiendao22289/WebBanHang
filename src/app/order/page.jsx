@@ -5712,7 +5712,7 @@ function OrderContent() {
                     {parsedLines && parsedLines.length > 0 && (
                       <div style={{ marginTop: 12 }}>
                         <div style={{ fontWeight: 800, fontSize: '0.82rem', color: '#0f172a', marginBottom: 6 }}>Kiểm tra lại — sửa số lượng / chọn loại / xoá nếu sai:</div>
-                        {parsedLines.map((row) => {
+                        {[...parsedLines].reverse().map((row) => {
                           const m = row.match;
                           const loaiOpt = m ? (m.item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại')) : null;
                           const ok = m && (m.kind === 'plain' || row.chosenChoice);
