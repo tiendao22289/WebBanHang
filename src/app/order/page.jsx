@@ -558,6 +558,14 @@ function OrderContent() {
   const [quickMode, setQuickMode] = useState('single'); // 'single' = gõ 1 món; 'batch' = ghi nhiều món
   const [batchText, setBatchText] = useState('');
   const [parsedLines, setParsedLines] = useState(null); // kết quả phân tích nhiều dòng để khách xem/sửa
+
+  // Khôi phục nháp gọi món (lỡ thoát/F5/quét mã lại vẫn còn) — theo bàn.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`quick_batch_${activeTableId || urlTableId || 'x'}`);
+      if (saved) setBatchText(prev => prev || saved);
+    } catch { }
+  }, [activeTableId, urlTableId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [previousOrders, setPreviousOrders] = useState([]);
   const [takeawaySeqMap, setTakeawaySeqMap] = useState({}); // { orderId: seqNo } cho takeaway
   const [editingAddress, setEditingAddress] = useState(false);
@@ -3608,6 +3616,15 @@ function OrderContent() {
     return { qty: Math.min(Math.max(qty, 1), 50), text: raw };
   }
 
+  // Lưu nháp món khách đang gõ (theo bàn) — lỡ thoát/F5/quét lại vẫn còn.
+  function quickDraftKey() { return `quick_batch_${activeTableId || urlTableId || 'x'}`; }
+  function saveQuickDraft(v) {
+    try {
+      if (v && v.trim()) localStorage.setItem(quickDraftKey(), v);
+      else localStorage.removeItem(quickDraftKey());
+    } catch { }
+  }
+
   // Phân tích ô nhiều dòng → danh sách để khách xem/sửa. TỰ chạy khi gõ.
   // Giữ lại chỉnh sửa (số lượng/loại đã chọn) của dòng chưa đổi chữ để khách
   // gõ thêm dòng mới không mất phần đã sửa.
@@ -3631,7 +3648,11 @@ function OrderContent() {
   // Xoá 1 dòng: bỏ khỏi danh sách VÀ bỏ dòng đó khỏi ô nhập (để không hiện lại).
   function deleteParsedRow(row) {
     setParsedLines(prev => (prev || []).filter(r => r.id !== row.id));
-    setBatchText(prev => (prev || '').split('\n').filter(l => l.trim() !== row.raw.trim()).join('\n'));
+    setBatchText(prev => {
+      const nt = (prev || '').split('\n').filter(l => l.trim() !== row.raw.trim()).join('\n');
+      saveQuickDraft(nt);
+      return nt;
+    });
   }
 
   // Thêm số lượng tuỳ ý 1 món (đã xác định LOẠI) vào giỏ.
@@ -3663,6 +3684,7 @@ function OrderContent() {
     if (added > 0) {
       setBatchText('');
       setParsedLines(null);
+      saveQuickDraft(''); // đã gửi vào giỏ → xoá nháp
       setShowQuickOrder(false);
       setShowCart(true);
     }
@@ -5649,7 +5671,7 @@ function OrderContent() {
               className="co-edge-tab quick"
               type="button"
               aria-label="Gọi món nhanh"
-              onClick={() => { setShowQuickOrder(true); setQuickQuery(''); }}
+              onClick={() => { setShowQuickOrder(true); setParsedLines(buildParsedLines(batchText, parsedLines)); }}
             >
               <span className="co-edge-icon">⚡</span>
             </button>
@@ -5666,7 +5688,8 @@ function OrderContent() {
 
         {/* ─── Bảng gọi món nhanh (gõ → gợi ý → thêm) ─── */}
         {showQuickOrder && (() => {
-          const closeQuick = () => { setShowQuickOrder(false); setBatchText(''); setParsedLines(null); };
+          // Đóng: GIỮ nháp (khách lỡ thoát vẫn còn) — chỉ ẩn bảng.
+          const closeQuick = () => setShowQuickOrder(false);
           return (
             <div className="co-chal-overlay" style={{ zIndex: 4300 }} onClick={closeQuick}>
               <div className="co-chal-modal" onClick={e => e.stopPropagation()}>
@@ -5680,7 +5703,7 @@ function OrderContent() {
                     <textarea
                       autoFocus
                       value={batchText}
-                      onChange={e => { const v = e.target.value; setBatchText(v); setParsedLines(prev => buildParsedLines(v, prev)); }}
+                      onChange={e => { const v = e.target.value; setBatchText(v); setParsedLines(prev => buildParsedLines(v, prev)); saveQuickDraft(v); }}
                       rows={5}
                       placeholder={"sò sữa nướng hành\nchem chép lá quế 2\nốc hương xào bơ cay\ncàng ghẹ rang muối 2"}
                       style={{ width: '100%', padding: '10px 12px', border: '1.5px solid #fdba74', borderRadius: 12, fontSize: '0.9rem', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
