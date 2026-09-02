@@ -5651,7 +5651,6 @@ function OrderContent() {
 
         {/* ─── Bảng gọi món nhanh (gõ → gợi ý → thêm) ─── */}
         {showQuickOrder && (() => {
-          const sugg = getQuickSuggestions(quickQuery);
           const cartQty = cart.reduce((s, c) => s + c.quantity, 0);
           return (
             <div className="co-chal-overlay" style={{ zIndex: 4300 }} onClick={() => { setShowQuickOrder(false); setQuickQuery(''); }}>
@@ -5659,67 +5658,12 @@ function OrderContent() {
                 <button className="co-chal-close" onClick={() => { setShowQuickOrder(false); setQuickQuery(''); }} aria-label="Đóng"><X size={20} /></button>
                 <div className="co-chal-modal-title">⚡ Gọi món nhanh</div>
                 <div className="co-chal-scroll">
-                  {/* Chuyển chế độ: gõ 1 món / ghi nhiều món */}
-                  <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                    <button onClick={() => setQuickMode('single')}
-                      style={{ flex: 1, padding: '8px', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: '0.82rem', background: quickMode === 'single' ? '#f59e0b' : '#f1f5f9', color: quickMode === 'single' ? 'white' : '#64748b' }}>
-                      ⚡ Gõ 1 món
-                    </button>
-                    <button onClick={() => setQuickMode('batch')}
-                      style={{ flex: 1, padding: '8px', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 800, fontSize: '0.82rem', background: quickMode === 'batch' ? '#f59e0b' : '#f1f5f9', color: quickMode === 'batch' ? 'white' : '#64748b' }}>
-                      📝 Ghi nhiều món
-                    </button>
-                  </div>
-
-                  {quickMode === 'single' && (<>
-                  <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 8 }}>
-                    Gõ tên món (có dấu hay không đều được), vd: <b>oc huong toi</b> — bấm gợi ý để thêm.
-                  </div>
-                  <input
-                    autoFocus
-                    value={quickQuery}
-                    onChange={e => setQuickQuery(e.target.value)}
-                    placeholder="Gõ món: ốc hương tỏi, càng ghẹ rang muối..."
-                    style={{ width: '100%', padding: '12px 14px', border: '1.5px solid #fdba74', borderRadius: 12, fontSize: '0.95rem', outline: 'none', boxSizing: 'border-box' }}
-                  />
-                  {quickAddedFlash && (
-                    <div style={{ marginTop: 8, color: '#16a34a', fontWeight: 700, fontSize: '0.85rem' }}>✓ Đã thêm: {quickAddedFlash}</div>
-                  )}
-
-                  <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {sugg.map((s, i) => {
-                      const loaiOpt = (s.item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
-                      const priceForChoice = s.choice ? computeModalPrice(s.item.price, s.item.options, { [loaiOpt?.name || 'LOẠI']: s.choice }) : s.item.price;
-                      return (
-                        <button key={i} onClick={() => pickQuickSuggestion(s)}
-                          style={{ display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', width: '100%', padding: '10px 12px', border: '1px solid #e5e7eb', borderRadius: 12, background: 'white', cursor: 'pointer' }}>
-                          <span style={{ fontSize: '1.2rem' }}>🦪</span>
-                          <span style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>
-                              {s.item.name}{s.choice ? <span style={{ color: '#ea580c' }}> · {s.choice}</span> : ''}
-                            </div>
-                            <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                              {s.kind === 'pick' ? 'Bấm để chọn loại' : `${(priceForChoice || 0).toLocaleString('vi-VN')}đ`}
-                            </div>
-                          </span>
-                          <span style={{ background: '#f59e0b', color: 'white', borderRadius: 8, padding: '5px 11px', fontWeight: 800, fontSize: '0.8rem', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                            {s.kind === 'pick' ? 'Chọn' : '+ Thêm'}
-                          </span>
-                        </button>
-                      );
-                    })}
-                    {quickQuery.trim().length >= 2 && sugg.length === 0 && (
-                      <div style={{ color: '#9ca3af', fontSize: '0.82rem', padding: '8px 2px' }}>Không tìm thấy món khớp. Thử gõ khác hoặc chọn trong thực đơn nhé.</div>
-                    )}
-                  </div>
-                  </>)}
-
-                  {quickMode === 'batch' && (<>
                     <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 8 }}>
                       Mỗi dòng 1 món (thêm số lượng ở cuối). Vd:<br />
                       <span style={{ color: '#334155' }}>sò sữa nướng hành · chem chép lá quế 2 · ốc hương xào bơ cay</span>
                     </div>
                     <textarea
+                      autoFocus
                       value={batchText}
                       onChange={e => setBatchText(e.target.value)}
                       rows={5}
@@ -5778,7 +5722,6 @@ function OrderContent() {
                         <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: 6, textAlign: 'center' }}>Dòng chưa chọn loại hoặc không nhận ra sẽ được bỏ qua.</div>
                       </div>
                     )}
-                  </>)}
 
                   {cart.length > 0 && (
                     <div style={{ marginTop: 14, borderTop: '1px dashed #e5e7eb', paddingTop: 10 }}>
