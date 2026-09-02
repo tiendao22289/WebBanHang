@@ -3861,15 +3861,6 @@ function OrderContent() {
                 </button>
               )}
             </div>
-            <button
-              className="co-feedback-inline-btn"
-              type="button"
-              aria-label="Góp ý cho quán"
-              onClick={() => setShowFeedbackModal(true)}
-            >
-              <span className="co-feedback-drop">★</span>
-              <span className="co-feedback-label">Góp ý</span>
-            </button>
           </div>
         </div>
 
@@ -5447,6 +5438,19 @@ function OrderContent() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Nút Góp ý thu gọn — dính sát mép phải, giữa màn hình, chỉ ló ngôi sao.
+            Bấm vào mở bảng đánh giá. Ẩn khi đang mở modal/giỏ khác. */}
+        {!showFeedbackModal && !showCart && !showOrdered && !wheelOpen && !showInfoModal && !showLuckyNudge && (
+          <button
+            className="co-feedback-edge"
+            type="button"
+            aria-label="Góp ý cho quán"
+            onClick={() => setShowFeedbackModal(true)}
+          >
+            <span className="co-feedback-edge-star">★</span>
+          </button>
         )}
 
         {showFeedbackModal && (() => {
