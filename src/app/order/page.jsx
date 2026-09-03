@@ -555,6 +555,7 @@ function OrderContent() {
   const [showQuickOrder, setShowQuickOrder] = useState(false); // bảng gọi món nhanh (gõ → gợi ý)
   const [quickQuery, setQuickQuery] = useState('');
   const [quickAddedFlash, setQuickAddedFlash] = useState(''); // tên món vừa thêm (báo nhanh)
+  const [searchAddedToast, setSearchAddedToast] = useState(''); // báo "đã thêm" khi bấm gợi ý ở thanh tìm
   const [quickMode, setQuickMode] = useState('single'); // 'single' = gõ 1 món; 'batch' = ghi nhiều món
   const [batchText, setBatchText] = useState('');
   const [parsedLines, setParsedLines] = useState(null); // kết quả phân tích nhiều dòng để khách xem/sửa
@@ -2858,19 +2859,12 @@ function OrderContent() {
     });
   }
 
-  // Mở món kèm LOẠI đã chọn sẵn (dùng cho gợi ý ở thanh tìm: "mì tay" → mở
-  // Mì Xào với loại "Ốc móng tay" sẵn để khách chỉ việc xác nhận).
+  // Bấm gợi ý ở thanh tìm ("mì tay" → Mì Xào · Ốc móng tay): loại đã chọn
+  // trong gợi ý rồi nên THÊM THẲNG vào giỏ, không mở lại bảng chọn.
   function openItemWithChoice(item, choice) {
-    addToCart(item); // mở bảng chọn (hoặc thêm luôn nếu món không có loại)
-    if (choice && item.options && item.options.length > 0) {
-      const loaiOpt = item.options.find(o => o.name && o.name.toLowerCase().includes('loại'));
-      if (loaiOpt && Array.isArray(loaiOpt.choices) && loaiOpt.choices.includes(choice)) {
-        setSelectedOpts(prev => ({ ...prev, [loaiOpt.name]: choice }));
-        const ci = loaiOpt.choices.indexOf(choice);
-        const p = loaiOpt.prices?.[ci];
-        if (p != null && p !== '') setChoicePrice(Number(p) || null);
-      }
-    }
+    quickAddResolved(item, choice); // tính giá đúng theo LOẠI + gộp vào giỏ
+    setSearchAddedToast(`${item.name}${choice ? ' · ' + choice : ''}`);
+    setTimeout(() => setSearchAddedToast(''), 1700);
     setSearchTerm('');
   }
 
@@ -4276,6 +4270,14 @@ function OrderContent() {
 
         {/* ─── Menu Content ─── */}
         <div className="co-content">
+
+          {/* ─── Báo nhanh "đã thêm" khi bấm gợi ý ở thanh tìm ─── */}
+          {searchAddedToast && (
+            <div style={{ position: 'fixed', top: 84, left: '50%', transform: 'translateX(-50%)', zIndex: 5000, background: '#16a34a', color: 'white', padding: '10px 18px', borderRadius: 999, fontWeight: 800, fontSize: '0.9rem', boxShadow: '0 6px 20px rgba(22,163,74,.4)', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '90vw' }}>
+              <span>✓ Đã thêm</span>
+              <span style={{ fontWeight: 700, opacity: 0.95, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{searchAddedToast}</span>
+            </div>
+          )}
 
           {/* ─── Gợi ý nhanh MÓN + LOẠI khi tìm ("mì tay" → Mì Xào · Ốc móng tay) ─── */}
           {searchSuggestions.length > 0 && (
