@@ -4266,6 +4266,32 @@ function OrderContent() {
               )}
             </div>
           </div>
+
+          {/* ─── Gợi ý nhanh MÓN + LOẠI — ngay dưới thanh tìm, cuộn ngang ─── */}
+          {searchSuggestions.length > 0 && (
+            <div style={{ padding: '0 12px 8px' }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#ea580c', margin: '0 0 5px' }}>⚡ Gợi ý nhanh — bấm chọn</div>
+              <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2, WebkitOverflowScrolling: 'touch' }}>
+                {searchSuggestions.map((s, si) => {
+                  const loaiOpt = (s.item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
+                  const price = computeModalPrice(s.item.price, s.item.options, loaiOpt ? { [loaiOpt.name]: s.choice } : {});
+                  return (
+                    <button
+                      key={si}
+                      type="button"
+                      onClick={() => openItemWithChoice(s.item, s.choice)}
+                      style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1, padding: '6px 12px', borderRadius: 11, border: '1.5px solid #fdba74', background: '#fff7ed', cursor: 'pointer', textAlign: 'left', whiteSpace: 'nowrap' }}
+                    >
+                      <span style={{ fontSize: '0.84rem', fontWeight: 700, color: '#9a3412' }}>
+                        {s.item.name} <span style={{ color: '#ea580c' }}>· {s.choice}</span>
+                      </span>
+                      {price > 0 && <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#16a34a' }}>{price.toLocaleString('vi-VN')}đ</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ─── Menu Content ─── */}
@@ -4276,32 +4302,6 @@ function OrderContent() {
             <div style={{ position: 'fixed', top: 84, left: '50%', transform: 'translateX(-50%)', zIndex: 5000, background: '#16a34a', color: 'white', padding: '10px 18px', borderRadius: 999, fontWeight: 800, fontSize: '0.9rem', boxShadow: '0 6px 20px rgba(22,163,74,.4)', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '90vw' }}>
               <span>✓ Đã thêm</span>
               <span style={{ fontWeight: 700, opacity: 0.95, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{searchAddedToast}</span>
-            </div>
-          )}
-
-          {/* ─── Gợi ý nhanh MÓN + LOẠI khi tìm ("mì tay" → Mì Xào · Ốc móng tay) ─── */}
-          {searchSuggestions.length > 0 && (
-            <div style={{ margin: '10px 14px 4px' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#ea580c', marginBottom: 6 }}>⚡ Gợi ý nhanh — bấm để chọn</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {searchSuggestions.map((s, si) => {
-                  const loaiOpt = (s.item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
-                  const price = computeModalPrice(s.item.price, s.item.options, loaiOpt ? { [loaiOpt.name]: s.choice } : {});
-                  return (
-                    <button
-                      key={si}
-                      type="button"
-                      onClick={() => openItemWithChoice(s.item, s.choice)}
-                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, padding: '8px 12px', borderRadius: 12, border: '1.5px solid #fdba74', background: '#fff7ed', cursor: 'pointer', textAlign: 'left' }}
-                    >
-                      <span style={{ fontSize: '0.86rem', fontWeight: 700, color: '#9a3412' }}>
-                        {s.item.name} <span style={{ color: '#ea580c' }}>· {s.choice}</span>
-                      </span>
-                      {price > 0 && <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#16a34a' }}>{price.toLocaleString('vi-VN')}đ</span>}
-                    </button>
-                  );
-                })}
-              </div>
             </div>
           )}
 
