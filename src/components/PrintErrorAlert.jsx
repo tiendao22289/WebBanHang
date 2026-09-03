@@ -95,6 +95,14 @@ function playPrinterRecovered() {
 const STALE_PENDING_SECONDS = 60;
 const STALE_POLL_INTERVAL_MS = 15000;
 
+// Lỗi "kẹt hàng đợi Windows" TỰ PHỤC HỒI (spooler thông là phiếu in ra) — KHÔNG
+// phải máy in hỏng, không nên hụ còi báo động. (Offline / lỗi khác vẫn báo.)
+function isQueueJamError(raw) {
+  const r = (raw || '').toLowerCase();
+  return r.includes('ket trong hang doi') || r.includes('kẹt trong hàng đợi') || r.includes('kẹt') || r.includes('hang doi') || r.includes('hàng đợi');
+}
+const ACTIVE_ORDER_STATUSES = ['pending', 'preparing'];
+
 /** Lấy tên bàn + món (để hiện trong card lỗi) và tên máy in của 1 print_job. */
 async function fetchJobDisplayInfo(job) {
   let orderInfo = '';
@@ -179,6 +187,8 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
 
         // ── XỬ LÝ FAILED ──
         if (job.status === 'failed') {
+          // Kẹt hàng đợi tự phục hồi → không hụ còi báo động (phiếu vẫn in ra).
+          if (isQueueJamError(job.error_message)) return;
           const cleanMsg = extractErrorMessage(job.error_message);
           setErrors(prev => {
              const exists = prev.find(e => e.id === job.id);
@@ -244,7 +254,22 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
       const { data: staleJobs, error } = await query;
       if (error || !staleJobs?.length) return;
 
-      for (const job of staleJobs) {
+      // Chỉ báo cho ĐƠN CÒN MỞ (pending/preparing). Lệnh in 'pending' mồ côi trên
+      // bill đã THANH TOÁN / HUỶ không phải "máy in lỗi" → bỏ qua, nếu không thẻ
+      // báo đỏ "Máy in đang gặp lỗi" cứ hiện hoài mỗi lần F5 dù máy in vẫn tốt.
+      const orderIds = [...new Set(staleJobs.flatMap(j => (j.order_ids?.length ? j.order_ids : [j.order_id])).filter(Boolean))];
+      const activeOrderIds = new Set();
+      if (orderIds.length) {
+        const { data: ords } = await supabase.from('orders').select('id, status').in('id', orderIds);
+        (ords || []).forEach(o => { if (ACTIVE_ORDER_STATUSES.includes(o.status)) activeOrderIds.add(o.id); });
+      }
+      const activeStale = staleJobs.filter(j => {
+        const ids = j.order_ids?.length ? j.order_ids : [j.order_id].filter(Boolean);
+        return ids.some(id => activeOrderIds.has(id));
+      });
+      if (!activeStale.length) return;
+
+      for (const job of activeStale) {
         if (dismissedIdsRef.current.has(job.id) || staleSeenRef.current.has(job.id)) continue;
         staleSeenRef.current.add(job.id);
 
