@@ -49,6 +49,22 @@ function isPrintJobBad(pj) {
   if (pj.status === 'failed') return true;
   return pj.status === 'pending' && pj.created_at && (Date.now() - new Date(pj.created_at).getTime()) > STALE_PRINT_JOB_MS;
 }
+// Lệnh in kẹt hàng đợi thường TỰ in lại được (hoặc nhân viên bấm "In lại"),
+// nhưng dòng 'failed' cũ vẫn nằm nguyên → thẻ bàn cứ đỏ hoài. Coi lệnh lỗi là
+// ĐÃ XỬ LÝ nếu CÙNG máy in đó có 1 lệnh 'done' quanh thời điểm đó (±/sau, trong
+// 10 phút) — tức là máy đã nhả phiếu cho đơn này rồi.
+function isJobResolvedByReprint(job, allJobs) {
+  if (!job || !job.printer_id) return false;
+  const t = new Date(job.created_at || 0).getTime();
+  return (allJobs || []).some(j =>
+    j.status === 'done' && j.printer_id === job.printer_id && j.id !== job.id
+    && new Date(j.created_at || 0).getTime() >= t - 10 * 60 * 1000
+  );
+}
+// Lệnh in CÒN LỖI THẬT của 1 đơn (lỗi/treo VÀ chưa được in lại thành công).
+function isUnresolvedBadJob(job, order) {
+  return isPrintJobBad(job) && !isJobResolvedByReprint(job, order?.print_jobs || []);
+}
 function isDrinkName(name) {
   const n = removeVietnameseTones(name || '');
   return DRINK_KEYWORDS.some(k => n.includes(k));
@@ -597,7 +613,7 @@ export default function TablesPage() {
   function unprintedItemIds(order) {
     const set = new Set();
     (order?.print_jobs || []).forEach(pj => {
-      if (!isPrintJobBad(pj)) return;
+      if (!isUnresolvedBadJob(pj, order)) return;
       itemsOfPrintJob(pj, order).forEach(i => set.add(i.id));
     });
     return set;
@@ -608,7 +624,7 @@ export default function TablesPage() {
     const out = [];
     (bills || []).forEach(o => {
       (o.print_jobs || []).forEach(pj => {
-        if (isPrintJobBad(pj)) out.push({ job: pj, order: o });
+        if (isUnresolvedBadJob(pj, o)) out.push({ job: pj, order: o });
       });
     });
     return out;
@@ -2358,7 +2374,7 @@ export default function TablesPage() {
           const groupColor = groupColorMap[hostIdCard] || null;
           const totalAmount = sumOrderItems(tableBills);
           const guestCount = tableBills.length;
-          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(isPrintJobBad));
+          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => isUnresolvedBadJob(pj, o)));
           // Bill của bàn đã dùng vòng xoay may mắn chưa — báo cho nhân viên biết,
           // vì mỗi bill chỉ được nhận 1 lần quà (xem /api/lucky/spin).
           const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelItem));
@@ -3179,7 +3195,7 @@ export default function TablesPage() {
                             ? []
                             : reviewRequests.filter(r => r.host_table_id === alertHostId);
                           const tableTotal = sumOrderItems(orders[table.merged_with || table.id] || []);
-                          const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(isPrintJobBad));
+                          const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(pj => isUnresolvedBadJob(pj, o)));
                           const hasLuckyWheel = (orders[table.merged_with || table.id] || []).some(o => (o.order_items || []).some(isLuckyWheelItem));
                           const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(orders[table.merged_with || table.id] || []) : { availableGiftSlots: 0, hasGiftInBill: false };
 
