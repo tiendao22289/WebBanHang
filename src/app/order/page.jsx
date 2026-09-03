@@ -4251,7 +4251,7 @@ function OrderContent() {
                 <option key={cat.id} value={cat.id}>{cat.name}</option>
               ))}
             </select>
-            <div className="co-search-box" style={{ padding: '5px 8px', minWidth: 0 }}>
+            <div className="co-search-box" style={{ padding: '5px 8px', minWidth: 0, flex: searchSuggestions.length > 0 ? '1 1 0' : '1 1 auto' }}>
               <Search size={14} />
               <input
                 placeholder="Tìm món"
@@ -4265,13 +4265,11 @@ function OrderContent() {
                 </button>
               )}
             </div>
-          </div>
 
-          {/* ─── Gợi ý nhanh MÓN + LOẠI — ngay dưới thanh tìm, cuộn ngang ─── */}
-          {searchSuggestions.length > 0 && (
-            <div style={{ padding: '0 12px 8px' }}>
-              <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#ea580c', margin: '0 0 5px' }}>⚡ Gợi ý nhanh — bấm chọn</div>
-              <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2, WebkitOverflowScrolling: 'touch' }}>
+            {/* ─── Gợi ý nhanh MÓN + LOẠI — cùng hàng, bên phải thanh tìm, cuộn ngang ─── */}
+            {searchSuggestions.length > 0 && (
+              <div style={{ flex: '1.3 1 0', minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <span style={{ flexShrink: 0, fontSize: '0.9rem' }} title="Gợi ý nhanh">⚡</span>
                 {searchSuggestions.map((s, si) => {
                   const loaiOpt = (s.item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
                   const price = computeModalPrice(s.item.price, s.item.options, loaiOpt ? { [loaiOpt.name]: s.choice } : {});
@@ -4280,18 +4278,18 @@ function OrderContent() {
                       key={si}
                       type="button"
                       onClick={() => openItemWithChoice(s.item, s.choice)}
-                      style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1, padding: '6px 12px', borderRadius: 11, border: '1.5px solid #fdba74', background: '#fff7ed', cursor: 'pointer', textAlign: 'left', whiteSpace: 'nowrap' }}
+                      style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0, padding: '4px 10px', borderRadius: 10, border: '1.5px solid #fdba74', background: '#fff7ed', cursor: 'pointer', textAlign: 'left', whiteSpace: 'nowrap' }}
                     >
-                      <span style={{ fontSize: '0.84rem', fontWeight: 700, color: '#9a3412' }}>
+                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#9a3412' }}>
                         {s.item.name} <span style={{ color: '#ea580c' }}>· {s.choice}</span>
                       </span>
-                      {price > 0 && <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#16a34a' }}>{price.toLocaleString('vi-VN')}đ</span>}
+                      {price > 0 && <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#16a34a' }}>{price.toLocaleString('vi-VN')}đ</span>}
                     </button>
                   );
                 })}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {/* ─── Menu Content ─── */}
