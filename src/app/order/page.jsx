@@ -4266,14 +4266,14 @@ function OrderContent() {
               )}
             </div>
 
-            {/* Nút ⚡ Gọi món nhanh — nằm kế bên phải thanh tìm */}
+            {/* Nút ⚡ Chọn nhanh — nằm kế bên phải thanh tìm */}
             <button
               type="button"
-              aria-label="Gọi món nhanh"
+              aria-label="Chọn nhanh"
               onClick={() => { setShowQuickOrder(true); setParsedLines(buildParsedLines(batchText, parsedLines)); }}
-              style={{ flexShrink: 0, width: 40, height: 34, borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 2px 8px rgba(37,99,235,.35)', fontSize: '1.1rem' }}
+              style={{ flexShrink: 0, height: 34, padding: '0 12px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: 'white', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', boxShadow: '0 2px 8px rgba(37,99,235,.35)', fontSize: '0.82rem', fontWeight: 800, whiteSpace: 'nowrap' }}
             >
-              ⚡
+              <span style={{ fontSize: '1rem' }}>⚡</span> Chọn nhanh
             </button>
           </div>
 
