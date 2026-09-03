@@ -3844,12 +3844,32 @@ function OrderContent() {
     return cats.length > 0 ? cats : [null];
   };
 
+  // Thanh tìm món: dùng CHUNG bộ từ khoá / chuẩn hoá của "gọi món nhanh"
+  // (ngao→nghêu, phomai→phô mai, ghi tắt "oc huong muoi"→ Ốc Hương…). Chỉ lọc
+  // ra món, không kèm gợi ý hay chọn loại. Tính 1 lần trước khi lọc.
+  const searchNorm = searchTerm ? canonQuery(removeVietnameseTones(searchTerm.trim().toLowerCase())) : '';
+  const searchWords = searchNorm ? searchNorm.split(/\s+/).filter(Boolean) : [];
+  const searchSet = new Set(searchWords);
+  function itemMatchesSearch(item) {
+    if (!searchNorm) return true;
+    const normName = removeVietnameseTones((item.name || '').toLowerCase());
+    if (!normName) return false;
+    // 1) gõ một phần / gõ dư chữ cách làm: tên chứa ô tìm, hoặc ô tìm chứa tên.
+    if (normName.includes(searchNorm) || searchNorm.includes(normName)) return true;
+    const nameWords = normName.split(/[^a-z0-9]+/).filter(w => w.length >= 2);
+    if (nameWords.length === 0) return false;
+    // 2) đủ mọi từ của tên có trong ô tìm (dù thứ tự khác / thêm chữ khác).
+    if (nameWords.every(w => searchSet.has(w))) return true;
+    // 3) ghi tắt: trùng 1 từ ĐẶC TRƯNG của tên ("huong", "long", "mai"…).
+    if (nameWords.some(w => searchSet.has(w) && isDistinctiveNameWord(w))) return true;
+    return false;
+  }
+
   // Filtered items
   const filteredItems = menuItems.filter(item => {
     const itemCats = getItemCategories(item);
     const matchCategory = activeCategory === 'all' || itemCats.includes(activeCategory);
-    const matchSearch = !searchTerm || removeVietnameseTones(item.name).includes(removeVietnameseTones(searchTerm));
-    return matchCategory && matchSearch;
+    return matchCategory && itemMatchesSearch(item);
   });
 
   // Group by category for display
