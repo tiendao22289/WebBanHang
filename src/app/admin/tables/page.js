@@ -69,6 +69,15 @@ function isDrinkName(name) {
   const n = removeVietnameseTones(name || '');
   return DRINK_KEYWORDS.some(k => n.includes(k));
 }
+// Bàn có "dính" vòng xoay may mắn để hiện logo: hoặc dòng % giảm (item_name có
+// "VÒNG XOAY"), HOẶC quà trúng (is_gift + note của finalizeGiftItem). Quà vòng
+// xoay có item_name=null nên isLuckyWheelItem không bắt được → phải xét thêm note.
+// (Quà "8 tặng 1" là is_gift nhưng note rỗng → không tính là vòng xoay.)
+function isLuckyWheelOutcome(item) {
+  if (isLuckyWheelItem(item)) return true;
+  const note = (item?.note || '').toLowerCase();
+  return !!item?.is_gift && note.includes('vòng quay');
+}
 
 // Tiếng chuông to vang vọng — Web Audio API, mô phỏng chuông kim loại bằng harmonic partials
 let _bellAudioCtx = null;
@@ -2377,7 +2386,7 @@ export default function TablesPage() {
           const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => isUnresolvedBadJob(pj, o)));
           // Bill của bàn đã dùng vòng xoay may mắn chưa — báo cho nhân viên biết,
           // vì mỗi bill chỉ được nhận 1 lần quà (xem /api/lucky/spin).
-          const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelItem));
+          const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelOutcome));
           // KM mua N tặng 1 — Mang về gộp nhiều khách khác nhau nên bỏ qua ở đây
           const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(tableBills) : { availableGiftSlots: 0, hasGiftInBill: false };
           let timeElapsed = '';
@@ -3196,7 +3205,7 @@ export default function TablesPage() {
                             : reviewRequests.filter(r => r.host_table_id === alertHostId);
                           const tableTotal = sumOrderItems(orders[table.merged_with || table.id] || []);
                           const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(pj => isUnresolvedBadJob(pj, o)));
-                          const hasLuckyWheel = (orders[table.merged_with || table.id] || []).some(o => (o.order_items || []).some(isLuckyWheelItem));
+                          const hasLuckyWheel = (orders[table.merged_with || table.id] || []).some(o => (o.order_items || []).some(isLuckyWheelOutcome));
                           const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(orders[table.merged_with || table.id] || []) : { availableGiftSlots: 0, hasGiftInBill: false };
 
                           // Style derivation: Merged group is Purple, Normal Occupied is Blue, Empty is White
