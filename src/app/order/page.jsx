@@ -1,5 +1,6 @@
 'use client';
 import { removeVietnameseTones } from '@/lib/utils';
+import { COOKING_WORDS, LOAI_SYNONYMS, KEYWORD_ALIASES } from '@/lib/quickMatch';
 
 
 import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
@@ -3510,17 +3511,8 @@ function OrderContent() {
   // hành, bơ…). Khách hay ghi tắt bỏ chữ đầu ("ghẹ rang muối" = càng ghẹ
   // rang muối, "long hành" = sò lông nướng mỡ hành) nên phải nhận diện món
   // qua từ đặc trưng, không lệ thuộc đủ tên.
-  // Động từ chế biến — không bao giờ là "tên món", chỉ là cách làm. Dù có
-  // món nào lỡ có chữ này trong tên ("HÀU nướng") cũng không cho các chữ này
-  // tự khớp món, tránh "sò sữa nướng hành" nhảy bừa sang "Hàu nướng".
-  const COOKING_WORDS = new Set([
-    'nuong', 'xao', 'hap', 'rang', 'luoc', 'chien', 'sot', 'ham', 'kho', 'chao', 'sup', 'lau',
-    // từ chung / đơn vị — không phải tên con hải sản
-    'mon', 'con', 'cai', 'dia', 'phan', 'ly', 'chai', 'ban', 'nay', 'cho', 'giup', 'them', 'phan',
-  ]);
-  // Từ đồng nghĩa khi chọn LOẠI: khách hay gõ "luộc" (ý là "hấp" vì nhiều
-  // món chỉ có "Hấp sả / Hấp thái"), và "xã"/"xả" thay cho "sả".
-  const LOAI_SYNONYMS = { luoc: ['hap'], hap: ['luoc'], xa: ['sa'], sa: ['xa'] };
+  // COOKING_WORDS, LOAI_SYNONYMS, KEYWORD_ALIASES nay để CHUNG ở @/lib/quickMatch
+  // (import ở đầu file) — sửa từ khoá 1 chỗ, cả web khách & admin cùng có.
   // Điểm khớp 1 từ khách gõ với 1 lựa chọn LOẠI: khớp thẳng = 2, qua từ đồng
   // nghĩa = 1 (để "Luộc" vẫn thắng khi món có sẵn "Luộc").
   function loaiWordScore(choiceNorm, w) {
@@ -3533,29 +3525,7 @@ function OrderContent() {
     return 0;
   }
 
-  // Chuẩn hoá từ khoá khách gõ → về đúng chữ trong thực đơn. Chạy trên chuỗi
-  // ĐÃ bỏ dấu + viết thường. Mỗi dòng: [chữ khách hay gõ, chữ chuẩn]. Có ranh
-  // giới từ (\b) nên không đụng chữ khác. Thêm dòng mới vào đây khi gặp cách
-  // gọi lạ của khách.
-  const KEYWORD_ALIASES = [
-    // ── Tên món khách hay gọi khác / viết sai ──
-    ['ngao', 'ngheu'],            // ngao = nghêu (miền Bắc)
-    ['chip chip', 'chem chep'],   // chíp chíp = chem chép
-    ['chip chep', 'chem chep'],
-    ['chem chip', 'chem chep'],
-    ['chip', 'chem chep'],
-    ['sting', 'siting'],          // sting = Siting (nước tăng lực)
-    ['bu lot', 'bulot'],          // bu lốt = bulot
-    ['bulo', 'bulot'],
-    // ── Cách chế biến viết liền / viết lẫn ──
-    ['phomai', 'pho mai'],        // phômai viết liền
-    ['pmai', 'pho mai'],
-    ['sate', 'sa te'],            // sa tế / satế viết liền
-    ['xa te', 'sa te'],           // menu ghi lẫn "xa tế" ↔ "sa tế"
-    ['botoi', 'bo toi'],
-    ['laque', 'la que'],
-    ['7up', '7 up'],
-  ];
+  // KEYWORD_ALIASES import từ @/lib/quickMatch (dùng chung với web admin).
   // Biên dịch mẫu tìm 1 LẦN (danh sách cố định) — không tạo lại mỗi lần khách
   // gõ. \b = ranh giới từ ASCII, an toàn mọi trình duyệt kể cả iOS cũ.
   const canonRegexes = useMemo(

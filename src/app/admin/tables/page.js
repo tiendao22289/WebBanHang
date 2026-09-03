@@ -2,7 +2,8 @@
 import { removeVietnameseTones } from '@/lib/utils';
 
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { createQuickMatcher } from '@/lib/quickMatch';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { getActiveAccount, processPaymentAtomic, buildQrUrl } from '@/lib/bankAccount';
@@ -134,6 +135,10 @@ export default function TablesPage() {
   const [activeMenuCategory, setActiveMenuCategory] = useState('all');
   const [addItemSearch, setAddItemSearch] = useState('');
   const [addedItemAlert, setAddedItemAlert] = useState(null);
+  // ─── Chọn nhanh (gõ nhiều món 1 lần) — dùng chung bộ nhận diện với web khách ─
+  const [showQuickPick, setShowQuickPick] = useState(false);
+  const [quickBatchText, setQuickBatchText] = useState('');
+  const [quickParsed, setQuickParsed] = useState(null);
   // ─── Draft Cart: giỏ hàng tạm, chỉ push lên server khi bấm "Xác nhận" ───
   const [draftCart, setDraftCart] = useState([]); // [{ menuItemId, menuItem, qty, options, note, price }]
   const [isConfirmingDraft, setIsConfirmingDraft] = useState(false);
@@ -1732,6 +1737,70 @@ export default function TablesPage() {
     });
     const initialPrice = getChoiceDerivedPrice(menuItem, initialOptions);
     return { initialOptions, initialPrice };
+  }
+
+  // ─── Chọn nhanh: gõ nhiều món 1 lần → nhận diện → thêm vào draft ──────────
+  // Dùng CHUNG bộ nhận diện với web khách (@/lib/quickMatch): ghi tắt, sai
+  // chính tả, không dấu, luộc→hấp, ngao→nghêu… Sửa từ khoá tại lib là cả 2 nơi hiểu.
+  const quickMatcher = useMemo(() => createQuickMatcher(menuItems), [menuItems]);
+
+  function qpBuildParsed(text, prev) {
+    const lines = (text || '').split('\n').map(l => l.trim()).filter(Boolean);
+    const used = new Set();
+    return lines.map((line, i) => {
+      const keep = (prev || []).find(r => r.raw === line && !used.has(r.id));
+      if (keep) { used.add(keep.id); return keep; }
+      const { qty, text: t } = quickMatcher.splitQtyFromLine(line);
+      const match = quickMatcher.matchOneLine(t);
+      return { id: `${i}-${line}-${Math.random().toString(36).slice(2, 7)}`, raw: line, qty, match, chosenChoice: match?.kind === 'specific' ? match.choice : '' };
+    });
+  }
+  function qpCountReady(rows) {
+    return (rows || []).filter(r => r.match && (r.match.kind === 'plain' || r.chosenChoice)).length;
+  }
+  function qpCurrentSuggestions() {
+    const cur = ((quickBatchText || '').split('\n').pop() || '').trim();
+    if (cur.length < 2) return { cur, list: [] };
+    const { text } = quickMatcher.splitQtyFromLine(cur);
+    const m = quickMatcher.matchOneLine(text);
+    if (m && m.kind === 'specific') return { cur, list: [] };
+    return { cur, list: quickMatcher.getQuickSuggestions(text).slice(0, 6) };
+  }
+  function qpPickSuggestion(s) {
+    const lines = (quickBatchText || '').split('\n');
+    const resolved = s.kind === 'specific' ? `${s.item.name} ${s.choice}` : s.item.name;
+    lines[lines.length - 1] = resolved;
+    const nt = lines.join('\n') + '\n';
+    setQuickBatchText(nt);
+    setQuickParsed(prev => qpBuildParsed(nt, prev));
+  }
+  function qpDeleteRow(row) {
+    setQuickParsed(prev => (prev || []).filter(r => r.id !== row.id));
+    setQuickBatchText(prev => (prev || '').split('\n').filter(l => l.trim() !== row.raw.trim()).join('\n'));
+  }
+  function qpPrice(item, choice) {
+    const loaiOpt = (item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
+    const sel = {}; if (loaiOpt && choice) sel[loaiOpt.name] = choice;
+    const derived = getChoiceDerivedPrice(item, sel);
+    return derived != null ? derived : (item.price || 0);
+  }
+  function qpAddResolved(item, choice, qty) {
+    const loaiOpt = (item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
+    const options = choice ? [{ name: loaiOpt?.name || 'LOẠI', choice }] : [];
+    const price = qpPrice(item, choice);
+    addToDraft({ ...item, price }, options, qty, '', price);
+  }
+  function qpAddAll() {
+    let added = 0;
+    (quickParsed || []).forEach(row => {
+      if (!row.match) return;
+      const needChoice = row.match.kind !== 'plain';
+      const choice = needChoice ? row.chosenChoice : null;
+      if (needChoice && !choice) return;
+      qpAddResolved(row.match.item, choice, row.qty);
+      added++;
+    });
+    if (added > 0) { setQuickBatchText(''); setQuickParsed(null); setShowQuickPick(false); }
   }
 
   function addToDraft(menuItem, options = [], qty = 1, note = '', price = null) {
@@ -4682,6 +4751,15 @@ export default function TablesPage() {
                   )}
                 </div>
 
+                {/* Nút ⚡ Chọn nhanh — kế bên phải ô tìm (giống web khách) */}
+                <button
+                  type="button"
+                  onClick={() => { setShowQuickPick(true); setQuickParsed(qpBuildParsed(quickBatchText, quickParsed)); }}
+                  style={{ flexShrink: 0, height: 36, padding: '0 14px', borderRadius: 20, border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: 'white', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 800, whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(37,99,235,.35)' }}
+                >
+                  <span style={{ fontSize: '1rem' }}>⚡</span> Chọn nhanh
+                </button>
+
                 <button
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4, flexShrink: 0, display: 'flex' }}
                   onClick={closeModal}
@@ -4927,6 +5005,90 @@ export default function TablesPage() {
                         }}>{draftTotal}</span>
                       )}
                     </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ─── Modal CHỌN NHANH (gõ nhiều món → nhận diện → thêm vào bàn) ─── */}
+              {showQuickPick && (
+                <div onClick={() => setShowQuickPick(false)} style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(15,23,42,.5)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: 16, paddingTop: 'calc(env(safe-area-inset-top,0px) + 16px)' }}>
+                  <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 460, maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #f3f4f6' }}>
+                      <span style={{ fontWeight: 800, fontSize: '1rem', color: '#2563eb' }}>⚡ Chọn nhanh — Bàn {selectedTable?.table_number}</span>
+                      <button onClick={() => setShowQuickPick(false)} style={{ border: 'none', background: '#f3f4f6', borderRadius: '50%', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><X size={16} color="#4b5563" /></button>
+                    </div>
+                    <div style={{ padding: 16, overflowY: 'auto' }}>
+                      <textarea
+                        autoFocus
+                        value={quickBatchText}
+                        onChange={e => { const v = e.target.value; setQuickBatchText(v); setQuickParsed(prev => qpBuildParsed(v, prev)); }}
+                        rows={5}
+                        placeholder={"sò lông hấp sả\nghẹ rang muối 2\nốc hương xào bơ tỏi\nmì tay"}
+                        style={{ width: '100%', padding: '10px 12px', border: '1.5px solid #93c5fd', borderRadius: 12, fontSize: '0.9rem', outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
+                      />
+                      {(() => {
+                        const { cur, list } = qpCurrentSuggestions();
+                        if (!cur || list.length === 0) return null;
+                        return (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                            {list.map((s, si) => (
+                              <button key={si} type="button" onClick={() => qpPickSuggestion(s)} style={{ padding: '7px 11px', borderRadius: 999, border: '1.5px solid #93c5fd', background: '#eff6ff', color: '#1d4ed8', fontSize: '0.82rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                {s.kind === 'specific' ? `${s.item.name} · ${s.choice}` : s.item.name}
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                      {quickParsed && quickParsed.length > 0 && (
+                        <div style={{ marginTop: 12 }}>
+                          {[...quickParsed].reverse().map((row) => {
+                            const m = row.match;
+                            const loaiOpt = m ? (m.item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại')) : null;
+                            const ok = m && (m.kind === 'plain' || row.chosenChoice);
+                            const linePrice = (m && ok) ? qpPrice(m.item, row.chosenChoice) * row.qty : 0;
+                            return (
+                              <div key={row.id} style={{ border: `1px solid ${ok ? '#bbf7d0' : '#fed7aa'}`, background: ok ? '#f0fdf4' : '#fff7ed', borderRadius: 10, padding: '8px 10px', marginBottom: 6 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    {m ? (
+                                      <div style={{ fontWeight: 700, fontSize: '0.86rem', color: '#111827' }}>
+                                        {m.item.name}{row.chosenChoice ? <span style={{ color: '#ea580c' }}> · {row.chosenChoice}</span> : (m.kind === 'plain' ? '' : <span style={{ color: '#c2410c' }}> · (chọn loại)</span>)}
+                                      </div>
+                                    ) : (
+                                      <div style={{ fontWeight: 700, fontSize: '0.86rem', color: '#c2410c' }}>❓ Không nhận ra</div>
+                                    )}
+                                    <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Bạn gõ: {row.raw}</div>
+                                    {ok && linePrice > 0 && (<div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#16a34a', marginTop: 2 }}>{linePrice.toLocaleString('vi-VN')}đ</div>)}
+                                  </div>
+                                  {m && (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                                      <button onClick={() => setQuickParsed(p => p.map(r => r.id === row.id ? { ...r, qty: Math.max(1, r.qty - 1) } : r))} style={{ width: 24, height: 24, borderRadius: 6, border: '1px solid #d1d5db', background: 'white', cursor: 'pointer' }}>−</button>
+                                      <span style={{ minWidth: 18, textAlign: 'center', fontWeight: 800, fontSize: '0.85rem' }}>{row.qty}</span>
+                                      <button onClick={() => setQuickParsed(p => p.map(r => r.id === row.id ? { ...r, qty: Math.min(50, r.qty + 1) } : r))} style={{ width: 24, height: 24, borderRadius: 6, border: '1px solid #d1d5db', background: 'white', cursor: 'pointer' }}>+</button>
+                                    </div>
+                                  )}
+                                  <button onClick={() => qpDeleteRow(row)} aria-label="Xoá dòng" style={{ width: 26, height: 26, borderRadius: 6, border: 'none', background: '#fee2e2', color: '#dc2626', cursor: 'pointer', flexShrink: 0, fontWeight: 800 }}>✕</button>
+                                </div>
+                                {m && loaiOpt && Array.isArray(loaiOpt.choices) && (
+                                  <select value={row.chosenChoice} onChange={e => setQuickParsed(p => p.map(r => r.id === row.id ? { ...r, chosenChoice: e.target.value } : r))} style={{ marginTop: 6, width: '100%', padding: '6px 8px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: '0.82rem', background: 'white' }}>
+                                    <option value="">— Chọn loại —</option>
+                                    {loaiOpt.choices.map((c, ci) => <option key={ci} value={c}>{c}</option>)}
+                                  </select>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {(() => {
+                        const ready = qpCountReady(quickParsed);
+                        return (
+                          <button onClick={() => { if (ready > 0) qpAddAll(); else setShowQuickPick(false); }} style={{ width: '100%', marginTop: 14, padding: '14px', background: ready > 0 ? 'linear-gradient(135deg,#2563eb,#1d4ed8)' : '#e5e7eb', color: ready > 0 ? 'white' : '#6b7280', border: 'none', borderRadius: 12, fontWeight: 900, fontSize: '0.98rem', cursor: 'pointer' }}>
+                            {ready > 0 ? `✓ Thêm ${ready} món vào bàn` : 'Đóng'}
+                          </button>
+                        );
+                      })()}
+                    </div>
                   </div>
                 </div>
               )}
