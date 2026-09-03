@@ -3522,6 +3522,39 @@ function OrderContent() {
     if (syns && syns.some(s => cwords.includes(s))) return 1;
     return 0;
   }
+
+  // Chuẩn hoá từ khoá khách gõ → về đúng chữ trong thực đơn. Chạy trên chuỗi
+  // ĐÃ bỏ dấu + viết thường. Mỗi dòng: [chữ khách hay gõ, chữ chuẩn]. Có ranh
+  // giới từ (\b) nên không đụng chữ khác. Thêm dòng mới vào đây khi gặp cách
+  // gọi lạ của khách.
+  const KEYWORD_ALIASES = [
+    // ── Tên món khách hay gọi khác / viết sai ──
+    ['ngao', 'ngheu'],            // ngao = nghêu (miền Bắc)
+    ['chip chip', 'chem chep'],   // chíp chíp = chem chép
+    ['chip chep', 'chem chep'],
+    ['chem chip', 'chem chep'],
+    ['chip', 'chem chep'],
+    ['sting', 'siting'],          // sting = Siting (nước tăng lực)
+    ['bu lot', 'bulot'],          // bu lốt = bulot
+    ['bulo', 'bulot'],
+    // ── Cách chế biến viết liền / viết lẫn ──
+    ['phomai', 'pho mai'],        // phômai viết liền
+    ['pmai', 'pho mai'],
+    ['sate', 'sa te'],            // sa tế / satế viết liền
+    ['xa te', 'sa te'],           // menu ghi lẫn "xa tế" ↔ "sa tế"
+    ['botoi', 'bo toi'],
+    ['laque', 'la que'],
+    ['7up', '7 up'],
+  ];
+  function canonQuery(q) {
+    let s = ' ' + (q || '') + ' ';
+    for (const [from, to] of KEYWORD_ALIASES) {
+      // \b (ranh giới từ ASCII) — an toàn mọi trình duyệt, kể cả iOS cũ.
+      s = s.replace(new RegExp('\\b' + from.replace(/ /g, '\\s+') + '\\b', 'g'), to);
+    }
+    return s.trim().replace(/\s+/g, ' ');
+  }
+
   const menuWordIndex = useMemo(() => {
     const df = new Map(); // từ trong TÊN món → xuất hiện ở bao nhiêu món
     for (const item of menuItems) {
@@ -3547,7 +3580,7 @@ function OrderContent() {
 
   // ── Gọi món nhanh: gõ chữ → gợi ý món (bỏ dấu, khớp gần đúng) ──
   function getQuickSuggestions(query) {
-    const q = removeVietnameseTones((query || '').trim().toLowerCase());
+    const q = canonQuery(removeVietnameseTones((query || '').trim().toLowerCase()));
     if (q.length < 2) return [];
     const out = [];
     for (const item of menuItems) {
@@ -3622,7 +3655,7 @@ function OrderContent() {
 
   // ── GHI NHIỀU MÓN: tìm MÓN khớp nhất cho 1 dòng chữ (đã bỏ số lượng) ──
   function matchOneLine(text) {
-    const q = removeVietnameseTones((text || '').trim().toLowerCase());
+    const q = canonQuery(removeVietnameseTones((text || '').trim().toLowerCase()));
     if (q.length < 2) return null;
     const qWords = q.split(/\s+/).filter(Boolean);
     const qSet = new Set(qWords);
