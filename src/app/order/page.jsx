@@ -2858,6 +2858,22 @@ function OrderContent() {
     });
   }
 
+  // Mở món kèm LOẠI đã chọn sẵn (dùng cho gợi ý ở thanh tìm: "mì tay" → mở
+  // Mì Xào với loại "Ốc móng tay" sẵn để khách chỉ việc xác nhận).
+  function openItemWithChoice(item, choice) {
+    addToCart(item); // mở bảng chọn (hoặc thêm luôn nếu món không có loại)
+    if (choice && item.options && item.options.length > 0) {
+      const loaiOpt = item.options.find(o => o.name && o.name.toLowerCase().includes('loại'));
+      if (loaiOpt && Array.isArray(loaiOpt.choices) && loaiOpt.choices.includes(choice)) {
+        setSelectedOpts(prev => ({ ...prev, [loaiOpt.name]: choice }));
+        const ci = loaiOpt.choices.indexOf(choice);
+        const p = loaiOpt.prices?.[ci];
+        if (p != null && p !== '') setChoicePrice(Number(p) || null);
+      }
+    }
+    setSearchTerm('');
+  }
+
   function confirmOptionAdd() {
     if (!optionModal) return;
     const optionsArr = Object.keys(selectedOpts).map(k => {
@@ -3872,6 +3888,28 @@ function OrderContent() {
     return matchCategory && itemMatchesSearch(item);
   });
 
+  // Gợi ý MÓN + LOẠI cụ thể cho thanh tìm ("mì tay" → Mì Xào · Ốc móng tay,
+  // "oc huong muoi" → Ốc Hương · Rang muối). Chỉ loại 'specific' (đã suy ra
+  // được loại) mới hiện — món chung đã có ở danh sách bên dưới.
+  const searchSuggestions = [];
+  if (searchNorm) {
+    const seenSug = new Set();
+    for (const s of getQuickSuggestions(searchTerm)) {
+      if (s.kind !== 'specific') continue;
+      const key = s.item.id + '|' + s.choice;
+      if (seenSug.has(key)) continue;
+      // Chỉ giữ gợi ý mà MỌI chữ khách gõ đều được giải thích (nằm trong tên
+      // món hoặc trong loại đã chọn) — bỏ các món chỉ trùng chữ chung như "ốc".
+      const nameW = new Set(removeVietnameseTones((s.item.name || '').toLowerCase()).split(/[^a-z0-9]+/).filter(Boolean));
+      const choiceW = new Set(removeVietnameseTones((s.choice || '').toLowerCase()).split(/[^a-z0-9]+/).filter(Boolean));
+      const explained = (w) => nameW.has(w) || choiceW.has(w) || (LOAI_SYNONYMS[w] || []).some(x => choiceW.has(x));
+      if (!searchWords.every(explained)) continue;
+      seenSug.add(key);
+      searchSuggestions.push(s);
+      if (searchSuggestions.length >= 8) break;
+    }
+  }
+
   // Group by category for display
   const groupedItems = [];
   if (activeCategory === 'all') {
@@ -4238,6 +4276,32 @@ function OrderContent() {
 
         {/* ─── Menu Content ─── */}
         <div className="co-content">
+
+          {/* ─── Gợi ý nhanh MÓN + LOẠI khi tìm ("mì tay" → Mì Xào · Ốc móng tay) ─── */}
+          {searchSuggestions.length > 0 && (
+            <div style={{ margin: '10px 14px 4px' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#ea580c', marginBottom: 6 }}>⚡ Gợi ý nhanh — bấm để chọn</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {searchSuggestions.map((s, si) => {
+                  const loaiOpt = (s.item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
+                  const price = computeModalPrice(s.item.price, s.item.options, loaiOpt ? { [loaiOpt.name]: s.choice } : {});
+                  return (
+                    <button
+                      key={si}
+                      type="button"
+                      onClick={() => openItemWithChoice(s.item, s.choice)}
+                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, padding: '8px 12px', borderRadius: 12, border: '1.5px solid #fdba74', background: '#fff7ed', cursor: 'pointer', textAlign: 'left' }}
+                    >
+                      <span style={{ fontSize: '0.86rem', fontWeight: 700, color: '#9a3412' }}>
+                        {s.item.name} <span style={{ color: '#ea580c' }}>· {s.choice}</span>
+                      </span>
+                      {price > 0 && <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#16a34a' }}>{price.toLocaleString('vi-VN')}đ</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* ─── Holiday Banner ─── */}
           {false && (
