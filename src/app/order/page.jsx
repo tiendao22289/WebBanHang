@@ -3546,12 +3546,15 @@ function OrderContent() {
     ['laque', 'la que'],
     ['7up', '7 up'],
   ];
+  // Biên dịch mẫu tìm 1 LẦN (danh sách cố định) — không tạo lại mỗi lần khách
+  // gõ. \b = ranh giới từ ASCII, an toàn mọi trình duyệt kể cả iOS cũ.
+  const canonRegexes = useMemo(
+    () => KEYWORD_ALIASES.map(([from, to]) => [new RegExp('\\b' + from.replace(/ /g, '\\s+') + '\\b', 'g'), to]),
+    [] // eslint-disable-line react-hooks/exhaustive-deps
+  );
   function canonQuery(q) {
     let s = ' ' + (q || '') + ' ';
-    for (const [from, to] of KEYWORD_ALIASES) {
-      // \b (ranh giới từ ASCII) — an toàn mọi trình duyệt, kể cả iOS cũ.
-      s = s.replace(new RegExp('\\b' + from.replace(/ /g, '\\s+') + '\\b', 'g'), to);
-    }
+    for (const [re, to] of canonRegexes) s = s.replace(re, to);
     return s.trim().replace(/\s+/g, ' ');
   }
 
