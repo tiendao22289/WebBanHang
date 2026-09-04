@@ -4795,9 +4795,9 @@ export default function TablesPage() {
                 <button
                   type="button"
                   onClick={() => { setShowQuickPick(true); setQuickParsed(qpBuildParsed(quickBatchText, quickParsed)); }}
-                  style={{ flexShrink: 0, height: 36, padding: '0 14px', borderRadius: 20, border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: 'white', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 800, whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(37,99,235,.35)' }}
+                  style={{ flexShrink: 0, height: 32, padding: '0 10px', borderRadius: 16, border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: 'white', display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', fontSize: '0.74rem', fontWeight: 700, whiteSpace: 'nowrap', boxShadow: '0 2px 6px rgba(37,99,235,.3)' }}
                 >
-                  <span style={{ fontSize: '1rem' }}>⚡</span> Chọn nhanh
+                  <span style={{ fontSize: '0.85rem' }}>⚡</span> Chọn nhanh
                 </button>
 
                 <button
