@@ -4806,7 +4806,7 @@ export default function TablesPage() {
                   aria-label="Chọn nhanh"
                   title="Chọn nhanh — gõ nhiều món 1 lần"
                   onClick={() => { setShowQuickPick(true); setQuickParsed(qpBuildParsed(quickBatchText, quickParsed)); }}
-                  style={{ position: 'fixed', right: 0, top: '42%', zIndex: 1150, width: 46, height: 48, borderRadius: '14px 0 0 14px', border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '1.5rem', boxShadow: '-3px 4px 12px rgba(37,99,235,.4)' }}
+                  style={{ position: 'fixed', right: 0, top: '38%', zIndex: 1150, width: 22, height: 84, borderRadius: '10px 0 0 10px', border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '1rem', padding: 0, boxShadow: '-2px 3px 10px rgba(37,99,235,.4)' }}
                 >
                   ⚡
                 </button>
