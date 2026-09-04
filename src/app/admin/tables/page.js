@@ -4791,15 +4791,6 @@ export default function TablesPage() {
                   )}
                 </div>
 
-                {/* Nút ⚡ Chọn nhanh — kế bên phải ô tìm (giống web khách) */}
-                <button
-                  type="button"
-                  onClick={() => { setShowQuickPick(true); setQuickParsed(qpBuildParsed(quickBatchText, quickParsed)); }}
-                  style={{ flexShrink: 0, height: 32, padding: '0 10px', borderRadius: 16, border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: 'white', display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer', fontSize: '0.74rem', fontWeight: 700, whiteSpace: 'nowrap', boxShadow: '0 2px 6px rgba(37,99,235,.3)' }}
-                >
-                  <span style={{ fontSize: '0.85rem' }}>⚡</span> Chọn nhanh
-                </button>
-
                 <button
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4, flexShrink: 0, display: 'flex' }}
                   onClick={closeModal}
@@ -4807,6 +4798,19 @@ export default function TablesPage() {
                   <X size={24} />
                 </button>
               </div>
+
+              {/* Nút ⚡ Chọn nhanh — nổi bên hông phải, chỉ hiện logo cho gọn & dễ thấy */}
+              {!showQuickPick && (
+                <button
+                  type="button"
+                  aria-label="Chọn nhanh"
+                  title="Chọn nhanh — gõ nhiều món 1 lần"
+                  onClick={() => { setShowQuickPick(true); setQuickParsed(qpBuildParsed(quickBatchText, quickParsed)); }}
+                  style={{ position: 'fixed', right: 0, top: '42%', zIndex: 1150, width: 46, height: 48, borderRadius: '14px 0 0 14px', border: 'none', background: 'linear-gradient(135deg,#3b82f6,#2563eb)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '1.5rem', boxShadow: '-3px 4px 12px rgba(37,99,235,.4)' }}
+                >
+                  ⚡
+                </button>
+              )}
 
               {/* Category pills */}
               <div style={{ display: 'flex', gap: 6, padding: '6px 12px', overflowX: 'auto', flexShrink: 0, borderBottom: '1px solid #f3f4f6' }}>
