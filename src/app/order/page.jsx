@@ -4342,12 +4342,6 @@ function OrderContent() {
                   return viewMode === 'list' ? (
                     <div key={item.id} className="co-item-row" onClick={() => addToCart(item)} style={{ cursor: 'pointer' }}>
                       <div className="co-item-img" style={{ position: 'relative' }}>
-                        {(item.is_new || item.is_hot) && (
-                          <div style={{ position: 'absolute', top: 4, left: 4, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 2 }}>
-                            {item.is_new && <span style={{ background: '#16a34a', color: '#fff', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '.5px', padding: '2px 6px', borderRadius: 5, boxShadow: '0 1px 3px rgba(0,0,0,.3)' }}>NEW</span>}
-                            {item.is_hot && <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '.5px', padding: '2px 6px', borderRadius: 5, boxShadow: '0 1px 3px rgba(0,0,0,.3)' }}>HOT</span>}
-                          </div>
-                        )}
                         {item.image_url ? (
                           <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         ) : (
@@ -4355,7 +4349,11 @@ function OrderContent() {
                         )}
                       </div>
                       <div className="co-item-info">
-                        <span className="co-item-name">{item.name}</span>
+                        <span className="co-item-name">
+                          {item.name}
+                          {item.is_new && <span style={{ display: 'inline-block', verticalAlign: 'middle', marginLeft: 6, background: '#16a34a', color: '#fff', fontSize: '0.56rem', fontWeight: 900, letterSpacing: '.5px', padding: '1px 5px', borderRadius: 4 }}>NEW</span>}
+                          {item.is_hot && <span style={{ display: 'inline-block', verticalAlign: 'middle', marginLeft: 5, background: '#ef4444', color: '#fff', fontSize: '0.56rem', fontWeight: 900, letterSpacing: '.5px', padding: '1px 5px', borderRadius: 4 }}>HOT</span>}
+                        </span>
                         {item.total_sold > 0 && (
                           <span style={{ fontSize: '0.68rem', color: '#6b7280', marginTop: 2, display: 'block', fontWeight: 600 }}>🔥 Đã bán {item.total_sold.toLocaleString('vi-VN')}</span>
                         )}
@@ -4384,19 +4382,17 @@ function OrderContent() {
                   ) : (
                     <div key={item.id} className="co-item-card" onClick={() => addToCart(item)} style={{ cursor: 'pointer' }}>
                       <div className="co-card-img" style={{ position: 'relative' }}>
-                        {(item.is_new || item.is_hot) && (
-                          <div style={{ position: 'absolute', top: 4, left: 4, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 2 }}>
-                            {item.is_new && <span style={{ background: '#16a34a', color: '#fff', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '.5px', padding: '2px 6px', borderRadius: 5, boxShadow: '0 1px 3px rgba(0,0,0,.3)' }}>NEW</span>}
-                            {item.is_hot && <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '.5px', padding: '2px 6px', borderRadius: 5, boxShadow: '0 1px 3px rgba(0,0,0,.3)' }}>HOT</span>}
-                          </div>
-                        )}
                         {item.image_url ? (
                           <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         ) : (
                           <div className="co-item-placeholder"><ChefHat size={24} /></div>
                         )}
                       </div>
-                      <span className="co-item-name">{item.name}</span>
+                      <span className="co-item-name">
+                        {item.name}
+                        {item.is_new && <span style={{ display: 'inline-block', verticalAlign: 'middle', marginLeft: 5, background: '#16a34a', color: '#fff', fontSize: '0.54rem', fontWeight: 900, letterSpacing: '.5px', padding: '1px 5px', borderRadius: 4 }}>NEW</span>}
+                        {item.is_hot && <span style={{ display: 'inline-block', verticalAlign: 'middle', marginLeft: 4, background: '#ef4444', color: '#fff', fontSize: '0.54rem', fontWeight: 900, letterSpacing: '.5px', padding: '1px 5px', borderRadius: 4 }}>HOT</span>}
+                      </span>
                       {item.total_sold > 0 && (
                         <span style={{ fontSize: '0.65rem', color: '#6b7280', marginTop: 1, padding: '0 4px', display: 'block', fontWeight: 600 }}>🔥 Đã bán {item.total_sold.toLocaleString('vi-VN')}</span>
                       )}
