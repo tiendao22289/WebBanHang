@@ -4351,8 +4351,8 @@ function OrderContent() {
                       <div className="co-item-info">
                         <span className="co-item-name">
                           {item.name}
-                          {item.is_new && <span style={{ display: 'inline-block', verticalAlign: 'middle', marginLeft: 6, background: '#16a34a', color: '#fff', fontSize: '0.56rem', fontWeight: 900, letterSpacing: '.5px', padding: '1px 5px', borderRadius: 4 }}>NEW</span>}
-                          {item.is_hot && <span style={{ display: 'inline-block', verticalAlign: 'middle', marginLeft: 5, background: '#ef4444', color: '#fff', fontSize: '0.56rem', fontWeight: 900, letterSpacing: '.5px', padding: '1px 5px', borderRadius: 4 }}>HOT</span>}
+                          {item.is_new && <span className="co-badge new">NEW</span>}
+                          {item.is_hot && <span className="co-badge hot">HOT</span>}
                         </span>
                         {item.total_sold > 0 && (
                           <span style={{ fontSize: '0.68rem', color: '#6b7280', marginTop: 2, display: 'block', fontWeight: 600 }}>🔥 Đã bán {item.total_sold.toLocaleString('vi-VN')}</span>
@@ -4390,8 +4390,8 @@ function OrderContent() {
                       </div>
                       <span className="co-item-name">
                         {item.name}
-                        {item.is_new && <span style={{ display: 'inline-block', verticalAlign: 'middle', marginLeft: 5, background: '#16a34a', color: '#fff', fontSize: '0.54rem', fontWeight: 900, letterSpacing: '.5px', padding: '1px 5px', borderRadius: 4 }}>NEW</span>}
-                        {item.is_hot && <span style={{ display: 'inline-block', verticalAlign: 'middle', marginLeft: 4, background: '#ef4444', color: '#fff', fontSize: '0.54rem', fontWeight: 900, letterSpacing: '.5px', padding: '1px 5px', borderRadius: 4 }}>HOT</span>}
+                        {item.is_new && <span className="co-badge new">NEW</span>}
+                        {item.is_hot && <span className="co-badge hot">HOT</span>}
                       </span>
                       {item.total_sold > 0 && (
                         <span style={{ fontSize: '0.65rem', color: '#6b7280', marginTop: 1, padding: '0 4px', display: 'block', fontWeight: 600 }}>🔥 Đã bán {item.total_sold.toLocaleString('vi-VN')}</span>
