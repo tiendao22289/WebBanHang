@@ -4731,19 +4731,18 @@ function OrderContent() {
               }
               .conudge-card { position: relative; z-index: 1; text-align: center; overflow: hidden; animation: conudge-pop .42s cubic-bezier(.18,.89,.32,1.28) both; }
               @keyframes conudge-pop { 0% { transform: scale(.7) translateY(10px); opacity: 0; } 100% { transform: scale(1) translateY(0); opacity: 1; } }
-              .conudge-top { margin: -20px -20px 0; padding: 22px 20px 16px; background: linear-gradient(135deg,#f97316 0%,#ef4444 55%,#db2777 100%); position: relative; overflow: hidden; }
-              .conudge-top::after { content:''; position:absolute; inset:0; background: radial-gradient(circle at 50% 0%, rgba(255,255,255,.35), transparent 60%); }
-              .conudge-badge { width: 78px; height: 78px; margin: 0 auto; border-radius: 50%; background: rgba(255,255,255,.18); border: 2px solid rgba(255,255,255,.6); display: flex; align-items: center; justify-content: center; font-size: 2.5rem; position: relative; z-index: 1; animation: conudge-bob 1.8s ease-in-out infinite; }
-              @keyframes conudge-bob { 0%,100%{ transform: translateY(0) rotate(-4deg);} 50%{ transform: translateY(-7px) rotate(4deg);} }
-              .conudge-title { position: relative; z-index: 1; margin-top: 12px; color: #fff; font-size: 1.42rem; font-weight: 900; letter-spacing: .2px; text-shadow: 0 2px 8px rgba(0,0,0,.18); }
-              .conudge-sub { position: relative; z-index: 1; margin-top: 4px; color: rgba(255,255,255,.95); font-size: .92rem; font-weight: 600; }
-              .conudge-prize { margin: 16px 4px 0; padding: 13px 14px; border-radius: 14px; background: linear-gradient(135deg,#fffbeb,#fef3c7); border: 1.5px solid #f59e0b; font-weight: 800; color: #92400e; font-size: .98rem; line-height: 1.35; box-shadow: 0 4px 14px rgba(245,158,11,.18); }
-              .conudge-urgency { margin-top: 12px; font-size: .82rem; color: #64748b; }
-              .conudge-cta { width: 100%; margin-top: 16px; padding: 15px; border: none; border-radius: 14px; background: linear-gradient(135deg,#f59e0b,#ef4444); color: #fff; font-size: 1.06rem; font-weight: 900; cursor: pointer; box-shadow: 0 8px 22px rgba(239,68,68,.4); animation: conudge-glow 1.8s ease-in-out infinite; }
+              .conudge-top { margin: -20px -20px 0; padding: 28px 22px 24px; background: radial-gradient(120% 100% at 50% 0%,#fb923c 0%,#f97316 45%,#ea580c 100%); position: relative; overflow: hidden; }
+              .conudge-top::after { content:''; position:absolute; inset:0; background: radial-gradient(circle at 50% -10%, rgba(255,255,255,.4), transparent 55%); }
+              .conudge-ring { width: 92px; height: 92px; margin: 0 auto; border-radius: 50%; background: rgba(255,255,255,.16); border: 3px dashed rgba(255,255,255,.75); display: flex; align-items: center; justify-content: center; font-size: 2.9rem; position: relative; z-index: 1; box-shadow: 0 6px 20px rgba(0,0,0,.15); animation: conudge-bob 1.8s ease-in-out infinite; }
+              @keyframes conudge-bob { 0%,100%{ transform: translateY(0);} 50%{ transform: translateY(-6px);} }
+              .conudge-title { position: relative; z-index: 1; margin-top: 16px; color: #fff; font-size: 1.5rem; font-weight: 900; letter-spacing: .3px; text-shadow: 0 2px 6px rgba(0,0,0,.15); }
+              .conudge-sub { position: relative; z-index: 1; margin-top: 8px; color: #fff; opacity: .97; font-size: .95rem; font-weight: 600; }
+              .conudge-sub b { background: rgba(255,255,255,.22); padding: 3px 10px; border-radius: 999px; font-weight: 800; }
+              .conudge-prize { margin: 18px 0 0; padding: 13px 16px; border-radius: 14px; background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; font-weight: 700; font-size: .98rem; line-height: 1.5; }
+              .conudge-cta { width: 100%; margin-top: 16px; padding: 16px; border: none; border-radius: 14px; background: linear-gradient(135deg,#f59e0b,#ea580c); color: #fff; font-size: 1.18rem; font-weight: 900; letter-spacing: .5px; cursor: pointer; box-shadow: 0 10px 24px rgba(234,88,12,.4); }
               .conudge-cta:active { transform: scale(.98); }
-              @keyframes conudge-glow { 0%,100%{ box-shadow: 0 8px 22px rgba(239,68,68,.38);} 50%{ box-shadow: 0 10px 30px rgba(245,158,11,.6);} }
-              .conudge-skip { width: 100%; margin-top: 9px; padding: 9px; background: none; border: none; color: #94a3b8; font-size: .85rem; font-weight: 600; cursor: pointer; }
-              .conudge-close { position: absolute; top: 10px; right: 10px; z-index: 5; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 999px; background: #fff; color: #dc2626; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+              .conudge-skip { width: 100%; margin-top: 10px; padding: 8px; background: none; border: none; color: #94a3b8; font-size: .86rem; font-weight: 600; cursor: pointer; }
+              .conudge-close { position: absolute; top: 12px; right: 12px; z-index: 5; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 999px; background: rgba(255,255,255,.92); color: #ea580c; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
               .conudge-close:active { transform: scale(.92); }
             `}</style>
 
@@ -4766,21 +4765,19 @@ function OrderContent() {
                 <X size={20} strokeWidth={2.6} />
               </button>
               <div className="conudge-top">
-                <div className="conudge-badge">🎁</div>
-                <div className="conudge-title">🎉 Chúc mừng Quý khách!</div>
-                <div className="conudge-sub">Quý khách vừa nhận <b>1 lượt Vòng Xoay May Mắn</b></div>
+                <div className="conudge-ring">🎁</div>
+                <div className="conudge-title">Chúc mừng Quý khách!</div>
+                <div className="conudge-sub">Quý khách nhận được <b>1 lượt quay</b></div>
               </div>
 
               <div className="conudge-prize">
                 {luckyNudgeMaxPercent > 0
-                  ? <>🔥 Cơ hội trúng ưu đãi giảm tới <span style={{ color: '#dc2626', fontSize: '1.15em' }}>{luckyNudgeMaxPercent}%</span> hoá đơn!</>
-                  : <>🎁 Quay là <span style={{ color: '#dc2626' }}>chắc chắn có quà</span> — giảm giá, nước hoặc món tặng!</>}
+                  ? <>🎉 Quay là chắc chắn có quà — cơ hội giảm tới <span style={{ color: '#ea580c', fontWeight: 900, fontSize: '1.2em' }}>{luckyNudgeMaxPercent}%</span> hoá đơn!</>
+                  : <>🎉 Quay là <b>chắc chắn có quà</b> — giảm giá, nước hoặc món tặng!</>}
               </div>
 
-              <div className="conudge-urgency">Quay liền tay — nhanh kẻo lỡ lượt của mình nha! ✨</div>
-
               <button className="conudge-cta" onClick={() => { setShowLuckyNudge(false); openWheel(); }}>
-                🎁 QUAY NGAY NHẬN QUÀ
+                🎁 QUAY NGAY
               </button>
               <button className="conudge-skip" onClick={() => setShowLuckyNudge(false)}>
                 Để sau
