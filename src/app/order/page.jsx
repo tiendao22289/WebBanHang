@@ -692,6 +692,12 @@ function OrderContent() {
   // hình chọn món cứ hiện lại mãi, khách không biết đã chọn xong, không có
   // đường sang bước Quan tâm Zalo.
   const wheelNeedsGiftPick = isGiftPrizeType(wheelPrize?.prizeType) && !wheelSpin?.gift_menu_item_id;
+  // ĐẢO THỨ TỰ: phải QUAN TÂM ZALO TRƯỚC rồi mới tới bước chọn quà. Bước quan
+  // tâm còn treo khi: cài đặt yêu cầu quan tâm + có link Zalo + lượt quay CHƯA
+  // 'applied'/'blocked' (ngay sau khi quay wheelSpin còn null cũng coi là đang
+  // chờ). Khi đang chờ → CHƯA cho chọn món, ép khách quan tâm xong đã.
+  const wheelFollowPending = !!wheelPrize && luckyWheelRequireFollow && !!wheelZaloCfg
+    && wheelSpin?.status !== 'applied' && wheelSpin?.status !== 'blocked';
   const wheelGiftActiveList = wheelPrize?.prizeType === 'gift_dish' ? giftItems
     : wheelPrize?.prizeType === 'gift_drink' ? wheelDrinkItems : [];
 
@@ -4847,6 +4853,12 @@ function OrderContent() {
                         <div style={{ fontWeight: 800, color: '#b45309' }}>
                           {wheelSpin.block_reason || 'Quán chưa áp được quà, Quý khách gọi nhân viên giúp ạ!'}
                         </div>
+                      ) : wheelFollowPending ? (
+                        <div style={{ fontWeight: 700, color: '#0f766e' }}>
+                          {isGiftPrizeType(wheelPrize.prizeType)
+                            ? 'Quan tâm Zalo quán để mở quà nha 👇'
+                            : 'Quan tâm Zalo quán để nhận quà nha 👇'}
+                        </div>
                       ) : wheelNeedsGiftPick ? (
                         <div style={{ fontWeight: 700, color: '#0f766e' }}>
                           Chọn {wheelPrize.prizeType === 'gift_drink' ? 'nước' : 'món'} Quý khách muốn nhận nha 👇
@@ -4858,8 +4870,9 @@ function OrderContent() {
                       )}
                     </div>
 
-                    {/* Quà Tặng nước/Tặng món — khách chọn món cụ thể trước khi qua bước Zalo */}
-                    {wheelNeedsGiftPick && (
+                    {/* Quà Tặng nước/Tặng món — CHỈ cho chọn món SAU KHI đã Quan
+                        tâm Zalo (wheelFollowPending = false). Trước đó ép quan tâm đã. */}
+                    {wheelNeedsGiftPick && !wheelFollowPending && (
                       wheelGiftOptionItem ? (
                         <div>
                           <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: 8, textAlign: 'center' }}>
@@ -4941,7 +4954,7 @@ function OrderContent() {
                         luckyWheelRequireFollow (Cài đặt > Vòng xoay) — RIÊNG
                         với việc kênh "Ưu đãi mạng xã hội > Zalo" có bật hay
                         không, 2 tính năng độc lập nhau. */}
-                    {!wheelNeedsGiftPick && wheelSpin?.status !== 'applied' && wheelSpin?.status !== 'blocked' && luckyWheelRequireFollow && wheelZaloCfg && (
+                    {wheelFollowPending && (
                       <>
                         <div className="co-gmap-state co-gmap-pending" style={{ marginTop: 10 }}>
                           <div className="co-gmap-big">💬</div>
