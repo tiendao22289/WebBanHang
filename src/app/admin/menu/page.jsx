@@ -187,7 +187,7 @@ export default function MenuPage() {
   const [catForm, setCatForm] = useState({ name: '', sort_order: 0 });
   const [itemForm, setItemForm] = useState({
     name: '', description: '', price: '', category_id: '', image_url: '', is_available: true,
-    counts_for_promotion: false, is_gift_item: false, promo_divisor: 1,
+    counts_for_promotion: false, is_gift_item: false, is_new: false, is_hot: false, promo_divisor: 1,
   });
 
   // Promotion config
@@ -411,6 +411,8 @@ export default function MenuPage() {
         is_available: item.is_available,
         counts_for_promotion: item.counts_for_promotion || false,
         is_gift_item: item.is_gift_item || false,
+        is_new: item.is_new || false,
+        is_hot: item.is_hot || false,
         promo_divisor: divisor,
         options: (item.options || []).filter(o => !o.__promo_divisor).map(opt => ({
           ...opt,
@@ -426,7 +428,7 @@ export default function MenuPage() {
         name: '', description: '', price: '',
         category_id: activeCategory || '',
         image_url: '', is_available: true,
-        counts_for_promotion: false, is_gift_item: false, promo_divisor: 1,
+        counts_for_promotion: false, is_gift_item: false, is_new: false, is_hot: false, promo_divisor: 1,
         options: [
           { name: 'LOẠI', choices: [''], prices: [50000], choiceCategories: [''], hiddenChoices: [false], promoDivisors: [''] },
           {
@@ -476,6 +478,8 @@ export default function MenuPage() {
       is_available: itemForm.is_available,
       counts_for_promotion: itemForm.counts_for_promotion,
       is_gift_item: itemForm.is_gift_item,
+      is_new: itemForm.is_new,
+      is_hot: itemForm.is_hot,
       price: parseInt(itemForm.price) || 0,
       category_id: itemForm.category_id || null,
       options: cleanedOptions,
@@ -796,6 +800,8 @@ export default function MenuPage() {
           hidden_until: item.hidden_until || null,
           counts_for_promotion: item.counts_for_promotion,
           is_gift_item: item.is_gift_item,
+          is_new: item.is_new || false,
+          is_hot: item.is_hot || false,
           price: item.price,
           category_id: mappedCategoryId,
           options: item.options || [],
@@ -1108,6 +1114,19 @@ export default function MenuPage() {
                 <input type="checkbox" checked={itemForm.is_available} onChange={(e) => setItemForm({ ...itemForm, is_available: e.target.checked })} />
                 <span className="text-sm">Hiển thị trên thực đơn</span>
               </label>
+
+              {/* Nhãn nổi bật NEW / HOT — hiện trên thực đơn khách */}
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 14px', marginBottom: 16 }}>
+                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a', marginBottom: 8 }}>🏷️ Nhãn nổi bật (hiện trên thực đơn khách)</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 6 }}>
+                  <input type="checkbox" checked={itemForm.is_new} onChange={e => setItemForm({ ...itemForm, is_new: e.target.checked })} />
+                  <span style={{ fontSize: '0.82rem', color: '#374151' }}><b style={{ background: '#22c55e', color: '#fff', borderRadius: 4, padding: '1px 6px', fontSize: '0.7rem', letterSpacing: '.5px' }}>NEW</b> Món mới</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={itemForm.is_hot} onChange={e => setItemForm({ ...itemForm, is_hot: e.target.checked })} />
+                  <span style={{ fontSize: '0.82rem', color: '#374151' }}><b style={{ background: '#ef4444', color: '#fff', borderRadius: 4, padding: '1px 6px', fontSize: '0.7rem', letterSpacing: '.5px' }}>HOT</b> Món bán chạy / nổi bật</span>
+                </label>
+              </div>
 
               {/* Promotion checkboxes */}
               <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '10px 14px', marginBottom: 16 }}>

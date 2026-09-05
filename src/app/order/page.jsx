@@ -4342,6 +4342,12 @@ function OrderContent() {
                   return viewMode === 'list' ? (
                     <div key={item.id} className="co-item-row" onClick={() => addToCart(item)} style={{ cursor: 'pointer' }}>
                       <div className="co-item-img" style={{ position: 'relative' }}>
+                        {(item.is_new || item.is_hot) && (
+                          <div style={{ position: 'absolute', top: 4, left: 4, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 2 }}>
+                            {item.is_new && <span style={{ background: '#16a34a', color: '#fff', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '.5px', padding: '2px 6px', borderRadius: 5, boxShadow: '0 1px 3px rgba(0,0,0,.3)' }}>NEW</span>}
+                            {item.is_hot && <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '.5px', padding: '2px 6px', borderRadius: 5, boxShadow: '0 1px 3px rgba(0,0,0,.3)' }}>HOT</span>}
+                          </div>
+                        )}
                         {item.image_url ? (
                           <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         ) : (
@@ -4378,6 +4384,12 @@ function OrderContent() {
                   ) : (
                     <div key={item.id} className="co-item-card" onClick={() => addToCart(item)} style={{ cursor: 'pointer' }}>
                       <div className="co-card-img" style={{ position: 'relative' }}>
+                        {(item.is_new || item.is_hot) && (
+                          <div style={{ position: 'absolute', top: 4, left: 4, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 2 }}>
+                            {item.is_new && <span style={{ background: '#16a34a', color: '#fff', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '.5px', padding: '2px 6px', borderRadius: 5, boxShadow: '0 1px 3px rgba(0,0,0,.3)' }}>NEW</span>}
+                            {item.is_hot && <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '.5px', padding: '2px 6px', borderRadius: 5, boxShadow: '0 1px 3px rgba(0,0,0,.3)' }}>HOT</span>}
+                          </div>
+                        )}
                         {item.image_url ? (
                           <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         ) : (
