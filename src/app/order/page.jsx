@@ -11,7 +11,7 @@ import { supabase } from '@/lib/supabase';
 import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, fetchGroupBillTotal, startOfTodayISO, isReviewDiscountItem } from '@/lib/reviewReward';
 import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem, isGiftPrizeType } from '@/lib/luckyWheel';
-import { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, newLuckyRequestId, fetchLuckyNudgeConfig } from '@/lib/luckyRewardFlow';
+import { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, hasPendingLuckySpin, newLuckyRequestId, fetchLuckyNudgeConfig } from '@/lib/luckyRewardFlow';
 import {
   Search,
   Plus,
@@ -640,6 +640,9 @@ function OrderContent() {
   const wheelResumeBusyRef = useRef(false);
   const wheelCheckBusyRef = useRef(false);
   const wheelGiftBusyRef = useRef(false);
+  const wheelOpeningRef = useRef(false);
+  const wheelDrinkLoadedRef = useRef(false);
+  const wheelDrinkLoadRef = useRef(null);
   const [wheelChecking, setWheelChecking] = useState(false);
   const zaloClaimRef = useRef(null);                // bản sao đọc ngay, không đợi setState
   const [zaloWaitedLong, setZaloWaitedLong] = useState(false); // chờ lâu → gợi ý nhắn SĐT
@@ -1862,7 +1865,7 @@ function OrderContent() {
   // A read/network failure must never erase the only saved reward reference.
   async function restoreWheel(manual = false) {
     if (wheelResumeBusyRef.current || wheelGiftBusyRef.current || wheelSpinning) return;
-    if (!manual && wheelOpen) return; // The open panel already polls its reward.
+    if (!manual && (wheelOpen || wheelOpeningRef.current)) return; // The open panel already polls its reward.
     const key = wheelStorageKey();
     let id;
     try {
@@ -1941,8 +1944,8 @@ function OrderContent() {
       setReviewOpen(false);
       setWheelOpen(true);
       if (luckyRewardState(data) === 'done') refreshPreviousOrdersReliably();
-      await fetchWheelDrinkItems();
-      await checkWheelReward(id);
+      if (data.prize_type === 'gift_drink') await fetchWheelDrinkItems();
+      await checkWheelReward(id, false, data);
     } catch (error) {
       setWheelErr('Chưa kiểm tra được phần quà. Quý khách kiểm tra mạng rồi bấm “Kiểm tra nhận quà” nhé.');
     } finally {
@@ -2044,16 +2047,30 @@ function OrderContent() {
 
   /** Pool "nước tặng" — admin cấu hình ở Cài đặt > Vòng xoay, khách chọn khi trúng quà gift_drink. */
   async function fetchWheelDrinkItems() {
-    const { data: setting } = await supabase
-      .from('settings').select('value').eq('key', 'lucky_wheel_drink_item_ids').maybeSingle();
-    let ids = [];
-    try { ids = JSON.parse(setting?.value || '[]'); } catch { }
-    if (!ids.length) { setWheelDrinkItems([]); return; }
-    const { data: items } = await supabase
-      .from('menu_items').select('id, name, price, image_url, options, hidden_until')
-      .in('id', ids).eq('is_available', true);
-    const now = new Date();
-    setWheelDrinkItems((items || []).filter(g => !g.hidden_until || new Date(g.hidden_until) < now));
+    if (wheelDrinkLoadedRef.current) return;
+    if (wheelDrinkLoadRef.current) return wheelDrinkLoadRef.current;
+    wheelDrinkLoadRef.current = (async () => {
+      const { data: setting } = await supabase
+        .from('settings').select('value').eq('key', 'lucky_wheel_drink_item_ids').maybeSingle();
+      let ids = [];
+      try { ids = JSON.parse(setting?.value || '[]'); } catch { }
+      if (!ids.length) {
+        setWheelDrinkItems([]);
+        wheelDrinkLoadedRef.current = true;
+        return;
+      }
+      const { data: items } = await supabase
+        .from('menu_items').select('id, name, price, image_url, options, hidden_until')
+        .in('id', ids).eq('is_available', true);
+      const now = new Date();
+      setWheelDrinkItems((items || []).filter(g => !g.hidden_until || new Date(g.hidden_until) < now));
+      wheelDrinkLoadedRef.current = true;
+    })();
+    try {
+      await wheelDrinkLoadRef.current;
+    } finally {
+      wheelDrinkLoadRef.current = null;
+    }
   }
 
   function getWheelGiftInitialOptions(item) {
@@ -2103,44 +2120,58 @@ function OrderContent() {
   }
 
   async function openWheel() {
-    setWheelOpen(true);
-    // Cơ cấu quà do Admin cấu hình → luôn đọc lại khi mở
-    fetchLuckyPrizes(supabase).then(setWheelPrizes);
-    fetchWheelDrinkItems();
-    setWheelErr('');
-    setWheelPrize(null);
-    setWheelSpin(null);
-    wheelSpinRef.current = null;
-    setWheelAngle(0);
-    setWheelSpinning(false);
-    setWheelGiftOptionItem(null);
-    setWheelGiftSelectedOptions({});
+    if (wheelOpeningRef.current) return;
+    wheelOpeningRef.current = true;
+    try {
+      setWheelOpen(true);
+      // Cơ cấu quà do Admin cấu hình → luôn đọc lại khi mở
+      fetchLuckyPrizes(supabase).then(setWheelPrizes);
+      setWheelErr('');
+      setWheelPrize(null);
+      setWheelSpin(null);
+      wheelSpinRef.current = null;
+      setWheelAngle(0);
+      setWheelSpinning(false);
+      setWheelGiftOptionItem(null);
+      setWheelGiftSelectedOptions({});
 
     // Lượt xem popup (đếm 1 lần/thiết bị) + lịch sử quay để khoe cho khách
     // hứng thú — giống kiểu "👁 X lượt xem" của 2 bảng Thử thách/Đặt tiệc.
-    try {
-      const storageKey = 'promo_viewed_wheel';
-      let alreadyViewed = false;
-      try { alreadyViewed = !!localStorage.getItem('promo_viewed_wheel'); } catch { }
-      if (!alreadyViewed) {
-        const { data } = await supabase.rpc('increment_feature_view', { p_feature: 'wheel' });
-        const n = Number(data);
-        if (data != null && !isNaN(n)) setFeatureViews(prev => ({ ...prev, wheel: n }));
-        try { localStorage.setItem(storageKey, '1'); } catch { }
-      }
-    } catch { }
-    try {
-      const { data } = await supabase.rpc('get_lucky_wheel_public_stats');
-      if (data) setWheelStats({ totalSpins: Number(data.totalSpins) || 0, recentWinners: data.recentWinners || [] });
-    } catch { }
+      try {
+        const storageKey = 'promo_viewed_wheel';
+        let alreadyViewed = false;
+        try { alreadyViewed = !!localStorage.getItem('promo_viewed_wheel'); } catch { }
+        if (!alreadyViewed) {
+          const { data } = await supabase.rpc('increment_feature_view', { p_feature: 'wheel' });
+          const n = Number(data);
+          if (data != null && !isNaN(n)) setFeatureViews(prev => ({ ...prev, wheel: n }));
+          try { localStorage.setItem(storageKey, '1'); } catch { }
+        }
+      } catch { }
+      try {
+        const { data } = await supabase.rpc('get_lucky_wheel_public_stats');
+        if (data) setWheelStats({ totalSpins: Number(data.totalSpins) || 0, recentWinners: data.recentWinners || [] });
+      } catch { }
 
-    const saved = getSavedSession();
-    setWheelForm({
-      name: (customerName || saved?.customerName || '').trim(),
-      phone: (customerPhone || saved?.customerPhone || '').trim(),
-    });
+      const saved = getSavedSession();
+      setWheelForm({
+        name: (customerName || saved?.customerName || '').trim(),
+        phone: (customerPhone || saved?.customerPhone || '').trim(),
+      });
 
-    await restoreWheel(true);
+      const key = wheelStorageKey();
+      let storedId = null;
+      let pendingId = null;
+      try {
+        storedId = localStorage.getItem(key);
+        pendingId = localStorage.getItem(`${key}_pending`);
+      } catch { }
+      // A normal click opens a fresh wheel. The expensive table/order recovery
+      // is only needed when this browser has a reward still waiting to finish.
+      if (hasPendingLuckySpin(storedId, pendingId)) await restoreWheel(true);
+    } finally {
+      wheelOpeningRef.current = false;
+    }
   }
 
   async function spinWheel() {
@@ -2199,6 +2230,7 @@ function OrderContent() {
       setWheelAngle(target);
 
       // Chờ hết hoạt ảnh (4.2s trong CSS) mới công bố
+      if (data.prizeType === 'gift_drink') fetchWheelDrinkItems();
       setTimeout(() => {
         setWheelPrize(data);
         setWheelSpinning(false);
@@ -2267,13 +2299,13 @@ function OrderContent() {
     return data;
   }
 
-  async function checkWheelReward(spinId, manual = false) {
+  async function checkWheelReward(spinId, manual = false, initialData = null) {
     if (!spinId || wheelCheckBusyRef.current || wheelGiftBusyRef.current) return;
     wheelCheckBusyRef.current = true;
     setWheelChecking(true);
     try {
       // Read before matching: completed rewards must not be claimed again.
-      let data = await refreshLuckySpin(spinId);
+      let data = initialData || await refreshLuckySpin(spinId);
       if (data.status === 'waiting_follow' || (data.status === 'applied' && !data.applied_item_id)) {
         await pingLuckyReady(spinId);
         data = await refreshLuckySpin(spinId);

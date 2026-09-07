@@ -24,6 +24,10 @@ export function shouldResumeLucky(spin, pendingId, dismissedId) {
   return false; // An old cached spin alone is not permission to reopen a popup.
 }
 
+export function hasPendingLuckySpin(storedId, pendingId) {
+  return Boolean(storedId && storedId === pendingId);
+}
+
 export async function fetchLuckyNudgeConfig(supabase) {
   const { data, error } = await supabase.from('settings').select('key, value')
     .in('key', ['lucky_wheel_enabled', 'lucky_wheel_auto_nudge', 'lucky_wheel_min_bill']);

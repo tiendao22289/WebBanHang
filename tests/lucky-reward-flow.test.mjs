@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const flow = await import(`data:text/javascript;base64,${Buffer.from(read('../src/lib/luckyRewardFlow.js')).toString('base64')}`);
-const { luckyRewardState, luckyPrizeTitle, shouldResumeLucky } = flow;
+const { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, hasPendingLuckySpin } = flow;
 const page = read('../src/app/order/page.jsx');
 const restoreSource = page.slice(page.indexOf('  async function restoreWheel('), page.indexOf('  wheelResumeRef.current = restoreWheel;'));
 const today = new Date();
@@ -17,7 +17,7 @@ function harness(spin = base, options = {}) {
   const seen = { checks: 0, reads: 0, orders: 0 };
   const context = {
     Date, localStorage: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) },
-    wheelResumeBusyRef: { current: false }, wheelGiftBusyRef: { current: false },
+    wheelResumeBusyRef: { current: false }, wheelGiftBusyRef: { current: false }, wheelOpeningRef: { current: false },
     wheelSpinning: false, wheelOpen: false, activeTableId: 'table-1', urlTableId: 'table-1',
     wheelSpinRef: { current: null }, customerPhoneRef: { current: '0900000000' },
     wheelStorageKey: () => 'lucky_spin_table-1', shouldResumeLucky, luckyRewardState,
@@ -70,6 +70,14 @@ test('reload restores an unfinished reward and starts checking', async () => {
   assert.equal(h.context.wheelOpen, true);
   assert.equal(h.seen.prize.spinId, base.id);
   assert.equal(h.seen.checks, 1);
+});
+
+test('focus restore does not duplicate requests while the wheel is opening', async () => {
+  const h = harness();
+  h.context.wheelOpeningRef.current = true;
+  await h.restore();
+  assert.equal(h.seen.reads, 0);
+  assert.equal(h.context.wheelOpen, false);
 });
 
 test('gift confirmed while away returns to gift selection', async () => {
@@ -129,6 +137,8 @@ test('old cached spins do not reopen without an explicit pending receipt', () =>
   assert.equal(shouldResumeLucky({ ...base, status: 'applied', applied_item_id: 'line' }, null, null), false);
   assert.equal(shouldResumeLucky(base, null, null), false);
   assert.equal(shouldResumeLucky(base, base.id, null), true);
+  assert.equal(hasPendingLuckySpin(base.id, null), false);
+  assert.equal(hasPendingLuckySpin(base.id, base.id), true);
 });
 test('older mobile browsers generate a valid retry UUID without randomUUID', () => {
   const id = flow.newLuckyRequestId({ getRandomValues: bytes => bytes.fill(7) });
