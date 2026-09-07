@@ -15,7 +15,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import {
-  drawLuckyPrize, calcLuckyDiscount, fetchLuckyPrizes,
+  drawLuckyPrize, calcLuckyDiscount, normalizePrize,
   LUCKY_SETTING_KEYS, parseLuckyConfig,
 } from '@/lib/luckyWheel';
 
@@ -39,12 +39,22 @@ function fail(message) {
   return NextResponse.json({ ok: false, message });
 }
 
+function spinReply(spin, needFollow = true) {
+  return NextResponse.json({ ok: true, spinId: spin.id, prizeKey: spin.prize_key,
+    prizeType: spin.prize_type, prizeValue: spin.prize_value, prizeLabel: spin.prize_label,
+    discountAmount: spin.discount_amount, billTotal: spin.bill_total, needFollow });
+}
+
 export async function POST(request) {
   try {
     const body = await request.json().catch(() => ({}));
     const tableId = String(body.tableId || '').trim();
     const name = String(body.name || '').trim();
     const phone = normalizePhone(body.phone);
+    const requestId = body.requestId;
+    if (requestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) {
+      return fail('Mã lượt quay chưa hợp lệ. Quý khách mở lại vòng xoay nhé.');
+    }
 
     if (!tableId) return fail('Thiếu thông tin bàn, Quý khách quét lại mã giúp quán nhé!');
     if (!name) return fail('Quý khách cho quán xin tên với ạ 😊');
@@ -54,6 +64,17 @@ export async function POST(request) {
     if (!supabase) {
       console.error('[Lucky] Thiếu SUPABASE_SERVICE_ROLE_KEY');
       return fail('Quán chưa mở được vòng xoay, Quý khách gọi nhân viên giúp ạ!');
+    }
+    // The client saves this UUID before sending. A lost response can be
+    // recovered without drawing another prize or losing the cooldown slot.
+    if (requestId) {
+      const { data: existing, error } = await supabase.from('lucky_spins')
+        .select('*').eq('id', requestId).maybeSingle();
+      if (error) throw error;
+      if (existing) {
+        if (existing.table_id !== tableId || existing.customer_phone !== phone) return fail('Mã lượt quay không khớp phiên này.');
+        return spinReply(existing);
+      }
     }
 
     // ── Cấu hình ────────────────────────────────────────────────
@@ -152,7 +173,11 @@ export async function POST(request) {
 
     // ── QUAY ────────────────────────────────────────────────────
     // Cơ cấu quà lấy từ bảng lucky_prizes (Admin > Cài đặt sửa được)
-    const prizes = await fetchLuckyPrizes(supabase);
+    // A database error must never draw from a fallback prize catalogue.
+    const { data: prizeRows, error: prizeError } = await supabase.from('lucky_prizes')
+      .select('*').eq('is_active', true).order('sort_order', { ascending: true });
+    if (prizeError) throw prizeError;
+    const prizes = (prizeRows || []).map(normalizePrize);
     const prize = drawLuckyPrize(prizes);
     if (!prize) return fail('Quán chưa cài phần quà nào, Quý khách gọi nhân viên giúp ạ!');
     const discount = calcLuckyDiscount(total, prize, cfg.max);
@@ -164,6 +189,7 @@ export async function POST(request) {
     const { data: spin, error: spinErr } = await supabase
       .from('lucky_spins')
       .insert({
+        ...(requestId ? { id: requestId } : {}),
         table_id: tableId,
         host_table_id: hostId,
         customer_name: name,
@@ -175,12 +201,16 @@ export async function POST(request) {
         bill_total: total,
         discount_amount: discount,
         // Tắt yêu cầu quan tâm Zalo trong Cài đặt thì áp quà ngay
-        status: cfg.requireFollow ? 'waiting_follow' : 'pending_apply',
+        status: 'waiting_follow',
       })
       .select()
       .maybeSingle();
 
     if (spinErr?.code === '23505') {
+      if (requestId) {
+        const { data: existing } = await supabase.from('lucky_spins').select('*').eq('id', requestId).maybeSingle();
+        if (existing?.table_id === tableId && existing.customer_phone === phone) return spinReply(existing);
+      }
       return fail('Bàn mình đã quay một lượt rồi ạ 🥰');
     }
     if (spinErr || !spin) {
@@ -190,11 +220,12 @@ export async function POST(request) {
 
     // Không yêu cầu quan tâm Zalo → áp quà vào hoá đơn ngay tại đây
     if (!cfg.requireFollow) {
-      await supabase.from('lucky_spins')
-        .update({ status: 'waiting_follow' }).eq('id', spin.id);
-      const { applyLuckySpin } = await import('@/lib/zaloRewardServer');
-      await applyLuckySpin(supabase, { ...spin, status: 'waiting_follow' }, null,
-        (m) => console.log('[Lucky]', m));
+      try {
+        const { applyLuckySpin } = await import('@/lib/zaloRewardServer');
+        await applyLuckySpin(supabase, spin, null, (m) => console.log('[Lucky]', m));
+      } catch (error) {
+        console.error('[Lucky] Quà đã lưu, chờ thử ghi bill lại:', error.message);
+      }
     }
 
     // Còn lại: quà CHƯA vào hoá đơn. Khách phải Quan tâm Zalo OA trước —
@@ -209,6 +240,7 @@ export async function POST(request) {
       // dù quà thật là gì → khách thấy kim chỉ 1% nhưng báo trúng quà khác.
       prizeKey: prize.id,
       prizeType: prize.type,
+      prizeValue: prize.value,
       prizeLabel: prize.label,
       discountAmount: discount,   // số tiền dự kiến, chốt lại lúc áp
       billTotal: total,

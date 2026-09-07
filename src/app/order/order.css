@@ -2060,6 +2060,19 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
   margin-top: 10px;
   line-height: 1.5;
 }
+.co-wheel-modal { max-height: calc(100dvh - 32px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); }
+.co-wheel-modal .co-chal-scroll { min-height: 0; }
+.co-wheel-zalo-cta { margin-top: 12px; }
+.co-wheel-zalo-guide {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: .84rem;
+  line-height: 1.5;
+}
+.co-wheel-zalo-guide > div + div { margin-top: 5px; }
 
 /* Nhãn NEW / HOT trên món — to, rõ, nhấp nháy cho sinh động */
 .co-badge {

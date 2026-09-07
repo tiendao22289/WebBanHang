@@ -145,6 +145,12 @@ export async function sendSmartPrintJobs(supabase, orderId) {
  */
 export async function sendGiftItemPrintJob(supabase, orderId, orderItemId) {
   try {
+    const { data: queued, error: queuedError } = await supabase.from('print_jobs')
+      .select('id, status').eq('order_id', orderId).contains('only_item_ids', [orderItemId]).limit(1);
+    if (queuedError) throw queuedError;
+    if (queued?.length) return queued[0].status === 'failed'
+      ? { success: false, error: 'Lệnh in quà bị lỗi. Nhân viên cần kiểm tra máy in.' }
+      : { success: true };
     const { data: item, error: itemErr } = await supabase
       .from('order_items')
       .select('id, item_options, menu_item:menu_items(category_id, options)')
@@ -198,6 +204,7 @@ export async function sendGiftItemPrintJob(supabase, orderId, orderItemId) {
     }
 
     const { error: insertErr } = await supabase.from('print_jobs').insert({
+      id: orderItemId,
       order_id: orderId,
       printer_id: assignedPrinter.id,
       filter_category_ids: null,
@@ -205,7 +212,13 @@ export async function sendGiftItemPrintJob(supabase, orderId, orderItemId) {
       status: 'pending',
     });
 
-    if (insertErr) throw new Error('Lỗi insert print_jobs: ' + insertErr.message);
+    if (insertErr?.code === '23505') {
+      const { data: existing, error } = await supabase.from('print_jobs')
+        .select('id, order_id, only_item_ids').eq('id', orderItemId).maybeSingle();
+      if (error || existing?.order_id !== orderId || !existing?.only_item_ids?.includes(orderItemId)) {
+        throw new Error('Chưa đối chiếu được lệnh in quà.');
+      }
+    } else if (insertErr) throw new Error('Lỗi insert print_jobs: ' + insertErr.message);
 
     console.log(`[Print] Đã gửi lệnh in riêng cho order_item ${orderItemId} → máy ${assignedPrinter.id}`);
     return { success: true };

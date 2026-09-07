@@ -2170,10 +2170,11 @@ export default function TablesPage() {
       // item_name nằm trong key: các dòng giảm giá ưu đãi (menu_item_id null)
       // của 2 kênh khác nhau mà tình cờ cùng số tiền sẽ KHÔNG bị gộp làm một,
       // để bill vẫn ghi rõ giảm vì kênh nào.
-      const key = `${item.menu_item_id}_${item.unit_price}_${optsString}_${item.note || ''}_${item.is_gift ? 'gift' : 'normal'}_${item.item_name || ''}`;
+      const key = `${item.menu_item_id}_${item.unit_price}_${optsString}_${item.note || ''}_${item.is_gift ? 'gift' : 'normal'}_${item.item_name || ''}_${isLuckyWheelOutcome(item) ? item.id : ''}`;
 
       if (!groupedMap[key]) {
         groupedMap[key] = {
+          id: item.id,
           order_id: mainBill.id, // Sẽ đẩy vào main bill
           menu_item_id: item.menu_item_id,
           quantity: 0,

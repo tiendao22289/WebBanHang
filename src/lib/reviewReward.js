@@ -165,5 +165,10 @@ export async function fetchGroupBillTotal(supabase, tableIds, phoneFilter = null
 
 /** Dòng order_items này có phải dòng giảm giá ưu đãi không? */
 export function isReviewDiscountItem(item) {
-  return !!item && item.menu_item_id == null && (Number(item.unit_price) || 0) < 0;
+  return !!item && item.menu_item_id == null && (
+    (Number(item.unit_price) || 0) < 0 ||
+    // A percentage entitlement remains a discount line if the customer removes
+    // all paid items (or the rounded reduction is temporarily zero).
+    /^Vòng xoay may mắn: giảm [\d.]+%$/u.test(item.item_name || '')
+  );
 }

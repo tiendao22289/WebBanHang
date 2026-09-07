@@ -11,12 +11,11 @@
  */
 
 import { NextResponse } from 'next/server';
-import { getServiceClient, tryApplyLuckyForSpin } from '@/lib/zaloRewardServer';
+import { getServiceClient, tryApplyLuckyForSpin, completeLuckySpin, applyLuckySpin } from '@/lib/zaloRewardServer';
+import { LUCKY_SETTING_KEYS, parseLuckyConfig } from '@/lib/luckyWheel';
 
 export const dynamic = 'force-dynamic';
 
-// Lượt quay quá lâu không hoàn tất thì bỏ qua
-const SPIN_FRESH_MINUTES = 30;
 
 export async function POST(request) {
   try {
@@ -31,21 +30,32 @@ export async function POST(request) {
       return NextResponse.json({ ok: false, reason: 'server chưa cấu hình' });
     }
 
-    const freshCutoff = new Date(Date.now() - SPIN_FRESH_MINUTES * 60000).toISOString();
-    const { data: spin } = await supabase
+    const { data: spin, error } = await supabase
       .from('lucky_spins')
       .select('*')
       .eq('id', spinId)
-      .eq('status', 'waiting_follow')
-      .gte('created_at', freshCutoff)
       .maybeSingle();
+    if (error) throw error;
 
     if (!spin) return NextResponse.json({ ok: true, matched: false });
+    if (spin.status === 'applied') {
+      await completeLuckySpin(supabase, spin);
+      return NextResponse.json({ ok: true, matched: true });
+    }
+    if (spin.status !== 'waiting_follow') return NextResponse.json({ ok: true, matched: false });
+    const { data: settings, error: settingsError } = await supabase.from('settings')
+      .select('key, value').in('key', LUCKY_SETTING_KEYS);
+    if (settingsError) throw settingsError;
+    if (!parseLuckyConfig(settings).requireFollow) {
+      await applyLuckySpin(supabase, spin, null);
+      return NextResponse.json({ ok: true, matched: true });
+    }
 
     const r = await tryApplyLuckyForSpin(supabase, spin, (m) => console.log('[Lucky claim-ready]', m));
     return NextResponse.json({ ok: true, matched: !!r.matched });
   } catch (err) {
     console.error('[Lucky claim-ready] lỗi:', err);
-    return NextResponse.json({ ok: false }, { status: 500 });
+    return NextResponse.json({ ok: false,
+      message: 'Quà chưa hoàn tất trên bill hoặc lệnh in. Quý khách bấm kiểm tra lại; nếu vẫn lỗi, vui lòng gọi nhân viên hỗ trợ.' }, { status: 500 });
   }
 }
