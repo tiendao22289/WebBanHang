@@ -141,10 +141,12 @@ function nudgeHarness(configs) {
   const fn = vm.runInNewContext(`(${nudgeSource.trim()})`, {
     supabase: {}, luckyWheelEnabled: true, luckyWheelAutoNudge: true, luckyWheelMinBill: 150000,
     fetchLuckyNudgeConfig: async () => configs[Math.min(seen.reads++, configs.length - 1)],
+    setLuckyWheelEnabled: value => { seen.enabled = value; },
     setLuckyWheelAutoNudge: value => { seen.auto = value; },
     setShowLuckyNudge: value => { seen.shown = value; },
     localStorage: { getItem: () => null, setItem: () => { seen.stored = true; } },
-    luckyNudgeStorageKey: () => 'nudge', wheelStorageKey: () => 'spin',
+    fetchSessionStart: async () => '2026-09-07T09:13:55.494Z',
+    luckyNudgeStorageKey: session => `nudge_${session}`, wheelStorageKey: () => 'spin',
     fetchGroupBillTotal: async () => { seen.billReads++; return 200000; },
     reviewGroupIds: () => ['table'], reviewPhoneFilter: () => null,
     groupOrders: [], previousOrders: [], isLuckyWheelItem: () => false,
@@ -181,4 +183,33 @@ test('an enabled invitation still opens once when the bill qualifies', async () 
   await h.run();
   assert.equal(h.seen.shown, true);
   assert.equal(h.seen.stored, true);
+});
+
+test('enabling the wheel revives a tab that loaded while it was disabled', async () => {
+  const h = nudgeHarness([nudgeOn]);
+  await h.run();
+  assert.equal(h.seen.enabled, true);
+  assert.equal(h.seen.auto, true);
+  assert.equal(h.seen.shown, true);
+});
+
+test('the invitation marker is scoped to the current occupied table session', async () => {
+  const seenKeys = [];
+  const h = nudgeHarness([nudgeOn]);
+  h.run = vm.runInNewContext(`(${nudgeSource.trim()})`, {
+    supabase: {}, luckyWheelEnabled: false, luckyWheelAutoNudge: false,
+    fetchLuckyNudgeConfig: async () => nudgeOn,
+    setLuckyWheelEnabled: value => { h.seen.enabled = value; },
+    setLuckyWheelAutoNudge: value => { h.seen.auto = value; }, setShowLuckyNudge: value => { h.seen.shown = value; },
+    fetchSessionStart: async () => '2026-09-07T09:13:55.494Z',
+    luckyNudgeStorageKey: session => `nudge_${session}`, wheelStorageKey: () => 'spin',
+    localStorage: { getItem: key => key === 'nudge_previous-session' ? '1' : null,
+      setItem: key => seenKeys.push(key) },
+    fetchGroupBillTotal: async () => 200000, reviewGroupIds: () => ['table'], reviewPhoneFilter: () => null,
+    groupOrders: [], previousOrders: [], isLuckyWheelItem: () => false,
+    fetchLuckyPrizes: async () => [], setLuckyNudgeMaxPercent: () => {},
+  });
+  await h.run();
+  assert.deepEqual(seenKeys, ['nudge_2026-09-07T09:13:55.494Z']);
+  assert.equal(h.seen.shown, true);
 });

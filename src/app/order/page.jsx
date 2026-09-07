@@ -1968,8 +1968,12 @@ function OrderContent() {
     };
   }, [activeTableId]);
 
-  function luckyNudgeStorageKey() {
-    return `lucky_nudge_shown_${activeTableId || urlTableId || 'x'}`;
+  function luckyNudgeStorageKey(sessionStart = null) {
+    // A table number is reused by many guests. Scope the one-time invitation
+    // to occupied_at so a hidden/stale invitation from the previous guest
+    // cannot suppress the current guest's wheel.
+    const session = sessionStart ? new Date(sessionStart).getTime() : 'unknown';
+    return `lucky_nudge_shown_${activeTableId || urlTableId || 'x'}_${session}`;
   }
 
   /**
@@ -1982,12 +1986,15 @@ function OrderContent() {
     // A customer tab may have been open before Admin disabled the setting.
     // Read current settings for each submitted order instead of cached state.
     const cfg = await fetchLuckyNudgeConfig(supabase).catch(() => null);
+    setLuckyWheelEnabled(!!cfg?.enabled);
     setLuckyWheelAutoNudge(!!cfg?.autoNudge);
     if (!cfg?.enabled || !cfg.autoNudge || cfg.minBill <= 0) {
       setShowLuckyNudge(false);
       return;
     }
-    try { if (localStorage.getItem(luckyNudgeStorageKey())) return; } catch { }
+    const sessionStart = await fetchSessionStart().catch(() => null);
+    const nudgeKey = luckyNudgeStorageKey(sessionStart);
+    try { if (localStorage.getItem(nudgeKey)) return; } catch { }
     // Đã có lượt quay đang chờ/đã dùng cho bàn này (kể cả chưa vào bill) → thôi
     try { if (localStorage.getItem(wheelStorageKey())) return; } catch { }
 
@@ -2011,12 +2018,13 @@ function OrderContent() {
     // Recheck after the bill/prize reads; a setting changed during those
     // requests must not allow an already-in-flight invitation to appear.
     const latest = await fetchLuckyNudgeConfig(supabase).catch(() => null);
+    setLuckyWheelEnabled(!!latest?.enabled);
     setLuckyWheelAutoNudge(!!latest?.autoNudge);
     if (!latest?.enabled || !latest.autoNudge || latest.minBill <= 0 || total < latest.minBill) {
       setShowLuckyNudge(false);
       return;
     }
-    try { localStorage.setItem(luckyNudgeStorageKey(), '1'); } catch { }
+    try { localStorage.setItem(nudgeKey, '1'); } catch { }
     setShowLuckyNudge(true);
   }
 
