@@ -135,7 +135,7 @@ test('older mobile browsers generate a valid retry UUID without randomUUID', () 
   assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 });
 
-const nudgeSource = page.slice(page.indexOf('  async function checkLuckyNudge()'), page.indexOf('  /** Pool "nước tặng"'));
+const nudgeSource = page.slice(page.indexOf('  async function checkLuckyNudge()'), page.indexOf('  // Recover an invitation'));
 function nudgeHarness(configs) {
   const seen = { shown: false, reads: 0, billReads: 0, stored: false };
   const fn = vm.runInNewContext(`(${nudgeSource.trim()})`, {

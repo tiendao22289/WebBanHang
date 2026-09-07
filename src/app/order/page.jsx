@@ -2028,6 +2028,17 @@ function OrderContent() {
     setShowLuckyNudge(true);
   }
 
+  // Recover an invitation that was missed because the customer submitted
+  // while an older tab still cached "wheel disabled". Only the browser that
+  // owns this table/order session may receive the reload invitation.
+  useEffect(() => {
+    if (!activeTableId) return;
+    const saved = getSavedSession();
+    if (!saved?.orderId || saved.tableId !== urlTableId) return;
+    const timer = setTimeout(() => checkLuckyNudge(), 900);
+    return () => clearTimeout(timer);
+  }, [activeTableId, urlTableId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   /** Pool "nước tặng" — admin cấu hình ở Cài đặt > Vòng xoay, khách chọn khi trúng quà gift_drink. */
   async function fetchWheelDrinkItems() {
     const { data: setting } = await supabase
