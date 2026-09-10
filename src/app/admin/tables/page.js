@@ -88,6 +88,14 @@ function isDrinkName(name) {
 // "VÒNG XOAY"), HOẶC quà trúng (is_gift + note của finalizeGiftItem). Quà vòng
 // xoay có item_name=null nên isLuckyWheelItem không bắt được → phải xét thêm note.
 // (Quà "8 tặng 1" là is_gift nhưng note rỗng → không tính là vòng xoay.)
+/** Header nhận diện nhân viên cho các route /api/admin/* — xem src/lib/adminApiAuth.js.
+ *  Không có phiên đăng nhập thì route sẽ trả 401 (đúng ý: người ngoài không gọi được). */
+function staffApiHeaders(extra = {}) {
+  let id = null;
+  try { id = JSON.parse(localStorage.getItem('staffUser') || 'null')?.id || null; } catch { }
+  return id ? { ...extra, 'x-staff-id': id } : extra;
+}
+
 function isLuckyWheelOutcome(item) {
   if (isLuckyWheelItem(item)) return true;
   const note = (item?.note || '').toLowerCase();
@@ -240,6 +248,9 @@ export default function TablesPage() {
   const [printToast, setPrintToast] = useState(''); // '' | 'sending' | 'ok' | 'err'
   // ── Ưu đãi đánh giá Google Maps ──
   const [reviewRequests, setReviewRequests] = useState([]); // các yêu cầu đang chờ duyệt hôm nay
+  const [luckySpins, setLuckySpins] = useState([]);         // lượt quay CHƯA vào bill (chờ Quan tâm / lỗi) — /api/admin/lucky-status
+  const [luckyModal, setLuckyModal] = useState(null);       // { hostTableId, tableNumber } đang xem chi tiết lượt quay
+  const [luckyGrantBusy, setLuckyGrantBusy] = useState(null); // spinId đang cấp quà tay
   const [reviewModal, setReviewModal] = useState(null);     // bản ghi đang xem
   const [reviewPreview, setReviewPreview] = useState(null); // { total, discount, percent }
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -521,6 +532,12 @@ export default function TablesPage() {
       .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi'));
     const catsData = cachedMenu.categories || [];
 
+    // Trạng thái vòng xoay (chờ Quan tâm Zalo / lỗi chưa vào bill) — không chặn
+    // render bàn; lucky_spins đã siết quyền đọc anon nên phải qua API service.
+    fetch('/api/admin/lucky-status', { headers: staffApiHeaders() })
+      .then(r => r.json()).then(d => { if (d.ok) setLuckySpins(d.spins || []); })
+      .catch(() => {});
+
     if (tablesData) {
       setTables(tablesData);
       const allTableIds = tablesData.map(t => t.id);
@@ -567,6 +584,46 @@ export default function TablesPage() {
     supabase.from('printers').select('id, name, target, type, interface')
       .then(({ data }) => { if (data) setPrinters(data); });
   }, []);
+
+  // Gom lượt quay CHƯA vào bill theo bàn host để gắn icon lên thẻ bàn. Ưu tiên
+  // trạng thái nặng nhất: error (cần xử lý) > waiting (đang chờ) > blocked.
+  const luckyByHost = useMemo(() => {
+    const rank = { error: 3, waiting: 2, blocked: 1 };
+    const map = {};
+    (luckySpins || []).forEach(s => {
+      const key = s.hostTableId || s.tableId;
+      if (!key) return;
+      if (!map[key]) map[key] = { spins: [], top: null };
+      map[key].spins.push(s);
+      if (!map[key].top || (rank[s.adminState] || 0) > (rank[map[key].top] || 0)) map[key].top = s.adminState;
+    });
+    return map;
+  }, [luckySpins]);
+
+  // Admin cấp quà tay cho 1 lượt quay bị kẹt → ghi thẳng quà/giảm giá vào bill.
+  async function grantLuckyGift(spinId) {
+    if (luckyGrantBusy) return;
+    setLuckyGrantBusy(spinId);
+    try {
+      const res = await fetch('/api/admin/lucky-grant', {
+        method: 'POST', headers: staffApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ spinId }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        await fetchTables();
+        setLuckySpins(prev => prev.filter(s => s.id !== spinId));
+        Swal.fire({ icon: 'success', title: data.already ? 'Quà đã có trong bill rồi' : 'Đã cấp quà vào bill!', timer: 1600, showConfirmButton: false });
+      } else {
+        Swal.fire({ icon: 'warning', title: 'Chưa cấp được', text: data.message || 'Vui lòng thử lại.' });
+      }
+    } catch (err) {
+      console.error('[grantLuckyGift]', err);
+      Swal.fire({ icon: 'error', title: 'Lỗi mạng', text: 'Không gọi được máy chủ, thử lại giúp.' });
+    } finally {
+      setLuckyGrantBusy(null);
+    }
+  }
 
   // ─── Chỉ refresh orders (không fetch lại menu/tables/categories) ───
   const fetchOrdersOnly = useCallback(async () => {
@@ -2403,6 +2460,8 @@ export default function TablesPage() {
           // Bill của bàn đã dùng vòng xoay may mắn chưa — báo cho nhân viên biết,
           // vì mỗi bill chỉ được nhận 1 lần quà (xem /api/lucky/spin).
           const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelOutcome));
+          // Lượt quay CHƯA vào bill của bàn này (chờ Quan tâm Zalo / lỗi hệ thống)
+          const luckyCard = luckyByHost[hostIdCard];
           // KM mua N tặng 1 — Mang về gộp nhiều khách khác nhau nên bỏ qua ở đây
           const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(tableBills) : { availableGiftSlots: 0, hasGiftInBill: false };
           let timeElapsed = '';
@@ -2462,6 +2521,26 @@ export default function TablesPage() {
                 {hasLuckyWheel && (
                   <div title="Bill đã dùng vòng xoay may mắn" style={{ background: '#fdf4ff', color: '#a21caf', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #f5d0fe', fontSize: '0.7rem' }}>
                     🎰
+                  </div>
+                )}
+                {luckyCard?.top && (
+                  <div
+                    className={luckyCard.top === 'error' ? 'review-req-blink' : undefined}
+                    title={luckyCard.top === 'error'
+                      ? 'Lỗi: khách đã Quan tâm Zalo nhưng quà CHƯA vào bill — bấm để xử lý'
+                      : luckyCard.top === 'waiting'
+                        ? 'Khách đang chờ Quan tâm Zalo để nhận quà — bấm xem'
+                        : 'Lượt quay bị chặn — bấm xem'}
+                    onClick={(e) => { e.stopPropagation(); setLuckyModal({ hostTableId: hostIdCard, tableNumber: table.table_number }); }}
+                    style={{
+                      background: luckyCard.top === 'error' ? '#fef2f2' : luckyCard.top === 'waiting' ? '#fffbeb' : '#f3f4f6',
+                      color: luckyCard.top === 'error' ? '#dc2626' : luckyCard.top === 'waiting' ? '#b45309' : '#6b7280',
+                      borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      border: `1px solid ${luckyCard.top === 'error' ? '#fecaca' : luckyCard.top === 'waiting' ? '#fde68a' : '#e5e7eb'}`,
+                      fontSize: '0.7rem', cursor: 'pointer',
+                    }}
+                  >
+                    {luckyCard.top === 'error' ? '⚠️' : luckyCard.top === 'waiting' ? '⏳' : '⛔'}
                   </div>
                 )}
                 {giftElig.availableGiftSlots > 0 && (
@@ -6316,6 +6395,68 @@ export default function TablesPage() {
             </div>
           </div>
         )
+      }
+
+      {/* ─── Chi tiết lượt quay vòng xoay của bàn (chờ Quan tâm / lỗi) ─── */}
+      {
+        luckyModal && (() => {
+          const spins = (luckySpins || []).filter(s => (s.hostTableId || s.tableId) === luckyModal.hostTableId);
+          const stateLabel = {
+            error: { text: '⚠️ Đã Quan tâm Zalo nhưng quà CHƯA vào bill (nghi lỗi hệ thống)', color: '#dc2626', bg: '#fef2f2', bd: '#fecaca' },
+            waiting: { text: '⏳ Đang chờ khách Quan tâm Zalo', color: '#b45309', bg: '#fffbeb', bd: '#fde68a' },
+            blocked: { text: '⛔ Lượt quay bị chặn', color: '#6b7280', bg: '#f3f4f6', bd: '#e5e7eb' },
+          };
+          return (
+            <div
+              onClick={() => !luckyGrantBusy && setLuckyModal(null)}
+              style={{ position: 'fixed', inset: 0, zIndex: 999999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(3px)', padding: 16 }}
+            >
+              <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 420, padding: 20, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)', maxHeight: '85vh', overflowY: 'auto' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#a21caf' }}>🎰 Vòng xoay — Bàn {luckyModal.tableNumber}</div>
+                  <button onClick={() => setLuckyModal(null)} disabled={!!luckyGrantBusy} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#94a3b8' }}>✕</button>
+                </div>
+                <div style={{ fontSize: '0.82rem', color: '#64748b', marginBottom: 14 }}>
+                  Khách trúng quà nhưng chưa vào bill. Nhắc khách nhắn <b>đúng SĐT đã quay</b> vào Zalo quán, hoặc bấm <b>Tặng quà thủ công</b> để cấp ngay cho khách.
+                </div>
+                {spins.length === 0 ? (
+                  <div style={{ padding: 20, textAlign: 'center', color: '#16a34a', fontWeight: 700 }}>✅ Đã xử lý xong, không còn lượt nào chờ.</div>
+                ) : spins.map(s => {
+                  const st = stateLabel[s.adminState] || stateLabel.waiting;
+                  return (
+                    <div key={s.id} style={{ border: `1px solid ${st.bd}`, background: st.bg, borderRadius: 12, padding: 13, marginBottom: 10 }}>
+                      <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.95rem', marginBottom: 3 }}>🎁 {s.prizeLabel || s.prizeType}</div>
+                      <div style={{ fontSize: '0.84rem', color: '#334155', lineHeight: 1.7 }}>
+                        <div>Khách: <b>{s.customerName || '—'}</b></div>
+                        <div>SĐT: <b>{s.customerPhone || '—'}</b></div>
+                      </div>
+                      <div style={{ marginTop: 7, fontSize: '0.8rem', fontWeight: 700, color: st.color }}>{st.text}</div>
+                      {s.adminState === 'blocked' && s.blockReason && (
+                        <div style={{ marginTop: 3, fontSize: '0.78rem', color: '#6b7280' }}>Lý do: {s.blockReason}</div>
+                      )}
+                      {['gift_drink', 'gift_dish', 'gift'].includes(s.prizeType) && !s.giftChosen && (
+                        <div style={{ marginTop: 6, fontSize: '0.78rem', color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px' }}>
+                          Khách chưa chọn món/nước quà — cần khách chọn ở màn hình vòng xoay trước khi cấp tay.
+                        </div>
+                      )}
+                      <button
+                        onClick={() => grantLuckyGift(s.id)}
+                        disabled={!!luckyGrantBusy || (['gift_drink', 'gift_dish', 'gift'].includes(s.prizeType) && !s.giftChosen)}
+                        style={{
+                          marginTop: 10, width: '100%', padding: '10px', borderRadius: 10, border: 'none', fontWeight: 800, cursor: 'pointer',
+                          background: (['gift_drink', 'gift_dish', 'gift'].includes(s.prizeType) && !s.giftChosen) ? '#e5e7eb' : '#16a34a',
+                          color: (['gift_drink', 'gift_dish', 'gift'].includes(s.prizeType) && !s.giftChosen) ? '#9ca3af' : 'white',
+                        }}
+                      >
+                        {luckyGrantBusy === s.id ? 'Đang cấp...' : '🎁 Tặng quà thủ công (ghi vào bill)'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()
       }
 
       {/* ─── Duyệt ưu đãi đánh giá Google Maps ─── */}

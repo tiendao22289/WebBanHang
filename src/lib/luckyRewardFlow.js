@@ -10,6 +10,32 @@ export function luckyRewardState(spin) {
   return 'saving';
 }
 
+// Cổng điều phối 2 bước quà nước/món trên popup vòng xoay: CHỌN MÓN TRƯỚC rồi
+// mới QUAN TÂM ZALO. Trước đây ép quan tâm Zalo trước → khách iOS back từ app
+// Zalo hay bị văng trang, chưa kịp chọn món nên quà không vào bill. Chọn món
+// trước thì pick-gift lưu gift_menu_item_id ngay (không cần đã follow); khi
+// khách quan tâm + nhắn SĐT, webhook server tự ghi quà — không cần app còn mở.
+// Tách hàm thuần để test được mọi nhánh mà không phải render component.
+export function wheelGiftGate({ spin, prizeType, hasPrize, requireFollow }) {
+  const state = luckyRewardState(spin);
+  // Cùng danh sách loại quà cần chọn món như luckyRewardState — giữ inline để
+  // module này không phụ thuộc file khác (test nạp qua data: URL, không resolve
+  // được import tương đối).
+  const isGift = ['gift', 'gift_drink', 'gift_dish'].includes(prizeType);
+  const giftChosen = !!spin?.gift_menu_item_id;
+  const done = state === 'done';
+  // Hiện bước chọn món khi trúng quà nước/món + khách CHƯA chọn + chưa xong +
+  // chưa bị chặn. spin=null ngay sau khi quay cũng coi là chưa chọn → picker
+  // hiện luôn, trước cả bước Quan tâm Zalo.
+  const needsGiftPick = isGift && !giftChosen && !done && spin?.status !== 'blocked';
+  // Bước Quan tâm Zalo còn treo khi cần follow + lượt quay chưa applied/blocked
+  // — NHƯNG với quà nước/món phải chọn xong món đã (needsGiftPick=false). Quà
+  // %/tiền không có bước chọn nên hiện Quan tâm Zalo ngay.
+  const followPending = !!hasPrize && !!requireFollow && !needsGiftPick
+    && (state === 'waiting_follow' || state === 'checking');
+  return { needsGiftPick, followPending, isGift, giftChosen };
+}
+
 export function luckyPrizeTitle(prize) {
   const type = prize?.prize_type ?? prize?.prizeType;
   const value = Number(prize?.prize_value ?? prize?.prizeValue);

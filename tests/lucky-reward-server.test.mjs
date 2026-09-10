@@ -64,7 +64,7 @@ function database(spin = spinTemplate) {
     return q;
   }, rpc: async () => ({ data: null, error: { code: 'NETWORK_TEST', message: 'rpc offline' } }) };
   const print = vm.runInNewContext(`(${printerFn})`, { console: { log() {}, error() {} } });
-  const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyForSpin })`, {
+  const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyByPhone, tryApplyLuckyForSpin, grantLuckySpinManually })`, {
     ...wheel, sendGiftItemPrintJob: print, console: { log() {}, error() {} }, Date, Set,
   });
   return { state, fail, db, ...funcs };
@@ -164,11 +164,72 @@ test('old spin cannot be applied to the next table session', async () => {
   assert.equal(h.state.order_items.length, 1);
 });
 
-test('anonymous follow / recent stranger never claims a wheel reward by timing', async () => {
+test('someone who is not actually following never claims a wheel reward by timing', async () => {
   const h = database();
   assert.equal((await h.tryApplyLuckyByTiming(h.db, 'stranger')).matched, false);
   assert.equal((await h.tryApplyLuckyForSpin(h.db, spinTemplate)).matched, false);
   assert.equal(h.state.order_items.length, 1);
+});
+
+// ── Khách CHỈ BẤM QUAN TÂM là nhận quà (không bắt nhắn SĐT) ──
+/** Lượt quay đang chờ + 1 tài khoản Zalo đang thật sự quan tâm OA. */
+function waitingSpinWithFollower(spinOverrides = {}) {
+  const h = database({ ...spinTemplate, status: 'waiting_follow', applied_order_id: null,
+    applied_item_id: null, zalo_user_id: null, ...spinOverrides });
+  h.state.zalo_followers.push({ zalo_user_id: 'fan', followed_at: now, unfollowed_at: null });
+  h.db.rpc = async () => ({ data: true, error: null }); // claim_lucky_wheel_slot chốt được slot
+  return h;
+}
+
+test('pressing Quan tam alone (no phone message) delivers the waiting gift', async () => {
+  const h = waitingSpinWithFollower();
+  const r = await h.tryApplyLuckyByTiming(h.db, 'fan');
+  assert.equal(r.matched, true);
+  assert.equal(h.state.lucky_spins[0].zalo_user_id, 'fan');
+  assert.equal(h.state.lucky_spins[0].applied_item_id !== null, true);
+  assert.equal(h.state.order_items.filter(r2 => r2.is_gift).length, 1);
+});
+
+test('a spin already bound to another Zalo account is never stolen by timing', async () => {
+  const h = waitingSpinWithFollower({ zalo_user_id: 'someone-else' });
+  assert.equal((await h.tryApplyLuckyByTiming(h.db, 'fan')).matched, false);
+  assert.equal(h.state.lucky_spins[0].zalo_user_id, 'someone-else');
+  assert.equal(h.state.lucky_spins[0].applied_item_id, null);
+});
+
+test('a spin older than the matching window is not claimed by an unrelated follow', async () => {
+  const h = waitingSpinWithFollower({ created_at: new Date(Date.now() - 60 * 60000).toISOString() });
+  assert.equal((await h.tryApplyLuckyByTiming(h.db, 'fan')).matched, false);
+  assert.equal(h.state.lucky_spins[0].zalo_user_id, null);
+  assert.equal(h.state.lucky_spins[0].applied_item_id, null);
+});
+
+test('a Zalo account inside the cooldown does not consume another guest waiting spin', async () => {
+  const h = waitingSpinWithFollower();
+  h.state.settings.push({ key: 'lucky_wheel_cooldown_days', value: '3' });
+  h.state.lucky_spins.push({ id: 'earlier', host_table_id: 'other', zalo_user_id: 'fan',
+    status: 'applied', verified_at: now });
+  assert.equal((await h.tryApplyLuckyByTiming(h.db, 'fan')).matched, false);
+  // Lượt của khách khác phải còn nguyên, không bị chiếm rồi block oan
+  assert.equal(h.state.lucky_spins[0].zalo_user_id, null);
+  assert.equal(h.state.lucky_spins[0].status, 'waiting_follow');
+  assert.equal(h.state.lucky_spins[0].applied_item_id, null);
+});
+
+test('an explicit phone message still matches that guest own spin exactly', async () => {
+  const h = waitingSpinWithFollower();
+  const r = await h.tryApplyLuckyByPhone(h.db, 'fan', '0900000000');
+  assert.equal(r.matched, true);
+  assert.equal(h.state.lucky_spins[0].zalo_user_id, 'fan');
+  assert.equal(h.state.lucky_spins[0].applied_item_id !== null, true);
+});
+
+test('admin manual grant writes the gift even though the guest never followed', async () => {
+  const h = waitingSpinWithFollower();
+  const r = await h.grantLuckySpinManually(h.db, 'spin');
+  assert.equal(r.ok, true);
+  assert.equal(h.state.order_items.filter(r2 => r2.is_gift).length, 1);
+  assert.equal(h.state.lucky_spins[0].applied_item_id !== null, true);
 });
 
 test('already delivered gift returns success on a customer retry', async () => {

@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const flow = await import(`data:text/javascript;base64,${Buffer.from(read('../src/lib/luckyRewardFlow.js')).toString('base64')}`);
-const { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, hasPendingLuckySpin } = flow;
+const { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, hasPendingLuckySpin, wheelGiftGate } = flow;
 const page = read('../src/app/order/page.jsx');
 const restoreSource = page.slice(page.indexOf('  async function restoreWheel('), page.indexOf('  wheelResumeRef.current = restoreWheel;'));
 const today = new Date();
@@ -57,6 +57,50 @@ test('discount reservation is not success until the bill item exists', () => {
   const discount = { ...base, status: 'applied', prize_type: 'percent' };
   assert.equal(luckyRewardState(discount), 'saving');
   assert.equal(luckyRewardState({ ...discount, applied_item_id: 'discount-line' }), 'done');
+});
+
+// ── Đảo thứ tự: CHỌN QUÀ nước/món TRƯỚC, QUAN TÂM ZALO SAU (fix văng app iOS) ──
+const gate = (spin, prizeType, requireFollow = true) =>
+  wheelGiftGate({ spin, prizeType, hasPrize: !!prizeType, requireFollow });
+
+test('gift prize shows the picker FIRST, before the Zalo follow step', () => {
+  // Ngay sau khi quay, chưa đọc được lượt quay (spin=null) — vẫn phải hiện chọn món.
+  const justSpun = gate(null, 'gift_drink');
+  assert.equal(justSpun.needsGiftPick, true);
+  assert.equal(justSpun.followPending, false);
+  // Đã đọc lượt quay, đang chờ follow, khách chưa chọn món → vẫn chọn món trước.
+  const waiting = gate({ status: 'waiting_follow' }, 'gift_dish');
+  assert.equal(waiting.needsGiftPick, true);
+  assert.equal(waiting.followPending, false);
+});
+
+test('after the gift is chosen the Zalo follow step appears (still waiting_follow)', () => {
+  const chosen = gate({ status: 'waiting_follow', gift_menu_item_id: 'drink-1' }, 'gift_drink');
+  assert.equal(chosen.needsGiftPick, false);
+  assert.equal(chosen.followPending, true);
+});
+
+test('percent/amount prizes keep the immediate Zalo follow step (no pick)', () => {
+  const percent = gate({ status: 'waiting_follow' }, 'percent');
+  assert.equal(percent.needsGiftPick, false);
+  assert.equal(percent.followPending, true);
+});
+
+test('follow step is skipped entirely when the setting does not require it', () => {
+  const noFollowGift = gate({ status: 'waiting_follow' }, 'gift_drink', false);
+  assert.equal(noFollowGift.needsGiftPick, true); // vẫn phải chọn món
+  assert.equal(noFollowGift.followPending, false);
+  const noFollowPercent = gate({ status: 'waiting_follow' }, 'percent', false);
+  assert.equal(noFollowPercent.followPending, false);
+});
+
+test('blocked or already-delivered gifts show neither picker nor follow', () => {
+  const blocked = gate({ status: 'blocked' }, 'gift_drink');
+  assert.equal(blocked.needsGiftPick, false);
+  assert.equal(blocked.followPending, false);
+  const done = gate({ status: 'applied', gift_menu_item_id: 'drink-1', applied_item_id: 'line-1' }, 'gift_drink');
+  assert.equal(done.needsGiftPick, false);
+  assert.equal(done.followPending, false);
 });
 
 test('success title uses the actual percentage instead of an admin placeholder', () => {

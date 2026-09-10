@@ -10,8 +10,8 @@ import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, fetchGroupBillTotal, startOfTodayISO, isReviewDiscountItem } from '@/lib/reviewReward';
-import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem, isGiftPrizeType } from '@/lib/luckyWheel';
-import { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, hasPendingLuckySpin, newLuckyRequestId, fetchLuckyNudgeConfig } from '@/lib/luckyRewardFlow';
+import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem } from '@/lib/luckyWheel';
+import { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, hasPendingLuckySpin, newLuckyRequestId, fetchLuckyNudgeConfig, wheelGiftGate } from '@/lib/luckyRewardFlow';
 import {
   Search,
   Plus,
@@ -695,17 +695,19 @@ function OrderContent() {
   // trong nhánh ternary chỉ thật sự chạy tới khi trúng gift_dish) vẫn bị lỗi
   // "Cannot access before initialization" và sập trắng trang.
   //
-  // Chỉ mở chọn món sau xác nhận Zalo. Giữ bước này tới khi dòng quà
-  // thực sự vào bill, để khách thử lại nếu lần ghi trước thất bại.
+  // CHỌN QUÀ TRƯỚC, QUAN TÂM ZALO SAU: khách chọn nước/món ngay sau khi quay
+  // (lúc này lượt quay còn 'waiting_follow'). pick-gift lưu gift_menu_item_id
+  // vào lucky_spins mà KHÔNG cần đã follow. Khi khách quan tâm Zalo + nhắn
+  // SĐT, webhook server tự ghi quà vào bill dựa trên lựa chọn đã lưu — không
+  // phụ thuộc app khách còn mở. Đảo lại thứ tự cũ (follow trước → chọn sau) vì
+  // trên iOS khách back từ app Zalo hay bị văng trang, chưa kịp chọn món nên
+  // quà không vào bill. Chọn trước thì dù văng, quà vẫn được nhận.
   const wheelRewardState = luckyRewardState(wheelSpin);
   const wheelDone = wheelRewardState === 'done';
-  const wheelNeedsGiftPick = wheelRewardState === 'choose_gift';
-  // ĐẢO THỨ TỰ: phải QUAN TÂM ZALO TRƯỚC rồi mới tới bước chọn quà. Bước quan
-  // tâm còn treo khi: cài đặt yêu cầu quan tâm + có link Zalo + lượt quay CHƯA
-  // 'applied'/'blocked' (ngay sau khi quay wheelSpin còn null cũng coi là đang
-  // chờ). Khi đang chờ → CHƯA cho chọn món, ép khách quan tâm xong đã.
-  const wheelFollowPending = !!wheelPrize && luckyWheelRequireFollow
-    && (wheelRewardState === 'waiting_follow' || wheelRewardState === 'checking');
+  const { needsGiftPick: wheelNeedsGiftPick, followPending: wheelFollowPending,
+    isGift: wheelIsGiftPrize, giftChosen: wheelGiftChosen } = wheelGiftGate({
+      spin: wheelSpin, prizeType: wheelPrize?.prizeType,
+      hasPrize: !!wheelPrize, requireFollow: luckyWheelRequireFollow });
   const wheelGiftActiveList = wheelPrize?.prizeType === 'gift_dish' ? giftItems
     : wheelPrize?.prizeType === 'gift_drink' ? wheelDrinkItems : [];
 
@@ -2312,7 +2314,7 @@ function OrderContent() {
       }
       if (manual) {
         setWheelErr(luckyRewardState(data) === 'waiting_follow'
-          ? 'Chưa xác nhận được Quan tâm Zalo. Quý khách nhắn đúng số điện thoại đã quay vào Zalo quán rồi quay lại kiểm tra nhé. Quà vẫn đang chờ nhận.'
+          ? 'Chưa xác nhận được Quan tâm Zalo. Quý khách bấm nút Quan tâm ở trang Zalo của quán rồi quay lại kiểm tra nhé (đã Quan tâm từ trước thì nhắn 1 tin bất kỳ cho quán ạ). Quà vẫn đang chờ nhận.'
           : luckyRewardState(data) === 'saving'
             ? 'Quà chưa được ghi xong vào hoá đơn. Quý khách kiểm tra lại sau ít giây; nếu vẫn chưa được, vui lòng gọi nhân viên.' : '');
       } else if (luckyRewardState(data) === 'done') setWheelErr('');
@@ -5087,24 +5089,28 @@ function OrderContent() {
                         </div>
                       ) : wheelFollowPending ? (
                         <div style={{ fontWeight: 700, color: '#0f766e' }}>
-                          {isGiftPrizeType(wheelPrize.prizeType)
-                            ? 'Quan tâm Zalo quán để mở quà nha 👇'
-                            : 'Quan tâm Zalo quán để nhận quà nha 👇'}
+                          {wheelIsGiftPrize && wheelGiftChosen
+                            ? '🎁 Quà đã chọn xong! Quý khách chỉ cần bấm Quan tâm Zalo là nhận quà ngay nha 👇'
+                            : 'Quý khách chỉ cần bấm Quan tâm Zalo là nhận quà ngay nha 👇'}
                         </div>
                       ) : wheelNeedsGiftPick ? (
                         <div style={{ fontWeight: 700, color: '#0f766e' }}>
-                          Đã mở quà! Mời Quý khách chọn {wheelPrize.prizeType === 'gift_drink' ? 'nước' : 'món'} để nhận vào bill 👇
+                          Quý khách chọn {wheelPrize.prizeType === 'gift_drink' ? 'nước' : 'món'} muốn nhận nha, chọn xong quán mời Quan tâm Zalo là có quà liền 👇
                         </div>
                       ) : (
-                        <div style={{ fontWeight: 700, color: '#0f766e' }}>
-                          {wheelChecking ? 'Đang kiểm tra phần quà…' : 'Quà chưa được ghi xong vào bill. Quý khách bấm kiểm tra bên dưới nhé.'}
+                        <div style={{ fontWeight: 700, color: '#b45309' }}>
+                          {wheelChecking
+                            ? 'Đang kiểm tra phần quà…'
+                            : 'Quán đang xử lý phần quà cho Quý khách. Bấm “Kiểm tra nhận quà” bên dưới; nếu chờ hơi lâu, Quý khách gọi nhân viên giúp quán xử lý ngay ạ 🙏'}
                         </div>
                       )}
                     </div>
 
-                    {/* Quà Tặng nước/Tặng món — CHỈ cho chọn món SAU KHI đã Quan
-                        tâm Zalo (wheelFollowPending = false). Trước đó ép quan tâm đã. */}
-                    {wheelNeedsGiftPick && !wheelFollowPending && (
+                    {/* Quà Tặng nước/Tặng món — cho khách CHỌN MÓN TRƯỚC, ngay
+                        sau khi quay. Chọn xong (pick-gift lưu gift_menu_item_id)
+                        mới hiện bước Quan tâm Zalo; webhook server ghi quà vào
+                        bill nên khách văng app vẫn nhận được. */}
+                    {wheelNeedsGiftPick && (
                       wheelGiftOptionItem ? (
                         <div>
                           <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: 8, textAlign: 'center' }}>
@@ -5201,9 +5207,9 @@ function OrderContent() {
                           Mở Zalo, bấm Quan tâm!
                         </a>
                         <div className="co-wheel-zalo-guide">
-                          <div>1. Bấm <b>Quan tâm</b> và nhắn <b>SĐT đã quay</b> vào Zalo quán.</div>
+                          <div>1. Bấm <b>Quan tâm</b> Zalo quán — chỉ vậy thôi là xong ạ!</div>
                           <div>2. Quay lại trang gọi món này, bấm <b>Kiểm tra nhận quà</b>.</div>
-                          <div>Đã quan tâm rồi: chỉ cần nhắn SĐT.</div>
+                          <div>Đã Quan tâm quán từ trước rồi? Quý khách nhắn <b>1 tin bất kỳ</b> cho quán (vd &quot;nhận quà&quot;) là quà vào bill ngay ạ.</div>
                           {inZaloBrowser && <div>Giữ trang gọi món này mở. Nếu lỡ đóng, quét lại QR bàn trong Zalo để tiếp tục nhận quà.</div>}
                         </div>
                       </>
