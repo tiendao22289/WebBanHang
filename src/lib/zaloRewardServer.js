@@ -23,11 +23,6 @@ export const CLAIM_FRESH_MINUTES = 30;
 // trùng giữa các bàn; dài hơn 3 phút thì khách đã đi làm việc khác.
 export const TIMING_MATCH_MINUTES = 3;
 
-// Vòng xoay để khung rộng hơn: khách còn phải CHỌN QUÀ rồi mới mở app Zalo
-// bấm Quan tâm, nên thực tế mất vài phút. Rộng quá thì lúc đông khách dễ ghép
-// nhầm lượt (xem lý giải "không phát thừa" ở tryApplyLuckyByTiming).
-export const LUCKY_TIMING_MATCH_MINUTES = 15;
-
 export function getServiceClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -736,94 +731,13 @@ export async function listAdminLuckySpins(supabase) {
   });
 }
 
-/**
- * Ghép CHÍNH XÁC theo SĐT khi đã biết SĐT của tài khoản Zalo (khách nhắn SĐT,
- * hoặc đã từng gắn SĐT từ lần trước). Chắc chắn hơn ghép theo thời gian nên
- * luôn thử hàm này trước rồi mới rơi xuống tryApplyLuckyByTiming.
- */
-export async function tryApplyLuckyByPhone(supabase, zaloUserId, phone, log = () => {}) {
-  if (!phone) return { matched: false, reason: 'không có SĐT' };
-  if (!(await isFollowing(supabase, zaloUserId))) return { matched: false, reason: 'chưa quan tâm' };
-  const { data: spins, error } = await supabase.from('lucky_spins').select('*')
-    .eq('customer_phone', phone).eq('status', 'waiting_follow')
-    .order('created_at', { ascending: false }).limit(1);
-  if (error) throw error;
-  if (!spins?.length) return { matched: false, reason: 'không có lượt quay của SĐT này' };
-
-  const spin = spins[0];
-  if (!spin.zalo_user_id) {
-    const { error: bindError } = await supabase.from('lucky_spins')
-      .update({ zalo_user_id: zaloUserId })
-      .eq('id', spin.id).eq('status', 'waiting_follow').is('zalo_user_id', null);
-    if (bindError) throw bindError;
-  }
-  const { data: bound, error: readError } = await supabase.from('lucky_spins')
-    .select('*').eq('id', spin.id).maybeSingle();
-  if (readError) throw readError;
-  if (bound?.zalo_user_id !== zaloUserId) return { matched: false, reason: 'lượt quay đã gắn tài khoản Zalo khác' };
-  await applyLuckySpin(supabase, bound, zaloUserId, log);
-  return { matched: true, spinId: bound.id };
-}
-
-/**
- * Khách CHỈ CẦN BẤM QUAN TÂM là nhận quà — không bắt nhắn SĐT nữa (bắt nhắn
- * SĐT làm nhiều khách bỏ luôn giữa chừng).
- *
- * Event `follow` của Zalo là ẩn danh (chỉ có zalo_user_id, không kèm SĐT), nên
- * phải ghép theo THỜI GIAN: lấy lượt quay đang chờ, chưa gắn tài khoản Zalo nào.
- *
- * VÌ SAO GHÉP NHẦM VẪN KHÔNG PHÁT THỪA / KHÔNG SAI BILL: phần thưởng luôn ghi
- * vào bill CỦA CHÍNH lượt quay đó (applyLuckySpin đọc host_table_id từ spin),
- * nên ghép nhầm chỉ đổi thứ tự ai kích hoạt trước, không bao giờ đẩy quà sang
- * bàn khác. Mỗi lượt quan tâm thật chỉ tiêu đúng MỘT lượt quay đang chờ → tổng
- * quà trao ra luôn bằng tổng lượt quan tâm. Bàn còn lại nhận ngay khi khách của
- * họ bấm Quan tâm; nếu bị kẹt thì admin thấy ⏳ trên thẻ bàn và cấp tay được.
- *
- * Gọi từ 2 chỗ trong handleZaloEvent: event `follow` (khách bấm Quan tâm lần
- * đầu) và `user_send_text` không kèm SĐT (khách đã quan tâm từ trước, chỉ cần
- * nhắn 1 tin bất kỳ vì Zalo không bắn lại event follow cho người đã theo dõi).
- */
-export async function tryApplyLuckyByTiming(supabase, zaloUserId, log = () => {}) {
-  if (!(await isFollowing(supabase, zaloUserId))) return { matched: false, reason: 'chưa quan tâm' };
-
-  // Tài khoản Zalo đang trong thời gian chờ (đã nhận quà gần đây) thì BỎ QUA,
-  // không chiếm lượt của người khác — vì nếu chiếm, applyLuckySpin sẽ block
-  // đúng lượt vừa chiếm, oan cho khách đang chờ chính đáng.
-  const { data: settingRows } = await supabase
-    .from('settings').select('key, value').in('key', LUCKY_SETTING_KEYS);
-  const cfg = parseLuckyConfig(settingRows);
-  if (cfg.cooldownDays > 0) {
-    const zaloCutoff = new Date(Date.now() - cfg.cooldownDays * 86400000).toISOString();
-    const { data: recent } = await supabase.from('lucky_spins').select('id')
-      .eq('zalo_user_id', zaloUserId).eq('status', 'applied')
-      .gte('verified_at', zaloCutoff).limit(1);
-    if (recent?.length) return { matched: false, reason: 'zalo đang trong thời gian chờ' };
-  }
-
-  const cutoff = new Date(Date.now() - LUCKY_TIMING_MATCH_MINUTES * 60000).toISOString();
-  const { data: spins, error } = await supabase.from('lucky_spins').select('*')
-    .eq('status', 'waiting_follow')
-    .is('zalo_user_id', null)                   // chưa gắn tài khoản Zalo nào
-    .gte('created_at', cutoff)
-    .order('created_at', { ascending: true })   // chờ lâu nhất được ghép trước
-    .limit(1);
-  if (error) throw error;
-  if (!spins?.length) {
-    log('khong co luot quay nao dang cho de khop theo thoi gian');
-    return { matched: false, reason: 'không có lượt quay đang chờ' };
-  }
-
-  // Gắn tài khoản Zalo bằng UPDATE CÓ ĐIỀU KIỆN — 2 webhook về cùng lúc không
-  // thể cùng chiếm 1 lượt quay (người thua thấy 0 dòng và bỏ qua).
-  const { data: bound, error: bindError } = await supabase.from('lucky_spins')
-    .update({ zalo_user_id: zaloUserId })
-    .eq('id', spins[0].id).eq('status', 'waiting_follow').is('zalo_user_id', null)
-    .select().maybeSingle();
-  if (bindError) throw bindError;
-  if (!bound) return { matched: false, reason: 'lượt quay vừa bị webhook khác chiếm' };
-
-  await applyLuckySpin(supabase, bound, zaloUserId, log);
-  return { matched: true, spinId: bound.id };
+// An anonymous follow event cannot identify a wheel customer. Never guess by
+// timing — that binds a stranger's Zalo account to an innocent guest's spin and
+// then blocks it with a false "already claimed" message (findings from the
+// follow-only trial). The guest sends the phone entered for this spin in the OA
+// chat; that is the only reliable link between a follow and a spin.
+export async function tryApplyLuckyByTiming() {
+  return { matched: false, reason: 'need_phone_message' };
 }
 
 export async function tryApplyLuckyForSpin(supabase, spin) {
@@ -853,14 +767,10 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
       unfollowed_at: null,
       last_event_at: now,
     }, { onConflict: 'zalo_user_id' });
-    // Đã biết SĐT từ trước → ghép quà Zalo theo SĐT, rồi vẫn phải xử lý vòng
-    // xoay (trước đây return sớm ở đây nên khách bấm Quan tâm mà đã từng gắn
-    // SĐT thì lượt quay bị bỏ quên): ưu tiên ghép đúng SĐT, không có thì ghép
-    // theo thời gian.
+    // Existing phone mappings may have come from timing-based social rewards.
+    // Wheel rewards require an explicit phone message for this interaction.
     if (existing?.phone) {
       await tryApplyReward(supabase, uid, existing.phone, log);
-      const exact = await tryApplyLuckyByPhone(supabase, uid, existing.phone, log);
-      if (!exact.matched) await tryApplyLuckyByTiming(supabase, uid, log);
       return;
     }
     // Chưa biết SĐT → khớp theo thời gian: khách chỉ cần bấm Quan tâm
@@ -901,11 +811,26 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
     }
 
     if (phone) {
+      // Only a phone explicitly sent in this event identifies a wheel customer.
       if (!(await isFollowing(supabase, uid))) return;
-      // Có SĐT trong tin nhắn → ghép chắc chắn nhất; không khớp SĐT nào thì
-      // vẫn cứu bằng ghép theo thời gian (khách nhắn nhầm số vẫn nhận được quà).
-      const exact = await tryApplyLuckyByPhone(supabase, uid, phone, log);
-      if (!exact.matched) await tryApplyLuckyByTiming(supabase, uid, log);
+      // Có SĐT trong tin nhắn → khớp chắc chắn nhất
+      // Luot quay cua chinh SDT nay (neu co) cung duoc ap
+      const { data: spins, error: spinsError } = await supabase
+        .from('lucky_spins').select('*')
+        .eq('customer_phone', phone).eq('status', 'waiting_follow')
+        .order('created_at', { ascending: false }).limit(1);
+      if (spinsError) throw spinsError;
+      if (spins?.length) {
+        const spin = spins[0];
+        if (!spin.zalo_user_id) {
+          const { error } = await supabase.from('lucky_spins').update({ zalo_user_id: uid })
+            .eq('id', spin.id).eq('status', 'waiting_follow').is('zalo_user_id', null);
+          if (error) throw error;
+        }
+        const { data: bound, error } = await supabase.from('lucky_spins').select('*').eq('id', spin.id).maybeSingle();
+        if (error) throw error;
+        if (bound?.zalo_user_id === uid) await applyLuckySpin(supabase, bound, uid, log);
+      }
       await tryApplyReward(supabase, uid, phone, log);
       return;
     }
