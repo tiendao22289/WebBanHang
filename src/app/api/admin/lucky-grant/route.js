@@ -28,6 +28,8 @@ export async function POST(request) {
     return NextResponse.json(result);
   } catch (err) {
     console.error('[admin/lucky-grant] lỗi:', err);
-    return NextResponse.json({ ok: false, message: 'Quán gặp lỗi khi cấp quà, thử lại giúp ạ.' });
+    // Hiện lý do thật cho nhân viên (route đã chặn ngoài) — câu chung chung
+    // khiến admin bấm lại mãi một lỗi cố định (vd thiếu RPC, máy in lỗi).
+    return NextResponse.json({ ok: false, message: err?.message || 'Quán gặp lỗi khi cấp quà, thử lại giúp ạ.' });
   }
 }
