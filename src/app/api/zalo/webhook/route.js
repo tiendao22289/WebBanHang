@@ -83,6 +83,15 @@ export async function POST(request) {
     }
 
     log(`event: ${body.event_name}`);
+    // ── TẠM THỜI — CHẨN ĐOÁN ────────────────────────────────────────────
+    // In nguyên payload của event quan tâm/bỏ quan tâm để xem Zalo có gửi
+    // kèm tham số định danh (ref/source) khi khách bấm Quan tâm qua link có
+    // gắn mã hay không. Nếu CÓ thì mới bỏ được bước bắt khách nhắn SĐT.
+    // CHỈ log event follow/unfollow — event tin nhắn chứa SĐT khách nên
+    // tuyệt đối không in ra log. Gỡ khối này sau khi đã kiểm tra xong.
+    if (body.event_name === 'follow' || body.event_name === 'unfollow') {
+      console.log('[Zalo Webhook] RAW', body.event_name, 'payload:', JSON.stringify(body));
+    }
     // Trả 200 NGAY cho Zalo (yêu cầu phản hồi < 2s), phần xử lý
     // (khớp SĐT, trừ tiền) chạy nền sau khi response đã gửi.
     after(async () => {
