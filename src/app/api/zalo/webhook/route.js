@@ -83,24 +83,12 @@ export async function POST(request) {
     }
 
     log(`event: ${body.event_name}`);
-    // ── TẠM THỜI — CHẨN ĐOÁN ────────────────────────────────────────────
-    // In nguyên payload của event quan tâm/bỏ quan tâm để xem Zalo có gửi
-    // kèm tham số định danh (ref/source) khi khách bấm Quan tâm qua link có
-    // gắn mã hay không. Nếu CÓ thì mới bỏ được bước bắt khách nhắn SĐT.
-    // CHỈ log event follow/unfollow — event tin nhắn chứa SĐT khách nên
-    // tuyệt đối không in ra log. Gỡ khối này sau khi đã kiểm tra xong.
-    if (body.event_name === 'follow' || body.event_name === 'unfollow') {
-      console.log('[Zalo Webhook] RAW', body.event_name, 'payload:', JSON.stringify(body));
-      // Ghi luôn vào settings để đọc lại được bằng SQL (log Vercel khó lấy).
-      after(async () => {
-        try {
-          await supabase.from('settings').upsert(
-            { key: 'debug_last_follow_payload',
-              value: JSON.stringify({ at: new Date().toISOString(), event: body.event_name, body }) },
-            { onConflict: 'key' });
-        } catch (e) { console.error('[Zalo Webhook] ghi debug payload lỗi:', e); }
-      });
-    }
+    // Đã đo thực tế trên OA này (12/09/2026): event `follow` KHÔNG mang theo
+    // tham số do mình đặt. Payload chỉ có oa_id, follower.id, user_id_by_app,
+    // event_name, source ("oa_profile" — danh mục cố định, không phải ref của
+    // mình), app_id, timestamp. Vì vậy KHÔNG thể gắn lượt quay vào cú bấm
+    // Quan tâm; muốn biết khách nào thì vẫn phải lấy SĐT (khách nhắn, hoặc
+    // bấm nút chia sẻ SĐT → event user_submit_info).
     // Trả 200 NGAY cho Zalo (yêu cầu phản hồi < 2s), phần xử lý
     // (khớp SĐT, trừ tiền) chạy nền sau khi response đã gửi.
     after(async () => {
