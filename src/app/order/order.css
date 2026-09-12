@@ -2027,6 +2027,34 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
   display: flex; align-items: center; justify-content: center;
   font-size: 1.5rem;
 }
+
+/* Nút QUAY NGAY nằm ngay tâm bánh xe — co giãn theo cỡ bánh xe (%) nên luôn
+   cân giữa, và không chạm vào nhãn quà (nhãn nằm ở ~39.5% bán kính). */
+.co-wheel-hub-btn {
+  width: 35%; height: 35%;
+  margin: 0;
+  transform: translate(-50%, -50%);
+  border: 3px solid #fff;
+  padding: 0;
+  background: linear-gradient(135deg, #fb923c, #ea580c);
+  color: #fff;
+  font-family: 'Nunito', sans-serif;
+  font-weight: 900;
+  font-size: clamp(.66rem, 3.1vw, .86rem);
+  line-height: 1.12;
+  letter-spacing: .3px;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 5px 16px rgba(234, 88, 12, .5);
+  z-index: 3;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.co-wheel-hub-btn:active { transform: translate(-50%, -50%) scale(.93); }
+.co-wheel-hub-btn:disabled {
+  background: linear-gradient(135deg, #cbd5e1, #94a3b8);
+  box-shadow: none;
+  cursor: default;
+}
 .co-wheel-pin {
   position: absolute;
   left: 50%; top: -12px;

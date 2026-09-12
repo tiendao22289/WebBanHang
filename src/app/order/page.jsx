@@ -5121,7 +5121,16 @@ function OrderContent() {
                         </span>
                       ))}
                     </div>
-                    <div className="co-wheel-hub">🎁</div>
+                    {/* Nút quay nằm ngay TÂM bánh xe cho gọn — tâm không xoay
+                        theo bánh xe (là phần tử riêng) nên bấm được ổn định. */}
+                    <button
+                      type="button"
+                      className="co-wheel-hub co-wheel-hub-btn"
+                      onClick={spinWheel}
+                      disabled={wheelSpinning}
+                    >
+                      <span>{wheelSpinning ? <>Đang<br />quay…</> : <>QUAY<br />NGAY</>}</span>
+                    </button>
                   </div>
                 )}
 
@@ -5318,9 +5327,6 @@ function OrderContent() {
                         disabled={wheelSpinning}
                         onChange={e => setWheelForm(f => ({ ...f, phone: e.target.value }))}
                       />
-                      <button className="co-gmap-cta" onClick={spinWheel} disabled={wheelSpinning}>
-                        {wheelSpinning ? 'Đang quay...' : 'QUAY NGAY! 🎁'}
-                      </button>
                       <div className="co-wheel-note">
                         Mỗi bàn quay 1 lượt. Quán chỉ dùng thông tin để ghi quà và
                         tích điểm, không nhắn tin quảng cáo đâu ạ.
