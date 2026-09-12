@@ -28,9 +28,21 @@ export function buildPermissionUrl(redirectUri, state = '') {
 
 /** Gọi endpoint token của Zalo. Trả về { access_token, refresh_token, expires_in }. */
 async function callTokenEndpoint(params) {
-  const secret = process.env.ZALO_APP_SECRET;
-  const appId = process.env.ZALO_APP_ID;
+  // trim() phòng lúc dán bị dính khoảng trắng / xuống dòng ở cuối.
+  const secret = (process.env.ZALO_APP_SECRET || '').trim();
+  const appId = (process.env.ZALO_APP_ID || '').trim();
   if (!secret || !appId) throw new Error('Thiếu ZALO_APP_ID hoặc ZALO_APP_SECRET');
+  // Secret đi trong HEADER, mà header HTTP chỉ nhận ký tự ASCII. Khoá thật của
+  // Zalo chỉ gồm chữ và số; có dấu tiếng Việt nghĩa là dán nhầm nội dung khác.
+  // Không chặn ở đây thì fetch ném "Cannot convert argument to a ByteString",
+  // đọc không ra vấn đề.
+  if (!/^[\x20-\x7E]+$/.test(secret)) {
+    throw new Error('ZALO_APP_SECRET chứa ký tự có dấu — có vẻ dán nhầm. '
+      + 'Hãy copy lại đúng "Khóa bí mật của ứng dụng" (chỉ gồm chữ và số) trên Zalo Developers.');
+  }
+  if (!/^\d+$/.test(appId)) {
+    throw new Error('ZALO_APP_ID phải là dãy số — hiện đang không đúng định dạng.');
+  }
 
   const res = await fetch(TOKEN_URL, {
     method: 'POST',
