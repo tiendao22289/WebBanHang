@@ -627,6 +627,7 @@ function OrderContent() {
   const [wheelAngle, setWheelAngle] = useState(0);
   const [wheelPrize, setWheelPrize] = useState(null);
   const [wheelErr, setWheelErr] = useState('');
+  const [wheelNotice, setWheelNotice] = useState(null); // popup thông báo RIÊNG, nổi TRÊN popup vòng xoay (vd "bàn đã nhận quà rồi")
   const [wheelPrizes, setWheelPrizes] = useState([]); // cơ cấu quà từ bảng lucky_prizes
   const [wheelSpin, setWheelSpin] = useState(null);   // ban ghi lucky_spins
   const [wheelStats, setWheelStats] = useState({ totalSpins: null, recentWinners: [] }); // khoe lượt quay + 10 người trúng gần nhất (ẩn danh, lấy từ RPC)
@@ -2211,7 +2212,9 @@ function OrderContent() {
       const data = await res.json();
 
       if (!data.ok) {
-        setWheelErr(data.message || 'Quán chưa quay được, Quý khách thử lại giúp ạ!');
+        // Lỗi từ server (bàn đã nhận quà, chưa đủ bill, vòng xoay tắt...) → bật
+        // POPUP RIÊNG nổi trên popup vòng xoay cho khách thấy rõ, không lẫn.
+        setWheelNotice(data.message || 'Quán chưa quay được, Quý khách thử lại giúp ạ!');
         setWheelSpinning(false);
         return;
       }
@@ -4229,6 +4232,25 @@ function OrderContent() {
             <span>{feedbackToast.message}</span>
           </div>
           <button onClick={() => setFeedbackToast(null)}><X size={14} /></button>
+        </div>
+      )}
+      {/* Popup thông báo RIÊNG — nổi TRÊN popup vòng xoay (z-index 3000 > 2500)
+          để khách thấy rõ, không lẫn với nội dung vòng xoay. */}
+      {wheelNotice && (
+        <div
+          onClick={() => setWheelNotice(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(2px)', padding: 20 }}
+        >
+          <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 18, maxWidth: 340, width: '100%', padding: '26px 22px', textAlign: 'center', boxShadow: '0 25px 60px rgba(0,0,0,0.4)' }}>
+            <div style={{ fontSize: '2.8rem', lineHeight: 1, marginBottom: 10 }}>🔔</div>
+            <div style={{ fontSize: '1.06rem', fontWeight: 800, lineHeight: 1.55, color: '#92400e' }}>{wheelNotice}</div>
+            <button
+              onClick={() => setWheelNotice(null)}
+              style={{ marginTop: 20, width: '100%', padding: '13px', background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: 'white', border: 'none', borderRadius: 12, fontWeight: 800, fontSize: '1rem', cursor: 'pointer' }}
+            >
+              Đã hiểu
+            </button>
+          </div>
         </div>
       )}
       <div className="co-page">
