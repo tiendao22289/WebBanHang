@@ -15,6 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { parseChannelConfig, calcReviewDiscount, getChannel } from '@/lib/reviewReward';
 import { luckyItemName, calcLuckyDiscount, LUCKY_SETTING_KEYS, parseLuckyConfig, isGiftPrizeType } from '@/lib/luckyWheel';
 import { sendGiftItemPrintJob } from '@/lib/print';
+import { sendOaText, sendOaRequestPhone } from '@/lib/zaloOa';
 
 // Yêu cầu quá 30 phút không hoàn tất thì bỏ qua (khách đã rời quán / thử nghịch)
 export const CLAIM_FRESH_MINUTES = 30;
@@ -494,8 +495,43 @@ export async function pickGiftItem(supabase, spinId, menuItemId, itemOptions, lo
   return { ok: true, applied: false };
 }
 
+/**
+ * Nhắn cho khách qua Zalo rằng quà đã vào hoá đơn.
+ *
+ * VÌ SAO CẦN: khách rời web sang app Zalo để Quan tâm; lúc quay lại trang order
+ * có thể đã bị hệ điều hành tắt nên không thấy màn hình "nhận quà thành công".
+ * Tin nhắn nằm lại trong Zalo nên khách luôn biết, xem lúc nào cũng được.
+ *
+ * KHÔNG BAO GIỜ được làm hỏng luồng quà: quà đã ghi vào bill rồi, tin nhắn chỉ
+ * là thông báo — mọi lỗi gửi tin đều nuốt và ghi log.
+ */
+async function notifyLuckyPrizeApplied(supabase, spin, log = () => {}) {
+  if (!spin?.zalo_user_id) return; // cấp tay / chưa gắn Zalo thì không có ai để nhắn
+  try {
+    // Đọc lại từ DB: số tiền giảm do RPC tính, bản ghi truyền vào có thể cũ.
+    const { data: fresh } = await supabase.from('lucky_spins')
+      .select('prize_label, discount_amount, applied_item_id').eq('id', spin.id).maybeSingle();
+    if (!fresh?.applied_item_id) return; // chưa thật sự vào bill thì đừng báo nhầm
+    const money = Number(fresh.discount_amount) || 0;
+    const detail = money > 0
+      ? `Hoá đơn của Quý khách được giảm ${money.toLocaleString('vi-VN')}đ ạ.`
+      : 'Phần quà đã được thêm vào hoá đơn, nhân viên mang ra ngay ạ!';
+    await sendOaText(supabase, spin.zalo_user_id,
+      `🎉 Chúc mừng Quý khách trúng "${fresh.prize_label || 'quà vòng xoay'}"!\n`
+      + `${detail}\nCảm ơn Quý khách đã ủng hộ Ốc Bảo Khang ạ!`, log);
+  } catch (err) {
+    log(`khong gui duoc tin bao nhan qua: ${err.message}`);
+  }
+}
+
 /** Resume a reserved reward after a timeout/crash without creating another line. */
 export async function completeLuckySpin(supabase, spin, log = () => {}) {
+  const result = await finishLuckyReward(supabase, spin, log);
+  await notifyLuckyPrizeApplied(supabase, spin, log);
+  return result;
+}
+
+async function finishLuckyReward(supabase, spin, log = () => {}) {
   if (spin.prize_type === 'percent') {
     // Database owns the live discount and totals; never overwrite them with
     // the older amount captured when the customer spun the wheel.
@@ -772,6 +808,18 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
     if (existing?.phone) {
       await tryApplyReward(supabase, uid, existing.phone, log);
       return;
+    }
+    // Khách vừa quan tâm mà quán chưa biết SĐT → mời bấm NÚT chia sẻ SĐT.
+    // Bấm nút nhanh hơn gõ tay, và SĐT do chính Zalo gửi nên ghép đúng lượt
+    // quay 100% (event follow không mang mã nhận diện — xem ghi chú ở
+    // tryApplyLuckyByTiming). Gửi tin hỏng không được chặn luồng quà.
+    try {
+      await sendOaRequestPhone(supabase, uid,
+        'Nhận quà vòng xoay 🎁',
+        'Quý khách bấm nút bên dưới gửi số điện thoại đã quay, quán ghi quà vào hoá đơn ngay ạ!',
+        log);
+    } catch (err) {
+      log(`khong gui duoc tin moi chia se SDT: ${err.message}`);
     }
     // Chưa biết SĐT → khớp theo thời gian: khách chỉ cần bấm Quan tâm
     const r = await tryApplyRewardByTiming(supabase, uid, log);
