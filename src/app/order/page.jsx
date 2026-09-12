@@ -5301,14 +5301,14 @@ function OrderContent() {
                 ) : (
                   <>
                     <div className="co-gmap-note" style={{ textAlign: 'center' }}>
-                      Quay là <b>chắc chắn có quà</b> — giảm tới <b>50% hoá đơn</b>,
-                      nước ngọt hoặc một món 40–50k 🎁
+                      <b>Chắc chắn có quà</b> — giảm tới <b>50% hoá đơn</b>,
+                      nước ngọt hoặc món 40–50k 🎁
                     </div>
 
 
                     <div className="co-gmap-info-form">
                       <div className="co-gmap-info-title">
-                        Quán xin tên và số điện thoại để ghi quà cho Quý khách nha!
+                        Quán xin tên và SĐT để ghi quà nha!
                       </div>
                       <input
                         className="co-gmap-input"
@@ -5328,8 +5328,7 @@ function OrderContent() {
                         onChange={e => setWheelForm(f => ({ ...f, phone: e.target.value }))}
                       />
                       <div className="co-wheel-note">
-                        Mỗi bàn quay 1 lượt. Quán chỉ dùng thông tin để ghi quà và
-                        tích điểm, không nhắn tin quảng cáo đâu ạ.
+                        Mỗi bàn 1 lượt. Quán chỉ dùng để ghi quà, không quảng cáo ạ.
                       </div>
                     </div>
                   </>

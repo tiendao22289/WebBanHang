@@ -2091,6 +2091,19 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
 .co-wheel-modal { max-height: calc(100dvh - 32px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); }
 .co-wheel-modal .co-chal-scroll { min-height: 0; }
 
+/* Khối nhập tên/SĐT trong popup vòng xoay gọn hơn bản dùng chung (co-gmap-*)
+   để nhường chiều cao cho bánh xe. Không đụng tới ưu đãi Google. */
+.co-wheel-modal .co-gmap-note { margin-top: 8px; font-size: .76rem; line-height: 1.45; }
+.co-wheel-modal .co-gmap-info-form { padding: 11px; margin-bottom: 8px; }
+.co-wheel-modal .co-gmap-info-title { font-size: .82rem; line-height: 1.4; margin-bottom: 8px; }
+.co-wheel-modal .co-gmap-input {
+  padding: 8px 11px;
+  margin-bottom: 7px;
+  font-size: .9rem;
+  border-radius: 9px;
+}
+.co-wheel-modal .co-wheel-note { margin-top: 7px; font-size: .72rem; line-height: 1.4; }
+
 /* ── ĐIỆN THOẠI: popup vòng xoay chiếm gần hết màn hình, và bánh xe nhỏ lại,
    để ô nhập TÊN + SĐT và nút QUAY NGAY hiện ra CÙNG LÚC với bánh xe — trước
    đây bánh xe 72vw đẩy form xuống dưới mép màn, khách tưởng không quay được. ── */
@@ -2111,14 +2124,13 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
     /* Bánh xe TO NHẤT CÓ THỂ mà vẫn chừa đủ chỗ cho form nhập tên/SĐT và nút
        QUAY NGAY (~400px). Màn càng cao bánh xe càng to; có mức sàn 210px để
        chữ trên các ô quà luôn đọc được. */
-    --co-wheel-size: max(210px, min(74vw, calc(100dvh - 400px), 310px));
+    --co-wheel-size: max(210px, min(76vw, calc(100dvh - 355px), 330px));
     width: var(--co-wheel-size);
     height: var(--co-wheel-size);
     margin: 2px auto 10px;
     /* Nhãn nằm sát vành — giữ đúng tỉ lệ gốc (28.5/72 ≈ 0.395) */
     --co-wheel-label-r: calc(var(--co-wheel-size) * 0.395);
   }
-  .co-wheel-modal .co-wheel-note { margin-top: 6px; font-size: .76rem; }
 }
 .co-wheel-zalo-cta { margin-top: 12px; }
 .co-wheel-zalo-guide {
