@@ -803,16 +803,13 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
       unfollowed_at: null,
       last_event_at: now,
     }, { onConflict: 'zalo_user_id' });
-    // Existing phone mappings may have come from timing-based social rewards.
-    // Wheel rewards require an explicit phone message for this interaction.
-    if (existing?.phone) {
-      await tryApplyReward(supabase, uid, existing.phone, log);
-      return;
-    }
-    // Khách vừa quan tâm mà quán chưa biết SĐT → mời bấm NÚT chia sẻ SĐT.
-    // Bấm nút nhanh hơn gõ tay, và SĐT do chính Zalo gửi nên ghép đúng lượt
-    // quay 100% (event follow không mang mã nhận diện — xem ghi chú ở
-    // tryApplyLuckyByTiming). Gửi tin hỏng không được chặn luồng quà.
+    // Mời khách bấm NÚT chia sẻ SĐT. Gửi cho MỌI lượt quan tâm mới, kể cả khi
+    // quán đã lưu sẵn SĐT của tài khoản này: SĐT cũ có thể đã được gắn bằng
+    // cách ghép theo thời gian ở luồng quà Zalo nên chưa chắc đúng người, và
+    // để khách bấm một cái xác nhận vẫn nhanh hơn gõ tay. Phải đứng TRƯỚC
+    // nhánh `existing?.phone` bên dưới — nhánh đó return sớm nên đặt sau thì
+    // khách đã từng lưu SĐT sẽ không bao giờ nhận được tin.
+    // Gửi tin hỏng không được chặn luồng quà.
     try {
       await sendOaRequestPhone(supabase, uid,
         'Nhận quà vòng xoay 🎁',
@@ -820,6 +817,12 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
         log);
     } catch (err) {
       log(`khong gui duoc tin moi chia se SDT: ${err.message}`);
+    }
+    // Existing phone mappings may have come from timing-based social rewards.
+    // Wheel rewards require an explicit phone message for this interaction.
+    if (existing?.phone) {
+      await tryApplyReward(supabase, uid, existing.phone, log);
+      return;
     }
     // Chưa biết SĐT → khớp theo thời gian: khách chỉ cần bấm Quan tâm
     const r = await tryApplyRewardByTiming(supabase, uid, log);
