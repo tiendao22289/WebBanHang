@@ -105,27 +105,6 @@ export async function sendOaText(supabase, userId, text, log = () => {}) {
   return sendOaMessage(supabase, userId, { text }, log);
 }
 
-/**
- * Gửi tin kèm nút "Chia sẻ số điện thoại" — khách bấm 1 cái là Zalo gửi SĐT
- * về webhook (event user_submit_info), khỏi phải gõ tay.
- */
-export async function sendOaRequestPhone(supabase, userId, title, subtitle, log = () => {}) {
-  // image_url phải là URL ảnh THẬT: gửi chuỗi rỗng bị Zalo trả về
-  // {"error":-201,"message":"image_url is not valid"} và không gửi được tin.
-  // Dùng icon có sẵn của web quán cho chắc chắn tồn tại.
-  const base = (process.env.NEXT_PUBLIC_BASE_URL || 'https://ocbaokhang.vercel.app')
-    .replace(/\/+$/, '');
-  return sendOaMessage(supabase, userId, {
-    attachment: {
-      type: 'template',
-      payload: {
-        template_type: 'request_user_info',
-        elements: [{ title, subtitle, image_url: `${base}/icon-192.png` }],
-      },
-    },
-  }, log);
-}
-
 async function sendOaMessage(supabase, userId, message, log = () => {}) {
   const accessToken = await getValidAccessToken(supabase);
   const res = await fetch(SEND_MESSAGE_URL, {

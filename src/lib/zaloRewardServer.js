@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { parseChannelConfig, calcReviewDiscount, getChannel } from '@/lib/reviewReward';
 import { luckyItemName, calcLuckyDiscount, LUCKY_SETTING_KEYS, parseLuckyConfig, isGiftPrizeType } from '@/lib/luckyWheel';
 import { sendGiftItemPrintJob } from '@/lib/print';
-import { sendOaText, sendOaRequestPhone } from '@/lib/zaloOa';
+import { sendOaText } from '@/lib/zaloOa';
 
 // Yêu cầu quá 30 phút không hoàn tất thì bỏ qua (khách đã rời quán / thử nghịch)
 export const CLAIM_FRESH_MINUTES = 30;
@@ -803,28 +803,11 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
       unfollowed_at: null,
       last_event_at: now,
     }, { onConflict: 'zalo_user_id' });
-    // Mời khách bấm NÚT chia sẻ SĐT. Gửi cho MỌI lượt quan tâm mới, kể cả khi
-    // quán đã lưu sẵn SĐT của tài khoản này: SĐT cũ có thể đã được gắn bằng
-    // cách ghép theo thời gian ở luồng quà Zalo nên chưa chắc đúng người, và
-    // để khách bấm một cái xác nhận vẫn nhanh hơn gõ tay. Phải đứng TRƯỚC
-    // nhánh `existing?.phone` bên dưới — nhánh đó return sớm nên đặt sau thì
-    // khách đã từng lưu SĐT sẽ không bao giờ nhận được tin.
-    // Gửi tin hỏng không được chặn luồng quà.
-    //
-    // Dùng TIN CHỮ chứ không dùng template request_user_info (nút "chia sẻ số
-    // điện thoại"): đo thực tế 13/09/2026 thấy Zalo nhận template và trả về
-    // thành công, nhưng KHÔNG render nút cho OA này — khách chỉ thấy tấm thẻ
-    // trống, còn khó hiểu hơn. Tin chữ thì chắc chắn hiển thị. sendOaRequestPhone
-    // vẫn giữ trong lib để bật lại khi OA được Zalo cấp quyền thu thập thông tin.
-    try {
-      await sendOaText(supabase, uid,
-        'Quán nhận được Quan tâm của Quý khách rồi ạ 🎁\n\n'
-        + 'Quý khách nhắn SỐ ĐIỆN THOẠI đã dùng để quay vào khung chat này, '
-        + 'quán ghi quà vào hoá đơn ngay nha!',
-        log);
-    } catch (err) {
-      log(`khong gui duoc tin huong dan nhan SDT: ${err.message}`);
-    }
+    // KHÔNG gửi tin hướng dẫn ở đây. Zalo đã tự gửi "Tin chào mừng" của OA
+    // đúng lúc khách bấm Quan tâm, nên gửi thêm sẽ ra hai tin chồng nhau, rối
+    // cho khách và tốn hạn mức tin của OA. Lời mời nhắn SĐT giờ nằm trong tin
+    // chào mừng (soạn ở trang quản lý OA). Tin xác nhận sau khi quà vào bill
+    // vẫn do hệ thống gửi — xem notifyLuckyPrizeApplied.
     // Existing phone mappings may have come from timing-based social rewards.
     // Wheel rewards require an explicit phone message for this interaction.
     if (existing?.phone) {
