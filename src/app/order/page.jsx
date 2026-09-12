@@ -2490,10 +2490,12 @@ function OrderContent() {
   function zaloOpenHref(cfg) {
     const oaid = (cfg?.url || '').match(/zalo\.me\/(\d{6,})/)?.[1];
     if (!oaid) return cfg?.url || '#';
-    // Android: intent:// mở thẳng app, kèm địa chỉ dự phòng nếu máy chưa có app
+    // Android: mở thẳng app Zalo qua App Link ĐÃ XÁC MINH của zalo.me (đáng tin
+    // hơn scheme tự chế zalo://conversation?oaid= — nhiều bản Zalo không đăng ký
+    // deep link đó nên Android bỏ qua, rơi về browser_fallback_url = web). Máy
+    // chưa cài Zalo → tự rơi về link web dự phòng.
     if (isAndroid) {
-      return `intent://conversation?oaid=${oaid}` +
-        `#Intent;scheme=zalo;package=com.zing.zalo;` +
+      return `intent://zalo.me/${oaid}#Intent;scheme=https;package=com.zing.zalo;` +
         `S.browser_fallback_url=${encodeURIComponent(cfg.url)};end`;
     }
     // iPhone + trong cửa sổ web của Zalo: universal link vô hiệu, và Zalo cũng
@@ -5028,7 +5030,18 @@ function OrderContent() {
               <div className="co-chal-modal-title">🎁 Vòng xoay may mắn</div>
               <div className="co-chal-scroll">
 
-                {wheelErr && <div role="alert" className="co-gmap-state co-gmap-warn">{wheelErr}</div>}
+                {wheelErr && (
+                  <div role="alert" style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    background: '#fff7ed', border: '2px solid #f59e0b', borderRadius: 14,
+                    padding: '14px 16px', margin: '2px 0 14px',
+                    fontSize: '1rem', fontWeight: 700, lineHeight: 1.5, color: '#92400e',
+                    boxShadow: '0 6px 18px rgba(245,158,11,0.28)',
+                  }}>
+                    <span style={{ fontSize: '1.6rem', flexShrink: 0, lineHeight: 1 }}>🔔</span>
+                    <span>{wheelErr}</span>
+                  </div>
+                )}
 
                 {!wheelPrize && <div className="co-chal-views">
                   👁 {featureViews.wheel ?? '…'} lượt xem
