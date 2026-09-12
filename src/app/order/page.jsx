@@ -1880,7 +1880,18 @@ function OrderContent() {
     try {
       const { data, error } = await supabase.rpc('get_my_lucky_spin', { p_spin_id: id }).maybeSingle();
       if (error) throw error;
-      if (!data) return;
+      // Lượt quay không còn tồn tại (quán đã xoá) → gỡ hẳn con trỏ đang lưu,
+      // nếu không máy khách gọi lại RPC này mỗi 7 giây mãi mãi (406/PGRST116)
+      // và bàn không bao giờ mời quay lại được. Lỗi đọc đã throw ở trên nên
+      // tới đây chắc chắn là hàng không có thật.
+      if (!data) {
+        try {
+          localStorage.removeItem(key);
+          localStorage.removeItem(`${key}_pending`);
+          localStorage.removeItem(`${key}_dismissed`);
+        } catch { }
+        return;
+      }
       let pendingId, dismissedId;
       try {
         pendingId = localStorage.getItem(`${key}_pending`);
@@ -1995,9 +2006,17 @@ function OrderContent() {
     // A customer tab may have been open before Admin disabled the setting.
     // Read current settings for each submitted order instead of cached state.
     const cfg = await fetchLuckyNudgeConfig(supabase).catch(() => null);
-    setLuckyWheelEnabled(!!cfg?.enabled);
-    setLuckyWheelAutoNudge(!!cfg?.autoNudge);
-    if (!cfg?.enabled || !cfg.autoNudge || cfg.minBill <= 0) {
+    // ĐỌC LỖI (null) ≠ ADMIN ĐÃ TẮT. Trước đây gộp chung nên chỉ cần rớt mạng
+    // một giây lúc khách gửi đơn là luckyWheelEnabled=false → nút 🎁 Vòng xoay
+    // biến mất, không quay lại tới khi tải lại trang. Giờ đọc lỗi thì giữ
+    // nguyên trạng thái đang có, chỉ không mời quay lần này.
+    if (!cfg) {
+      setShowLuckyNudge(false);
+      return;
+    }
+    setLuckyWheelEnabled(!!cfg.enabled);
+    setLuckyWheelAutoNudge(!!cfg.autoNudge);
+    if (!cfg.enabled || !cfg.autoNudge || cfg.minBill <= 0) {
       setShowLuckyNudge(false);
       return;
     }
@@ -2027,9 +2046,14 @@ function OrderContent() {
     // Recheck after the bill/prize reads; a setting changed during those
     // requests must not allow an already-in-flight invitation to appear.
     const latest = await fetchLuckyNudgeConfig(supabase).catch(() => null);
-    setLuckyWheelEnabled(!!latest?.enabled);
-    setLuckyWheelAutoNudge(!!latest?.autoNudge);
-    if (!latest?.enabled || !latest.autoNudge || latest.minBill <= 0 || total < latest.minBill) {
+    // Cùng lý do như lần đọc đầu: đọc lỗi thì đừng ẩn nút vòng xoay.
+    if (!latest) {
+      setShowLuckyNudge(false);
+      return;
+    }
+    setLuckyWheelEnabled(!!latest.enabled);
+    setLuckyWheelAutoNudge(!!latest.autoNudge);
+    if (!latest.enabled || !latest.autoNudge || latest.minBill <= 0 || total < latest.minBill) {
       setShowLuckyNudge(false);
       return;
     }
