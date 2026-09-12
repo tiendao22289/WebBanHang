@@ -5292,7 +5292,7 @@ function OrderContent() {
                 ) : (
                   <>
                     <div className="co-gmap-note" style={{ textAlign: 'center' }}>
-                      Quay là <b>chắc chắn có quà</b> — giảm tới <b>5% hoá đơn</b>,
+                      Quay là <b>chắc chắn có quà</b> — giảm tới <b>50% hoá đơn</b>,
                       nước ngọt hoặc một món 40–50k 🎁
                     </div>
 
