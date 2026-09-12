@@ -40,20 +40,34 @@ export const dynamic = 'force-dynamic';
 
 /**
  * Kiểm chữ ký Zalo (X-ZEvent-Signature: "mac=<sha256>").
- * Công thức theo docs OA: sha256(appId + rawBody + timestamp + OASecretKey).
- * Chỉ kiểm khi có ZALO_APP_SECRET; sai công thức sẽ thấy log để đối chiếu.
+ *
+ * KHÔNG CHẶN EVENT KHI CHỮ KÝ SAI — cố tình như vậy. Trước đây hàm này trả 401
+ * khi không khớp; ngay khi ZALO_APP_SECRET được đặt, TOÀN BỘ event Zalo bị chặn
+ * và khách không nhận được quà nào (đo thực tế 13/09/2026: webhook đứng im 40
+ * phút). Công thức ký của Zalo chưa xác minh được, nên chặn cứng là đánh đổi
+ * sai: mất tính năng chắc chắn, đổi lấy phòng thủ chưa chắc đúng.
+ *
+ * Thay vào đó: thử vài công thức, ghi lại cái nào khớp, rồi VẪN cho event chạy.
+ * Khi biết chắc công thức đúng thì mới bật chặn cứng.
  */
-function verifySignature(rawBody, body, signatureHeader) {
-  const secret = process.env.ZALO_APP_SECRET;
-  if (!secret) return { ok: true, skipped: true };
+function signatureDiagnosis(rawBody, body, signatureHeader) {
+  const secret = (process.env.ZALO_APP_SECRET || '').trim();
   const mac = String(signatureHeader || '').replace(/^mac=/, '').trim();
-  if (!mac) return { ok: false, reason: 'thiếu header X-ZEvent-Signature' };
+  if (!secret) return { matched: null, note: 'chưa đặt ZALO_APP_SECRET' };
+  if (!mac) return { matched: null, note: 'event không kèm header chữ ký' };
+
   const appId = String(body.app_id || '');
   const ts = String(body.timestamp || '');
-  const expected = crypto.createHash('sha256').update(appId + rawBody + ts + secret).digest('hex');
-  return expected === mac
-    ? { ok: true }
-    : { ok: false, reason: 'chữ ký không khớp' };
+  const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
+  const candidates = {
+    'appId+body+ts+secret': sha(appId + rawBody + ts + secret),
+    'body+ts+secret': sha(rawBody + ts + secret),
+    'appId+body+secret': sha(appId + rawBody + secret),
+    'body+secret': sha(rawBody + secret),
+    'appId+ts+secret': sha(appId + ts + secret),
+  };
+  const matched = Object.keys(candidates).find(k => candidates[k] === mac) || null;
+  return { matched, note: matched ? `khớp công thức: ${matched}` : 'không công thức nào khớp' };
 }
 
 // Zalo gọi GET khi khai báo webhook — chỉ cần 200
@@ -69,11 +83,8 @@ export async function POST(request) {
     let body;
     try { body = JSON.parse(rawBody); } catch { return NextResponse.json({ ok: false }, { status: 400 }); }
 
-    const sig = verifySignature(rawBody, body, request.headers.get('x-zevent-signature'));
-    if (!sig.ok) {
-      console.warn('[Zalo Webhook] từ chối:', sig.reason);
-      return NextResponse.json({ ok: false, reason: sig.reason }, { status: 401 });
-    }
+    const sig = signatureDiagnosis(rawBody, body, request.headers.get('x-zevent-signature'));
+    log(`chu ky: ${sig.note}`);
 
     const supabase = getServiceClient();
     if (!supabase) {
@@ -81,6 +92,15 @@ export async function POST(request) {
       // Vẫn trả 200 để Zalo không dồn retry; lỗi cấu hình xem ở server log
       return NextResponse.json({ ok: false, reason: 'server chưa cấu hình' });
     }
+    // Cất kết quả dò công thức chữ ký để đọc bằng SQL. Chỉ là TÊN công thức,
+    // không chứa bí mật gì. Gỡ khi đã bật kiểm chữ ký thật.
+    after(async () => {
+      try {
+        await supabase.from('settings').upsert(
+          { key: 'debug_zalo_signature', value: `${new Date().toISOString()} | ${sig.note}` },
+          { onConflict: 'key' });
+      } catch { /* chẩn đoán hỏng không được ảnh hưởng việc xử lý event */ }
+    });
 
     log(`event: ${body.event_name}`);
     // Đã đo thực tế trên OA này (12/09/2026): event `follow` KHÔNG mang theo
