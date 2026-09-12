@@ -810,13 +810,20 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
     // nhánh `existing?.phone` bên dưới — nhánh đó return sớm nên đặt sau thì
     // khách đã từng lưu SĐT sẽ không bao giờ nhận được tin.
     // Gửi tin hỏng không được chặn luồng quà.
+    //
+    // Dùng TIN CHỮ chứ không dùng template request_user_info (nút "chia sẻ số
+    // điện thoại"): đo thực tế 13/09/2026 thấy Zalo nhận template và trả về
+    // thành công, nhưng KHÔNG render nút cho OA này — khách chỉ thấy tấm thẻ
+    // trống, còn khó hiểu hơn. Tin chữ thì chắc chắn hiển thị. sendOaRequestPhone
+    // vẫn giữ trong lib để bật lại khi OA được Zalo cấp quyền thu thập thông tin.
     try {
-      await sendOaRequestPhone(supabase, uid,
-        'Nhận quà vòng xoay 🎁',
-        'Quý khách bấm nút bên dưới gửi số điện thoại đã quay, quán ghi quà vào hoá đơn ngay ạ!',
+      await sendOaText(supabase, uid,
+        'Quán nhận được Quan tâm của Quý khách rồi ạ 🎁\n\n'
+        + 'Quý khách nhắn SỐ ĐIỆN THOẠI đã dùng để quay vào khung chat này, '
+        + 'quán ghi quà vào hoá đơn ngay nha!',
         log);
     } catch (err) {
-      log(`khong gui duoc tin moi chia se SDT: ${err.message}`);
+      log(`khong gui duoc tin huong dan nhan SDT: ${err.message}`);
     }
     // Existing phone mappings may have come from timing-based social rewards.
     // Wheel rewards require an explicit phone message for this interaction.
