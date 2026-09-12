@@ -2068,35 +2068,29 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
    đây bánh xe 72vw đẩy form xuống dưới mép màn, khách tưởng không quay được. ── */
 @media (max-width: 560px) {
   .co-wheel-overlay {
-    padding: 6px;
-    padding-top: calc(6px + env(safe-area-inset-top, 0px));
-    padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+    padding: 4px;
+    padding-top: calc(4px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(4px + env(safe-area-inset-bottom, 0px));
   }
   .co-wheel-modal {
     max-width: none;
-    height: calc(100dvh - 12px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
-    max-height: calc(100dvh - 12px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    height: calc(100dvh - 8px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    max-height: calc(100dvh - 8px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
   }
   .co-wheel-modal .co-chal-modal-title { padding: 11px 44px 9px 14px; }
   .co-wheel-modal .co-chal-scroll { padding: 10px 12px 12px; }
   .co-wheel-modal .co-wheel-wrap {
-    width: min(56vw, 230px);
-    height: min(56vw, 230px);
+    /* Bánh xe TO NHẤT CÓ THỂ mà vẫn chừa đủ chỗ cho form nhập tên/SĐT và nút
+       QUAY NGAY (~400px). Màn càng cao bánh xe càng to; có mức sàn 210px để
+       chữ trên các ô quà luôn đọc được. */
+    --co-wheel-size: max(210px, min(74vw, calc(100dvh - 400px), 310px));
+    width: var(--co-wheel-size);
+    height: var(--co-wheel-size);
     margin: 2px auto 10px;
-    /* giữ đúng tỉ lệ nhãn/vành như cỡ gốc (28.5/72 ≈ 0.4) */
-    --co-wheel-label-r: min(22vw, 91px);
+    /* Nhãn nằm sát vành — giữ đúng tỉ lệ gốc (28.5/72 ≈ 0.395) */
+    --co-wheel-label-r: calc(var(--co-wheel-size) * 0.395);
   }
   .co-wheel-modal .co-wheel-note { margin-top: 6px; font-size: .76rem; }
-}
-
-/* Màn hình thấp (điện thoại nhỏ / bàn phím bật lên): thu bánh xe thêm nữa. */
-@media (max-width: 560px) and (max-height: 700px) {
-  .co-wheel-modal .co-wheel-wrap {
-    width: min(44vw, 180px);
-    height: min(44vw, 180px);
-    margin: 0 auto 8px;
-    --co-wheel-label-r: min(17.5vw, 71px);
-  }
 }
 .co-wheel-zalo-cta { margin-top: 12px; }
 .co-wheel-zalo-guide {
