@@ -91,6 +91,15 @@ export async function POST(request) {
     // tuyệt đối không in ra log. Gỡ khối này sau khi đã kiểm tra xong.
     if (body.event_name === 'follow' || body.event_name === 'unfollow') {
       console.log('[Zalo Webhook] RAW', body.event_name, 'payload:', JSON.stringify(body));
+      // Ghi luôn vào settings để đọc lại được bằng SQL (log Vercel khó lấy).
+      after(async () => {
+        try {
+          await supabase.from('settings').upsert(
+            { key: 'debug_last_follow_payload',
+              value: JSON.stringify({ at: new Date().toISOString(), event: body.event_name, body }) },
+            { onConflict: 'key' });
+        } catch (e) { console.error('[Zalo Webhook] ghi debug payload lỗi:', e); }
+      });
     }
     // Trả 200 NGAY cho Zalo (yêu cầu phản hồi < 2s), phần xử lý
     // (khớp SĐT, trừ tiền) chạy nền sau khi response đã gửi.
