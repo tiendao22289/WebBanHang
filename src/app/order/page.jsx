@@ -5066,7 +5066,7 @@ function OrderContent() {
 
         {/* ─── Overlay Vòng xoay may mắn ─── */}
         {wheelOpen && (
-          <div className="co-chal-overlay" onClick={dismissWheel}>
+          <div className="co-chal-overlay co-wheel-overlay" onClick={dismissWheel}>
             <div className="co-chal-modal co-wheel-modal" onClick={e => e.stopPropagation()}>
               {!wheelSpinning && (
                 <button className="co-chal-close" onClick={dismissWheel} disabled={wheelGiftPicking} aria-label="Đóng, để sau">
