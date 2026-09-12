@@ -132,8 +132,22 @@ async function sendOaMessage(supabase, userId, message, log = () => {}) {
   // error = 0 là thành công; khác 0 kèm message mô tả (hết quota, ngoài khung
   // thời gian được phép nhắn, chưa quan tâm...).
   if (!res.ok || (data && data.error !== 0)) {
-    log(`gui tin OA that bai: ${data ? JSON.stringify(data) : `HTTP ${res.status}`}`);
+    const detail = data ? JSON.stringify(data) : `HTTP ${res.status}`;
+    log(`gui tin OA that bai: ${detail}`);
+    // Cất lý do vào DB — log của máy chủ khó lấy, mà không biết Zalo từ chối
+    // vì sao thì không sửa được (hết quota / ngoài khung giờ / sai định dạng).
+    await recordSendError(supabase, detail);
     return { ok: false, detail: data };
   }
+  await recordSendError(supabase, null);
   return { ok: true, detail: data };
+}
+
+/** Ghi lý do gửi tin hỏng gần nhất (null = lần gần nhất gửi thành công). */
+async function recordSendError(supabase, detail) {
+  try {
+    await supabase.from('zalo_oa_tokens')
+      .update({ last_send_error: detail ? `${new Date().toISOString()} ${detail}`.slice(0, 1000) : null })
+      .eq('id', ROW_ID);
+  } catch { /* cột chưa tạo cũng không sao — đừng làm hỏng việc gửi tin */ }
 }
