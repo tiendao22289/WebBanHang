@@ -2168,3 +2168,174 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
 @media (prefers-reduced-motion: reduce) {
   .co-badge { animation: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   BẢN CHÚC MỪNG "8 MÓN TẶNG 1" — hiện khi khách đủ điểm, cho chọn quà ngay.
+   Dùng chung modal chọn quà (co-info-modal); khi ở chế độ chúc mừng thì
+   thêm class .co-gift-celebrate để bật hero vàng + pháo giấy.
+   ══════════════════════════════════════════════════════════════════════ */
+.co-gift-modal {
+  position: relative;
+  padding: 0 0 20px;                 /* hero tràn sát mép trên, phần dưới có đệm */
+  overflow: hidden;                  /* giữ pháo giấy trong khung bo góc */
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+.co-gift-modal .co-gift-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── Hero (đầu bản) ── */
+.co-gift-hero {
+  position: relative;
+  text-align: center;
+  padding: 26px 22px 22px;
+  background: linear-gradient(160deg, #ecfdf5 0%, #ffffff 100%);
+  border-bottom: 1px solid #eef2f7;
+  overflow: hidden;
+}
+.co-gift-celebrate .co-gift-hero {
+  background: linear-gradient(160deg, #fff7db 0%, #ffedd5 55%, #ffffff 100%);
+}
+.co-gift-hero-badge {
+  position: relative;
+  width: 84px; height: 84px;
+  margin: 2px auto 10px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 2.9rem;
+  background: radial-gradient(circle at 50% 40%, #ffffff, #fef3c7);
+  box-shadow: 0 8px 22px rgba(245, 158, 11, .35), inset 0 0 0 3px rgba(255,255,255,.9);
+}
+.co-gift-celebrate .co-gift-hero-badge {
+  animation: coGiftBadgePop .6s cubic-bezier(.34,1.56,.64,1) both;
+}
+.co-gift-hero-badge::after {                 /* vầng sáng nhấp nháy quanh quà */
+  content: '';
+  position: absolute; inset: -10px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(250,204,21,.45), transparent 70%);
+  z-index: -1;
+}
+.co-gift-celebrate .co-gift-hero-badge::after { animation: coGiftHalo 1.8s ease-in-out infinite; }
+
+.co-gift-hero h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 900;
+  letter-spacing: -.02em;
+  color: #b45309;
+}
+.co-gift-hero .co-gift-hero-sub {
+  margin: 7px 0 0;
+  font-size: 1.02rem;
+  font-weight: 800;
+  color: #15803d;
+}
+.co-gift-hero .co-gift-hero-sub b {
+  color: #dc2626;
+  font-size: 1.28rem;
+}
+.co-gift-hero .co-gift-hero-hint {
+  margin: 8px 0 0;
+  font-size: .82rem;
+  font-weight: 600;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+/* ── Danh sách món quà ── */
+.co-gift-list { padding: 12px 16px 4px; }
+.co-gift-empty {
+  text-align: center; color: #9ca3af; padding: 26px 10px; font-size: .9rem;
+}
+.co-gift-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: 1.5px solid #eef2f7;
+  border-radius: 14px;
+  background: #fff;
+  transition: border-color .15s, box-shadow .15s;
+}
+.co-gift-row.picked {
+  border-color: #6ee7b7;
+  box-shadow: 0 3px 12px rgba(16,185,129,.16);
+  background: #f0fdf4;
+}
+.co-gift-thumb {
+  width: 56px; height: 56px; border-radius: 11px; flex-shrink: 0;
+  overflow: hidden; background: #f1f5f9;
+  display: flex; align-items: center; justify-content: center; font-size: 1.6rem;
+}
+.co-gift-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.co-gift-info { flex: 1; min-width: 0; }
+.co-gift-name {
+  font-weight: 800; font-size: .95rem; color: #0f172a;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.co-gift-free-tag {
+  display: inline-block; margin-top: 3px;
+  font-size: .72rem; font-weight: 800; color: #15803d;
+  background: #dcfce7; border-radius: 6px; padding: 2px 8px;
+}
+.co-gift-stepper { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.co-gift-minus {
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 1.5px solid #e5e7eb; background: #fff; cursor: pointer;
+  font-size: 1.1rem; font-weight: 800; color: #374151;
+  display: flex; align-items: center; justify-content: center;
+}
+.co-gift-qty { font-weight: 800; min-width: 18px; text-align: center; font-size: 1rem; color: #0f172a; }
+.co-gift-add {
+  border: none; border-radius: 10px; padding: 9px 18px;
+  font-weight: 800; font-size: .88rem; cursor: pointer;
+  background: linear-gradient(135deg, #22c55e, #15803d); color: #fff;
+  box-shadow: 0 3px 10px rgba(22,163,74,.32);
+}
+.co-gift-add:disabled {
+  background: #e2e8f0; color: #94a3b8; cursor: not-allowed; box-shadow: none;
+}
+
+/* ── Nút dưới cùng ── */
+.co-gift-actions { padding: 8px 16px 0; display: flex; flex-direction: column; gap: 9px; }
+.co-gift-btn-primary {
+  width: 100%; padding: 14px; border: none; border-radius: 12px;
+  font-weight: 800; font-size: 1.02rem; cursor: pointer; color: #fff;
+  background: linear-gradient(135deg, #16a34a, #15803d);
+  box-shadow: 0 5px 14px rgba(22,163,74,.35);
+}
+.co-gift-btn-skip {
+  width: 100%; padding: 12px; border: none; border-radius: 12px;
+  font-weight: 700; font-size: .95rem; cursor: pointer;
+  color: #475569; background: #f1f5f9;
+}
+
+/* ── Pháo giấy (chỉ khi chúc mừng) ── */
+.co-gift-confetti { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 3; }
+.co-gift-confetti i {
+  position: absolute; top: -18px; width: 9px; height: 14px; border-radius: 2px;
+  opacity: 0; animation: coGiftConfetti linear infinite;
+}
+
+@keyframes coGiftBadgePop {
+  0%   { transform: scale(0) rotate(-25deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+@keyframes coGiftHalo {
+  0%, 100% { transform: scale(1);   opacity: .8; }
+  50%      { transform: scale(1.25); opacity: .35; }
+}
+@keyframes coGiftConfetti {
+  0%   { transform: translateY(0) rotate(0);       opacity: 0; }
+  8%   { opacity: 1; }
+  100% { transform: translateY(320px) rotate(540deg); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .co-gift-hero-badge, .co-gift-hero-badge::after, .co-gift-confetti i { animation: none !important; }
+  .co-gift-confetti { display: none; }
+}

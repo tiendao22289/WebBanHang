@@ -714,6 +714,16 @@ function OrderContent() {
 
   const [giftCart, setGiftCart] = useState([]); // { id, name, price:0, is_gift:true }
   const [showGiftModal, setShowGiftModal] = useState(false);
+  // Chế độ CHÚC MỪNG: bản chọn quà tự bật khi khách vừa đủ điểm, có hero vàng +
+  // pháo giấy. Tắt (mở từ bong bóng / lúc gửi đơn) thì hiện tiêu đề bình thường.
+  const [giftCelebrate, setGiftCelebrate] = useState(false);
+  // Mỗi suất quà (giftCount) chỉ tự bật bản chúc mừng ĐÚNG MỘT LẦN — tránh
+  // popup chen ngang lặp lại ở các lần gọi món sau (từng gây lỗi không in bill).
+  const celebratedSlotRef = useRef(0);
+  // Suất quà đang CHỜ chúc mừng (0 = không). Tách khỏi lúc "đủ điểm" để nếu ngay
+  // lúc đủ điểm khách đang bận (mở modal tuỳ chọn / đang gửi đơn) thì bản chúc
+  // mừng KHÔNG bị bỏ mất — nó chờ hết bận rồi mới bật.
+  const [pendingCelebrate, setPendingCelebrate] = useState(0);
   const [giftPromptPending, setGiftPromptPending] = useState(false); // đang chờ khách chọn quà để gửi đơn
   const [promoNudge, setPromoNudge] = useState(null); // { item, name, unitsNeeded } — gợi ý "gần đủ" điểm
   const nudgeDismissedRef = useRef(false); // khách đã bấm "bỏ qua" gợi ý → không hiện lại trong lần gửi này
@@ -3325,18 +3335,42 @@ function OrderContent() {
       setPromoCallout({ text: promoText, isGift: true });
       if (promoCalloutTimerRef.current) clearTimeout(promoCalloutTimerRef.current);
       promoCalloutTimerRef.current = setTimeout(() => setPromoCallout(null), 6000);
-      // KHÔNG tự bật gift modal — chỉ hiện toast/callout, để khách tự bấm bubble khi muốn.
-      // Auto-popup gây chen ngang flow order lần 2,3+ và có thể khiến bill không được in.
+      // Đánh dấu có suất quà mới cần chúc mừng. Việc BẬT bản chúc mừng do một
+      // effect riêng lo (xem bên dưới) — để nếu đang bận thì chờ, không bỏ mất.
+      if (giftCount > celebratedSlotRef.current) setPendingCelebrate(giftCount);
     } else if (giftCount < prev) {
       // Giảm: đóng toast và modal nếu đang mở
       setAdminUnlockToast(false);
+      // Khách bớt món làm rớt suất quà → cho phép chúc mừng lại nếu sau này
+      // họ đặt đủ trở lại (hạ mốc đã-chúc-mừng xuống bằng số suất hiện tại).
+      if (giftCount < celebratedSlotRef.current) celebratedSlotRef.current = giftCount;
+      if (pendingCelebrate > giftCount) setPendingCelebrate(giftCount > celebratedSlotRef.current ? giftCount : 0);
       if (giftCount === 0) {
         setShowGiftModal(false);
+        setGiftCelebrate(false);
       }
     }
 
     prevGiftCountRef.current = giftCount;
   }, [giftCount]);
+
+  // Bật BẢN CHÚC MỪNG khi có suất quà đang chờ VÀ không còn vướng luồng nào.
+  // Effect chạy lại mỗi khi một cờ "bận" đổi, nên vừa đóng modal tuỳ chọn / gửi
+  // đơn xong là bản chúc mừng bật ngay — không bị bỏ mất như cách gắn cứng vào
+  // lúc đủ điểm. Vẫn đảm bảo mỗi suất chỉ chúc mừng đúng 1 lần (celebratedSlotRef).
+  useEffect(() => {
+    if (!pendingCelebrate) return;
+    if (pendingCelebrate <= celebratedSlotRef.current) { setPendingCelebrate(0); return; }
+    // Không chen ngang: đang gửi đơn / màn cảm ơn / chọn tuỳ chọn món / đang ở
+    // luồng bắt chọn quà trước khi gửi / bản chúc mừng đã mở sẵn.
+    if (submitting || orderSuccess || optionModal || giftPromptPending || showGiftModal) return;
+    if (availableGiftSlots <= 0 || giftItems.length === 0) { setPendingCelebrate(0); return; }
+    celebratedSlotRef.current = pendingCelebrate;
+    setPendingCelebrate(0);
+    setGiftCelebrate(true);
+    setShowCart(false);
+    setShowGiftModal(true);
+  }, [pendingCelebrate, submitting, orderSuccess, optionModal, giftPromptPending, showGiftModal, availableGiftSlots, giftItems.length]);
 
   // Auto-trim giftCart if qualifyingQty drops (customer removed items)
   const [giftLostToast, setGiftLostToast] = useState(false);
@@ -4899,94 +4933,126 @@ function OrderContent() {
         )}
 
         {showGiftModal && (
-          <div className="co-modal-overlay" onClick={() => setShowGiftModal(false)}>
-            <div className="co-info-modal" style={{ maxHeight: '80vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
-              <div className="co-info-header" style={{ paddingBottom: 12 }}>
-                <div style={{ fontSize: '3.5rem' }}>🎁</div>
-                <h2 style={{ fontSize: '2rem', margin: 0, fontWeight: 900 }}>Chọn món tặng</h2>
-                <p style={{ margin: '8px 0 0', fontSize: '1.25rem', color: '#16a34a', fontWeight: 700 }}>
-                  Còn <b style={{ fontSize: '1.5rem', color: '#dc2626' }}>{availableGiftSlots}</b> lượt chọn miễn phí
-                </p>
-              </div>
-              <div style={{ padding: '0 16px 16px' }}>
-                {giftItems.length === 0 ? (
-                  <p style={{ textAlign: 'center', color: '#9ca3af', padding: 20 }}>Chưa có món tặng nào được cấu hình</p>
-                ) : giftItems.map(g => (
-                  <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: '1px solid #f3f4f6' }}>
-                    <div style={{ width: 48, height: 48, borderRadius: 8, background: '#f1f5f9', flexShrink: 0, overflow: 'hidden', position: 'relative' }}>
-                      {g.image_url
-                        ? <img src={g.image_url} alt={g.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        : <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.4rem' }}>🍽️</div>}
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{g.name}</div>
-                      <div style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 600 }}>Miễn phí 🎁</div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {(() => {
-                        const addedQty = giftCart.filter(x => x.id === g.id).length; return addedQty > 0 ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <button onClick={() => setGiftCart(prev => { const idx = prev.findLastIndex(x => x.id === g.id); return idx >= 0 ? prev.filter((_, i) => i !== idx) : prev; })} style={{ width: 28, height: 28, borderRadius: '50%', border: '1.5px solid #e5e7eb', background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '1rem', color: '#374151' }}>−</button>
-                            <span style={{ fontWeight: 700, minWidth: 18, textAlign: 'center', fontSize: '0.95rem' }}>{addedQty}</span>
-                          </div>
-                        ) : null;
-                      })()}
-                      <button
-                        disabled={availableGiftSlots === 0}
-                        onClick={() => {
-                          if (availableGiftSlots <= 0) return;
-                          if (g.options && g.options.length > 0) {
-                            setIsGiftMode(true);
-                            setOptionModal(g);
-                            setModalError('');
-                            const init = {};
-                            g.options.forEach(opt => {
-                              if (opt.name && opt.choices && opt.choices.length > 0) init[opt.name] = opt.choices[0];
-                            });
-                            setSelectedOpts(init);
-                            setOptionQty(1);
-                            setOptNote('');
-                          } else {
-                            // Thêm vào giftCart; nếu cart rỗng → tự động submit ngay
-                            const newGift = { id: g.id, name: g.name, price: 0, is_gift: true };
-                            const newGiftCart = [...giftCart, newGift];
-                            setGiftCart(newGiftCart);
-                            setShowGiftModal(false);
-                            if (cart.length === 0) {
-                              submitOrder(null, newGiftCart);
-                            }
-                          }
-                        }}
-                        style={{ background: availableGiftSlots > 0 ? '#16a34a' : '#e2e8f0', color: availableGiftSlots > 0 ? 'white' : '#94a3b8', border: 'none', borderRadius: 8, padding: '6px 14px', fontWeight: 700, fontSize: '0.82rem', cursor: availableGiftSlots > 0 ? 'pointer' : 'not-allowed' }}>
-                        + Thêm
-                      </button>
-                    </div>
+          <div className="co-modal-overlay" onClick={() => { setShowGiftModal(false); setGiftCelebrate(false); }}>
+            <div className={`co-info-modal co-gift-modal${giftCelebrate ? ' co-gift-celebrate' : ''}`} onClick={e => e.stopPropagation()}>
+              {/* ── Hero: chúc mừng (vàng + pháo giấy) hoặc chọn quà bình thường ── */}
+              <div className="co-gift-hero">
+                {giftCelebrate && (
+                  <div className="co-gift-confetti" aria-hidden="true">
+                    {Array.from({ length: 16 }).map((_, i) => {
+                      const colors = ['#facc15', '#22c55e', '#ef4444', '#38bdf8', '#fb923c', '#a855f7'];
+                      return <i key={i} style={{
+                        left: `${(i * 6.3 + 3) % 100}%`,
+                        background: colors[i % colors.length],
+                        animationDuration: `${2.2 + (i % 5) * 0.35}s`,
+                        animationDelay: `${(i % 7) * 0.18}s`,
+                      }} />;
+                    })}
                   </div>
-                ))}
+                )}
+                <div className="co-gift-hero-badge">{giftCelebrate ? '🎉' : '🎁'}</div>
+                <h2>{giftCelebrate ? 'Chúc mừng Quý khách!' : 'Chọn món tặng'}</h2>
+                <p className="co-gift-hero-sub">
+                  {giftCelebrate
+                    ? <>Quý khách được tặng <b>{availableGiftSlots}</b> món miễn phí 🎁</>
+                    : <>Còn <b>{availableGiftSlots}</b> lượt chọn miễn phí</>}
+                </p>
+                <div className="co-gift-hero-hint">
+                  {giftCelebrate
+                    ? 'Mời Quý khách chọn món quà bên dưới — hoặc để sau cũng được ạ.'
+                    : 'Chọn món quà Quý khách muốn nhận.'}
+                </div>
               </div>
-              <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+
+              {/* ── Danh sách món quà (cuộn được) ── */}
+              <div className="co-gift-scroll">
+                <div className="co-gift-list">
+                  {giftItems.length === 0 ? (
+                    <p className="co-gift-empty">Chưa có món tặng nào được cấu hình</p>
+                  ) : giftItems.map(g => {
+                    const addedQty = giftCart.filter(x => x.id === g.id).length;
+                    const canAdd = availableGiftSlots > 0;
+                    return (
+                      <div key={g.id} className={`co-gift-row${addedQty > 0 ? ' picked' : ''}`}>
+                        <div className="co-gift-thumb">
+                          {g.image_url
+                            ? <img src={g.image_url} alt={g.name} />
+                            : <span>🍽️</span>}
+                        </div>
+                        <div className="co-gift-info">
+                          <div className="co-gift-name">{g.name}</div>
+                          <span className="co-gift-free-tag">Miễn phí 🎁</span>
+                        </div>
+                        <div className="co-gift-stepper">
+                          {addedQty > 0 && (
+                            <>
+                              <button
+                                className="co-gift-minus"
+                                onClick={() => setGiftCart(prev => { const idx = prev.findLastIndex(x => x.id === g.id); return idx >= 0 ? prev.filter((_, i) => i !== idx) : prev; })}
+                                aria-label="Bớt"
+                              >−</button>
+                              <span className="co-gift-qty">{addedQty}</span>
+                            </>
+                          )}
+                          <button
+                            className="co-gift-add"
+                            disabled={!canAdd}
+                            onClick={() => {
+                              if (!canAdd) return;
+                              if (g.options && g.options.length > 0) {
+                                setIsGiftMode(true);
+                                setOptionModal(g);
+                                setModalError('');
+                                const init = {};
+                                g.options.forEach(opt => {
+                                  if (opt.name && opt.choices && opt.choices.length > 0) init[opt.name] = opt.choices[0];
+                                });
+                                setSelectedOpts(init);
+                                setOptionQty(1);
+                                setOptNote('');
+                              } else {
+                                // Thêm vào giftCart; nếu cart rỗng → tự động submit ngay
+                                const newGift = { id: g.id, name: g.name, price: 0, is_gift: true };
+                                const newGiftCart = [...giftCart, newGift];
+                                setGiftCart(newGiftCart);
+                                setShowGiftModal(false);
+                                setGiftCelebrate(false);
+                                if (cart.length === 0) {
+                                  submitOrder(null, newGiftCart);
+                                }
+                              }
+                            }}
+                          >
+                            {addedQty > 0 ? '+ Thêm' : 'Chọn'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* ── Nút dưới cùng ── */}
+              <div className="co-gift-actions">
                 {giftPromptPending && (
                   <button
-                    onClick={() => { setShowGiftModal(false); submitOrder(); }}
-                    style={{
-                      width: '100%', padding: '13px',
-                      background: 'linear-gradient(135deg, #16a34a, #15803d)',
-                      border: 'none', borderRadius: 10, fontWeight: 700,
-                      cursor: 'pointer', color: 'white', fontSize: '1rem',
-                      boxShadow: '0 4px 12px rgba(22,163,74,0.35)',
-                    }}
+                    className="co-gift-btn-primary"
+                    onClick={() => { setShowGiftModal(false); setGiftCelebrate(false); submitOrder(); }}
                   >
                     ✅ Xác nhận & Gửi đơn
                   </button>
                 )}
                 <button
+                  className="co-gift-btn-skip"
                   onClick={() => {
                     setShowGiftModal(false);
+                    setGiftCelebrate(false);
                     if (giftPromptPending) { setGiftPromptPending(false); submitOrder(); }
                   }}
-                  style={{ width: '100%', padding: '11px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', color: '#374151' }}
                 >
-                  {giftPromptPending ? 'Bỏ qua, gửi không cần quà' : 'Đóng'}
+                  {giftPromptPending
+                    ? 'Bỏ qua, gửi không cần quà'
+                    : giftCelebrate ? 'Để sau 👋' : 'Đóng'}
                 </button>
               </div>
             </div>
