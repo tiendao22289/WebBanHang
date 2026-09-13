@@ -52,6 +52,8 @@ export default function SettingsPage() {
   const [wheelDrinkSearch, setWheelDrinkSearch] = useState('');
   const [wheelDrinkSaving, setWheelDrinkSaving] = useState(false);
   const [showDrinkPicker, setShowDrinkPicker] = useState(false);
+  // Cơ cấu quà thu gọn — mặc định đóng cho đỡ rối (15 quà rất dài), bấm mới mở.
+  const [showPrizes, setShowPrizes] = useState(false);
 
   // Nút ưu đãi trang khách (Thử thách / Đặt tiệc) — bật/tắt
   const [featureCfg, setFeatureCfg] = useState({ challenge: true, party: true });
@@ -300,6 +302,23 @@ export default function SettingsPage() {
         }];
       }))
     );
+  }
+
+  // Bật/tắt kênh bằng công tắc. Vì khi TẮT ta ẩn luôn cả nút "Lưu cấu hình",
+  // nên phải lưu ngay cờ tắt tại đây để nó có hiệu lực. Khi BẬT thì chỉ hiện
+  // form ra cho chủ quán chỉnh link/% rồi bấm Lưu như cũ (không tự lưu vì link
+  // có thể còn trống — saveRewardChannel sẽ chặn nếu bật mà thiếu link).
+  async function toggleChannelEnabled(ch) {
+    const next = !channelForms[ch.key]?.enabled;
+    setChannelField(ch.key, 'enabled', next);
+    if (next) return;
+    const key = `${ch.prefix}_enabled`;
+    const { error } = await supabase.from('settings').upsert({ key, value: 'false' }, { onConflict: 'key' });
+    if (error) {
+      await supabase.from('settings').delete().eq('key', key);
+      await supabase.from('settings').insert({ key, value: 'false' });
+    }
+    flash(`Đã tắt ${ch.name}.`);
   }
 
   async function saveRewardChannel(ch) {
@@ -956,11 +975,30 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        {/* Cơ cấu quà */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+        {/* Cơ cấu quà — thu gọn: bấm tiêu đề mới mở danh sách quà ra để chỉnh,
+            cho đỡ rối vì có tới 15 quà kéo dài cả trang. */}
+        <button
+          type="button"
+          onClick={() => setShowPrizes(s => !s)}
+          style={{
+            width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 10, background: 'white', border: '1.5px solid #fed7aa', borderRadius: 12,
+            padding: '12px 14px', cursor: 'pointer', textAlign: 'left',
+            boxShadow: '0 2px 10px rgba(15,23,42,0.05)',
+          }}
+        >
           <div style={{ fontWeight: 800, fontSize: '0.95rem', color: '#0f172a' }}>
-            Cơ cấu quà ({prizes.filter(p => p.is_active).length} đang bật)
+            🎁 Cơ cấu quà ({prizes.filter(p => p.is_active).length} đang bật)
           </div>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem', fontWeight: 700, color: '#b45309' }}>
+            {showPrizes ? 'Thu gọn' : 'Mở ra chỉnh'}
+            <span style={{ display: 'inline-block', transform: showPrizes ? 'rotate(90deg)' : 'none', transition: 'transform .2s' }}>›</span>
+          </span>
+        </button>
+
+        {showPrizes && (
+        <div style={{ marginTop: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
           <button
             onClick={addPrize}
             style={{ padding: '8px 14px', background: '#ecfdf5', border: '1.5px solid #6ee7b7', borderRadius: 8, cursor: 'pointer', fontSize: '0.8rem', fontWeight: 700, color: '#065f46' }}
@@ -1105,6 +1143,8 @@ export default function SettingsPage() {
             })}
           </>
         )}
+        </div>
+        )}
       </div>
 
       {/* Modal chọn danh sách "nước tặng" — chỉ mở khi bấm nút trên quà Tặng nước */}
@@ -1205,7 +1245,7 @@ export default function SettingsPage() {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div
-                    onClick={() => setChannelField(ch.key, 'enabled', !form.enabled)}
+                    onClick={() => toggleChannelEnabled(ch)}
                     style={{ position: 'relative', width: 44, height: 24, background: form.enabled ? theme.main : '#d1d5db', borderRadius: 12, cursor: 'pointer', transition: 'background 0.2s', flexShrink: 0 }}
                   >
                     <div style={{ position: 'absolute', top: 2, left: form.enabled ? 22 : 2, width: 20, height: 20, background: 'white', borderRadius: '50%', transition: 'left 0.2s' }} />
@@ -1216,6 +1256,9 @@ export default function SettingsPage() {
                 </div>
               </div>
 
+              {/* Kênh TẮT thì ẩn hết cấu hình cho gọn — chỉ chừa tiêu đề + công tắc.
+                  Bật lên mới hiện link, %, trần giảm... để chỉnh. */}
+              {form.enabled && (<>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
                 <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#374151' }}>Link {ch.short} *</label>
                 <input value={form.url || ''} onChange={e => setChannelField(ch.key, 'url', e.target.value)}
@@ -1250,6 +1293,7 @@ export default function SettingsPage() {
                 style={{ padding: '8px 16px', background: theme.main, color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 700, opacity: saving ? 0.7 : 1 }}>
                 {saving ? 'Đang lưu...' : '💾 Lưu cấu hình'}
               </button>
+              </>)}
             </div>
           );
         })}
