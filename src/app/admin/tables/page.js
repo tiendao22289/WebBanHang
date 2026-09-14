@@ -1841,10 +1841,34 @@ export default function TablesPage() {
 
   async function performDeleteItem(orderId, itemId) {
     setConfirmDelete(null);
+
+    // QUÀ VÒNG XOAY: xoá thẳng bằng anon sẽ bị trang khách (claim-ready) ghi lại
+    // vì lượt quay vẫn 'applied'. Phải xoá qua server để khoá lượt quay trước.
+    const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
+    const target = (orderNow?.order_items || []).find(i => i.id === itemId);
+    if (target && isLuckyWheelOutcome(target)) {
+      try {
+        const res = await fetch('/api/admin/lucky-remove-gift', {
+          method: 'POST', headers: staffApiHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ orderId, itemId }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.ok) {
+          Swal.fire({ icon: 'error', title: 'Chưa xoá được quà', text: data.message || 'Vui lòng thử lại.' });
+          return;
+        }
+      } catch (e) {
+        console.error('[performDeleteItem] lucky gift', e);
+        Swal.fire({ icon: 'error', title: 'Lỗi mạng', text: 'Không xoá được quà, thử lại giúp ạ.' });
+        return;
+      }
+      await fetchOrdersOnly();
+      return;
+    }
+
     await supabase.from('order_items').delete().eq('id', itemId);
 
     // Tính total locally: bỏ item vừa xóa ra khỏi mảng hiện tại
-    const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
     const newTotal = (orderNow?.order_items || [])
       .filter(i => i.id !== itemId)
       .reduce((s, i) => s + i.unit_price * i.quantity, 0);

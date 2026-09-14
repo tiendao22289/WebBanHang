@@ -767,6 +767,36 @@ export async function grantLuckySpinManually(supabase, spinId, log = () => {}) {
 }
 
 /**
+ * Nhân viên XOÁ một dòng QUÀ VÒNG XOAY khỏi bill.
+ *
+ * VÌ SAO PHẢI QUA SERVER (không xoá thẳng bằng anon như món thường): dòng quà
+ * này gắn với một lượt quay đã 'applied' (lucky_spins.applied_item_id = id dòng).
+ * Nếu chỉ xoá dòng, trang khách còn mở sẽ gọi /api/lucky/claim-ready, thấy lượt
+ * vẫn 'applied' → completeLuckySpin → finalizeGiftItem không thấy dòng cũ nên
+ * CHÈN LẠI quà → "xoá không được". Ở đây ta KHOÁ lượt quay lại trước, rồi mới
+ * xoá, để không bị ghi lại. Giữ nguyên applied_item_id (trỏ tới dòng vừa xoá)
+ * để lượt này KHÔNG hiện lại trong danh sách chờ của admin (bộ lọc applied_item_id IS NULL).
+ */
+export async function removeLuckyGiftItem(supabase, orderId, itemId) {
+  // 1) Khoá lượt quay tương ứng (nếu có) để claim-ready/webhook không tái tạo quà.
+  await supabase.from('lucky_spins')
+    .update({ status: 'blocked', block_reason: 'Nhân viên đã xoá quà khỏi bill' })
+    .eq('applied_item_id', itemId).eq('status', 'applied');
+
+  // 2) Xoá dòng quà.
+  const { error: delErr } = await supabase.from('order_items').delete().eq('id', itemId);
+  if (delErr) throw new Error(`Không xoá được dòng quà: ${delErr.message}`);
+
+  // 3) Tính lại tổng bill từ các dòng còn lại.
+  const { data: items, error: itemsErr } = await supabase.from('order_items')
+    .select('unit_price, quantity').eq('order_id', orderId);
+  if (itemsErr) throw itemsErr;
+  const newTotal = (items || []).reduce((s, i) => s + Number(i.unit_price) * Number(i.quantity), 0);
+  await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+  return { ok: true };
+}
+
+/**
  * Danh sách lượt quay CHƯA vào bill trong ngày (theo giờ VN) để trang admin
  * hiển thị trạng thái/lỗi trên từng bàn. Trả kèm tên/SĐT cho nhân viên phục
  * vụ (route gọi bằng SERVICE_ROLE_KEY, không lộ ra anon). Mỗi lượt gắn 1

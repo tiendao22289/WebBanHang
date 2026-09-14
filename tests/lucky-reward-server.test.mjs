@@ -40,6 +40,7 @@ function database(spin = spinTemplate) {
       limit(n) { max = n; return q; },
       update(v) { op = 'update'; values = v; return q; },
       insert(v) { op = 'insert'; values = v; return q; },
+      delete() { op = 'delete'; return q; },
       maybeSingle() { single = true; return q; },
       async then(resolve, reject) {
         try {
@@ -55,6 +56,7 @@ function database(spin = spinTemplate) {
             if (state[table].some(r => r.id === values.id)) return resolve({ data: null, error: { code: '23505' } });
             rows = [structuredClone(values)]; state[table].push(rows[0]);
           } else if (op === 'update') rows.forEach(r => Object.assign(r, structuredClone(values)));
+          else if (op === 'delete') { const del = new Set(rows.map(r => r.id)); state[table] = state[table].filter(r => !del.has(r.id)); }
           const result = structuredClone(rows);
           if (table === 'order_items') result.forEach(r => { r.menu_item = state.menu_items.find(m => m.id === r.menu_item_id); });
           resolve({ data: single ? result[0] ?? null : result, error: null });
@@ -67,7 +69,7 @@ function database(spin = spinTemplate) {
   // Mock sendOaText: ghi lại tin đã gửi để kiểm "nhắn đúng 1 lần".
   const sentMessages = [];
   const sendOaText = async (_sb, userId, text) => { sentMessages.push({ userId, text }); return { ok: true }; };
-  const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyForSpin, grantLuckySpinManually })`, {
+  const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyForSpin, grantLuckySpinManually, removeLuckyGiftItem })`, {
     ...wheel, sendGiftItemPrintJob: print, sendOaText, console: { log() {}, error() {} }, Date, Set,
   });
   return { state, fail, db, sentMessages, ...funcs };
@@ -291,4 +293,22 @@ test('a failed OA send releases notified_at so a later retry can deliver', async
   h.state.lucky_spins[0].notified_at = null; // giả lập lần trước gửi hỏng đã nhả cờ
   await h.completeLuckySpin(h.db, spin);
   assert.equal(h.sentMessages.length, 2); // gửi lại được sau khi cờ nhả
+});
+
+test('removing a lucky-wheel gift deletes the line and blocks the spin so it cannot be re-added', async () => {
+  const spin = { ...spinTemplate };
+  const h = database(spin);
+  // Quà đã vào bill: 1 dòng order_items id = spin.id, note của vòng xoay, applied_item_id = spin.id.
+  h.state.order_items.push({ id: 'spin', order_id: 'order', menu_item_id: 'drink', quantity: 3, unit_price: 0, is_gift: true, note: 'Quà tặng từ vòng quay may mắn' });
+  h.state.lucky_spins[0].applied_item_id = 'spin';
+
+  await h.removeLuckyGiftItem(h.db, 'order', 'spin');
+
+  // Dòng quà đã bị xoá khỏi bill.
+  assert.equal(h.state.order_items.some(i => i.id === 'spin'), false);
+  // Lượt quay bị khoá → claim-ready (chỉ re-finalize khi status==='applied') sẽ KHÔNG ghi lại.
+  assert.equal(h.state.lucky_spins[0].status, 'blocked');
+  assert.equal(h.state.lucky_spins[0].block_reason, 'Nhân viên đã xoá quà khỏi bill');
+  // Giữ applied_item_id (không null) → admin không thấy lượt này hiện lại trong danh sách chờ.
+  assert.equal(h.state.lucky_spins[0].applied_item_id, 'spin');
 });
