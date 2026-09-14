@@ -859,7 +859,26 @@ export async function listAdminLuckySpins(supabase) {
   let { data, error } = await query(LUCKY_SPIN_COLS_FULL);
   if (error) ({ data, error } = await query(LUCKY_SPIN_COLS));
   if (error) throw error;
-  return (data || []).map(mapLuckySpinRow);
+  const rows = data || [];
+
+  // CHỈ hiện lượt của PHIÊN ĐANG NGỒI: bàn trống/đã đóng thì ẩn hết lượt cũ,
+  // và bàn đã có khách mới vào thì chỉ hiện lượt tạo SAU khi khách mới ngồi
+  // (occupied_at) — tránh chồng chéo khách cũ ↔ khách mới trên cùng một mã bàn.
+  const hostIds = [...new Set(rows.map(r => r.host_table_id).filter(Boolean))];
+  let tableById = {};
+  if (hostIds.length) {
+    const { data: tbls } = await supabase.from('tables')
+      .select('id, occupied_at, table_type').in('id', hostIds);
+    tableById = Object.fromEntries((tbls || []).map(t => [t.id, t]));
+  }
+  const inCurrentSession = (s) => {
+    const t = tableById[s.host_table_id];
+    if (!t) return true;                            // không rõ bàn → cứ hiện (an toàn)
+    if (t.table_type === 'takeaway') return true;   // mang về: khớp theo SĐT, không theo phiên bàn
+    if (!t.occupied_at) return false;               // bàn trống/đã đóng → ẩn lượt cũ
+    return new Date(s.created_at) >= new Date(t.occupied_at);
+  };
+  return rows.filter(inCurrentSession).map(mapLuckySpinRow);
 }
 
 /**

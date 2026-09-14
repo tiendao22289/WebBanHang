@@ -336,3 +336,21 @@ test('guest who has not tapped Quan tam yet shows adminState waiting', async () 
   const list = await h.listAdminLuckySpins(h.db);
   assert.equal(list[0].adminState, 'waiting');
 });
+
+test('an empty/closed table hides its old pending spins (no overlap with next guest)', async () => {
+  const spin = { ...spinTemplate, status: 'waiting_follow', zalo_user_id: null,
+    applied_item_id: null, gift_menu_item_id: null, follow_prompt_at: now };
+  const h = database(spin);
+  h.state.tables[0].occupied_at = null; // bàn đã đóng / trống
+  const list = await h.listAdminLuckySpins(h.db);
+  assert.equal(list.length, 0);
+});
+
+test('a previous-session spin is hidden after a new guest sits at the same table', async () => {
+  const spin = { ...spinTemplate, status: 'applied', applied_item_id: null,
+    created_at: new Date(Date.now() - 120000).toISOString() }; // lượt cũ 2 phút trước
+  const h = database(spin);
+  h.state.tables[0].occupied_at = new Date().toISOString();    // khách mới vừa ngồi
+  const list = await h.listAdminLuckySpins(h.db);
+  assert.equal(list.length, 0);
+});
