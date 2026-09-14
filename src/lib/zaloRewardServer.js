@@ -743,28 +743,59 @@ export async function grantLuckySpinManually(supabase, spinId, log = () => {}) {
  *  - 'waiting' : đang chờ khách Quan tâm Zalo.
  *  - 'blocked' : bị chặn (đã nhận gần đây / bill đóng...).
  */
-export async function listAdminLuckySpins(supabase) {
+const LUCKY_SPIN_COLS = 'id, table_id, host_table_id, customer_name, customer_phone, prize_type, prize_value, prize_label, status, zalo_user_id, gift_menu_item_id, applied_item_id, block_reason, created_at';
+
+function mapLuckySpinRow(s) {
+  const followConfirmed = !!s.zalo_user_id || s.status === 'applied';
+  const adminState = s.status === 'blocked' ? 'blocked'
+    : followConfirmed ? 'error' : 'waiting';
+  return {
+    id: s.id, tableId: s.table_id, hostTableId: s.host_table_id,
+    customerName: s.customer_name, customerPhone: s.customer_phone,
+    prizeType: s.prize_type, prizeValue: s.prize_value, prizeLabel: s.prize_label,
+    status: s.status, adminState, followConfirmed,
+    giftChosen: !!s.gift_menu_item_id, blockReason: s.block_reason, createdAt: s.created_at,
+  };
+}
+
+/** Đầu ngày hôm nay theo giờ VN (UTC+7), dạng ISO — mốc lọc "hôm nay". */
+function startOfVnTodayISO() {
   const vnDayKey = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
-  const startOfToday = new Date(`${vnDayKey}T00:00:00.000+07:00`).toISOString();
+  return new Date(`${vnDayKey}T00:00:00.000+07:00`).toISOString();
+}
+
+export async function listAdminLuckySpins(supabase) {
   const { data, error } = await supabase.from('lucky_spins')
-    .select('id, table_id, host_table_id, customer_name, customer_phone, prize_type, prize_value, prize_label, status, zalo_user_id, gift_menu_item_id, applied_item_id, block_reason, created_at')
-    .gte('created_at', startOfToday)
+    .select(LUCKY_SPIN_COLS)
+    .gte('created_at', startOfVnTodayISO())
     .is('applied_item_id', null)
     .in('status', ['waiting_follow', 'applied', 'blocked'])
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return (data || []).map(s => {
-    const followConfirmed = !!s.zalo_user_id || s.status === 'applied';
-    const adminState = s.status === 'blocked' ? 'blocked'
-      : followConfirmed ? 'error' : 'waiting';
-    return {
-      id: s.id, tableId: s.table_id, hostTableId: s.host_table_id,
-      customerName: s.customer_name, customerPhone: s.customer_phone,
-      prizeType: s.prize_type, prizeValue: s.prize_value, prizeLabel: s.prize_label,
-      status: s.status, adminState, followConfirmed,
-      giftChosen: !!s.gift_menu_item_id, blockReason: s.block_reason, createdAt: s.created_at,
-    };
-  });
+  return (data || []).map(mapLuckySpinRow);
+}
+
+/**
+ * Lượt quay KẸT từ các NGÀY TRƯỚC — trúng quà nhưng tới giờ vẫn chưa vào bill.
+ *
+ * VÌ SAO TÁCH RIÊNG khỏi badge trên thẻ bàn: mã bàn được dùng lại giữa các ngày,
+ * nên KHÔNG được gắn lượt cũ lên thẻ bàn hiện tại (sẽ hiện nhầm người). Nhóm này
+ * chỉ hiện trong một danh sách riêng để admin xử lý nốt, không sót quà của khách.
+ * Ưu tiên nhóm 'error' (đã Quan tâm nhưng quà chưa vào bill) — mới thật sự cần xử lý.
+ */
+export async function listStuckLuckySpins(supabase, limit = 300) {
+  const { data, error } = await supabase.from('lucky_spins')
+    .select(LUCKY_SPIN_COLS)
+    .lt('created_at', startOfVnTodayISO())
+    .is('applied_item_id', null)
+    .in('status', ['waiting_follow', 'applied', 'blocked'])
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  const rank = { error: 3, waiting: 2, blocked: 1 };
+  return (data || []).map(mapLuckySpinRow)
+    .sort((a, b) => (rank[b.adminState] || 0) - (rank[a.adminState] || 0)
+      || (b.createdAt || '').localeCompare(a.createdAt || ''));
 }
 
 // An anonymous follow event cannot identify a wheel customer. Never guess by

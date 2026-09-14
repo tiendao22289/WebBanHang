@@ -8,7 +8,7 @@
  * admin không đọc thẳng bảng được. Route này chạy bằng SERVICE_ROLE_KEY.
  */
 import { NextResponse } from 'next/server';
-import { getServiceClient, listAdminLuckySpins } from '@/lib/zaloRewardServer';
+import { getServiceClient, listAdminLuckySpins, listStuckLuckySpins } from '@/lib/zaloRewardServer';
 import { isAdminRequest } from '@/lib/adminApiAuth';
 
 export const dynamic = 'force-dynamic';
@@ -16,15 +16,20 @@ export const dynamic = 'force-dynamic';
 export async function GET(request) {
   // Trả về tên + SĐT khách → bắt buộc phải là nhân viên đã đăng nhập.
   if (!(await isAdminRequest(request))) {
-    return NextResponse.json({ ok: false, spins: [] }, { status: 401 });
+    return NextResponse.json({ ok: false, spins: [], stuck: [] }, { status: 401 });
   }
   const supabase = getServiceClient();
-  if (!supabase) return NextResponse.json({ ok: false, spins: [] });
+  if (!supabase) return NextResponse.json({ ok: false, spins: [], stuck: [] });
   try {
-    const spins = await listAdminLuckySpins(supabase);
-    return NextResponse.json({ ok: true, spins });
+    // spins = của HÔM NAY (gắn badge lên thẻ bàn) · stuck = kẹt từ NGÀY TRƯỚC
+    // (danh sách riêng, không gắn lên thẻ bàn vì mã bàn dùng lại giữa các ngày).
+    const [spins, stuck] = await Promise.all([
+      listAdminLuckySpins(supabase),
+      listStuckLuckySpins(supabase),
+    ]);
+    return NextResponse.json({ ok: true, spins, stuck });
   } catch (err) {
     console.error('[admin/lucky-status] lỗi:', err);
-    return NextResponse.json({ ok: false, spins: [] });
+    return NextResponse.json({ ok: false, spins: [], stuck: [] });
   }
 }
