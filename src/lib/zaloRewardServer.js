@@ -489,6 +489,11 @@ export async function pickGiftItem(supabase, spinId, menuItemId, itemOptions, lo
     if (!item) {
       return { ok: false, applied: false, message: 'Quà chưa được ghi vào hoá đơn. Quý khách bấm chọn lại món để thử nhận quà lần nữa, hoặc gọi nhân viên giúp nhé!' };
     }
+    // Quà vừa vào bill ở ĐÂY (không qua completeLuckySpin) → phải TỰ nhắn tin
+    // chúc mừng, nếu không nhánh "chọn quà sau khi đã Quan tâm Zalo" sẽ có quà
+    // mà khách không nhận được tin (đúng lỗi chủ quán báo). notifyLuckyPrizeApplied
+    // có CAS notified_at nên không trùng với tin của đường webhook follow.
+    await notifyLuckyPrizeApplied(supabase, saved, log);
     return { ok: true, applied: true };
   }
 
@@ -507,20 +512,48 @@ export async function pickGiftItem(supabase, spinId, menuItemId, itemOptions, lo
  */
 async function notifyLuckyPrizeApplied(supabase, spin, log = () => {}) {
   if (!spin?.zalo_user_id) return; // cấp tay / chưa gắn Zalo thì không có ai để nhắn
+  // claimedNotify = ta đã CHIẾM quyền gửi (set notified_at) nhưng chưa gửi xong;
+  // nếu gửi hỏng phải nhả cờ ở finally để lần sau còn thử lại, khỏi mất tin.
+  let claimedNotify = false;
   try {
     // Đọc lại từ DB: số tiền giảm do RPC tính, bản ghi truyền vào có thể cũ.
+    // KHÔNG select notified_at ở đây để không vỡ nếu migration chưa chạy.
     const { data: fresh } = await supabase.from('lucky_spins')
       .select('prize_label, discount_amount, applied_item_id').eq('id', spin.id).maybeSingle();
     if (!fresh?.applied_item_id) return; // chưa thật sự vào bill thì đừng báo nhầm
+
+    // NHẮN ĐÚNG 1 LẦN: compare-and-set nguyên tử. Hàm này bị gọi từ nhiều đường
+    // cho cùng 1 lượt (webhook follow bắn lại, client poll claim-ready, và nhánh
+    // pickGiftItem khi khách chọn quà sau follow), nên chỉ luồng THẮNG CAS mới gửi.
+    // Nếu cột notified_at CHƯA tồn tại (migration lucky_wheel_notify_once.sql chưa
+    // chạy) thì update lỗi → KHÔNG chặn tin: gửi theo kiểu cũ (thà hiếm khi trùng
+    // còn hơn nuốt mất tin của khách). Sau khi chạy migration là hết trùng.
+    const { data: claimed, error: casErr } = await supabase.from('lucky_spins')
+      .update({ notified_at: new Date().toISOString() })
+      .eq('id', spin.id).is('notified_at', null).select('id').maybeSingle();
+    if (!casErr) {
+      if (!claimed) return;  // luồng khác đã/đang gửi rồi
+      claimedNotify = true;
+    } else {
+      log(`CAS notified_at loi (co the chua chay migration): ${casErr.message}`);
+    }
+
     const money = Number(fresh.discount_amount) || 0;
     const detail = money > 0
       ? `Hoá đơn của Quý khách được giảm ${money.toLocaleString('vi-VN')}đ ạ.`
       : 'Phần quà đã được thêm vào hoá đơn, nhân viên mang ra ngay ạ!';
-    await sendOaText(supabase, spin.zalo_user_id,
+    const res = await sendOaText(supabase, spin.zalo_user_id,
       `🎉 Chúc mừng Quý khách trúng "${fresh.prize_label || 'quà vòng xoay'}"!\n`
       + `${detail}\nCảm ơn Quý khách đã ủng hộ Ốc Bảo Khang ạ!`, log);
+    if (res && res.ok === false) throw new Error('sendOaText tra ve ok=false');
+    claimedNotify = false; // gửi xong → GIỮ notified_at để không gửi lại
   } catch (err) {
     log(`khong gui duoc tin bao nhan qua: ${err.message}`);
+  } finally {
+    // Đã chiếm cờ mà gửi không xong → nhả về NULL cho lần sau thử lại.
+    if (claimedNotify) {
+      try { await supabase.from('lucky_spins').update({ notified_at: null }).eq('id', spin.id); } catch { /* để nguyên, poll sau xử lý */ }
+    }
   }
 }
 

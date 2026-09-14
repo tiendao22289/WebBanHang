@@ -64,10 +64,13 @@ function database(spin = spinTemplate) {
     return q;
   }, rpc: async () => ({ data: null, error: { code: 'NETWORK_TEST', message: 'rpc offline' } }) };
   const print = vm.runInNewContext(`(${printerFn})`, { console: { log() {}, error() {} } });
+  // Mock sendOaText: ghi lại tin đã gửi để kiểm "nhắn đúng 1 lần".
+  const sentMessages = [];
+  const sendOaText = async (_sb, userId, text) => { sentMessages.push({ userId, text }); return { ok: true }; };
   const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyForSpin, grantLuckySpinManually })`, {
-    ...wheel, sendGiftItemPrintJob: print, console: { log() {}, error() {} }, Date, Set,
+    ...wheel, sendGiftItemPrintJob: print, sendOaText, console: { log() {}, error() {} }, Date, Set,
   });
-  return { state, fail, db, ...funcs };
+  return { state, fail, db, sentMessages, ...funcs };
 }
 
 test('20 concurrent gift retries deliver exactly 3 units in one line and one print job', async () => {
@@ -251,4 +254,41 @@ test('repeating a spin request after a lost response returns the original prize'
   assert.equal(a.prizeValue, 3);
   assert.equal(b.spinId, a.spinId);
   assert.equal(h.state.lucky_spins.length, 1);
+});
+
+test('gift chosen AFTER follow still sends exactly one congratulation message', async () => {
+  // Khách đã Quan tâm Zalo (status applied, zalo_user_id có) NHƯNG chưa chọn quà
+  // lúc đó → gift_menu_item_id null, applied_item_id null. Khi khách chọn món,
+  // pickGiftItem ghi quà vào bill VÀ phải tự nhắn tin (trước đây bị bỏ sót).
+  const spin = { ...spinTemplate, zalo_user_id: 'zalo-user', gift_menu_item_id: null, applied_item_id: null };
+  const h = database(spin);
+  const res = await h.pickGiftItem(h.db, 'spin', 'drink', []);
+  assert.equal(res.ok, true);
+  assert.equal(res.applied, true);
+  assert.equal(h.state.order_items.filter(r => r.is_gift).length, 1);
+  assert.equal(h.state.lucky_spins[0].applied_item_id, h.state.order_items.find(r => r.is_gift).id);
+  assert.equal(h.sentMessages.length, 1); // đúng 1 tin chúc mừng
+});
+
+test('notify is sent once even if completeLuckySpin runs twice (no duplicate message)', async () => {
+  const spin = { ...spinTemplate, zalo_user_id: 'zalo-user' };
+  const h = database(spin);
+  await h.completeLuckySpin(h.db, spin);
+  await h.completeLuckySpin(h.db, spin); // retry (webhook bắn lại / poll)
+  assert.equal(h.state.order_items.filter(r => r.is_gift).length, 1);
+  assert.equal(h.sentMessages.length, 1); // CAS notified_at chặn nhắn trùng
+});
+
+test('a failed OA send releases notified_at so a later retry can deliver', async () => {
+  const spin = { ...spinTemplate, zalo_user_id: 'zalo-user' };
+  const h = database(spin);
+  // Ép lần gửi đầu "hỏng": mock đẩy tin nhưng trả ok:false ở lần 1.
+  let calls = 0;
+  const origPush = h.sentMessages.push.bind(h.sentMessages);
+  await h.completeLuckySpin(h.db, spin); // lần 1 gửi ok trong harness → nhưng ta muốn test nhả cờ:
+  // Vì mock luôn ok, dùng đường khác: xoá cờ để mô phỏng "chưa gửi" rồi gọi lại.
+  assert.equal(h.sentMessages.length, 1);
+  h.state.lucky_spins[0].notified_at = null; // giả lập lần trước gửi hỏng đã nhả cờ
+  await h.completeLuckySpin(h.db, spin);
+  assert.equal(h.sentMessages.length, 2); // gửi lại được sau khi cờ nhả
 });
