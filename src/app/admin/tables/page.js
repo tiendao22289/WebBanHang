@@ -702,7 +702,7 @@ export default function TablesPage() {
   // Gom lượt quay CHƯA vào bill theo bàn host để gắn icon lên thẻ bàn. Ưu tiên
   // trạng thái nặng nhất: error (cần xử lý) > waiting (đang chờ) > blocked.
   const luckyByHost = useMemo(() => {
-    const rank = { error: 3, waiting: 2, blocked: 1 };
+    const rank = { error: 4, need_phone: 3, waiting: 2, blocked: 1 };
     const map = {};
     (luckySpins || []).forEach(s => {
       const key = s.hostTableId || s.tableId;
@@ -2763,26 +2763,29 @@ export default function TablesPage() {
                     🎰
                   </div>
                 )}
-                {luckyCard?.top && (
-                  <div
-                    className={luckyCard.top === 'error' ? 'review-req-blink' : undefined}
-                    title={luckyCard.top === 'error'
-                      ? 'Lỗi: khách đã Quan tâm Zalo nhưng quà CHƯA vào bill — bấm để xử lý'
-                      : luckyCard.top === 'waiting'
-                        ? 'Khách đang chờ Quan tâm Zalo để nhận quà — bấm xem'
-                        : 'Lượt quay bị chặn — bấm xem'}
-                    onClick={(e) => { e.stopPropagation(); setLuckyModal({ hostTableId: hostIdCard, tableNumber: table.table_number }); }}
-                    style={{
-                      background: luckyCard.top === 'error' ? '#fef2f2' : luckyCard.top === 'waiting' ? '#fffbeb' : '#f3f4f6',
-                      color: luckyCard.top === 'error' ? '#dc2626' : luckyCard.top === 'waiting' ? '#b45309' : '#6b7280',
-                      borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      border: `1px solid ${luckyCard.top === 'error' ? '#fecaca' : luckyCard.top === 'waiting' ? '#fde68a' : '#e5e7eb'}`,
-                      fontSize: '0.7rem', cursor: 'pointer',
-                    }}
-                  >
-                    {luckyCard.top === 'error' ? '⚠️' : luckyCard.top === 'waiting' ? '⏳' : '⛔'}
-                  </div>
-                )}
+                {luckyCard?.top && (() => {
+                  const LUCKY_BADGE = {
+                    error:      { icon: '⚠️', bg: '#fef2f2', color: '#dc2626', bd: '#fecaca', blink: true,  title: 'Lỗi: khách đã Quan tâm Zalo nhưng quà CHƯA vào bill — bấm để xử lý' },
+                    need_phone: { icon: '💬', bg: '#eff6ff', color: '#1d4ed8', bd: '#bfdbfe', blink: true,  title: 'Khách đã bấm Quan tâm nhưng CHƯA nhắn SĐT vào khung chat — nhắc khách nhắn SĐT đã quay để nhận quà' },
+                    waiting:    { icon: '⏳', bg: '#fffbeb', color: '#b45309', bd: '#fde68a', blink: false, title: 'Khách đang chờ Quan tâm Zalo để nhận quà — bấm xem' },
+                    blocked:    { icon: '⛔', bg: '#f3f4f6', color: '#6b7280', bd: '#e5e7eb', blink: false, title: 'Lượt quay bị chặn — bấm xem' },
+                  };
+                  const b = LUCKY_BADGE[luckyCard.top] || LUCKY_BADGE.waiting;
+                  return (
+                    <div
+                      className={b.blink ? 'review-req-blink' : undefined}
+                      title={b.title}
+                      onClick={(e) => { e.stopPropagation(); setLuckyModal({ hostTableId: hostIdCard, tableNumber: table.table_number }); }}
+                      style={{
+                        background: b.bg, color: b.color, border: `1px solid ${b.bd}`,
+                        borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '0.7rem', cursor: 'pointer',
+                      }}
+                    >
+                      {b.icon}
+                    </div>
+                  );
+                })()}
                 {giftElig.availableGiftSlots > 0 && (
                   <div
                     title="Đủ điều kiện nhận quà — bấm để chọn quà cho khách"
@@ -6703,6 +6706,7 @@ export default function TablesPage() {
           const spins = (luckySpins || []).filter(s => (s.hostTableId || s.tableId) === luckyModal.hostTableId);
           const stateLabel = {
             error: { text: '⚠️ Đã Quan tâm Zalo nhưng quà CHƯA vào bill (nghi lỗi hệ thống)', color: '#dc2626', bg: '#fef2f2', bd: '#fecaca' },
+            need_phone: { text: '💬 Khách đã bấm Quan tâm nhưng CHƯA nhắn SĐT — nhắc khách nhắn SĐT đã quay vào Zalo quán', color: '#1d4ed8', bg: '#eff6ff', bd: '#bfdbfe' },
             waiting: { text: '⏳ Đang chờ khách Quan tâm Zalo', color: '#b45309', bg: '#fffbeb', bd: '#fde68a' },
             blocked: { text: '⛔ Lượt quay bị chặn', color: '#6b7280', bg: '#f3f4f6', bd: '#e5e7eb' },
           };

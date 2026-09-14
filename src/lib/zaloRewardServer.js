@@ -801,22 +801,32 @@ export async function removeLuckyGiftItem(supabase, orderId, itemId) {
  * hiển thị trạng thái/lỗi trên từng bàn. Trả kèm tên/SĐT cho nhân viên phục
  * vụ (route gọi bằng SERVICE_ROLE_KEY, không lộ ra anon). Mỗi lượt gắn 1
  * adminState:
- *  - 'error'   : Zalo đã xác nhận Quan tâm (zalo_user_id có, hoặc đã 'applied')
- *                nhưng quà chưa vào bill → nghi lỗi hệ thống, cần xử lý.
- *  - 'waiting' : đang chờ khách Quan tâm Zalo.
- *  - 'blocked' : bị chặn (đã nhận gần đây / bill đóng...).
+ *  - 'error'     : Zalo đã xác nhận Quan tâm (zalo_user_id có, hoặc đã 'applied')
+ *                  nhưng quà chưa vào bill → nghi lỗi hệ thống, cần xử lý.
+ *  - 'need_phone': khách ĐÃ bấm Quan tâm (follow_prompt_at có) nhưng CHƯA nhắn
+ *                  SĐT vào khung chat → nhân viên nhắc khách nhắn SĐT.
+ *  - 'waiting'   : quay xong nhưng chưa bấm Quan tâm.
+ *  - 'blocked'   : bị chặn (đã nhận gần đây / bill đóng...).
  */
 const LUCKY_SPIN_COLS = 'id, table_id, host_table_id, customer_name, customer_phone, prize_type, prize_value, prize_label, status, zalo_user_id, gift_menu_item_id, applied_item_id, block_reason, created_at';
+// Có thêm follow_prompt_at — tách riêng vì cột này có thể chưa tồn tại (migration
+// lucky_wheel_follow_prompt.sql chưa chạy); listAdminLuckySpins sẽ tự lùi về
+// LUCKY_SPIN_COLS nếu select cột này lỗi.
+const LUCKY_SPIN_COLS_FULL = `${LUCKY_SPIN_COLS}, follow_prompt_at`;
 
 function mapLuckySpinRow(s) {
   const followConfirmed = !!s.zalo_user_id || s.status === 'applied';
+  // follow_prompt_at có (khách đã bấm Quan tâm) nhưng chưa khớp SĐT → cần nhắc SĐT.
+  const tappedFollow = !!s.follow_prompt_at;
   const adminState = s.status === 'blocked' ? 'blocked'
-    : followConfirmed ? 'error' : 'waiting';
+    : followConfirmed ? 'error'
+    : tappedFollow ? 'need_phone'
+    : 'waiting';
   return {
     id: s.id, tableId: s.table_id, hostTableId: s.host_table_id,
     customerName: s.customer_name, customerPhone: s.customer_phone,
     prizeType: s.prize_type, prizeValue: s.prize_value, prizeLabel: s.prize_label,
-    status: s.status, adminState, followConfirmed,
+    status: s.status, adminState, followConfirmed, tappedFollow,
     giftChosen: !!s.gift_menu_item_id, blockReason: s.block_reason, createdAt: s.created_at,
   };
 }
@@ -828,14 +838,32 @@ function startOfVnTodayISO() {
 }
 
 export async function listAdminLuckySpins(supabase) {
-  const { data, error } = await supabase.from('lucky_spins')
-    .select(LUCKY_SPIN_COLS)
-    .gte('created_at', startOfVnTodayISO())
+  const start = startOfVnTodayISO();
+  const query = (cols) => supabase.from('lucky_spins')
+    .select(cols)
+    .gte('created_at', start)
     .is('applied_item_id', null)
     .in('status', ['waiting_follow', 'applied', 'blocked'])
     .order('created_at', { ascending: false });
+  // Thử select kèm follow_prompt_at; nếu cột chưa có (migration chưa chạy) thì
+  // lùi về cột cũ (mọi lượt sẽ về 'waiting' như trước, KHÔNG vỡ badge).
+  let { data, error } = await query(LUCKY_SPIN_COLS_FULL);
+  if (error) ({ data, error } = await query(LUCKY_SPIN_COLS));
   if (error) throw error;
   return (data || []).map(mapLuckySpinRow);
+}
+
+/**
+ * Ghi nhận khách BẤM nút "Quan tâm Zalo" trên web cho một lượt quay (chỉ khi
+ * lượt còn đang chờ follow). Fail-safe: cột chưa có / lỗi mạng đều nuốt — đây
+ * chỉ là tín hiệu hiển thị cho nhân viên, không được làm hỏng luồng nhận quà.
+ */
+export async function markFollowTapped(supabase, spinId) {
+  try {
+    await supabase.from('lucky_spins')
+      .update({ follow_prompt_at: new Date().toISOString() })
+      .eq('id', spinId).eq('status', 'waiting_follow').is('follow_prompt_at', null);
+  } catch { /* bỏ qua — không ảnh hưởng việc nhận quà */ }
 }
 
 

@@ -5335,6 +5335,14 @@ function OrderContent() {
                             rememberWheel(wheelPrize.spinId);
                             ensureBackGuard();
                             try { localStorage.setItem(`${wheelStorageKey()}_zalo_departure`, wheelPrize.spinId); } catch { }
+                            // Báo cho admin biết "khách đã bấm Quan tâm" (để nhắc khách nhắn SĐT
+                            // nếu chưa nhắn). Fire-and-forget, không chặn việc mở Zalo.
+                            try {
+                              fetch('/api/lucky/follow-tapped', {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ spinId: wheelPrize.spinId }), keepalive: true,
+                              }).catch(() => {});
+                            } catch { }
                           }}
                           target="_blank" rel="noopener noreferrer"
                         >

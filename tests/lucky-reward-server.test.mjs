@@ -69,7 +69,7 @@ function database(spin = spinTemplate) {
   // Mock sendOaText: ghi lại tin đã gửi để kiểm "nhắn đúng 1 lần".
   const sentMessages = [];
   const sendOaText = async (_sb, userId, text) => { sentMessages.push({ userId, text }); return { ok: true }; };
-  const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyForSpin, grantLuckySpinManually, removeLuckyGiftItem })`, {
+  const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyForSpin, grantLuckySpinManually, removeLuckyGiftItem, listAdminLuckySpins })`, {
     ...wheel, sendGiftItemPrintJob: print, sendOaText, console: { log() {}, error() {} }, Date, Set,
   });
   return { state, fail, db, sentMessages, ...funcs };
@@ -311,4 +311,21 @@ test('removing a lucky-wheel gift deletes the line and blocks the spin so it can
   assert.equal(h.state.lucky_spins[0].block_reason, 'Nhân viên đã xoá quà khỏi bill');
   // Giữ applied_item_id (không null) → admin không thấy lượt này hiện lại trong danh sách chờ.
   assert.equal(h.state.lucky_spins[0].applied_item_id, 'spin');
+});
+
+test('guest who tapped Quan tam but sent no phone shows adminState need_phone', async () => {
+  const spin = { ...spinTemplate, status: 'waiting_follow', zalo_user_id: null,
+    applied_item_id: null, gift_menu_item_id: null, follow_prompt_at: now };
+  const h = database(spin);
+  const list = await h.listAdminLuckySpins(h.db);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].adminState, 'need_phone');
+});
+
+test('guest who has not tapped Quan tam yet shows adminState waiting', async () => {
+  const spin = { ...spinTemplate, status: 'waiting_follow', zalo_user_id: null,
+    applied_item_id: null, gift_menu_item_id: null };
+  const h = database(spin);
+  const list = await h.listAdminLuckySpins(h.db);
+  assert.equal(list[0].adminState, 'waiting');
 });
