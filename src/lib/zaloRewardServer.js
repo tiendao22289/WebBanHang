@@ -775,28 +775,6 @@ export async function listAdminLuckySpins(supabase) {
   return (data || []).map(mapLuckySpinRow);
 }
 
-/**
- * Lượt quay KẸT từ các NGÀY TRƯỚC — trúng quà nhưng tới giờ vẫn chưa vào bill.
- *
- * VÌ SAO TÁCH RIÊNG khỏi badge trên thẻ bàn: mã bàn được dùng lại giữa các ngày,
- * nên KHÔNG được gắn lượt cũ lên thẻ bàn hiện tại (sẽ hiện nhầm người). Nhóm này
- * chỉ hiện trong một danh sách riêng để admin xử lý nốt, không sót quà của khách.
- * Ưu tiên nhóm 'error' (đã Quan tâm nhưng quà chưa vào bill) — mới thật sự cần xử lý.
- */
-export async function listStuckLuckySpins(supabase, limit = 300) {
-  const { data, error } = await supabase.from('lucky_spins')
-    .select(LUCKY_SPIN_COLS)
-    .lt('created_at', startOfVnTodayISO())
-    .is('applied_item_id', null)
-    .in('status', ['waiting_follow', 'applied', 'blocked'])
-    .order('created_at', { ascending: false })
-    .limit(limit);
-  if (error) throw error;
-  const rank = { error: 3, waiting: 2, blocked: 1 };
-  return (data || []).map(mapLuckySpinRow)
-    .sort((a, b) => (rank[b.adminState] || 0) - (rank[a.adminState] || 0)
-      || (b.createdAt || '').localeCompare(a.createdAt || ''));
-}
 
 // An anonymous follow event cannot identify a wheel customer. Never guess by
 // timing — that binds a stranger's Zalo account to an innocent guest's spin and

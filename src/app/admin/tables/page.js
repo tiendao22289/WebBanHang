@@ -263,8 +263,6 @@ export default function TablesPage() {
   // ── Ưu đãi đánh giá Google Maps ──
   const [reviewRequests, setReviewRequests] = useState([]); // các yêu cầu đang chờ duyệt hôm nay
   const [luckySpins, setLuckySpins] = useState([]);         // lượt quay HÔM NAY chưa vào bill (badge trên thẻ bàn) — /api/admin/lucky-status
-  const [stuckSpins, setStuckSpins] = useState([]);         // lượt KẸT từ ngày trước (danh sách riêng, không gắn thẻ bàn)
-  const [stuckModal, setStuckModal] = useState(false);      // mở danh sách quà kẹt ngày trước
   const [luckyModal, setLuckyModal] = useState(null);       // { hostTableId, tableNumber } đang xem chi tiết lượt quay
   const [luckyGrantBusy, setLuckyGrantBusy] = useState(null); // spinId đang cấp quà tay
   const [reviewModal, setReviewModal] = useState(null);     // bản ghi đang xem
@@ -627,7 +625,6 @@ export default function TablesPage() {
       if (data.ok) {
         await fetchTables();
         setLuckySpins(prev => prev.filter(s => s.id !== spinId));
-        setStuckSpins(prev => prev.filter(s => s.id !== spinId));
         Swal.fire({ icon: 'success', title: data.already ? 'Quà đã có trong bill rồi' : 'Đã cấp quà vào bill!', timer: 1600, showConfirmButton: false });
       } else {
         Swal.fire({ icon: 'warning', title: 'Chưa cấp được', text: data.message || 'Vui lòng thử lại.' });
@@ -678,7 +675,6 @@ export default function TablesPage() {
       const d = await res.json();
       if (d.ok) {
         setLuckySpins(d.spins || []);
-        setStuckSpins(d.stuck || []);
       } else if (res.status === 401) {
         console.warn('[lucky-status] 401 — phiên đăng nhập không hợp lệ, không tải được trạng thái quà.');
       }
@@ -2744,28 +2740,6 @@ export default function TablesPage() {
                   ))}
                 </div>
               </div>
-              {/* Quà kẹt từ ngày trước (chưa vào bill) — bấm để xử lý */}
-              {stuckSpins.length > 0 && (() => {
-                const nErr = stuckSpins.filter(s => s.adminState === 'error').length;
-                return (
-                  <div
-                    onClick={() => setStuckModal(true)}
-                    className={nErr > 0 ? 'review-req-blink' : undefined}
-                    style={{
-                      margin: '8px 8px 0', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
-                      background: nErr > 0 ? '#fef2f2' : '#fffbeb',
-                      border: `1.5px solid ${nErr > 0 ? '#fecaca' : '#fde68a'}`,
-                      borderRadius: 12, padding: '10px 12px',
-                    }}
-                  >
-                    <span style={{ fontSize: '1.2rem' }}>🎰</span>
-                    <span style={{ flex: 1, fontWeight: 800, fontSize: '0.82rem', color: nErr > 0 ? '#b91c1c' : '#b45309' }}>
-                      {stuckSpins.length} lượt quà kẹt ngày trước{nErr > 0 ? ` · ${nErr} nghi lỗi` : ''}
-                    </span>
-                    <span style={{ fontWeight: 800, fontSize: '0.78rem', color: nErr > 0 ? '#dc2626' : '#d97706' }}>Xem →</span>
-                  </div>
-                );
-              })()}
               {/* Takeaway pinned card */}
               {takeawayTable && (
                 <div style={{ margin: '8px 8px 0', background: '#eff6ff', border: '2px solid #bfdbfe', borderRadius: 16, padding: '14px', gridColumn: '1 / -1' }}>
@@ -3433,32 +3407,6 @@ export default function TablesPage() {
                           ))}
                         </div>
                       )}
-                      {stuckSpins.length > 0 && (() => {
-                        const nErr = stuckSpins.filter(s => s.adminState === 'error').length;
-                        return (
-                          <div style={{
-                            display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10,
-                            background: nErr > 0 ? '#fef2f2' : '#fffbeb',
-                            border: `1.5px solid ${nErr > 0 ? '#fecaca' : '#fde68a'}`,
-                            borderRadius: 12, padding: '10px 12px', marginBottom: 12,
-                          }}>
-                            <span style={{ fontWeight: 800, fontSize: '0.85rem', color: nErr > 0 ? '#b91c1c' : '#b45309' }}>
-                              🎰 {stuckSpins.length} lượt quà kẹt từ ngày trước
-                              {nErr > 0 ? ` — trong đó ${nErr} lượt nghi lỗi (đã Quan tâm nhưng quà chưa vào bill)` : ''}
-                            </span>
-                            <button
-                              onClick={() => setStuckModal(true)}
-                              className={nErr > 0 ? 'review-req-blink' : undefined}
-                              style={{
-                                padding: '6px 14px', background: nErr > 0 ? '#dc2626' : '#d97706', color: 'white',
-                                border: 'none', borderRadius: 100, fontWeight: 800, fontSize: '0.78rem', cursor: 'pointer',
-                              }}
-                            >
-                              Xem & xử lý →
-                            </button>
-                          </div>
-                        );
-                      })()}
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 14 }}>
                         {filteredTables.map(table => {
                           const isChild = !!table.merged_with;
@@ -6742,70 +6690,6 @@ export default function TablesPage() {
                           marginTop: 10, width: '100%', padding: '10px', borderRadius: 10, border: 'none', fontWeight: 800, cursor: 'pointer',
                           background: (['gift_drink', 'gift_dish', 'gift'].includes(s.prizeType) && !s.giftChosen) ? '#e5e7eb' : '#16a34a',
                           color: (['gift_drink', 'gift_dish', 'gift'].includes(s.prizeType) && !s.giftChosen) ? '#9ca3af' : 'white',
-                        }}
-                      >
-                        {luckyGrantBusy === s.id ? 'Đang cấp...' : '🎁 Tặng quà thủ công (ghi vào bill)'}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })()
-      }
-
-      {/* ─── Quà KẸT từ ngày trước (không gắn thẻ bàn vì mã bàn dùng lại) ─── */}
-      {
-        stuckModal && (() => {
-          const stateLabel = {
-            error: { text: '⚠️ Đã Quan tâm Zalo nhưng quà CHƯA vào bill (nghi lỗi hệ thống)', color: '#dc2626', bg: '#fef2f2', bd: '#fecaca' },
-            waiting: { text: '⏳ Khách chưa Quan tâm Zalo (thường là khách bỏ dở)', color: '#b45309', bg: '#fffbeb', bd: '#fde68a' },
-            blocked: { text: '⛔ Lượt quay bị chặn (chống gian lận)', color: '#6b7280', bg: '#f3f4f6', bd: '#e5e7eb' },
-          };
-          const dayOf = (iso) => {
-            try { return new Date(iso).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }); } catch { return ''; }
-          };
-          return (
-            <div
-              onClick={() => !luckyGrantBusy && setStuckModal(false)}
-              style={{ position: 'fixed', inset: 0, zIndex: 999999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(3px)', padding: 16 }}
-            >
-              <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 440, padding: 20, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)', maxHeight: '85vh', overflowY: 'auto' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#b91c1c' }}>🎰 Quà kẹt từ ngày trước ({stuckSpins.length})</div>
-                  <button onClick={() => setStuckModal(false)} disabled={!!luckyGrantBusy} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#94a3b8' }}>✕</button>
-                </div>
-                <div style={{ fontSize: '0.82rem', color: '#64748b', marginBottom: 14 }}>
-                  Các lượt trúng quà chưa vào bill từ những ngày trước. Ưu tiên nhóm <b>⚠️ nghi lỗi</b> — bấm <b>Tặng quà thủ công</b> để cấp cho khách. Nhóm ⏳/⛔ thường không cần xử lý.
-                </div>
-                {stuckSpins.length === 0 ? (
-                  <div style={{ padding: 20, textAlign: 'center', color: '#16a34a', fontWeight: 700 }}>✅ Không còn lượt kẹt nào.</div>
-                ) : stuckSpins.map(s => {
-                  const st = stateLabel[s.adminState] || stateLabel.waiting;
-                  const needGiftPick = ['gift_drink', 'gift_dish', 'gift'].includes(s.prizeType) && !s.giftChosen;
-                  return (
-                    <div key={s.id} style={{ border: `1px solid ${st.bd}`, background: st.bg, borderRadius: 12, padding: 13, marginBottom: 10 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                        <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.95rem', marginBottom: 3 }}>🎁 {s.prizeLabel || s.prizeType}</div>
-                        <div style={{ fontSize: '0.74rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>{dayOf(s.createdAt)}</div>
-                      </div>
-                      <div style={{ fontSize: '0.84rem', color: '#334155', lineHeight: 1.7 }}>
-                        <div>Khách: <b>{s.customerName || '—'}</b> · SĐT: <b>{s.customerPhone || '—'}</b></div>
-                      </div>
-                      <div style={{ marginTop: 7, fontSize: '0.8rem', fontWeight: 700, color: st.color }}>{st.text}</div>
-                      {needGiftPick && (
-                        <div style={{ marginTop: 6, fontSize: '0.78rem', color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 8px' }}>
-                          Khách chưa chọn món/nước quà — không cấp tay được. Cần khách chọn ở màn hình vòng xoay trước.
-                        </div>
-                      )}
-                      <button
-                        onClick={() => grantLuckyGift(s.id)}
-                        disabled={!!luckyGrantBusy || needGiftPick}
-                        style={{
-                          marginTop: 10, width: '100%', padding: '10px', borderRadius: 10, border: 'none', fontWeight: 800, cursor: needGiftPick ? 'not-allowed' : 'pointer',
-                          background: needGiftPick ? '#e5e7eb' : '#16a34a',
-                          color: needGiftPick ? '#9ca3af' : 'white',
                         }}
                       >
                         {luckyGrantBusy === s.id ? 'Đang cấp...' : '🎁 Tặng quà thủ công (ghi vào bill)'}
