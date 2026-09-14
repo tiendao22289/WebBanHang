@@ -406,19 +406,28 @@ export async function finalizeGiftItem(supabase, spin, targetOrderId, log = () =
     throw new Error('Dòng quà chưa khớp với phần đã trúng; cần nhân viên kiểm tra.');
   }
 
-  // Queue this gift once before acknowledging it. If queueing fails,
-  // leave the receipt pending so polling can retry without adding a new item.
-  try {
-    const printResult = await sendGiftItemPrintJob(supabase, targetOrderId, item.id);
-    if (!printResult.success) throw new Error('Quà đã ghi vào bill nhưng chưa gửi được tới máy in. Quý khách bấm kiểm tra lại hoặc gọi nhân viên.');
-  } catch (printErr) {
-    log(`in qua vong xoay loi (khong anh huong bill): ${printErr.message}`);
-    throw printErr;
-  }
-
+  // GHI RECEIPT NGAY khi quà đã nằm ĐÚNG trong bill — KHÔNG chờ in xong.
+  //
+  // Trước đây bắt in phiếu bếp thành công RỒI mới ghi receipt, với lý do "quà vật
+  // lý chưa in thì bếp chưa làm". Nhưng đo thực tế 14/09: lệnh in đơn-lẻ
+  // (sendGiftItemPrintJob) hay hỏng, và hễ hỏng là throw ở đây → receipt không
+  // được ghi → khách MẤT tin chúc mừng + lượt hiện ⚠️, DÙ quà đã có trên bill
+  // (2/2 quà món trong ngày kẹt đúng kiểu này). Đánh đổi sai: mất hẳn quà của
+  // khách chỉ vì một trục trặc in.
+  //
+  // Giờ: quà đã vào bill = coi như KHÁCH ĐÃ NHẬN (ghi receipt → nhắn tin, tắt ⚠️).
+  // Nhân viên luôn thấy dòng quà trong đơn để mang ra. In phiếu bếp là best-effort:
+  // hỏng thì CHỈ log, KHÔNG chặn — và claim-ready/poll sau vẫn gọi lại, thử in tiếp.
   const { error: receiptError } = await supabase.from('lucky_spins')
     .update({ applied_item_id: item.id }).eq('id', spin.id);
   if (receiptError) throw receiptError;
+
+  try {
+    const printResult = await sendGiftItemPrintJob(supabase, targetOrderId, item.id);
+    if (!printResult.success) log(`in qua vong xoay chua duoc (qua da vao bill): ${printResult.error || ''}`);
+  } catch (printErr) {
+    log(`in qua vong xoay loi (qua da vao bill, khong chan): ${printErr.message}`);
+  }
 
   return item;
 }

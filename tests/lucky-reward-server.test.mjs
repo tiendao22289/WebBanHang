@@ -95,14 +95,21 @@ test('receipt update failure retries the same gift and same print job', async ()
   assert.equal(h.state.print_jobs.length, 1);
 });
 
-test('printer outage does not acknowledge success; retry queues the original gift', async () => {
-  const h = database();
+test('printer outage still credits the gift (receipt set) and does not lose it; retry prints', async () => {
+  const spin = { ...spinTemplate, zalo_user_id: 'zalo-user' };
+  const h = database(spin);
   h.fail.set('print_jobs:insert', 1);
-  await assert.rejects(h.completeLuckySpin(h.db, spinTemplate));
-  assert.equal(h.state.lucky_spins[0].applied_item_id, null);
-  await h.completeLuckySpin(h.db, spinTemplate);
+  // In hỏng KHÔNG còn chặn: quà đã vào bill → ghi receipt + không throw.
+  await h.completeLuckySpin(h.db, spin);
+  const gift = h.state.order_items.find(r => r.is_gift);
+  assert.equal(h.state.order_items.filter(r => r.is_gift).length, 1);
+  assert.equal(h.state.lucky_spins[0].applied_item_id, gift.id); // đã ghi nhận nhận quà
+  assert.equal(h.sentMessages.length, 1);                         // khách vẫn nhận tin
+  // Lần poll sau (claim-ready) in lại được, không thêm dòng quà thứ 2.
+  await h.completeLuckySpin(h.db, spin);
   assert.equal(h.state.order_items.filter(r => r.is_gift).length, 1);
   assert.equal(h.state.print_jobs.length, 1);
+  assert.equal(h.sentMessages.length, 1);                         // không nhắn trùng
 });
 
 test('fixed discount total-update failure is recoverable without subtracting twice', async () => {
