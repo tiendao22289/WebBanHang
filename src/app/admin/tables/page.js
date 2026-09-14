@@ -169,6 +169,108 @@ function ringBell() {
   }
 }
 
+/**
+ * Bảng "Điều chỉnh bill" (Cộng/Trừ tiền, Giảm %). TÁCH RIÊNG khỏi TablesPage vì
+ * trang bàn rất lớn (70 thẻ bàn + toàn bộ đơn): nếu ô nhập giữ state ở cha thì
+ * MỖI phím gõ vẽ lại cả trang → giật, gõ không kịp. Ở đây state cục bộ nên gõ
+ * chỉ vẽ lại đúng bảng nhỏ này. Chỉ gọi lên cha khi bấm "Áp dụng".
+ *
+ * discountBase = tiền món dương, không tính quà (cha tính sẵn, truyền xuống) để
+ * xem trước mức giảm % ngay lập tức mà không phải đọc lại đơn.
+ */
+function BillAdjustDialog({ tableNumber, discountBase, busy, onApply, onClose }) {
+  const [mode, setMode] = useState('sub'); // 'add' | 'sub' | 'pct'
+  const [amount, setAmount] = useState('');
+  const [percent, setPercent] = useState('');
+  const [maxCap, setMaxCap] = useState('');
+  const [minFloor, setMinFloor] = useState('');
+  const [reason, setReason] = useState('');
+  const fmt = (p) => new Intl.NumberFormat('vi-VN').format(Math.max(0, Math.round(Number(p) || 0))) + 'đ';
+
+  const pctReduction = (() => {
+    const pct = Number(percent) || 0;
+    if (pct <= 0) return 0;
+    let r = Math.floor(discountBase * pct / 100 / 1000) * 1000;
+    const mx = Math.round(Number(maxCap) || 0);
+    const mn = Math.round(Number(minFloor) || 0);
+    if (mx > 0) r = Math.min(r, mx);
+    if (mn > 0) r = Math.max(r, mn);
+    return Math.max(0, Math.min(r, discountBase));
+  })();
+
+  const inputStyle = { width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #e5e7eb', fontSize: '0.95rem', margin: '5px 0 10px', boxSizing: 'border-box' };
+
+  return (
+    <div onClick={() => !busy && onClose()}
+      style={{ position: 'fixed', inset: 0, zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(2px)', padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 380, padding: 18, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)', maxHeight: '88vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ fontWeight: 800, fontSize: '1.02rem', color: '#0f172a' }}>🏷️ Điều chỉnh bill — Bàn {tableNumber}</div>
+          <button onClick={onClose} disabled={busy} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#94a3b8' }}>✕</button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+          {[['add', '➕ Cộng tiền'], ['sub', '➖ Trừ tiền'], ['pct', '％ Giảm %']].map(([m, lbl]) => (
+            <button key={m} onClick={() => setMode(m)}
+              style={{ flex: 1, padding: '9px 4px', borderRadius: 10, fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer',
+                border: `1.5px solid ${mode === m ? '#d97706' : '#e5e7eb'}`, background: mode === m ? '#fffbeb' : 'white', color: mode === m ? '#b45309' : '#475569' }}>
+              {lbl}
+            </button>
+          ))}
+        </div>
+
+        {mode === 'pct' ? (
+          <>
+            <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#374151' }}>% giảm</label>
+            <input type="number" inputMode="decimal" value={percent} autoFocus
+              onChange={e => setPercent(e.target.value)} placeholder="vd 10" style={inputStyle} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: '0.76rem', fontWeight: 700, color: '#374151' }}>Giảm tối đa (đ)</label>
+                <input type="number" inputMode="numeric" value={maxCap}
+                  onChange={e => setMaxCap(e.target.value)} placeholder="không bắt buộc"
+                  style={{ ...inputStyle, padding: '9px 10px', fontSize: '0.9rem', margin: '5px 0' }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: '0.76rem', fontWeight: 700, color: '#374151' }}>Giảm tối thiểu (đ)</label>
+                <input type="number" inputMode="numeric" value={minFloor}
+                  onChange={e => setMinFloor(e.target.value)} placeholder="không bắt buộc"
+                  style={{ ...inputStyle, padding: '9px 10px', fontSize: '0.9rem', margin: '5px 0' }} />
+              </div>
+            </div>
+            <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '9px 11px', margin: '8px 0 4px', fontSize: '0.82rem', color: '#166534' }}>
+              Bill sẽ giảm: <b>{fmt(pctReduction)}</b>
+              <span style={{ color: '#6b7280' }}> (tiền món: {fmt(discountBase)})</span>
+            </div>
+          </>
+        ) : (
+          <>
+            <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#374151' }}>
+              {mode === 'add' ? 'Số tiền cộng thêm (đ)' : 'Số tiền cần giảm (đ)'}
+            </label>
+            <input type="number" inputMode="numeric" value={amount} autoFocus
+              onChange={e => setAmount(e.target.value)} placeholder="vd 20000" style={inputStyle} />
+          </>
+        )}
+
+        <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#374151' }}>Lý do (hiện trên bill)</label>
+        <input type="text" value={reason}
+          onChange={e => setReason(e.target.value)} placeholder="vd Giảm khách quen / Phụ thu phòng VIP"
+          style={{ ...inputStyle, margin: '5px 0 4px' }} />
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+          <button onClick={onClose} disabled={busy}
+            style={{ padding: '11px 16px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 700, cursor: 'pointer', color: '#374151' }}>Huỷ</button>
+          <button onClick={() => onApply({ mode, amount, percent, max: maxCap, min: minFloor, reason })} disabled={busy}
+            style={{ flex: 1, padding: '11px', background: mode === 'add' ? '#d97706' : '#16a34a', border: 'none', borderRadius: 10, fontWeight: 800, cursor: 'pointer', color: 'white' }}>
+            {busy ? 'Đang lưu…' : 'Áp dụng vào bill'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function TablesPage() {
   const [tables, setTables] = useState([]);
   const [orders, setOrders] = useState({});
@@ -211,8 +313,8 @@ export default function TablesPage() {
   const [showBillPreview, setShowBillPreview] = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false); // panel chọn nhanh nước/bia/khăn
   const [adjustOpen, setAdjustOpen] = useState(false);      // bảng Cộng/Trừ tiền, Giảm % vào bill
-  const [adjustMode, setAdjustMode] = useState('sub');      // 'add' | 'sub' | 'pct'
-  const [adjustForm, setAdjustForm] = useState({ amount: '', percent: '', max: '', min: '', reason: '' });
+  // Ô nhập của bảng điều chỉnh bill giờ nằm trong BillAdjustDialog (state cục bộ,
+  // tránh re-render cả trang khi gõ). Cha chỉ giữ mở/đóng + đang lưu.
   const [adjustBusy, setAdjustBusy] = useState(false);
   const [tableNote, setTableNote] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null); // { orderId, itemId, itemName }
@@ -1816,44 +1918,37 @@ export default function TablesPage() {
           ? (Number(i.unit_price) || 0) * (Number(i.quantity) || 0) : 0), 0), 0);
   }
 
-  // Số tiền giảm nếu áp % hiện tại (để hiện xem trước trong bảng) — đã kẹp
-  // tối đa/tối thiểu và không vượt tiền món.
-  function adjustPercentPreview() {
-    const pct = Number(adjustForm.percent) || 0;
-    if (pct <= 0) return 0;
-    const base = adjustDiscountBase();
-    let reduction = Math.floor(base * pct / 100 / 1000) * 1000;
-    const maxCap = Math.round(Number(adjustForm.max) || 0);
-    const minFloor = Math.round(Number(adjustForm.min) || 0);
-    if (maxCap > 0) reduction = Math.min(reduction, maxCap);
-    if (minFloor > 0) reduction = Math.max(reduction, minFloor);
-    return Math.max(0, Math.min(reduction, base));
-  }
-
   // Cộng thêm tiền / Trừ tiền / Giảm % vào bill — ghi 1 dòng order_items (giá
   // dương = phụ thu, giá âm = giảm), rồi tính lại total từ DB (đọc lại cho chắc,
   // giống flow duyệt ưu đãi review). Nhãn khác "Vòng xoay may mắn: giảm N%" nên
-  // không đụng dòng quà vòng xoay.
-  async function applyBillAdjustment() {
+  // không đụng dòng quà vòng xoay. Nhận payload từ BillAdjustDialog (state cục bộ).
+  async function applyBillAdjustment(payload = {}) {
     if (adjustBusy) return;
     const bills = (getSelectedTableOrders() || [])
       .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
     if (bills.length === 0) { Swal.fire({ icon: 'warning', title: 'Bàn chưa có bill để điều chỉnh' }); return; }
-    const reason = (adjustForm.reason || '').trim();
+    const reason = (payload.reason || '').trim();
 
     let unitPrice = 0, label = '';
-    if (adjustMode === 'add') {
-      const amt = Math.round(Number(adjustForm.amount) || 0);
+    if (payload.mode === 'add') {
+      const amt = Math.round(Number(payload.amount) || 0);
       if (amt <= 0) { Swal.fire({ icon: 'warning', title: 'Nhập số tiền cộng thêm' }); return; }
       unitPrice = amt; label = 'Phụ thu';
-    } else if (adjustMode === 'sub') {
-      const amt = Math.round(Number(adjustForm.amount) || 0);
+    } else if (payload.mode === 'sub') {
+      const amt = Math.round(Number(payload.amount) || 0);
       if (amt <= 0) { Swal.fire({ icon: 'warning', title: 'Nhập số tiền cần giảm' }); return; }
       unitPrice = -amt; label = 'Giảm giá';
     } else {
-      const pct = Number(adjustForm.percent) || 0;
+      const pct = Number(payload.percent) || 0;
       if (pct <= 0) { Swal.fire({ icon: 'warning', title: 'Nhập % cần giảm' }); return; }
-      const reduction = adjustPercentPreview();
+      // Tính lại mức giảm ở cha (không tin số từ client) — cùng công thức dialog.
+      const base = adjustDiscountBase();
+      let reduction = Math.floor(base * pct / 100 / 1000) * 1000;
+      const mx = Math.round(Number(payload.max) || 0);
+      const mn = Math.round(Number(payload.min) || 0);
+      if (mx > 0) reduction = Math.min(reduction, mx);
+      if (mn > 0) reduction = Math.max(reduction, mn);
+      reduction = Math.max(0, Math.min(reduction, base));
       if (reduction <= 0) { Swal.fire({ icon: 'warning', title: 'Mức giảm đang bằng 0', text: 'Kiểm tra lại % và tiền món trong bill.' }); return; }
       unitPrice = -reduction; label = `Giảm ${pct}%`;
     }
@@ -1875,8 +1970,7 @@ export default function TablesPage() {
       const newTotal = (itemsNow || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
       await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
       await fetchOrdersOnly();
-      setAdjustOpen(false);
-      setAdjustForm({ amount: '', percent: '', max: '', min: '', reason: '' });
+      setAdjustOpen(false); // dialog unmount → tự xoá ô nhập, không cần reset state ở cha
       Swal.fire({ icon: 'success', title: 'Đã cập nhật bill', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500 });
     } catch (e) {
       console.error('[applyBillAdjustment]', e);
@@ -4516,7 +4610,7 @@ export default function TablesPage() {
 
               {/* ─── Nút "Điều chỉnh bill": cộng/trừ tiền, giảm % ─── */}
               <button
-                onClick={() => { setAdjustOpen(true); setAdjustMode('sub'); setAdjustForm({ amount: '', percent: '', max: '', min: '', reason: '' }); }}
+                onClick={() => setAdjustOpen(true)}
                 title="Cộng / Trừ tiền, Giảm % cho bill"
                 style={{
                   position: 'absolute', right: 0, top: '62%', transform: 'translateY(-50%)',
@@ -4633,77 +4727,15 @@ export default function TablesPage() {
                 </div>
               </div>
 
-              {/* ─── Bảng Điều chỉnh bill (Cộng/Trừ tiền, Giảm %) ─── */}
+              {/* ─── Bảng Điều chỉnh bill (Cộng/Trừ tiền, Giảm %) — component riêng ─── */}
               {adjustOpen && (
-                <div onClick={() => !adjustBusy && setAdjustOpen(false)}
-                  style={{ position: 'fixed', inset: 0, zIndex: 100000, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(2px)', padding: 16 }}>
-                  <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: 16, width: '100%', maxWidth: 380, padding: 18, boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)', maxHeight: '88vh', overflowY: 'auto' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                      <div style={{ fontWeight: 800, fontSize: '1.02rem', color: '#0f172a' }}>🏷️ Điều chỉnh bill — Bàn {selectedTable?.table_number}</div>
-                      <button onClick={() => setAdjustOpen(false)} disabled={adjustBusy} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#94a3b8' }}>✕</button>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-                      {[['add', '➕ Cộng tiền'], ['sub', '➖ Trừ tiền'], ['pct', '％ Giảm %']].map(([m, lbl]) => (
-                        <button key={m} onClick={() => setAdjustMode(m)}
-                          style={{ flex: 1, padding: '9px 4px', borderRadius: 10, fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer',
-                            border: `1.5px solid ${adjustMode === m ? '#d97706' : '#e5e7eb'}`, background: adjustMode === m ? '#fffbeb' : 'white', color: adjustMode === m ? '#b45309' : '#475569' }}>
-                          {lbl}
-                        </button>
-                      ))}
-                    </div>
-
-                    {adjustMode === 'pct' ? (
-                      <>
-                        <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#374151' }}>% giảm</label>
-                        <input type="number" inputMode="decimal" value={adjustForm.percent}
-                          onChange={e => setAdjustForm(f => ({ ...f, percent: e.target.value }))} placeholder="vd 10"
-                          style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #e5e7eb', fontSize: '0.95rem', margin: '5px 0 10px', boxSizing: 'border-box' }} />
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.76rem', fontWeight: 700, color: '#374151' }}>Giảm tối đa (đ)</label>
-                            <input type="number" inputMode="numeric" value={adjustForm.max}
-                              onChange={e => setAdjustForm(f => ({ ...f, max: e.target.value }))} placeholder="không bắt buộc"
-                              style={{ width: '100%', padding: '9px 10px', borderRadius: 10, border: '1.5px solid #e5e7eb', fontSize: '0.9rem', margin: '5px 0', boxSizing: 'border-box' }} />
-                          </div>
-                          <div style={{ flex: 1 }}>
-                            <label style={{ fontSize: '0.76rem', fontWeight: 700, color: '#374151' }}>Giảm tối thiểu (đ)</label>
-                            <input type="number" inputMode="numeric" value={adjustForm.min}
-                              onChange={e => setAdjustForm(f => ({ ...f, min: e.target.value }))} placeholder="không bắt buộc"
-                              style={{ width: '100%', padding: '9px 10px', borderRadius: 10, border: '1.5px solid #e5e7eb', fontSize: '0.9rem', margin: '5px 0', boxSizing: 'border-box' }} />
-                          </div>
-                        </div>
-                        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '9px 11px', margin: '8px 0 4px', fontSize: '0.82rem', color: '#166534' }}>
-                          Bill sẽ giảm: <b>{formatPrice(adjustPercentPreview())}</b>
-                          <span style={{ color: '#6b7280' }}> (tiền món: {formatPrice(adjustDiscountBase())})</span>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#374151' }}>
-                          {adjustMode === 'add' ? 'Số tiền cộng thêm (đ)' : 'Số tiền cần giảm (đ)'}
-                        </label>
-                        <input type="number" inputMode="numeric" value={adjustForm.amount}
-                          onChange={e => setAdjustForm(f => ({ ...f, amount: e.target.value }))} placeholder="vd 20000"
-                          style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #e5e7eb', fontSize: '0.95rem', margin: '5px 0 10px', boxSizing: 'border-box' }} />
-                      </>
-                    )}
-
-                    <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#374151' }}>Lý do (hiện trên bill)</label>
-                    <input type="text" value={adjustForm.reason}
-                      onChange={e => setAdjustForm(f => ({ ...f, reason: e.target.value }))} placeholder="vd Giảm khách quen / Phụ thu phòng VIP"
-                      style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1.5px solid #e5e7eb', fontSize: '0.95rem', margin: '5px 0 4px', boxSizing: 'border-box' }} />
-
-                    <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-                      <button onClick={() => setAdjustOpen(false)} disabled={adjustBusy}
-                        style={{ padding: '11px 16px', background: '#f1f5f9', border: 'none', borderRadius: 10, fontWeight: 700, cursor: 'pointer', color: '#374151' }}>Huỷ</button>
-                      <button onClick={applyBillAdjustment} disabled={adjustBusy}
-                        style={{ flex: 1, padding: '11px', background: adjustMode === 'add' ? '#d97706' : '#16a34a', border: 'none', borderRadius: 10, fontWeight: 800, cursor: 'pointer', color: 'white' }}>
-                        {adjustBusy ? 'Đang lưu…' : 'Áp dụng vào bill'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                <BillAdjustDialog
+                  tableNumber={selectedTable?.table_number}
+                  discountBase={adjustDiscountBase()}
+                  busy={adjustBusy}
+                  onApply={applyBillAdjustment}
+                  onClose={() => setAdjustOpen(false)}
+                />
               )}
 
               <div className="modal-footer" style={{ padding: '8px 12px', gap: 6, flexDirection: 'column', alignItems: 'stretch' }}>
