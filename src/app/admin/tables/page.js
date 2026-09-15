@@ -319,6 +319,8 @@ export default function TablesPage() {
   const [giftsTodayLoading, setGiftsTodayLoading] = useState(false);
   const [giftPending, setGiftPending] = useState({});           // {id: bậtMới} — thay đổi CHƯA lưu
   const [giftSaving, setGiftSaving] = useState(false);
+  const [giftOffOpen, setGiftOffOpen] = useState(false);        // mở/thu nhóm "chưa là món tặng"
+  const [giftSearch, setGiftSearch] = useState('');             // tìm nhanh trong danh sách TẮT
   // Ô nhập của bảng điều chỉnh bill giờ nằm trong BillAdjustDialog (state cục bộ,
   // tránh re-render cả trang khi gõ). Cha chỉ giữ mở/đóng + đang lưu.
   const [adjustBusy, setAdjustBusy] = useState(false);
@@ -1556,12 +1558,11 @@ export default function TablesPage() {
         supabase.from('order_items')
           .select('quantity, item_name, menu_item:menu_items(name)')
           .eq('is_gift', true).gte('created_at', startVN),
-        // Chỉ lấy món ĐANG là món tặng (is_gift_item=true). Kèm is_available để
-        // ghi chú nếu MÓN ĂN đó đang tắt trên menu — nhưng công tắc chỉ đổi cờ
-        // món-tặng, KHÔNG đụng is_available.
+        // TẤT CẢ món trong thực đơn — để admin bật/tắt món tặng ngay tại đây,
+        // khỏi vào trang Thực đơn. Kèm is_gift_item (đang là quà chưa) + is_available
+        // (món có đang bán không). Công tắc chỉ đổi is_gift_item, KHÔNG đụng is_available.
         supabase.from('menu_items')
-          .select('id, name, is_available')
-          .eq('is_gift_item', true).order('name'),
+          .select('id, name, is_gift_item, is_available').order('name'),
       ]);
       const givenMap = {};
       (givenRes.data || []).forEach(oi => {
@@ -1569,16 +1570,16 @@ export default function TablesPage() {
         givenMap[name] = (givenMap[name] || 0) + (Number(oi.quantity) || 1);
       });
       const given = Object.entries(givenMap).map(([name, qty]) => ({ name, qty })).sort((a, b) => b.qty - a.qty);
-      // on = đang là món tặng. Món vừa tắt (không còn is_gift_item) sẽ không nằm
-      // trong kết quả nữa → giữ lại từ danh sách cũ với on=false để còn bật lại được.
-      const fetched = (itemsRes.data || []).map(m => ({ id: m.id, name: m.name, on: true, dishOff: !m.is_available }));
-      setGiftsTodayData(prev => {
-        const map = {};
-        fetched.forEach(i => { map[i.id] = i; });
-        (prev?.items || []).forEach(i => { if (!map[i.id]) map[i.id] = { ...i, on: false }; });
-        const items = Object.values(map).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi'));
-        return { given, items };
+      // grp phân nhóm lúc TẢI (không đổi khi gạt, để món không nhảy chỗ giữa chừng;
+      // gạt xong bấm Lưu thì tải lại → phân nhóm lại):
+      //   'on'    = đang là quà + món đang bán  → nhóm trên
+      //   'onOff' = đang là quà nhưng món tắt trên menu → nhóm giữa
+      //   'off'   = chưa là quà → nhóm dưới (thu vào mũi tên)
+      const items = (itemsRes.data || []).map(m => {
+        const isGift = !!m.is_gift_item, dishOff = !m.is_available;
+        return { id: m.id, name: m.name, on: isGift, dishOff, grp: !isGift ? 'off' : dishOff ? 'onOff' : 'on' };
       });
+      setGiftsTodayData({ given, items });
     } catch (e) {
       console.error('[fetchGiftsToday]', e);
       setGiftsTodayData({ given: [], items: [] });
@@ -6791,7 +6792,7 @@ export default function TablesPage() {
       {/* ─── Tab "Quà hôm nay" ở mép phải màn hình bàn (chỉ hiện khi đang xem lưới bàn) ─── */}
       {!selectedTable && (
         <button
-          onClick={() => { setShowGiftsToday(true); setGiftPending({}); fetchGiftsToday(); }}
+          onClick={() => { setShowGiftsToday(true); setGiftPending({}); setGiftOffOpen(false); setGiftSearch(''); fetchGiftsToday(); }}
           title="Quà hôm nay & bật/tắt món tặng (admin)"
           style={{
             position: 'fixed', right: 0, top: '46%', transform: 'translateY(-50%)',
@@ -6862,30 +6863,68 @@ export default function TablesPage() {
                     </div>
                   )}
 
-                  <div style={{ fontWeight: 800, fontSize: '0.85rem', color: '#0f172a', marginBottom: 4 }}>🎁 Là món tặng (bấm để bật/tắt)</div>
+                  <div style={{ fontWeight: 800, fontSize: '0.85rem', color: '#0f172a', marginBottom: 4 }}>🎁 Món tặng (bấm để bật/tắt)</div>
                   <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginBottom: 8, lineHeight: 1.5 }}>
-                    Chỉ bật/tắt việc <b>cho khách chọn làm quà</b> — <b>KHÔNG tắt món ăn</b>. Tắt thì khách
-                    không chọn món này làm quà nữa, nhưng món vẫn bán bình thường.
+                    Bật/tắt <b>ngay tại đây</b> việc cho khách chọn món làm quà — <b>KHÔNG tắt món ăn</b>.
+                    Gạt xong bấm <b>Lưu</b>. Món đang bật ở trên, món chưa bật gom dưới cùng.
                   </div>
                   {(!giftsTodayData?.items || giftsTodayData.items.length === 0) ? (
-                    <div style={{ fontSize: '0.82rem', color: '#9ca3af' }}>Chưa có món tặng nào (bật "Là món tặng" cho món ở Thực đơn).</div>
-                  ) : giftsTodayData.items.map(it => {
-                    const changed = Object.prototype.hasOwnProperty.call(giftPending, it.id);
+                    <div style={{ fontSize: '0.82rem', color: '#9ca3af' }}>Chưa tải được danh sách món.</div>
+                  ) : (() => {
+                    const Row = (it) => {
+                      const changed = Object.prototype.hasOwnProperty.call(giftPending, it.id);
+                      return (
+                        <div key={it.id} onClick={() => stageGiftToggle(it.id, !it.on)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', border: `1.5px solid ${changed ? '#fdba74' : it.on ? '#bbf7d0' : '#e5e7eb'}`, background: it.on ? '#f0fdf4' : '#f9fafb', borderRadius: 10, marginBottom: 7, cursor: 'pointer' }}>
+                          <div style={{ position: 'relative', width: 40, height: 22, background: it.on ? '#16a34a' : '#d1d5db', borderRadius: 11, flexShrink: 0, transition: 'background .2s' }}>
+                            <div style={{ position: 'absolute', top: 2, left: it.on ? 20 : 2, width: 18, height: 18, background: 'white', borderRadius: '50%', transition: 'left .2s' }} />
+                          </div>
+                          <span style={{ flex: 1, minWidth: 0, fontSize: '0.86rem', fontWeight: 600, color: it.on ? '#15803d' : '#374151' }}>
+                            {it.name}
+                            {it.dishOff && <span style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#f59e0b' }}>⚠️ món đang tắt trên menu</span>}
+                          </span>
+                          {changed && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: '#ea580c', background: '#ffedd5', borderRadius: 6, padding: '1px 5px', flexShrink: 0 }}>chưa lưu</span>}
+                          <span style={{ fontSize: '0.72rem', fontWeight: 800, color: it.on ? '#16a34a' : '#9ca3af', flexShrink: 0 }}>{it.on ? 'BẬT' : 'TẮT'}</span>
+                        </div>
+                      );
+                    };
+                    const items = giftsTodayData.items;
+                    const gOn = items.filter(i => i.grp === 'on');
+                    const gOnOff = items.filter(i => i.grp === 'onOff');
+                    const nOff = items.filter(i => i.grp === 'off').length;
+                    const q = removeVietnameseTones((giftSearch || '').trim().toLowerCase());
+                    const gOff = items.filter(i => i.grp === 'off'
+                      && (!q || removeVietnameseTones((i.name || '').toLowerCase()).includes(q)));
                     return (
-                    <div key={it.id} onClick={() => stageGiftToggle(it.id, !it.on)}
-                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', border: `1.5px solid ${changed ? '#fdba74' : it.on ? '#bbf7d0' : '#e5e7eb'}`, background: it.on ? '#f0fdf4' : '#f9fafb', borderRadius: 10, marginBottom: 7, cursor: 'pointer' }}>
-                      <div style={{ position: 'relative', width: 40, height: 22, background: it.on ? '#16a34a' : '#d1d5db', borderRadius: 11, flexShrink: 0, transition: 'background .2s' }}>
-                        <div style={{ position: 'absolute', top: 2, left: it.on ? 20 : 2, width: 18, height: 18, background: 'white', borderRadius: '50%', transition: 'left .2s' }} />
-                      </div>
-                      <span style={{ flex: 1, minWidth: 0, fontSize: '0.86rem', fontWeight: 600, color: it.on ? '#15803d' : '#9ca3af' }}>
-                        {it.name}
-                        {it.dishOff && <span style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#f59e0b' }}>⚠️ món đang tắt trên menu</span>}
-                      </span>
-                      {changed && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: '#ea580c', background: '#ffedd5', borderRadius: 6, padding: '1px 5px', flexShrink: 0 }}>chưa lưu</span>}
-                      <span style={{ fontSize: '0.72rem', fontWeight: 800, color: it.on ? '#16a34a' : '#9ca3af', flexShrink: 0 }}>{it.on ? 'BẬT' : 'TẮT'}</span>
-                    </div>
+                      <>
+                        {gOn.length === 0
+                          ? <div style={{ fontSize: '0.82rem', color: '#9ca3af', marginBottom: 10 }}>Chưa bật món tặng nào.</div>
+                          : gOn.map(Row)}
+
+                        {gOnOff.length > 0 && (
+                          <>
+                            <div style={{ fontWeight: 700, fontSize: '0.76rem', color: '#b45309', margin: '12px 0 6px' }}>⚠️ Đang là quà nhưng món tắt trên menu ({gOnOff.length})</div>
+                            {gOnOff.map(Row)}
+                          </>
+                        )}
+
+                        <button onClick={() => setGiftOffOpen(o => !o)}
+                          style={{ width: '100%', marginTop: 12, display: 'flex', alignItems: 'center', gap: 6, background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 10, padding: '11px 12px', cursor: 'pointer', fontWeight: 800, fontSize: '0.82rem', color: '#475569' }}>
+                          <span style={{ display: 'inline-block', transform: giftOffOpen ? 'rotate(90deg)' : 'none', transition: 'transform .2s' }}>›</span>
+                          Chưa là món tặng ({nOff}) — bấm để bật thêm
+                        </button>
+                        {giftOffOpen && (
+                          <div style={{ marginTop: 8 }}>
+                            <input value={giftSearch} onChange={e => setGiftSearch(e.target.value)} placeholder="Tìm món…"
+                              style={{ width: '100%', padding: '8px 11px', border: '1.5px solid #e5e7eb', borderRadius: 10, fontSize: '0.86rem', marginBottom: 8, boxSizing: 'border-box' }} />
+                            {gOff.length === 0
+                              ? <div style={{ fontSize: '0.82rem', color: '#9ca3af' }}>Không có món khớp.</div>
+                              : gOff.map(Row)}
+                          </div>
+                        )}
+                      </>
                     );
-                  })}
+                  })()}
                 </>
               )}
             </div>
