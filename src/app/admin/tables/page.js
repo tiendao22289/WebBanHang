@@ -2730,6 +2730,8 @@ export default function TablesPage() {
                 padding: compact ? '12px 12px 10px' : '14px 14px 12px',
                 cursor: 'pointer',
                 minHeight: compact ? 80 : 90,
+                minWidth: 0, // KHÔNG cho thẻ nới rộng quá ô lưới (mặc định grid item = min-content
+                             // → nhiều biểu tượng sẽ kéo thẻ rộng ra, đẩy bàn khác ra ngoài màn hình)
                 display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
                 boxShadow: isKitchenAlerting ? '0 0 0 4px rgba(239,68,68,0.25), 0 8px 24px rgba(185,28,28,0.45)' : groupColor ? `0 2px 10px ${groupColor.border}40` : isOccupied ? '0 2px 8px rgba(37,99,235,0.10)' : '0 1px 4px rgba(0,0,0,0.06)',
                 position: 'relative', transition: 'transform 0.1s, box-shadow 0.1s',
@@ -2749,10 +2751,14 @@ export default function TablesPage() {
               <div onClick={openHistory} style={{ position: 'absolute', top: 6, right: 6, opacity: 0.55 }}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={groupColor ? groupColor.border : isOccupied ? '#3b82f6' : '#9ca3af'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: 18 }}>
-                <div style={{ fontSize: compact ? '1rem' : '1.1rem', fontWeight: 800, color: groupColor ? groupColor.text : isOccupied ? '#1d4ed8' : '#1f2937' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 4, paddingRight: 16 }}>
+                <div style={{ fontSize: compact ? '1rem' : '1.1rem', fontWeight: 800, color: groupColor ? groupColor.text : isOccupied ? '#1d4ed8' : '#1f2937', flexShrink: 0 }}>
                   B{table.table_number}
                 </div>
+                {/* Cụm biểu tượng: XUỐNG DÒNG gọn trong thẻ (flexWrap) thay vì xếp ngang
+                    kéo rộng thẻ ra ngoài lưới. flex:1 để cụm dùng hết bề ngang còn lại
+                    → icon xếp 2–3 cái/hàng cho thẻ đỡ cao, minWidth:0 để co vừa thẻ. */}
+                <div style={{ display: 'flex', flex: '1 1 0', minWidth: 0, flexWrap: 'wrap', gap: 3, justifyContent: 'flex-end', alignItems: 'center' }}>
                 {hasPrintError && (
                   <div style={{ background: '#fef2f2', color: '#dc2626', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #fecaca' }}>
                     <Printer size={12} strokeWidth={2} />
@@ -2800,6 +2806,7 @@ export default function TablesPage() {
                     🎁
                   </div>
                 )}
+                </div>
               </div>
               {tableReviewReqs.length > 0 && (
                 <div style={{ display: 'flex', gap: 3, marginTop: 4, flexWrap: 'wrap' }}>
