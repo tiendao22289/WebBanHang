@@ -313,6 +313,11 @@ export default function TablesPage() {
   const [showBillPreview, setShowBillPreview] = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false); // panel chọn nhanh nước/bia/khăn
   const [adjustOpen, setAdjustOpen] = useState(false);      // bảng Cộng/Trừ tiền, Giảm % vào bill
+  // Tab "Quà hôm nay": xem quà đã tặng hôm nay + món tặng nào đang bật/tắt.
+  const [showGiftsToday, setShowGiftsToday] = useState(false);
+  const [giftsTodayData, setGiftsTodayData] = useState(null);   // { given:[{name,qty}], items:[{id,name,on}] }
+  const [giftsTodayLoading, setGiftsTodayLoading] = useState(false);
+  const [giftToggleBusy, setGiftToggleBusy] = useState(null);   // id món đang bật/tắt
   // Ô nhập của bảng điều chỉnh bill giờ nằm trong BillAdjustDialog (state cục bộ,
   // tránh re-render cả trang khi gõ). Cha chỉ giữ mở/đóng + đang lưu.
   const [adjustBusy, setAdjustBusy] = useState(false);
@@ -1538,6 +1543,59 @@ export default function TablesPage() {
     const now = new Date();
     setGiftItems((gifts || []).filter(g => !g.hidden_until || new Date(g.hidden_until) < now));
   }, []);
+
+  // Dữ liệu cho tab "Quà hôm nay": (1) món đã tặng hôm nay + số lượng,
+  // (2) TẤT CẢ món tặng (is_gift_item) kèm trạng thái bật/tắt.
+  const fetchGiftsToday = useCallback(async () => {
+    setGiftsTodayLoading(true);
+    try {
+      const vnDayKey = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+      const startVN = new Date(`${vnDayKey}T00:00:00.000+07:00`).toISOString();
+      const [givenRes, itemsRes] = await Promise.all([
+        supabase.from('order_items')
+          .select('quantity, item_name, menu_item:menu_items(name)')
+          .eq('is_gift', true).gte('created_at', startVN),
+        supabase.from('menu_items')
+          .select('id, name, is_available, hidden_until')
+          .eq('is_gift_item', true).order('name'),
+      ]);
+      const givenMap = {};
+      (givenRes.data || []).forEach(oi => {
+        const name = oi.menu_item?.name || oi.item_name || 'Quà khác';
+        givenMap[name] = (givenMap[name] || 0) + (Number(oi.quantity) || 1);
+      });
+      const given = Object.entries(givenMap).map(([name, qty]) => ({ name, qty })).sort((a, b) => b.qty - a.qty);
+      const now = new Date();
+      const items = (itemsRes.data || []).map(m => ({
+        id: m.id, name: m.name,
+        on: !!m.is_available && (!m.hidden_until || new Date(m.hidden_until) < now),
+      }));
+      setGiftsTodayData({ given, items });
+    } catch (e) {
+      console.error('[fetchGiftsToday]', e);
+      setGiftsTodayData({ given: [], items: [] });
+    } finally {
+      setGiftsTodayLoading(false);
+    }
+  }, []);
+
+  // Bật/tắt nhanh 1 món tặng (đổi is_available). Tắt = khách không chọn được món
+  // đó làm quà nữa; bật = cho chọn lại (xoá luôn hạn ẩn tạm hidden_until).
+  async function toggleGiftItem(id, turnOn) {
+    if (giftToggleBusy) return;
+    setGiftToggleBusy(id);
+    try {
+      const patch = turnOn ? { is_available: true, hidden_until: null } : { is_available: false };
+      const { error } = await supabase.from('menu_items').update(patch).eq('id', id);
+      if (error) { Swal.fire({ icon: 'error', title: 'Chưa đổi được', text: error.message }); return; }
+      await fetchGiftsToday();
+      fetchPromoAndGifts(); // cập nhật danh sách quà dùng chung toàn trang
+    } catch (e) {
+      Swal.fire({ icon: 'error', title: 'Lỗi', text: 'Không đổi được, thử lại giúp ạ.' });
+    } finally {
+      setGiftToggleBusy(null);
+    }
+  }
 
   // Toàn bộ table id của nhóm gộp (host + satellites)
   function groupTableIds(hostId) {
@@ -6706,6 +6764,86 @@ export default function TablesPage() {
           </div>
         )
       }
+
+      {/* ─── Tab "Quà hôm nay" ở mép phải màn hình bàn (chỉ hiện khi đang xem lưới bàn) ─── */}
+      {!selectedTable && (
+        <button
+          onClick={() => { setShowGiftsToday(true); fetchGiftsToday(); }}
+          title="Xem quà tặng hôm nay & bật/tắt món tặng"
+          style={{
+            position: 'fixed', right: 0, top: '46%', transform: 'translateY(-50%)',
+            zIndex: 55, width: 30, minHeight: 92,
+            border: 'none', borderRadius: '12px 0 0 12px',
+            background: 'linear-gradient(135deg,#db2777,#9d174d)', color: 'white',
+            cursor: 'pointer', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 0',
+            boxShadow: '-3px 3px 12px rgba(219,39,119,0.4)',
+          }}
+        >
+          <span style={{ fontSize: '1.05rem', lineHeight: 1, fontWeight: 800 }}>‹</span>
+          <span style={{ fontSize: '1rem', lineHeight: 1 }}>🎁</span>
+          <span style={{ writingMode: 'vertical-rl', fontSize: '0.6rem', fontWeight: 700, letterSpacing: 1 }}>QUÀ</span>
+        </button>
+      )}
+
+      {/* Drawer "Quà hôm nay": đã tặng hôm nay + món tặng bật/tắt */}
+      {showGiftsToday && (
+        <div onClick={() => setShowGiftsToday(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 99998, background: 'rgba(15,23,42,0.45)' }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{
+              position: 'absolute', top: 0, bottom: 0, right: 0,
+              width: 'min(85%, 340px)', background: 'white',
+              boxShadow: '-8px 0 30px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column',
+              borderRadius: '16px 0 0 16px', overflow: 'hidden',
+            }}>
+            <div style={{ padding: 'calc(12px + env(safe-area-inset-top)) 14px 12px', background: '#fdf2f8', borderBottom: '1px solid #fbcfe8', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontWeight: 800, color: '#9d174d', fontSize: '1rem' }}>🎁 Quà hôm nay</span>
+              <button onClick={() => fetchGiftsToday()} style={{ marginLeft: 'auto', background: '#fce7f3', border: 'none', borderRadius: 8, padding: '4px 9px', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700, color: '#9d174d' }}>↻ Làm mới</button>
+              <button onClick={() => setShowGiftsToday(false)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px calc(14px + env(safe-area-inset-bottom))' }}>
+              {giftsTodayLoading && !giftsTodayData ? (
+                <div style={{ textAlign: 'center', color: '#9ca3af', padding: 20 }}>Đang tải…</div>
+              ) : (
+                <>
+                  <div style={{ fontWeight: 800, fontSize: '0.85rem', color: '#0f172a', marginBottom: 8 }}>
+                    🎉 Đã tặng hôm nay
+                    {giftsTodayData?.given?.length > 0 && <span style={{ color: '#db2777' }}> ({giftsTodayData.given.reduce((s, g) => s + g.qty, 0)} phần)</span>}
+                  </div>
+                  {(!giftsTodayData?.given || giftsTodayData.given.length === 0) ? (
+                    <div style={{ fontSize: '0.82rem', color: '#9ca3af', background: '#f8fafc', borderRadius: 10, padding: '10px 12px', marginBottom: 16 }}>Hôm nay chưa tặng món nào.</div>
+                  ) : (
+                    <div style={{ marginBottom: 16 }}>
+                      {giftsTodayData.given.map(g => (
+                        <div key={g.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', border: '1px solid #f3e8ff', background: '#faf5ff', borderRadius: 10, marginBottom: 6 }}>
+                          <span style={{ fontSize: '0.86rem', fontWeight: 600, color: '#374151' }}>{g.name}</span>
+                          <span style={{ fontSize: '0.86rem', fontWeight: 800, color: '#9d174d' }}>×{g.qty}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div style={{ fontWeight: 800, fontSize: '0.85rem', color: '#0f172a', marginBottom: 4 }}>🎁 Món tặng (bấm để bật/tắt)</div>
+                  <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginBottom: 8 }}>Tắt = khách không chọn được món đó làm quà.</div>
+                  {(!giftsTodayData?.items || giftsTodayData.items.length === 0) ? (
+                    <div style={{ fontSize: '0.82rem', color: '#9ca3af' }}>Chưa cấu hình món tặng nào (bật ở Thực đơn).</div>
+                  ) : giftsTodayData.items.map(it => (
+                    <div key={it.id} onClick={() => toggleGiftItem(it.id, !it.on)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', border: `1.5px solid ${it.on ? '#bbf7d0' : '#e5e7eb'}`, background: it.on ? '#f0fdf4' : '#f9fafb', borderRadius: 10, marginBottom: 7, cursor: 'pointer', opacity: giftToggleBusy === it.id ? 0.5 : 1 }}>
+                      <div style={{ position: 'relative', width: 40, height: 22, background: it.on ? '#16a34a' : '#d1d5db', borderRadius: 11, flexShrink: 0, transition: 'background .2s' }}>
+                        <div style={{ position: 'absolute', top: 2, left: it.on ? 20 : 2, width: 18, height: 18, background: 'white', borderRadius: '50%', transition: 'left .2s' }} />
+                      </div>
+                      <span style={{ flex: 1, fontSize: '0.86rem', fontWeight: 600, color: it.on ? '#15803d' : '#9ca3af' }}>{it.name}</span>
+                      <span style={{ fontSize: '0.72rem', fontWeight: 800, color: it.on ? '#16a34a' : '#9ca3af' }}>{giftToggleBusy === it.id ? '…' : it.on ? 'BẬT' : 'TẮT'}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── Chi tiết lượt quay vòng xoay của bàn (chờ Quan tâm / lỗi) ─── */}
       {
