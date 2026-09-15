@@ -2083,6 +2083,19 @@ function OrderContent() {
   }, [activeTableId, urlTableId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Pool "nước tặng" — admin cấu hình ở Cài đặt > Vòng xoay, khách chọn khi trúng quà gift_drink. */
+  // Nạp lại danh sách MÓN TẶNG (is_gift_item) — gọi mỗi lần mở vòng xoay để khi
+  // admin vừa bật/tắt món tặng (bấm Lưu) thì khách nhận NGAY ở lần quay kế tiếp,
+  // không phải tải lại trang. Nhẹ (1 query), không chặn UI.
+  async function refreshGiftItems() {
+    try {
+      const { data: gifts } = await supabase.from('menu_items')
+        .select('id, name, price, image_url, options, hidden_until')
+        .eq('is_gift_item', true).eq('is_available', true);
+      const now = new Date();
+      setGiftItems((gifts || []).filter(g => !g.hidden_until || new Date(g.hidden_until) < now));
+    } catch { /* giữ danh sách cũ nếu lỗi mạng */ }
+  }
+
   async function fetchWheelDrinkItems() {
     if (wheelDrinkLoadedRef.current) return;
     if (wheelDrinkLoadRef.current) return wheelDrinkLoadRef.current;
@@ -2161,8 +2174,10 @@ function OrderContent() {
     wheelOpeningRef.current = true;
     try {
       setWheelOpen(true);
-      // Cơ cấu quà do Admin cấu hình → luôn đọc lại khi mở
+      // Cơ cấu quà + danh sách món tặng do Admin cấu hình → luôn đọc lại khi mở
+      // để khách nhận NGAY thay đổi admin vừa lưu (bật/tắt món tặng).
       fetchLuckyPrizes(supabase).then(setWheelPrizes);
+      refreshGiftItems();
       setWheelErr('');
       setWheelPrize(null);
       setWheelSpin(null);

@@ -317,7 +317,8 @@ export default function TablesPage() {
   const [showGiftsToday, setShowGiftsToday] = useState(false);
   const [giftsTodayData, setGiftsTodayData] = useState(null);   // { given:[{name,qty}], items:[{id,name,on}] }
   const [giftsTodayLoading, setGiftsTodayLoading] = useState(false);
-  const [giftToggleBusy, setGiftToggleBusy] = useState(null);   // id món đang bật/tắt
+  const [giftPending, setGiftPending] = useState({});           // {id: bậtMới} — thay đổi CHƯA lưu
+  const [giftSaving, setGiftSaving] = useState(false);
   // Ô nhập của bảng điều chỉnh bill giờ nằm trong BillAdjustDialog (state cục bộ,
   // tránh re-render cả trang khi gõ). Cha chỉ giữ mở/đóng + đang lưu.
   const [adjustBusy, setAdjustBusy] = useState(false);
@@ -1586,24 +1587,36 @@ export default function TablesPage() {
     }
   }, []);
 
-  // Bật/tắt tư cách MÓN TẶNG của 1 món — CHỈ đổi is_gift_item ("🎁 Là món tặng").
-  // KHÔNG đụng is_available: món ăn vẫn bán bình thường, chỉ là không cho khách
-  // chọn làm quà nữa. Cập nhật tại chỗ (giữ dòng để bật lại được), không refetch
-  // để món vừa tắt không biến mất khỏi danh sách đang mở.
-  async function toggleGiftItem(id, turnOn) {
-    if (giftToggleBusy) return;
-    setGiftToggleBusy(id);
+  // Gạt bật/tắt tư cách MÓN TẶNG — CHỈ ĐỔI HIỂN THỊ, gộp vào giftPending, CHƯA
+  // ghi DB. Phải bấm "Lưu" mới đẩy lên. (is_gift_item = "🎁 Là món tặng", KHÔNG
+  // đụng is_available nên món ăn vẫn bán bình thường.)
+  function stageGiftToggle(id, turnOn) {
+    setGiftPending(p => ({ ...p, [id]: turnOn }));
+    setGiftsTodayData(prev => prev
+      ? { ...prev, items: prev.items.map(it => (it.id === id ? { ...it, on: turnOn } : it)) }
+      : prev);
+  }
+
+  // Bấm LƯU: ghi 1 lần tất cả thay đổi is_gift_item, rồi cập nhật NGAY cho web
+  // admin (refetch danh sách quà). Web khách nạp lại danh sách quà mỗi lần mở
+  // vòng xoay nên cũng nhận ngay lần tương tác kế tiếp.
+  async function saveGiftChanges() {
+    const changes = Object.entries(giftPending);
+    if (changes.length === 0 || giftSaving) return;
+    setGiftSaving(true);
     try {
-      const { error } = await supabase.from('menu_items').update({ is_gift_item: turnOn }).eq('id', id);
-      if (error) { Swal.fire({ icon: 'error', title: 'Chưa đổi được', text: error.message }); return; }
-      setGiftsTodayData(prev => prev
-        ? { ...prev, items: prev.items.map(it => (it.id === id ? { ...it, on: turnOn } : it)) }
-        : prev);
-      fetchPromoAndGifts(); // cập nhật danh sách quà dùng chung toàn trang
+      const results = await Promise.all(changes.map(([id, on]) =>
+        supabase.from('menu_items').update({ is_gift_item: on }).eq('id', id)));
+      const failed = results.find(r => r.error);
+      if (failed) { Swal.fire({ icon: 'error', title: 'Lưu chưa xong', text: failed.error.message }); return; }
+      setGiftPending({});
+      await fetchGiftsToday();
+      fetchPromoAndGifts(); // cập nhật badge quà trên thẻ bàn cho admin ngay
+      Swal.fire({ icon: 'success', title: 'Đã lưu!', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500 });
     } catch (e) {
-      Swal.fire({ icon: 'error', title: 'Lỗi', text: 'Không đổi được, thử lại giúp ạ.' });
+      Swal.fire({ icon: 'error', title: 'Lỗi', text: 'Không lưu được, thử lại giúp ạ.' });
     } finally {
-      setGiftToggleBusy(null);
+      setGiftSaving(false);
     }
   }
 
@@ -6778,15 +6791,15 @@ export default function TablesPage() {
       {/* ─── Tab "Quà hôm nay" ở mép phải màn hình bàn (chỉ hiện khi đang xem lưới bàn) ─── */}
       {!selectedTable && (
         <button
-          onClick={() => { setShowGiftsToday(true); fetchGiftsToday(); }}
+          onClick={() => { setShowGiftsToday(true); setGiftPending({}); fetchGiftsToday(); }}
           title="Quà hôm nay & bật/tắt món tặng (admin)"
           style={{
             position: 'fixed', right: 0, top: '46%', transform: 'translateY(-50%)',
-            zIndex: 55, width: 18, height: 44,
-            border: 'none', borderRadius: '8px 0 0 8px',
+            zIndex: 55, width: 10, height: 40,
+            border: 'none', borderRadius: '6px 0 0 6px',
             background: 'linear-gradient(135deg,#db2777,#9d174d)', color: 'white',
             cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: 0, fontSize: '0.85rem', fontWeight: 800, lineHeight: 1,
+            padding: 0, fontSize: '0.7rem', fontWeight: 800, lineHeight: 1,
             boxShadow: '-2px 2px 8px rgba(219,39,119,0.32)',
           }}
         >
@@ -6807,7 +6820,24 @@ export default function TablesPage() {
             }}>
             <div style={{ padding: 'calc(12px + env(safe-area-inset-top)) 14px 12px', background: '#fdf2f8', borderBottom: '1px solid #fbcfe8', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontWeight: 800, color: '#9d174d', fontSize: '1rem' }}>🎁 Quà hôm nay</span>
-              <button onClick={() => fetchGiftsToday()} style={{ marginLeft: 'auto', background: '#fce7f3', border: 'none', borderRadius: 8, padding: '4px 9px', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700, color: '#9d174d' }}>↻ Làm mới</button>
+              {(() => {
+                const nPending = Object.keys(giftPending).length;
+                return (
+                  <button
+                    onClick={saveGiftChanges}
+                    disabled={nPending === 0 || giftSaving}
+                    style={{
+                      marginLeft: 'auto', border: 'none', borderRadius: 8, padding: '6px 12px',
+                      cursor: nPending === 0 ? 'default' : 'pointer', fontSize: '0.78rem', fontWeight: 800,
+                      background: nPending === 0 ? '#e5e7eb' : 'linear-gradient(135deg,#16a34a,#15803d)',
+                      color: nPending === 0 ? '#9ca3af' : 'white',
+                      boxShadow: nPending === 0 ? 'none' : '0 3px 10px rgba(22,163,74,0.35)',
+                    }}
+                  >
+                    {giftSaving ? 'Đang lưu…' : nPending > 0 ? `💾 Lưu (${nPending})` : '💾 Lưu'}
+                  </button>
+                );
+              })()}
               <button onClick={() => setShowGiftsToday(false)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>✕</button>
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px calc(14px + env(safe-area-inset-bottom))' }}>
@@ -6839,9 +6869,11 @@ export default function TablesPage() {
                   </div>
                   {(!giftsTodayData?.items || giftsTodayData.items.length === 0) ? (
                     <div style={{ fontSize: '0.82rem', color: '#9ca3af' }}>Chưa có món tặng nào (bật "Là món tặng" cho món ở Thực đơn).</div>
-                  ) : giftsTodayData.items.map(it => (
-                    <div key={it.id} onClick={() => toggleGiftItem(it.id, !it.on)}
-                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', border: `1.5px solid ${it.on ? '#bbf7d0' : '#e5e7eb'}`, background: it.on ? '#f0fdf4' : '#f9fafb', borderRadius: 10, marginBottom: 7, cursor: 'pointer', opacity: giftToggleBusy === it.id ? 0.5 : 1 }}>
+                  ) : giftsTodayData.items.map(it => {
+                    const changed = Object.prototype.hasOwnProperty.call(giftPending, it.id);
+                    return (
+                    <div key={it.id} onClick={() => stageGiftToggle(it.id, !it.on)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', border: `1.5px solid ${changed ? '#fdba74' : it.on ? '#bbf7d0' : '#e5e7eb'}`, background: it.on ? '#f0fdf4' : '#f9fafb', borderRadius: 10, marginBottom: 7, cursor: 'pointer' }}>
                       <div style={{ position: 'relative', width: 40, height: 22, background: it.on ? '#16a34a' : '#d1d5db', borderRadius: 11, flexShrink: 0, transition: 'background .2s' }}>
                         <div style={{ position: 'absolute', top: 2, left: it.on ? 20 : 2, width: 18, height: 18, background: 'white', borderRadius: '50%', transition: 'left .2s' }} />
                       </div>
@@ -6849,9 +6881,11 @@ export default function TablesPage() {
                         {it.name}
                         {it.dishOff && <span style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#f59e0b' }}>⚠️ món đang tắt trên menu</span>}
                       </span>
-                      <span style={{ fontSize: '0.72rem', fontWeight: 800, color: it.on ? '#16a34a' : '#9ca3af', flexShrink: 0 }}>{giftToggleBusy === it.id ? '…' : it.on ? 'BẬT' : 'TẮT'}</span>
+                      {changed && <span style={{ fontSize: '0.6rem', fontWeight: 800, color: '#ea580c', background: '#ffedd5', borderRadius: 6, padding: '1px 5px', flexShrink: 0 }}>chưa lưu</span>}
+                      <span style={{ fontSize: '0.72rem', fontWeight: 800, color: it.on ? '#16a34a' : '#9ca3af', flexShrink: 0 }}>{it.on ? 'BẬT' : 'TẮT'}</span>
                     </div>
-                  ))}
+                    );
+                  })}
                 </>
               )}
             </div>
