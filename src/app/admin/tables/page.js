@@ -6779,20 +6779,18 @@ export default function TablesPage() {
       {!selectedTable && (
         <button
           onClick={() => { setShowGiftsToday(true); fetchGiftsToday(); }}
-          title="Xem quà tặng hôm nay & bật/tắt món tặng"
+          title="Quà hôm nay & bật/tắt món tặng (admin)"
           style={{
             position: 'fixed', right: 0, top: '46%', transform: 'translateY(-50%)',
-            zIndex: 55, width: 30, minHeight: 92,
-            border: 'none', borderRadius: '12px 0 0 12px',
+            zIndex: 55, width: 18, height: 44,
+            border: 'none', borderRadius: '8px 0 0 8px',
             background: 'linear-gradient(135deg,#db2777,#9d174d)', color: 'white',
-            cursor: 'pointer', display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 0',
-            boxShadow: '-3px 3px 12px rgba(219,39,119,0.4)',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 0, fontSize: '0.85rem', fontWeight: 800, lineHeight: 1,
+            boxShadow: '-2px 2px 8px rgba(219,39,119,0.32)',
           }}
         >
-          <span style={{ fontSize: '1.05rem', lineHeight: 1, fontWeight: 800 }}>‹</span>
-          <span style={{ fontSize: '1rem', lineHeight: 1 }}>🎁</span>
-          <span style={{ writingMode: 'vertical-rl', fontSize: '0.6rem', fontWeight: 700, letterSpacing: 1 }}>QUÀ</span>
+          ‹
         </button>
       )}
 
