@@ -11,7 +11,7 @@ import { supabase } from '@/lib/supabase';
 import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, fetchGroupBillTotal, startOfTodayISO, isReviewDiscountItem } from '@/lib/reviewReward';
 import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem } from '@/lib/luckyWheel';
-import { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, hasPendingLuckySpin, newLuckyRequestId, fetchLuckyNudgeConfig, wheelGiftGate } from '@/lib/luckyRewardFlow';
+import { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, newLuckyRequestId, fetchLuckyNudgeConfig, wheelGiftGate } from '@/lib/luckyRewardFlow';
 import {
   Search,
   Plus,
@@ -2198,14 +2198,16 @@ function OrderContent() {
 
       const key = wheelStorageKey();
       let storedId = null;
-      let pendingId = null;
       try {
         storedId = localStorage.getItem(key);
-        pendingId = localStorage.getItem(`${key}_pending`);
       } catch { }
-      // A normal click opens a fresh wheel. The expensive table/order recovery
-      // is only needed when this browser has a reward still waiting to finish.
-      if (hasPendingLuckySpin(storedId, pendingId)) await restoreWheel(true);
+      // Khách TỰ BẤM mở vòng xoay: nếu thiết bị này ĐÃ có lượt quay lưu lại
+      // (storedId) thì LUÔN khôi phục về đúng bản kết quả/"Mở Zalo, bấm Quan tâm!"
+      // — kể cả khi khách đã lỡ bấm X/"Để sau" trước đó (dismiss xoá cờ _pending).
+      // Vì khách đã quay rồi thì KHÔNG được hiện vòng xoay để quay lại. restoreWheel
+      // ở chế độ manual bỏ qua cờ dismissed, và nếu lượt cũ/khác phiên thì nó tự
+      // dọn con trỏ rồi trả về → openWheel hiện vòng xoay mới cho khách mới.
+      if (storedId) await restoreWheel(true);
     } finally {
       wheelOpeningRef.current = false;
     }
