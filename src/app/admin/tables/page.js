@@ -1555,8 +1555,11 @@ export default function TablesPage() {
         supabase.from('order_items')
           .select('quantity, item_name, menu_item:menu_items(name)')
           .eq('is_gift', true).gte('created_at', startVN),
+        // Chỉ lấy món ĐANG là món tặng (is_gift_item=true). Kèm is_available để
+        // ghi chú nếu MÓN ĂN đó đang tắt trên menu — nhưng công tắc chỉ đổi cờ
+        // món-tặng, KHÔNG đụng is_available.
         supabase.from('menu_items')
-          .select('id, name, is_available, hidden_until')
+          .select('id, name, is_available')
           .eq('is_gift_item', true).order('name'),
       ]);
       const givenMap = {};
@@ -1565,12 +1568,16 @@ export default function TablesPage() {
         givenMap[name] = (givenMap[name] || 0) + (Number(oi.quantity) || 1);
       });
       const given = Object.entries(givenMap).map(([name, qty]) => ({ name, qty })).sort((a, b) => b.qty - a.qty);
-      const now = new Date();
-      const items = (itemsRes.data || []).map(m => ({
-        id: m.id, name: m.name,
-        on: !!m.is_available && (!m.hidden_until || new Date(m.hidden_until) < now),
-      }));
-      setGiftsTodayData({ given, items });
+      // on = đang là món tặng. Món vừa tắt (không còn is_gift_item) sẽ không nằm
+      // trong kết quả nữa → giữ lại từ danh sách cũ với on=false để còn bật lại được.
+      const fetched = (itemsRes.data || []).map(m => ({ id: m.id, name: m.name, on: true, dishOff: !m.is_available }));
+      setGiftsTodayData(prev => {
+        const map = {};
+        fetched.forEach(i => { map[i.id] = i; });
+        (prev?.items || []).forEach(i => { if (!map[i.id]) map[i.id] = { ...i, on: false }; });
+        const items = Object.values(map).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi'));
+        return { given, items };
+      });
     } catch (e) {
       console.error('[fetchGiftsToday]', e);
       setGiftsTodayData({ given: [], items: [] });
@@ -1579,16 +1586,19 @@ export default function TablesPage() {
     }
   }, []);
 
-  // Bật/tắt nhanh 1 món tặng (đổi is_available). Tắt = khách không chọn được món
-  // đó làm quà nữa; bật = cho chọn lại (xoá luôn hạn ẩn tạm hidden_until).
+  // Bật/tắt tư cách MÓN TẶNG của 1 món — CHỈ đổi is_gift_item ("🎁 Là món tặng").
+  // KHÔNG đụng is_available: món ăn vẫn bán bình thường, chỉ là không cho khách
+  // chọn làm quà nữa. Cập nhật tại chỗ (giữ dòng để bật lại được), không refetch
+  // để món vừa tắt không biến mất khỏi danh sách đang mở.
   async function toggleGiftItem(id, turnOn) {
     if (giftToggleBusy) return;
     setGiftToggleBusy(id);
     try {
-      const patch = turnOn ? { is_available: true, hidden_until: null } : { is_available: false };
-      const { error } = await supabase.from('menu_items').update(patch).eq('id', id);
+      const { error } = await supabase.from('menu_items').update({ is_gift_item: turnOn }).eq('id', id);
       if (error) { Swal.fire({ icon: 'error', title: 'Chưa đổi được', text: error.message }); return; }
-      await fetchGiftsToday();
+      setGiftsTodayData(prev => prev
+        ? { ...prev, items: prev.items.map(it => (it.id === id ? { ...it, on: turnOn } : it)) }
+        : prev);
       fetchPromoAndGifts(); // cập nhật danh sách quà dùng chung toàn trang
     } catch (e) {
       Swal.fire({ icon: 'error', title: 'Lỗi', text: 'Không đổi được, thử lại giúp ạ.' });
@@ -6824,18 +6834,24 @@ export default function TablesPage() {
                     </div>
                   )}
 
-                  <div style={{ fontWeight: 800, fontSize: '0.85rem', color: '#0f172a', marginBottom: 4 }}>🎁 Món tặng (bấm để bật/tắt)</div>
-                  <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginBottom: 8 }}>Tắt = khách không chọn được món đó làm quà.</div>
+                  <div style={{ fontWeight: 800, fontSize: '0.85rem', color: '#0f172a', marginBottom: 4 }}>🎁 Là món tặng (bấm để bật/tắt)</div>
+                  <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginBottom: 8, lineHeight: 1.5 }}>
+                    Chỉ bật/tắt việc <b>cho khách chọn làm quà</b> — <b>KHÔNG tắt món ăn</b>. Tắt thì khách
+                    không chọn món này làm quà nữa, nhưng món vẫn bán bình thường.
+                  </div>
                   {(!giftsTodayData?.items || giftsTodayData.items.length === 0) ? (
-                    <div style={{ fontSize: '0.82rem', color: '#9ca3af' }}>Chưa cấu hình món tặng nào (bật ở Thực đơn).</div>
+                    <div style={{ fontSize: '0.82rem', color: '#9ca3af' }}>Chưa có món tặng nào (bật "Là món tặng" cho món ở Thực đơn).</div>
                   ) : giftsTodayData.items.map(it => (
                     <div key={it.id} onClick={() => toggleGiftItem(it.id, !it.on)}
                       style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', border: `1.5px solid ${it.on ? '#bbf7d0' : '#e5e7eb'}`, background: it.on ? '#f0fdf4' : '#f9fafb', borderRadius: 10, marginBottom: 7, cursor: 'pointer', opacity: giftToggleBusy === it.id ? 0.5 : 1 }}>
                       <div style={{ position: 'relative', width: 40, height: 22, background: it.on ? '#16a34a' : '#d1d5db', borderRadius: 11, flexShrink: 0, transition: 'background .2s' }}>
                         <div style={{ position: 'absolute', top: 2, left: it.on ? 20 : 2, width: 18, height: 18, background: 'white', borderRadius: '50%', transition: 'left .2s' }} />
                       </div>
-                      <span style={{ flex: 1, fontSize: '0.86rem', fontWeight: 600, color: it.on ? '#15803d' : '#9ca3af' }}>{it.name}</span>
-                      <span style={{ fontSize: '0.72rem', fontWeight: 800, color: it.on ? '#16a34a' : '#9ca3af' }}>{giftToggleBusy === it.id ? '…' : it.on ? 'BẬT' : 'TẮT'}</span>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: '0.86rem', fontWeight: 600, color: it.on ? '#15803d' : '#9ca3af' }}>
+                        {it.name}
+                        {it.dishOff && <span style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#f59e0b' }}>⚠️ món đang tắt trên menu</span>}
+                      </span>
+                      <span style={{ fontSize: '0.72rem', fontWeight: 800, color: it.on ? '#16a34a' : '#9ca3af', flexShrink: 0 }}>{giftToggleBusy === it.id ? '…' : it.on ? 'BẬT' : 'TẮT'}</span>
                     </div>
                   ))}
                 </>
