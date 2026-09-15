@@ -1014,10 +1014,10 @@ export default function TablesPage() {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
         scheduleRefetch(false); // items đổi → chỉ cần fetchOrdersOnly
-        // Quà vừa vào bill là một order_item mới → nạp lại trạng thái quà để icon
-        // ⏳/⚠️ tắt ngay, không chờ vòng poll. (lucky_spins không realtime được
-        // vì đã siết quyền đọc anon, nên bám theo tín hiệu order_items.)
-        fetchLuckyStatusRef.current?.();
+        // KHÔNG nạp lại trạng thái quà ở đây: mỗi lần thêm/sửa món (rất thường
+        // xuyên lúc đông khách) mà gọi thêm 2 query lucky-status trên MỌI máy →
+        // ngốn tải vô ích. Vòng poll 20s + lúc quay lại tab đã lo cập nhật icon
+        // ⏳/⚠️ đủ nhanh rồi.
       })
       // Lệnh in đổi trạng thái → cập nhật badge lỗi TỨC THÌ + báo nhân viên biết.
       .on('postgres_changes', { event: '*', schema: 'public', table: 'print_jobs' }, (payload) => {
