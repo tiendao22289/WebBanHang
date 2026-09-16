@@ -23,6 +23,7 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [sortBy, setSortBy] = useState('recent'); // 'recent' = ghé gần nhất | 'returns' = quay lại nhiều nhất
   const [currentPage, setCurrentPage] = useState(1);
   const [syncProgress, setSyncProgress] = useState(0);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
@@ -91,14 +92,26 @@ export default function CustomersPage() {
 
   const filteredCustomers = useMemo(() => {
     const keyword = debouncedSearch.trim().toLowerCase();
-    if (!keyword) return customers;
+    let list = customers;
 
-    return customers.filter((customer) => {
-      const name = (customer.name || '').toLowerCase();
-      const phone = (customer.phone || '').toLowerCase();
-      return name.includes(keyword) || phone.includes(keyword);
-    });
-  }, [customers, debouncedSearch]);
+    if (keyword) {
+      list = customers.filter((customer) => {
+        const name = (customer.name || '').toLowerCase();
+        const phone = (customer.phone || '').toLowerCase();
+        return name.includes(keyword) || phone.includes(keyword);
+      });
+    }
+
+    // 'recent' giữ nguyên thứ tự đồng bộ (last_visit_at giảm dần).
+    // 'returns' = top khách quay lại nhiều nhất (số lần ghé giảm dần).
+    if (sortBy === 'returns') {
+      list = [...list].sort(
+        (a, b) => (b.visit_count || 0) - (a.visit_count || 0)
+      );
+    }
+
+    return list;
+  }, [customers, debouncedSearch, sortBy]);
 
   const totalCount = filteredCustomers.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
@@ -226,6 +239,20 @@ export default function CustomersPage() {
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
+        <select
+          value={sortBy}
+          onChange={(e) => { setSortBy(e.target.value); setCurrentPage(1); }}
+          title="S\u1eafp x\u1ebfp"
+          style={{
+            padding: '10px 14px',
+            border: '1px solid #e2e8f0', borderRadius: '10px',
+            fontSize: '0.9rem', fontWeight: 600, color: '#475569',
+            background: 'white', cursor: 'pointer', minWidth: 190,
+          }}
+        >
+          <option value="recent">{'Gh\u00e9 g\u1ea7n nh\u1ea5t'}</option>
+          <option value="returns">{'Quay l\u1ea1i nhi\u1ec1u nh\u1ea5t'}</option>
+        </select>
         <button
           onClick={syncCustomers}
           disabled={loading}
