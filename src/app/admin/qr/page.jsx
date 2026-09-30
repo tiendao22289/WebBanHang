@@ -27,6 +27,7 @@ export default function QrGeneratorPage() {
   const [amount, setAmount] = useState('');
   const [qrAccount, setQrAccount] = useState(null);
   const [transactionCode, setTransactionCode] = useState('');
+  const [activeQr, setActiveQr] = useState(null);
   const [paymentStatus, setPaymentStatus] = useState('idle'); // idle | pending | completed
   const [isGenerating, setIsGenerating] = useState(false);
 
@@ -92,6 +93,7 @@ export default function QrGeneratorPage() {
       setAmount('');
       setPaymentStatus('idle');
       setTransactionCode('');
+      setActiveQr(null);
       if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
 
     } catch (err) {
@@ -104,6 +106,7 @@ export default function QrGeneratorPage() {
 
   // ─── Tạo mã QR cho thẻ ẨN ────────────────────────────────────────────────
   const handleGenerateQR = async () => {
+    if (paymentStatus === 'pending' || isGenerating) return;
     setIsGenerating(true);
 
     // Luôn lấy thẻ Ẩn mới nhất
@@ -113,12 +116,26 @@ export default function QrGeneratorPage() {
       Swal.fire('Lỗi', 'Không tìm thấy thẻ ngân hàng phù hợp! Vui lòng thêm thẻ phụ trong phần Cài đặt.', 'error');
       return;
     }
-    setQrAccount(account);
-
     const numAmount = parseInt(amount.replace(/\D/g, ''), 10) || 0;
+    if (!Number.isSafeInteger(numAmount) || numAmount <= 0) {
+      setIsGenerating(false);
+      Swal.fire('Số tiền không hợp lệ', 'Vui lòng nhập số tiền lớn hơn 0.', 'error');
+      return;
+    }
 
     try {
       const newCode = generateCode();
+      const { error: insertError } = await supabase.from('payment_transactions').insert({
+        transaction_code: newCode,
+        order_ids: 'shadow_qr',
+        account_id: account.id,
+        total_amount: numAmount,
+        status: 'pending',
+      });
+      if (insertError) throw insertError;
+
+      // Keep the QR tied to the amount and account saved with this transaction.
+      setActiveQr({ code: newCode, amount: numAmount, account });
       setTransactionCode(newCode);
       setPaymentStatus('pending');
 
@@ -156,15 +173,6 @@ export default function QrGeneratorPage() {
           }
         )
         .subscribe();
-
-      // Lưu transaction để theo dõi (dùng account_id của thẻ Ẩn)
-      await supabase.from('payment_transactions').insert({
-        transaction_code: newCode,
-        order_ids: 'shadow_qr',
-        account_id: account.id,
-        total_amount: numAmount,
-        status: 'pending',
-      });
 
     } catch (err) {
       console.error(err);
@@ -206,12 +214,21 @@ export default function QrGeneratorPage() {
   const handleCancel = async () => {
     if (!transactionCode) return;
     try {
-      await supabase.from('payment_transactions').update({ status: 'failed' }).eq('transaction_code', transactionCode);
+      const { data: cancelled, error } = await supabase.from('payment_transactions')
+        .update({ status: 'failed' })
+        .eq('transaction_code', transactionCode)
+        .eq('status', 'pending')
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!cancelled) throw new Error('Mã QR đã đổi trạng thái. Vui lòng đối soát giao dịch.');
       setPaymentStatus('idle');
       setTransactionCode('');
+      setActiveQr(null);
       if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
     } catch (err) {
       console.error(err);
+      Swal.fire('Chưa huỷ được mã', 'Không lưu được trạng thái huỷ. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
     }
   };
 
@@ -229,7 +246,7 @@ export default function QrGeneratorPage() {
     if (!isConfirmed) return;
 
     try {
-      const numAmount = parseInt(amount.replace(/\D/g, ''), 10) || 0;
+      const numAmount = activeQr?.amount || 0;
 
       // Huỷ subscription TRƯỚC khi tự update status — nếu để sau, chính update
       // này kích lại listener realtime bên dưới (đang lắng nghe đúng sự kiện
@@ -239,11 +256,18 @@ export default function QrGeneratorPage() {
         subscriptionRef.current = null;
       }
 
-      await supabase.from('payment_transactions').update({ status: 'completed' }).eq('transaction_code', transactionCode);
+      const { data: confirmed, error: confirmError } = await supabase.from('payment_transactions')
+        .update({ status: 'completed' })
+        .eq('transaction_code', transactionCode)
+        .eq('status', 'pending')
+        .select('id')
+        .maybeSingle();
+      if (confirmError) throw confirmError;
+      if (!confirmed) throw new Error('Mã QR đã đổi trạng thái. Vui lòng tải lại và đối soát giao dịch.');
 
       // Cộng tiền vào thẻ Ẩn
-      if (qrAccount && numAmount > 0) {
-        await recordShadowPayment(qrAccount.id, numAmount);
+      if (activeQr?.account && numAmount > 0) {
+        await recordShadowPayment(activeQr.account.id, numAmount);
       }
 
       setPaymentStatus('completed');
@@ -294,11 +318,12 @@ export default function QrGeneratorPage() {
                 type="text"
                 value={amount}
                 onChange={handleAmountChange}
+                disabled={paymentStatus === 'pending'}
                 placeholder="Ví dụ: 100,000"
                 style={{
-                  width: '100%', padding: '14px 16px', borderRadius: 12, border: '1.5px solid #cbd5e1', 
+                  width: '100%', padding: '14px 16px', borderRadius: 12, border: '1.5px solid #cbd5e1',
                   fontSize: '1.2rem', fontWeight: 700, color: '#0f172a', boxSizing: 'border-box',
-                  outline: 'none', transition: 'border-color 0.2s'
+                  outline: 'none', transition: 'border-color 0.2s', opacity: paymentStatus === 'pending' ? 0.6 : 1
                 }}
                 onFocus={e => e.target.style.borderColor = '#3b82f6'}
                 onBlur={e => e.target.style.borderColor = '#cbd5e1'}
@@ -307,11 +332,11 @@ export default function QrGeneratorPage() {
             
             <button
               onClick={handleGenerateQR}
-              disabled={isGenerating || !amount}
+              disabled={isGenerating || !amount || paymentStatus === 'pending'}
               style={{
-                background: isGenerating || !amount ? '#94a3b8' : '#2563eb',
+                background: isGenerating || !amount || paymentStatus === 'pending' ? '#94a3b8' : '#2563eb',
                 color: 'white', border: 'none', borderRadius: 12, padding: '14px',
-                fontSize: '1rem', fontWeight: 700, cursor: isGenerating || !amount ? 'not-allowed' : 'pointer',
+                fontSize: '1rem', fontWeight: 700, cursor: isGenerating || !amount || paymentStatus === 'pending' ? 'not-allowed' : 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                 transition: 'background 0.2s'
               }}
@@ -322,11 +347,11 @@ export default function QrGeneratorPage() {
             
             <button
               onClick={handleCashPayment}
-              disabled={isGenerating || !amount}
+              disabled={isGenerating || !amount || paymentStatus === 'pending'}
               style={{
-                background: isGenerating || !amount ? '#cbd5e1' : '#16a34a',
+                background: isGenerating || !amount || paymentStatus === 'pending' ? '#cbd5e1' : '#16a34a',
                 color: 'white', border: 'none', borderRadius: 12, padding: '14px',
-                fontSize: '1rem', fontWeight: 700, cursor: isGenerating || !amount ? 'not-allowed' : 'pointer',
+                fontSize: '1rem', fontWeight: 700, cursor: isGenerating || !amount || paymentStatus === 'pending' ? 'not-allowed' : 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                 transition: 'background 0.2s', marginTop: -6
               }}
@@ -337,24 +362,28 @@ export default function QrGeneratorPage() {
           </div>
 
           {/* QR Display */}
-          {paymentStatus !== 'idle' && transactionCode && qrAccount && (
+          {paymentStatus !== 'idle' && activeQr && (
             <div style={{ background: '#f8fafc', borderRadius: 16, padding: 20, border: '1px solid #e2e8f0', textAlign: 'center', animation: 'fadeIn 0.3s ease' }}>
               
               <div style={{ background: 'white', borderRadius: 12, padding: 12, display: 'inline-block', border: '1px solid #cbd5e1', marginBottom: 16 }}>
                 <img
-                  src={buildQrUrl(qrAccount, parseInt(amount.replace(/\D/g, ''), 10), transactionCode)}
+                  src={buildQrUrl(activeQr.account, activeQr.amount, activeQr.code)}
                   alt="QR Code"
                   style={{ width: 220, height: 220, display: 'block', objectFit: 'contain' }}
                 />
               </div>
 
+              <div style={{ marginBottom: 16, color: '#b91c1c', fontSize: '1.35rem', fontWeight: 900 }}>
+                Khách chuyển: {activeQr.amount.toLocaleString('vi-VN')}đ
+              </div>
+
               <div style={{ marginBottom: 16, background: 'white', padding: 12, borderRadius: 12, border: '1px dashed #cbd5e1' }}>
-                <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>{qrAccount.bank_name}</div>
+                <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>{activeQr.account.bank_name}</div>
                 <div style={{ fontSize: '1.4rem', letterSpacing: 1.5, fontWeight: 900, color: '#1d4ed8', marginTop: 4 }}>
-                  {qrAccount.account_number}
+                  {activeQr.account.account_number}
                 </div>
                 <div style={{ fontSize: '0.9rem', color: '#475569', marginTop: 4, textTransform: 'uppercase', fontWeight: 700 }}>
-                  {qrAccount.account_name}
+                  {activeQr.account.account_name}
                 </div>
               </div>
 
