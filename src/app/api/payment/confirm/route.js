@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase'; // Using the public client since admin operations don't strictly require service role here, but depending on RLS it might fail.
+import { transactionMatchesOpenBill } from '@/lib/paymentTransactionGuard';
 
 export async function POST(req) {
   try {
@@ -8,6 +9,34 @@ export async function POST(req) {
 
     if (!transactionCode) {
       return NextResponse.json({ error: 'Missing transactionCode' }, { status: 400 });
+    }
+
+    // A QR can become stale when staff add items or merge another table after
+    // it was displayed. Never mark the old amount as full payment.
+    const { data: pendingTx, error: pendingError } = await supabase.from('payment_transactions')
+      .select('order_ids, total_amount, status').eq('transaction_code', transactionCode).maybeSingle();
+    if (pendingError || !pendingTx) return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
+    if (pendingTx.status === 'completed') return NextResponse.json({ message: 'Transaction already completed' });
+    if (pendingTx.status !== 'pending') return NextResponse.json({ error: 'Transaction is not pending' }, { status: 409 });
+    let groupIds = [];
+    if (pendingTx.order_ids !== 'shadow_qr') {
+      const txIds = String(pendingTx.order_ids || '').split(',').filter(Boolean);
+      if (!txIds.length) return NextResponse.json({ error: 'Transaction has no orders' }, { status: 409 });
+      const { data: sampleOrder, error: sampleError } = await supabase.from('orders')
+        .select('table_id').eq('id', txIds[0]).maybeSingle();
+      if (sampleError || !sampleOrder) return NextResponse.json({ error: 'Bill unavailable' }, { status: 409 });
+      const { data: allTables, error: tablesError } = await supabase.from('tables').select('id, merged_with');
+      if (tablesError || !allTables) return NextResponse.json({ error: 'Table group unavailable' }, { status: 503 });
+      const table = allTables.find(t => t.id === sampleOrder.table_id);
+      if (!table) return NextResponse.json({ error: 'Table unavailable' }, { status: 409 });
+      const hostId = table.merged_with || table.id;
+      groupIds = [hostId, ...allTables.filter(t => t.merged_with === hostId && t.id !== hostId).map(t => t.id)];
+      const { data: openOrders, error: ordersError } = await supabase.from('orders')
+        .select('id, order_items(unit_price, quantity)')
+        .in('table_id', groupIds).in('status', ['pending', 'preparing', 'completed']);
+      if (ordersError || !transactionMatchesOpenBill(pendingTx, openOrders)) {
+        return NextResponse.json({ error: 'Bill changed; reconcile the payment with staff' }, { status: 409 });
+      }
     }
 
     // 1. Chốt giao dịch TRƯỚC khi cộng tiền — chặn webhook gọi trùng (khá phổ
@@ -20,7 +49,7 @@ export async function POST(req) {
       .from('payment_transactions')
       .update({ status: 'completed' })
       .eq('transaction_code', transactionCode)
-      .neq('status', 'completed')
+      .eq('status', 'pending')
       .select()
       .maybeSingle();
 
@@ -48,19 +77,9 @@ export async function POST(req) {
 
     const orderIdList = order_ids.split(',');
 
-    if (orderIdList.length > 0) {
-      // Xác định table_id từ một trong các order
-      const { data: sampleOrder } = await supabase
-        .from('orders')
-        .select('table_id')
-        .eq('id', orderIdList[0])
-        .maybeSingle();
-
-      if (sampleOrder && sampleOrder.table_id) {
-        const hostId = sampleOrder.table_id;
-        
+    if (order_ids !== 'shadow_qr' && orderIdList.length > 0) {
         // Hoàn tất các đơn hàng (chuyển sang paid)
-        await supabase
+        const { data: paidOrders, error: paidError } = await supabase
           .from('orders')
           .update({ 
             status: 'paid', 
@@ -68,14 +87,22 @@ export async function POST(req) {
             created_at: new Date().toISOString()
           })
           .in('id', orderIdList)
-          .in('status', ['pending', 'preparing', 'completed']);
+          .in('status', ['pending', 'preparing', 'completed'])
+          .select('id');
+        if (paidError || paidOrders?.length !== orderIdList.length) {
+          console.error('Payment order update incomplete:', paidError);
+          return NextResponse.json({ error: 'Payment requires reconciliation' }, { status: 500 });
+        }
         
         // Reset bàn và tất cả bàn gộp chung (host_id)
-        await supabase
+        const { error: releaseError } = await supabase
           .from('tables')
           .update({ status: 'available', occupied_at: null, merged_with: null })
-          .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
-      }
+          .in('id', groupIds);
+        if (releaseError) {
+          console.error('Payment table release failed:', releaseError);
+          return NextResponse.json({ error: 'Payment requires reconciliation' }, { status: 500 });
+        }
     }
 
     // Ghi nhận doanh thu ngân hàng

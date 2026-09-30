@@ -583,11 +583,11 @@ export default function TablesPage() {
   // ─── Gửi lệnh in tới PrintAgent — gộp orders của bàn → 1 phiếu → máy mặc định ───
   const handlePrintInvoice = async () => {
     if (!selectedTable) return;
-    const tableOrders = getSelectedTableOrders()
-      .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
-    if (tableOrders.length === 0) { alert('Không có đơn hàng để in!'); return; }
-
-    const total = sumOrderItems(tableOrders);
+    let snapshot;
+    try { snapshot = await getFreshPaymentSnapshot(selectedTable); }
+    catch { Swal.fire('Chưa thể in', 'Không đọc được đầy đủ nhóm bàn. Vui lòng kiểm tra mạng rồi thử lại.', 'error'); return; }
+    if (snapshot.bills.length === 0) { alert('Không có đơn hàng để in!'); return; }
+    const total = snapshot.total;
     const { isConfirmed } = await Swal.fire({
       title: '🖨️ In hoá đơn?',
       html: `In hoá đơn bàn <b>${selectedTable.table_number}</b>?<br/><span style="color:#c53b3b;font-weight:700;font-size:1.05rem">Tổng: ${new Intl.NumberFormat('vi-VN').format(total)}đ</span>`,
@@ -601,8 +601,16 @@ export default function TablesPage() {
     });
     if (!isConfirmed) return;
 
+    let latest;
+    try { latest = await getFreshPaymentSnapshot(selectedTable); }
+    catch { Swal.fire('Chưa thể in', 'Không đọc được đầy đủ nhóm bàn. Vui lòng kiểm tra mạng rồi thử lại.', 'error'); return; }
+    if (latest.total !== total || latest.orderIdsStr !== snapshot.orderIdsStr) {
+      Swal.fire('Bill đã thay đổi', 'Vui lòng xem lại món và tổng tiền rồi in lại.', 'warning');
+      return;
+    }
+
     setPrintToast('sending');
-    const orderIds = tableOrders.map(o => o.id);
+    const orderIds = latest.bills.map(o => o.id);
     const { success, error } = await sendTableSummaryPrintJob(supabase, orderIds);
     setPrintToast(success ? 'ok' : 'err');
     if (!success) alert(error || 'Lỗi khi gửi lệnh in!');
@@ -612,11 +620,11 @@ export default function TablesPage() {
   // ─── In phiếu tạm tính — cùng logic (gộp + máy mặc định) ──────────────────
   const handlePrintTempBill = async () => {
     if (!selectedTable) return;
-    const tableOrders = getSelectedTableOrders()
-      .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
-    if (tableOrders.length === 0) { alert('Không có đơn hàng để in!'); return; }
-
-    const total = sumOrderItems(tableOrders);
+    let snapshot;
+    try { snapshot = await getFreshPaymentSnapshot(selectedTable); }
+    catch { Swal.fire('Chưa thể in', 'Không đọc được đầy đủ nhóm bàn. Vui lòng kiểm tra mạng rồi thử lại.', 'error'); return; }
+    if (snapshot.bills.length === 0) { alert('Không có đơn hàng để in!'); return; }
+    const total = snapshot.total;
     const { isConfirmed } = await Swal.fire({
       title: '🧾 In tạm tính?',
       html: `In phiếu tạm tính bàn <b>${selectedTable.table_number}</b>?<br/><span style="color:#c53b3b;font-weight:700;font-size:1.05rem">Tổng tạm: ${new Intl.NumberFormat('vi-VN').format(total)}đ</span>`,
@@ -630,8 +638,16 @@ export default function TablesPage() {
     });
     if (!isConfirmed) return;
 
+    let latest;
+    try { latest = await getFreshPaymentSnapshot(selectedTable); }
+    catch { Swal.fire('Chưa thể in', 'Không đọc được đầy đủ nhóm bàn. Vui lòng kiểm tra mạng rồi thử lại.', 'error'); return; }
+    if (latest.total !== total || latest.orderIdsStr !== snapshot.orderIdsStr) {
+      Swal.fire('Bill đã thay đổi', 'Vui lòng xem lại món và tổng tiền rồi in lại.', 'warning');
+      return;
+    }
+
     setPrintToast('sending');
-    const orderIds = tableOrders.map(o => o.id);
+    const orderIds = latest.bills.map(o => o.id);
     const { success, error } = await sendTableSummaryPrintJob(supabase, orderIds);
     setPrintToast(success ? 'ok' : 'err');
     if (!success) alert(error || 'Lỗi khi gửi lệnh in!');
@@ -967,11 +983,26 @@ export default function TablesPage() {
           filter: `transaction_code=eq.${transactionCode}`
         }, async (payload) => {
           if (payload.new && payload.new.status === 'completed') {
+            if (Number(payload.new.total_amount) !== Number(paymentModal?.total)) {
+              Swal.fire('Cần đối soát chuyển khoản', 'Số tiền giao dịch khác tổng bill đang hiển thị. Vui lòng kiểm tra trước khi đóng bàn.', 'warning');
+              return;
+            }
             // Đóng bill + ghi nhận định mức + xử lý is_hidden_from_stats
             // paymentModal.table chứa thông tin bàn cần đóng
-            if (paymentModal?.table) {
-              await completeTable(paymentModal.table, 'transfer');
+            let paid = false;
+            if (paymentModal?.table && Number(payload.new.total_amount) === Number(paymentModal.total)) {
+              // The payment webhook may already have marked every order paid.
+              // In that case there is nothing for completeTable() to claim.
+              const txOrderIds = String(payload.new.order_ids || '').split(',').filter(Boolean);
+              if (txOrderIds.length) {
+                const { data: paidOrders, error: paidError } = await supabase.from('orders')
+                  .select('id, status').in('id', txOrderIds);
+                paid = !paidError && paidOrders?.length === txOrderIds.length
+                  && paidOrders.every(order => order.status === 'paid');
+              }
+              if (!paid) paid = await completeTable(paymentModal.table, 'transfer', qrAccount?.shouldHideStats || false, paymentModal.total);
             }
+            if (!paid) return;
             Swal.fire({
               title: 'Thành công',
               text: 'Hệ thống đã nhận được thanh toán chuyển khoản!',
@@ -1081,37 +1112,9 @@ export default function TablesPage() {
     // Mark first load complete after a short delay
     setTimeout(() => { isFirstLoad.current = false; }, 2000);
 
-    // Auto-expire tables after 5 hours
-    const autoExpireInterval = setInterval(async () => {
-      const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
-      const { data: expiredTables } = await supabase
-        .from('tables')
-        .select('id')
-        .eq('status', 'occupied')
-        .not('occupied_at', 'is', null)
-        .lt('occupied_at', fiveHoursAgo);
-
-      if (expiredTables && expiredTables.length > 0) {
-        const expiredIds = expiredTables.map(t => t.id);
-        // Mark all active orders as paid (history preserved)
-        await supabase
-          .from('orders')
-          .update({ status: 'paid', created_at: new Date().toISOString() })
-          .in('table_id', expiredIds)
-          .in('status', ['pending', 'preparing', 'completed']);
-        // Reset tables — xóa cả merged_with để bàn không còn bị đánh dấu màu cam
-        await supabase
-          .from('tables')
-          .update({ status: 'available', occupied_at: null, merged_with: null })
-          .in('id', expiredIds);
-        // Cũng release các satellite tables tham chiếu đến host đã expire
-        await supabase
-          .from('tables')
-          .update({ status: 'available', occupied_at: null, merged_with: null })
-          .in('merged_with', expiredIds);
-        fetchTables();
-      }
-
+    // Keep occupied tables open until a staff payment/cancellation action.
+    // A long meal must never be silently marked paid and removed from the POS.
+    const takeawayCleanupInterval = setInterval(async () => {
       // ── Auto-cleanup đơn TAKEAWAY treo quá 6h ──
       // Tránh list "Xem đơn" bừa bộn vì admin quên bấm "Đã giao đi"
       const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
@@ -1129,7 +1132,7 @@ export default function TablesPage() {
 
     return () => {
       supabase.removeChannel(channel);
-      clearInterval(autoExpireInterval);
+      clearInterval(takeawayCleanupInterval);
       clearInterval(pollInterval);
       clearInterval(luckyInterval);
       document.removeEventListener('visibilitychange', handleVisibility);
@@ -1170,7 +1173,7 @@ export default function TablesPage() {
   // hai lượt gọi cùng đọc được đơn chưa paid → cộng tiền 2 lần vào bank_daily_totals,
   // đẩy thẻ chính đầy hạn mức sớm và làm đóng băng thống kê cả ngày.
   // ═══════════════════════════════════════════════════════════════════════════
-  async function completeTable(tableObj, paymentMethod = 'cash', shouldHideStats = false) {
+  async function completeTable(tableObj, paymentMethod = 'cash', shouldHideStats = false, expectedAmount = null) {
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
     const hostId = table.merged_with || table.id;
 
@@ -1180,21 +1183,27 @@ export default function TablesPage() {
     setPayingHostId(hostId);
 
     try {
-      // Lấy tất cả table ID trong nhóm gộp (host + satellites)
-      const groupTableIds = [hostId, ...tables.filter(t => t.merged_with === hostId).map(t => t.id)];
+      // Re-read the group and its items before marking anything paid. A stale
+      // browser tab or failed table request must not drop a satellite bill.
+      const snapshot = await getFreshPaymentSnapshot(table);
+      if (!snapshot.bills.length || snapshot.total <= 0) {
+        Swal.fire('Chưa thể thanh toán', 'Không đọc được bill đang mở. Vui lòng đồng bộ lại bàn.', 'error');
+        return false;
+      }
+      if (expectedAmount != null && snapshot.total !== Number(expectedAmount)) {
+        if (paymentMethod === 'cash') {
+          setConfirmPayment({ table, totalAmount: snapshot.total, transactionCode: null });
+        }
+        Swal.fire('Bill đã thay đổi', `Tổng mới là ${formatPrice(snapshot.total)}. Vui lòng kiểm tra lại món và số tiền khách trả trước khi chốt.`, 'warning');
+        return false;
+      }
+      const groupTableIds = snapshot.groupTableIds;
 
       // Chốt cuối cho TIỀN MẶT: tuyệt đối không cho qua khi còn món chưa thêm giá
       // (0đ, không phải món tặng). Chuyển khoản không chặn ở đây vì tiền có thể đã vào tài khoản.
       if (paymentMethod === 'cash') {
-        const { data: ordersToCheck } = await supabase
-          .from('orders')
-          .select('id, order_items(id, quantity, unit_price, is_gift, menu_item_id, menu_item:menu_items(name))')
-          .in('table_id', groupTableIds)
-          .in('status', ['pending', 'preparing', 'completed']);
-
-        const unpriced = collectUnpricedItems(ordersToCheck || []);
-        if (unpriced.length > 0) {
-          promptFixUnpricedItems(unpriced);
+        if (snapshot.unpricedItems.length > 0) {
+          promptFixUnpricedItems(snapshot.unpricedItems);
           return false;
         }
       }
@@ -1223,16 +1232,24 @@ export default function TablesPage() {
         return false;
       }
 
-      // Lượt gọi trước đã xử lý xong nhóm bàn này → KHÔNG cộng tiền, chỉ dọn UI
+      // Another tab may have paid this group first. Do not announce a new payment.
       if (!claimed || claimed.length === 0) {
-        setSelectedTable(null);
         fetchTables();
-        return true;
+        Swal.fire('Bill đã thay đổi', 'Không còn bill đang mở để chốt. Vui lòng đồng bộ lại bàn.', 'warning');
+        return false;
       }
 
       // ── Cộng tiền đúng theo số đơn vừa giành được (tính thẳng từ order_items) ──
       const totalAmount = claimed.reduce((sum, o) =>
         sum + (o.order_items || []).reduce((s, i) => s + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0), 0);
+      const claimedIds = claimed.map(o => o.id).sort().join(',');
+      if (claimedIds !== snapshot.orderIdsStr || totalAmount !== snapshot.total) {
+        // A concurrent menu edit or new order landed between the read and claim.
+        // Leave the group visible so staff can reconcile the unpaid remainder.
+        fetchTables();
+        Swal.fire('Cần đối soát bill', 'Bill thay đổi ngay lúc thanh toán. Bàn vẫn mở; hãy kiểm tra các món đã thu và món còn lại trước khi đóng.', 'warning');
+        return false;
+      }
       if (totalAmount > 0) {
         try {
           // RPC atomic — check hạn mức + ghi bank_daily_totals trong 1 transaction
@@ -1256,11 +1273,15 @@ export default function TablesPage() {
       await supabase
         .from('tables')
         .update({ status: 'available', occupied_at: null, merged_with: null })
-        .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
+        .or(`id.eq.${snapshot.hostId},merged_with.eq.${snapshot.hostId}`);
 
       setSelectedTable(null);
       fetchTables();
       return true;
+    } catch (error) {
+      console.error('[completeTable]', error);
+      Swal.fire('Chưa thể thanh toán', 'Không kiểm tra được đầy đủ bill. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
+      return false;
     } finally {
       completingTablesRef.current.delete(hostId);
       setPayingHostId(null);
@@ -1343,16 +1364,20 @@ export default function TablesPage() {
 
   async function getFreshPaymentSnapshot(tableObj) {
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
-    const hostId = table.merged_with || table.id;
 
-    // Lấy tất cả table ID trong nhóm gộp (host + satellites)
-    const { data: _allTables } = await supabase.from('tables').select('id, merged_with');
-    const _freshGroupIds = [hostId, ...(_allTables || []).filter(t => t.merged_with === hostId).map(t => t.id)];
+    // Resolve from live table rows, not the potentially stale selected card.
+    // Never fall back to the host alone when this request fails.
+    const { data: allTables, error: tablesError } = await supabase.from('tables').select('id, merged_with');
+    if (tablesError || !allTables) throw tablesError || new Error('Không đọc được nhóm bàn');
+    const currentTable = allTables.find(t => t.id === table.id);
+    if (!currentTable) throw new Error('Không tìm thấy bàn cần thanh toán');
+    const hostId = currentTable.merged_with || currentTable.id;
+    const groupTableIds = [hostId, ...allTables.filter(t => t.merged_with === hostId && t.id !== hostId).map(t => t.id)];
 
     const { data, error } = await supabase
       .from('orders')
       .select('id, total_amount, customer_phone, order_items(id, quantity, unit_price, is_gift, menu_item_id, menu_item:menu_items(name))')
-      .in('table_id', _freshGroupIds)
+      .in('table_id', groupTableIds)
       .in('status', ['pending', 'preparing', 'completed'])
       .order('created_at', { ascending: true });
 
@@ -1361,6 +1386,7 @@ export default function TablesPage() {
     const bills = data || [];
     return {
       hostId,
+      groupTableIds,
       bills,
       unpricedItems: collectUnpricedItems(bills),
       orderIdsStr: bills.map(o => o.id).sort().join(','),
@@ -1374,6 +1400,27 @@ export default function TablesPage() {
       total: Math.max(0, bills.reduce((sum, o) =>
         sum + (o.order_items || []).reduce((s, i) => s + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0), 0)),
     };
+  }
+
+  async function cancelTableGroup(table) {
+    try {
+      const snapshot = await getFreshPaymentSnapshot(table);
+      const { error: ordersError } = await supabase.from('orders')
+        .update({ status: 'cancelled', payment_method: 'cancelled', ...cancelStamp() })
+        .in('table_id', snapshot.groupTableIds)
+        .in('status', ['pending', 'preparing', 'completed']);
+      if (ordersError) throw ordersError;
+      const { error: tablesError } = await supabase.from('tables')
+        .update({ status: 'available', occupied_at: null, merged_with: null })
+        .in('id', snapshot.groupTableIds);
+      if (tablesError) throw tablesError;
+      fetchTables();
+      return true;
+    } catch (error) {
+      console.error('[cancelTableGroup]', error);
+      Swal.fire('Chưa huỷ được bàn', 'Không đọc hoặc lưu được đầy đủ nhóm bàn. Vui lòng kiểm tra mạng và đồng bộ lại.', 'error');
+      return false;
+    }
   }
 
   async function getOrGenerateBillCode(hostId, total, finalAccId = null, freshBills = null) {
@@ -1393,15 +1440,12 @@ export default function TablesPage() {
       .limit(1)
       .maybeSingle();
 
-    if (existingTx && existingTx.transaction_code) {
-      if (Number(existingTx.total_amount) !== Number(total)) {
-        await supabase
-          .from('payment_transactions')
-          .update({ total_amount: total, account_id: finalAccId })
-          .eq('transaction_code', existingTx.transaction_code);
-      }
+    if (existingTx && existingTx.transaction_code && Number(existingTx.total_amount) === Number(total)) {
       return existingTx.transaction_code;
     }
+
+    // A QR already shown to a guest may be paid at its old amount. Preserve
+    // that transaction for reconciliation and issue a new code for the new bill.
 
     // Nếu chưa có, sinh mã mới
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -1454,6 +1498,12 @@ export default function TablesPage() {
       if (code) {
         setTransactionCode(code);
       }
+    } catch (error) {
+      console.error('[openPaymentModal]', error);
+      setPaymentModal(null);
+      setQrAccount(null);
+      setShowTransfer(false);
+      Swal.fire('Chưa thể tạo QR', 'Không đọc được đầy đủ bill. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
     } finally {
       setQrLoading(false);
     }
@@ -3860,32 +3910,22 @@ export default function TablesPage() {
 
           const doCashPayment = async () => {
             if (payingHostId) return;
-            const ok = await completeTable(table, 'cash');
+            const ok = await completeTable(table, 'cash', false, total);
             if (!ok) return;
             closeModal();
           };
 
           const doTransferPayment = async () => {
             if (payingHostId) return;
-            closeModal();
-            await completeTable(table.id, 'transfer', qrAccount ? qrAccount.shouldHideStats : false);
+            const ok = await completeTable(table, 'transfer', qrAccount ? qrAccount.shouldHideStats : false, total);
+            if (ok) closeModal();
           };
 
           const doCancelOrder = async () => {
             if (!window.confirm('Bạn có chắc muốn huỷ tất cả đơn của bàn này?')) return;
-            const hostId = table.merged_with || table.id;
-            // Hủy tất cả đơn của host (kể cả đơn từ bàn satellite đã được chuyển sang)
-            await supabase.from('orders')
-              .update({ status: 'cancelled', payment_method: 'cancelled', ...cancelStamp() })
-              .eq('table_id', hostId)
-              .in('status', ['pending', 'preparing', 'completed']);
-            // Reset toàn bộ nhóm gộp (host + all satellites)
-            await supabase.from('tables')
-              .update({ status: 'available', occupied_at: null, merged_with: null })
-              .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
+            if (!(await cancelTableGroup(table))) return;
             closeModal();
             setSelectedTable(null);
-            fetchTables();
           };
 
           // Vietcombank VietQR string: bank_id|account_number|amount|description
@@ -6392,7 +6432,7 @@ export default function TablesPage() {
                 <div
                   onClick={async () => {
                     if (payingHostId) return;
-                    const ok = await completeTable(confirmPayment.table, 'cash');
+                    const ok = await completeTable(confirmPayment.table, 'cash', false, confirmPayment.totalAmount);
                     if (!ok) return;
                     setConfirmPayment(null);
                     setSelectedTable(null);
@@ -6515,7 +6555,8 @@ export default function TablesPage() {
                   disabled={!qrAccount || !!payingHostId}
                   onClick={async () => {
                     if (!qrAccount || payingHostId) return;
-                    await completeTable(paymentModal.table, 'transfer', qrAccount.shouldHideStats);
+                    const ok = await completeTable(paymentModal.table, 'transfer', qrAccount.shouldHideStats, paymentModal.total);
+                    if (!ok) return;
                     setPaymentModal(null);
                     setConfirmPayment(null);
                     setTransactionCode(null);
@@ -6594,8 +6635,7 @@ export default function TablesPage() {
                 <button
                   onClick={async () => {
                     const t = cancelConfirm;
-
-                    // ─── 1. Close ALL panels INSTANTLY ───
+                    if (!(await cancelTableGroup(t))) return;
                     setCancelConfirm(null);
                     setSelectedTable(null);
                     setAddingToOrder(null);
@@ -6603,20 +6643,6 @@ export default function TablesPage() {
                     setActiveMenuCategory('all');
                     setShowBillPreview(false);
                     setPaymentModal(null);
-                    setOrders(prev => ({ ...prev, [t.id]: [] }));
-
-                    // ─── 2. DB updates in background (after UI is already gone) ───
-                    const hostId = t.merged_with || t.id;
-                    // Hủy tất cả đơn của host (kể cả đơn từ bàn satellite đã được chuyển sang)
-                    await supabase.from('orders')
-                      .update({ status: 'cancelled', payment_method: 'cancelled', ...cancelStamp() })
-                      .eq('table_id', hostId)
-                      .in('status', ['pending', 'preparing', 'completed']);
-                    // Reset toàn bộ nhóm gộp (host + all satellites)
-                    await supabase.from('tables')
-                      .update({ status: 'available', occupied_at: null, merged_with: null })
-                      .or(`id.eq.${hostId},merged_with.eq.${hostId}`);
-                    fetchTables();
                   }}
                   style={{
                     flex: 1, padding: '13px', border: 'none',
