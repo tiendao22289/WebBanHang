@@ -1413,8 +1413,14 @@ export default function TablesPage() {
       const { error: ordersError } = await supabase.from('orders')
         .update({ status: 'cancelled', payment_method: 'cancelled', ...cancelStamp() })
         .in('table_id', snapshot.groupTableIds)
-        .in('status', ['pending', 'preparing', 'completed']);
+        .in('status', OPEN_BILL_STATUSES);
       if (ordersError) throw ordersError;
+      const remaining = await getFreshPaymentSnapshot(table);
+      if (remaining.bills.length > 0) {
+        Swal.fire('Bàn còn bill mới', 'Có món được gửi thêm lúc huỷ. Bàn vẫn mở để nhân viên kiểm tra.', 'warning');
+        await fetchTables();
+        return false;
+      }
       const { error: tablesError } = await supabase.from('tables')
         .update({ status: 'available', occupied_at: null, merged_with: null })
         .in('id', snapshot.groupTableIds);
@@ -1426,6 +1432,48 @@ export default function TablesPage() {
       Swal.fire('Chưa huỷ được bàn', 'Không đọc hoặc lưu được đầy đủ nhóm bàn. Vui lòng kiểm tra mạng và đồng bộ lại.', 'error');
       return false;
     }
+  }
+
+  async function cancelSingleBill(orderId) {
+    const { data, error } = await supabase.from('orders')
+      .update({ status: 'cancelled', payment_method: 'cancelled', ...cancelStamp() })
+      .eq('id', orderId)
+      .in('status', OPEN_BILL_STATUSES)
+      .select('id');
+    if (error || !data?.length) {
+      Swal.fire('Chưa huỷ được bill', error?.message || 'Bill đã đổi trạng thái. Vui lòng đồng bộ lại.', 'error');
+      return false;
+    }
+    // Keep the source table occupied. Releasing it here can hide another open
+    // bill in the merged group, including one that reached the kitchen just now.
+    await fetchTables();
+    return true;
+  }
+
+  async function moveBillToTable(orderId, targetTable) {
+    if (targetTable.status === 'available') {
+      const { data: occupiedTarget, error: occupyError } = await supabase.from('tables')
+        .update({ status: 'occupied', occupied_at: new Date().toISOString() })
+        .eq('id', targetTable.id)
+        .eq('status', 'available')
+        .select('id');
+      if (occupyError || !occupiedTarget?.length) {
+        Swal.fire('Chưa chuyển được bill', 'Không giữ được bàn đích. Vui lòng kiểm tra mạng.', 'error');
+        return false;
+      }
+    }
+    const { data, error } = await supabase.from('orders')
+      .update({ table_id: targetTable.id })
+      .eq('id', orderId)
+      .in('status', OPEN_BILL_STATUSES)
+      .select('id');
+    if (error || !data?.length) {
+      Swal.fire('Chưa chuyển được bill', error?.message || 'Bill đã đổi trạng thái. Vui lòng đồng bộ lại.', 'error');
+      return false;
+    }
+    // Do not release the old group from a stale browser snapshot.
+    await fetchTables();
+    return true;
   }
 
   async function getOrGenerateBillCode(hostId, total, finalAccId = null, freshBills = null) {
@@ -2550,9 +2598,25 @@ export default function TablesPage() {
 
   async function handleUnmergeTable() {
     if (!selectedTable || !selectedTable.merged_with) return;
-    await supabase.from('tables')
-      .update({ status: 'available', merged_with: null, occupied_at: null })
-      .eq('id', selectedTable.id);
+    const { data: openOrders, error: ordersError } = await supabase.from('orders')
+      .select('id')
+      .eq('table_id', selectedTable.id)
+      .in('status', OPEN_BILL_STATUSES)
+      .limit(1);
+    if (ordersError) {
+      Swal.fire('Chưa tách được bàn', 'Không kiểm tra được bill của bàn này. Vui lòng kiểm tra mạng.', 'error');
+      return;
+    }
+    const hasOpenBill = !!openOrders?.length;
+    const { data: unmerged, error: tableError } = await supabase.from('tables')
+      .update({ status: hasOpenBill ? 'occupied' : 'available', merged_with: null, occupied_at: hasOpenBill ? (selectedTable.occupied_at || new Date().toISOString()) : null })
+      .eq('id', selectedTable.id)
+      .eq('merged_with', selectedTable.merged_with)
+      .select('id');
+    if (tableError || !unmerged?.length) {
+      Swal.fire('Chưa tách được bàn', 'Không lưu được trạng thái bàn. Vui lòng thử lại.', 'error');
+      return;
+    }
     fetchTables();
     setSelectedTable(null);
     Swal.fire({
@@ -3139,14 +3203,7 @@ export default function TablesPage() {
                                   confirmButtonColor: '#ef4444', reverseButtons: true,
                                 });
                                 if (!confirm.isConfirmed) return;
-                                await supabase.from('orders').update({ status: 'cancelled', total_amount: 0, ...cancelStamp() }).eq('id', order.id);
-                                const remaining = tableBills.filter(o => o.id !== order.id && o.status !== 'cancelled');
-                                if (remaining.length === 0) {
-                                  const hId = selectedTable.merged_with || selectedTable.id;
-                                  await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
-                                  setSelectedTable(null);
-                                }
-                                fetchTables();
+                                if (!(await cancelSingleBill(order.id))) return;
                                 Swal.fire({ title: 'Đã huỷ', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
                               }}
                               style={{ background: '#fff1f2', border: '1.5px solid #fecdd3', borderRadius: 6, color: '#dc2626', cursor: 'pointer', padding: '3px 10px', fontSize: '0.76rem', fontWeight: 700 }}
@@ -3166,19 +3223,8 @@ export default function TablesPage() {
                                   inputValidator: (v) => { if (!v) return 'Vui lòng chọn bàn!'; }
                                 });
                                 if (!targetTableId) return;
-                                const { error } = await supabase.from('orders').update({ table_id: targetTableId }).eq('id', order.id);
-                                if (error) { Swal.fire('Lỗi', error.message, 'error'); return; }
                                 const targetTable = otherTables.find(t => t.id === targetTableId);
-                                if (targetTable?.status === 'available') {
-                                  await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
-                                }
-                                const remaining = tableBills.filter(o => o.id !== order.id && o.status !== 'cancelled');
-                                if (remaining.length === 0) {
-                                  const hId = selectedTable.merged_with || selectedTable.id;
-                                  await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
-                                  setSelectedTable(null);
-                                }
-                                fetchTables();
+                                if (!targetTable || !(await moveBillToTable(order.id, targetTable))) return;
                                 Swal.fire({ title: 'Thành công', text: 'Đã chuyển bill!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
                               }}
                               style={{ background: '#e0e7ff', border: '1.5px solid #a5b4fc', borderRadius: 6, color: '#4f46e5', cursor: 'pointer', padding: '3px 10px', fontSize: '0.76rem', fontWeight: 700 }}
@@ -4379,25 +4425,8 @@ export default function TablesPage() {
                               });
 
                               if (targetTableId) {
-                                const { error } = await supabase.from('orders').update({ table_id: targetTableId }).eq('id', order.id);
-                                if (error) {
-                                  Swal.fire('Lỗi', error.message, 'error');
-                                  return;
-                                }
-
                                 const targetTable = otherTables.find(t => t.id === targetTableId);
-                                if (targetTable && targetTable.status === 'available') {
-                                  await supabase.from('tables').update({ status: 'occupied', occupied_at: new Date().toISOString() }).eq('id', targetTableId);
-                                }
-
-                                const remaining = getSelectedTableOrders().filter(o => o.id !== order.id && o.status !== 'cancelled');
-                                if (remaining.length === 0) {
-                                  // Reset toàn bộ nhóm gộp
-                                  const hId = selectedTable.merged_with || selectedTable.id;
-                                  await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
-                                  setSelectedTable(null);
-                                }
-                                fetchTables();
+                                if (!targetTable || !(await moveBillToTable(order.id, targetTable))) return;
                                 Swal.fire({
                                   title: 'Thành công',
                                   text: 'Đã chuyển bàn!',
@@ -4429,16 +4458,7 @@ export default function TablesPage() {
                                 reverseButtons: true,
                               });
                               if (!result.isConfirmed) return;
-                              await supabase.from('orders').update({ status: 'cancelled', ...cancelStamp() }).eq('id', order.id);
-                              // If all orders at this table are now cancelled, reset the table
-                              const remaining = getSelectedTableOrders().filter(o => o.id !== order.id && o.status !== 'cancelled');
-                              if (remaining.length === 0) {
-                                // Reset toàn bộ nhóm gộp
-                                const hId = selectedTable.merged_with || selectedTable.id;
-                                await supabase.from('tables').update({ status: 'available', occupied_at: null, merged_with: null }).or(`id.eq.${hId},merged_with.eq.${hId}`);
-                                setSelectedTable(null);
-                              }
-                              fetchTables();
+                              await cancelSingleBill(order.id);
                             }}
                             title="Huỷ bill này"
                             style={{ background: '#fff1f2', border: '1.5px solid #fca5a5', borderRadius: 8, color: '#dc2626', cursor: 'pointer', padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap' }}

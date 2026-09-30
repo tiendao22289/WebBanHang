@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const page = readFileSync(new URL('../src/app/admin/tables/page.js', import.meta.url), 'utf8');
 const source = page.slice(page.indexOf('  async function getFreshPaymentSnapshot('), page.indexOf('  async function cancelTableGroup('));
-const cancelSource = page.slice(page.indexOf('  async function cancelTableGroup('), page.indexOf('  async function getOrGenerateBillCode('));
+const cancelSource = page.slice(page.indexOf('  async function cancelTableGroup('), page.indexOf('  async function cancelSingleBill('));
 
 function harness(tableRows, tableError = null) {
   const seen = { orderIds: null, statuses: null };
@@ -53,7 +53,8 @@ test('table lookup failure stops payment before reading an incomplete bill', asy
 test('cancelling a merged table covers both host and satellite before clearing the UI', async () => {
   const seen = [];
   const context = {
-    getFreshPaymentSnapshot: async () => ({ groupTableIds: ['49', '48'] }),
+    getFreshPaymentSnapshot: async () => ({ groupTableIds: ['49', '48'], bills: [] }),
+    OPEN_BILL_STATUSES: ['pending', 'preparing', 'completed'],
     cancelStamp: () => ({}), fetchTables: () => seen.push('refresh'),
     console, Swal: { fire: () => seen.push('error') },
     supabase: { from(name) {
