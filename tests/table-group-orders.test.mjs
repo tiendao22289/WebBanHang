@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/lib/tableGroupOrders.js', import.meta.url), 'utf8');
-const { getTableGroupOrders } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const { getTableGroupOrders, OPEN_BILL_STATUSES } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+
+test('completed kitchen orders remain in the unpaid table bill', () => {
+  assert.deepEqual(OPEN_BILL_STATUSES, ['pending', 'preparing', 'completed']);
+  assert.equal(OPEN_BILL_STATUSES.includes('paid'), false);
+  assert.equal(OPEN_BILL_STATUSES.includes('cancelled'), false);
+});
 
 test('host and satellite cards show the full merged bill, including the satellite amount', () => {
   const tables = [{ id: '49', merged_with: null }, { id: '48', merged_with: '49' }];

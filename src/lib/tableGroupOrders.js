@@ -1,3 +1,5 @@
+export const OPEN_BILL_STATUSES = ['pending', 'preparing', 'completed'];
+
 // Keep every table in a merged group visible on each table card and in its bill.
 export function getTableGroupOrders(table, tables, ordersByTable) {
   if (!table) return [];

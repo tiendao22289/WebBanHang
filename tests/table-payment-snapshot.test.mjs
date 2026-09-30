@@ -8,19 +8,24 @@ const source = page.slice(page.indexOf('  async function getFreshPaymentSnapshot
 const cancelSource = page.slice(page.indexOf('  async function cancelTableGroup('), page.indexOf('  async function getOrGenerateBillCode('));
 
 function harness(tableRows, tableError = null) {
-  const seen = { orderIds: null };
+  const seen = { orderIds: null, statuses: null };
   const orderRows = [
     { id: 'host-order', order_items: [{ quantity: 1, unit_price: 2104000 }] },
     { id: 'child-order', order_items: [{ quantity: 1, unit_price: 480000 }] },
   ];
   const context = {
     collectUnpricedItems: () => [],
+    OPEN_BILL_STATUSES: ['pending', 'preparing', 'completed'],
     supabase: {
       from(name) {
         if (name === 'tables') return { select: async () => ({ data: tableRows, error: tableError }) };
         const query = {
           select: () => query,
-          in(column, ids) { if (column === 'table_id') seen.orderIds = ids; return query; },
+          in(column, ids) {
+            if (column === 'table_id') seen.orderIds = ids;
+            if (column === 'status') seen.statuses = ids;
+            return query;
+          },
           order: async () => ({ data: orderRows.filter((_, i) => seen.orderIds.includes(i ? '48' : '49')), error: null }),
         };
         return query;
@@ -36,6 +41,7 @@ test('payment reads the live merged group and charges both tables', async () => 
   assert.deepEqual([...result.groupTableIds], ['49', '48']);
   assert.equal(result.total, 2584000);
   assert.equal(result.bills.length, 2);
+  assert.deepEqual([...h.seen.statuses], ['pending', 'preparing', 'completed']);
 });
 
 test('table lookup failure stops payment before reading an incomplete bill', async () => {

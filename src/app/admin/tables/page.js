@@ -13,7 +13,7 @@ import {
   isReviewDiscountItem,
 } from '@/lib/reviewReward';
 import { getMenuCached } from '@/lib/menuCache';
-import { getTableGroupOrders } from '@/lib/tableGroupOrders';
+import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
@@ -658,7 +658,7 @@ export default function TablesPage() {
     // Menu + categories đọc từ cache admin (adminMenuCache:v1) — không request
     // server. Cache do admin/menu ghi khi fetchData (mount + sau "Đồng bộ").
     // Nếu cache miss (lần đầu chưa vào admin/menu) → getMenuCached() sẽ tự fetch.
-    const [{ data: tablesData }, cachedMenu] = await Promise.all([
+    const [{ data: tablesData, error: tablesError }, cachedMenu] = await Promise.all([
       supabase.from('tables').select('*').order('table_number'),
       getMenuCached().catch(err => {
         console.error('[fetchTables] menu cache error:', err.message);
@@ -677,7 +677,9 @@ export default function TablesPage() {
     // render bàn; lucky_spins đã siết quyền đọc anon nên phải qua API service.
     fetchLuckyStatusRef.current?.();
 
-    if (tablesData) {
+    if (tablesError) {
+      console.error('[fetchTables] tables error:', tablesError.message);
+    } else if (tablesData) {
       setTables(tablesData);
       const allTableIds = tablesData.map(t => t.id);
       if (allTableIds.length > 0) {
@@ -693,17 +695,19 @@ export default function TablesPage() {
               print_jobs (id, status, created_at, printer_id, error_message, filter_category_ids, only_item_ids, order_ids)
             `)
             .in('table_id', allTableIds)
-            .in('status', ['pending', 'preparing'])
+            .in('status', OPEN_BILL_STATUSES)
             .order('created_at', { ascending: false });
 
-          if (ordErr) console.error('[fetchTables] orders error:', ordErr.message);
-
-          const ordersByTable = {};
-          ordersData?.forEach(order => {
-            if (!ordersByTable[order.table_id]) ordersByTable[order.table_id] = [];
-            ordersByTable[order.table_id].push(order);
-          });
-          setOrders(ordersByTable);
+          if (ordErr) {
+            console.error('[fetchTables] orders error:', ordErr.message);
+          } else {
+            const ordersByTable = {};
+            ordersData?.forEach(order => {
+              if (!ordersByTable[order.table_id]) ordersByTable[order.table_id] = [];
+              ordersByTable[order.table_id].push(order);
+            });
+            setOrders(ordersByTable);
+          }
         } catch (e) {
           console.error('[fetchTables] unexpected error:', e);
         }
@@ -769,7 +773,7 @@ export default function TablesPage() {
     const currentTableIds = tables.map(t => t.id);
     if (currentTableIds.length === 0) return;
     try {
-      const { data: ordersData } = await supabase
+      const { data: ordersData, error: ordersError } = await supabase
         .from('orders')
         .select(`
           id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
@@ -780,8 +784,9 @@ export default function TablesPage() {
           print_jobs (id, status, created_at, printer_id, error_message, filter_category_ids, only_item_ids, order_ids)
         `)
         .in('table_id', currentTableIds)
-        .in('status', ['pending', 'preparing'])
+        .in('status', OPEN_BILL_STATUSES)
         .order('created_at', { ascending: false });
+      if (ordersError) throw ordersError;
       const ordersByTable = {};
       ordersData?.forEach(order => {
         if (!ordersByTable[order.table_id]) ordersByTable[order.table_id] = [];
@@ -1378,7 +1383,7 @@ export default function TablesPage() {
       .from('orders')
       .select('id, total_amount, customer_phone, order_items(id, quantity, unit_price, is_gift, menu_item_id, menu_item:menu_items(name))')
       .in('table_id', groupTableIds)
-      .in('status', ['pending', 'preparing', 'completed'])
+      .in('status', OPEN_BILL_STATUSES)
       .order('created_at', { ascending: true });
 
     if (error) throw error;
@@ -1431,14 +1436,17 @@ export default function TablesPage() {
     const orderIdsStr = [...tableBills].map(o => o.id).sort().join(',');
 
     // Check if there is already a pending transaction for exactly these orders
-    const { data: existingTx } = await supabase
+    let existingQuery = supabase
       .from('payment_transactions')
       .select('transaction_code, total_amount')
       .eq('order_ids', orderIdsStr)
-      .eq('status', 'pending')
+      .eq('status', 'pending');
+    existingQuery = finalAccId ? existingQuery.eq('account_id', finalAccId) : existingQuery.is('account_id', null);
+    const { data: existingTx, error: existingError } = await existingQuery
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (existingError) throw existingError;
 
     if (existingTx && existingTx.transaction_code && Number(existingTx.total_amount) === Number(total)) {
       return existingTx.transaction_code;
@@ -1452,13 +1460,14 @@ export default function TablesPage() {
     let code = '';
     for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
 
-    await supabase.from('payment_transactions').insert({
+    const { error: insertError } = await supabase.from('payment_transactions').insert({
       transaction_code: code,
       order_ids: orderIdsStr,
       account_id: finalAccId,
       total_amount: total,
       status: 'pending'
     });
+    if (insertError) throw insertError;
 
     return code;
   }
