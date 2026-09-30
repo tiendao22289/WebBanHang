@@ -13,6 +13,7 @@ import {
   isReviewDiscountItem,
 } from '@/lib/reviewReward';
 import { getMenuCached } from '@/lib/menuCache';
+import { getTableGroupOrders } from '@/lib/tableGroupOrders';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
@@ -2634,18 +2635,7 @@ export default function TablesPage() {
   // Lấy TẤT CẢ đơn hàng của nhóm bàn gộp (host + satellites)
   // Đọc orders theo từng table id, không dựa vào table_id bên trong order
   function getSelectedTableOrders() {
-    if (!selectedTable) return [];
-    const hostId = selectedTable.merged_with || selectedTable.id;
-    // Orders của bàn chính
-    let allOrders = [...(orders[hostId] || [])];
-    // Orders của tất cả bàn phụ đang gộp vào bàn chính này
-    tables.forEach(t => {
-      if (t.merged_with === hostId && t.id !== hostId) {
-        const satelliteOrders = orders[t.id] || [];
-        allOrders = [...allOrders, ...satelliteOrders];
-      }
-    });
-    return allOrders;
+    return getTableGroupOrders(selectedTable, tables, orders);
   }
 
   const availableCount = tables.filter(t => t.status === 'available' && t.table_type !== 'takeaway').length;
@@ -2767,9 +2757,7 @@ export default function TablesPage() {
           const isHost = !isMergedSatellite && !!groupColorMap[table.id];
           const hostIdCard = table.merged_with || table.id;
           // Cộng dồn orders của cả nhóm gộp (host + satellites) để hiển thị tổng tiền chính xác
-          const _hostOrdersCard = orders[hostIdCard] || [];
-          const _satOrdersCard = tables.filter(t => t.merged_with === hostIdCard && t.id !== hostIdCard).flatMap(t => orders[t.id] || []);
-          const tableBills = [..._hostOrdersCard, ..._satOrdersCard];
+          const tableBills = getTableGroupOrders(table, tables, orders);
           const isKitchenAlerting = !!kitchenAlertTables[table.id] || !!kitchenAlertTables[hostIdCard];
           // Yêu cầu ưu đãi — hiện ĐỦ mọi kênh đang chờ, chỉ trên thẻ bàn host của nhóm
           const tableReviewReqs = isMergedSatellite
@@ -3630,10 +3618,11 @@ export default function TablesPage() {
                           const tableReviewReqs = isChild
                             ? []
                             : reviewRequests.filter(r => r.host_table_id === alertHostId);
-                          const tableTotal = sumOrderItems(orders[table.merged_with || table.id] || []);
-                          const hasPrintError = (orders[table.merged_with || table.id] || []).some(o => o.print_jobs && o.print_jobs.some(pj => needsPrintAttention(pj, o)));
-                          const hasLuckyWheel = (orders[table.merged_with || table.id] || []).some(o => (o.order_items || []).some(isLuckyWheelOutcome));
-                          const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(orders[table.merged_with || table.id] || []) : { availableGiftSlots: 0, hasGiftInBill: false };
+                          const tableBills = getTableGroupOrders(table, tables, orders);
+                          const tableTotal = sumOrderItems(tableBills);
+                          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => needsPrintAttention(pj, o)));
+                          const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelOutcome));
+                          const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(tableBills) : { availableGiftSlots: 0, hasGiftInBill: false };
 
                           // Style derivation: Merged group is Purple, Normal Occupied is Blue, Empty is White
                           const bgColors = {
