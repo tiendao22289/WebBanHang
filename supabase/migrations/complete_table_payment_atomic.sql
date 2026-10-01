@@ -8,7 +8,8 @@ CREATE OR REPLACE FUNCTION public.complete_table_payment_atomic(
   p_account_id uuid DEFAULT NULL,
   p_hide_stats boolean DEFAULT false,
   p_staff_id uuid DEFAULT NULL,
-  p_staff_name text DEFAULT NULL
+  p_staff_name text DEFAULT NULL,
+  p_transaction_code text DEFAULT NULL
 ) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
   host_id uuid;
@@ -61,13 +62,13 @@ BEGIN
   IF p_payment_method = 'transfer' THEN
     IF p_account_id IS NOT NULL THEN
       SELECT * INTO account_row FROM public.bank_accounts
-      WHERE id = p_account_id AND is_active = true FOR UPDATE;
-      IF account_row.id IS NULL THEN RAISE EXCEPTION 'Tài khoản QR không còn hoạt động'; END IF;
+      WHERE id = p_account_id FOR UPDATE;
+      IF account_row.id IS NULL THEN RAISE EXCEPTION 'Không tìm thấy tài khoản đã hiện trên QR'; END IF;
       INSERT INTO public.bank_daily_totals(account_id, date, total_amount)
       VALUES (p_account_id, vn_date, live_total)
       ON CONFLICT (account_id, date)
       DO UPDATE SET total_amount = public.bank_daily_totals.total_amount + EXCLUDED.total_amount;
-      hide_stats := hide_stats OR NOT account_row.is_visible;
+      hide_stats := hide_stats OR NOT COALESCE(account_row.is_visible, false);
     ELSE
       bank_result := public.process_bank_payment(live_total::integer, vn_date);
       hide_stats := hide_stats OR COALESCE((bank_result->>'should_hide_stats')::boolean, false);
@@ -83,6 +84,17 @@ BEGIN
     paid_at = now(), paid_by_id = p_staff_id, paid_by_name = p_staff_name,
     created_at = now(), is_hidden_from_stats = hide_stats
   WHERE o.id = ANY(order_ids);
+
+  IF p_payment_method = 'transfer' AND p_transaction_code IS NOT NULL THEN
+    UPDATE public.payment_transactions SET status = 'completed'
+    WHERE transaction_code = p_transaction_code AND status = 'pending'
+      AND order_ids = array_to_string(order_ids, ',')
+      AND total_amount = live_total
+      AND account_id IS NOT DISTINCT FROM p_account_id;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Mã QR không còn khớp bill hoặc tài khoản; kiểm tra lại giao dịch';
+    END IF;
+  END IF;
 
   UPDATE public.tables SET status = 'available', occupied_at = NULL, merged_with = NULL
   WHERE id = ANY(table_ids);
