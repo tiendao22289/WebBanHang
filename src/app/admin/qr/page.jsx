@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 import { getShadowAccount, buildQrUrl } from '@/lib/bankAccount';
+import { newLuckyRequestId } from '@/lib/luckyRewardFlow';
 import { QrCode, RefreshCw, CheckCircle2, Banknote, X } from 'lucide-react';
 import Swal from 'sweetalert2';
 
@@ -13,12 +14,11 @@ const supabase = createClient(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cổng QR Tùy chỉnh — Chỉ dùng thẻ ẨN (is_active = false)
+// Cổng QR Tùy chỉnh — chuyển khoản dùng thẻ ẨN; tiền mặt có phiếu thu riêng.
 //
 // NGUYÊN TẮC:
 //   - Tuyệt đối không chạm vào thẻ Hiển thị (is_active = true).
-//   - Tiền thu qua đây vẫn được lưu vào bank_daily_totals của thẻ Ẩn
-//     để phục vụ xoay vòng giữa các thẻ cá nhân (ví dụ: thẻ vợ, thẻ em...).
+//   - Chỉ chuyển khoản mới vào bank_daily_totals của thẻ Ẩn.
 //   - Không có bill nào (order) được tạo / cập nhật qua cổng này.
 //     → Không ảnh hưởng gì đến sổ sách thống kê / báo cáo S2a-HKD.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,7 +31,6 @@ export default function QrGeneratorPage() {
   const [paymentStatus, setPaymentStatus] = useState('idle'); // idle | pending | completed
   const [isGenerating, setIsGenerating] = useState(false);
 
-  const subscriptionRef = useRef(null);
   const router = useRouter();
 
   // Lấy thẻ ẨN lúc mới vào trang
@@ -43,15 +42,6 @@ export default function QrGeneratorPage() {
     init();
   }, []);
 
-  // Hủy subscription khi unmount
-  useEffect(() => {
-    return () => {
-      if (subscriptionRef.current) {
-        supabase.removeChannel(subscriptionRef.current);
-      }
-    };
-  }, []);
-
   const generateCode = () => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code = '';
@@ -59,25 +49,23 @@ export default function QrGeneratorPage() {
     return code;
   };
 
-  // ─── Nhận tiền mặt qua cổng QR (chỉ lưu vào thẻ ẨN, không tạo bill) ────
+  // ─── Tiền mặt tạo phiếu thu riêng, không làm tăng số dư chuyển khoản ────
   const handleCashPayment = async () => {
     setIsGenerating(true);
-
-    // Luôn lấy lại thẻ Ẩn mới nhất (phòng trường hợp vừa xoay vòng)
-    const { account } = await getShadowAccount();
-    if (!account) {
-      Swal.fire('Lỗi', 'Không tìm thấy thẻ ngân hàng phù hợp!', 'error');
-      setIsGenerating(false);
-      return;
-    }
-    setQrAccount(account);
-
     const numAmount = parseInt(amount.replace(/\D/g, ''), 10) || 0;
-    if (numAmount <= 0) { setIsGenerating(false); return; }
+    if (!Number.isSafeInteger(numAmount) || numAmount <= 0) { setIsGenerating(false); return; }
 
     try {
-      // Cộng tiền vào định mức thẻ Ẩn (để xoay vòng thẻ cá nhân)
-      await recordShadowPayment(account.id, numAmount);
+      const attemptKey = 'custom-cash-receipt';
+      let previous = null;
+      try { previous = JSON.parse(sessionStorage.getItem(attemptKey) || 'null'); } catch { /* stale cache */ }
+      const receiptId = previous?.amount === numAmount ? previous.id : newLuckyRequestId();
+      sessionStorage.setItem(attemptKey, JSON.stringify({ id: receiptId, amount: numAmount }));
+      const { data, error } = await supabase.rpc('record_custom_cash_receipt', {
+        p_id: receiptId, p_amount: numAmount,
+      });
+      if (error || !data?.success) throw error || new Error('Chưa lưu được phiếu thu');
+      sessionStorage.removeItem(attemptKey);
 
       Swal.fire({
         icon: 'success',
@@ -94,7 +82,6 @@ export default function QrGeneratorPage() {
       setPaymentStatus('idle');
       setTransactionCode('');
       setActiveQr(null);
-      if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
 
     } catch (err) {
       console.error(err);
@@ -139,41 +126,6 @@ export default function QrGeneratorPage() {
       setTransactionCode(newCode);
       setPaymentStatus('pending');
 
-      // Lắng nghe realtime để tự xác nhận khi khách chuyển khoản
-      if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
-
-      subscriptionRef.current = supabase
-        .channel(`shadow_qr_${newCode}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'UPDATE',
-            schema: 'public',
-            table: 'payment_transactions',
-            filter: `transaction_code=eq.${newCode}`,
-          },
-          async (payload) => {
-            if (payload.new && payload.new.status === 'completed') {
-              // Cộng tiền vào thẻ Ẩn khi khách chuyển xong
-              if (numAmount > 0) {
-                await recordShadowPayment(account.id, numAmount);
-              }
-              setPaymentStatus('completed');
-              Swal.fire({
-                icon: 'success',
-                title: '✅ Đã nhận tiền!',
-                html: `Mã giao dịch: <b>${newCode}</b><br/>Số tiền: <b style="color:#2563eb">${numAmount.toLocaleString('vi-VN')}đ</b>`,
-                timer: 4000,
-                timerProgressBar: true,
-                showConfirmButton: false,
-                position: 'top-end',
-                toast: true,
-              });
-            }
-          }
-        )
-        .subscribe();
-
     } catch (err) {
       console.error(err);
       Swal.fire('Lỗi', 'Không thể tạo mã QR: ' + err.message, 'error');
@@ -181,28 +133,6 @@ export default function QrGeneratorPage() {
       setIsGenerating(false);
     }
   };
-
-  // ─── Cộng tiền vào định mức của thẻ Ẩn (để xoay vòng thẻ cá nhân) ──────
-  async function recordShadowPayment(accountId, amount) {
-    const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
-    const { data: existing } = await supabase
-      .from('bank_daily_totals')
-      .select('id, total_amount')
-      .eq('account_id', accountId)
-      .eq('date', today)
-      .maybeSingle();
-
-    if (existing) {
-      await supabase
-        .from('bank_daily_totals')
-        .update({ total_amount: existing.total_amount + amount })
-        .eq('id', existing.id);
-    } else {
-      await supabase
-        .from('bank_daily_totals')
-        .insert({ account_id: accountId, date: today, total_amount: amount });
-    }
-  }
 
   // Format số tiền khi nhập
   const handleAmountChange = (e) => {
@@ -225,7 +155,6 @@ export default function QrGeneratorPage() {
       setPaymentStatus('idle');
       setTransactionCode('');
       setActiveQr(null);
-      if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
     } catch (err) {
       console.error(err);
       Swal.fire('Chưa huỷ được mã', 'Không lưu được trạng thái huỷ. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
@@ -248,27 +177,13 @@ export default function QrGeneratorPage() {
     try {
       const numAmount = activeQr?.amount || 0;
 
-      // Huỷ subscription TRƯỚC khi tự update status — nếu để sau, chính update
-      // này kích lại listener realtime bên dưới (đang lắng nghe đúng sự kiện
-      // này) và cộng tiền thêm 1 lần nữa cho cùng 1 lần xác nhận (double credit).
-      if (subscriptionRef.current) {
-        await supabase.removeChannel(subscriptionRef.current);
-        subscriptionRef.current = null;
-      }
-
-      const { data: confirmed, error: confirmError } = await supabase.from('payment_transactions')
-        .update({ status: 'completed' })
-        .eq('transaction_code', transactionCode)
-        .eq('status', 'pending')
-        .select('id')
-        .maybeSingle();
+      const { data: confirmed, error: confirmError } = await supabase.rpc('confirm_shadow_qr_atomic', {
+        p_code: transactionCode,
+        p_expected_amount: numAmount,
+        p_account_id: activeQr?.account?.id || null,
+      });
       if (confirmError) throw confirmError;
-      if (!confirmed) throw new Error('Mã QR đã đổi trạng thái. Vui lòng tải lại và đối soát giao dịch.');
-
-      // Cộng tiền vào thẻ Ẩn
-      if (activeQr?.account && numAmount > 0) {
-        await recordShadowPayment(activeQr.account.id, numAmount);
-      }
+      if (!confirmed?.success) throw new Error('Chưa đối chiếu được mã QR và số tiền.');
 
       setPaymentStatus('completed');
       Swal.fire({ title: 'Thành công!', text: 'Đã xác nhận thanh toán thủ công.', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 3000 });
