@@ -727,7 +727,7 @@ export default function TablesPage() {
   // Gom lượt quay CHƯA vào bill theo bàn host để gắn icon lên thẻ bàn. Ưu tiên
   // trạng thái nặng nhất: error (cần xử lý) > waiting (đang chờ) > blocked.
   const luckyByHost = useMemo(() => {
-    const rank = { error: 4, need_phone: 3, waiting: 2, blocked: 1 };
+    const rank = { error: 6, auto_pending: 5, need_phone: 4, choose_gift: 3, waiting: 2, blocked: 1, auto_approved: 0.5 };
     const map = {};
     (luckySpins || []).forEach(s => {
       const key = s.hostTableId || s.tableId;
@@ -797,9 +797,12 @@ export default function TablesPage() {
   // ─── Trạng thái quà vòng xoay (badge thẻ bàn + danh sách kẹt ngày trước) ───
   // Gọi được độc lập (nhẹ, chỉ 1 API) nên poll riêng ~20s cho icon cập nhật nhanh,
   // không phải chờ fetchTables 90s. Lỗi (401 phiên cũ / mạng) chỉ log, không phá UI.
+  const luckyStatusBusyRef = useRef(false);
   const fetchLuckyStatus = useCallback(async () => {
+    if (luckyStatusBusyRef.current) return;
+    luckyStatusBusyRef.current = true;
     try {
-      const res = await fetch('/api/admin/lucky-status', { headers: staffApiHeaders() });
+      const res = await fetch('/api/admin/lucky-status', { method: 'POST', headers: staffApiHeaders() });
       const d = await res.json();
       if (d.ok) {
         setLuckySpins(d.spins || []);
@@ -808,6 +811,8 @@ export default function TablesPage() {
       }
     } catch (e) {
       console.warn('[lucky-status] không tải được:', e?.message || e);
+    } finally {
+      luckyStatusBusyRef.current = false;
     }
   }, []);
 
@@ -2808,7 +2813,10 @@ export default function TablesPage() {
                 {luckyCard?.top && (() => {
                   const LUCKY_BADGE = {
                     error:      { icon: '⚠️', bg: '#fef2f2', color: '#dc2626', bd: '#fecaca', blink: true,  title: 'Lỗi: khách đã Quan tâm Zalo nhưng quà CHƯA vào bill — bấm để xử lý' },
-                    need_phone: { icon: '💬', bg: '#eff6ff', color: '#1d4ed8', bd: '#bfdbfe', blink: true,  title: 'Khách đã bấm Quan tâm nhưng CHƯA nhắn SĐT vào khung chat — nhắc khách nhắn SĐT đã quay để nhận quà' },
+                    need_phone: { icon: '⏳', bg: '#eff6ff', color: '#1d4ed8', bd: '#bfdbfe', blink: true, title: 'Đang tự duyệt quà sau khi khách mở Zalo' },
+                    auto_pending: { icon: '⚠️', bg: '#fff7ed', color: '#c2410c', bd: '#fed7aa', blink: true, title: 'Đã tự duyệt, đang hoàn tất quà vào bill — bấm xem' },
+                    choose_gift: { icon: '🎁', bg: '#eff6ff', color: '#1d4ed8', bd: '#bfdbfe', blink: false, title: 'Đã tự duyệt — chờ khách chọn món/nước quà' },
+                    auto_approved: { icon: '✅', bg: '#f0fdf4', color: '#15803d', bd: '#bbf7d0', blink: false, title: 'Đã tự duyệt — quà đã vào bill. Bấm xem quà và tình trạng in' },
                     waiting:    { icon: '⏳', bg: '#fffbeb', color: '#b45309', bd: '#fde68a', blink: false, title: 'Khách đang chờ Quan tâm Zalo để nhận quà — bấm xem' },
                     blocked:    { icon: '⛔', bg: '#f3f4f6', color: '#6b7280', bd: '#e5e7eb', blink: false, title: 'Lượt quay bị chặn — bấm xem' },
                   };
@@ -2825,6 +2833,7 @@ export default function TablesPage() {
                       }}
                     >
                       {b.icon}
+                      {luckyCard.top === 'auto_approved' && <span style={{ marginLeft: 3, fontSize: '0.6rem', fontWeight: 700 }}>Tự duyệt</span>}
                     </div>
                   );
                 })()}
@@ -6825,7 +6834,10 @@ export default function TablesPage() {
           const spins = (luckySpins || []).filter(s => (s.hostTableId || s.tableId) === luckyModal.hostTableId);
           const stateLabel = {
             error: { text: '⚠️ Đã Quan tâm Zalo nhưng quà CHƯA vào bill (nghi lỗi hệ thống)', color: '#dc2626', bg: '#fef2f2', bd: '#fecaca' },
-            need_phone: { text: '💬 Khách đã bấm Quan tâm nhưng CHƯA nhắn SĐT — nhắc khách nhắn SĐT đã quay vào Zalo quán', color: '#1d4ed8', bg: '#eff6ff', bd: '#bfdbfe' },
+            need_phone: { text: '⏳ Đang tự duyệt quà sau khi khách mở Zalo', color: '#1d4ed8', bg: '#eff6ff', bd: '#bfdbfe' },
+            auto_pending: { text: '⚠️ Đã tự duyệt — đang hoàn tất quà vào bill', color: '#c2410c', bg: '#fff7ed', bd: '#fed7aa' },
+            choose_gift: { text: '🎁 Đã tự duyệt — chờ khách chọn món/nước quà', color: '#1d4ed8', bg: '#eff6ff', bd: '#bfdbfe' },
+            auto_approved: { text: '✅ Đã tự duyệt — quà đã vào bill', color: '#15803d', bg: '#f0fdf4', bd: '#bbf7d0' },
             waiting: { text: '⏳ Đang chờ khách Quan tâm Zalo', color: '#b45309', bg: '#fffbeb', bd: '#fde68a' },
             blocked: { text: '⛔ Lượt quay bị chặn', color: '#6b7280', bg: '#f3f4f6', bd: '#e5e7eb' },
           };
@@ -6840,7 +6852,7 @@ export default function TablesPage() {
                   <button onClick={() => setLuckyModal(null)} disabled={!!luckyGrantBusy} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#94a3b8' }}>✕</button>
                 </div>
                 <div style={{ fontSize: '0.82rem', color: '#64748b', marginBottom: 14 }}>
-                  Khách trúng quà nhưng chưa vào bill. Nhắc khách nhắn <b>đúng SĐT đã quay</b> vào Zalo quán, hoặc bấm <b>Tặng quà thủ công</b> để cấp ngay cho khách.
+                  Khách mở Zalo sẽ được tự duyệt, không cần gửi SĐT. Mức giảm được ghi vào bill; món/nước đã chọn được gửi đến máy in theo nhóm món.
                 </div>
                 {spins.length === 0 ? (
                   <div style={{ padding: 20, textAlign: 'center', color: '#16a34a', fontWeight: 700 }}>✅ Đã xử lý xong, không còn lượt nào chờ.</div>
@@ -6854,6 +6866,15 @@ export default function TablesPage() {
                         <div>SĐT: <b>{s.customerPhone || '—'}</b></div>
                       </div>
                       <div style={{ marginTop: 7, fontSize: '0.8rem', fontWeight: 700, color: st.color }}>{st.text}</div>
+                      {s.autoApprovedAt && <div style={{ marginTop: 6, fontSize: '0.82rem', lineHeight: 1.6 }}>
+                        {s.prizeType === 'percent' && <div>Giảm <b>{s.prizeValue}%</b> theo tổng bill.</div>}
+                        {['percent', 'amount'].includes(s.prizeType) && s.appliedItemId && <div>Đã trừ: <b>{Number(s.discountAmount).toLocaleString('vi-VN')}đ</b></div>}
+                        {s.giftName && <div>Quà trên bill: <b>{s.quantity} × {s.giftName}</b>{s.itemOptions?.length > 0 && ` (${s.itemOptions.map(o => o.choice).join(', ')})`}</div>}
+                        {s.printStatus && <div style={{ color: ['failed', 'missing', 'cancelled'].includes(s.printStatus) ? '#dc2626' : '#475569' }}>
+                          Phiếu {s.prizeType === 'gift_drink' ? 'nước' : 'món'}: {s.printStatus === 'done' ? 'Máy in báo hoàn tất' : s.printStatus === 'failed' ? 'In lỗi — kiểm tra máy in' : s.printStatus === 'missing' ? 'Chưa tạo được lệnh in, hệ thống sẽ thử lại' : s.printStatus === 'cancelled' ? 'Lệnh in đã bị huỷ' : 'Đã gửi lệnh, đang chờ máy in'}
+                        </div>}
+                        {s.deliveryError && <div style={{ color: '#dc2626' }}>{s.deliveryError}</div>}
+                      </div>}
                       {s.adminState === 'blocked' && s.blockReason && (
                         <div style={{ marginTop: 3, fontSize: '0.78rem', color: '#6b7280' }}>Lý do: {s.blockReason}</div>
                       )}
@@ -6862,7 +6883,7 @@ export default function TablesPage() {
                           Khách chưa chọn món/nước quà — cần khách chọn ở màn hình vòng xoay trước khi cấp tay.
                         </div>
                       )}
-                      <button
+                      {s.adminState !== 'auto_approved' && <button
                         onClick={() => grantLuckyGift(s.id)}
                         disabled={!!luckyGrantBusy || (['gift_drink', 'gift_dish', 'gift'].includes(s.prizeType) && !s.giftChosen)}
                         style={{
@@ -6872,7 +6893,7 @@ export default function TablesPage() {
                         }}
                       >
                         {luckyGrantBusy === s.id ? 'Đang cấp...' : '🎁 Tặng quà thủ công (ghi vào bill)'}
-                      </button>
+                      </button>}
                     </div>
                   );
                 })}

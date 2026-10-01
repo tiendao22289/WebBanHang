@@ -11,7 +11,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { getServiceClient, tryApplyLuckyForSpin, completeLuckySpin, applyLuckySpin } from '@/lib/zaloRewardServer';
+import { getServiceClient, tryApplyLuckyForSpin, completeLuckySpin, applyLuckySpin, markFollowTapped, autoApproveTappedSpin } from '@/lib/zaloRewardServer';
 import { LUCKY_SETTING_KEYS, parseLuckyConfig } from '@/lib/luckyWheel';
 
 export const dynamic = 'force-dynamic';
@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(request) {
   try {
-    const { spinId } = await request.json().catch(() => ({}));
+    const { spinId, followTapped } = await request.json().catch(() => ({}));
     if (!spinId || typeof spinId !== 'string') {
       return NextResponse.json({ ok: false, reason: 'thiếu spinId' }, { status: 400 });
     }
@@ -43,6 +43,12 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, matched: true });
     }
     if (spin.status !== 'waiting_follow') return NextResponse.json({ ok: true, matched: false });
+    // Recover the recorded browser tap when navigation interrupted its request.
+    if (followTapped === true) {
+      await markFollowTapped(supabase, spinId);
+      const result = await autoApproveTappedSpin(supabase, spinId);
+      if (result.matched) return NextResponse.json({ ok: true, matched: true });
+    }
     const { data: settings, error: settingsError } = await supabase.from('settings')
       .select('key, value').in('key', LUCKY_SETTING_KEYS);
     if (settingsError) throw settingsError;

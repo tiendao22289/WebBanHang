@@ -35,6 +35,7 @@ function database(spin = spinTemplate) {
       is(k, v) { conditions.push(r => (r[k] ?? null) === v); return q; },
       in(k, vs) { conditions.push(r => vs.includes(r[k])); return q; },
       contains(k, vs) { conditions.push(r => vs.every(v => r[k]?.includes(v))); return q; },
+      overlaps(k, vs) { conditions.push(r => vs.some(v => r[k]?.includes(v))); return q; },
       gte(k, v) { conditions.push(r => r[k] >= v); return q; },
       or() { return q; }, order() { return q; },
       limit(n) { max = n; return q; },
@@ -69,7 +70,7 @@ function database(spin = spinTemplate) {
   // Mock sendOaText: ghi lại tin đã gửi để kiểm "nhắn đúng 1 lần".
   const sentMessages = [];
   const sendOaText = async (_sb, userId, text) => { sentMessages.push({ userId, text }); return { ok: true }; };
-  const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyForSpin, grantLuckySpinManually, removeLuckyGiftItem, listAdminLuckySpins })`, {
+  const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyForSpin, grantLuckySpinManually, removeLuckyGiftItem, listAdminLuckySpins, markFollowTapped, autoApproveTappedSpin })`, {
     ...wheel, sendGiftItemPrintJob: print, sendOaText, console: { log() {}, error() {} }, Date, Set,
   });
   return { state, fail, db, sentMessages, ...funcs };
@@ -353,4 +354,94 @@ test('a previous-session spin is hidden after a new guest sits at the same table
   h.state.tables[0].occupied_at = new Date().toISOString();    // khách mới vừa ngồi
   const list = await h.listAdminLuckySpins(h.db);
   assert.equal(list.length, 0);
+});
+
+function enableSlotClaim(h) {
+  h.db.rpc = async (name, p) => {
+    if (name !== 'claim_lucky_wheel_slot') throw new Error(name);
+    const s = h.state.lucky_spins.find(s => s.id === p.p_spin_id);
+    if (s.status !== 'waiting_follow') return { data: false, error: null };
+    Object.assign(s, { status: 'applied', applied_order_id: p.p_target_order_id,
+      discount_amount: p.p_discount_amount, zalo_user_id: p.p_zalo_user_id });
+    return { data: true, error: null };
+  };
+}
+
+test('opening Zalo auto grants a fixed discount once without a phone message', async () => {
+  const h = database({ ...spinTemplate, status: 'waiting_follow', applied_order_id: null,
+    gift_menu_item_id: null, prize_type: 'amount', prize_value: 5000 });
+  enableSlotClaim(h);
+  h.state.customers.push({ phone: spinTemplate.customer_phone, zalo_user_id: 'known-identity' });
+  await h.markFollowTapped(h.db, 'spin');
+  await Promise.all(Array.from({ length: 20 }, () => h.autoApproveTappedSpin(h.db, 'spin')));
+  assert.equal(h.state.orders[0].total_amount, 95000);
+  assert.equal(h.state.order_items.filter(i => i.unit_price < 0).length, 1);
+  assert.ok(h.state.lucky_spins[0].auto_approved_at);
+  assert.equal(h.state.lucky_spins[0].zalo_user_id, null);
+  assert.equal(h.state.customers[0].zalo_user_id, 'known-identity');
+  const [row] = await h.listAdminLuckySpins(h.db);
+  assert.equal(row.adminState, 'auto_approved');
+  assert.equal(row.discountAmount, 5000);
+});
+
+test('admin reconciliation auto delivers a pending drink to its category printer', async () => {
+  const h = database({ ...spinTemplate, status: 'waiting_follow', follow_prompt_at: now, applied_order_id: null });
+  enableSlotClaim(h);
+  h.state.printers = [
+    { id: 'kitchen', is_active: true, is_default: true, printer_categories: [{ category_id: 'food' }] },
+    { id: 'bar', is_active: true, is_default: false, printer_categories: [{ category_id: 'drinks' }] },
+  ];
+  const [row] = await h.listAdminLuckySpins(h.db, { reconcile: true });
+  assert.equal(row.adminState, 'auto_approved');
+  assert.equal(row.printStatus, 'pending');
+  assert.equal(h.state.print_jobs[0].printer_id, 'bar');
+  assert.equal(h.state.order_items.find(i => i.is_gift).quantity, 3);
+  await h.listAdminLuckySpins(h.db, { reconcile: true });
+  assert.equal(h.state.print_jobs.length, 1);
+});
+
+test('auto-approved food follows selected cooking category rather than default drink printer', async () => {
+  const h = database({ ...spinTemplate, status: 'waiting_follow', follow_prompt_at: now,
+    prize_type: 'gift_dish', gift_item_options: [{ name: 'LOẠI', choice: 'Nướng' }] });
+  enableSlotClaim(h);
+  h.state.menu_items[0].options = [{ name: 'LOẠI', choices: ['Nướng'], choiceCategories: ['grill'] }];
+  h.state.printers = [
+    { id: 'bar', is_active: true, is_default: true, printer_categories: [{ category_id: 'drinks' }] },
+    { id: 'grill-printer', is_active: true, is_default: false, printer_categories: [{ category_id: 'grill' }] },
+  ];
+  await h.autoApproveTappedSpin(h.db, 'spin');
+  assert.equal(h.state.print_jobs[0].printer_id, 'grill-printer');
+});
+
+test('auto delivery survives receipt failure and does not show completed prematurely', async () => {
+  const h = database({ ...spinTemplate, auto_approved_at: now, follow_prompt_at: now });
+  h.fail.set('lucky_spins:update', 1);
+  await assert.rejects(h.autoApproveTappedSpin(h.db, 'spin'));
+  assert.equal((await h.listAdminLuckySpins(h.db))[0].adminState, 'auto_pending');
+  const [row] = await h.listAdminLuckySpins(h.db, { reconcile: true });
+  assert.equal(row.adminState, 'auto_approved');
+  assert.equal(h.state.order_items.filter(i => i.is_gift).length, 1);
+});
+
+test('auto approval waits for a specific gift choice and never reopens blocked spins', async () => {
+  const h = database({ ...spinTemplate, status: 'waiting_follow', follow_prompt_at: now, gift_menu_item_id: null });
+  enableSlotClaim(h);
+  await h.autoApproveTappedSpin(h.db, 'spin');
+  assert.equal((await h.listAdminLuckySpins(h.db))[0].adminState, 'choose_gift');
+  assert.equal(h.state.print_jobs.length, 0);
+  await h.pickGiftItem(h.db, 'spin', 'drink', []);
+  assert.equal(h.state.order_items.filter(i => i.is_gift).length, 1);
+  h.state.lucky_spins[0].status = 'blocked';
+  assert.equal((await h.autoApproveTappedSpin(h.db, 'spin')).matched, false);
+});
+
+test('admin poll retries a missing auto gift print job without duplicating the gift', async () => {
+  const h = database({ ...spinTemplate, auto_approved_at: now, follow_prompt_at: now });
+  h.fail.set('print_jobs:insert', 1);
+  await h.autoApproveTappedSpin(h.db, 'spin');
+  assert.equal(h.state.print_jobs.length, 0);
+  const [row] = await h.listAdminLuckySpins(h.db, { reconcile: true });
+  assert.equal(row.printStatus, 'pending');
+  assert.equal(h.state.order_items.filter(i => i.is_gift).length, 1);
+  assert.equal(h.state.print_jobs.length, 1);
 });

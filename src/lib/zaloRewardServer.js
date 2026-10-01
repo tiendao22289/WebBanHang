@@ -709,7 +709,7 @@ export async function applyLuckySpin(supabase, spin, zaloUserId, log = () => {})
   await completeLuckySpin(supabase, { ...spin, status: 'applied',
     applied_order_id: targetOrderId, discount_amount: discount }, log);
 
-  try {
+  if (zaloUserId) try {
     await supabase.from('customers')
       .update({ zalo_user_id: zaloUserId, last_visit_at: new Date().toISOString() })
       .eq('phone', spin.customer_phone);
@@ -806,7 +806,7 @@ export async function removeLuckyGiftItem(supabase, orderId, itemId) {
 }
 
 /**
- * Danh sách lượt quay CHƯA vào bill trong ngày (theo giờ VN) để trang admin
+ * Danh sách lượt quay đang chờ và quà tự duyệt trong ngày để trang admin
  * hiển thị trạng thái/lỗi trên từng bàn. Trả kèm tên/SĐT cho nhân viên phục
  * vụ (route gọi bằng SERVICE_ROLE_KEY, không lộ ra anon). Mỗi lượt gắn 1
  * adminState:
@@ -818,16 +818,17 @@ export async function removeLuckyGiftItem(supabase, orderId, itemId) {
  *  - 'blocked'   : bị chặn (đã nhận gần đây / bill đóng...).
  */
 const LUCKY_SPIN_COLS = 'id, table_id, host_table_id, customer_name, customer_phone, prize_type, prize_value, prize_label, status, zalo_user_id, gift_menu_item_id, applied_item_id, block_reason, created_at';
-// Có thêm follow_prompt_at — tách riêng vì cột này có thể chưa tồn tại (migration
-// lucky_wheel_follow_prompt.sql chưa chạy); listAdminLuckySpins sẽ tự lùi về
-// LUCKY_SPIN_COLS nếu select cột này lỗi.
-const LUCKY_SPIN_COLS_FULL = `${LUCKY_SPIN_COLS}, follow_prompt_at`;
+// Includes the explicit auto-approval audit marker and bill receipt.
+const LUCKY_SPIN_COLS_FULL = `${LUCKY_SPIN_COLS}, follow_prompt_at, auto_approved_at, applied_order_id, discount_amount, gift_item_options`;
 
 function mapLuckySpinRow(s) {
   const followConfirmed = !!s.zalo_user_id || s.status === 'applied';
-  // follow_prompt_at có (khách đã bấm Quan tâm) nhưng chưa khớp SĐT → cần nhắc SĐT.
+  // A web tap is not proof of following; auto delivery records its own marker.
   const tappedFollow = !!s.follow_prompt_at;
   const adminState = s.status === 'blocked' ? 'blocked'
+    : s.auto_approved_at && s.applied_item_id ? 'auto_approved'
+    : s.auto_approved_at && isGiftPrizeType(s.prize_type) && !s.gift_menu_item_id ? 'choose_gift'
+    : s.auto_approved_at ? 'auto_pending'
     : followConfirmed ? 'error'
     : tappedFollow ? 'need_phone'
     : 'waiting';
@@ -837,6 +838,8 @@ function mapLuckySpinRow(s) {
     prizeType: s.prize_type, prizeValue: s.prize_value, prizeLabel: s.prize_label,
     status: s.status, adminState, followConfirmed, tappedFollow,
     giftChosen: !!s.gift_menu_item_id, blockReason: s.block_reason, createdAt: s.created_at,
+    autoApprovedAt: s.auto_approved_at || null, appliedItemId: s.applied_item_id,
+    discountAmount: Number(s.discount_amount) || 0,
   };
 }
 
@@ -846,12 +849,11 @@ function startOfVnTodayISO() {
   return new Date(`${vnDayKey}T00:00:00.000+07:00`).toISOString();
 }
 
-export async function listAdminLuckySpins(supabase) {
+export async function listAdminLuckySpins(supabase, { reconcile = false } = {}) {
   const start = startOfVnTodayISO();
   const query = (cols) => supabase.from('lucky_spins')
     .select(cols)
     .gte('created_at', start)
-    .is('applied_item_id', null)
     .in('status', ['waiting_follow', 'applied', 'blocked'])
     .order('created_at', { ascending: false });
   // Thử select kèm follow_prompt_at; nếu cột chưa có (migration chưa chạy) thì
@@ -878,20 +880,81 @@ export async function listAdminLuckySpins(supabase) {
     if (!t.occupied_at) return false;               // bàn trống/đã đóng → ẩn lượt cũ
     return new Date(s.created_at) >= new Date(t.occupied_at);
   };
-  return rows.filter(inCurrentSession).map(mapLuckySpinRow);
+  const currentRows = rows.filter(inCurrentSession);
+  if (reconcile) {
+    for (let i = 0; i < currentRows.length; i++) {
+      const s = currentRows[i];
+      if (!s.applied_item_id && s.follow_prompt_at && !s.zalo_user_id && s.status !== 'blocked') {
+        try {
+          await autoApproveTappedSpin(supabase, s.id);
+          const { data: fresh, error } = await supabase.from('lucky_spins').select('*').eq('id', s.id).maybeSingle();
+          if (error) throw error;
+          if (fresh) currentRows[i] = fresh;
+        } catch (error) { s.autoDeliveryError = error.message || 'Chưa hoàn tất quà'; }
+      }
+    }
+  }
+  const visible = currentRows.filter(s => !s.applied_item_id || s.auto_approved_at);
+  const itemIds = visible.filter(s => s.auto_approved_at && s.applied_item_id).map(s => s.applied_item_id);
+  let items = [], jobs = [];
+  if (itemIds.length) {
+    const itemResult = await supabase.from('order_items')
+      .select('id, order_id, item_name, quantity, unit_price, item_options, menu_item:menu_items(name)')
+      .in('id', itemIds);
+    if (itemResult.error) throw itemResult.error;
+    items = itemResult.data || [];
+    const result = await supabase.from('print_jobs').select('id, order_id, only_item_ids, status, printer_id')
+      .overlaps('only_item_ids', itemIds);
+    if (result.error) throw result.error;
+    jobs = result.data || [];
+  }
+  const result = [];
+  for (const s of visible) {
+    const item = items.find(i => i.id === s.applied_item_id);
+    let job = jobs.find(j => j.only_item_ids?.includes(s.applied_item_id));
+    let printError = null;
+    if (reconcile && s.status === 'applied' && item && s.auto_approved_at && isGiftPrizeType(s.prize_type) && !job) {
+      const printed = await sendGiftItemPrintJob(supabase, item.order_id, item.id);
+      if (printed.success) job = { status: 'pending' };
+      else printError = printed.error;
+    }
+    const mapped = mapLuckySpinRow(s);
+    if (s.status !== 'blocked' && s.auto_approved_at && s.applied_item_id && !item) mapped.adminState = 'auto_pending';
+    result.push({ ...mapped, giftName: item?.menu_item?.name || item?.item_name || null,
+      quantity: item?.quantity || Number(s.prize_value) || 1,
+      itemOptions: item?.item_options || [],
+      discountAmount: item && !isGiftPrizeType(s.prize_type) ? Math.max(0, -Number(item.unit_price) * Number(item.quantity)) : mapped.discountAmount,
+      printStatus: isGiftPrizeType(s.prize_type) && item ? job?.status || 'missing' : null,
+      deliveryError: s.autoDeliveryError || printError || null });
+  }
+  return result;
 }
 
 /**
- * Ghi nhận khách BẤM nút "Quan tâm Zalo" trên web cho một lượt quay (chỉ khi
- * lượt còn đang chờ follow). Fail-safe: cột chưa có / lỗi mạng đều nuốt — đây
- * chỉ là tín hiệu hiển thị cho nhân viên, không được làm hỏng luồng nhận quà.
+ * Record the web tap durably before auto approval. A failed write is retryable.
  */
 export async function markFollowTapped(supabase, spinId) {
-  try {
-    await supabase.from('lucky_spins')
+    const { error } = await supabase.from('lucky_spins')
       .update({ follow_prompt_at: new Date().toISOString() })
       .eq('id', spinId).eq('status', 'waiting_follow').is('follow_prompt_at', null);
-  } catch { /* bỏ qua — không ảnh hưởng việc nhận quà */ }
+    if (error) throw error;
+}
+
+// Owner policy: a recorded tap grants the prize without claiming Zalo identity.
+// The existing slot lock and stable item/print IDs still enforce one reward.
+export async function autoApproveTappedSpin(supabase, spinId) {
+  const { data: spin, error } = await supabase.from('lucky_spins').select('*').eq('id', spinId).maybeSingle();
+  if (error) throw error;
+  if (!spin || !spin.follow_prompt_at || spin.zalo_user_id || spin.status === 'blocked') return { matched: false };
+  if (spin.status !== 'waiting_follow' && !spin.auto_approved_at) return { matched: false };
+  if (spin.status === 'waiting_follow') {
+    const { error: markerError } = await supabase.from('lucky_spins')
+      .update({ auto_approved_at: new Date().toISOString() }).eq('id', spin.id)
+      .eq('status', 'waiting_follow').is('auto_approved_at', null);
+    if (markerError) throw markerError;
+  }
+  await applyLuckySpin(supabase, spin, null);
+  return { matched: true };
 }
 
 
@@ -905,6 +968,7 @@ export async function tryApplyLuckyByTiming() {
 }
 
 export async function tryApplyLuckyForSpin(supabase, spin) {
+  if (spin.follow_prompt_at && !spin.zalo_user_id) return autoApproveTappedSpin(supabase, spin.id);
   // Only resume an identity already recorded from the explicit phone message.
   if (spin.zalo_user_id && await isFollowing(supabase, spin.zalo_user_id)) {
     await applyLuckySpin(supabase, spin, spin.zalo_user_id);

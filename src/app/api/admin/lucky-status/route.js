@@ -14,6 +14,15 @@ import { isAdminRequest } from '@/lib/adminApiAuth';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request) {
+  return luckyStatus(request, false);
+}
+
+// The existing admin poll also repairs interrupted auto-delivery; no staff click.
+export async function POST(request) {
+  return luckyStatus(request, true);
+}
+
+async function luckyStatus(request, reconcile) {
   // Trả về tên + SĐT khách → bắt buộc phải là nhân viên đã đăng nhập.
   if (!(await isAdminRequest(request))) {
     return NextResponse.json({ ok: false, spins: [] }, { status: 401 });
@@ -24,7 +33,7 @@ export async function GET(request) {
     // Chỉ lượt quay HÔM NAY chưa vào bill → gắn badge lên đúng thẻ bàn đang bị.
     // Lượt kẹt từ ngày trước KHÔNG hiện: bill đã đóng, không gắn được với bàn
     // nào đang mở nên báo cũng không xử lý được, chỉ gây rối.
-    const spins = await listAdminLuckySpins(supabase);
+    const spins = await listAdminLuckySpins(supabase, { reconcile });
     return NextResponse.json({ ok: true, spins });
   } catch (err) {
     console.error('[admin/lucky-status] lỗi:', err);

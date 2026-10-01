@@ -2305,10 +2305,12 @@ function OrderContent() {
   async function pingLuckyReady(spinId) {
     if (!spinId) return;
     try {
+      let followTapped = false;
+      try { followTapped = localStorage.getItem(`${wheelStorageKey()}_auto_tap`) === spinId; } catch { }
       const response = await fetch('/api/lucky/claim-ready', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ spinId }),
+        body: JSON.stringify({ spinId, followTapped }),
       });
       const result = await response.json();
       if (!response.ok || !result.ok) {
@@ -2368,7 +2370,7 @@ function OrderContent() {
       }
       if (manual) {
         setWheelErr(luckyRewardState(data) === 'waiting_follow'
-          ? 'Chưa xác nhận được Quan tâm Zalo. Quý khách nhắn đúng số điện thoại đã quay vào Zalo quán rồi quay lại kiểm tra nhé. Quà vẫn đang chờ nhận.'
+          ? 'Quà vẫn đang chờ nhận. Quý khách bấm “Mở Zalo” để được tự duyệt, rồi quay lại kiểm tra nhé.'
           : luckyRewardState(data) === 'saving'
             ? 'Quà chưa được ghi xong vào hoá đơn. Quý khách kiểm tra lại sau ít giây; nếu vẫn chưa được, vui lòng gọi nhân viên.' : '');
       } else if (luckyRewardState(data) === 'done') setWheelErr('');
@@ -5236,8 +5238,8 @@ function OrderContent() {
                       ) : wheelFollowPending ? (
                         <div style={{ fontWeight: 700, color: '#0f766e' }}>
                           {wheelIsGiftPrize && wheelGiftChosen
-                            ? '🎁 Quà đã chọn xong! Quý khách bấm Quan tâm Zalo và nhắn SĐT đã quay là nhận quà nha 👇'
-                            : 'Quý khách bấm Quan tâm Zalo và nhắn SĐT đã quay để nhận quà nha 👇'}
+                            ? '🎁 Quà đã chọn xong! Mở Zalo để hệ thống tự duyệt quà nha 👇'
+                            : 'Mở Zalo để hệ thống tự duyệt ưu đãi vào hoá đơn nha 👇'}
                         </div>
                       ) : wheelNeedsGiftPick ? (
                         <div style={{ fontWeight: 700, color: '#0f766e' }}>
@@ -5347,8 +5349,9 @@ function OrderContent() {
                             rememberWheel(wheelPrize.spinId);
                             ensureBackGuard();
                             try { localStorage.setItem(`${wheelStorageKey()}_zalo_departure`, wheelPrize.spinId); } catch { }
-                            // Báo cho admin biết "khách đã bấm Quan tâm" (để nhắc khách nhắn SĐT
-                            // nếu chưa nhắn). Fire-and-forget, không chặn việc mở Zalo.
+                            try { localStorage.setItem(`${wheelStorageKey()}_auto_tap`, wheelPrize.spinId); } catch { }
+                            // Tự duyệt trên server; keepalive tiếp tục khi chuyển sang Zalo.
+                            // Mốc local giúp claim-ready gửi lại nếu mạng ngắt lúc chuyển app.
                             try {
                               fetch('/api/lucky/follow-tapped', {
                                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -5361,9 +5364,9 @@ function OrderContent() {
                           Mở Zalo, bấm Quan tâm!
                         </a>
                         <div className="co-wheel-zalo-guide">
-                          <div>1. Bấm <b>Quan tâm</b> và nhắn <b>SĐT đã quay</b> vào Zalo quán.</div>
-                          <div>2. Quay lại trang gọi món này, bấm <b>Kiểm tra nhận quà</b>.</div>
-                          <div>Đã quan tâm rồi: chỉ cần nhắn SĐT.</div>
+                          <div>1. Mở Zalo và bấm <b>Quan tâm</b> để theo dõi quán.</div>
+                          <div>2. Quà được <b>tự duyệt</b> sau khi mở Zalo, không cần gửi SĐT.</div>
+                          <div>Quay lại đây để xem quà đã vào hoá đơn. Nếu chưa thấy, bấm <b>Kiểm tra nhận quà</b>.</div>
                           {inZaloBrowser && <div>Giữ trang gọi món này mở. Nếu lỡ đóng, quét lại QR bàn trong Zalo để tiếp tục nhận quà.</div>}
                         </div>
                       </>

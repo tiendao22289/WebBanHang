@@ -146,7 +146,7 @@ export async function sendSmartPrintJobs(supabase, orderId) {
 export async function sendGiftItemPrintJob(supabase, orderId, orderItemId) {
   try {
     const { data: queued, error: queuedError } = await supabase.from('print_jobs')
-      .select('id, status').eq('order_id', orderId).contains('only_item_ids', [orderItemId]).limit(1);
+      .select('id, status').contains('only_item_ids', [orderItemId]).limit(1);
     if (queuedError) throw queuedError;
     if (queued?.length) return queued[0].status === 'failed'
       ? { success: false, error: 'Lệnh in quà bị lỗi. Nhân viên cần kiểm tra máy in.' }

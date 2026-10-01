@@ -920,10 +920,10 @@ export default function SettingsPage() {
             </div>
             <div>
               <div style={{ fontWeight: 700, fontSize: '0.84rem', color: '#0f766e' }}>
-                Phải quan tâm Zalo mới nhận quà
+                Mở Zalo để tự nhận quà
               </div>
               <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                Bật: quay xong khách phải Quan tâm Zalo OA, quà mới vào hoá đơn.
+                Bật: khách mở Zalo, hệ thống tự duyệt quà vào hoá đơn, không cần gửi SĐT.
                 Tắt: quà vào hoá đơn ngay khi quay.
               </div>
             </div>

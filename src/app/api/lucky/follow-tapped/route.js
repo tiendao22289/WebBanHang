@@ -1,14 +1,12 @@
 /**
  * POST /api/lucky/follow-tapped — máy khách báo đã BẤM nút "Quan tâm Zalo" cho
- * một lượt quay. Chỉ ghi một mốc thời gian (follow_prompt_at) để trang admin
- * biết "khách đã bấm Quan tâm nhưng chưa nhắn SĐT" mà nhắc khách.
+ * một lượt quay. Ghi mốc mở Zalo và tự duyệt quà theo chính sách của quán.
  *
- * KHÔNG cấp quà, KHÔNG cần đăng nhập — chỉ nhận spinId. Chạy bằng SERVICE_ROLE_KEY
- * vì lucky_spins đã siết quyền ghi của anon. Mọi lỗi đều trả ok:false êm, không
- * làm hỏng trải nghiệm nhận quà của khách.
+ * Không xác nhận danh tính/follow Zalo. Dùng chung khoá slot và ID dòng quà
+ * để retry không cộng hoặc in trùng. Lỗi được claim-ready/admin poll thử lại.
  */
 import { NextResponse } from 'next/server';
-import { getServiceClient, markFollowTapped } from '@/lib/zaloRewardServer';
+import { getServiceClient, markFollowTapped, autoApproveTappedSpin } from '@/lib/zaloRewardServer';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,6 +19,7 @@ export async function POST(request) {
     const supabase = getServiceClient();
     if (!supabase) return NextResponse.json({ ok: false });
     await markFollowTapped(supabase, spinId);
+    await autoApproveTappedSpin(supabase, spinId);
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error('[lucky/follow-tapped] lỗi:', err);
