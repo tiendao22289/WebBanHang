@@ -18,6 +18,7 @@ await db.exec(`
   CREATE TABLE order_items(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), order_id uuid REFERENCES orders ON DELETE CASCADE,
     menu_item_id uuid, item_name text, quantity integer, unit_price integer, is_gift boolean DEFAULT false,
     item_options jsonb, note text);
+  CREATE TABLE print_jobs(id uuid PRIMARY KEY, order_id uuid REFERENCES orders, status text);
   CREATE TABLE lucky_spins(id uuid PRIMARY KEY, host_table_id uuid, customer_phone text,
     status text, prize_type text, prize_value numeric, applied_order_id uuid REFERENCES orders,
     applied_item_id uuid, created_at timestamptz DEFAULT now(), session_started_at timestamptz,
@@ -30,7 +31,7 @@ await db.exec(safeMergeMigration);
 await db.exec(readFileSync(new URL('../supabase/migrations/order_total_follows_items.sql', import.meta.url), 'utf8'));
 
 async function fixture({ type = 'percent', takeaway = false, claim = true } = {}) {
-  await db.exec(`TRUNCATE lucky_spins, order_items, orders, tables, settings CASCADE;
+  await db.exec(`TRUNCATE lucky_spins, print_jobs, order_items, orders, tables, settings CASCADE;
     INSERT INTO settings VALUES ('lucky_wheel_max','10000');
     INSERT INTO tables(id,table_type) VALUES ('${id(1)}','${takeaway ? 'takeaway' : 'normal'}');
     INSERT INTO orders(id, table_id) VALUES ('${id(10)}','${id(1)}');
@@ -169,6 +170,13 @@ test('merge RPC preserves live item IDs and ignores stale browser totals/items',
   assert.deepEqual(after, before);
   assert.equal((await state()).discount,5000);
   assert.equal((await state()).total,245000);
+});
+test('merge waits for kitchen jobs on secondary orders', async () => {
+  await fixture(); await addOrder(11,100000);
+  await db.query('INSERT INTO print_jobs VALUES ($1,$2,$3)',[id(50),id(11),'pending']);
+  await assert.rejects(db.query('SELECT merge_bills_atomic($1,$2,$3,$4,$5)',
+    [[id(10),id(11)],id(10),[id(11)],0,JSON.stringify([])]));
+  assert.equal((await db.query('SELECT count(*)::integer AS n FROM order_items WHERE order_id=$1',[id(11)])).rows[0].n,1);
 });
 test('failed transaction rolls back both added items and recalculated reward', async () => {
   await fixture();

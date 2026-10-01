@@ -33,6 +33,14 @@ BEGIN
     WHERE o.id = ANY(p_all_bill_ids) AND COALESCE(t.merged_with, t.id) IS DISTINCT FROM group_id
   ) THEN RAISE EXCEPTION 'Các bill không cùng một nhóm bàn'; END IF;
 
+  -- A queued/retry print job still reads its original secondary order. Moving
+  -- the rows now would make that kitchen ticket empty or incomplete.
+  IF EXISTS (SELECT 1 FROM public.print_jobs j
+             WHERE j.order_id = ANY(p_other_bill_ids)
+               AND j.status NOT IN ('done', 'cancelled')) THEN
+    RAISE EXCEPTION 'Bill phụ còn phiếu in đang chờ hoặc lỗi; xử lý in trước khi gộp';
+  END IF;
+
   -- Keep every order_item ID, including rows added after the browser loaded.
   UPDATE public.lucky_spins SET applied_order_id = p_main_bill_id
     WHERE applied_order_id = ANY(p_other_bill_ids) AND status = 'applied';
