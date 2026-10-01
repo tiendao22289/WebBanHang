@@ -3553,10 +3553,6 @@ function OrderContent() {
       }
     }
 
-    const effectiveTotal = Array.isArray(cartOverride)
-      ? cartOverride.reduce((sum, i) => sum + (i.price || 0) * (i.quantity || 1), 0)
-      : totalAmount;
-
     setGiftPromptPending(false);
     submittingRef.current = true; // khoá NGAY (đồng bộ) trước mọi await để cú bấm thứ 2 bị chặn
     setSubmitting(true);
@@ -3597,26 +3593,8 @@ function OrderContent() {
         }
       }
 
-      const { data: order, error: orderErr } = await supabase
-        .from('orders')
-        .insert({
-          table_id: activeTableId,
-          customer_id: customerId,
-          customer_name: customerName.trim() || 'Khách ẩn danh',
-          customer_phone: customerPhone.trim() || '',
-          status: 'pending',
-          total_amount: effectiveTotal,
-          ...(isTakeaway && deliveryAddress.trim() ? { delivery_address: deliveryAddress.trim() } : {}),
-          ...(isTakeaway && customerNote.trim() ? { customer_note: customerNote.trim() } : {}),
-        })
-        .select()
-        .single();
-
-      if (orderErr) throw orderErr;
-
-      const { error: itemsErr } = await supabase.from('order_items').insert([
+      const submittedItems = [
         ...effectiveCart.map(item => ({
-          order_id: order.id,
           menu_item_id: item.id,
           quantity: item.quantity,
           unit_price: item.price,
@@ -3625,7 +3603,6 @@ function OrderContent() {
           is_gift: false,
         })),
         ...effectiveGifts.map(g => ({
-          order_id: order.id,
           menu_item_id: g.id,
           quantity: 1,
           unit_price: 0,
@@ -3633,9 +3610,29 @@ function OrderContent() {
           note: g._note || null,
           is_gift: true,
         })),
-      ]);
-
-      if (itemsErr) throw itemsErr;
+      ];
+      const attemptKey = `order-submit:${activeTableId}`;
+      const signature = JSON.stringify({ submittedItems, customerPhone: customerPhone.trim(),
+        customerName: customerName.trim(), deliveryAddress: isTakeaway ? deliveryAddress.trim() : '',
+        customerNote: isTakeaway ? customerNote.trim() : '' });
+      let previousAttempt = null;
+      try { previousAttempt = JSON.parse(sessionStorage.getItem(attemptKey) || 'null'); } catch { /* corrupted cache */ }
+      const orderId = previousAttempt?.signature === signature && previousAttempt?.orderId
+        ? previousAttempt.orderId : newLuckyRequestId();
+      sessionStorage.setItem(attemptKey, JSON.stringify({ signature, orderId }));
+      const { data: savedOrder, error: orderErr } = await supabase.rpc('submit_customer_order_atomic', {
+        p_order_id: orderId,
+        p_table_id: activeTableId,
+        p_customer_id: customerId,
+        p_customer_name: customerName.trim() || 'Khách ẩn danh',
+        p_customer_phone: customerPhone.trim() || '',
+        p_delivery_address: isTakeaway ? deliveryAddress.trim() : null,
+        p_customer_note: isTakeaway ? customerNote.trim() : null,
+        p_items: submittedItems,
+      });
+      if (orderErr || !savedOrder?.order_id) throw orderErr || new Error('Không nhận được mã đơn hàng');
+      const order = { id: savedOrder.order_id };
+      sessionStorage.removeItem(attemptKey);
 
       // Xoá giỏ NGAY sau khi món đã vào DB — TRƯỚC lệnh in (chờ ~1s).
       // Nếu để sau, realtime listener nạp đơn vừa gửi vào groupOrders trong lúc chờ in,
@@ -3646,14 +3643,12 @@ function OrderContent() {
       setCustomerNote(''); // reset ghi chú takeaway sau khi gửi thành công
       setShowCart(false);
 
-      await supabase
-        .from('tables')
-        .update({ status: 'occupied', occupied_at: new Date().toISOString() })
-        .eq('id', activeTableId)
-        .eq('status', 'available');
-
       // Gửi lệnh in — retry 1 lần nếu lỗi, alert khách nếu vẫn fail
-      let printResult = await sendPrintJob(supabase, order.id);
+      const { data: priorJobs, error: priorJobsError } = await supabase
+        .from('print_jobs').select('id').eq('order_id', order.id).limit(1);
+      let printResult = priorJobsError
+        ? { success: false, error: 'Không kiểm tra được phiếu in cũ' }
+        : priorJobs?.length ? { success: true } : await sendPrintJob(supabase, order.id);
       if (!printResult?.success) {
         console.warn('[submitOrder] sendPrintJob lần 1 fail:', printResult?.error);
         await new Promise(r => setTimeout(r, 500));
@@ -3665,7 +3660,7 @@ function OrderContent() {
           .from('print_jobs').select('id').eq('order_id', order.id).limit(1);
         printResult = existingJobs?.length > 0
           ? { success: true }
-          : await sendPrintJob(supabase, order.id);
+          : priorJobsError ? printResult : await sendPrintJob(supabase, order.id);
       }
       if (!printResult?.success) {
         console.error('[submitOrder] sendPrintJob fail sau retry:', printResult?.error);
