@@ -70,7 +70,19 @@ test('wrong QR reference rolls back both paid statuses and bank total', async ()
   await db.query('INSERT INTO bank_accounts VALUES ($1,true,true)', [id(40)]);
   await db.query('INSERT INTO payment_transactions VALUES ($1,$2,$3,$4,$5)',
     ['OLD-CODE','pending',`${id(10)},${id(11)}`,100000,id(40)]);
-  await assert.rejects(pay(150000,'transfer',id(40),'OLD-CODE'));
+  await assert.rejects(pay(150000,'transfer',id(40),'OLD-CODE'), /Mã QR không còn khớp/);
   assert.deepEqual((await db.query('SELECT status FROM orders ORDER BY id')).rows.map(r => r.status), ['pending','completed']);
   assert.equal((await db.query('SELECT count(*)::integer AS n FROM bank_daily_totals')).rows[0].n, 0);
+});
+
+test('valid QR code settles the bill, transaction and bank ledger exactly once', async () => {
+  await reset();
+  await db.query('INSERT INTO bank_accounts VALUES ($1,true,true)', [id(40)]);
+  await db.query('INSERT INTO payment_transactions VALUES ($1,$2,$3,$4,$5)',
+    ['VALID-CODE','pending',`${id(10)},${id(11)}`,150000,id(40)]);
+  assert.equal((await pay(150000,'transfer',id(40),'VALID-CODE')).success, true);
+  assert.equal((await db.query('SELECT status FROM payment_transactions')).rows[0].status, 'completed');
+  assert.deepEqual((await db.query('SELECT status FROM orders ORDER BY id')).rows.map(r => r.status), ['paid','paid']);
+  assert.equal((await pay(150000,'transfer',id(40),'VALID-CODE')).success, false);
+  assert.equal(Number((await db.query('SELECT total_amount FROM bank_daily_totals')).rows[0].total_amount),150000);
 });
