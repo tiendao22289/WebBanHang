@@ -27,6 +27,7 @@ const migration = readFileSync(new URL('../supabase/migrations/lucky_wheel_dynam
 await db.exec(migration);
 const safeMergeMigration = readFileSync(new URL('../supabase/migrations/merge_bills_preserve_live_items.sql', import.meta.url), 'utf8');
 await db.exec(safeMergeMigration);
+await db.exec(readFileSync(new URL('../supabase/migrations/order_total_follows_items.sql', import.meta.url), 'utf8'));
 
 async function fixture({ type = 'percent', takeaway = false, claim = true } = {}) {
   await db.exec(`TRUNCATE lucky_spins, order_items, orders, tables, settings CASCADE;
