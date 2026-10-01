@@ -1255,7 +1255,8 @@ export default function TablesPage() {
         Swal.fire('Cần đối soát bill', 'Bill thay đổi ngay lúc thanh toán. Bàn vẫn mở; hãy kiểm tra các món đã thu và món còn lại trước khi đóng.', 'warning');
         return false;
       }
-      if (totalAmount > 0) {
+      // Cash never enters a bank account or its daily transfer limit.
+      if (paymentMethod === 'transfer' && totalAmount > 0) {
         try {
           // RPC atomic — check hạn mức + ghi bank_daily_totals trong 1 transaction
           const { shouldHideStats: autoHide } = await processPaymentAtomic(totalAmount);
