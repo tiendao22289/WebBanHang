@@ -25,6 +25,8 @@ await db.exec(`
 `);
 const migration = readFileSync(new URL('../supabase/migrations/lucky_wheel_dynamic_percent.sql', import.meta.url), 'utf8');
 await db.exec(migration);
+const safeMergeMigration = readFileSync(new URL('../supabase/migrations/merge_bills_preserve_live_items.sql', import.meta.url), 'utf8');
+await db.exec(safeMergeMigration);
 
 async function fixture({ type = 'percent', takeaway = false, claim = true } = {}) {
   await db.exec(`TRUNCATE lucky_spins, order_items, orders, tables, settings CASCADE;
@@ -156,6 +158,16 @@ test('merge RPC preserves reward identity and future additions still reprice', a
   await addOrder(12,100000);
   assert.equal((await state()).discount,7000);
   assert.equal((await state()).total,343000);
+});
+test('merge RPC preserves live item IDs and ignores stale browser totals/items', async () => {
+  await fixture(); await addOrder(11,100000);
+  const before = (await db.query('SELECT id FROM order_items ORDER BY id')).rows.map(row => row.id);
+  await db.query('SELECT merge_bills_atomic($1,$2,$3,$4,$5)',
+    [[id(10),id(11)],id(10),[id(11)],0,JSON.stringify([])]);
+  const after = (await db.query('SELECT id FROM order_items ORDER BY id')).rows.map(row => row.id);
+  assert.deepEqual(after, before);
+  assert.equal((await state()).discount,5000);
+  assert.equal((await state()).total,245000);
 });
 test('failed transaction rolls back both added items and recalculated reward', async () => {
   await fixture();
