@@ -6,7 +6,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createQuickMatcher } from '@/lib/quickMatch';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
-import { getActiveAccount, processPaymentAtomic, buildQrUrl } from '@/lib/bankAccount';
+import { getActiveAccount, buildQrUrl } from '@/lib/bankAccount';
 import { sendTableSummaryPrintJob, sendSmartPrintJobs } from '@/lib/print';
 import {
   getChannel, fetchChannelConfig, calcReviewDiscount, startOfTodayISO,
@@ -418,10 +418,6 @@ export default function TablesPage() {
   const cancelStamp = () => ({
     cancelled_at: new Date().toISOString(),
     ...(currentStaff ? { cancelled_by_id: currentStaff.id, cancelled_by_name: currentStaff.full_name } : {}),
-  });
-  const paidStamp = () => ({
-    paid_at: new Date().toISOString(),
-    ...(currentStaff ? { paid_by_id: currentStaff.id, paid_by_name: currentStaff.full_name } : {}),
   });
 
   // Nhãn tên hiển thị: nhân viên → "NV: ...", khách → "KHÁCH: ..."
@@ -976,66 +972,6 @@ export default function TablesPage() {
     }
   }, [showTransfer, transactionCode, paymentCountdown]);
 
-  // Realtime subscription for auto-confirm payment (Chuyển khoản)
-  useEffect(() => {
-    if (showTransfer && transactionCode) {
-      const channel = supabase
-        .channel(`payment_tx_${transactionCode}`)
-        .on('postgres_changes', {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'payment_transactions',
-          filter: `transaction_code=eq.${transactionCode}`
-        }, async (payload) => {
-          if (payload.new && payload.new.status === 'completed') {
-            if (Number(payload.new.total_amount) !== Number(paymentModal?.total)) {
-              Swal.fire('Cần đối soát chuyển khoản', 'Số tiền giao dịch khác tổng bill đang hiển thị. Vui lòng kiểm tra trước khi đóng bàn.', 'warning');
-              return;
-            }
-            // Đóng bill + ghi nhận định mức + xử lý is_hidden_from_stats
-            // paymentModal.table chứa thông tin bàn cần đóng
-            let paid = false;
-            if (paymentModal?.table && Number(payload.new.total_amount) === Number(paymentModal.total)) {
-              // The payment webhook may already have marked every order paid.
-              // In that case there is nothing for completeTable() to claim.
-              const txOrderIds = String(payload.new.order_ids || '').split(',').filter(Boolean);
-              if (txOrderIds.length) {
-                const { data: paidOrders, error: paidError } = await supabase.from('orders')
-                  .select('id, status').in('id', txOrderIds);
-                paid = !paidError && paidOrders?.length === txOrderIds.length
-                  && paidOrders.every(order => order.status === 'paid');
-              }
-              if (!paid) paid = await completeTable(paymentModal.table, 'transfer', qrAccount?.shouldHideStats || false, paymentModal.total);
-            }
-            if (!paid) return;
-            Swal.fire({
-              title: 'Thành công',
-              text: 'Hệ thống đã nhận được thanh toán chuyển khoản!',
-              icon: 'success',
-              timer: 2000,
-              showConfirmButton: false,
-              position: 'top-end',
-              toast: true
-            });
-            setPaymentModal(null);
-            setQrAccount(null);
-            setShowTransfer(false);
-            setTransactionCode(null);
-            setPaymentCountdown(0);
-            setSelectedTable(null);
-            setConfirmPayment(null);
-            setDesktopView('tables');
-            fetchTables();
-          }
-        })
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    }
-  }, [showTransfer, transactionCode, paymentModal, fetchTables]);
-
   useEffect(() => {
     fetchTables();
     fetchReviewRequests();
@@ -1167,22 +1103,14 @@ export default function TablesPage() {
   // ═══════════════════════════════════════════════════════════════════════════
   // completeTable — đóng bill cho một nhóm bàn.
   //
-  // CHỐNG CỘNG TIỀN HAI LẦN (2 lớp):
-  //   Lớp 1 — client: completingTablesRef chặn lượt gọi trùng cho cùng nhóm bàn
-  //           (nhân viên bấm nhanh 2 cái, hoặc realtime auto-confirm đua với nút).
-  //   Lớp 2 — database: GIÀNH đơn trước (update status → 'paid'), cộng tiền sau.
-  //           Postgres chỉ cho MỘT lượt update khớp status pending/preparing/completed;
-  //           lượt thứ hai khớp 0 dòng → thoát, không cộng tiền lần nữa.
-  //
-  // Thứ tự CŨ (cộng tiền → mới đánh dấu paid) để hở khoảng giữa đọc và ghi:
-  // hai lượt gọi cùng đọc được đơn chưa paid → cộng tiền 2 lần vào bank_daily_totals,
-  // đẩy thẻ chính đầy hạn mức sớm và làm đóng băng thống kê cả ngày.
+  // Client khoá nút đang xử lý; RPC khoá nhóm bàn và chốt bill, sổ chuyển
+  // khoản, trạng thái QR cùng lúc. Lỗi giữa chừng rollback toàn bộ.
   // ═══════════════════════════════════════════════════════════════════════════
-  async function completeTable(tableObj, paymentMethod = 'cash', shouldHideStats = false, expectedAmount = null) {
+  async function completeTable(tableObj, paymentMethod = 'cash', shouldHideStats = false, expectedAmount = null, accountId = null) {
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
     const hostId = table.merged_with || table.id;
 
-    // ── LỚP 1: nhóm bàn này đang xử lý dở → bỏ qua lượt gọi này ───────────────
+    // Nhóm bàn này đang xử lý dở → bỏ qua lượt gọi trùng.
     if (completingTablesRef.current.has(hostId)) return false;
     completingTablesRef.current.add(hostId);
     setPayingHostId(hostId);
@@ -1202,8 +1130,6 @@ export default function TablesPage() {
         Swal.fire('Bill đã thay đổi', `Tổng mới là ${formatPrice(snapshot.total)}. Vui lòng kiểm tra lại món và số tiền khách trả trước khi chốt.`, 'warning');
         return false;
       }
-      const groupTableIds = snapshot.groupTableIds;
-
       // Chốt cuối cho TIỀN MẶT: tuyệt đối không cho qua khi còn món chưa thêm giá
       // (0đ, không phải món tặng). Chuyển khoản không chặn ở đây vì tiền có thể đã vào tài khoản.
       if (paymentMethod === 'cash') {
@@ -1213,80 +1139,36 @@ export default function TablesPage() {
         }
       }
 
-      // ── LỚP 2: GIÀNH đơn — chỉ lượt gọi đầu tiên khớp được dòng nào ──────────
-      const { data: claimed, error: claimError } = await supabase
-        .from('orders')
-        .update({
-          status: 'paid',
-          payment_method: paymentMethod,
-          created_at: new Date().toISOString(),
-          ...paidStamp(),
-        })
-        .in('table_id', groupTableIds)
-        .in('status', ['pending', 'preparing', 'completed'])
-        // Trả về order_items chứ KHÔNG dùng cột total_amount cache sẵn — cột này
-        // được ghi lại bằng kiểu "đọc rồi ghi" ở nhiều chỗ khác (thêm món, xoá
-        // món, áp ưu đãi...) không có khoá, nên có thể bị lệch (thấp hơn thực tế)
-        // nếu 2 thao tác đụng cùng lúc trên cùng 1 order. Cộng tiền doanh thu ở
-        // ĐÂY — sau khi đã khoá order bằng status='paid' — mới là số đúng 100%.
-        .select('id, order_items(unit_price, quantity)');
-
-      if (claimError) {
-        console.error('[completeTable] Không giành được đơn:', claimError);
-        Swal.fire('Lỗi', 'Không đóng được bill. Vui lòng thử lại.', 'error');
-        return false;
-      }
-
-      // Another tab may have paid this group first. Do not announce a new payment.
-      if (!claimed || claimed.length === 0) {
-        fetchTables();
-        Swal.fire('Bill đã thay đổi', 'Không còn bill đang mở để chốt. Vui lòng đồng bộ lại bàn.', 'warning');
-        return false;
-      }
-
-      // ── Cộng tiền đúng theo số đơn vừa giành được (tính thẳng từ order_items) ──
-      const totalAmount = claimed.reduce((sum, o) =>
-        sum + (o.order_items || []).reduce((s, i) => s + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0), 0);
-      const claimedIds = claimed.map(o => o.id).sort().join(',');
-      if (claimedIds !== snapshot.orderIdsStr || totalAmount !== snapshot.total) {
-        // A concurrent menu edit or new order landed between the read and claim.
-        // Leave the group visible so staff can reconcile the unpaid remainder.
-        fetchTables();
-        Swal.fire('Cần đối soát bill', 'Bill thay đổi ngay lúc thanh toán. Bàn vẫn mở; hãy kiểm tra các món đã thu và món còn lại trước khi đóng.', 'warning');
-        return false;
-      }
-      // Cash never enters a bank account or its daily transfer limit.
-      if (paymentMethod === 'transfer' && totalAmount > 0) {
-        try {
-          // RPC atomic — check hạn mức + ghi bank_daily_totals trong 1 transaction
-          const { shouldHideStats: autoHide } = await processPaymentAtomic(totalAmount);
-          if (!shouldHideStats && autoHide) shouldHideStats = autoHide;
-        } catch (err) {
-          console.error('[completeTable] Error in processPaymentAtomic:', err);
+      // The database locks the live group and verifies these IDs/amount before
+      // changing any order, bank total, or table. A network/SQL failure rolls
+      // back the whole operation instead of leaving a partly paid bill.
+      const { data: settled, error: settleError } = await supabase.rpc('complete_table_payment_atomic', {
+        p_table_id: table.id,
+        p_expected_order_ids: snapshot.bills.map(o => o.id),
+        p_expected_amount: snapshot.total,
+        p_payment_method: paymentMethod,
+        p_account_id: paymentMethod === 'transfer' ? accountId : null,
+        p_hide_stats: shouldHideStats,
+        p_staff_id: currentStaff?.id || null,
+        p_staff_name: currentStaff?.full_name || null,
+        p_transaction_code: paymentMethod === 'transfer' ? transactionCode : null,
+      });
+      if (settleError) throw settleError;
+      if (!settled?.success) {
+        if (paymentMethod === 'cash' && settled?.reason === 'amount_changed') {
+          setConfirmPayment({ table, totalAmount: Number(settled.total), transactionCode: null });
         }
+        await fetchTables();
+        Swal.fire('Bill đã thay đổi', 'Có món hoặc trạng thái bill thay đổi lúc thanh toán. Vui lòng kiểm tra lại toàn bộ món và số tiền trước khi chốt.', 'warning');
+        return false;
       }
-
-      // Chỉ ghi cờ ẩn khi thật sự cần. Nếu bước này lỗi, bill vẫn nằm trong thống kê
-      // — nghiêng về phía KHAI ĐỦ, an toàn hơn là âm thầm giấu doanh thu.
-      if (shouldHideStats) {
-        await supabase
-          .from('orders')
-          .update({ is_hidden_from_stats: true })
-          .in('id', claimed.map(o => o.id));
-      }
-
-      // Reset toàn bộ nhóm bàn gộp
-      await supabase
-        .from('tables')
-        .update({ status: 'available', occupied_at: null, merged_with: null })
-        .or(`id.eq.${snapshot.hostId},merged_with.eq.${snapshot.hostId}`);
 
       setSelectedTable(null);
       fetchTables();
       return true;
     } catch (error) {
       console.error('[completeTable]', error);
-      Swal.fire('Chưa thể thanh toán', 'Không kiểm tra được đầy đủ bill. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
+      Swal.fire('Chưa thể thanh toán', error?.message || 'Không kiểm tra được đầy đủ bill. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
       return false;
     } finally {
       completingTablesRef.current.delete(hostId);
@@ -1324,6 +1206,21 @@ export default function TablesPage() {
     return true;
   }
 
+  async function refreshOrderTotalFromItems(orderId) {
+    const { data: rows, error: readError } = await supabase.from('order_items')
+      .select('unit_price, quantity').eq('order_id', orderId);
+    if (readError) throw readError;
+    const total = (rows || []).reduce((sum, item) =>
+      sum + Number(item.unit_price || 0) * Number(item.quantity || 0), 0);
+    const { data: updated, error: writeError } = await supabase.from('orders')
+      .update({ total_amount: total }).eq('id', orderId)
+      .in('status', OPEN_BILL_STATUSES).select('id');
+    if (writeError || !updated?.length) {
+      throw writeError || new Error('Bill đã chốt hoặc huỷ trong lúc sửa món');
+    }
+    return total;
+  }
+
   // Lưu giá đã nhập cho từng món 0đ, rồi cộng dồn lại total_amount của các bill liên quan.
   async function saveFixedPrices() {
     const rawItems = priceFixModal?.items || [];
@@ -1339,17 +1236,14 @@ export default function TablesPage() {
     try {
       // 1. Cập nhật đơn giá từng món
       for (const p of parsed) {
-        await supabase.from('order_items').update({ unit_price: p.priceNum }).eq('id', p.orderItemId);
+        const { data: updated, error } = await supabase.from('order_items')
+          .update({ unit_price: p.priceNum }).eq('id', p.orderItemId).select('id');
+        if (error || !updated?.length) throw error || new Error('Món đã thay đổi hoặc không còn tồn tại');
       }
       // 2. Tính lại tổng tiền các bill bị ảnh hưởng (đọc lại từ DB để chắc chắn)
       const orderIds = [...new Set(parsed.map(p => p.orderId))];
       for (const oid of orderIds) {
-        const { data: rows } = await supabase
-          .from('order_items').select('unit_price, quantity').eq('order_id', oid);
-        const newTotal = (rows || []).reduce(
-          (s, i) => s + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0
-        );
-        await supabase.from('orders').update({ total_amount: newTotal }).eq('id', oid);
+        await refreshOrderTotalFromItems(oid);
       }
       setPriceFixModal(null);
       await fetchOrdersOnly();
@@ -1835,14 +1729,12 @@ export default function TablesPage() {
       }
 
       // Tính lại tổng của bill vừa chèn — đọc từ DB cho chắc
-      const { data: itemsNow } = await supabase
-        .from('order_items').select('unit_price, quantity').eq('order_id', targetOrderId);
-      const newTotal = (itemsNow || []).reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
-      await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
+      await refreshOrderTotalFromItems(targetOrderId);
 
-      await supabase.from('review_rewards')
+      const { error: receiptError } = await supabase.from('review_rewards')
         .update({ applied_order_id: targetOrderId, applied_item_id: item.id })
         .eq('id', reward.id);
+      if (receiptError) throw receiptError;
 
       setReviewModal(null);
       await fetchReviewRequests();
@@ -2057,16 +1949,17 @@ export default function TablesPage() {
       return;
     }
 
-    await supabase.from('order_items').delete().eq('id', itemId);
-
-    // Tính total locally: bỏ item vừa xóa ra khỏi mảng hiện tại
-    const newTotal = (orderNow?.order_items || [])
-      .filter(i => i.id !== itemId)
-      .reduce((s, i) => s + i.unit_price * i.quantity, 0);
-    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
-
-    await syncOrderPromotions(orderId);
-    fetchOrdersOnly();
+    try {
+      const { data: removed, error } = await supabase.from('order_items')
+        .delete().eq('id', itemId).eq('order_id', orderId).select('id');
+      if (error || !removed?.length) throw error || new Error('Món đã thay đổi');
+      await refreshOrderTotalFromItems(orderId);
+      await syncOrderPromotions(orderId);
+    } catch (error) {
+      Swal.fire('Chưa xoá được món', error.message || 'Vui lòng thử lại.', 'error');
+    } finally {
+      await fetchOrdersOnly();
+    }
   }
 
   async function updateItemQuantity(orderId, itemId, currentQuantity, change) {
@@ -2089,39 +1982,37 @@ export default function TablesPage() {
       return next;
     });
 
-    // Tính total từ local state (không cần query lại DB)
-    const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
-    const itemsNow = (orderNow?.order_items || []).map(i =>
-      i.id === itemId ? { ...i, quantity: newQuantity } : i
-    );
-    const newTotal = itemsNow.reduce((s, i) => s + i.unit_price * i.quantity, 0);
-
-    // 2 API calls song song thay vì 3 tuần tự
-    await Promise.all([
-      supabase.from('order_items').update({ quantity: newQuantity }).eq('id', itemId),
-      supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId),
-    ]);
-
-    await syncOrderPromotions(orderId);
-    // Chỉ refresh orders, không fetch lại toàn bộ
-    fetchOrdersOnly();
+    try {
+      const { data: updated, error } = await supabase.from('order_items')
+        .update({ quantity: newQuantity }).eq('id', itemId).eq('order_id', orderId).select('id');
+      if (error || !updated?.length) throw error || new Error('Món đã thay đổi');
+      await refreshOrderTotalFromItems(orderId);
+      await syncOrderPromotions(orderId);
+    } catch (error) {
+      Swal.fire('Chưa sửa được số lượng', error.message || 'Vui lòng thử lại.', 'error');
+    } finally {
+      await fetchOrdersOnly();
+    }
   }
 
   async function updateItemPrice(orderId, itemId, newPrice) {
     if (newPrice == null || newPrice < 0) return;
-    await supabase.from('order_items').update({ unit_price: newPrice }).eq('id', itemId);
-    // Tính lại total locally
-    const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
-    const newTotal = (orderNow?.order_items || []).reduce((s, i) =>
-      s + (i.id === itemId ? newPrice : i.unit_price) * i.quantity, 0
-    );
-    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+    try {
+      const { data: updated, error } = await supabase.from('order_items')
+        .update({ unit_price: newPrice }).eq('id', itemId).eq('order_id', orderId).select('id');
+      if (error || !updated?.length) throw error || new Error('Món đã thay đổi');
+      await refreshOrderTotalFromItems(orderId);
+    } catch (error) {
+      Swal.fire('Chưa sửa được giá', error.message || 'Vui lòng thử lại.', 'error');
+      await fetchOrdersOnly();
+      return;
+    }
     setEditItemPrice(null);
     setShowPriceModal(null);
     setDiscountValue(0);
     setDiscountMode('VND');
     setCustomNewPrice(null);
-    fetchOrdersOnly();
+    await fetchOrdersOnly();
   }
 
   // Tiền món tính giảm % (giống vòng xoay): chỉ dòng có giá DƯƠNG và không phải
@@ -2180,10 +2071,7 @@ export default function TablesPage() {
         Swal.fire({ icon: 'error', title: 'Chưa lưu được', text: error?.message || 'Vui lòng thử lại.' });
         setAdjustBusy(false); return;
       }
-      const { data: itemsNow } = await supabase.from('order_items')
-        .select('unit_price, quantity').eq('order_id', targetOrderId);
-      const newTotal = (itemsNow || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
-      await supabase.from('orders').update({ total_amount: newTotal }).eq('id', targetOrderId);
+      await refreshOrderTotalFromItems(targetOrderId);
       await fetchOrdersOnly();
       setAdjustOpen(false); // dialog unmount → tự xoá ô nhập, không cần reset state ở cha
       Swal.fire({ icon: 'success', title: 'Đã cập nhật bill', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500 });
@@ -2199,23 +2087,22 @@ export default function TablesPage() {
     const updatePayload = { item_options: newOptions, note: note || '' };
     if (newPrice != null && newPrice >= 0) updatePayload.unit_price = newPrice;
     if (newQty != null && newQty > 0) updatePayload.quantity = newQty;
-    await supabase.from('order_items').update(updatePayload).eq('id', itemId);
-
-    // Tính lại total locally (không cần query DB)
-    const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
-    const newTotal = (orderNow?.order_items || []).reduce((s, i) => {
-      if (i.id !== itemId) return s + i.unit_price * i.quantity;
-      const price = newPrice != null && newPrice >= 0 ? newPrice : i.unit_price;
-      const qty = newQty != null && newQty > 0 ? newQty : i.quantity;
-      return s + price * qty;
-    }, 0);
-    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
+    try {
+      const { data: updated, error } = await supabase.from('order_items')
+        .update(updatePayload).eq('id', itemId).eq('order_id', orderId).select('id');
+      if (error || !updated?.length) throw error || new Error('Món đã thay đổi');
+      await refreshOrderTotalFromItems(orderId);
+    } catch (error) {
+      Swal.fire('Chưa sửa được món', error.message || 'Vui lòng thử lại.', 'error');
+      await fetchOrdersOnly();
+      return;
+    }
 
     setEditingOrderItem(null);
     setOptionModalItem(null);
     setSelectedOptions({});
     setOptionNote('');
-    fetchOrdersOnly();
+    await fetchOrdersOnly();
   }
 
   const decreaseItemFromMenu = async (menuItemId) => {
@@ -2656,59 +2543,14 @@ export default function TablesPage() {
     const allBillIds = sortedBills.map(b => b.id);
     const otherIds = allBillIds.filter(id => id !== mainBill.id);
 
-    // Fetch toàn bộ món của tất cả các bills
-    const { data: allItems, error: fetchErr } = await supabase
-      .from('order_items')
-      .select('*')
-      .in('order_id', allBillIds);
-
-    if (fetchErr) {
-      Swal.fire('Lỗi', 'Lỗi khi lấy dữ liệu món ăn: ' + fetchErr.message, 'error');
-      return;
-    }
-
-    // Nhóm các món lại bằng key duy nhất (gộp qty nếu giống nhau)
-    const groupedMap = {};
-    allItems.forEach(item => {
-      const optsString = item.item_options ? JSON.stringify(item.item_options) : '[]';
-      // item_name nằm trong key: các dòng giảm giá ưu đãi (menu_item_id null)
-      // của 2 kênh khác nhau mà tình cờ cùng số tiền sẽ KHÔNG bị gộp làm một,
-      // để bill vẫn ghi rõ giảm vì kênh nào.
-      const key = `${item.menu_item_id}_${item.unit_price}_${optsString}_${item.note || ''}_${item.is_gift ? 'gift' : 'normal'}_${item.item_name || ''}_${isLuckyWheelOutcome(item) ? item.id : ''}`;
-
-      if (!groupedMap[key]) {
-        groupedMap[key] = {
-          id: item.id,
-          order_id: mainBill.id, // Sẽ đẩy vào main bill
-          menu_item_id: item.menu_item_id,
-          quantity: 0,
-          unit_price: item.unit_price,
-          item_options: item.item_options,
-          note: item.note,
-          is_gift: item.is_gift,
-          item_name: item.item_name || null
-        };
-      }
-      groupedMap[key].quantity += item.quantity;
-    });
-
-    const newItems = Object.values(groupedMap);
-
-    // Tổng mới không cộng tiền từ quà tặng `is_gift` hoặc áp dụng logic riêng (nếu món không phải quà tặng thì cộng)
-    let newTotal = 0;
-    newItems.forEach(i => {
-      if (!i.is_gift) {
-        newTotal += Number(i.unit_price) * Number(i.quantity);
-      }
-    });
-
-    // === THỰC THI ATOMIC BẰNG RPC ===
+    // The RPC moves live database rows with their original IDs. Browser item
+    // snapshots must never be used to reconstruct a bill during a merge.
     const { error: rpcErr } = await supabase.rpc('merge_bills_atomic', {
       p_all_bill_ids: allBillIds,
       p_main_bill_id: mainBill.id,
       p_other_bill_ids: otherIds,
-      p_new_total: newTotal,
-      p_new_items: newItems
+      p_new_total: 0,
+      p_new_items: []
     });
 
     if (rpcErr) {
@@ -3973,7 +3815,7 @@ export default function TablesPage() {
 
           const doTransferPayment = async () => {
             if (payingHostId) return;
-            const ok = await completeTable(table, 'transfer', qrAccount ? qrAccount.shouldHideStats : false, total);
+            const ok = await completeTable(table, 'transfer', qrAccount ? qrAccount.shouldHideStats : false, total, qrAccount?.id || null);
             if (ok) closeModal();
           };
 
@@ -6457,7 +6299,7 @@ export default function TablesPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
                 {/* Tiền mặt Button */}
-                {/* completeTable() tự xử lý: check hạn mức → cộng bank_daily_totals → gán is_hidden_from_stats */}
+                {/* Thanh toán tiền mặt chỉ chốt bill; không ghi vào tổng chuyển khoản ngân hàng. */}
                 {/* Khoá nút khi đang xử lý — chặn bấm 2 lần làm cộng tiền 2 lượt vào thẻ */}
                 <div
                   onClick={async () => {
@@ -6585,7 +6427,7 @@ export default function TablesPage() {
                   disabled={!qrAccount || !!payingHostId}
                   onClick={async () => {
                     if (!qrAccount || payingHostId) return;
-                    const ok = await completeTable(paymentModal.table, 'transfer', qrAccount.shouldHideStats, paymentModal.total);
+                    const ok = await completeTable(paymentModal.table, 'transfer', qrAccount.shouldHideStats, paymentModal.total, qrAccount.id);
                     if (!ok) return;
                     setPaymentModal(null);
                     setConfirmPayment(null);
