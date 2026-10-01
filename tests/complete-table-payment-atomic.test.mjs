@@ -18,8 +18,8 @@ await db.exec(`
   CREATE TABLE bank_accounts(id uuid PRIMARY KEY, is_active boolean, is_visible boolean);
   CREATE TABLE bank_daily_totals(id uuid DEFAULT gen_random_uuid(), account_id uuid,
     date date, total_amount numeric, UNIQUE(account_id, date));
-  CREATE TABLE payment_transactions(transaction_code text PRIMARY KEY, status text,
-    order_ids text, total_amount numeric, account_id uuid);
+  CREATE TABLE payment_transactions(transaction_code varchar(8) PRIMARY KEY, status text,
+    order_ids text, total_amount numeric, account_id text);
 `);
 await db.exec(readFileSync(new URL('../supabase/migrations/complete_table_payment_atomic.sql', import.meta.url), 'utf8'));
 
@@ -79,10 +79,10 @@ test('valid QR code settles the bill, transaction and bank ledger exactly once',
   await reset();
   await db.query('INSERT INTO bank_accounts VALUES ($1,true,true)', [id(40)]);
   await db.query('INSERT INTO payment_transactions VALUES ($1,$2,$3,$4,$5)',
-    ['VALID-CODE','pending',`${id(10)},${id(11)}`,150000,id(40)]);
-  assert.equal((await pay(150000,'transfer',id(40),'VALID-CODE')).success, true);
+    ['VALID001','pending',`${id(10)},${id(11)}`,150000,id(40)]);
+  assert.equal((await pay(150000,'transfer',id(40),'VALID001')).success, true);
   assert.equal((await db.query('SELECT status FROM payment_transactions')).rows[0].status, 'completed');
   assert.deepEqual((await db.query('SELECT status FROM orders ORDER BY id')).rows.map(r => r.status), ['paid','paid']);
-  assert.equal((await pay(150000,'transfer',id(40),'VALID-CODE')).success, false);
+  assert.equal((await pay(150000,'transfer',id(40),'VALID001')).success, false);
   assert.equal(Number((await db.query('SELECT total_amount FROM bank_daily_totals')).rows[0].total_amount),150000);
 });

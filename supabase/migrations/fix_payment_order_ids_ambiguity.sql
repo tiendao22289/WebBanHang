@@ -90,7 +90,7 @@ BEGIN
     WHERE tx.transaction_code = p_transaction_code AND tx.status = 'pending'
       AND tx.order_ids = array_to_string(v_order_ids, ',')
       AND tx.total_amount = live_total
-      AND tx.account_id IS NOT DISTINCT FROM p_account_id;
+      AND tx.account_id::text IS NOT DISTINCT FROM p_account_id::text;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'Mã QR không còn khớp bill hoặc tài khoản; kiểm tra lại giao dịch';
     END IF;
