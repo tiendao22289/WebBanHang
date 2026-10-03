@@ -93,7 +93,9 @@ function playPrinterRecovered() {
 // (crash, mất mạng, rớt Realtime...) — job dạng này KHÔNG BAO GIỜ tự chuyển
 // sang 'failed' nên phải chủ động dò, nếu không nhân viên sẽ không biết gì.
 const STALE_PENDING_SECONDS = 60;
-const STALE_POLL_INTERVAL_MS = 15000;
+// 45s: job phải treo ≥60s mới bị coi là lỗi nên dò dày hơn cũng không báo sớm
+// hơn bao nhiêu; trước đây 15s × mọi máy admin + mọi máy khách là quá nhiều.
+const STALE_POLL_INTERVAL_MS = 45000;
 
 // Lỗi "kẹt hàng đợi Windows" TỰ PHỤC HỒI (spooler thông là phiếu in ra) — KHÔNG
 // phải máy in hỏng, không nên hụ còi báo động. (Offline / lỗi khác vẫn báo.)
@@ -165,9 +167,15 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
       return raw;
     };
 
+    // Máy khách: chỉ nghe lệnh in của bill mình (filter phía server) — không
+    // lọc thì mọi lệnh in của cả quán bị đẩy xuống mọi điện thoại khách.
+    const customerIds = [...new Set([customerOrderId, ...customerOrderIds].filter(Boolean))].slice(0, 100);
+    const printJobsFilter = { event: 'UPDATE', schema: 'public', table: 'print_jobs' };
+    if (!isAdmin) printJobsFilter.filter = `order_id=in.(${customerIds.join(',')})`;
+
     const channel = supabase
       .channel('print_errors_listener_' + Date.now())
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'print_jobs' }, async (payload) => {
+      .on('postgres_changes', printJobsFilter, async (payload) => {
         const { new: job } = payload;
         
         // ── KHÔNG CAN THIỆP CÁC TRẠNG THÁI BÌNH THƯỜNG KHÁC ──
@@ -238,7 +246,12 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
     const allKnownIds = [customerOrderId, ...customerOrderIds].filter(Boolean);
     if (!isAdmin && allKnownIds.length === 0) return;
 
+    let lastCheckAt = 0;
     const checkStalePending = async () => {
+      // Tab ẩn / màn hình khoá → không ai nhìn thấy cảnh báo, khỏi hỏi DB.
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastCheckAt < 15000) return; // chuyển tab qua lại liên tục
+      lastCheckAt = Date.now();
       const cutoff = new Date(Date.now() - STALE_PENDING_SECONDS * 1000).toISOString();
       let query = supabase
         .from('print_jobs')
@@ -290,7 +303,12 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
 
     checkStalePending();
     const interval = setInterval(checkStalePending, STALE_POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+    // Quay lại tab thì dò ngay 1 lần, không phải chờ hết chu kỳ 45s.
+    document.addEventListener('visibilitychange', checkStalePending);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', checkStalePending);
+    };
   }, [isAdmin, customerOrderId, customerOrderIds.length]);
 
   // ── Alarm interval: kêu cycle 20s (10s ring + 10s im) khi có lỗi chưa được giải quyết ──

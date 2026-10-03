@@ -651,7 +651,9 @@ export default function TablesPage() {
     setTimeout(() => setPrintToast(''), 3500);
   };
 
+  const lastFullFetchRef = useRef(0);
   const fetchTables = useCallback(async () => {
+    lastFullFetchRef.current = Date.now();
     // Menu + categories đọc từ cache admin (adminMenuCache:v1) — không request
     // server. Cache do admin/menu ghi khi fetchData (mount + sau "Đồng bộ").
     // Nếu cache miss (lần đầu chưa vào admin/menu) → getMenuCached() sẽ tự fetch.
@@ -799,8 +801,13 @@ export default function TablesPage() {
   // Gọi được độc lập (nhẹ, chỉ 1 API) nên poll riêng ~20s cho icon cập nhật nhanh,
   // không phải chờ fetchTables 90s. Lỗi (401 phiên cũ / mạng) chỉ log, không phá UI.
   const luckyStatusBusyRef = useRef(false);
+  const luckyStatusLastRef = useRef(0);
   const fetchLuckyStatus = useCallback(async () => {
     if (luckyStatusBusyRef.current) return;
+    // fetchTables() + poll 20s + quay lại tab hay gọi dồn nhau — route này nặng
+    // (service role + reconcile quà) nên giãn tối thiểu 10s giữa 2 lần gọi.
+    if (Date.now() - luckyStatusLastRef.current < 10000) return;
+    luckyStatusLastRef.current = Date.now();
     luckyStatusBusyRef.current = true;
     try {
       const res = await fetch('/api/admin/lucky-status', { method: 'POST', headers: staffApiHeaders() });
@@ -1040,7 +1047,7 @@ export default function TablesPage() {
 
     // ── Fallback: poll every 30s in case Supabase Realtime is not enabled ──
     const pollInterval = setInterval(() => {
-      fetchTables();
+      if (document.visibilityState === 'visible') fetchTables();
     }, 90000);
 
     // ── Trạng thái quà: poll riêng 20s (nhẹ) cho icon ⏳/⚠️ cập nhật nhanh khi
@@ -1051,8 +1058,14 @@ export default function TablesPage() {
     }, 20000);
 
     // ── Re-fetch when user switches back to this tab ──
+    // Chrome trên Windows coi cửa sổ bị che là "hidden", máy tính bảng thì mỗi
+    // lần mở khoá màn hình → event này bắn rất dày. Chỉ refetch nếu lần tải đầy
+    // đủ gần nhất đã quá 30s (Realtime vẫn lo cập nhật tức thì trong lúc đó).
+    // fetchTables() tự gọi fetchLuckyStatus() nên không gọi thêm ở đây.
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible') { fetchTables(); fetchLuckyStatusRef.current?.(); }
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastFullFetchRef.current < 30000) return;
+      fetchTables();
     };
     document.addEventListener('visibilitychange', handleVisibility);
 

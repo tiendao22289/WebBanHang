@@ -54,7 +54,10 @@ function database(spin = spinTemplate) {
           }
           let rows = (state[table] || []).filter(r => conditions.every(c => c(r))).slice(0, max);
           if (op === 'insert') {
-            if (state[table].some(r => r.id === values.id)) return resolve({ data: null, error: { code: '23505' } });
+            if (state[table].some(r => r.id === values.id || (values.dedupe_key && r.dedupe_key === values.dedupe_key))) {
+              return resolve({ data: null, error: { code: '23505' } });
+            }
+            if (table === 'print_jobs' && 'id' in values) return resolve({ data: null, error: { code: '22P02', message: 'print_jobs.id is bigint' } });
             rows = [structuredClone(values)]; state[table].push(rows[0]);
           } else if (op === 'update') rows.forEach(r => Object.assign(r, structuredClone(values)));
           else if (op === 'delete') { const del = new Set(rows.map(r => r.id)); state[table] = state[table].filter(r => !del.has(r.id)); }

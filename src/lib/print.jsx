@@ -203,22 +203,27 @@ export async function sendGiftItemPrintJob(supabase, orderId, orderItemId) {
       return { success: false, error: 'Không có máy in phù hợp và không có máy mặc định.' };
     }
 
-    const { error: insertErr } = await supabase.from('print_jobs').insert({
-      id: orderItemId,
+    // KHÔNG gán id = orderItemId: print_jobs.id là bigint tự tăng, còn
+    // orderItemId là UUID → insert luôn lỗi 22P02, và vòng reconcile (poll
+    // lucky-status / claim-ready) cứ thế thử lại mãi, quà không bao giờ in.
+    // Chống in trùng khi nhiều máy cùng retry: dedupe_key UNIQUE
+    // (migration print_jobs_dedupe_key.sql) → lần insert thứ 2 trả 23505.
+    const job = {
       order_id: orderId,
       printer_id: assignedPrinter.id,
       filter_category_ids: null,
       only_item_ids: [orderItemId],
       status: 'pending',
-    });
+    };
+    let { error: insertErr } = await supabase.from('print_jobs')
+      .insert({ ...job, dedupe_key: `gift:${orderItemId}` });
+    // Migration chưa chạy (chưa có cột dedupe_key) → vẫn in, chỉ mất chống trùng song song.
+    if (insertErr && (insertErr.code === 'PGRST204' || insertErr.code === '42703')) {
+      ({ error: insertErr } = await supabase.from('print_jobs').insert(job));
+    }
 
-    if (insertErr?.code === '23505') {
-      const { data: existing, error } = await supabase.from('print_jobs')
-        .select('id, order_id, only_item_ids').eq('id', orderItemId).maybeSingle();
-      if (error || existing?.order_id !== orderId || !existing?.only_item_ids?.includes(orderItemId)) {
-        throw new Error('Chưa đối chiếu được lệnh in quà.');
-      }
-    } else if (insertErr) throw new Error('Lỗi insert print_jobs: ' + insertErr.message);
+    if (insertErr?.code === '23505') return { success: true }; // máy khác vừa tạo xong lệnh in này
+    if (insertErr) throw new Error('Lỗi insert print_jobs: ' + insertErr.message);
 
     console.log(`[Print] Đã gửi lệnh in riêng cho order_item ${orderItemId} → máy ${assignedPrinter.id}`);
     return { success: true };
