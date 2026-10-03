@@ -26,7 +26,7 @@ await db.exec(`
   CREATE TABLE payment_transactions(transaction_code text PRIMARY KEY, status text,
     order_ids text, total_amount numeric, account_id text);
   CREATE TABLE print_jobs(id uuid PRIMARY KEY, order_id uuid REFERENCES orders ON DELETE CASCADE,
-    order_ids uuid[], status text);
+    order_ids uuid[], status text, order_items_at_queue jsonb);
   CREATE TABLE customer_reviews(id uuid DEFAULT gen_random_uuid(), table_id uuid,
     order_id uuid REFERENCES orders ON DELETE SET NULL,
     customer_name text, customer_phone text, rating integer, feedback text,
@@ -237,7 +237,7 @@ test('purging preserves feedback, never deletes historical hidden bills', async 
 
 test('pending or failed printing retains the excluded bill until printing succeeds', async () => {
   await reset(); await seedQuota(5000000); await openBill();
-  await db.query('INSERT INTO print_jobs VALUES ($1,$2,$3,$4)', [id(500), id(101), [id(101)], 'pending']);
+  await db.query('INSERT INTO print_jobs(id,order_id,order_ids,status) VALUES ($1,$2,$3,$4)', [id(500), id(101), [id(101)], 'pending']);
   assert.equal((await settle()).selected_for_stats, false);
   assert.equal((await db.query('SELECT status FROM orders')).rows[0].status, 'paid');
   await db.query('UPDATE print_jobs SET status=$1', ['failed']);
@@ -256,6 +256,20 @@ test('merged tables settle together without splitting their account/decision', a
   assert.deepEqual((await db.query('SELECT status FROM orders ORDER BY id')).rows.map(o => o.status), ['paid', 'paid']);
   assert.deepEqual((await db.query('SELECT status FROM tables ORDER BY id')).rows.map(o => o.status), ['available', 'available']);
   assert.equal(Number((await quota()).transfer_amount), 500000);
+});
+
+test('purging an excluded bill preserves completed shared print evidence for a kept bill', async () => {
+  await reset(); await seedQuota(); await openBill(1, 300000); await settle();
+  await db.query('UPDATE stats_daily_quotas SET cash_amount=5000000');
+  await openBill(2, 200000);
+  await db.query(`INSERT INTO print_jobs(id,order_id,order_ids,status,order_items_at_queue)
+    VALUES ($1,$2,$3,'done',$4)`, [id(500), id(102), [id(101),id(102)],
+    JSON.stringify([{order_id:id(101),quantity:1,unit_price:300000},{order_id:id(102),quantity:1,unit_price:200000}])]);
+  assert.equal((await settle(2,200000)).selected_for_stats,false);
+  const job = (await db.query('SELECT * FROM print_jobs')).rows[0];
+  assert.equal(job.order_id,id(101));
+  assert.deepEqual(job.order_ids,[id(101)]);
+  assert.deepEqual(job.order_items_at_queue,[{order_id:id(101),quantity:1,unit_price:300000}]);
 });
 
 test('existing wheel discount triggers remain correct for both kept and deleted bills', async () => {

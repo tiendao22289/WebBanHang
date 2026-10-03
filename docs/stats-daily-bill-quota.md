@@ -94,3 +94,23 @@ Database tests use PGlite, not the production Supabase instance. Before enabling
 production, verify its foreign keys, triggers and scheduled cleanup. Anonymous
 POS RPC access follows the repository's existing login design; this migration
 does not redesign admin authentication.
+
+## Production Activation On 2026-10-03
+
+The migration was applied and enabled after checking the deployed POS chunk
+contains `prepare_stats_payment`. No active pending QR was attached to an open
+bill at activation. Production-schema cash/transfer/immutability/purge probes
+ran in a rolled-back transaction before activation.
+
+The user explicitly requested repairing 2026-10-02 and 2026-10-03. An ID-scoped
+repair used whole settlement groups and original timestamps, copied feedback,
+and removed excluded paid receipts only after verifying their jobs were done.
+The saved targets are 6,024,000 and 4,091,000 VND; retained actual sums are
+5,809,000 and 4,049,000 VND. Existing bank-account receipt totals were preserved;
+historical transfers were not falsely reassigned to another receiving bank.
+
+Local snapshots, the fixed selection plan, dry-run/repair SQL and verification
+evidence are in `artifacts/stats-quota-*`. They include private customer data
+and must not be committed. `scripts/prepare-stats-quota-repair.cjs` reuses its
+saved plan rather than randomizing again. The repair aborts on changed/new
+receipts and was tested with ROLLBACK before its committed run.

@@ -257,7 +257,19 @@ BEGIN
   SELECT table_id, customer_name, customer_phone, customer_rating, customer_feedback, created_at
   FROM public.orders WHERE id = ANY(ids) AND (customer_rating IS NOT NULL OR customer_feedback IS NOT NULL);
   PERFORM set_config('app.stats_quota_purge', 'on', true);
-  DELETE FROM public.print_jobs WHERE order_id = ANY(ids) OR order_ids && ids;
+  -- A completed shared print may also cover a retained bill. Preserve that
+  -- bill's job and snapshot rather than cascading its audit evidence away.
+  UPDATE public.print_jobs j SET
+    order_id = COALESCE((SELECT candidate FROM unnest(COALESCE(j.order_ids, ARRAY[j.order_id])) candidate
+      WHERE NOT candidate = ANY(ids) ORDER BY candidate LIMIT 1), j.order_id),
+    order_ids = ARRAY(SELECT candidate FROM unnest(j.order_ids) candidate WHERE NOT candidate = ANY(ids)),
+    order_items_at_queue = CASE WHEN j.order_items_at_queue IS NULL THEN NULL ELSE
+      (SELECT COALESCE(jsonb_agg(item), '[]'::jsonb) FROM jsonb_array_elements(j.order_items_at_queue) item
+        WHERE NOT COALESCE(item->>'order_id', '') = ANY(ARRAY(SELECT unnest(ids)::text))) END
+  WHERE (j.order_id = ANY(ids) OR j.order_ids && ids)
+    AND EXISTS (SELECT 1 FROM unnest(COALESCE(j.order_ids, ARRAY[j.order_id])) candidate
+      WHERE NOT candidate = ANY(ids));
+  DELETE FROM public.print_jobs WHERE order_id = ANY(ids);
   DELETE FROM public.order_items WHERE order_id = ANY(ids);
   DELETE FROM public.payment_transactions
   WHERE string_to_array(order_ids, ',') && ARRAY(SELECT unnest(ids)::text);
