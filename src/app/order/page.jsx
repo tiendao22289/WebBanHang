@@ -1,4 +1,6 @@
 'use client';
+
+import { isPaidTableCheckout } from '@/lib/tableCheckout';
 import { removeVietnameseTones } from '@/lib/utils';
 import { createOrderRefresh } from '@/lib/orderRefresh.mjs';
 import { COOKING_WORDS, LOAI_SYNONYMS, KEYWORD_ALIASES } from '@/lib/quickMatch';
@@ -1118,14 +1120,15 @@ function OrderContent() {
         setShowOrdered(false);
         return;
       }
-      const savedOrderId = getSavedSession()?.orderId;
+      const savedSession = getSavedSession();
+      const savedOrderId = savedSession?.orderId;
       let isPaid = false;
       if (savedOrderId) {
         const { data: ord } = await supabase
           .from('orders').select('status, total_amount').eq('id', savedOrderId).maybeSingle();
-        isPaid = ord?.status === 'paid';
+        isPaid = ord?.status === 'paid' || (!ord && isPaidTableCheckout(newData, savedSession, previousOrdersRef.current));
         if (isPaid) {
-          setOrderPaid({ total: ord.total_amount });
+          setOrderPaid({ total: ord?.total_amount || 0 });
           setTimeout(() => setOrderPaid(null), 5000);
         }
       }
@@ -3059,10 +3062,24 @@ function OrderContent() {
     }
 
     setFeedbackSaving(prev => ({ ...prev, [order.id]: true }));
-    const { error } = await supabase
+    const { data: updatedFeedback, error: updateError } = await supabase
       .from('orders')
       .update({ customer_rating: rating || null, customer_feedback: note || null })
-      .eq('id', order.id);
+      .eq('id', order.id)
+      .select('id');
+    let error = updateError;
+    // A just-settled excluded bill may already be gone; feedback is independent
+    // of its financial details and must still be delivered.
+    if (!error && updatedFeedback?.length === 0) {
+      const result = await supabase.from('customer_reviews').insert({
+        table_id: order.table_id || activeTableId || null,
+        customer_name: order.customer_name || customerName?.trim() || null,
+        customer_phone: order.customer_phone || customerPhone?.trim() || null,
+        rating: rating || null,
+        feedback: note || null,
+      });
+      error = result.error;
+    }
     setFeedbackSaving(prev => ({ ...prev, [order.id]: false }));
 
     if (error) {

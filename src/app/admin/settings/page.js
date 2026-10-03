@@ -1,4 +1,6 @@
 'use client';
+
+import { statsQuotaProgress } from '@/lib/statsQuotaDisplay';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { getActiveAccount } from '@/lib/bankAccount';
@@ -24,6 +26,7 @@ export default function SettingsPage() {
   const [formContext, setFormContext] = useState('inside');
   const [showSecretModal, setShowSecretModal] = useState(false);
   const [secretAccounts, setSecretAccounts] = useState([]);
+  const [quotaSummary, setQuotaSummary] = useState(null);
 
   // Restaurant location
   const [locForm, setLocForm] = useState({ lat: '', lng: '', radius: '300' });
@@ -593,6 +596,9 @@ export default function SettingsPage() {
       .select('*, bank_daily_totals(date, total_amount)')
       .order('sort_order');
     setSecretAccounts(data || []);
+    const { data: summary, error } = await supabase.rpc('get_stats_quota_summary');
+    if (!error) setQuotaSummary(summary);
+    else if (error.code !== 'PGRST202' && error.code !== '42883') console.error('fetch quota summary:', error);
   }
 
   async function fetchAccounts() {
@@ -674,9 +680,11 @@ export default function SettingsPage() {
   }
 
   function todayTotal(acc) {
-    const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
-    const row = acc.bank_daily_totals?.find(r => r.date === today);
-    return row?.total_amount || 0;
+    return statsQuotaProgress(acc, quotaSummary).receivedToday;
+  }
+
+  function todayLimit(acc) {
+    return statsQuotaProgress(acc, quotaSummary).limit;
   }
 
   const fmt = n => new Intl.NumberFormat('vi-VN').format(n);
@@ -776,9 +784,10 @@ export default function SettingsPage() {
           </div>
         ) : accounts.map((acc, idx) => {
           const today = todayTotal(acc);
-          const pct = Math.min(Math.round((today / acc.daily_limit) * 100), 100);
-          const remaining = Math.max(0, acc.daily_limit - today);
-          const isFull = today >= acc.daily_limit;
+          const limit = todayLimit(acc);
+          const pct = Math.min(Math.round((today / limit) * 100), 100);
+          const remaining = Math.max(0, limit - today);
+          const isFull = today >= limit;
           return (
             <div key={acc.id} style={{
               background: 'white', border: `1.5px solid ${acc.is_active ? '#bfdbfe' : '#e2e8f0'}`,
@@ -1546,9 +1555,10 @@ export default function SettingsPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {secretAccounts.map((acc, idx) => {
                 const today = todayTotal(acc);
-                const pct = Math.min(Math.round((today / acc.daily_limit) * 100), 100);
-                const remaining = Math.max(0, acc.daily_limit - today);
-                const isFull = today >= acc.daily_limit;
+                const limit = todayLimit(acc);
+                const pct = Math.min(Math.round((today / limit) * 100), 100);
+                const remaining = Math.max(0, limit - today);
+                const isFull = today >= limit;
                 return (
                   <div key={acc.id} style={{
                     background: 'white', border: `1.5px solid ${acc.is_active ? '#bfdbfe' : '#e2e8f0'}`,
@@ -1571,8 +1581,8 @@ export default function SettingsPage() {
                         </div>
                         <div style={{ marginTop: 8 }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#94a3b8', marginBottom: 4 }}>
-                            <span>Hôm nay: <strong style={{ color: '#0f172a' }}>{fmt(today)}đ</strong></span>
-                            <span>Còn lại: <strong style={{ color: isFull ? '#f59e0b' : '#16a34a' }}>{fmt(remaining)}đ</strong> / {fmt(acc.daily_limit)}đ</span>
+                            <span>{statsQuotaProgress(acc, quotaSummary).combined ? 'Hôm nay (TM + CK)' : 'Hôm nay'}: <strong style={{ color: '#0f172a' }}>{fmt(today)}đ</strong></span>
+                            <span>Còn lại: <strong style={{ color: isFull ? '#f59e0b' : '#16a34a' }}>{fmt(remaining)}đ</strong> / {fmt(limit)}đ</span>
                           </div>
                           <div style={{ height: 5, background: '#e2e8f0', borderRadius: 3, overflow: 'hidden' }}>
                             <div style={{ width: `${pct}%`, height: '100%', background: pct >= 100 ? '#f59e0b' : pct > 80 ? '#f97316' : '#2563eb', borderRadius: 3, transition: 'width 0.4s' }} />

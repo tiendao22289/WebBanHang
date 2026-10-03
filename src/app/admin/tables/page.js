@@ -6,7 +6,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createQuickMatcher } from '@/lib/quickMatch';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
-import { getActiveAccount, buildQrUrl } from '@/lib/bankAccount';
+import { buildQrUrl } from '@/lib/bankAccount';
+import { prepareTableStatsPayment } from '@/lib/tableStatsQuota';
 import { sendTableSummaryPrintJob, sendSmartPrintJobs } from '@/lib/print';
 import {
   getChannel, fetchChannelConfig, calcReviewDiscount, startOfTodayISO,
@@ -1446,7 +1447,7 @@ export default function TablesPage() {
 
       setPaymentModal({ table, total: snapshot.total, mode: 'transfer' });
 
-      const { account, overLimit, shouldHideStats } = await getActiveAccount(snapshot.total);
+      const { account, overLimit, shouldHideStats } = await prepareTableStatsPayment(snapshot);
       const finalAcc = account ? { ...account, overLimit, shouldHideStats } : null;
       setQrAccount(finalAcc);
 
