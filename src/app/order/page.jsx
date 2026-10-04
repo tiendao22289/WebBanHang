@@ -745,6 +745,8 @@ function OrderContent() {
   const [optionModal, setOptionModal] = useState(null);
   const [modalError, setModalError] = useState('');
   const [currentOrderId, setCurrentOrderId] = useState(null);
+  const currentOrderIdRef = useRef(null);
+  useEffect(() => { currentOrderIdRef.current = currentOrderId; }, [currentOrderId]);
   const [movedMessage, setMovedMessage] = useState(null);
   const [isGiftMode, setIsGiftMode] = useState(false);
   const [selectedOpts, setSelectedOpts] = useState({});
@@ -794,6 +796,10 @@ function OrderContent() {
         p: c.price
       })) : null;
 
+      // occupiedAt: occupied_at của bàn lúc mình đang ngồi (xem rememberOccupiedAt)
+      // — giữ nguyên qua các lần lưu để nhận ra bàn đã đóng rồi có khách MỚI ngồi.
+      const prev = getSavedSession();
+      const samePhase = prev?.tableId === urlTableId && prev?.date === getTodayStr();
       const payload = {
         tableId: urlTableId,
         customerName: name,
@@ -803,6 +809,7 @@ function OrderContent() {
         cart: compactCart,
         date: getTodayStr(),
         lastActive: Date.now(),
+        occupiedAt: samePhase ? prev.occupiedAt || null : null,
       };
       const jsonStr = JSON.stringify(payload);
       localStorage.setItem(STORAGE_KEY, jsonStr);
@@ -838,6 +845,80 @@ function OrderContent() {
       if (!raw) return null;
       return JSON.parse(raw);
     } catch { return null; }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  //  KẾT THÚC PHIÊN KHI BÀN ĐÃ THANH TOÁN / RESET
+  //  Trước đây trang khách không nhận ra bàn đã đóng (bill thanh toán xong bị
+  //  xoá theo hạn mức thống kê → không có event 'paid'; realtime DELETE không
+  //  lọc được) → giữ orderId cũ, PrintErrorAlert + vòng refresh 10s + realtime
+  //  chạy mãi tới khi tải lại trang. endSession() xoá orderId/bill/popup → các
+  //  vòng đó tự dừng vì không còn id đơn nào để theo dõi.
+  // ══════════════════════════════════════════════════════════
+  function hasOrderSession() {
+    return !!(getSavedSession()?.orderId || currentOrderIdRef.current);
+  }
+
+  // Ghi nhớ occupied_at của bàn trong lúc mình đang có bill ở đó. Bàn đóng rồi
+  // có khách mới ngồi → occupied_at đổi → biết phiên của mình đã hết (kể cả khi
+  // lỡ mất event 'available' vì điện thoại ngủ đúng lúc thanh toán).
+  function rememberOccupiedAt(occupiedAt) {
+    const saved = getSavedSession();
+    if (!saved || !occupiedAt || saved.occupiedAt || !hasOrderSession()) return;
+    try {
+      const jsonStr = JSON.stringify({ ...saved, occupiedAt });
+      localStorage.setItem(STORAGE_KEY, jsonStr);
+      setCookieFallback(STORAGE_KEY, jsonStr);
+    } catch { /* bộ nhớ đầy / chặn cookie — bỏ qua, chỉ mất lớp phát hiện này */ }
+  }
+  function isNewGuest(occupiedAt) {
+    const known = getSavedSession()?.occupiedAt;
+    if (!known || !occupiedAt) return false;
+    return new Date(occupiedAt).getTime() !== new Date(known).getTime();
+  }
+
+  /** reason: 'paid' | 'cancelled' | 'stale' (khách mới đã ngồi / phiên hết hạn) | 'silent' */
+  function endSession(reason, paidTotal = 0) {
+    setCart([]);
+    setNotes({});
+    setPreviousOrders([]);
+    setCurrentOrderId(null);
+    currentOrderIdRef.current = null;
+    clearSession();
+    setShowCart(false);
+    setShowOrdered(false);
+    if (reason === 'paid') setOrderPaid({ total: paidTotal });
+    else if (reason === 'cancelled') setOrderCancelled(true);
+    else if (reason === 'stale') setShowInfoModal(true);
+  }
+
+  /**
+   * Hỏi lại trạng thái bàn khi nghi phiên đã kết thúc (bill biến mất, quay lại
+   * tab, mở lại trình duyệt). Không phải khách đã gọi món → không làm gì.
+   */
+  const verifyingSessionRef = useRef(false);
+  const lastSessionCheckRef = useRef(0);
+  async function verifyTableSession({ force = false } = {}) {
+    if (!activeTableId || isTakeawayRef.current || !hasOrderSession()) return;
+    if (verifyingSessionRef.current) return;
+    if (!force && Date.now() - lastSessionCheckRef.current < 30000) return;
+    verifyingSessionRef.current = true;
+    lastSessionCheckRef.current = Date.now();
+    try {
+      const saved = getSavedSession();
+      const { data: table, error } = await supabase.from('tables')
+        .select('status, occupied_at, last_payment_at').eq('id', activeTableId).maybeSingle();
+      if (error || !table) return;
+      const newGuest = table.status === 'occupied' && isNewGuest(table.occupied_at);
+      if (table.status === 'occupied' && !newGuest) { // vẫn là phiên của mình
+        rememberOccupiedAt(table.occupied_at);
+        return;
+      }
+      if (newGuest) endSession('stale');
+      else endSession(isPaidTableCheckout(table, saved, previousOrdersRef.current) ? 'paid' : 'cancelled');
+    } finally {
+      verifyingSessionRef.current = false;
+    }
   }
 
   // ══════════════════════════════════════════════════════════
@@ -970,13 +1051,40 @@ function OrderContent() {
   }, [showInfoModal, showCart, showOrdered, showFeedbackModal]);
 
   // Cập nhật trạng thái đơn/in bill tự động mỗi 10 giây khi khách xem "Món đã gọi"
+  // Tối đa ~10 phút mỗi lần mở popup — để quên popup trên bàn thì không hỏi mãi;
+  // realtime + mở lại popup vẫn cập nhật bình thường.
   useEffect(() => {
     if (!showOrdered) return;
+    let ticks = 0;
     const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') refreshPreviousOrdersReliably();
+      if (document.visibilityState !== 'visible') return;
+      if (++ticks > 60) { clearInterval(interval); return; }
+      refreshPreviousOrdersReliably();
     }, 10000);
     return () => clearInterval(interval);
   }, [showOrdered, customerPhone]);
+
+  // Lớp 3: quay lại tab / mở lại trình duyệt (bfcache) / có mạng lại → kiểm tra
+  // phiên TRƯỚC khi các vòng hỏi lại chạy tiếp với id đơn cũ. Phiên quá 2 tiếng
+  // không thao tác thì cũng kiểm tra lại bàn (bàn vẫn của mình thì giữ nguyên).
+  useEffect(() => {
+    if (!activeTableId) return;
+    const onResume = () => {
+      if (document.visibilityState !== 'visible' || !hasOrderSession()) return;
+      const saved = getSavedSession();
+      const expired = saved?.date !== getTodayStr()
+        || Date.now() - (Number(saved?.lastActive) || 0) > 2 * 60 * 60 * 1000;
+      verifyTableSession({ force: expired });
+    };
+    document.addEventListener('visibilitychange', onResume);
+    window.addEventListener('pageshow', onResume);
+    window.addEventListener('online', onResume);
+    return () => {
+      document.removeEventListener('visibilitychange', onResume);
+      window.removeEventListener('pageshow', onResume);
+      window.removeEventListener('online', onResume);
+    };
+  }, [activeTableId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build mã đơn TW theo khách cho takeaway:
   // - Mỗi SĐT khác = 1 base code mới (TW-001, TW-002, ...)
@@ -1094,19 +1202,46 @@ function OrderContent() {
   useEffect(() => {
     if (!activeTableId) return;
 
+    // Realtime UPDATE chỉ gửi kèm payload.old = { id } (bảng tables để REPLICA
+    // IDENTITY mặc định) → KHÔNG so được với oldData. Trước đây so `merged_with`
+    // với undefined nên MỌI update bàn đều bị coi là "gộp bàn" rồi return sớm,
+    // nhánh "bàn trở về trống" không bao giờ chạy. Giờ so với giá trị đã biết.
+    const knownTable = {}; // tableId → { merged_with, promo }
+    const knownOf = (id) => (knownTable[id] ||= {
+      merged_with: id === activeTableId ? null : activeTableId, // bàn phụ đang gộp vào bàn chính
+      promo: undefined,
+    });
+
     const handleTableUpdate = async (payload) => {
       const newData = payload.new || {};
-      const oldData = payload.old || {};
+      if (!newData.id) return;
+      const known = knownOf(newData.id);
 
       // Case 1: promo_gift_unlocked thay đổi → re-fetch để cập nhật danh sách quà
-      if (newData.promo_gift_unlocked !== undefined && newData.promo_gift_unlocked !== oldData.promo_gift_unlocked) {
+      if ('promo_gift_unlocked' in newData && newData.promo_gift_unlocked !== known.promo) {
+        known.promo = newData.promo_gift_unlocked;
         fetchPreviousOrders();
         // Notification logic sẽ được xử lý bởi useEffect giftCount bên dưới
       }
 
-      // Case Bị Gộp Bàn (merged_with thay đổi)
-      if (newData.merged_with !== oldData.merged_with) {
+      // Case Bị Gộp / Tách Bàn (merged_with thay đổi)
+      if ('merged_with' in newData && (newData.merged_with ?? null) !== known.merged_with) {
+        known.merged_with = newData.merged_with ?? null;
         refreshGroupIds(newData.merged_with, newData.id);
+        return;
+      }
+
+      // Khách chưa gửi món nào (chỉ đang xem menu) → không xoá giỏ của họ.
+      if (!hasOrderSession()) {
+        if (newData.status === 'available') setPreviousOrders([]);
+        return;
+      }
+
+      // Case 3: bàn đã đóng rồi có khách MỚI ngồi (occupied_at khác lúc mình ngồi)
+      if (newData.status === 'occupied') {
+        if (newData.id !== activeTableId) return; // chỉ so occupied_at của bàn chính
+        if (isNewGuest(newData.occupied_at)) endSession('stale');
+        else rememberOccupiedAt(newData.occupied_at);
         return;
       }
 
@@ -1114,33 +1249,19 @@ function OrderContent() {
       if (newData.status !== 'available') return;
       if (justPaidRef.current) {
         justPaidRef.current = false;
-        setCart([]);
-        setNotes({});
-        setPreviousOrders([]);
-        clearSession();
-        setShowCart(false);
-        setShowOrdered(false);
+        endSession('silent'); // banner "Thanh toán thành công" đã hiện từ event orders 'paid'
         return;
       }
       const savedSession = getSavedSession();
-      const savedOrderId = savedSession?.orderId;
-      let isPaid = false;
+      const savedOrderId = savedSession?.orderId || currentOrderIdRef.current;
+      let ord = null;
       if (savedOrderId) {
-        const { data: ord } = await supabase
-          .from('orders').select('status, total_amount').eq('id', savedOrderId).maybeSingle();
-        isPaid = ord?.status === 'paid' || (!ord && isPaidTableCheckout(newData, savedSession, previousOrdersRef.current));
-        if (isPaid) {
-          setOrderPaid({ total: ord?.total_amount || 0 });
-          setTimeout(() => setOrderPaid(null), 5000);
-        }
+        ({ data: ord } = await supabase
+          .from('orders').select('status, total_amount').eq('id', savedOrderId).maybeSingle());
       }
-      setCart([]);
-      setNotes({});
-      setPreviousOrders([]);
-      clearSession();
-      setShowCart(false);
-      setShowOrdered(false);
-      if (!isPaid) setOrderCancelled(true);
+      // Bill đã bị xoá (bill ngoài hạn mức thống kê) → dựa vào last_payment_at của bàn.
+      const isPaid = ord?.status === 'paid' || (!ord && isPaidTableCheckout(newData, savedSession, previousOrdersRef.current));
+      endSession(isPaid ? 'paid' : 'cancelled', ord?.total_amount || 0);
     };
 
     // Alias for satellite channel
@@ -1213,6 +1334,8 @@ function OrderContent() {
 
         // Clear session cục bộ để không load lại bill cũ
         clearSession();
+        setCurrentOrderId(null);
+        currentOrderIdRef.current = null;
         setPreviousOrders([]);
         setShowCart(false);
         setShowOrdered(false);
@@ -1227,6 +1350,8 @@ function OrderContent() {
             setCart([]);
             setNotes({});
             setPreviousOrders([]);
+            setCurrentOrderId(null);
+            currentOrderIdRef.current = null;
             clearSession();
             setShowCart(false);
             setShowOrdered(false);
@@ -1390,19 +1515,21 @@ function OrderContent() {
     // Validate table is still active
     const { data: tableData } = await supabase
       .from('tables')
-      .select('status')
+      .select('status, occupied_at')
       .eq('id', activeTableId)
       .single();
 
     // Chỉ xoá session (reset) nếu bàn trống VÀ khách đã từng gửi bill trước đó (đã ăn xong)
     // Nếu khách mới vào bàn (chưa có orderId) thì giữ lại để không mất giỏ hàng đang chọn
-    if (tableData?.status !== 'occupied' && saved?.orderId) {
+    // Bàn đã đóng rồi có khách MỚI ngồi (occupied_at khác lúc mình ngồi) cũng vậy.
+    if (saved?.orderId && (tableData?.status !== 'occupied' || isNewGuest(tableData?.occupied_at))) {
       clearSession();
       setPreviousOrders([]);
       setShowInfoModal(true);
       isSessionRestored.current = true;
       return;
     }
+    if (saved?.orderId) rememberOccupiedAt(tableData?.occupied_at);
 
     // Kiểm tra session còn hợp lệ không (tương tác trong vòng 2 tiếng)
     const TWO_HOURS = 2 * 60 * 60 * 1000;
@@ -1574,7 +1701,13 @@ function OrderContent() {
 
       const { data: allTableBills } = await bills.order('created_at', { ascending: false });
 
-      setPreviousOrders((allTableBills || []).filter(order => order.customer_phone !== 'BAO_BEP'));
+      const visibleBills = (allTableBills || []).filter(order => order.customer_phone !== 'BAO_BEP');
+      setPreviousOrders(visibleBills);
+      // Lớp 2: còn giữ đơn của mình mà bàn không còn bill mở nào (thanh toán xong
+      // bill bị xoá / huỷ, lỡ mất event realtime) → hỏi lại bàn 1 lần để chốt phiên.
+      if (!isTakeawayRef.current && (allTableBills || []).length === 0 && hasOrderSession()) {
+        verifyTableSession({ force: true });
+      }
       // Đồng thời cập nhật groupOrders để tính KM chung cho nhóm (chỉ dine-in)
       await fetchGroupOrders(targetIds);
       return;
@@ -3725,6 +3858,9 @@ function OrderContent() {
       setTimeout(() => setOrderSuccess(false), 6000);
       saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim(), order.id);
       setCurrentOrderId(order.id);
+      currentOrderIdRef.current = order.id;
+      // Ghi nhớ occupied_at của bàn ngay khi có bill (dùng để nhận ra khách mới — lớp 1/3).
+      if (!isTakeawayRef.current && !getSavedSession()?.occupiedAt) verifyTableSession({ force: true });
       fetchPreviousOrders();
       checkLuckyNudge();
     } catch (err) {
