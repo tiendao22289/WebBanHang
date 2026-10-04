@@ -1076,7 +1076,10 @@ function OrderContent() {
   }
 
   async function refreshGroupIds(mergedWithVal, tableId) {
-    const hostId = mergedWithVal || tableId;
+    // Payload Realtime đôi khi thiếu id → trước đây bắn query
+    // `id.eq.undefined` (~50 lần/giờ lúc đông) và xoá luôn nhóm bàn đang có.
+    const hostId = mergedWithVal || tableId || activeTableId;
+    if (!hostId) return;
     const { data: groupTables } = await supabase
       .from('tables')
       .select('id')

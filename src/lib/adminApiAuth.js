@@ -27,16 +27,25 @@ function getServiceClient() {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Nhớ staffId đã xác thực trong instance serverless đang "ấm" — trang admin
+// poll lucky-status vài lần/phút trên mỗi máy, không cần hỏi bảng staff mỗi lần.
+// TTL ngắn để nhân viên bị xoá mất quyền trong vài phút.
+const STAFF_CACHE_TTL_MS = 5 * 60 * 1000;
+const verifiedStaff = new Map(); // staffId → hết hạn lúc (ms)
+
 /** true nếu request đến từ một nhân viên đã đăng nhập trang admin. */
 export async function isAdminRequest(request) {
   const staffId = request.headers.get('x-staff-id');
   if (!staffId || !UUID.test(staffId)) return false;
+  if ((verifiedStaff.get(staffId) || 0) > Date.now()) return true;
   const supabase = getServiceClient();
   if (!supabase) return false;
   try {
     const { data, error } = await supabase
       .from('staff').select('id').eq('id', staffId).maybeSingle();
     if (error) return false;
+    if (data) verifiedStaff.set(staffId, Date.now() + STAFF_CACHE_TTL_MS);
+    else verifiedStaff.delete(staffId);
     return !!data;
   } catch {
     return false;

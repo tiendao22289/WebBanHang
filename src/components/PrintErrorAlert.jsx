@@ -130,12 +130,17 @@ async function fetchJobDisplayInfo(job) {
 
   let printerName = 'Máy in Bếp';
   if (job.printer_id) {
-    const { data: pData } = await supabase.from('printers').select('name').eq('id', job.printer_id).maybeSingle();
-    if (pData) printerName = pData.name;
+    if (!printerNameCache.has(job.printer_id)) {
+      const { data: pData } = await supabase.from('printers').select('name').eq('id', job.printer_id).maybeSingle();
+      if (pData) printerNameCache.set(job.printer_id, pData.name);
+    }
+    printerName = printerNameCache.get(job.printer_id) || printerName;
   }
 
   return { orderInfo, printerName };
 }
+// Tên máy in gần như không đổi → nhớ trong phiên trang, khỏi hỏi lại mỗi lần.
+const printerNameCache = new Map();
 
 export default function PrintErrorAlert({ isAdmin = false, customerOrderId = null, customerOrderIds = [], onRecovered = null }) {
   const [errors, setErrors] = useState([]);
@@ -143,6 +148,8 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
   // Job bị khách/nhân viên bấm X bỏ qua — không cho lần poll sau "hồi sinh" lại
   // (job vẫn pending thật trong DB, nhưng người dùng đã chủ động ẩn rồi).
   const dismissedIdsRef = useRef(new Set());
+  const errorsRef = useRef(errors);
+  useEffect(() => { errorsRef.current = errors; }, [errors]);
 
   useEffect(() => {
     // Customer mode: chỉ cần có tableId là đủ, hoặc isAdmin
@@ -190,13 +197,21 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
              if (!belongs) return;
         }
 
+        // Lọc TRƯỚC khi hỏi DB: phần lớn event là lệnh in xong bình thường
+        // (không phải phục hồi từ lỗi) hoặc kẹt hàng đợi tự phục hồi → bỏ qua,
+        // không tốn 2 query lấy tên bàn/máy in cho mỗi phiếu in trên mọi máy.
+        if (job.status === 'failed' && isQueueJamError(job.error_message)) return;
+        if (job.status === 'done') {
+          const wasShown = errorsRef.current.some(e => e.id === job.id);
+          const isRecovery = wasShown || (job.error_message && job.error_message.includes('Đã tự động in'));
+          if (!isRecovery) return;
+        }
+
         // Fetch Order Info for BOTH failed and recovered workflows
         const { orderInfo, printerName } = await fetchJobDisplayInfo(job);
 
         // ── XỬ LÝ FAILED ──
         if (job.status === 'failed') {
-          // Kẹt hàng đợi tự phục hồi → không hụ còi báo động (phiếu vẫn in ra).
-          if (isQueueJamError(job.error_message)) return;
           const cleanMsg = extractErrorMessage(job.error_message);
           setErrors(prev => {
              const exists = prev.find(e => e.id === job.id);

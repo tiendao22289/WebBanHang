@@ -802,18 +802,27 @@ export default function TablesPage() {
   // không phải chờ fetchTables 90s. Lỗi (401 phiên cũ / mạng) chỉ log, không phá UI.
   const luckyStatusBusyRef = useRef(false);
   const luckyStatusLastRef = useRef(0);
+  const luckyHasPendingRef = useRef(true); // chưa biết → coi như đang có lượt chờ
   const fetchLuckyStatus = useCallback(async () => {
     if (luckyStatusBusyRef.current) return;
     // fetchTables() + poll 20s + quay lại tab hay gọi dồn nhau — route này nặng
-    // (service role + reconcile quà) nên giãn tối thiểu 10s giữa 2 lần gọi.
-    if (Date.now() - luckyStatusLastRef.current < 10000) return;
+    // (mỗi lần ~5 query service role + reconcile quà, là nguồn request lớn nhất
+    // giờ cao điểm). Còn lượt đang chờ xử lý → tối thiểu 10s/lần; không còn gì
+    // dở dang → 60s/lần là đủ để badge lượt quay mới hiện lên.
+    const minGap = luckyHasPendingRef.current ? 10000 : 60000;
+    if (Date.now() - luckyStatusLastRef.current < minGap) return;
     luckyStatusLastRef.current = Date.now();
     luckyStatusBusyRef.current = true;
     try {
       const res = await fetch('/api/admin/lucky-status', { method: 'POST', headers: staffApiHeaders() });
       const d = await res.json();
       if (d.ok) {
-        setLuckySpins(d.spins || []);
+        const spins = d.spins || [];
+        luckyHasPendingRef.current = spins.some(s =>
+          !['auto_approved', 'blocked'].includes(s.adminState)
+          || s.deliveryError
+          || (s.printStatus && s.printStatus !== 'done'));
+        setLuckySpins(spins);
       } else if (res.status === 401) {
         console.warn('[lucky-status] 401 — phiên đăng nhập không hợp lệ, không tải được trạng thái quà.');
       }
@@ -972,7 +981,43 @@ export default function TablesPage() {
       pendingFullRef.current = false;
       if (doFull) fetchTablesRef.current?.();
       else fetchOrdersOnlyRef.current?.();
-    }, 200);
+    }, 500);
+  }, []);
+
+  // Vá 1 lệnh in (Realtime print_jobs) vào orders đang hiển thị — đủ cho badge
+  // lỗi in / nút "In lại". Job của bill không còn trên màn hình thì bỏ qua (bill
+  // mới đã có event orders/order_items lo refetch).
+  const patchPrintJobInOrders = useCallback((payload) => {
+    const PRINT_JOB_FIELDS = ['id', 'status', 'created_at', 'printer_id', 'error_message', 'filter_category_ids', 'only_item_ids', 'order_ids'];
+    const isDelete = payload.eventType === 'DELETE';
+    const row = isDelete ? payload.old : payload.new;
+    if (!row?.id) return;
+    const job = Object.fromEntries(PRINT_JOB_FIELDS.filter(k => k in row).map(k => [k, row[k]]));
+    setOrders(prev => {
+      let changed = false;
+      const next = {};
+      for (const [tableId, bills] of Object.entries(prev)) {
+        next[tableId] = bills.map(order => {
+          const jobs = order.print_jobs || [];
+          const idx = jobs.findIndex(j => j.id === row.id);
+          if (isDelete) {
+            if (idx === -1) return order;
+            changed = true;
+            return { ...order, print_jobs: jobs.filter(j => j.id !== row.id) };
+          }
+          if (idx !== -1) {
+            changed = true;
+            return { ...order, print_jobs: jobs.map(j => j.id === row.id ? { ...j, ...job } : j) };
+          }
+          if (row.order_id === order.id) {
+            changed = true;
+            return { ...order, print_jobs: [...jobs, job] };
+          }
+          return order;
+        });
+      }
+      return changed ? next : prev;
+    });
   }, []);
 
   // Payment Countdown Timer
@@ -1034,7 +1079,10 @@ export default function TablesPage() {
             Swal.fire({ title: '✅ Máy in OK', text: 'Phiếu bị kẹt đã tự in lại xong rồi ạ.', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 4000 });
           }
         }
-        scheduleRefetch(false); // cập nhật badge lỗi trên thẻ bàn
+        // Cập nhật badge lỗi trên thẻ bàn bằng cách vá thẳng lệnh in vào state,
+        // KHÔNG tải lại toàn bộ bill: PrintAgent đổi trạng thái lệnh in ~100
+        // lần/giờ lúc đông, mỗi lần × mọi máy admin × 1 query orders lồng nặng.
+        patchPrintJobInOrders(payload);
       })
       // Khách xin ưu đãi đánh giá Google → kêu chuông + hiện badge trên thẻ bàn
       .on('postgres_changes', { event: '*', schema: 'public', table: 'review_rewards' }, (payload) => {
