@@ -1,0 +1,23 @@
+name: Deploy Local Production
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: local-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/master' && github.repository == 'tiendao22289/WebBanHang'
+    runs-on: [self-hosted, Windows, X64, webbanhang-production]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Test, build and activate production
+        shell: powershell
+        run: ./scripts/deploy-production.ps1 -Commit '${{ github.sha }}'

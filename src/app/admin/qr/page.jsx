@@ -2,16 +2,11 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabase';
 import { getShadowAccount, buildQrUrl } from '@/lib/bankAccount';
 import { newLuckyRequestId } from '@/lib/luckyRewardFlow';
 import { QrCode, RefreshCw, CheckCircle2, Banknote, X } from 'lucide-react';
 import Swal from 'sweetalert2';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cổng QR Tùy chỉnh — chuyển khoản dùng thẻ ẨN; tiền mặt có phiếu thu riêng.

@@ -1,3 +1,5 @@
+const { PHASE_DEVELOPMENT_SERVER } = require('next/constants');
+const { assertRuntimeEnvironment } = require('./src/lib/runtime-mode.cjs');
 /** @type {import('next').NextConfig} */
 const withPWA = require('next-pwa')({
   dest: 'public',
@@ -51,4 +53,8 @@ const nextConfig = {
   },
 };
 
-module.exports = withPWA(nextConfig);
+module.exports = phase => {
+  const mode = phase === PHASE_DEVELOPMENT_SERVER ? 'dev' : 'prod';
+  const settings = assertRuntimeEnvironment(mode, process.env);
+  return withPWA({ ...nextConfig, distDir: settings.distDir, env: { NEXT_PUBLIC_APP_ENV: mode } });
+};

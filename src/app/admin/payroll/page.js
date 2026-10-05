@@ -1,15 +1,10 @@
 'use client';
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabase';
 import { QRCodeSVG } from 'qrcode.react';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users, RefreshCw } from 'lucide-react';
 import './payroll.css';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
 
 const now = new Date();
 const fmt = (n) => String(n).padStart(2, '0');

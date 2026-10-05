@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "node scripts/run-next.cjs dev",
+    "build": "node scripts/run-next.cjs build",
+    "start": "node scripts/run-next.cjs start",
+    "configure:environments": "node scripts/configure-environments.cjs",
     "lint": "next lint",
     "test:lucky": "node --test tests/lucky-dynamic-percent.test.mjs tests/lucky-reward-flow.test.mjs tests/lucky-reward-server.test.mjs"
   },

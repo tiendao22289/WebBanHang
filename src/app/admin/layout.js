@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabase';
 import {
   LayoutGrid,
   UtensilsCrossed,
@@ -17,14 +17,10 @@ import {
   X,
   QrCode,
   Star,
+  Activity,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './admin.css';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
 
 const ALL_NAV = [
   { href: '/admin/tables', label: 'Quản lý bàn', icon: LayoutGrid },
@@ -37,6 +33,7 @@ const ALL_NAV = [
   { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
   { href: '/admin/stats', label: 'Thống kê', icon: BarChart3 },
   { href: '/admin/settings', label: 'Cài đặt', icon: Settings, adminOnly: true },
+  { href: '/admin/status', label: 'Trạng thái hệ thống', icon: Activity, adminOnly: true },
 ];
 
 const STAFF_ALLOWED_HREFS = ['/admin/tables', '/admin/payroll', '/admin/qr'];
@@ -58,13 +55,33 @@ export default function AdminLayout({ children }) {
 
   // Restore session on mount
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('staffUser');
-      if (saved) setUser(JSON.parse(saved));
-      const savedCollapsed = localStorage.getItem('sidebarCollapsed');
-      if (savedCollapsed === 'true') setCollapsed(true);
-    } catch { }
-    setMounted(true);
+    let cancelled = false;
+    const expireSession = () => {
+      localStorage.removeItem('staffUser');
+      setUser(null);
+      setErr('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    };
+    window.addEventListener('staff-session-expired', expireSession);
+    async function restoreSession() {
+      try {
+        const saved = localStorage.getItem('staffUser');
+        if (localStorage.getItem('sidebarCollapsed') === 'true') setCollapsed(true);
+        const response = await fetch('/api/admin/session', { cache: 'no-store' });
+        const result = await response.json();
+        if (cancelled) return;
+        if (response.ok && result.user) {
+          localStorage.setItem('staffUser', JSON.stringify(result.user));
+          setUser(result.user);
+        } else {
+          localStorage.removeItem('staffUser');
+          if (response.status === 503) setErr('Không kiểm tra được phiên đăng nhập. Vui lòng thử lại.');
+          else if (saved) setErr('Phiên đăng nhập cũ cần cập nhật. Vui lòng đăng nhập lại một lần.');
+        }
+      } catch { if (!cancelled) setErr('Không kết nối được máy chủ để kiểm tra đăng nhập.'); }
+      finally { if (!cancelled) setMounted(true); }
+    }
+    restoreSession();
+    return () => { cancelled = true; window.removeEventListener('staff-session-expired', expireSession); };
   }, []);
 
   // Persist sidebar state
@@ -87,15 +104,20 @@ export default function AdminLayout({ children }) {
     e.preventDefault();
     setErr('');
     setLoading(true);
-    const { data, error } = await supabase
-      .from('staff')
-      .select('id, full_name, phone, role')
-      .eq('phone', phone.trim())
-      .eq('pin', pin.trim())
-      .single();
+    let data;
+    let error;
+    try {
+      const response = await fetch('/api/admin/session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phone.trim(), pin: pin.trim() }),
+      });
+      const result = await response.json();
+      data = result.user;
+      if (!response.ok) error = result.error;
+    } catch { error = 'Không thể kết nối máy chủ.'; }
 
     if (error || !data) {
-      setErr('Sai số điện thoại hoặc mã PIN!');
+      setErr(error || 'Sai số điện thoại hoặc mã PIN!');
       setLoading(false);
       return;
     }
@@ -108,7 +130,11 @@ export default function AdminLayout({ children }) {
     supabase.from('staff').update({ last_login: new Date().toISOString() }).eq('id', data.id);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      const response = await fetch('/api/admin/session', { method: 'DELETE' });
+      if (!response.ok) throw new Error('Logout failed');
+    } catch { window.alert('Không thể đăng xuất. Vui lòng thử lại.'); return; }
     localStorage.removeItem('staffUser');
     setUser(null);
     setPhone('');
@@ -132,7 +158,7 @@ export default function AdminLayout({ children }) {
           <div style={{ textAlign: 'center', marginBottom: 28 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 6 }}>
               <ChefHat size={32} color="#dc2626" />
-              <span style={{ fontSize: '1.5rem', fontWeight: 800, color: '#dc2626', letterSpacing: '-0.02em' }}>Nhà Hàng V1</span>
+              <span style={{ fontSize: '1.5rem', fontWeight: 800, color: '#dc2626', letterSpacing: 0 }}>Nhà Hàng V1{process.env.NEXT_PUBLIC_APP_ENV === 'dev' ? ' · DEV' : ''}</span>
             </div>
             <p style={{ fontSize: '0.85rem', color: '#9ca3af', margin: 0 }}>Đăng nhập để tiếp tục</p>
           </div>
@@ -204,7 +230,7 @@ export default function AdminLayout({ children }) {
             <div className="sidebar-logo">
               <ChefHat size={28} />
               <div>
-                <h1 className="sidebar-title">Nhà Hàng</h1>
+                <h1 className="sidebar-title">Nhà Hàng{process.env.NEXT_PUBLIC_APP_ENV === 'dev' ? ' · DEV' : ''}</h1>
                 <span className="sidebar-subtitle">Quản lý đặt món</span>
               </div>
             </div>
@@ -246,7 +272,7 @@ export default function AdminLayout({ children }) {
                 <LogOut size={16} />
               </button>
             </div>
-            <div className="sidebar-version">v1.0.0</div>
+            <div className="sidebar-version">v1.0.0 · {process.env.NEXT_PUBLIC_APP_ENV === 'dev' ? 'DEV' : 'PROD'}</div>
           </div>
         )}
 
