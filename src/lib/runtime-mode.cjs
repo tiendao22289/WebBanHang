@@ -19,7 +19,10 @@ function assertRuntimeEnvironment(mode, env) {
   }
   let url;
   try { url = new URL(env.NEXT_PUBLIC_SUPABASE_URL); } catch { throw new Error('Missing local Supabase URL.'); }
-  if (url.protocol !== 'http:' || !['localhost', '127.0.0.1'].includes(url.hostname) || url.port !== settings.apiPort || url.pathname !== '/') {
+  const local = url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname) && url.port === settings.apiPort;
+  const remoteDev = mode === 'dev' && env.DEV_SUPABASE_REMOTE_URL === env.NEXT_PUBLIC_SUPABASE_URL &&
+    url.protocol === 'https:' && url.hostname.endsWith('.ts.net') && url.port === '8443';
+  if ((!local && !remoteDev) || url.pathname !== '/' || url.username || url.password || url.search || url.hash) {
     throw new Error(`Refusing ${mode} startup: Supabase must use local port ${settings.apiPort}.`);
   }
   for (const key of ['NEXT_PUBLIC_SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY']) {

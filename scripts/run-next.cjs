@@ -10,7 +10,7 @@ process.env.NODE_ENV = mode === 'dev' ? 'development' : 'production';
 // Do not let stale shell variables override the environment-specific local files.
 for (const key of ['APP_ENV', 'NEXT_PUBLIC_APP_ENV', 'NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY', 'NEXT_PUBLIC_SUPABASE_PROXY_PATH', 'ADMIN_SESSION_SECRET']) delete process.env[key];
 const root = path.resolve(__dirname, '..');
-if (mode === 'dev') {
+if (mode === 'dev' && fs.existsSync(path.join(root, '.env.local'))) {
   for (const line of fs.readFileSync(path.join(root, '.env.local'), 'utf8').split(/\r?\n/)) {
     const match = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line);
     if (match && match[1] !== 'NODE_ENV') delete process.env[match[1]];
