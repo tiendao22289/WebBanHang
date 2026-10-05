@@ -1,10 +1,11 @@
-param([string]$Commit = 'HEAD')
+param([string]$Commit = 'HEAD', [switch]$ValidateOnly)
 $ErrorActionPreference = 'Stop'
 $source = Split-Path $PSScriptRoot -Parent
 $sha = (& git -C $source rev-parse "$Commit^{commit}").Trim()
 if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[a-f0-9]{40}$') { throw 'Invalid deployment commit.' }
-$branch = (& git -C $source branch --show-current).Trim()
+$branch = ((& git -C $source branch --show-current) -join '').Trim()
 if ($branch -ne 'master' -and $env:GITHUB_REF -ne 'refs/heads/master') { throw 'Only master may deploy production.' }
+if ($ValidateOnly) { Write-Output $sha; exit 0 }
 $release = "C:\Tool\WebBanHangReleases\$($sha.Substring(0,12))-$(Get-Date -Format yyyyMMddHHmmss)"
 New-Item -ItemType Directory -Path $release -Force | Out-Null
 $archive = Join-Path $release 'source.zip'
