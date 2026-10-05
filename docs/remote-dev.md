@@ -1,5 +1,7 @@
 # Remote Development Through Tailscale
 
+For an AI performing setup on another coding machine, follow [AI_REMOTE_DEV_SETUP.md](AI_REMOTE_DEV_SETUP.md).
+
 The database host must be running with Supabase dev and Tailscale connected. The other machine must join the same authorized tailnet. These endpoints are private to that tailnet, not public Internet endpoints.
 
 - API and Studio: https://desktop-8sbg15n.tail012010.ts.net:8443
@@ -29,3 +31,9 @@ tailscale serve --tcp=5433 off
 ```
 
 Do not run tailscale serve reset; it would remove other existing services.
+
+## Start/Stop Dev To Save Memory
+
+On the database host, double-click `C:\Tool\WebBanHang\database-dev.bat`. Select start, stop or status. CLI usage: `database-dev.bat start`, `database-dev.bat stop`, `database-dev.bat status`.
+
+Stop uses Compose stop for the DEV stack only and preserves database data. It does not stop prod, Docker/WSL, either web process, PrintAgent or Tailscale. Remote dev connections become unavailable until DEV is started again. Vmmem may not immediately shrink because WSL/Docker and prod still run. Do not shut down WSL/Docker to force memory reclamation while prod is serving.
