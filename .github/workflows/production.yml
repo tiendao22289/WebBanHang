@@ -19,5 +19,5 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
       - name: Test, build and activate production
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
         run: ./scripts/deploy-production.ps1 -Commit '${{ github.sha }}'
