@@ -42,6 +42,8 @@ async function main() {
   console.log(JSON.stringify({ services: status.services, printers: status.printers, cron: status.cron }, null, 2));
   assert.equal(status.services.filter(service => service.id.startsWith('supabase:')).length, 11);
   assert.equal(status.environment, isDev ? 'dev' : 'prod');
+  assert.ok(Object.hasOwn(status.host, 'cpuUsagePercent'));
+  assert.ok(status.host.cpuUsagePercent === null || (Number.isFinite(status.host.cpuUsagePercent) && status.host.cpuUsagePercent >= 0 && status.host.cpuUsagePercent <= 100));
   if (isDev) {
     assert.ok(!status.services.some(service => service.id === 'printing' || service.id === 'tunnel' || service.id === 'public'));
     assert.ok(status.cron.length > 0 && status.cron.every(job => !job.active));

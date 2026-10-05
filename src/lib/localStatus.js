@@ -6,6 +6,7 @@ import { cpus, freemem, totalmem, uptime } from 'node:os';
 import { connect } from 'node:net';
 import { statusDatabase } from './statusAuth';
 import { redactLog } from './statusSession.mjs';
+import { sampleCpuUsage } from './hostCpu.mjs';
 
 const run = promisify(execFile);
 const isDev = process.env.APP_ENV === 'dev';
@@ -67,7 +68,9 @@ async function collect() {
   let agent = null;
   let cron = [];
   let printers = [];
+  let cpuUsagePercent = null;
   await Promise.all([
+    (async () => { cpuUsagePercent = await sampleCpuUsage(); })(),
     (async () => {
       try {
         const text = await command(['ps', '--all', '--format', 'json']);
@@ -138,7 +141,7 @@ async function collect() {
   ]);
   return { environment: isDev ? 'dev' : 'prod', checkedAt: new Date().toISOString(), services, cron, printers,
     agent: agent && { uptime: agent.uptime, printed: agent.printed, failed: agent.failed, realtimeMode: agent.realtimeMode },
-    host: { uptime: uptime(), memoryTotal: totalmem(), memoryFree: freemem(), cpuCount: cpus().length },
+    host: { uptime: uptime(), memoryTotal: totalmem(), memoryFree: freemem(), cpuCount: cpus().length, cpuUsagePercent },
     logSources: LOG_SOURCES,
   };
 }

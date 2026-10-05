@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, RefreshCw, Download, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
+import { Activity, Cpu, RefreshCw, Download, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
 import './status.css';
 
 const labels = { healthy: 'Healthy', warning: 'Cần kiểm tra', error: 'Lỗi' };
@@ -81,7 +81,7 @@ export default function StatusPage() {
     </header>
     {error && <div role="alert" className="status-error">{error}{data && ' Kết quả bên dưới là lần kiểm tra trước.'}</div>}
     {data && <>
-      <div className="status-summary"><span><strong>{healthy}/{data.services.length}</strong> dịch vụ healthy</span><span>Máy chủ: {duration(data.host.uptime)}</span><span>RAM: {((data.host.memoryTotal - data.host.memoryFree) / 1024 ** 3).toFixed(1)} / {(data.host.memoryTotal / 1024 ** 3).toFixed(1)} GB</span>{data.agent && <span>PrintAgent: {duration(data.agent.uptime)}</span>}</div>
+      <div className="status-summary"><span><strong>{healthy}/{data.services.length}</strong> dịch vụ healthy</span><span>Máy chủ: {duration(data.host.uptime)}</span><span className="status-cpu" title="Mức sử dụng CPU toàn máy chủ, lấy mẫu khoảng 1 giây"><Cpu size={16} aria-hidden="true" />CPU: {Number.isFinite(data.host.cpuUsagePercent) ? `${data.host.cpuUsagePercent.toFixed(1)}%` : 'Chưa đo được'} · {data.host.cpuCount} luồng</span><span>RAM: {((data.host.memoryTotal - data.host.memoryFree) / 1024 ** 3).toFixed(1)} / {(data.host.memoryTotal / 1024 ** 3).toFixed(1)} GB</span>{data.agent && <span>PrintAgent: {duration(data.agent.uptime)}</span>}</div>
       <div className="status-table-wrap"><table><thead><tr><th>Dịch vụ</th><th>Trạng thái</th><th>Chi tiết</th><th>Log</th></tr></thead><tbody>
         {data.services.map(service => <tr key={service.id}><td>{service.name}</td><td><Badge state={service.state} /></td><td>{service.detail}</td><td>{data.logSources.includes(service.id) && <button onClick={() => { setSource(service.id); document.getElementById('system-logs')?.scrollIntoView({ behavior: 'smooth' }); }}>Xem log</button>}</td></tr>)}
       </tbody></table></div>

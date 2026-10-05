@@ -8,6 +8,8 @@
 .system-status button:hover { background: #f1f5f9; }
 .system-status button:disabled { opacity: .6; cursor: wait; }
 .status-summary { display: flex; flex-wrap: wrap; gap: 16px 24px; padding: 14px 0; border-top: 1px solid #e2e8f0; border-bottom: 1px solid #e2e8f0; margin-bottom: 18px; font-size: 14px; }
+.status-cpu { display: inline-flex; align-items: center; gap: 6px; }
+.status-cpu svg { flex-shrink: 0; }
 .status-table-wrap { overflow-x: auto; }
 .system-status table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
 .system-status th { background: #f1f5f9; color: #475569; font-weight: 600; }
