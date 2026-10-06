@@ -2854,14 +2854,14 @@ export default function TablesPage() {
               <div onClick={openHistory} style={{ position: 'absolute', top: 6, right: 6, opacity: 0.55 }}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={groupColor ? groupColor.border : isOccupied ? '#3b82f6' : '#9ca3af'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
               </div>
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 4, paddingRight: 16 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 4, paddingRight: 16 }}>
                 <div style={{ fontSize: compact ? '1rem' : '1.1rem', fontWeight: 800, color: groupColor ? groupColor.text : isOccupied ? '#1d4ed8' : '#1f2937', flexShrink: 0 }}>
                   B{table.table_number}
                 </div>
                 {/* Cụm biểu tượng: XUỐNG DÒNG gọn trong thẻ (flexWrap) thay vì xếp ngang
                     kéo rộng thẻ ra ngoài lưới. flex:1 để cụm dùng hết bề ngang còn lại
                     → icon xếp 2–3 cái/hàng cho thẻ đỡ cao, minWidth:0 để co vừa thẻ. */}
-                <div style={{ display: 'flex', flex: '1 1 0', minWidth: 0, flexWrap: 'wrap', gap: 3, justifyContent: 'flex-end', alignItems: 'center' }}>
+                <div style={{ display: 'flex', flex: '1 1 80px', minWidth: 0, flexWrap: 'wrap', gap: 3, justifyContent: 'flex-end', alignItems: 'center' }}>
                 {hasPrintError && (
                   <div style={{ background: '#fef2f2', color: '#dc2626', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #fecaca' }}>
                     <Printer size={12} strokeWidth={2} />
@@ -2872,7 +2872,7 @@ export default function TablesPage() {
                     🎰
                   </div>
                 )}
-                {luckyCard?.top && (() => {
+                {luckyCard?.top && luckyCard.top !== 'auto_approved' && (() => {
                   const LUCKY_BADGE = {
                     error:      { icon: '⚠️', bg: '#fef2f2', color: '#dc2626', bd: '#fecaca', blink: true,  title: 'Lỗi: khách đã Quan tâm Zalo nhưng quà CHƯA vào bill — bấm để xử lý' },
                     need_phone: { icon: '⏳', bg: '#eff6ff', color: '#1d4ed8', bd: '#bfdbfe', blink: true, title: 'Đang tự duyệt quà sau khi khách mở Zalo' },
@@ -2895,10 +2895,20 @@ export default function TablesPage() {
                       }}
                     >
                       {b.icon}
-                      {luckyCard.top === 'auto_approved' && <span style={{ marginLeft: 3, fontSize: '0.6rem', fontWeight: 700 }}>Tự duyệt</span>}
                     </div>
                   );
                 })()}
+                {luckyCard?.top === 'auto_approved' && (
+                  <button
+                    type="button"
+                    className="table-auto-approved"
+                    title="Đã tự duyệt — quà đã vào bill. Bấm xem quà và tình trạng in"
+                    onClick={(e) => { e.stopPropagation(); setLuckyModal({ hostTableId: hostIdCard, tableNumber: table.table_number }); }}
+                  >
+                    <Check size={12} aria-hidden="true" />
+                    <span>Tự duyệt</span>
+                  </button>
+                )}
                 {giftElig.availableGiftSlots > 0 && (
                   <div
                     title="Đủ điều kiện nhận quà — bấm để chọn quà cho khách"
