@@ -1263,6 +1263,24 @@ input[placeholder="Tìm món ăn..."] {
 @media (prefers-reduced-motion: reduce) {
   .review-req-banner { animation: none; }
 }
+.table-card-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.table-card-icons {
+  display: contents;
+}
+
+.table-card-heading > *,
+.table-card-icons > * {
+  flex-shrink: 0;
+}
+
 .table-auto-approved {
   display: inline-flex;
   align-items: center;
