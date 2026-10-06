@@ -2824,13 +2824,13 @@ export default function TablesPage() {
           return (
             <div
               key={table.id}
-              className={isKitchenAlerting ? 'kitchen-alert-blink' : ''}
+              className={`table-flow-card${isKitchenAlerting ? ' kitchen-alert-blink' : ''}`}
               onClick={() => { setSelectedTable(table); if (!isOccupied) setAddingToOrder('admin'); }}
               style={{
                 background: isKitchenAlerting ? 'linear-gradient(145deg, #ef4444, #b91c1c)' : groupColor ? groupColor.bg : isOccupied ? '#dbeafe' : 'white',
                 border: `2px solid ${isKitchenAlerting ? '#991b1b' : groupColor ? groupColor.border : isOccupied ? '#93c5fd' : '#e5e7eb'}`,
                 borderRadius: compact ? 12 : 16,
-                padding: compact ? '12px 12px 10px' : '14px 14px 12px',
+                padding: compact ? '12px var(--table-card-inset, 12px) 10px' : '14px var(--table-card-inset, 14px) 12px',
                 cursor: 'pointer',
                 minHeight: compact ? 80 : 90,
                 minWidth: 0, // KHÔNG cho thẻ nới rộng quá ô lưới (mặc định grid item = min-content
@@ -2905,12 +2905,14 @@ export default function TablesPage() {
                     🎁 {giftElig.availableGiftSlots}
                   </div>
                 )}
+                </div>
+                {(giftElig.hasGiftInBill || luckyCard?.top === 'auto_approved') && (
+                <div className="table-card-reward-status">
                 {giftElig.hasGiftInBill && (
                   <div title="Bill đã có món tặng — nhớ mang ra cho khách" style={{ background: '#f0fdf4', color: '#15803d', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #bbf7d0', fontSize: '0.7rem' }}>
                     🎁
                   </div>
                 )}
-                </div>
                 {luckyCard?.top === 'auto_approved' && (
                   <button
                     type="button"
@@ -2921,6 +2923,8 @@ export default function TablesPage() {
                     <Check size={12} aria-hidden="true" />
                     <span>Tự duyệt</span>
                   </button>
+                )}
+                </div>
                 )}
               </div>
               {tableReviewReqs.length > 0 && (

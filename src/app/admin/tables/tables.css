@@ -1281,6 +1281,18 @@ input[placeholder="Tìm món ăn..."] {
   flex-shrink: 0;
 }
 
+.table-card-reward-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+}
+
+.table-card-reward-status > * {
+  flex-shrink: 0;
+}
+
 .table-auto-approved {
   display: inline-flex;
   align-items: center;
@@ -1304,4 +1316,19 @@ input[placeholder="Tìm món ăn..."] {
 .table-auto-approved:focus-visible {
   outline: 2px solid #15803d;
   outline-offset: 2px;
+}
+
+@media (max-width: 767px) {
+  .table-flow-card {
+    --table-card-inset: 8px;
+  }
+
+  .table-card-heading {
+    column-gap: 2px;
+  }
+
+  .table-auto-approved {
+    gap: 2px;
+    padding-inline: 3px;
+  }
 }
