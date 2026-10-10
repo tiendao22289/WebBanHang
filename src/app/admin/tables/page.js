@@ -13,10 +13,9 @@ import {
   getChannel, fetchChannelConfig, calcReviewDiscount, startOfTodayISO,
   isReviewDiscountItem,
 } from '@/lib/reviewReward';
-import { getMenuCached, fetchMenuFromServer } from '@/lib/menuCache';
+import { getMenuCached } from '@/lib/menuCache';
 import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders';
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
-import { createOrderRefresh } from '@/lib/orderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
@@ -1065,7 +1064,6 @@ export default function TablesPage() {
       else await fetchOrdersOnlyRef.current?.([...affected]);
     });
     realtimeRefreshRef.current = refresh;
-    const refreshMenu = createOrderRefresh();
     fetchTables();
     fetchReviewRequests();
     fetchPromoAndGifts();
@@ -1099,16 +1097,6 @@ export default function TablesPage() {
         // ngốn tải vô ích. Vòng poll 20s + lúc quay lại tab đã lo cập nhật icon
         // ⏳/⚠️ đủ nhanh rồi.
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_items' }, () => refreshMenu(async () => {
-        // Keep cached options fresh when another admin changes menu settings.
-        try {
-          const cached = await fetchMenuFromServer();
-          setMenuItems(cached.items.filter(item => item.is_available)
-            .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi')));
-          setOrders(prev => Object.fromEntries(Object.entries(prev)
-            .map(([id, bills]) => [id, withCachedMenuOptions(bills, cached.items)])));
-        } catch (err) { console.warn('[menu cache] refresh failed:', err.message); }
-      }))
       // Lệnh in đổi trạng thái → cập nhật badge lỗi TỨC THÌ + báo nhân viên biết.
       .on('postgres_changes', { event: '*', schema: 'public', table: 'print_jobs' }, (payload) => {
         const row = payload.new || {};
