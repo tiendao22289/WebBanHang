@@ -15,7 +15,7 @@ import {
 } from '@/lib/reviewReward';
 import { getMenuCached, fetchMenuFromServer } from '@/lib/menuCache';
 import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders';
-import { createTableOrderRefresh, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
+import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { createOrderRefresh } from '@/lib/orderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import { QRCodeSVG } from 'qrcode.react';
@@ -1069,6 +1069,12 @@ export default function TablesPage() {
     fetchReviewRequests();
     fetchPromoAndGifts();
 
+    const recovery = createTableOrderRecovery(() => fetchTablesRef.current?.(), {
+      isVisible: () => document.visibilityState === 'visible',
+      intervalMs: process.env.NEXT_PUBLIC_APP_ENV === 'dev' ? 10000 : 90000,
+      disconnectedIntervalMs: 10000,
+    });
+
     // Use a unique channel name each mount to avoid stale channel on HMR
     const channelName = `tables-realtime-${Date.now()}`;
     const channel = supabase
@@ -1135,12 +1141,8 @@ export default function TablesPage() {
       })
       .subscribe((status) => {
         console.log('[Realtime] channel status:', status);
+        Promise.resolve(recovery.onStatus(status)).catch(error => console.warn('[Realtime] recovery failed:', error.message));
       });
-
-    // ── Fallback: poll every 30s in case Supabase Realtime is not enabled ──
-    const pollInterval = setInterval(() => {
-      if (document.visibilityState === 'visible') fetchTables();
-    }, 90000);
 
     // ── Trạng thái quà: poll riêng 20s (nhẹ) cho icon ⏳/⚠️ cập nhật nhanh khi
     //    khách vừa quay — không phải chờ fetchTables 90s. lucky_spins không
@@ -1149,15 +1151,10 @@ export default function TablesPage() {
       if (document.visibilityState === 'visible') fetchLuckyStatusRef.current?.();
     }, 20000);
 
-    // ── Re-fetch when user switches back to this tab ──
-    // Chrome trên Windows coi cửa sổ bị che là "hidden", máy tính bảng thì mỗi
-    // lần mở khoá màn hình → event này bắn rất dày. Chỉ refetch nếu lần tải đầy
-    // đủ gần nhất đã quá 30s (Realtime vẫn lo cập nhật tức thì trong lúc đó).
-    // fetchTables() tự gọi fetchLuckyStatus() nên không gọi thêm ở đây.
+    // Mobile browsers may suspend the socket while the screen is locked.
     const handleVisibility = () => {
       if (document.visibilityState !== 'visible') return;
-      if (Date.now() - lastFullFetchRef.current < 30000) return;
-      fetchTables();
+      recovery.refresh().catch(error => console.warn('[Realtime] visibility refresh failed:', error.message));
     };
     document.addEventListener('visibilitychange', handleVisibility);
 
@@ -1185,7 +1182,7 @@ export default function TablesPage() {
     return () => {
       supabase.removeChannel(channel);
       clearInterval(takeawayCleanupInterval);
-      clearInterval(pollInterval);
+      recovery.dispose();
       clearInterval(luckyInterval);
       document.removeEventListener('visibilitychange', handleVisibility);
       refresh.dispose();

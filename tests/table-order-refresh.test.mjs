@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import {
-  createTableOrderReadGuard, createTableOrderRefresh, expandTableRefreshScope,
+  createTableOrderReadGuard, createTableOrderRefresh, createTableOrderRecovery, expandTableRefreshScope,
   getCachedOrderTableIds, getTableOrderChangeScope, mergeTableOrders, readOpenTableOrders, withCachedMenuOptions,
 } from '../src/lib/tableOrderRefresh.mjs';
 
@@ -66,6 +66,20 @@ test('an empty scoped response clears paid/deleted bills and preserves unrelated
   assert.deepEqual(next.b, []);
   assert.equal(next.c, orders.c);
   assert.equal(orders.a.length, 1);
+});
+
+test('full and scoped refreshes exclude kitchen calls but retain real zero-price and deleted-menu items', () => {
+  const call = { id: 'call', table_id: 'a', customer_phone: 'BAO_BEP', order_items: [{ menu_item_id: null, unit_price: 0 }] };
+  const food = { id: 'food', table_id: 'a', customer_phone: null, order_items: [
+    { menu_item_id: 'gift', unit_price: 0, is_gift: true },
+    { menu_item_id: null, item_name: 'Previous dish', unit_price: 80000 },
+  ] };
+  for (const scope of [null, ['a']]) {
+    const next = mergeTableOrders({ ...orders, a: [call] }, [call, food], scope);
+    assert.deepEqual(next.a, [food]);
+    if (scope) assert.equal(next.c, orders.c);
+  }
+  assert.deepEqual(mergeTableOrders(orders, [call], ['a']).a, []);
 });
 
 test('full reads use non-null FK filtering; scoped reads contain only affected IDs', async () => {
@@ -132,6 +146,55 @@ function schedulerHarness(execute) {
     return fn();
   } };
 }
+
+test('recovery refreshes on connection and resume, polls faster offline, and never overlaps reads', async () => {
+  const timers = new Map();
+  let nextId = 0;
+  let visible = true;
+  let reads = 0;
+  let release;
+  const recovery = createTableOrderRecovery(async () => {
+    reads++;
+    await new Promise(resolve => { release = resolve; });
+  }, {
+    isVisible: () => visible,
+    setTimer(fn, delay) { timers.set(++nextId, { fn, delay }); return nextId; },
+    clearTimer(id) { timers.delete(id); },
+  });
+  assert.equal([...timers.values()][0].delay, 10000);
+  const connected = recovery.onStatus('SUBSCRIBED');
+  assert.equal(reads, 1);
+  await recovery.refresh();
+  assert.equal(reads, 1);
+  release(); await connected;
+  assert.equal([...timers.values()][0].delay, 90000);
+  recovery.onStatus('CHANNEL_ERROR');
+  assert.equal([...timers.values()][0].delay, 10000);
+  visible = false;
+  await [...timers.values()][0].fn();
+  assert.equal(reads, 1);
+  visible = true;
+  const resumed = recovery.refresh();
+  assert.equal(reads, 2);
+  recovery.dispose();
+  release(); await resumed;
+  assert.equal(timers.size, 0);
+});
+
+test('a failed recovery read still schedules the next attempt', async () => {
+  let timer;
+  let errors = 0;
+  const recovery = createTableOrderRecovery(async () => { throw new Error('offline'); }, {
+    isVisible: () => true,
+    setTimer(fn) { timer = fn; return 1; },
+    clearTimer() { timer = null; },
+    onError() { errors++; },
+  });
+  await timer();
+  assert.equal(errors, 1);
+  assert.equal(typeof timer, 'function');
+  recovery.dispose();
+});
 
 test('a burst accumulates all tables and events during a slow read get one trailing read', async () => {
   let release;

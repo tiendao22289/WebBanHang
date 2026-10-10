@@ -123,10 +123,59 @@ export function mergeTableOrders(previous, data, tableIds = null) {
   // An empty response still clears a table whose last bill was paid/deleted.
   for (const id of tableIds || []) next[id] = [];
   for (const order of data || []) {
+    // Kitchen calls remain in the database for alerts/printing, not food bills.
+    if (order.customer_phone === 'BAO_BEP') continue;
     if (tableIds !== null && !tableIds.includes(order.table_id)) continue;
     (next[order.table_id] ||= []).push(order);
   }
   return next;
+}
+
+// Recover missed events after reconnects and while the socket is unavailable.
+export function createTableOrderRecovery(refresh, {
+  isVisible, intervalMs = 90000, disconnectedIntervalMs = 10000,
+  setTimer = setTimeout, clearTimer = clearTimeout,
+  onError = error => console.warn('[Table orders] recovery failed:', error.message),
+}) {
+  let connected = false;
+  let stopped = false;
+  let running = false;
+  let timer = null;
+  function arm() {
+    if (stopped || running || timer !== null) return;
+    timer = setTimer(run, connected ? intervalMs : disconnectedIntervalMs);
+  }
+  async function run() {
+    if (stopped || running) return;
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+    running = true;
+    try {
+      if (isVisible()) await refresh();
+    } catch (error) {
+      onError(error);
+    } finally {
+      running = false;
+      arm();
+    }
+  }
+  arm();
+  return {
+    onStatus(status) {
+      const wasConnected = connected;
+      connected = status === 'SUBSCRIBED';
+      if (timer !== null) clearTimer(timer);
+      timer = null;
+      if (connected && !wasConnected) return run();
+      arm();
+    },
+    refresh: run,
+    dispose() {
+      stopped = true;
+      if (timer !== null) clearTimer(timer);
+      timer = null;
+    },
+  };
 }
 
 // Accumulate every affected table; serialize reads without losing events received
