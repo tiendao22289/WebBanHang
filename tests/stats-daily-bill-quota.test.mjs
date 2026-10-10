@@ -10,7 +10,8 @@ await db.exec(`
   CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;
   CREATE TABLE settings(key text PRIMARY KEY, value text);
   CREATE TABLE tables(id uuid PRIMARY KEY, merged_with uuid, status text, occupied_at timestamptz,
-    table_type text DEFAULT 'normal');
+    table_type text DEFAULT 'normal', table_number integer);
+  CREATE TABLE menu_items(id uuid PRIMARY KEY, name text);
   CREATE TABLE orders(id uuid PRIMARY KEY, table_id uuid REFERENCES tables,
     status text, total_amount numeric, payment_method text, paid_at timestamptz,
     paid_by_id uuid, paid_by_name text, created_at timestamptz DEFAULT now(),
@@ -37,14 +38,14 @@ await db.exec(`
     bill_total integer DEFAULT 0, discount_amount integer DEFAULT 0);
 `);
 for (const file of ['lucky_wheel_dynamic_percent.sql', 'complete_table_payment_atomic.sql', 'protect_settled_order_items.sql',
-  'order_total_follows_items.sql', 'stats_daily_bill_quota.sql']) {
+  'order_total_follows_items.sql', 'stats_daily_bill_quota.sql', 'table_bill_history_10h.sql']) {
   await db.exec(readFileSync(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8'));
 }
 
 async function reset(enabled = true) {
   await db.exec(`TRUNCATE order_items, orders, tables, bank_daily_totals, bank_accounts,
     payment_transactions, print_jobs, customer_reviews, stats_daily_quotas, stats_bill_allocations,
-    lucky_spins, settings CASCADE;
+    lucky_spins, settings, table_bill_history CASCADE;
     UPDATE stats_quota_config SET enabled=${enabled}, start_hour=0, end_hour=1;`);
   await db.query('INSERT INTO bank_accounts VALUES ($1,true,true,5000000,1),($2,true,false,5000000,2),($3,true,false,5000000,3)',
     [id(40), id(41), id(42)]);
@@ -97,6 +98,91 @@ test('disabled mode preserves original cash and bank behavior', async () => {
   assert.equal((await db.query('SELECT status FROM orders')).rows[0].status, 'paid');
   assert.equal((await db.query('SELECT count(*)::int AS n FROM stats_daily_quotas')).rows[0].n, 0);
   assert.equal((await db.query('SELECT count(*)::int AS n FROM bank_daily_totals')).rows[0].n, 0);
+});
+
+test('10-hour history survives excluded receipt deletion with its original items', async () => {
+  await reset(); await seedQuota(5000000); await openBill();
+  await db.query('UPDATE order_items SET item_name=$1, note=$2 WHERE order_id=$3', ['Test dish', 'Less spicy', id(101)]);
+  await settle();
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM orders')).rows[0].n, 0);
+  const row = (await db.query('SELECT *, extract(epoch FROM expires_at-paid_at) AS duration FROM table_bill_history')).rows[0];
+  assert.equal(Number(row.duration), 36000);
+  assert.equal(row.snapshot.total_amount, 300000);
+  assert.equal(row.snapshot.status, 'paid');
+  assert.equal(row.snapshot.order_items[0].menu_item.name, 'Test dish');
+  assert.equal(row.snapshot.order_items[0].note, 'Less spicy');
+  assert.deepEqual(row.table_ids, [id(1)]);
+});
+
+test('history expiration hides and deletes only archives, preserving selected financial records', async () => {
+  await reset(); await seedQuota(); await openBill(); await settle();
+  await db.exec('SET ROLE anon');
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM table_bill_history')).rows[0].n, 1);
+  await assert.rejects(db.query('DELETE FROM table_bill_history'));
+  await db.exec('RESET ROLE');
+  await db.query("UPDATE table_bill_history SET expires_at=now()-interval '1 second'");
+  await db.exec('SET ROLE anon');
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM table_bill_history')).rows[0].n, 0);
+  await db.exec('RESET ROLE');
+  assert.equal((await db.query('SELECT purge_expired_table_bill_history() AS n')).rows[0].n, 1);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM orders')).rows[0].n, 1);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM order_items')).rows[0].n, 1);
+});
+
+test('failed settlement rolls back history and repeated payment does not duplicate it', async () => {
+  await reset(); await seedQuota(); await openBill();
+  const p = await prepare();
+  await transaction(1, 300000, p.account_id, 'REAL');
+  await assert.rejects(settle(1, 300000, 'transfer', p.account_id, 'WRONG'));
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM table_bill_history')).rows[0].n, 0);
+  await settle(1, 300000, 'transfer', p.account_id, 'REAL');
+  assert.equal((await db.query('SELECT snapshot FROM table_bill_history')).rows[0].snapshot.bill_code, 'REAL');
+  await db.query("UPDATE orders SET status='paid' WHERE id=$1", [id(101)]);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM table_bill_history')).rows[0].n, 1);
+});
+
+test('archive write failure does not block settlement or change excluded receipt deletion', async () => {
+  await reset(); await seedQuota(5000000); await openBill();
+  await db.exec('ALTER TABLE table_bill_history ADD CONSTRAINT simulate_archive_failure CHECK (false)');
+  try {
+    const result = await settle();
+    assert.equal(result.success, true);
+    assert.equal(result.selected_for_stats, false);
+    assert.equal((await db.query('SELECT status FROM tables')).rows[0].status, 'available');
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM orders')).rows[0].n, 0);
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM order_items')).rows[0].n, 0);
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM table_bill_history')).rows[0].n, 0);
+  } finally {
+    await db.exec('ALTER TABLE table_bill_history DROP CONSTRAINT simulate_archive_failure');
+  }
+});
+
+test('archive write failure preserves normal transfer settlement and bank totals for a selected bill', async () => {
+  await reset(); await seedQuota(); await openBill();
+  const decision = await prepare();
+  await transaction(1, 300000, decision.account_id, 'HISTORYFAIL');
+  await db.exec('ALTER TABLE table_bill_history ADD CONSTRAINT simulate_archive_failure CHECK (false)');
+  try {
+    const result = await settle(1, 300000, 'transfer', decision.account_id, 'HISTORYFAIL');
+    assert.equal(result.success, true);
+    assert.equal(result.selected_for_stats, true);
+    assert.equal((await db.query('SELECT status FROM orders')).rows[0].status, 'paid');
+    assert.equal((await db.query('SELECT status FROM payment_transactions')).rows[0].status, 'completed');
+    assert.equal(Number((await db.query('SELECT total_amount FROM bank_daily_totals')).rows[0].total_amount), 300000);
+    assert.equal(Number((await quota()).transfer_amount), 300000);
+    assert.equal((await db.query('SELECT status FROM tables')).rows[0].status, 'available');
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM table_bill_history')).rows[0].n, 0);
+  } finally {
+    await db.exec('ALTER TABLE table_bill_history DROP CONSTRAINT simulate_archive_failure');
+  }
+});
+
+test('merged history is visible from both table IDs after settlement ungroups the tables', async () => {
+  await reset(); await seedQuota(); await openBill(1, 300000); await openBill(2, 200000, 1);
+  await settle(2, 500000, 'cash', null, null, [1, 2]);
+  const rows = (await db.query('SELECT table_ids FROM table_bill_history')).rows;
+  assert.equal(rows.length, 2);
+  for (const row of rows) assert.deepEqual(row.table_ids, [id(1), id(2)]);
 });
 
 test('cash and transfers use one budget, but cash is not a bank receipt', async () => {

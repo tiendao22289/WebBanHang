@@ -18,6 +18,7 @@ import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders'
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
+import { flushSync } from 'react-dom';
 import Swal from 'sweetalert2';
 import {
   Bell,
@@ -360,6 +361,9 @@ export default function TablesPage() {
   const [tableOpenLog, setTableOpenLog] = useState([]); // nhật ký mở bàn (6 tiếng)
   const [tableOpenLogLoading, setTableOpenLogLoading] = useState(false);
   const [historySynced, setHistorySynced] = useState(false); // đã bấm Đồng bộ tải lịch sử chưa
+  const [historyPrintBill, setHistoryPrintBill] = useState(null);
+  const historyPrintRef = useRef(null);
+  const printHistoryBill = useReactToPrint({ contentRef: historyPrintRef, documentTitle: 'Hoa don' });
   const lastLoggedOpenRef = useRef(null); // chống ghi trùng khi re-render
   const [transactionCode, setTransactionCode] = useState(null);
   const [paymentCountdown, setPaymentCountdown] = useState(0);
@@ -463,11 +467,11 @@ export default function TablesPage() {
     const since8 = new Date(Date.now() - 8 * 3600 * 1000).toISOString();
     const since6 = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
     try {
-      const [billsRes, opensRes] = await Promise.all([
+      const [billsRes, opensRes, archiveRes] = await Promise.all([
         supabase.from('orders')
           .select('*, order_items(*, menu_item:menu_items(name))')
           .eq('table_id', hId)
-          .in('status', ['paid', 'cancelled'])
+          .eq('status', 'cancelled')
           .gte('created_at', since8)
           .order('created_at', { ascending: false }),
         supabase.from('table_open_log')
@@ -475,16 +479,53 @@ export default function TablesPage() {
           .eq('table_id', table.id)
           .gte('opened_at', since6)
           .order('opened_at', { ascending: false }),
+        supabase.from('table_bill_history')
+          .select('order_id, expires_at, snapshot')
+          .contains('table_ids', [table.id])
+          .gt('expires_at', new Date().toISOString())
+          .order('paid_at', { ascending: false }),
       ]);
-      setTableHistoryData(billsRes.data || []);
+      const archiveNotInstalled = ['PGRST205', '42P01'].includes(archiveRes.error?.code);
+      if (billsRes.error || opensRes.error || (archiveRes.error && !archiveNotInstalled)) {
+        throw billsRes.error || opensRes.error || archiveRes.error;
+      }
+      const archived = (archiveRes.data || []).map(row => ({ ...row.snapshot, historyExpiresAt: row.expires_at }));
+      let legacyPaid = [];
+      if (archiveNotInstalled) {
+        const result = await supabase.from('orders').select('*, order_items(*, menu_item:menu_items(name))')
+          .eq('table_id', hId).eq('status', 'paid').gte('created_at', since8)
+          .order('created_at', { ascending: false });
+        if (result.error) throw result.error;
+        legacyPaid = result.data || [];
+      }
+      setTableHistoryData([...archived, ...legacyPaid, ...(billsRes.data || [])].sort((a, b) =>
+        new Date(b.paid_at || b.created_at) - new Date(a.paid_at || a.created_at)));
       setTableOpenLog(opensRes.data || []);
       setHistorySynced(true);
     } catch (err) {
       console.error('[syncTableHistory]', err);
+      Swal.fire('Chưa tải được lịch sử', err.message || 'Vui lòng đồng bộ lại.', 'error');
     } finally {
       setTableHistoryLoading(false);
       setTableOpenLogLoading(false);
     }
+  }
+
+  useEffect(() => {
+    if (!showTableHistory) return;
+    const timer = setInterval(() => setTableHistoryData(prev => prev.filter(order =>
+      !order.historyExpiresAt || new Date(order.historyExpiresAt).getTime() > Date.now())), 1000);
+    return () => clearInterval(timer);
+  }, [showTableHistory]);
+
+  async function reprintHistory(order) {
+    if (!order.historyExpiresAt) return sendTableSummaryPrintJob(supabase, [order.id]);
+    const { data, error } = await supabase.from('table_bill_history').select('snapshot')
+      .eq('order_id', order.id).gt('expires_at', new Date().toISOString()).maybeSingle();
+    if (error || !data) return { success: false, error: error?.message || 'Lịch sử đã hết hạn 10 tiếng.' };
+    flushSync(() => setHistoryPrintBill(data.snapshot));
+    printHistoryBill();
+    return { success: true };
   }
 
   // Detect mobile vs desktop
@@ -6622,7 +6663,7 @@ export default function TablesPage() {
               <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid #f3f4f6', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 800, fontSize: '1rem', color: '#1f2937' }}>🕐 Lịch sử Bàn {showTableHistory.table_number}</div>
-                  <div style={{ fontSize: '0.72rem', color: '#9ca3af', marginTop: 1 }}>{historyTab === 'opens' ? 'Lượt mở bàn · 6 tiếng gần nhất' : 'Hoá đơn · 8 tiếng gần nhất'}</div>
+                  <div style={{ fontSize: '0.72rem', color: '#9ca3af', marginTop: 1 }}>{historyTab === 'opens' ? 'Lượt mở bàn · 6 tiếng gần nhất' : 'Đã thanh toán · 10 tiếng | Đã huỷ · 8 tiếng'}</div>
                 </div>
                 <button onClick={() => setShowTableHistory(null)} style={{ background: '#f3f4f6', border: 'none', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
               </div>
@@ -6694,11 +6735,11 @@ export default function TablesPage() {
                   <div style={{ textAlign: 'center', padding: '30px 0', color: '#9ca3af', fontSize: '0.85rem' }}>Đang tải...</div>
                 ) : tableHistoryData.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '30px 0', color: '#d1d5db', fontSize: '0.85rem' }}>
-                    <div style={{ fontSize: '2rem', marginBottom: 6 }}>📭</div>Không có lịch sử trong 8 tiếng qua
+                    <div style={{ fontSize: '2rem', marginBottom: 6 }}>📭</div>Không có lịch sử hoá đơn
                   </div>
-                ) : tableHistoryData.map(order => {
+                ) : tableHistoryData.filter(order => !order.historyExpiresAt || new Date(order.historyExpiresAt).getTime() > Date.now()).map(order => {
                   const isPaid = order.status === 'paid';
-                  const tTime = new Date(order.updated_at || order.created_at);
+                    const tTime = new Date(order.paid_at || order.updated_at || order.created_at);
                   const timeStr = tTime.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
                   return (
                     <div key={order.id} style={{ borderBottom: '1px solid #f3f4f6', paddingBottom: 10, marginBottom: 10 }}>
@@ -6742,7 +6783,8 @@ export default function TablesPage() {
                             const btn = e.currentTarget;
                             const orig = btn.textContent;
                             btn.textContent = '⏳'; btn.disabled = true;
-                            const { success } = await sendTableSummaryPrintJob(supabase, [order.id]);
+                            const { success, error } = await reprintHistory(order);
+                            if (!success) Swal.fire('Chưa in được', error || 'Vui lòng thử lại.', 'error');
                             btn.textContent = success ? '✓ Gửii' : '✗ Lỗi';
                             setTimeout(() => { if (btn) { btn.textContent = orig; btn.disabled = false; } }, 2000);
                           }}
@@ -6759,6 +6801,22 @@ export default function TablesPage() {
         )
       }
 
+      <div style={{ display: 'none' }}>
+        <div ref={historyPrintRef} style={{ padding: 16, fontFamily: 'Arial, sans-serif', color: '#000' }}>
+          {historyPrintBill && <>
+            <h3>Hoá đơn Bàn {historyPrintBill.table_number}</h3>
+            <p>{historyPrintBill.bill_code || historyPrintBill.id}</p>
+            <p>{new Date(historyPrintBill.paid_at).toLocaleString('vi-VN')}</p>
+            <p>{historyPrintBill.payment_method === 'cash' ? 'Tiền mặt' : 'Chuyển khoản'} · {historyPrintBill.paid_by_name || ''}</p>
+            {(historyPrintBill.order_items || []).map(item => <div key={item.id} style={{ marginBottom: 8 }}>
+              <div>{item.quantity}x {item.menu_item?.name || item.item_name || 'Món'}</div>
+              <div>{(item.item_options || []).map(o => o.choice).join(' · ')} {item.note || ''}</div>
+              <div>{formatPrice(item.unit_price * item.quantity)}</div>
+            </div>)}
+            <strong>Tổng: {formatPrice(historyPrintBill.total_amount)}</strong>
+          </>}
+        </div>
+      </div>
       {/* ─── Tab "Quà hôm nay" ở mép phải màn hình bàn (chỉ hiện khi đang xem lưới bàn) ─── */}
       {!selectedTable && (
         <button
