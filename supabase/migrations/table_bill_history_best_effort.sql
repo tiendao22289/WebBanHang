@@ -6,6 +6,7 @@ RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_t
 DECLARE host_id uuid; group_ids uuid[]; items jsonb; bill jsonb; settled_at timestamptz;
 BEGIN
   IF NEW.status <> 'paid' OR OLD.status IS NOT DISTINCT FROM 'paid' THEN RETURN NEW; END IF;
+  IF NEW.customer_phone = 'BAO_BEP' THEN RETURN NEW; END IF;
   settled_at := COALESCE(NEW.paid_at, now());
   SELECT COALESCE(merged_with, id) INTO host_id FROM public.tables WHERE id = NEW.table_id;
   SELECT array_agg(id ORDER BY id) INTO group_ids FROM public.tables

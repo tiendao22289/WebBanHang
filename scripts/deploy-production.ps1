@@ -23,8 +23,6 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed; production is unchanged.' }
     & npm.cmd run build
     if ($LASTEXITCODE -ne 0) { throw 'Build failed; production is unchanged.' }
-    & node scripts/apply-table-history-migration.cjs
-    if ($LASTEXITCODE -ne 0) { throw 'History migration failed; current production web remains active.' }
 } finally { Pop-Location }
 # WMI starts the server outside the runner/Codex process job so job cleanup cannot kill it.
 $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ShowWindow=[uint16]0}

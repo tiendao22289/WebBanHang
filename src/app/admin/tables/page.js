@@ -509,7 +509,8 @@ export default function TablesPage() {
         if (result.error) throw result.error;
         legacyPaid = result.data || [];
       }
-      setTableHistoryData([...archived, ...legacyPaid, ...(billsRes.data || [])].sort((a, b) =>
+      setTableHistoryData([...archived, ...legacyPaid, ...(billsRes.data || [])]
+        .filter(order => order.customer_phone !== 'BAO_BEP').sort((a, b) =>
         new Date(b.paid_at || b.created_at) - new Date(a.paid_at || a.created_at)));
       setTableOpenLog(opensRes.data || []);
       setHistorySynced(true);
