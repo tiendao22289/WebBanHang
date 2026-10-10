@@ -321,7 +321,10 @@ export default function TablesPage() {
   const [optionNote, setOptionNote] = useState('');
   const [editingPrice, setEditingPrice] = useState(false);
   const [customPrice, setCustomPrice] = useState(null);
-  const [showBillPreview, setShowBillPreview] = useState(false);
+  const [billPreviewTableId, setBillPreviewTableId] = useState(null);
+  const showBillPreview = !!selectedTable && billPreviewTableId === selectedTable.id;
+  const setShowBillPreview = (show) => setBillPreviewTableId(show ? selectedTable?.id || null : null);
+  useEffect(() => { setBillPreviewTableId(null); }, [selectedTable?.id]);
   const [quickAddOpen, setQuickAddOpen] = useState(false); // panel chọn nhanh nước/bia/khăn
   const [adjustOpen, setAdjustOpen] = useState(false);      // bảng Cộng/Trừ tiền, Giảm % vào bill
   // Tab "Quà hôm nay": xem quà đã tặng hôm nay + món tặng nào đang bật/tắt.
@@ -1269,6 +1272,7 @@ export default function TablesPage() {
         return false;
       }
 
+      setShowBillPreview(false);
       setSelectedTable(null);
       fetchTables(snapshot.groupTableIds);
       return true;
