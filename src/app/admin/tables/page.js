@@ -13,8 +13,10 @@ import {
   getChannel, fetchChannelConfig, calcReviewDiscount, startOfTodayISO,
   isReviewDiscountItem,
 } from '@/lib/reviewReward';
-import { getMenuCached } from '@/lib/menuCache';
+import { getMenuCached, fetchMenuFromServer } from '@/lib/menuCache';
 import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders';
+import { createTableOrderRefresh, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
+import { createOrderRefresh } from '@/lib/orderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
@@ -277,6 +279,12 @@ function BillAdjustDialog({ tableNumber, discountBase, busy, onApply, onClose })
 export default function TablesPage() {
   const [tables, setTables] = useState([]);
   const [orders, setOrders] = useState({});
+  const tablesStateRef = useRef(tables);
+  const ordersStateRef = useRef(orders);
+  const orderReadGuardRef = useRef(null);
+  if (!orderReadGuardRef.current) orderReadGuardRef.current = createTableOrderReadGuard();
+  useEffect(() => { tablesStateRef.current = tables; }, [tables]);
+  useEffect(() => { ordersStateRef.current = orders; }, [orders]);
   const [loading, setLoading] = useState(true);
   const [selectedTable, setSelectedTable] = useState(null);
   const [showQR, setShowQR] = useState(null);
@@ -693,17 +701,20 @@ export default function TablesPage() {
   };
 
   const lastFullFetchRef = useRef(0);
-  const fetchTables = useCallback(async () => {
-    lastFullFetchRef.current = Date.now();
+  const fetchTables = useCallback(async (affectedTableIds = null) => {
+    if (affectedTableIds === null) lastFullFetchRef.current = Date.now();
     // Menu + categories đọc từ cache admin (adminMenuCache:v1) — không request
     // server. Cache do admin/menu ghi khi fetchData (mount + sau "Đồng bộ").
     // Nếu cache miss (lần đầu chưa vào admin/menu) → getMenuCached() sẽ tự fetch.
-    const [{ data: tablesData, error: tablesError }, cachedMenu] = await Promise.all([
+    // Start a full bill read alongside tables/menu; no table UUID round trip.
+    const applyFullOrders = affectedTableIds === null ? orderReadGuardRef.current.begin() : null;
+    const [{ data: tablesData, error: tablesError }, cachedMenu, fullOrders] = await Promise.all([
       supabase.from('tables').select('*').order('table_number'),
       getMenuCached().catch(err => {
         console.error('[fetchTables] menu cache error:', err.message);
         return { items: [], categories: [] };
       }),
+      affectedTableIds === null ? readOpenTableOrders(supabase) : Promise.resolve(null),
     ]);
 
     // Lọc + sắp xếp menu client-side (giống filter cũ: is_available + order('name'))
@@ -721,32 +732,18 @@ export default function TablesPage() {
       console.error('[fetchTables] tables error:', tablesError.message);
     } else if (tablesData) {
       setTables(tablesData);
-      const allTableIds = tablesData.map(t => t.id);
-      if (allTableIds.length > 0) {
+      const allTableIds = affectedTableIds === null ? null
+        : expandTableRefreshScope(affectedTableIds, tablesData, tablesStateRef.current);
+      if (allTableIds === null || allTableIds.length > 0) {
         try {
-          const { data: ordersData, error: ordErr } = await supabase
-            .from('orders')
-            .select(`
-              id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
-              order_items (
-                id, quantity, unit_price, item_options, note, is_gift, menu_item_id, item_name, added_by_name,
-                menu_item:menu_items (name, price, image_url, category_id, options)
-              ),
-              print_jobs (id, status, created_at, printer_id, error_message, filter_category_ids, only_item_ids, order_ids)
-            `)
-            .in('table_id', allTableIds)
-            .in('status', OPEN_BILL_STATUSES)
-            .order('created_at', { ascending: false });
+          const applyOrders = applyFullOrders || orderReadGuardRef.current.begin(allTableIds);
+          const { data: ordersData, error: ordErr } = fullOrders || await readOpenTableOrders(supabase, allTableIds);
 
           if (ordErr) {
             console.error('[fetchTables] orders error:', ordErr.message);
           } else {
-            const ordersByTable = {};
-            ordersData?.forEach(order => {
-              if (!ordersByTable[order.table_id]) ordersByTable[order.table_id] = [];
-              ordersByTable[order.table_id].push(order);
-            });
-            setOrders(ordersByTable);
+            const hydrated = withCachedMenuOptions(ordersData, cachedMenu.items);
+            setOrders(prev => applyOrders(prev, hydrated));
           }
         } catch (e) {
           console.error('[fetchTables] unexpected error:', e);
@@ -809,34 +806,26 @@ export default function TablesPage() {
   }
 
   // ─── Chỉ refresh orders (không fetch lại menu/tables/categories) ───
-  const fetchOrdersOnly = useCallback(async () => {
-    const currentTableIds = tables.map(t => t.id);
-    if (currentTableIds.length === 0) return;
+  const fetchOrdersOnly = useCallback(async (affectedTableIds = null) => {
+    const currentTableIds = affectedTableIds === null
+      ? null
+      : expandTableRefreshScope(affectedTableIds, tablesStateRef.current);
+    if (currentTableIds?.length === 0) return;
     try {
-      const { data: ordersData, error: ordersError } = await supabase
-        .from('orders')
-        .select(`
-          id, table_id, status, total_amount, customer_name, customer_phone, customer_note, delivery_address, created_at, created_by_name,
-          order_items (
-            id, quantity, unit_price, item_options, note, is_gift, menu_item_id, item_name, added_by_name,
-            menu_item:menu_items (name, price, image_url, category_id, options)
-          ),
-          print_jobs (id, status, created_at, printer_id, error_message, filter_category_ids, only_item_ids, order_ids)
-        `)
-        .in('table_id', currentTableIds)
-        .in('status', OPEN_BILL_STATUSES)
-        .order('created_at', { ascending: false });
+      const applyOrders = orderReadGuardRef.current.begin(currentTableIds);
+      const [{ data: ordersData, error: ordersError }, cachedMenu] = await Promise.all([
+        readOpenTableOrders(supabase, currentTableIds), getMenuCached(),
+      ]);
       if (ordersError) throw ordersError;
-      const ordersByTable = {};
-      ordersData?.forEach(order => {
-        if (!ordersByTable[order.table_id]) ordersByTable[order.table_id] = [];
-        ordersByTable[order.table_id].push(order);
-      });
-      setOrders(ordersByTable);
+      const hydrated = withCachedMenuOptions(ordersData, cachedMenu.items);
+      setOrders(prev => applyOrders(prev, hydrated));
     } catch (e) {
       console.error('[fetchOrdersOnly] error:', e);
     }
-  }, [tables]);
+  }, []);
+
+  const fetchOrdersForBills = useCallback((orderIds) =>
+    fetchOrdersOnly(getCachedOrderTableIds(ordersStateRef.current, orderIds)), [fetchOrdersOnly]);
 
   // ─── Trạng thái quà vòng xoay (badge thẻ bàn + danh sách kẹt ngày trước) ───
   // Gọi được độc lập (nhẹ, chỉ 1 API) nên poll riêng ~20s cho icon cập nhật nhanh,
@@ -951,7 +940,7 @@ export default function TablesPage() {
       // Lệnh cũ: đánh dấu đã xử lý để hết báo đỏ (lệnh mới quyết định trạng thái tiếp)
       await supabase.from('print_jobs')
         .update({ status: 'done', error_message: 'Đã tạo lệnh in lại' }).eq('id', job.id);
-      fetchOrdersOnly();
+      fetchOrdersForBills([targetOrderId, ...(job.order_ids || [])]);
       Swal.fire({ title: 'Đã gửi in lại!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
     } catch (e) {
       Swal.fire('Lỗi', 'Không gửi được lệnh in lại: ' + e.message, 'error');
@@ -995,34 +984,19 @@ export default function TablesPage() {
     );
   }
 
-  // ─── Debounced refetch scheduler ───────────────────────────────────────────
-  // Khi khách gửi 1 đơn N món, Supabase Realtime bắn N+2 event (1 orders INSERT
-  // + N order_items INSERT + 1 tables UPDATE). Không debounce → fetchTables()
-  // chạy N+2 lần ⇒ (N+2) × 4 request. Gom vào 1 timer 200ms để chỉ fetch 1 lần.
-  //
-  // pendingFullRef=true khi có event trên bảng `tables` (bàn mới / status đổi)
-  // → dùng fetchTables (refetch menu/categories/tables/orders).
-  // Ngược lại (chỉ orders / order_items) → fetchOrdersOnly (rẻ hơn nhiều).
+  // Realtime accumulates affected tables instead of invalidating every bill.
   const fetchTablesRef = useRef(null);
   const fetchOrdersOnlyRef = useRef(null);
   const fetchLuckyStatusRef = useRef(null);
-  const refetchTimerRef = useRef(null);
-  const pendingFullRef = useRef(false);
+  const realtimeRefreshRef = useRef(null);
 
   useEffect(() => { fetchTablesRef.current = fetchTables; }, [fetchTables]);
   useEffect(() => { fetchOrdersOnlyRef.current = fetchOrdersOnly; }, [fetchOrdersOnly]);
   useEffect(() => { fetchLuckyStatusRef.current = fetchLuckyStatus; }, [fetchLuckyStatus]);
 
-  const scheduleRefetch = useCallback((full = false) => {
-    if (full) pendingFullRef.current = true;
-    if (refetchTimerRef.current) return; // đã có timer đang chờ
-    refetchTimerRef.current = setTimeout(() => {
-      refetchTimerRef.current = null;
-      const doFull = pendingFullRef.current;
-      pendingFullRef.current = false;
-      if (doFull) fetchTablesRef.current?.();
-      else fetchOrdersOnlyRef.current?.();
-    }, 500);
+  const scheduleRefetch = useCallback((kind, payload) => {
+    const scope = getTableOrderChangeScope(kind, payload, ordersStateRef.current);
+    realtimeRefreshRef.current?.schedule(scope);
   }, []);
 
   // Vá 1 lệnh in (Realtime print_jobs) vào orders đang hiển thị — đủ cho badge
@@ -1072,6 +1046,22 @@ export default function TablesPage() {
   }, [showTransfer, transactionCode, paymentCountdown]);
 
   useEffect(() => {
+    const refresh = createTableOrderRefresh(async batch => {
+      let full = batch.full;
+      const affected = new Set(batch.tableIds);
+      if (!full && batch.orderIds.size > 0) {
+        // New item's parent bill may not be cached yet. Resolve all unknown
+        // parents in one small read, rather than reading every open bill.
+        const { data, error } = await supabase.from('orders')
+          .select('id, table_id').in('id', [...batch.orderIds]);
+        if (error || data?.length !== batch.orderIds.size || data.some(order => !order.table_id)) full = true;
+        else data.forEach(order => affected.add(order.table_id));
+      }
+      if (full || batch.tables) await fetchTablesRef.current?.(full ? null : [...affected]);
+      else await fetchOrdersOnlyRef.current?.([...affected]);
+    });
+    realtimeRefreshRef.current = refresh;
+    const refreshMenu = createOrderRefresh();
     fetchTables();
     fetchReviewRequests();
     fetchPromoAndGifts();
@@ -1080,8 +1070,8 @@ export default function TablesPage() {
     const channelName = `tables-realtime-${Date.now()}`;
     const channel = supabase
       .channel(channelName)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tables' }, () => {
-        scheduleRefetch(true); // bàn đổi status/thêm/xoá → cần fetchTables đầy đủ
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tables' }, (payload) => {
+        scheduleRefetch('tables', payload);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
         if (payload.eventType === 'INSERT' && !isFirstLoad.current) {
@@ -1090,15 +1080,25 @@ export default function TablesPage() {
             triggerKitchenAlert(payload.new.table_id);
           }
         }
-        scheduleRefetch(false); // orders đổi → chỉ cần fetchOrdersOnly
+        scheduleRefetch('orders', payload);
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, () => {
-        scheduleRefetch(false); // items đổi → chỉ cần fetchOrdersOnly
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_items' }, (payload) => {
+        scheduleRefetch('order_items', payload);
         // KHÔNG nạp lại trạng thái quà ở đây: mỗi lần thêm/sửa món (rất thường
         // xuyên lúc đông khách) mà gọi thêm 2 query lucky-status trên MỌI máy →
         // ngốn tải vô ích. Vòng poll 20s + lúc quay lại tab đã lo cập nhật icon
         // ⏳/⚠️ đủ nhanh rồi.
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_items' }, () => refreshMenu(async () => {
+        // Keep cached options fresh when another admin changes menu settings.
+        try {
+          const cached = await fetchMenuFromServer();
+          setMenuItems(cached.items.filter(item => item.is_available)
+            .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi')));
+          setOrders(prev => Object.fromEntries(Object.entries(prev)
+            .map(([id, bills]) => [id, withCachedMenuOptions(bills, cached.items)])));
+        } catch (err) { console.warn('[menu cache] refresh failed:', err.message); }
+      }))
       // Lệnh in đổi trạng thái → cập nhật badge lỗi TỨC THÌ + báo nhân viên biết.
       .on('postgres_changes', { event: '*', schema: 'public', table: 'print_jobs' }, (payload) => {
         const row = payload.new || {};
@@ -1185,10 +1185,8 @@ export default function TablesPage() {
       clearInterval(pollInterval);
       clearInterval(luckyInterval);
       document.removeEventListener('visibilitychange', handleVisibility);
-      if (refetchTimerRef.current) {
-        clearTimeout(refetchTimerRef.current);
-        refetchTimerRef.current = null;
-      }
+      refresh.dispose();
+      if (realtimeRefreshRef.current === refresh) realtimeRefreshRef.current = null;
     };
   }, [fetchTables, scheduleRefetch]);
 
@@ -1205,7 +1203,7 @@ export default function TablesPage() {
   async function deleteTable(id) {
     if (!confirm('Bạn có chắc muốn xoá bàn này?')) return;
     await supabase.from('tables').delete().eq('id', id);
-    fetchTables();
+    fetchTables([id]);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1266,13 +1264,13 @@ export default function TablesPage() {
         if (paymentMethod === 'cash' && settled?.reason === 'amount_changed') {
           setConfirmPayment({ table, totalAmount: Number(settled.total), transactionCode: null });
         }
-        await fetchTables();
+        await fetchTables(snapshot.groupTableIds);
         Swal.fire('Bill đã thay đổi', 'Có món hoặc trạng thái bill thay đổi lúc thanh toán. Vui lòng kiểm tra lại toàn bộ món và số tiền trước khi chốt.', 'warning');
         return false;
       }
 
       setSelectedTable(null);
-      fetchTables();
+      fetchTables(snapshot.groupTableIds);
       return true;
     } catch (error) {
       console.error('[completeTable]', error);
@@ -1354,7 +1352,7 @@ export default function TablesPage() {
         await refreshOrderTotalFromItems(oid);
       }
       setPriceFixModal(null);
-      await fetchOrdersOnly();
+      await fetchOrdersForBills(orderIds);
       Swal.fire({
         icon: 'success',
         title: '✅ Đã cập nhật giá',
@@ -1421,14 +1419,14 @@ export default function TablesPage() {
       const remaining = await getFreshPaymentSnapshot(table);
       if (remaining.bills.length > 0) {
         Swal.fire('Bàn còn bill mới', 'Có món được gửi thêm lúc huỷ. Bàn vẫn mở để nhân viên kiểm tra.', 'warning');
-        await fetchTables();
+        await fetchTables([...snapshot.groupTableIds, ...remaining.groupTableIds]);
         return false;
       }
       const { error: tablesError } = await supabase.from('tables')
         .update({ status: 'available', occupied_at: null, merged_with: null })
         .in('id', snapshot.groupTableIds);
       if (tablesError) throw tablesError;
-      fetchTables();
+      fetchTables(snapshot.groupTableIds);
       return true;
     } catch (error) {
       console.error('[cancelTableGroup]', error);
@@ -1442,18 +1440,19 @@ export default function TablesPage() {
       .update({ status: 'cancelled', payment_method: 'cancelled', ...cancelStamp() })
       .eq('id', orderId)
       .in('status', OPEN_BILL_STATUSES)
-      .select('id');
+      .select('id, table_id');
     if (error || !data?.length) {
       Swal.fire('Chưa huỷ được bill', error?.message || 'Bill đã đổi trạng thái. Vui lòng đồng bộ lại.', 'error');
       return false;
     }
     // Keep the source table occupied. Releasing it here can hide another open
     // bill in the merged group, including one that reached the kitchen just now.
-    await fetchTables();
+    await fetchTables(data[0].table_id ? [data[0].table_id] : null);
     return true;
   }
 
   async function moveBillToTable(orderId, targetTable) {
+    const sourceTableIds = getCachedOrderTableIds(ordersStateRef.current, [orderId]);
     if (targetTable.status === 'available') {
       const { data: occupiedTarget, error: occupyError } = await supabase.from('tables')
         .update({ status: 'occupied', occupied_at: new Date().toISOString() })
@@ -1475,7 +1474,7 @@ export default function TablesPage() {
       return false;
     }
     // Do not release the old group from a stale browser snapshot.
-    await fetchTables();
+    await fetchTables(sourceTableIds ? [...sourceTableIds, targetTable.id] : null);
     return true;
   }
 
@@ -1846,7 +1845,7 @@ export default function TablesPage() {
 
       setReviewModal(null);
       await fetchReviewRequests();
-      fetchOrdersOnly();
+      fetchOrdersForBills([targetOrderId]);
 
       Swal.fire({
         icon: 'success', title: 'Đã duyệt',
@@ -2014,7 +2013,7 @@ export default function TablesPage() {
       }
 
       syncOrderPromotions(targetOrderId); // đồng bộ promo_gift_unlocked cho trang khách — không cần đợi
-      await fetchOrdersOnly();
+      await fetchOrdersForBills([targetOrderId]);
     } finally {
       setGiftPickerSaving(null);
     }
@@ -2053,7 +2052,7 @@ export default function TablesPage() {
         Swal.fire({ icon: 'error', title: 'Lỗi mạng', text: 'Không xoá được quà, thử lại giúp ạ.' });
         return;
       }
-      await fetchOrdersOnly();
+      await fetchOrdersForBills([orderId]);
       return;
     }
 
@@ -2066,7 +2065,7 @@ export default function TablesPage() {
     } catch (error) {
       Swal.fire('Chưa xoá được món', error.message || 'Vui lòng thử lại.', 'error');
     } finally {
-      await fetchOrdersOnly();
+      await fetchOrdersForBills([orderId]);
     }
   }
 
@@ -2099,7 +2098,7 @@ export default function TablesPage() {
     } catch (error) {
       Swal.fire('Chưa sửa được số lượng', error.message || 'Vui lòng thử lại.', 'error');
     } finally {
-      await fetchOrdersOnly();
+      await fetchOrdersForBills([orderId]);
     }
   }
 
@@ -2112,7 +2111,7 @@ export default function TablesPage() {
       await refreshOrderTotalFromItems(orderId);
     } catch (error) {
       Swal.fire('Chưa sửa được giá', error.message || 'Vui lòng thử lại.', 'error');
-      await fetchOrdersOnly();
+      await fetchOrdersForBills([orderId]);
       return;
     }
     setEditItemPrice(null);
@@ -2120,7 +2119,7 @@ export default function TablesPage() {
     setDiscountValue(0);
     setDiscountMode('VND');
     setCustomNewPrice(null);
-    await fetchOrdersOnly();
+    await fetchOrdersForBills([orderId]);
   }
 
   // Tiền món tính giảm % (giống vòng xoay): chỉ dòng có giá DƯƠNG và không phải
@@ -2180,7 +2179,7 @@ export default function TablesPage() {
         setAdjustBusy(false); return;
       }
       await refreshOrderTotalFromItems(targetOrderId);
-      await fetchOrdersOnly();
+      await fetchOrdersForBills([targetOrderId]);
       setAdjustOpen(false); // dialog unmount → tự xoá ô nhập, không cần reset state ở cha
       Swal.fire({ icon: 'success', title: 'Đã cập nhật bill', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500 });
     } catch (e) {
@@ -2202,7 +2201,7 @@ export default function TablesPage() {
       await refreshOrderTotalFromItems(orderId);
     } catch (error) {
       Swal.fire('Chưa sửa được món', error.message || 'Vui lòng thử lại.', 'error');
-      await fetchOrdersOnly();
+      await fetchOrdersForBills([orderId]);
       return;
     }
 
@@ -2210,7 +2209,7 @@ export default function TablesPage() {
     setOptionModalItem(null);
     setSelectedOptions({});
     setOptionNote('');
-    await fetchOrdersOnly();
+    await fetchOrdersForBills([orderId]);
   }
 
   const decreaseItemFromMenu = async (menuItemId) => {
@@ -2418,7 +2417,7 @@ export default function TablesPage() {
       setDraftCart([]);
       setAddingToOrder(null);
       setAddItemSearch('');
-      fetchOrdersOnly();
+      fetchOrdersOnly([selectedTable.id]);
     } catch (err) {
       console.error('[confirmDraft] error:', err);
     } finally {
@@ -2462,7 +2461,7 @@ export default function TablesPage() {
       : (orderNow?.order_items || []).reduce((s, i) => s + i.unit_price * i.quantity, 0) + menuItem.price * qty;
     await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
     syncOrderPromotions(orderId);
-    fetchOrdersOnly();
+    fetchOrdersForBills([orderId]);
   }
 
   function handleConfirmOptions() {
@@ -2577,7 +2576,7 @@ export default function TablesPage() {
       .update({ status: 'occupied', occupied_at: new Date().toISOString() })
       .eq('id', hostId);
 
-    fetchTables();
+    fetchTables([hostId, ...selectedIds]);
     setSelectedTable(null);
 
     const names = selectedIds.map(sid => {
@@ -2613,7 +2612,7 @@ export default function TablesPage() {
       Swal.fire('Chưa tách được bàn', 'Không lưu được trạng thái bàn. Vui lòng thử lại.', 'error');
       return;
     }
-    fetchTables();
+    fetchTables([selectedTable.id, selectedTable.merged_with]);
     setSelectedTable(null);
     Swal.fire({
       title: 'Đã tách bàn!',
@@ -2666,7 +2665,7 @@ export default function TablesPage() {
       return;
     }
 
-    fetchTables();
+    fetchTables([selectedTable.id]);
     Swal.fire({
       title: 'Thành công',
       text: 'Đã gộp đơn và dồn các món! (Các bill phụ đã chuyển sang Huỷ)',
