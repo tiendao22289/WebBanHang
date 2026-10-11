@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export const STATUS_COOKIE = process.env.APP_ENV === 'dev' ? 'local_dev_admin_session' : 'local_admin_session';
-export const SESSION_SECONDS = 8 * 60 * 60;
+export const SESSION_SECONDS = 90 * 24 * 60 * 60;
 
 export function signSession(staffId, secret, now = Date.now()) {
   const payload = Buffer.from(JSON.stringify({ staffId, exp: Math.floor(now / 1000) + SESSION_SECONDS })).toString('base64url');

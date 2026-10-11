@@ -7,10 +7,20 @@ export const dynamic = 'force-dynamic';
 const attempts = new Map();
 const headers = { 'Cache-Control': 'no-store' };
 
+function persistSession(response, request, staffId) {
+  response.cookies.set(STATUS_COOKIE, signSession(staffId, getStatusSecret()), {
+    httpOnly: true, sameSite: 'strict', path: '/', maxAge: SESSION_SECONDS,
+    secure: request.headers.get('x-forwarded-proto') === 'https' || new URL(request.url).protocol === 'https:',
+  });
+  return response;
+}
+
 export async function GET(request) {
   try {
     const session = await getStaffSession(request);
-    return NextResponse.json(session.user ? { user: session.user } : { error: 'Phiên đăng nhập không còn hiệu lực.' }, { status: session.code, headers });
+    const response = NextResponse.json(session.user ? { user: session.user } : { error: 'Phiên đăng nhập không còn hiệu lực.' }, { status: session.code, headers });
+    // Renew only after the signed cookie and current staff record are verified.
+    return session.code === 200 && session.user ? persistSession(response, request, session.user.id) : response;
   } catch { return NextResponse.json({ error: 'Không kiểm tra được phiên đăng nhập.' }, { status: 503, headers }); }
 }
 
@@ -39,10 +49,7 @@ export async function POST(request) {
       .eq('phone', phone.trim()).eq('pin', pin.trim()).single();
     if (error || !data) return NextResponse.json({ error: 'Sai số điện thoại hoặc mã PIN!' }, { status: 401, headers });
     const response = NextResponse.json({ user: data }, { headers });
-    response.cookies.set(STATUS_COOKIE, signSession(data.id, getStatusSecret()), {
-      httpOnly: true, sameSite: 'strict', path: '/', maxAge: SESSION_SECONDS,
-      secure: request.headers.get('x-forwarded-proto') === 'https' || new URL(request.url).protocol === 'https:',
-    });
+    persistSession(response, request, data.id);
     attempts.delete(address);
     return response;
   } catch { return NextResponse.json({ error: 'Không thể đăng nhập lúc này.' }, { status: 503, headers }); }

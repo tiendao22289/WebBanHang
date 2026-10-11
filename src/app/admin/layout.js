@@ -73,7 +73,7 @@ export default function AdminLayout({ children }) {
           localStorage.setItem('staffUser', JSON.stringify(result.user));
           setUser(result.user);
         } else {
-          localStorage.removeItem('staffUser');
+          if (response.status === 401) localStorage.removeItem('staffUser');
           if (response.status === 503) setErr('Không kiểm tra được phiên đăng nhập. Vui lòng thử lại.');
           else if (saved) setErr('Phiên đăng nhập cũ cần cập nhật. Vui lòng đăng nhập lại một lần.');
         }

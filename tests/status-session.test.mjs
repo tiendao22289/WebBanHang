@@ -13,6 +13,15 @@ test('signed sessions are valid only before expiry and with correct key', () => 
   assert.equal(verifySession('forged-admin-id', secret), null);
   assert.equal(verifySession(signSession('not-a-uuid', secret), secret), null);
 });
+test('remembered sessions survive reopening the app the next day and expire after 90 days', () => {
+  const now = Date.UTC(2026, 9, 11, 12);
+  const token = signSession(id, secret, now);
+  assert.equal(SESSION_SECONDS, 90 * 24 * 60 * 60);
+  for (const days of [1, 7, 30, 89]) {
+    assert.equal(verifySession(token, secret, now + days * 24 * 60 * 60 * 1000)?.staffId, id);
+  }
+  assert.equal(verifySession(token, secret, now + SESSION_SECONDS * 1000), null);
+});
 test('logs redact known secrets, JWT, PAT, passwords and connection credentials', () => {
   const log = redactLog('secret-known eyJabc.abc.def sbp_abcdef password=foo postgres://postgres:pass@localhost token="hidden value"', ['secret-known']);
   for (const value of ['secret-known', 'eyJabc', 'sbp_abcdef', 'password=foo', ':pass@', 'hidden value']) assert.ok(!log.includes(value));
