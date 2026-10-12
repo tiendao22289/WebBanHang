@@ -17,7 +17,7 @@ import {
   X,
   QrCode,
   Star,
-  Activity,
+  History,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './admin.css';
@@ -33,7 +33,7 @@ const ALL_NAV = [
   { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
   { href: '/admin/stats', label: 'Thống kê', icon: BarChart3 },
   { href: '/admin/settings', label: 'Cài đặt', icon: Settings, adminOnly: true },
-  { href: '/admin/status', label: 'Trạng thái hệ thống', icon: Activity, adminOnly: true },
+  { href: '/admin/logs', label: 'Lịch sử bàn', icon: History, adminOnly: true },
 ];
 
 const STAFF_ALLOWED_HREFS = ['/admin/tables', '/admin/payroll', '/admin/qr'];
@@ -211,6 +211,7 @@ export default function AdminLayout({ children }) {
   }
 
   // ── Logged in — render layout ─────────────────────────────────────────────
+  if (user.role !== 'admin' && pathname.startsWith('/admin/logs')) return null;
   const navItems = user.role === 'admin' ? ALL_NAV : STAFF_NAV;
 
   return (
@@ -246,10 +247,10 @@ export default function AdminLayout({ children }) {
                 key={item.href}
                 href={item.href}
                 className={`nav-item ${isActive ? 'active' : ''}`}
-                title={collapsed ? item.label : ''}
+                title={item.label}
+                aria-label={item.label}
               >
                 <Icon size={20} />
-                {!collapsed && <span>{item.label}</span>}
               </Link>
             );
           })}

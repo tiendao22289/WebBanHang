@@ -185,6 +185,7 @@
 .nav-item {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-lg);
@@ -253,6 +254,10 @@
    ══════════════════════════════════════════ */
 @media (max-width: 768px) {
 
+  body:has(.admin-layout) {
+    padding-bottom: 0 !important;
+  }
+
   /* Hide hamburger toggle — mobile uses bottom tab bar */
   .sidebar-toggle {
     display: none;
@@ -268,13 +273,15 @@
   }
 
   .admin-layout {
+    --admin-bottom-nav-height: 53px;
     flex-direction: column;
+    min-height: calc(100dvh - env(safe-area-inset-top, 0px));
   }
 
   /* Sidebar becomes bottom tab bar */
   .sidebar {
     width: 100%;
-    height: auto;
+    height: var(--admin-bottom-nav-height);
     position: fixed;
     top: auto;
     left: 0;
@@ -287,8 +294,7 @@
     overflow: visible;
     z-index: 200;
     padding: 0;
-    /* Safe area for iPhone notch/home indicator */
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-bottom: 0;
   }
 
   .sidebar-header,
@@ -352,8 +358,12 @@
   /* Main content: no sidebar margin, add bottom padding for tab bar */
   .admin-main {
     margin-left: 0;
-    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: var(--admin-bottom-nav-height);
     min-height: 100vh;
-    min-height: 100dvh;
+    min-height: calc(100dvh - env(safe-area-inset-top, 0px));
+  }
+
+  .admin-main .notes-container {
+    min-height: calc(100dvh - env(safe-area-inset-top, 0px) - var(--admin-bottom-nav-height));
   }
 }

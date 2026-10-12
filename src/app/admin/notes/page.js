@@ -89,6 +89,23 @@ export default function StaffNotesPage() {
   });
   const fabDrag = useRef({ dragging: false, moved: false, startX: 0, startY: 0, origRight: 0, origBottom: 0 });
   const editFormRef = useRef(null);
+  const [noteButtonBottom, setNoteButtonBottom] = useState(76);
+
+  useEffect(() => {
+    const menu = document.querySelector('.admin-layout > .sidebar');
+    if (!menu) return;
+    const updatePosition = () => setNoteButtonBottom(window.innerWidth <= 768
+      ? Math.max(76, Math.ceil(menu.getBoundingClientRect().height) + 12)
+      : 76);
+    const observer = new ResizeObserver(updatePosition);
+    observer.observe(menu, { box: 'border-box' });
+    window.addEventListener('resize', updatePosition);
+    updatePosition();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, []);
 
   const fetchEmpData = async (staffId) => {
     const today = new Date().toISOString().split('T')[0];
@@ -2178,9 +2195,11 @@ export default function StaffNotesPage() {
       {currentUser.role === 'admin' && (
         <button
           onClick={() => setShowAddModal(true)}
+          aria-label="Thêm mới"
+          title="Thêm mới"
           style={{
             position: 'fixed',
-            bottom: 76,
+            bottom: `max(${noteButtonBottom}px, calc(76px + env(safe-area-inset-bottom, 0px)))`,
             right: 20,
             width: 56,
             height: 56,
@@ -2193,14 +2212,14 @@ export default function StaffNotesPage() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            zIndex: 200,
+            zIndex: 210,
             fontSize: 28,
             fontWeight: 300,
             lineHeight: 1,
             touchAction: 'manipulation',
           }}
         >
-          +
+          <Plus size={28} />
         </button>
       )}
 
