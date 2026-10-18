@@ -73,7 +73,7 @@ function database(spin = spinTemplate) {
   // Mock sendOaText: ghi lại tin đã gửi để kiểm "nhắn đúng 1 lần".
   const sentMessages = [];
   const sendOaText = async (_sb, userId, text) => { sentMessages.push({ userId, text }); return { ok: true }; };
-  const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyForSpin, grantLuckySpinManually, removeLuckyGiftItem, listAdminLuckySpins, markFollowTapped, autoApproveTappedSpin })`, {
+  const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyForSpin, grantLuckySpinManually, removeLuckyGiftItem, listAdminLuckySpins, markFollowTapped, autoApproveTappedSpin, moveLuckySpinsWithBill })`, {
     ...wheel, sendGiftItemPrintJob: print, sendOaText, console: { log() {}, error() {} }, Date, Set,
   });
   return { state, fail, db, sentMessages, ...funcs };
@@ -447,4 +447,44 @@ test('admin poll retries a missing auto gift print job without duplicating the g
   assert.equal(row.printStatus, 'pending');
   assert.equal(h.state.order_items.filter(i => i.is_gift).length, 1);
   assert.equal(h.state.print_jobs.length, 1);
+});
+
+test('moving the whole bill to another table carries the pending wheel spin along', async () => {
+  const h = database({ ...spinTemplate, status: 'waiting_follow', applied_order_id: null });
+  h.state.tables.push({ id: 'table2', table_type: 'normal', occupied_at: h.state.tables[0].occupied_at });
+  h.state.orders[0].table_id = 'table2';
+  const result = await h.moveLuckySpinsWithBill(h.db, { orderId: 'order', sourceTableIds: ['table'], targetTableId: 'table2' });
+  assert.equal(result.moved, 1);
+  assert.equal(h.state.lucky_spins[0].host_table_id, 'table2');
+  assert.equal(h.state.lucky_spins[0].table_id, 'table2');
+  assert.equal(h.state.lucky_spins[0].created_at, now);
+  const admin = await h.listAdminLuckySpins(h.db);
+  assert.equal(admin[0].hostTableId, 'table2');
+});
+
+test('a partial move keeps the group spin on the old table but moves the gift applied to that bill', async () => {
+  const h = database({ ...spinTemplate, status: 'waiting_follow', applied_order_id: null });
+  h.state.lucky_spins.push({ ...structuredClone(spinTemplate), id: 'applied-spin', applied_order_id: 'order' });
+  h.state.tables.push({ id: 'table2', table_type: 'normal', occupied_at: now });
+  h.state.orders.push({ id: 'other', table_id: 'table', status: 'pending', created_at: now });
+  h.state.orders[0].table_id = 'table2';
+  await h.moveLuckySpinsWithBill(h.db, { orderId: 'order', sourceTableIds: ['table'], targetTableId: 'table2' });
+  assert.equal(h.state.lucky_spins.find(s => s.id === 'spin').host_table_id, 'table');
+  assert.equal(h.state.lucky_spins.find(s => s.id === 'applied-spin').host_table_id, 'table2');
+});
+
+test('moving into a table seated after the spin keeps the spin inside that table session', async () => {
+  const seated = new Date(Date.now() + 1000).toISOString();
+  const h = database({ ...spinTemplate, status: 'waiting_follow', applied_order_id: null });
+  h.state.tables.push({ id: 'table2', table_type: 'normal', occupied_at: seated });
+  h.state.orders[0].table_id = 'table2';
+  await h.moveLuckySpinsWithBill(h.db, { orderId: 'order', sourceTableIds: ['table'], targetTableId: 'table2' });
+  assert.equal(h.state.lucky_spins[0].created_at, seated);
+});
+
+test('lucky spin move refuses a bill that is not on the target table', async () => {
+  const h = database({ ...spinTemplate, status: 'waiting_follow', applied_order_id: null });
+  const result = await h.moveLuckySpinsWithBill(h.db, { orderId: 'order', sourceTableIds: ['table'], targetTableId: 'table2' });
+  assert.equal(result.ok, false);
+  assert.equal(h.state.lucky_spins[0].host_table_id, 'table');
 });

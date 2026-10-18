@@ -1444,8 +1444,13 @@ export default function TablesPage() {
   async function moveBillToTable(orderId, targetTable) {
     const sourceTableIds = getCachedOrderTableIds(ordersStateRef.current, [orderId]);
     if (targetTable.status === 'available') {
+      // Bàn trống nhận khách chuyển sang: giữ mốc ngồi của khách ở bàn cũ, để
+      // lượt quay vòng xoay của khách vẫn thuộc "phiên đang ngồi" ở bàn mới.
+      const sourceSeatedAt = (tablesStateRef.current || [])
+        .filter(t => sourceTableIds?.includes(t.id))
+        .map(t => t.occupied_at).filter(Boolean).sort()[0];
       const { data: occupiedTarget, error: occupyError } = await supabase.from('tables')
-        .update({ status: 'occupied', occupied_at: new Date().toISOString() })
+        .update({ status: 'occupied', occupied_at: sourceSeatedAt || new Date().toISOString() })
         .eq('id', targetTable.id)
         .eq('status', 'available')
         .select('id');
@@ -1463,8 +1468,27 @@ export default function TablesPage() {
       Swal.fire('Chưa chuyển được bill', error?.message || 'Bill đã đổi trạng thái. Vui lòng đồng bộ lại.', 'error');
       return false;
     }
+    // Lượt quay vòng xoay gắn theo bàn, không theo bill → dời sang bàn mới.
+    let luckyMoved = true;
+    try {
+      const res = await fetch('/api/admin/lucky-move-table', {
+        method: 'POST', headers: staffApiHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ orderId, sourceTableIds: sourceTableIds || [], targetTableId: targetTable.id }),
+      });
+      const moved = await res.json().catch(() => ({}));
+      if (!moved.ok) throw new Error(moved.message || `HTTP ${res.status}`);
+    } catch (e) {
+      console.error('[moveBillToTable] lucky spins', e);
+      luckyMoved = false;
+    }
+    luckyStatusLastRef.current = 0;
     // Do not release the old group from a stale browser snapshot.
     await fetchTables(sourceTableIds ? [...sourceTableIds, targetTable.id] : null);
+    if (!luckyMoved) {
+      // false chỉ để nơi gọi không đè cảnh báo bằng toast "Thành công".
+      Swal.fire('Đã chuyển bill', 'Nhưng chưa dời được lượt quay vòng xoay sang bàn mới. Kiểm tra mục Vòng xoay của bàn cũ.', 'warning');
+      return false;
+    }
     return true;
   }
 

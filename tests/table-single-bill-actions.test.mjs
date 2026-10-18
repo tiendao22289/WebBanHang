@@ -16,10 +16,21 @@ function harness(source) {
     fetchTables: async ids => { calls.push(`refresh:${ids?.join(',') || 'all'}`); },
     getCachedOrderTableIds,
     ordersStateRef: { current: { 'table-1': [{ id: 'order-1', table_id: 'table-1' }] } },
+    tablesStateRef: { current: [{ id: 'table-1', occupied_at: '2026-10-18T05:00:00.000Z' }] },
+    luckyStatusLastRef: { current: 1 },
+    staffApiHeaders: headers => headers,
+    fetch: async (url, init) => {
+      calls.push(`${url}:${init.body}`);
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    },
     Swal: { fire: () => calls.push('error') },
     supabase: { from(name) {
       const query = {
-        update: () => { calls.push(`${name}.update`); return query; },
+        update: values => {
+          calls.push(`${name}.update`);
+          if (values.occupied_at) calls.push(`occupied_at:${values.occupied_at}`);
+          return query;
+        },
         eq: () => query,
         in: (column, values) => {
           if (column === 'status') calls.push(`statuses:${values.join(',')}`);
@@ -42,5 +53,8 @@ test('cancelling one bill never releases a possibly unpaid table group', async (
 test('moving a bill occupies its destination before changing the order', async () => {
   const { run, calls } = harness(moveSource);
   assert.equal(await run('order-1', { id: 'table-2', status: 'available' }), true);
-  assert.deepEqual(calls, ['tables.update', 'orders.update', 'statuses:pending,preparing,completed', 'refresh:table-1,table-2']);
+  assert.deepEqual(calls, ['tables.update', 'occupied_at:2026-10-18T05:00:00.000Z', 'orders.update',
+    'statuses:pending,preparing,completed',
+    '/api/admin/lucky-move-table:{"orderId":"order-1","sourceTableIds":["table-1"],"targetTableId":"table-2"}',
+    'refresh:table-1,table-2']);
 });

@@ -931,6 +931,87 @@ export async function listAdminLuckySpins(supabase, { reconcile = false } = {}) 
 }
 
 /**
+ * Chuyển bill sang bàn khác → lượt quay vòng xoay phải đi theo khách.
+ *
+ * Lượt quay gắn theo host_table_id, không theo bill, nên trước đây chuyển bill
+ * xong lượt quay vẫn nằm ở bàn cũ: badge kẹt trên bàn cũ, còn quà chờ Quan tâm
+ * thì tìm bill ở bàn cũ (đã trống) nên không bao giờ vào được bill.
+ *
+ * Quy tắc:
+ *  - Lượt đã ghi vào CHÍNH bill vừa chuyển (applied_order_id) luôn đi theo.
+ *  - Lượt chưa vào bill của phiên đang ngồi chỉ đi theo khi nhóm bàn cũ không
+ *    còn bill mở nào (cả khách đã sang bàn mới). Còn bill khác ở lại thì lượt
+ *    quay vẫn thuộc nhóm bàn cũ.
+ *  - Bàn đích đã có khách từ SAU lúc quay thì dời created_at của lượt về mốc
+ *    ngồi của bàn đích, để lọc "phiên đang ngồi" không giấu/chặn lượt đó.
+ */
+export async function moveLuckySpinsWithBill(supabase, { orderId, sourceTableIds, targetTableId }) {
+  const { data: order, error: orderError } = await supabase.from('orders')
+    .select('id, table_id').eq('id', orderId).maybeSingle();
+  if (orderError) throw orderError;
+  if (!order || order.table_id !== targetTableId) return { ok: false, message: 'Bill chưa nằm ở bàn đích.' };
+
+  const { data: target, error: targetError } = await supabase.from('tables')
+    .select('id, merged_with, occupied_at, table_type').eq('id', targetTableId).maybeSingle();
+  if (targetError) throw targetError;
+  if (!target) return { ok: false, message: 'Không tìm thấy bàn đích.' };
+  let targetHost = target;
+  if (target.merged_with) {
+    const { data, error } = await supabase.from('tables')
+      .select('id, merged_with, occupied_at, table_type').eq('id', target.merged_with).maybeSingle();
+    if (error) throw error;
+    if (data) targetHost = data;
+  }
+
+  const ids = [...new Set((sourceTableIds || []).filter(id => id && id !== targetTableId))];
+  const { data: sources, error: sourceError } = ids.length
+    ? await supabase.from('tables').select('id, merged_with, occupied_at, table_type').in('id', ids)
+    : { data: [], error: null };
+  if (sourceError) throw sourceError;
+  const sourceHostIds = [...new Set((sources || []).map(t => t.merged_with || t.id))]
+    .filter(id => id !== targetHost.id);
+
+  const start = startOfVnTodayISO();
+  const toMove = new Map();
+  const { data: appliedRows, error: appliedError } = await supabase.from('lucky_spins')
+    .select('id, host_table_id, created_at').eq('applied_order_id', orderId).gte('created_at', start);
+  if (appliedError) throw appliedError;
+  (appliedRows || []).forEach(s => { if (s.host_table_id !== targetHost.id) toMove.set(s.id, s); });
+
+  for (const hostId of sourceHostIds) {
+    const [{ data: host, error: hostError }, { data: members, error: memberError }] = await Promise.all([
+      supabase.from('tables').select('id, occupied_at, table_type').eq('id', hostId).maybeSingle(),
+      supabase.from('tables').select('id').eq('merged_with', hostId),
+    ]);
+    if (hostError) throw hostError;
+    if (memberError) throw memberError;
+    if (!host || host.table_type === 'takeaway') continue;
+    const groupIds = [hostId, ...(members || []).map(t => t.id)];
+    const { data: openBills, error: billError } = await supabase.from('orders')
+      .select('id').in('table_id', groupIds).in('status', ['pending', 'preparing', 'completed']).limit(1);
+    if (billError) throw billError;
+    if (openBills?.length) continue;
+    const { data: rows, error } = await supabase.from('lucky_spins')
+      .select('id, host_table_id, created_at').eq('host_table_id', hostId)
+      .in('status', ['waiting_follow', 'applied', 'blocked']).gte('created_at', start);
+    if (error) throw error;
+    (rows || [])
+      .filter(s => !host.occupied_at || new Date(s.created_at) >= new Date(host.occupied_at))
+      .forEach(s => toMove.set(s.id, s));
+  }
+
+  const sessionStart = targetHost.table_type !== 'takeaway' && targetHost.occupied_at
+    ? new Date(targetHost.occupied_at) : null;
+  for (const s of toMove.values()) {
+    const patch = { host_table_id: targetHost.id, table_id: targetTableId };
+    if (sessionStart && new Date(s.created_at) < sessionStart) patch.created_at = sessionStart.toISOString();
+    const { error } = await supabase.from('lucky_spins').update(patch).eq('id', s.id);
+    if (error) throw error;
+  }
+  return { ok: true, moved: toMove.size };
+}
+
+/**
  * Record the web tap durably before auto approval. A failed write is retryable.
  */
 export async function markFollowTapped(supabase, spinId) {
