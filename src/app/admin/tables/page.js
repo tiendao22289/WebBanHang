@@ -427,6 +427,20 @@ export default function TablesPage() {
     return `KHÁCH: ${order?.customer_name || 'Khách'}`;
   };
 
+  // Giờ khách gọi bill (giờ VN). Bill từ ngày khác thì kèm ngày/tháng.
+  const orderTimeLabel = (order) => {
+    if (!order?.created_at) return '';
+    const at = new Date(order.created_at);
+    const time = at.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Ho_Chi_Minh' });
+    const day = d => d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', timeZone: 'Asia/Ho_Chi_Minh' });
+    return day(at) === day(new Date()) ? time : `${time} ${day(at)}`;
+  };
+  const renderOrderTime = (order) => orderTimeLabel(order) && (
+    <span title="Giờ gọi món" style={{ fontSize: '0.72rem', fontWeight: 700, color: '#475569', background: '#f1f5f9', borderRadius: 6, padding: '1px 6px', whiteSpace: 'nowrap' }}>
+      🕐 {orderTimeLabel(order)}
+    </span>
+  );
+
   // Ghi nhật ký MỞ BÀN — mỗi lần nhân viên mở 1 bàn (để biết ai xem cuối cùng)
   useEffect(() => {
     if (!selectedTable) return;
@@ -3222,6 +3236,7 @@ export default function TablesPage() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: '#f8fafc', borderBottom: '1px solid #e5e7eb', borderTop: billIdx > 0 ? '2px solid #e5e7eb' : 'none' }}>
                           <span style={{ background: '#2563eb', color: 'white', borderRadius: 10, padding: '1px 8px', fontSize: '0.7rem', fontWeight: 700 }}>#{billIdx + 1}</span>
                           <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#111827' }}>👤 {orderWhoLabel(order)}</span>
+                          {renderOrderTime(order)}
                           <span style={{
                             fontSize: '0.68rem', fontWeight: 700, padding: '2px 7px', borderRadius: 20,
                             background: order.status === 'pending' ? '#fef3c7' : '#dbeafe',
@@ -4406,6 +4421,7 @@ export default function TablesPage() {
                           {order.customer_phone && order.customer_phone !== 'Quản lý' && (
                             <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>· {order.customer_phone}</span>
                           )}
+                          {renderOrderTime(order)}
                           {/* Status badge */}
                           <span style={{
                             fontSize: '0.68rem', fontWeight: 700, padding: '2px 7px', borderRadius: 20,
