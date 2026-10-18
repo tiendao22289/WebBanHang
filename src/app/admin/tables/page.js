@@ -1441,6 +1441,38 @@ export default function TablesPage() {
     return true;
   }
 
+  // Bàn cũ hết bill sau khi chuyển → trả về trống. Đọc lại từ server, không
+  // tin snapshot trên máy (có thể chưa thấy món khách vừa gửi), và kiểm lại
+  // sau khi giải phóng: có bill mới chen vào thì mở lại bàn như cũ.
+  async function releaseTableGroupIfEmpty(tableId, keepTableId) {
+    try {
+      const { data: table, error: tableError } = await supabase.from('tables')
+        .select('id, merged_with, table_type').eq('id', tableId).maybeSingle();
+      if (tableError || !table || table.table_type === 'takeaway') return;
+      const hostId = table.merged_with || table.id;
+      const { data: group, error: groupError } = await supabase.from('tables')
+        .select('id, status, occupied_at, merged_with').or(`id.eq.${hostId},merged_with.eq.${hostId}`);
+      if (groupError || !group?.length) return;
+      const groupIds = group.map(t => t.id);
+      if (groupIds.includes(keepTableId)) return;
+      const hasOpenBill = async () => {
+        const { data, error } = await supabase.from('orders')
+          .select('id').in('table_id', groupIds).in('status', OPEN_BILL_STATUSES).limit(1);
+        return !!error || !!data?.length;
+      };
+      if (await hasOpenBill()) return;
+      const { error: releaseError } = await supabase.from('tables')
+        .update({ status: 'available', occupied_at: null, merged_with: null })
+        .in('id', groupIds).eq('status', 'occupied');
+      if (releaseError) return;
+      if (!(await hasOpenBill())) return;
+      await Promise.all(group.filter(t => t.status === 'occupied').map(t => supabase.from('tables')
+        .update({ status: 'occupied', occupied_at: t.occupied_at, merged_with: t.merged_with }).eq('id', t.id)));
+    } catch (e) {
+      console.error('[releaseTableGroupIfEmpty]', e);
+    }
+  }
+
   async function moveBillToTable(orderId, targetTable) {
     const sourceTableIds = getCachedOrderTableIds(ordersStateRef.current, [orderId]);
     if (targetTable.status === 'available') {
@@ -1482,7 +1514,7 @@ export default function TablesPage() {
       luckyMoved = false;
     }
     luckyStatusLastRef.current = 0;
-    // Do not release the old group from a stale browser snapshot.
+    for (const sourceId of sourceTableIds || []) await releaseTableGroupIfEmpty(sourceId, targetTable.id);
     await fetchTables(sourceTableIds ? [...sourceTableIds, targetTable.id] : null);
     if (!luckyMoved) {
       // false chỉ để nơi gọi không đè cảnh báo bằng toast "Thành công".

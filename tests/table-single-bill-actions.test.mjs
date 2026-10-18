@@ -5,8 +5,9 @@ import vm from 'node:vm';
 import { getCachedOrderTableIds } from '../src/lib/tableOrderRefresh.mjs';
 
 const page = readFileSync(new URL('../src/app/admin/tables/page.js', import.meta.url), 'utf8');
-const cancelSource = page.slice(page.indexOf('  async function cancelSingleBill('), page.indexOf('  async function moveBillToTable('));
+const cancelSource = page.slice(page.indexOf('  async function cancelSingleBill('), page.indexOf('  // Bàn cũ hết bill sau khi chuyển'));
 const moveSource = page.slice(page.indexOf('  async function moveBillToTable('), page.indexOf('  async function getOrGenerateBillCode('));
+const releaseSource = page.slice(page.indexOf('  async function releaseTableGroupIfEmpty('), page.indexOf('  async function moveBillToTable('));
 
 function harness(source) {
   const calls = [];
@@ -18,6 +19,7 @@ function harness(source) {
     ordersStateRef: { current: { 'table-1': [{ id: 'order-1', table_id: 'table-1' }] } },
     tablesStateRef: { current: [{ id: 'table-1', occupied_at: '2026-10-18T05:00:00.000Z' }] },
     luckyStatusLastRef: { current: 1 },
+    releaseTableGroupIfEmpty: async (id, keep) => { calls.push(`release:${id}:${keep}`); },
     staffApiHeaders: headers => headers,
     fetch: async (url, init) => {
       calls.push(`${url}:${init.body}`);
@@ -56,5 +58,81 @@ test('moving a bill occupies its destination before changing the order', async (
   assert.deepEqual(calls, ['tables.update', 'occupied_at:2026-10-18T05:00:00.000Z', 'orders.update',
     'statuses:pending,preparing,completed',
     '/api/admin/lucky-move-table:{"orderId":"order-1","sourceTableIds":["table-1"],"targetTableId":"table-2"}',
-    'refresh:table-1,table-2']);
+    'release:table-1:table-2', 'refresh:table-1,table-2']);
+});
+
+function releaseHarness({ tables, orders, lateOrder = false }) {
+  const state = { tables: structuredClone(tables), orders: structuredClone(orders) };
+  let orderReads = 0;
+  const supabase = { from(name) {
+    let op = 'read', values, conditions = [], single = false;
+    const q = {
+      select: () => q,
+      eq: (k, v) => { conditions.push(r => r[k] === v); return q; },
+      in: (k, vs) => { conditions.push(r => vs.includes(r[k])); return q; },
+      or: expr => {
+        const host = expr.match(/id\.eq\.([^,]+)/)[1];
+        conditions.push(r => r.id === host || r.merged_with === host);
+        return q;
+      },
+      limit: () => q,
+      maybeSingle: () => { single = true; return q; },
+      update: v => { op = 'update'; values = v; return q; },
+      then(resolve) {
+        if (name === 'orders' && op === 'read' && ++orderReads === 2 && lateOrder) {
+          state.orders.push({ id: 'late', table_id: 'table-4', status: 'pending' });
+        }
+        const rows = state[name].filter(r => conditions.every(c => c(r)));
+        if (op === 'update') rows.forEach(r => Object.assign(r, values));
+        resolve({ data: single ? rows[0] ?? null : structuredClone(rows), error: null });
+      },
+    };
+    return q;
+  } };
+  const run = vm.runInNewContext(`(${releaseSource.trim()})`, {
+    supabase, OPEN_BILL_STATUSES: ['pending', 'preparing', 'completed'], console: { error() {} },
+  });
+  return { run, state };
+}
+
+const seated = '2026-10-18T05:00:00.000Z';
+
+test('moving the last bill away frees the old table', async () => {
+  const h = releaseHarness({
+    tables: [{ id: 'table-4', status: 'occupied', occupied_at: seated, merged_with: null }],
+    orders: [{ id: 'moved', table_id: 'table-5', status: 'pending' }],
+  });
+  await h.run('table-4', 'table-5');
+  assert.deepEqual(h.state.tables[0], { id: 'table-4', status: 'available', occupied_at: null, merged_with: null });
+});
+
+test('the old table stays open while another bill is still on it', async () => {
+  const h = releaseHarness({
+    tables: [{ id: 'table-4', status: 'occupied', occupied_at: seated, merged_with: null }],
+    orders: [{ id: 'other', table_id: 'table-4', status: 'pending' }],
+  });
+  await h.run('table-4', 'table-5');
+  assert.equal(h.state.tables[0].status, 'occupied');
+});
+
+test('a merged group keeps open when its partner table still has a bill, or the bill moved inside it', async () => {
+  const tables = [
+    { id: 'table-4', status: 'occupied', occupied_at: seated, merged_with: null },
+    { id: 'table-6', status: 'occupied', occupied_at: seated, merged_with: 'table-4' },
+  ];
+  const withBill = releaseHarness({ tables, orders: [{ id: 'other', table_id: 'table-6', status: 'pending' }] });
+  await withBill.run('table-4', 'table-5');
+  assert.ok(withBill.state.tables.every(t => t.status === 'occupied'));
+  const inside = releaseHarness({ tables, orders: [] });
+  await inside.run('table-4', 'table-6');
+  assert.ok(inside.state.tables.every(t => t.status === 'occupied'));
+});
+
+test('a bill arriving while the table is freed reopens it with the original seat time', async () => {
+  const h = releaseHarness({
+    tables: [{ id: 'table-4', status: 'occupied', occupied_at: seated, merged_with: null }],
+    orders: [], lateOrder: true,
+  });
+  await h.run('table-4', 'table-5');
+  assert.deepEqual(h.state.tables[0], { id: 'table-4', status: 'occupied', occupied_at: seated, merged_with: null });
 });
