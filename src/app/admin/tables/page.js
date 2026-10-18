@@ -69,21 +69,6 @@ function isJobResolvedByReprint(job, allJobs) {
 function isUnresolvedBadJob(job, order) {
   return isPrintJobBad(job) && !isJobResolvedByReprint(job, order?.print_jobs || []);
 }
-// Lỗi "kẹt hàng đợi Windows" TỰ PHỤC HỒI (spooler thông là in ra) — KHÔNG phải
-// máy in hỏng. Nhận diện theo thông báo (có/không dấu đều bắt).
-function isAutoRecoverPrintError(msg) {
-  const m = (msg || '').toLowerCase();
-  return m.includes('kẹt') || m.includes('ket trong hang doi') || m.includes('hàng đợi') || m.includes('hang doi') || m.includes('giấy') || m.includes('giay');
-}
-// Bàn có CẦN nhân viên để mắt máy in không → chỉ để bật dấu đỏ ngoài thẻ bàn.
-// Bỏ qua: lệnh đã in lại xong, VÀ lệnh kẹt hàng đợi (tự phục hồi, phiếu vẫn ra)
-// — tránh báo đỏ oan khi máy in vẫn chạy bình thường. Vẫn báo đỏ với lệnh TREO
-// (pending quá lâu = PrintAgent tắt/rớt mạng) và lỗi khác chưa in lại.
-function needsPrintAttention(job, order) {
-  if (!isUnresolvedBadJob(job, order)) return false;
-  if (job.status === 'failed' && isAutoRecoverPrintError(job.error_message)) return false;
-  return true;
-}
 function isDrinkName(name) {
   const n = removeVietnameseTones(name || '');
   return DRINK_KEYWORDS.some(k => n.includes(k));
@@ -950,6 +935,22 @@ export default function TablesPage() {
     }
   }
 
+  // Kẹt hàng đợi Windows thường tự thông và phiếu vẫn ra, nhưng dòng 'failed'
+  // không tự đổi → thẻ bàn báo đỏ mãi. Nhân viên thấy phiếu đã ra thì bấm
+  // "Đã in" để tắt báo trên mọi máy (Realtime print_jobs), không in trùng.
+  async function markPrintJobPrinted(job, orderId) {
+    const { isConfirmed } = await Swal.fire({
+      title: 'Phiếu đã in ra?', text: `${printerNameOf(job.printer_id)}: tắt báo lỗi, không in lại.`,
+      icon: 'question', showCancelButton: true, confirmButtonText: 'Đã in', cancelButtonText: 'Huỷ',
+      confirmButtonColor: '#dc2626', reverseButtons: true,
+    });
+    if (!isConfirmed) return;
+    const { error } = await supabase.from('print_jobs')
+      .update({ status: 'done', error_message: 'Nhân viên xác nhận đã in' }).eq('id', job.id);
+    if (error) { Swal.fire('Lỗi', 'Không cập nhật được: ' + error.message, 'error'); return; }
+    fetchOrdersForBills([orderId || job.order_id, ...(job.order_ids || [])]);
+  }
+
   // Lý do lỗi in — rút gọn cho dễ đọc (giấu đoạn lỗi kỹ thuật dài vào tooltip).
   function shortPrintError(job) {
     if (job.status === 'pending') return 'máy in chưa nhận';
@@ -976,6 +977,10 @@ export default function TablesPage() {
               >
                 🖨️ <b>{printerNameOf(job.printer_id)}</b> · {shortPrintError(job)}
               </span>
+              <button onClick={() => markPrintJobPrinted(job, order.id)} title="Phiếu đã ra máy in — tắt báo lỗi, không in lại"
+                style={{ background: 'white', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 6, padding: '4px 8px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                Đã in
+              </button>
               <button onClick={() => reprintFailedJob(job, order.id)}
                 style={{ background: '#dc2626', color: 'white', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                 In lại
@@ -2885,7 +2890,7 @@ export default function TablesPage() {
           const groupColor = groupColorMap[hostIdCard] || null;
           const totalAmount = sumOrderItems(tableBills);
           const guestCount = tableBills.length;
-          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => needsPrintAttention(pj, o)));
+          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => isUnresolvedBadJob(pj, o)));
           // Bill của bàn đã dùng vòng xoay may mắn chưa — báo cho nhân viên biết,
           // vì mỗi bill chỉ được nhận 1 lần quà (xem /api/lucky/spin).
           const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelOutcome));
@@ -2947,7 +2952,7 @@ export default function TablesPage() {
                 {/* Icons share the heading's wrapping flow rather than reserving a separate column. */}
                 <div className="table-card-icons">
                 {hasPrintError && (
-                  <div style={{ background: '#fef2f2', color: '#dc2626', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #fecaca' }}>
+                  <div title="Có món chưa in được — mở bàn để In lại" style={{ background: '#fef2f2', color: '#dc2626', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #fecaca' }}>
                     <Printer size={12} strokeWidth={2} />
                   </div>
                 )}
@@ -3737,7 +3742,7 @@ export default function TablesPage() {
                             : reviewRequests.filter(r => r.host_table_id === alertHostId);
                           const tableBills = getTableGroupOrders(table, tables, orders);
                           const tableTotal = sumOrderItems(tableBills);
-                          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => needsPrintAttention(pj, o)));
+                          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => isUnresolvedBadJob(pj, o)));
                           const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelOutcome));
                           const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(tableBills) : { availableGiftSlots: 0, hasGiftInBill: false };
 
