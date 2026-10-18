@@ -69,21 +69,6 @@ function isJobResolvedByReprint(job, allJobs) {
 function isUnresolvedBadJob(job, order) {
   return isPrintJobBad(job) && !isJobResolvedByReprint(job, order?.print_jobs || []);
 }
-// Lỗi "kẹt hàng đợi Windows" TỰ PHỤC HỒI (spooler thông là in ra) — KHÔNG phải
-// máy in hỏng. Nhận diện theo thông báo (có/không dấu đều bắt).
-function isAutoRecoverPrintError(msg) {
-  const m = (msg || '').toLowerCase();
-  return m.includes('kẹt') || m.includes('ket trong hang doi') || m.includes('hàng đợi') || m.includes('hang doi') || m.includes('giấy') || m.includes('giay');
-}
-// Bàn có CẦN nhân viên để mắt máy in không → chỉ để bật dấu đỏ ngoài thẻ bàn.
-// Bỏ qua: lệnh đã in lại xong, VÀ lệnh kẹt hàng đợi (tự phục hồi, phiếu vẫn ra)
-// — tránh báo đỏ oan khi máy in vẫn chạy bình thường. Vẫn báo đỏ với lệnh TREO
-// (pending quá lâu = PrintAgent tắt/rớt mạng) và lỗi khác chưa in lại.
-function needsPrintAttention(job, order) {
-  if (!isUnresolvedBadJob(job, order)) return false;
-  if (job.status === 'failed' && isAutoRecoverPrintError(job.error_message)) return false;
-  return true;
-}
 function isDrinkName(name) {
   const n = removeVietnameseTones(name || '');
   return DRINK_KEYWORDS.some(k => n.includes(k));
@@ -950,6 +935,22 @@ export default function TablesPage() {
     }
   }
 
+  // Kẹt hàng đợi Windows thường tự thông và phiếu vẫn ra, nhưng dòng 'failed'
+  // không tự đổi → thẻ bàn báo đỏ mãi. Nhân viên thấy phiếu đã ra thì bấm
+  // "Đã in" để tắt báo trên mọi máy (Realtime print_jobs), không in trùng.
+  async function markPrintJobPrinted(job, orderId) {
+    const { isConfirmed } = await Swal.fire({
+      title: 'Phiếu đã in ra?', text: `${printerNameOf(job.printer_id)}: tắt báo lỗi, không in lại.`,
+      icon: 'question', showCancelButton: true, confirmButtonText: 'Đã in', cancelButtonText: 'Huỷ',
+      confirmButtonColor: '#dc2626', reverseButtons: true,
+    });
+    if (!isConfirmed) return;
+    const { error } = await supabase.from('print_jobs')
+      .update({ status: 'done', error_message: 'Nhân viên xác nhận đã in' }).eq('id', job.id);
+    if (error) { Swal.fire('Lỗi', 'Không cập nhật được: ' + error.message, 'error'); return; }
+    fetchOrdersForBills([orderId || job.order_id, ...(job.order_ids || [])]);
+  }
+
   // Lý do lỗi in — rút gọn cho dễ đọc (giấu đoạn lỗi kỹ thuật dài vào tooltip).
   function shortPrintError(job) {
     if (job.status === 'pending') return 'máy in chưa nhận';
@@ -976,6 +977,10 @@ export default function TablesPage() {
               >
                 🖨️ <b>{printerNameOf(job.printer_id)}</b> · {shortPrintError(job)}
               </span>
+              <button onClick={() => markPrintJobPrinted(job, order.id)} title="Phiếu đã ra máy in — tắt báo lỗi, không in lại"
+                style={{ background: 'white', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 6, padding: '4px 8px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                Đã in
+              </button>
               <button onClick={() => reprintFailedJob(job, order.id)}
                 style={{ background: '#dc2626', color: 'white', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                 In lại
@@ -1473,8 +1478,8 @@ export default function TablesPage() {
     }
   }
 
-  async function moveBillToTable(orderId, targetTable) {
-    const sourceTableIds = getCachedOrderTableIds(ordersStateRef.current, [orderId]);
+  async function moveBillsToTable(orderIds, targetTable) {
+    const sourceTableIds = getCachedOrderTableIds(ordersStateRef.current, orderIds);
     if (targetTable.status === 'available') {
       // Bàn trống nhận khách chuyển sang: giữ mốc ngồi của khách ở bàn cũ, để
       // lượt quay vòng xoay của khách vẫn thuộc "phiên đang ngồi" ở bàn mới.
@@ -1493,7 +1498,7 @@ export default function TablesPage() {
     }
     const { data, error } = await supabase.from('orders')
       .update({ table_id: targetTable.id })
-      .eq('id', orderId)
+      .in('id', orderIds)
       .in('status', OPEN_BILL_STATUSES)
       .select('id');
     if (error || !data?.length) {
@@ -1503,14 +1508,16 @@ export default function TablesPage() {
     // Lượt quay vòng xoay gắn theo bàn, không theo bill → dời sang bàn mới.
     let luckyMoved = true;
     try {
-      const res = await fetch('/api/admin/lucky-move-table', {
-        method: 'POST', headers: staffApiHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ orderId, sourceTableIds: sourceTableIds || [], targetTableId: targetTable.id }),
-      });
-      const moved = await res.json().catch(() => ({}));
-      if (!moved.ok) throw new Error(moved.message || `HTTP ${res.status}`);
+      for (const moved of data) {
+        const res = await fetch('/api/admin/lucky-move-table', {
+          method: 'POST', headers: staffApiHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ orderId: moved.id, sourceTableIds: sourceTableIds || [], targetTableId: targetTable.id }),
+        });
+        const result = await res.json().catch(() => ({}));
+        if (!result.ok) throw new Error(result.message || `HTTP ${res.status}`);
+      }
     } catch (e) {
-      console.error('[moveBillToTable] lucky spins', e);
+      console.error('[moveBillsToTable] lucky spins', e);
       luckyMoved = false;
     }
     luckyStatusLastRef.current = 0;
@@ -1522,6 +1529,61 @@ export default function TablesPage() {
       return false;
     }
     return true;
+  }
+
+  // Chuyển bàn: bàn có nhiều bill (nhiều người gọi riêng) thì cho tích chọn
+  // bill nào đi cùng — mặc định chỉ bill đang bấm, có "Chọn tất cả".
+  async function openMoveBillsDialog(order) {
+    const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
+    if (otherTables.length === 0) { Swal.fire('Lỗi', 'Không có bàn khác để chuyển!', 'error'); return; }
+    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const bills = getSelectedTableOrders().filter(o => OPEN_BILL_STATUSES.includes(o.status));
+    const tableOptions = otherTables.map(t =>
+      `<option value="${esc(t.id)}">Bàn ${esc(t.table_number)} ${t.status === 'occupied' ? '(Có khách)' : '(Trống)'}</option>`).join('');
+    const billRows = bills.length > 1 ? `
+      <div style="text-align:left;margin-top:12px;font-size:0.9rem">
+        <label style="display:flex;gap:8px;align-items:center;font-weight:700;padding:6px 0;border-bottom:1px solid #e5e7eb">
+          <input type="checkbox" id="move-all"> Chọn tất cả (${bills.length} bill)
+        </label>
+        ${bills.map((b, i) => {
+          const total = (b.order_items || []).reduce((sum, it) => sum + (Number(it.unit_price) || 0) * (Number(it.quantity) || 0), 0);
+          return `<label style="display:flex;gap:8px;align-items:center;padding:6px 0">
+            <input type="checkbox" class="move-bill" value="${esc(b.id)}" ${b.id === order.id ? 'checked' : ''}>
+            <span>#${i + 1} ${esc(b.customer_name || 'Khách')} · <b>${total.toLocaleString('vi-VN')}đ</b></span>
+          </label>`;
+        }).join('')}
+      </div>` : '';
+    const { value: picked } = await Swal.fire({
+      title: 'Chuyển bàn',
+      html: `<select id="move-target" class="swal2-select" style="width:100%;margin:0">
+          <option value="">Chọn bàn muốn chuyển đến...</option>${tableOptions}</select>${billRows}`,
+      showCancelButton: true, confirmButtonText: 'Chuyển', cancelButtonText: 'Huỷ',
+      confirmButtonColor: '#2563eb', cancelButtonColor: '#6b7280', reverseButtons: true,
+      didOpen: (popup) => {
+        const all = popup.querySelector('#move-all');
+        const boxes = [...popup.querySelectorAll('.move-bill')];
+        if (!all) return;
+        const sync = () => { all.checked = boxes.every(b => b.checked); };
+        sync();
+        all.addEventListener('change', () => boxes.forEach(b => { b.checked = all.checked; }));
+        boxes.forEach(b => b.addEventListener('change', sync));
+      },
+      preConfirm: () => {
+        const popup = Swal.getPopup();
+        const targetTableId = popup.querySelector('#move-target').value;
+        const orderIds = bills.length > 1
+          ? [...popup.querySelectorAll('.move-bill:checked')].map(b => b.value)
+          : [order.id];
+        if (!targetTableId) { Swal.showValidationMessage('Vui lòng chọn bàn!'); return false; }
+        if (orderIds.length === 0) { Swal.showValidationMessage('Chọn ít nhất 1 bill để chuyển!'); return false; }
+        return { targetTableId, orderIds };
+      },
+    });
+    if (!picked) return;
+    const targetTable = otherTables.find(t => t.id === picked.targetTableId);
+    if (!targetTable || !(await moveBillsToTable(picked.orderIds, targetTable))) return;
+    Swal.fire({ title: 'Thành công', text: picked.orderIds.length > 1 ? `Đã chuyển ${picked.orderIds.length} bill!` : 'Đã chuyển bill!',
+      icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
   }
 
   async function getOrGenerateBillCode(hostId, total, finalAccId = null, freshBills = null) {
@@ -2885,7 +2947,7 @@ export default function TablesPage() {
           const groupColor = groupColorMap[hostIdCard] || null;
           const totalAmount = sumOrderItems(tableBills);
           const guestCount = tableBills.length;
-          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => needsPrintAttention(pj, o)));
+          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => isUnresolvedBadJob(pj, o)));
           // Bill của bàn đã dùng vòng xoay may mắn chưa — báo cho nhân viên biết,
           // vì mỗi bill chỉ được nhận 1 lần quà (xem /api/lucky/spin).
           const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelOutcome));
@@ -2947,7 +3009,7 @@ export default function TablesPage() {
                 {/* Icons share the heading's wrapping flow rather than reserving a separate column. */}
                 <div className="table-card-icons">
                 {hasPrintError && (
-                  <div style={{ background: '#fef2f2', color: '#dc2626', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #fecaca' }}>
+                  <div title="Có món chưa in được — mở bàn để In lại" style={{ background: '#fef2f2', color: '#dc2626', borderRadius: '50%', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #fecaca' }}>
                     <Printer size={12} strokeWidth={2} />
                   </div>
                 )}
@@ -3222,23 +3284,7 @@ export default function TablesPage() {
                             >✕ Huỷ</button>
                             {/* Chuyển bàn */}
                             <button
-                              onClick={async () => {
-                                const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
-                                if (otherTables.length === 0) { Swal.fire('Lỗi', 'Không có bàn khác!', 'error'); return; }
-                                const inputOptions = {};
-                                otherTables.forEach(t => { inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Có khách)' : '(Trống)'}`; });
-                                const { value: targetTableId } = await Swal.fire({
-                                  title: 'Chuyển bill sang bàn',
-                                  input: 'select', inputOptions, inputPlaceholder: 'Chọn bàn...',
-                                  showCancelButton: true, confirmButtonText: 'Chuyển', cancelButtonText: 'Huỷ',
-                                  confirmButtonColor: '#2563eb', reverseButtons: true,
-                                  inputValidator: (v) => { if (!v) return 'Vui lòng chọn bàn!'; }
-                                });
-                                if (!targetTableId) return;
-                                const targetTable = otherTables.find(t => t.id === targetTableId);
-                                if (!targetTable || !(await moveBillToTable(order.id, targetTable))) return;
-                                Swal.fire({ title: 'Thành công', text: 'Đã chuyển bill!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
-                              }}
+                              onClick={() => openMoveBillsDialog(order)}
                               style={{ background: '#e0e7ff', border: '1.5px solid #a5b4fc', borderRadius: 6, color: '#4f46e5', cursor: 'pointer', padding: '3px 10px', fontSize: '0.76rem', fontWeight: 700 }}
                             >➜ Chuyển bàn</button>
                           </div>
@@ -3737,7 +3783,7 @@ export default function TablesPage() {
                             : reviewRequests.filter(r => r.host_table_id === alertHostId);
                           const tableBills = getTableGroupOrders(table, tables, orders);
                           const tableTotal = sumOrderItems(tableBills);
-                          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => needsPrintAttention(pj, o)));
+                          const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => isUnresolvedBadJob(pj, o)));
                           const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelOutcome));
                           const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(tableBills) : { availableGiftSlots: 0, hasGiftInBill: false };
 
@@ -4408,49 +4454,8 @@ export default function TablesPage() {
                             style={{ background: '#fff7ed', border: '1.5px solid #fed7aa', borderRadius: 6, color: '#ea580c', cursor: 'pointer', padding: '3px 8px', fontSize: '0.7rem', fontWeight: 700 }}
                           >🖨 In</button>
                           <button
-                            onClick={async () => {
-                              const otherTables = tables.filter(t => t.id !== selectedTable.id && t.table_type !== 'takeaway');
-                              if (otherTables.length === 0) {
-                                Swal.fire('Lỗi', 'Không có bàn nào khác để chuyển!', 'error');
-                                return;
-                              }
-
-                              const inputOptions = {};
-                              otherTables.forEach(t => {
-                                inputOptions[t.id] = `Bàn ${t.table_number} ${t.status === 'occupied' ? '(Đang có khách)' : '(Trống)'}`;
-                              });
-
-                              const { value: targetTableId } = await Swal.fire({
-                                title: 'Chuyển bàn',
-                                input: 'select',
-                                inputOptions,
-                                inputPlaceholder: 'Chọn bàn muốn chuyển đến',
-                                showCancelButton: true,
-                                confirmButtonColor: '#2563eb',
-                                cancelButtonColor: '#6b7280',
-                                confirmButtonText: 'Chuyển',
-                                cancelButtonText: 'Huỷ',
-                                reverseButtons: true,
-                                inputValidator: (value) => {
-                                  if (!value) return 'Vui lòng chọn một bàn!';
-                                }
-                              });
-
-                              if (targetTableId) {
-                                const targetTable = otherTables.find(t => t.id === targetTableId);
-                                if (!targetTable || !(await moveBillToTable(order.id, targetTable))) return;
-                                Swal.fire({
-                                  title: 'Thành công',
-                                  text: 'Đã chuyển bàn!',
-                                  icon: 'success',
-                                  toast: true,
-                                  position: 'top-end',
-                                  showConfirmButton: false,
-                                  timer: 2000
-                                });
-                              }
-                            }}
-                            title="Chuyển bill này sang bàn khác"
+                            onClick={() => openMoveBillsDialog(order)}
+                            title="Chuyển bill sang bàn khác (tích chọn được nhiều bill)"
                             style={{ background: '#e0e7ff', border: '1.5px solid #a5b4fc', borderRadius: 8, color: '#4f46e5', cursor: 'pointer', padding: '4px 12px', fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap' }}
                           >
                             Chuyển bàn

@@ -6,8 +6,8 @@ import { getCachedOrderTableIds } from '../src/lib/tableOrderRefresh.mjs';
 
 const page = readFileSync(new URL('../src/app/admin/tables/page.js', import.meta.url), 'utf8');
 const cancelSource = page.slice(page.indexOf('  async function cancelSingleBill('), page.indexOf('  // Bàn cũ hết bill sau khi chuyển'));
-const moveSource = page.slice(page.indexOf('  async function moveBillToTable('), page.indexOf('  async function getOrGenerateBillCode('));
-const releaseSource = page.slice(page.indexOf('  async function releaseTableGroupIfEmpty('), page.indexOf('  async function moveBillToTable('));
+const moveSource = page.slice(page.indexOf('  async function moveBillsToTable('), page.indexOf('  // Chuyển bàn: bàn có nhiều bill'));
+const releaseSource = page.slice(page.indexOf('  async function releaseTableGroupIfEmpty('), page.indexOf('  async function moveBillsToTable('));
 
 function harness(source) {
   const calls = [];
@@ -16,7 +16,7 @@ function harness(source) {
     cancelStamp: () => ({}),
     fetchTables: async ids => { calls.push(`refresh:${ids?.join(',') || 'all'}`); },
     getCachedOrderTableIds,
-    ordersStateRef: { current: { 'table-1': [{ id: 'order-1', table_id: 'table-1' }] } },
+    ordersStateRef: { current: { 'table-1': [{ id: 'order-1', table_id: 'table-1' }, { id: 'order-2', table_id: 'table-1' }] } },
     tablesStateRef: { current: [{ id: 'table-1', occupied_at: '2026-10-18T05:00:00.000Z' }] },
     luckyStatusLastRef: { current: 1 },
     releaseTableGroupIfEmpty: async (id, keep) => { calls.push(`release:${id}:${keep}`); },
@@ -36,15 +36,25 @@ function harness(source) {
         eq: () => query,
         in: (column, values) => {
           if (column === 'status') calls.push(`statuses:${values.join(',')}`);
+          if (column === 'id') { calls.push(`ids:${values.join(',')}`); query.ids = values; }
           return query;
         },
-        select: async () => ({ data: [{ id: 'updated', table_id: 'table-1' }], error: null }),
+        select: async () => ({ data: (query.ids || ['updated']).map(id => ({ id, table_id: 'table-1' })), error: null }),
       };
       return query;
     } },
   };
   return { run: vm.runInNewContext(`(${source.trim()})`, context), calls };
 }
+
+test('several bills move to another table in one update, each carrying its wheel spins', async () => {
+  const { run, calls } = harness(moveSource);
+  assert.equal(await run(['order-1', 'order-2'], { id: 'table-2', status: 'occupied' }), true);
+  assert.deepEqual(calls, ['orders.update', 'ids:order-1,order-2', 'statuses:pending,preparing,completed',
+    '/api/admin/lucky-move-table:{"orderId":"order-1","sourceTableIds":["table-1"],"targetTableId":"table-2"}',
+    '/api/admin/lucky-move-table:{"orderId":"order-2","sourceTableIds":["table-1"],"targetTableId":"table-2"}',
+    'release:table-1:table-2', 'refresh:table-1,table-2']);
+});
 
 test('cancelling one bill never releases a possibly unpaid table group', async () => {
   const { run, calls } = harness(cancelSource);
@@ -54,9 +64,9 @@ test('cancelling one bill never releases a possibly unpaid table group', async (
 
 test('moving a bill occupies its destination before changing the order', async () => {
   const { run, calls } = harness(moveSource);
-  assert.equal(await run('order-1', { id: 'table-2', status: 'available' }), true);
+  assert.equal(await run(['order-1'], { id: 'table-2', status: 'available' }), true);
   assert.deepEqual(calls, ['tables.update', 'occupied_at:2026-10-18T05:00:00.000Z', 'orders.update',
-    'statuses:pending,preparing,completed',
+    'ids:order-1', 'statuses:pending,preparing,completed',
     '/api/admin/lucky-move-table:{"orderId":"order-1","sourceTableIds":["table-1"],"targetTableId":"table-2"}',
     'release:table-1:table-2', 'refresh:table-1,table-2']);
 });
