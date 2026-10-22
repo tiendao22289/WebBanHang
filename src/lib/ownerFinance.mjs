@@ -107,10 +107,11 @@ function datesBetween(from, toInclusive) {
 
 /**
  * Gom số liệu 1 tháng thành từng ngày + tổng tháng.
- * revenue: dòng finance_revenue_ledger; notes: staff_notes; entries: finance_entries.
+ * revenue: dòng finance_revenue_ledger; notes: staff_notes; entries: finance_entries;
+ * categories: finance_categories (để biết tab tự tạo nhập theo ngày hay theo tháng).
  * Chỉ tính các ngày từ FINANCE_START_DATE đến hết hôm nay (giờ VN).
  */
-export function summarizeMonth({ month, revenue = [], notes = [], entries = [], closes = [], today, startDate = FINANCE_START_DATE }) {
+export function summarizeMonth({ month, revenue = [], notes = [], entries = [], closes = [], categories = [], today, startDate = FINANCE_START_DATE }) {
   const { start, next, daysInMonth } = monthBounds(month);
   const lastOfMonth = new Date(Date.parse(`${next}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
   const from = start > startDate ? start : startDate;
@@ -121,9 +122,19 @@ export function summarizeMonth({ month, revenue = [], notes = [], entries = [], 
   const fixedMonthTotal = fixedEntries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
   const fixedPerDay = fixedMonthTotal / daysInMonth;
 
+  // Tab tự tạo: theo tháng thì chia đều như chi cố định, theo ngày thì tính đúng ngày.
+  const monthlyTabs = new Set(categories.filter(c => c.scope === 'tab' && c.schedule === 'monthly').map(c => c.id));
+  const customMonthTotals = {};
+  for (const e of entries) {
+    if (e.kind !== 'custom' || !monthlyTabs.has(e.category) || e.entry_date < start || e.entry_date >= next) continue;
+    customMonthTotals[e.category] = (customMonthTotals[e.category] || 0) + (Number(e.amount) || 0);
+  }
+  const customDailyShare = Object.fromEntries(Object.entries(customMonthTotals).map(([id, total]) => [id, total / daysInMonth]));
+
   const days = dates.map(date => ({
     date, revenue: 0, bills: 0, cash: 0, transfer: 0, byAccount: {},
-    purchases: 0, purchaseNotes: 0, suspiciousNotes: 0, drinks: 0, salary: 0, fixedShare: fixedPerDay, profit: 0, close: null,
+    purchases: 0, purchaseNotes: 0, suspiciousNotes: 0, drinks: 0, salary: 0, fixedShare: fixedPerDay,
+    custom: { ...customDailyShare }, customTotal: 0, profit: 0, close: null,
   }));
   const byDate = new Map(days.map(d => [d.date, d]));
 
@@ -154,16 +165,22 @@ export function summarizeMonth({ month, revenue = [], notes = [], entries = [], 
     if (!day) continue;
     if (entry.kind === 'drink') day.drinks += Number(entry.amount) || 0;
     if (entry.kind === 'salary') day.salary += Number(entry.amount) || 0;
+    if (entry.kind === 'custom' && !monthlyTabs.has(entry.category)) {
+      day.custom[entry.category] = (day.custom[entry.category] || 0) + (Number(entry.amount) || 0);
+    }
   }
 
   const closeByDate = new Map(closes.map(c => [c.business_date, c]));
   for (const day of days) day.close = closeDifferences(day, closeByDate.get(day.date));
 
-  const totals = { revenue: 0, bills: 0, cash: 0, transfer: 0, byAccount: {}, purchases: 0, drinks: 0, salary: 0, fixedShare: 0, profit: 0 };
+  const totals = { revenue: 0, bills: 0, cash: 0, transfer: 0, byAccount: {}, purchases: 0, drinks: 0, salary: 0, fixedShare: 0,
+    custom: {}, customTotal: 0, profit: 0 };
   for (const day of days) {
-    day.profit = day.revenue - day.purchases - day.drinks - day.salary - day.fixedShare;
-    for (const key of ['revenue', 'bills', 'cash', 'transfer', 'purchases', 'drinks', 'salary', 'fixedShare', 'profit']) totals[key] += day[key];
+    day.customTotal = Object.values(day.custom).reduce((sum, v) => sum + v, 0);
+    day.profit = day.revenue - day.purchases - day.drinks - day.salary - day.fixedShare - day.customTotal;
+    for (const key of ['revenue', 'bills', 'cash', 'transfer', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit']) totals[key] += day[key];
     for (const [acc, amount] of Object.entries(day.byAccount)) totals.byAccount[acc] = (totals.byAccount[acc] || 0) + amount;
+    for (const [id, amount] of Object.entries(day.custom)) totals.custom[id] = (totals.custom[id] || 0) + amount;
   }
-  return { month, from, to, daysInMonth, fixedMonthTotal, fixedEntries, days, totals };
+  return { month, from, to, daysInMonth, fixedMonthTotal, fixedEntries, customMonthTotals, days, totals };
 }

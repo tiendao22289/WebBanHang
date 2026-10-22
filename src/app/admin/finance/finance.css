@@ -107,3 +107,16 @@
   .fin-card b { font-size: 17px; }
   .fin-day-grid { grid-template-columns: 1fr; }
 }
+
+/* Tab / mục tự đặt */
+.fin-tabs .fin-tab-add { min-height: 40px; border: 1px dashed #2563eb; background: #eff6ff; color: #1d4ed8; border-radius: 999px; padding: 8px 16px; font-size: 14px; font-weight: 700; }
+.fin-new { border: 1px solid #bfdbfe; background: white; border-radius: 8px; padding: 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px; }
+.fin-new label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #4b5563; }
+.fin-new input { height: 44px; border: 1px solid #d1d5db; border-radius: 6px; padding: 0 10px; font: inherit; font-size: 16px; min-width: 0; -webkit-appearance: none; appearance: none; }
+.fin-new .fin-hint { margin: 0; }
+.fin-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.fin-choice button { min-height: 44px; border: 1px solid #d1d5db; border-radius: 6px; background: white; color: #374151; font-size: 14px; }
+.fin-choice button.active { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; font-weight: 700; }
+.fin-new-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; }
+.fin-ghost { min-height: 46px; border: 1px solid #d1d5db; border-radius: 6px; background: white; color: #374151; font-size: 16px; }
+.fin-link { display: block; margin: 10px auto 0; min-height: 40px; border: 0; background: none; color: #6b7280; font-size: 13px; text-decoration: underline; }

@@ -25,6 +25,7 @@ function fakeDb(state, { failTable } = {}) {
       range(a, b) { range = [a, b]; return q; },
       insert(v) { op = 'insert'; values = v; return q; },
       delete() { op = 'delete'; return q; },
+      update(v) { op = 'update'; values = v; return q; },
       single() { single = true; return q; },
       then(onFulfilled, onRejected) { return new Promise(run).then(onFulfilled, onRejected); },
     };
@@ -45,6 +46,7 @@ function fakeDb(state, { failTable } = {}) {
           if (existing) Object.assign(existing, values); else state[table].push({ ...values });
           return resolve({ data: structuredClone(existing || values), error: null });
         }
+        if (op === 'update') { rows.forEach(r => Object.assign(r, values)); return resolve({ data: structuredClone(rows), error: null }); }
         if (op === 'delete') {
           const ids = new Set(rows.map(r => r.id));
           state[table] = state[table].filter(r => !ids.has(r.id));
@@ -73,7 +75,7 @@ const plain = res => JSON.parse(JSON.stringify(res));
 const get = async (api, query) => plain(await api.GET({ url: `http://x/api/admin/finance?${query}` }));
 const post = async (api, body) => plain(await api.POST({ json: async () => body }));
 const empty = () => ({ finance_revenue_ledger: [], staff_notes: [], finance_entries: [], bank_accounts: [], staff: [],
-  finance_day_closes: [], table_bill_history: [] });
+  finance_day_closes: [], table_bill_history: [], finance_categories: [] });
 const ACC_A = '00000000-0000-0000-0000-0000000000aa';
 const later = minutes => new Date(Date.now() + minutes * 60000).toISOString();
 
@@ -252,4 +254,75 @@ test('purchase notes with prices that look like a missing "k" are flagged', asyn
   assert.deepEqual(day.body.notes[0].suspicious, ['Ốc len: 250']);
   const month = await get(load({ state }), 'month=2026-10');
   assert.equal(month.body.days.find(d => d.date === '2026-10-23').suspiciousNotes, 1);
+});
+
+const TAB_GAS = '00000000-0000-0000-0000-0000000000a1';
+const TAB_ADS = '00000000-0000-0000-0000-0000000000a2';
+const SAL_BONUS = '00000000-0000-0000-0000-0000000000b1';
+const FIX_TRASH = '00000000-0000-0000-0000-0000000000c1';
+const ownCategories = () => [
+  { id: TAB_GAS, scope: 'tab', name: 'Gas', schedule: 'daily', archived: false, created_at: '1' },
+  { id: TAB_ADS, scope: 'tab', name: 'Quảng cáo', schedule: 'monthly', archived: false, created_at: '2' },
+  { id: SAL_BONUS, scope: 'salary', name: 'Thưởng', schedule: 'daily', archived: false, created_at: '3' },
+  { id: FIX_TRASH, scope: 'fixed', name: 'Tiền rác', schedule: 'daily', archived: false, created_at: '4' },
+];
+
+test('own tabs, salary types and fixed items are created once, validated and can be hidden', async () => {
+  const state = empty();
+  state.finance_categories = [];
+  const api = load({ state });
+  let res = await post(api, { action: 'add_category', scope: 'tab', name: '  Gas   bình ', schedule: 'daily' });
+  assert.deepEqual([res.status, res.body.category.name, res.body.category.schedule], [200, 'Gas bình', 'daily']);
+  res = await post(api, { action: 'add_category', scope: 'tab', name: 'Quảng cáo', schedule: 'monthly' });
+  assert.equal(res.body.category.schedule, 'monthly');
+  assert.equal((await post(api, { action: 'add_category', scope: 'tab', name: 'gas BÌNH' })).status, 409, 'same name, any case');
+  assert.equal((await post(api, { action: 'add_category', scope: 'tab', name: 'Lương' })).status, 409, 'clashes with a built-in tab');
+  assert.equal((await post(api, { action: 'add_category', scope: 'fixed', name: 'Tiền điện' })).status, 409, 'clashes with a built-in fixed item');
+  assert.equal((await post(api, { action: 'add_category', scope: 'salary', name: 'Thưởng' })).status, 200);
+  assert.equal((await post(api, { action: 'add_category', scope: 'salary', name: 'Thưởng tết', schedule: 'monthly' })).body.category.schedule, 'daily', 'only tabs can be monthly');
+  for (const bad of [{ scope: 'tab', name: '   ' }, { scope: 'boss', name: 'x' }]) {
+    assert.equal((await post(api, { action: 'add_category', ...bad })).status, 400, JSON.stringify(bad));
+  }
+  const gas = state.finance_categories[0];
+  assert.equal((await post(api, { action: 'archive_category', id: gas.id })).status, 200);
+  assert.equal(state.finance_categories[0].archived, true);
+  assert.equal((await post(api, { action: 'add_category', scope: 'tab', name: 'Gas bình' })).status, 200, 'a hidden name can be reused');
+  assert.equal((await post(api, { action: 'archive_category', id: 'x' })).status, 400);
+  const month = await get(api, 'month=2026-10');
+  assert.equal(month.body.categories.length, 5, 'hidden items are still returned so old entries keep their names');
+});
+
+test('entries go into own tabs, salary types and fixed items with the right date', async () => {
+  const state = empty();
+  state.finance_categories = ownCategories();
+  state.finance_categories.push({ id: '00000000-0000-0000-0000-0000000000d1', scope: 'tab', name: 'Cũ', schedule: 'daily', archived: true, created_at: '5' });
+  const api = load({ state });
+  let res = await post(api, { action: 'add', kind: 'custom', category: TAB_GAS, entry_date: '2026-10-23', amount: 450000, label: '' });
+  assert.deepEqual([res.body.entry.entry_date, res.body.entry.label, res.body.entry.category], ['2026-10-23', 'Gas', TAB_GAS]);
+  res = await post(api, { action: 'add', kind: 'custom', category: TAB_ADS, month: '2026-10', entry_date: '2026-10-23', amount: 3100000, label: 'Facebook' });
+  assert.deepEqual([res.body.entry.entry_date, res.body.entry.label], ['2026-10-01', 'Facebook'], 'monthly tab is booked on the 1st');
+  res = await post(api, { action: 'add', kind: 'salary', category: SAL_BONUS, entry_date: '2026-10-23', amount: 200000, label: 'Lan' });
+  assert.equal(res.body.entry.category, SAL_BONUS);
+  res = await post(api, { action: 'add', kind: 'salary', entry_date: '2026-10-23', amount: 300000, label: 'Lan' });
+  assert.equal(res.body.entry.category, null, 'plain salary has no type');
+  res = await post(api, { action: 'add', kind: 'fixed', category: FIX_TRASH, month: '2026-10', amount: 310000 });
+  assert.deepEqual([res.body.entry.entry_date, res.body.entry.label, res.body.entry.category], ['2026-10-01', 'Tiền rác', FIX_TRASH]);
+  for (const bad of [
+    { kind: 'custom', category: '00000000-0000-0000-0000-0000000000d1', entry_date: '2026-10-23', amount: 1 },
+    { kind: 'custom', category: SAL_BONUS, entry_date: '2026-10-23', amount: 1 },
+    { kind: 'custom', entry_date: '2026-10-23', amount: 1 },
+    { kind: 'salary', category: TAB_GAS, entry_date: '2026-10-23', amount: 1, label: 'Lan' },
+    { kind: 'fixed', category: TAB_GAS, month: '2026-10', amount: 1 },
+    { kind: 'custom', category: TAB_ADS, entry_date: '2026-10-23', amount: 1 },
+  ]) assert.equal((await post(api, { action: 'add', ...bad })).status, 400, JSON.stringify(bad));
+
+  const month = await get(api, 'month=2026-10');
+  const day = month.body.days.find(d => d.date === '2026-10-23');
+  assert.equal(day.custom[TAB_GAS], 450000);
+  assert.equal(day.custom[TAB_ADS], 100000, '3.100.000 / 31 days');
+  assert.equal(day.salary, 500000);
+  assert.equal(day.fixedShare, 10000);
+  assert.equal(day.profit, -(450000 + 100000 + 500000 + 10000));
+  assert.equal(month.body.customMonthTotals[TAB_ADS], 3100000);
+  assert.deepEqual(month.body.customMonthlyEntries.map(e => e.label), ['Facebook']);
 });

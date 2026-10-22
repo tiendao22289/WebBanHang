@@ -13,7 +13,6 @@ const dayLabel = date => {
 const clock = value => new Date(value).toLocaleTimeString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit' });
 const vnToday = () => new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
 const digits = value => String(value || '').replace(/\D/g, '');
-const KIND_LABEL = { drink: 'Nước ngọt / bia', salary: 'Lương', fixed: 'Chi cố định' };
 
 async function api(path, options) {
   const response = await fetch(path, { cache: 'no-store', ...options });
@@ -23,53 +22,156 @@ async function api(path, options) {
   return result;
 }
 
-function AddEntryForm({ data, month, onSaved }) {
-  const [kind, setKind] = useState('drink');
-  const [date, setDate] = useState(vnToday());
-  const [label, setLabel] = useState('');
-  const [category, setCategory] = useState('rent');
-  const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
+const KIND_LABEL = { drink: 'Nước ngọt / bia', salary: 'Lương', fixed: 'Chi cố định', custom: 'Chi khác' };
+const NEW = '__new';
+
+// Tên hiển thị của 1 khoản đã nhập: loại lương / mục cố định / tên tab tự tạo.
+function entryTitle(entry, categories = []) {
+  const own = categories.find(c => c.id === entry.category);
+  if (entry.kind === 'salary') return `${own?.name || 'Lương'}: ${entry.label}`;
+  if (entry.kind === 'custom') return own && entry.label !== own.name ? `${own.name}: ${entry.label}` : (own?.name || entry.label);
+  if (entry.kind === 'fixed') return entry.label;
+  return `${KIND_LABEL[entry.kind] || ''}: ${entry.label}`;
+}
+
+async function post(body) {
+  return api('/api/admin/finance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+// Ô thêm mục / tab mới ngay trong form (không dùng prompt — cần chọn theo ngày/tháng).
+function NewCategory({ scope, onDone, onCancel }) {
+  const [name, setName] = useState('');
+  const [schedule, setSchedule] = useState('daily');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  async function create() {
+    setBusy(true); setError('');
+    try {
+      const { category } = await post({ action: 'add_category', scope, name, schedule });
+      onDone(category);
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+  const title = scope === 'tab' ? 'Tên tab mới' : scope === 'salary' ? 'Tên loại lương mới' : 'Tên mục chi cố định mới';
+  const example = scope === 'tab' ? 'VD: Gas, Sửa chữa, Quảng cáo' : scope === 'salary' ? 'VD: Thưởng, Tạm ứng, Phụ cấp' : 'VD: Tiền rác, Thuế, Wifi';
+  return <div className="fin-new">
+    <label>{title}<input value={name} onChange={e => setName(e.target.value)} placeholder={example} maxLength={40} autoFocus
+      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); create(); } }} /></label>
+    {scope === 'tab' && <div className="fin-choice" role="radiogroup" aria-label="Cách nhập">
+      {[['daily', 'Nhập theo ngày'], ['monthly', 'Nhập theo tháng']].map(([key, text]) =>
+        <button key={key} type="button" role="radio" aria-checked={schedule === key} className={schedule === key ? 'active' : ''}
+          onClick={() => setSchedule(key)}>{text}</button>)}
+    </div>}
+    {scope === 'tab' && <p className="fin-hint">{schedule === 'monthly' ? 'Nhập 1 lần cho cả tháng, tự chia đều cho từng ngày (như tiền nhà).' : 'Nhập vào đúng ngày phát sinh (như tiền gas, sửa chữa).'}</p>}
+    {error && <p className="fin-error">{error}</p>}
+    <div className="fin-new-actions">
+      <button type="button" className="fin-ghost" onClick={onCancel}>Huỷ</button>
+      <button type="button" className="fin-primary" disabled={busy || !name.trim()} onClick={create}>{busy ? 'Đang lưu...' : 'Lưu'}</button>
+    </div>
+  </div>;
+}
+
+function AddEntryForm({ data, month, onSaved }) {
+  // Mục/tab vừa tạo được giữ tạm ở đây cho tới khi danh sách tải lại xong —
+  // không thì form chọn tab mới khi server chưa trả về, mất tên tab.
+  const [created, setCreated] = useState([]);
+  const loaded = data?.categories || [];
+  const categories = [...loaded, ...created.filter(c => !loaded.some(x => x.id === c.id))];
+  const active = scope => categories.filter(c => c.scope === scope && !c.archived);
+  const tabs = active('tab');
+  const [kind, setKind] = useState('drink'); // 'drink' | 'salary' | 'fixed' | 'tab:<id>'
+  const [date, setDate] = useState(vnToday());
+  const [label, setLabel] = useState('');
+  const [fixedCategory, setFixedCategory] = useState('rent');
+  const [salaryCategory, setSalaryCategory] = useState('');
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+  const [adding, setAdding] = useState(null); // 'tab' | 'salary' | 'fixed'
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const tab = kind.startsWith('tab:') ? categories.find(c => c.id === kind.slice(4)) : null;
+  // Tab đã bị ẩn (ở máy khác) → quay về tab mặc định.
+  useEffect(() => { if (kind.startsWith('tab:') && data && (!tab || tab.archived)) setKind('drink'); }, [kind, tab, data]);
+  const monthly = kind === 'fixed' || tab?.schedule === 'monthly';
+  const kindName = (tab ? tab.name : KIND_LABEL[kind]) || '';
+
+  function choose(next) {
+    if (next !== kind) setLabel('');
+    setKind(next); setAdding(null); setError('');
+  }
 
   async function save(event) {
     event.preventDefault();
     setBusy(true); setError('');
     try {
-      await api('/api/admin/finance', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'add', kind, entry_date: date, month, category, amount: Number(digits(amount)),
-          label: kind === 'drink' ? (label || 'Nước ngọt / bia') : label, note }),
+      await post({
+        action: 'add', kind: tab ? 'custom' : kind, entry_date: date, month, amount: Number(digits(amount)), note,
+        category: tab ? tab.id : kind === 'fixed' ? fixedCategory : kind === 'salary' ? (salaryCategory || undefined) : undefined,
+        label: kind === 'drink' ? (label || 'Nước ngọt / bia') : label,
       });
       setAmount(''); setNote(''); if (kind !== 'drink') setLabel('');
       onSaved();
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
 
+  async function archive(category, after) {
+    if (!confirm(`Ẩn "${category.name}"? Các khoản đã nhập vẫn được giữ và vẫn tính vào sổ.`)) return;
+    try { await post({ action: 'archive_category', id: category.id }); after(); onSaved(); } catch (err) { alert(err.message); }
+  }
+
+  const ownFixed = active('fixed');
+  const ownSalary = active('salary');
+  const selectedOwn = kind === 'fixed' ? ownFixed.find(c => c.id === fixedCategory) : kind === 'salary' ? ownSalary.find(c => c.id === salaryCategory) : null;
+
   return <form className="fin-form" onSubmit={save}>
     <div className="fin-tabs" role="tablist">
       {['drink', 'salary', 'fixed'].map(k => <button key={k} type="button" role="tab" aria-selected={kind === k}
-        className={kind === k ? 'active' : ''} onClick={() => { if (k !== kind) setLabel(''); setKind(k); setError(''); }}>{KIND_LABEL[k]}</button>)}
+        className={kind === k ? 'active' : ''} onClick={() => choose(k)}>{KIND_LABEL[k]}</button>)}
+      {tabs.map(t => <button key={t.id} type="button" role="tab" aria-selected={kind === `tab:${t.id}`}
+        className={kind === `tab:${t.id}` ? 'active' : ''} onClick={() => choose(`tab:${t.id}`)}>{t.name}</button>)}
+      <button type="button" className="fin-tab-add" onClick={() => { setAdding(adding === 'tab' ? null : 'tab'); setError(''); }}>+ Thêm tab</button>
     </div>
+
+    {adding === 'tab' && <NewCategory scope="tab" onCancel={() => setAdding(null)}
+      onDone={category => { setCreated(prev => [...prev, category]); setAdding(null); onSaved(); choose(`tab:${category.id}`); }} />}
+
     <div className="fin-fields">
-      {kind === 'fixed'
-        ? <label>Loại<select value={category} onChange={e => setCategory(e.target.value)}>
-            {(data?.fixedCategories || []).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-          </select></label>
-        : <label>Ngày<input type="date" value={date} min={data?.startDate} max={vnToday()} onChange={e => setDate(e.target.value)} required /></label>}
+      {kind === 'fixed' && <label>Mục<select value={fixedCategory} onChange={e => e.target.value === NEW ? setAdding('fixed') : setFixedCategory(e.target.value)}>
+        {(data?.fixedCategories || []).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+        {ownFixed.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        <option value={NEW}>+ Thêm mục mới...</option>
+      </select></label>}
+      {kind === 'salary' && <label>Loại<select value={salaryCategory} onChange={e => e.target.value === NEW ? setAdding('salary') : setSalaryCategory(e.target.value)}>
+        <option value="">Lương</option>
+        {ownSalary.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        <option value={NEW}>+ Thêm loại lương...</option>
+      </select></label>}
+      {!monthly && <label>Ngày<input type="date" value={date} min={data?.startDate} max={vnToday()} onChange={e => setDate(e.target.value)} required /></label>}
       {kind === 'salary' && <label>Nhân viên
         <input list="fin-staff" value={label} onChange={e => setLabel(e.target.value)} placeholder="Tên nhân viên" required />
         <datalist id="fin-staff">{(data?.staff || []).map(name => <option key={name} value={name} />)}</datalist>
       </label>}
-      {kind === 'drink' && <label>Nội dung<input value={label} onChange={e => setLabel(e.target.value)} placeholder="Nước ngọt / bia" /></label>}
+      {(kind === 'drink' || tab) && <label>Nội dung<input value={label} onChange={e => setLabel(e.target.value)} placeholder={tab ? tab.name : 'Nước ngọt / bia'} /></label>}
       <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''}
         onChange={e => setAmount(digits(e.target.value))} placeholder="0" enterKeyHint="done" required /></label>
       <label className="fin-wide">Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
     </div>
-    {kind === 'fixed' && <p className="fin-hint">Ghi cho cả tháng {month.slice(5)}/{month.slice(0, 4)}, tự chia đều cho từng ngày.</p>}
+
+    {(adding === 'fixed' || adding === 'salary') && <NewCategory scope={adding} onCancel={() => setAdding(null)}
+      onDone={category => {
+        const scope = adding;
+        setCreated(prev => [...prev, category]); setAdding(null); onSaved();
+        if (scope === 'fixed') setFixedCategory(category.id); else setSalaryCategory(category.id);
+      }} />}
+
+    {monthly && <p className="fin-hint">Ghi cho cả tháng {month.slice(5)}/{month.slice(0, 4)}, tự chia đều cho từng ngày.</p>}
     {error && <p className="fin-error">{error}</p>}
-    <button className="fin-primary" disabled={busy}>{busy ? 'Đang lưu...' : `Thêm ${KIND_LABEL[kind].toLowerCase()}`}</button>
+    <button className="fin-primary" disabled={busy}>{busy ? 'Đang lưu...' : `Thêm ${kindName.toLowerCase()}`}</button>
+    {(tab || selectedOwn) && <button type="button" className="fin-link" onClick={() => tab
+      ? archive(tab, () => choose('drink'))
+      : archive(selectedOwn, () => kind === 'fixed' ? setFixedCategory('rent') : setSalaryCategory(''))}>
+      Ẩn {tab ? `tab "${tab.name}"` : `mục "${selectedOwn.name}"`}
+    </button>}
   </form>;
 }
 
@@ -130,7 +232,7 @@ function CloseForm({ detail, accounts, onSaved }) {
   </form>;
 }
 
-function DayDetail({ date, accounts, onClose, onChanged }) {
+function DayDetail({ date, accounts, categories, onClose, onChanged }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(null);
@@ -190,7 +292,7 @@ function DayDetail({ date, accounts, onClose, onChanged }) {
         <h3>Khoản tự nhập</h3>
         {detail.entries.length === 0 && <p className="fin-empty">Chưa có.</p>}
         {detail.entries.map(entry => <div key={entry.id} className="fin-row static">
-          <span>{KIND_LABEL[entry.kind]}: {entry.label}{entry.note && <small>{entry.note}</small>}</span>
+          <span>{entryTitle(entry, categories)}{entry.note && <small>{entry.note}</small>}</span>
           <span className="fin-row-end"><b>{money(entry.amount)}</b>
             <button className="fin-icon danger" onClick={() => remove(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
         </div>)}
@@ -241,6 +343,8 @@ export default function FinancePage() {
   const accounts = data?.accounts || [];
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ tài khoản';
   const days = [...(data?.days || [])].reverse();
+  // Tab tự tạo: đang dùng, hoặc đã ẩn nhưng tháng này còn tiền (để tổng vẫn khớp).
+  const customTabs = (data?.categories || []).filter(c => c.scope === 'tab' && (!c.archived || data?.totals?.custom?.[c.id]));
 
   return <div className="finance">
     <header className="fin-header">
@@ -272,6 +376,9 @@ export default function FinancePage() {
         <div className="fin-card"><span>Lương</span><b>{money(t.salary)}</b></div>
         <div className="fin-card"><span>Chi cố định (phần các ngày đã qua)</span><b>{money(t.fixedShare)}</b>
           <small>Cả tháng {money(data.fixedMonthTotal)}</small></div>
+        {customTabs.map(tab => <div key={tab.id} className="fin-card"><span>{tab.name}{tab.schedule === 'monthly' ? ' (phần các ngày đã qua)' : ''}</span>
+          <b>{money(t.custom[tab.id] || 0)}</b>
+          {tab.schedule === 'monthly' && <small>Cả tháng {money(data.customMonthTotals?.[tab.id] || 0)}</small>}</div>)}
         <div className={`fin-card profit ${t.profit < 0 ? 'loss' : ''}`}><span>{t.profit < 0 ? 'Lỗ' : 'Lãi'}</span><b>{money(Math.abs(t.profit))}</b>
           <small>Doanh thu − tất cả khoản chi</small></div>
       </section>
@@ -295,6 +402,14 @@ export default function FinancePage() {
             <button className="fin-icon danger" onClick={() => removeFixed(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
         </div>)}
       </div>}
+      {data?.customMonthlyEntries?.length > 0 && <div className="fin-fixed">
+        <h3>Khoản theo tháng {month.slice(5)}/{month.slice(0, 4)}</h3>
+        {data.customMonthlyEntries.map(entry => <div key={entry.id} className="fin-row static">
+          <span>{entryTitle(entry, data.categories)}{entry.note && <small>{entry.note}</small>}</span>
+          <span className="fin-row-end"><b>{money(entry.amount)}</b>
+            <button className="fin-icon danger" onClick={() => removeFixed(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
+        </div>)}
+      </div>}
     </section>
 
     <section className="fin-section">
@@ -311,6 +426,7 @@ export default function FinancePage() {
             <span>Nước ngọt <b>{money(d.drinks)}</b></span>
             <span>Lương <b>{money(d.salary)}</b></span>
             <span>Cố định <b>{money(d.fixedShare)}</b></span>
+            {customTabs.filter(tab => d.custom[tab.id]).map(tab => <span key={tab.id}>{tab.name} <b>{money(d.custom[tab.id])}</b></span>)}
           </div>
           <div className="fin-day-tags">
             {d.close
@@ -327,6 +443,6 @@ export default function FinancePage() {
       </div>
     </section>
 
-    {day && <DayDetail date={day} accounts={accounts} onClose={() => setDay(null)} onChanged={load} />}
+    {day && <DayDetail date={day} accounts={accounts} categories={data?.categories || []} onClose={() => setDay(null)} onChanged={load} />}
   </div>;
 }

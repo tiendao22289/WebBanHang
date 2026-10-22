@@ -32,7 +32,7 @@ CREATE INDEX IF NOT EXISTS finance_revenue_ledger_date ON public.finance_revenue
 CREATE TABLE IF NOT EXISTS public.finance_entries (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   entry_date date NOT NULL,
-  kind text NOT NULL CHECK (kind IN ('drink', 'salary', 'fixed')),
+  kind text NOT NULL CHECK (kind IN ('drink', 'salary', 'fixed', 'custom')),
   category text,
   label text NOT NULL,
   amount numeric NOT NULL CHECK (amount >= 0),
@@ -41,6 +41,24 @@ CREATE TABLE IF NOT EXISTS public.finance_entries (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS finance_entries_date ON public.finance_entries(entry_date);
+-- Bản cài trước chỉ cho drink/salary/fixed → mở thêm 'custom' (tab tự tạo).
+ALTER TABLE public.finance_entries DROP CONSTRAINT IF EXISTS finance_entries_kind_check;
+ALTER TABLE public.finance_entries ADD CONSTRAINT finance_entries_kind_check
+  CHECK (kind IN ('drink', 'salary', 'fixed', 'custom'));
+
+-- Mục do chủ quán tự đặt: loại lương (Thưởng, Tạm ứng...), mục chi cố định
+-- (Tiền rác, Thuế...) và tab chi riêng (Gas, Sửa chữa...). Tab nhập theo
+-- ngày ('daily') hoặc theo tháng ('monthly', chia đều cho từng ngày).
+-- Ẩn (archived) chứ không xoá để khoản đã nhập vẫn có tên.
+CREATE TABLE IF NOT EXISTS public.finance_categories (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  scope text NOT NULL CHECK (scope IN ('salary', 'fixed', 'tab')),
+  name text NOT NULL,
+  schedule text NOT NULL DEFAULT 'daily' CHECK (schedule IN ('daily', 'monthly')),
+  archived boolean NOT NULL DEFAULT false,
+  created_by_name text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 
 -- Chốt sổ cuối ngày: tiền mặt đếm được trong két và số tiền thật từng tài
 -- khoản ngân hàng nhận được ({account_id: số tiền}), để so với sổ.
@@ -56,12 +74,15 @@ CREATE TABLE IF NOT EXISTS public.finance_day_closes (
 ALTER TABLE public.finance_revenue_ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.finance_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.finance_day_closes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.finance_categories ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.finance_revenue_ledger FROM anon, authenticated;
 REVOKE ALL ON public.finance_entries FROM anon, authenticated;
 REVOKE ALL ON public.finance_day_closes FROM anon, authenticated;
+REVOKE ALL ON public.finance_categories FROM anon, authenticated;
 GRANT ALL ON public.finance_revenue_ledger TO service_role;
 GRANT ALL ON public.finance_entries TO service_role;
 GRANT ALL ON public.finance_day_closes TO service_role;
+GRANT ALL ON public.finance_categories TO service_role;
 
 CREATE OR REPLACE FUNCTION public.capture_finance_revenue()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$

@@ -20,7 +20,9 @@ export const dynamic = 'force-dynamic';
 const headers = { 'Cache-Control': 'private, no-store', Vary: 'Cookie' };
 const missingTable = error => ['PGRST205', '42P01'].includes(error?.code);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
-const KINDS = ['drink', 'salary', 'fixed'];
+const KINDS = ['drink', 'salary', 'fixed', 'custom'];
+const CATEGORY_SCOPES = ['salary', 'fixed', 'tab'];
+const MAX_CATEGORIES_PER_SCOPE = 30;
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
 const MAX_AMOUNT = 10_000_000_000;
 
@@ -71,6 +73,10 @@ const notesBetween = (db, fromIso, toIso) => readAll(() => db.from('staff_notes'
   .select('id, created_at, note_type, amount, debt, paid_debt, content, staff ( full_name )')
   .eq('note_type', 'expense').gte('created_at', fromIso).lt('created_at', toIso)
   .order('created_at', { ascending: true }));
+
+// Mục / tab tự đặt (kể cả đã ẩn, để khoản cũ vẫn có tên). Chưa cài bảng → [].
+const readCategories = db => db.from('finance_categories').select('*').order('created_at')
+  .then(r => { if (r.error) { if (missingTable(r.error)) return []; throw r.error; } return r.data || []; });
 
 const readClose = (db, date) => db.from('finance_day_closes').select('*').eq('business_date', date).maybeSingle()
   .then(r => { if (r.error && !missingTable(r.error)) throw r.error; return r.data || null; });
@@ -144,21 +150,25 @@ export async function GET(request) {
       if (missingTable(error)) return NextResponse.json({ error: 'Chưa cài bảng sổ thu chi trên cơ sở dữ liệu (owner_finance.sql).', setupMissing: true }, { status: 503, headers });
       throw error;
     }
-    const [notes, entriesResult, accountsResult, staffResult, closesResult, missingBills] = await Promise.all([
+    const [notes, entriesResult, accountsResult, staffResult, closesResult, missingBills, categories] = await Promise.all([
       notesBetween(db, vnDayStartIso(start), vnDayStartIso(next)),
       db.from('finance_entries').select('*').gte('entry_date', start).lt('entry_date', next).order('entry_date').order('created_at'),
       db.from('bank_accounts').select('id, account_name, bank_name, account_number').order('sort_order'),
       db.from('staff').select('id, full_name').order('full_name'),
       db.from('finance_day_closes').select('*').gte('business_date', start).lt('business_date', next),
       findMissingBills(db).catch(error => { console.error('[admin/finance] missing bills', error); return null; }),
+      readCategories(db),
     ]);
     for (const result of [entriesResult, accountsResult, staffResult]) if (result.error) throw result.error;
     if (closesResult.error && !missingTable(closesResult.error)) throw closesResult.error;
     const entries = entriesResult.data || [];
-    const summary = summarizeMonth({ month, revenue, notes, entries, closes: closesResult.data || [], today });
+    const summary = summarizeMonth({ month, revenue, notes, entries, closes: closesResult.data || [], categories, today });
+    const monthlyTabs = new Set(categories.filter(c => c.scope === 'tab' && c.schedule === 'monthly').map(c => c.id));
     return NextResponse.json({
-      ...summary, today, startDate: FINANCE_START_DATE, fixedCategories: FIXED_CATEGORIES,
+      ...summary, today, startDate: FINANCE_START_DATE, fixedCategories: FIXED_CATEGORIES, categories,
       entries: entries.filter(e => e.kind !== 'fixed'),
+      // Khoản của tab nhập theo tháng — liệt kê riêng như chi cố định.
+      customMonthlyEntries: entries.filter(e => e.kind === 'custom' && monthlyTabs.has(e.category)),
       accounts: (accountsResult.data || []).map(a => ({ id: a.id, name: [a.bank_name, a.account_name].filter(Boolean).join(' · ') || 'Tài khoản', last4: String(a.account_number || '').slice(-4) })),
       staff: (staffResult.data || []).map(s => s.full_name).filter(Boolean),
       // null = không kiểm tra được (khác với [] = đã kiểm, không thiếu bill nào).
@@ -243,6 +253,36 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, entries: data }, { headers });
     }
 
+    if (body.action === 'add_category') {
+      const scope = body.scope;
+      const name = String(body.name || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+      const schedule = scope === 'tab' && body.schedule === 'monthly' ? 'monthly' : 'daily';
+      if (!CATEGORY_SCOPES.includes(scope)) return NextResponse.json({ error: 'Loại mục không hợp lệ.' }, { status: 400, headers });
+      if (!name) return NextResponse.json({ error: scope === 'tab' ? 'Nhập tên tab.' : 'Nhập tên mục.' }, { status: 400, headers });
+      const active = (await readCategories(db)).filter(c => c.scope === scope && !c.archived);
+      const builtIn = scope === 'fixed' ? FIXED_CATEGORIES.map(c => c.label)
+        : scope === 'tab' ? ['Nước ngọt / bia', 'Lương', 'Chi cố định'] : ['Lương'];
+      if ([...builtIn, ...active.map(c => c.name)].some(n => n.toLowerCase() === name.toLowerCase())) {
+        return NextResponse.json({ error: `"${name}" đã có rồi.` }, { status: 409, headers });
+      }
+      if (active.length >= MAX_CATEGORIES_PER_SCOPE) return NextResponse.json({ error: 'Đã đủ số mục tối đa, ẩn bớt mục cũ trước.' }, { status: 400, headers });
+      const { data, error } = await db.from('finance_categories').insert({
+        scope, name, schedule, created_by_name: session.user.full_name || null,
+      }).select('*').single();
+      if (error) {
+        if (missingTable(error)) return NextResponse.json({ error: 'Chưa cài bảng mục chi trên cơ sở dữ liệu (owner_finance.sql).' }, { status: 503, headers });
+        throw error;
+      }
+      return NextResponse.json({ ok: true, category: data }, { headers });
+    }
+
+    if (body.action === 'archive_category') {
+      if (typeof body.id !== 'string' || !UUID.test(body.id)) return NextResponse.json({ error: 'Thiếu mã mục.' }, { status: 400, headers });
+      const { error } = await db.from('finance_categories').update({ archived: true }).eq('id', body.id);
+      if (error) throw error;
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
     if (body.action !== 'add') return NextResponse.json({ error: 'Thao tác không hợp lệ.' }, { status: 400, headers });
     const kind = body.kind;
     const amount = Math.round(Number(body.amount));
@@ -251,13 +291,32 @@ export async function POST(request) {
     let category = null;
     if (!KINDS.includes(kind)) return NextResponse.json({ error: 'Loại khoản chi không hợp lệ.' }, { status: 400, headers });
     if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_AMOUNT) return NextResponse.json({ error: 'Số tiền không hợp lệ.' }, { status: 400, headers });
+    // Mục tự đặt còn đang dùng (chưa ẩn) thuộc đúng nhóm.
+    const ownCategory = async scope => {
+      if (typeof body.category !== 'string' || !UUID.test(body.category)) return null;
+      return (await readCategories(db)).find(c => c.id === body.category && c.scope === scope && !c.archived) || null;
+    };
+    let monthly = kind === 'fixed';
     if (kind === 'fixed') {
+      const builtIn = FIXED_CATEGORIES.find(c => c.key === body.category);
+      const own = builtIn ? null : await ownCategory('fixed');
+      if (!builtIn && !own) return NextResponse.json({ error: 'Chọn mục chi cố định.' }, { status: 400, headers });
+      category = builtIn ? builtIn.key : own.id;
+      label = label || (builtIn ? builtIn.label : own.name);
+    } else if (kind === 'salary' && body.category) {
+      const own = await ownCategory('salary');
+      if (!own) return NextResponse.json({ error: 'Loại lương không còn, chọn lại.' }, { status: 400, headers });
+      category = own.id;
+    } else if (kind === 'custom') {
+      const tab = await ownCategory('tab');
+      if (!tab) return NextResponse.json({ error: 'Tab này không còn, tải lại trang.' }, { status: 400, headers });
+      category = tab.id;
+      monthly = tab.schedule === 'monthly';
+      label = label || tab.name;
+    }
+    if (monthly) {
       if (!isMonthKey(body.month)) return NextResponse.json({ error: 'Tháng không hợp lệ.' }, { status: 400, headers });
-      const cat = FIXED_CATEGORIES.find(c => c.key === body.category);
-      if (!cat) return NextResponse.json({ error: 'Chọn loại chi cố định.' }, { status: 400, headers });
       entryDate = monthBounds(body.month).start;
-      category = cat.key;
-      label = label || cat.label;
     } else if (!DATE.test(entryDate)) {
       return NextResponse.json({ error: 'Ngày không hợp lệ.' }, { status: 400, headers });
     }
