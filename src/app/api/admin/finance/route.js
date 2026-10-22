@@ -46,7 +46,8 @@ function parseNoteItems(note) {
   try {
     if (!note.content?.includes('structured_expense')) return null;
     const data = JSON.parse(note.content);
-    return (data.items || []).filter(i => i.name).map(i => ({
+    // Bỏ các dòng mẫu chưa điền giá ("Tiền rau", "Tiền gia vị"...).
+    return (data.items || []).filter(i => i.name && String(i.price || '').trim()).map(i => ({
       name: i.name, qty: i.qty || '', price: i.price || '', paymentStatus: i.paymentStatus || 'full', creditor: i.creditor || '',
     }));
   } catch { return null; }
