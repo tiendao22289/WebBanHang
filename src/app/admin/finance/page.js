@@ -50,7 +50,7 @@ function AddEntryForm({ data, month, onSaved }) {
   return <form className="fin-form" onSubmit={save}>
     <div className="fin-tabs" role="tablist">
       {['drink', 'salary', 'fixed'].map(k => <button key={k} type="button" role="tab" aria-selected={kind === k}
-        className={kind === k ? 'active' : ''} onClick={() => { setKind(k); setError(''); }}>{KIND_LABEL[k]}</button>)}
+        className={kind === k ? 'active' : ''} onClick={() => { if (k !== kind) setLabel(''); setKind(k); setError(''); }}>{KIND_LABEL[k]}</button>)}
     </div>
     <div className="fin-fields">
       {kind === 'fixed'
@@ -187,7 +187,7 @@ export default function FinancePage() {
         <div className="fin-card"><span>Lương</span><b>{money(t.salary)}</b></div>
         <div className="fin-card"><span>Chi cố định (phần các ngày đã qua)</span><b>{money(t.fixedShare)}</b>
           <small>Cả tháng {money(data.fixedMonthTotal)}</small></div>
-        <div className={`fin-card profit ${t.profit < 0 ? 'loss' : ''}`}><span>{t.profit < 0 ? 'Lỗ' : 'Lãi'}</span><b>{money(t.profit)}</b>
+        <div className={`fin-card profit ${t.profit < 0 ? 'loss' : ''}`}><span>{t.profit < 0 ? 'Lỗ' : 'Lãi'}</span><b>{money(Math.abs(t.profit))}</b>
           <small>Doanh thu − tất cả khoản chi</small></div>
       </section>
       {Object.keys(t.byAccount).length > 0 && <section className="fin-accounts">
@@ -215,7 +215,7 @@ export default function FinancePage() {
       <div className="fin-days">
         {days.map(d => <button key={d.date} className="fin-day" onClick={() => setDay(d.date)}>
           <div className="fin-day-head"><b>{dayLabel(d.date)}</b>
-            <span className={d.profit < 0 ? 'loss' : 'gain'}>{d.profit < 0 ? 'Lỗ' : 'Lãi'} {money(d.profit)}</span><ChevronRight size={16} /></div>
+            <span className={d.profit < 0 ? 'loss' : 'gain'}>{d.profit < 0 ? 'Lỗ' : 'Lãi'} {money(Math.abs(d.profit))}</span><ChevronRight size={16} /></div>
           <div className="fin-day-grid">
             <span>Doanh thu <b>{money(d.revenue)}</b></span>
             <span>{d.bills} bill · TM {money(d.cash)} · CK {money(d.transfer)}</span>
