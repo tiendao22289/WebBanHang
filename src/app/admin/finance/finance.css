@@ -91,8 +91,11 @@
 .fin-day-head > span:nth-child(2) { text-align: right; font-size: 13px; line-height: 1.3; flex-shrink: 0; }
 
 .fin-warn { font-size: 12px; color: #92400e; background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 8px 10px; margin: 0 0 10px; overflow-wrap: anywhere; }
-.fin-alert { border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; border-radius: 8px; padding: 12px 14px; margin: 16px 0; }
+.fin-alert { border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; border-radius: 12px; padding: 12px 14px; margin: 0 0 12px; }
 .fin-alert p { font-size: 13px; margin: 4px 0 8px; }
+.fin-recovered { border: 1px solid #bbf7d0; background: #f0fdf4; color: #166534; border-radius: 12px; padding: 12px 14px; margin: 0 0 12px; }
+.fin-recovered p { font-size: 13px; margin: 4px 0 8px; }
+.fin-recovered .fin-row { border-bottom-color: #bbf7d0; color: #14532d; }
 .fin-alert .fin-row { border-bottom-color: #fecaca; color: #7f1d1d; }
 .fin-secondary { width: 100%; min-height: 44px; margin-top: 10px; border: 1px dashed #93c5fd; border-radius: 6px; background: #eff6ff; color: #1d4ed8; font-weight: 700; font-size: 15px; }
 .fin-day-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

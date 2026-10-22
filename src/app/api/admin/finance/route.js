@@ -82,15 +82,14 @@ const readClose = (db, date) => db.from('finance_day_closes').select('*').eq('bu
   .then(r => { if (r.error && !missingTable(r.error)) throw r.error; return r.data || null; });
 
 /**
- * Bill đã thanh toán (còn trong lịch sử bàn 10 giờ) mà chưa có trong sổ.
- * Chỉ xét bill thanh toán SAU dòng sổ đầu tiên — trước lúc cài sổ thì đương
- * nhiên chưa có, không phải lỗi. Lịch sử bàn không có thì bỏ qua.
+ * Bill đã thanh toán (còn trong lịch sử bàn 10 giờ) mà chưa có trong sổ,
+ * tính từ ngày sổ bắt đầu — kể cả bill thu trước lúc cài bảng sổ trong ngày
+ * đó, miễn lịch sử bàn còn giữ. Lịch sử bàn không có thì bỏ qua.
  */
 async function findMissingBills(db) {
-  const first = await db.from('finance_revenue_ledger').select('recorded_at').order('recorded_at', { ascending: true }).limit(1);
-  if (first.error) throw first.error;
-  const since = first.data?.[0]?.recorded_at;
-  if (!since) return [];
+  const probe = await db.from('finance_revenue_ledger').select('order_id').limit(1);
+  if (probe.error) throw probe.error; // chưa cài bảng sổ → báo lên trên
+  const since = vnDayStartIso(FINANCE_START_DATE);
   const history = await db.from('table_bill_history').select('order_id, paid_at, snapshot')
     .gt('expires_at', new Date().toISOString()).gte('paid_at', since).order('paid_at', { ascending: true });
   if (history.error) { if (missingTable(history.error)) return []; throw history.error; }
@@ -103,7 +102,48 @@ async function findMissingBills(db) {
     orderId: r.order_id, paidAt: r.paid_at, tableNumber: r.snapshot?.table_number ?? null,
     customerName: r.snapshot?.customer_name || null, paymentMethod: r.snapshot?.payment_method || null,
     amount: Math.max(0, (r.snapshot?.order_items || []).reduce((sum, i) => sum + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0)),
+    snapshot: r.snapshot,
   }));
+}
+
+/**
+ * Tự bổ sung vào sổ các bill đã thu mà trigger ghi sổ bỏ sót (lỗi hiếm), lấy
+ * từ lịch sử bàn 10 giờ — để sổ không thiếu bill nào. Bỏ qua bill đã được
+ * mở lại / huỷ sau khi thu (còn trong orders nhưng không còn 'paid'); bill đã
+ * bị dọn khỏi orders thì vẫn bổ sung vì lịch sử bàn chỉ ghi lúc thanh toán.
+ * Không đụng tới orders hay trang Thống kê.
+ */
+async function repairMissingBills(db) {
+  const missing = await findMissingBills(db);
+  if (!missing.length) return { recovered: [], unrecovered: [] };
+  const ids = missing.map(m => m.orderId);
+  const orders = await db.from('orders').select('id, status').in('id', ids);
+  if (orders.error) throw orders.error;
+  const statusById = new Map((orders.data || []).map(o => [o.id, o.status]));
+  // Tài khoản nhận tiền: giao dịch QR của đúng bill (có thể đã bị dọn → để trống).
+  const accountOf = async orderId => {
+    const { data } = await db.from('payment_transactions').select('order_ids, account_id')
+      .like('order_ids', `%${orderId}%`).in('status', ['pending', 'completed']);
+    return (data || []).find(t => t.account_id && String(t.order_ids || '').split(',').includes(orderId))?.account_id || null;
+  };
+  const recovered = [], unrecovered = [];
+  for (const bill of missing) {
+    const status = statusById.get(bill.orderId);
+    if (status && status !== 'paid') continue; // mở lại / huỷ sau khi thu → không phải doanh thu
+    const items = (bill.snapshot?.order_items || []).map(i => ({
+      name: i.item_name || i.menu_item?.name || null, quantity: i.quantity, unit_price: i.unit_price,
+      options: i.item_options ?? null, is_gift: i.is_gift ?? null,
+    }));
+    const { error } = await db.from('finance_revenue_ledger').upsert({
+      order_id: bill.orderId, paid_at: bill.paidAt, business_date: vnDate(bill.paidAt),
+      table_number: bill.tableNumber === null ? null : String(bill.tableNumber), customer_name: bill.customerName,
+      payment_method: bill.paymentMethod, account_id: bill.paymentMethod === 'transfer' ? await accountOf(bill.orderId) : null,
+      amount: bill.amount, items,
+    }, { onConflict: 'order_id', ignoreDuplicates: true });
+    const view = { orderId: bill.orderId, paidAt: bill.paidAt, tableNumber: bill.tableNumber, customerName: bill.customerName, paymentMethod: bill.paymentMethod, amount: bill.amount };
+    if (error) { console.error('[admin/finance] repair', error); unrecovered.push(view); } else recovered.push(view);
+  }
+  return { recovered, unrecovered };
 }
 
 export async function GET(request) {
@@ -141,6 +181,13 @@ export async function GET(request) {
     const month = params.get('month') || today.slice(0, 7);
     if (!isMonthKey(month)) return NextResponse.json({ error: 'Tháng không hợp lệ.' }, { status: 400, headers });
     const { start, next } = monthBounds(month);
+    // Bổ sung bill bị sót trước khi đọc sổ, để con số tháng đã đủ.
+    let repair = null;
+    try { repair = await repairMissingBills(db); }
+    catch (error) {
+      if (missingTable(error)) return NextResponse.json({ error: 'Chưa cài bảng sổ thu chi trên cơ sở dữ liệu (owner_finance.sql).', setupMissing: true }, { status: 503, headers });
+      console.error('[admin/finance] repair', error);
+    }
     let revenue;
     try {
       revenue = await readAll(() => db.from('finance_revenue_ledger')
@@ -150,13 +197,12 @@ export async function GET(request) {
       if (missingTable(error)) return NextResponse.json({ error: 'Chưa cài bảng sổ thu chi trên cơ sở dữ liệu (owner_finance.sql).', setupMissing: true }, { status: 503, headers });
       throw error;
     }
-    const [notes, entriesResult, accountsResult, staffResult, closesResult, missingBills, categories] = await Promise.all([
+    const [notes, entriesResult, accountsResult, staffResult, closesResult, categories] = await Promise.all([
       notesBetween(db, vnDayStartIso(start), vnDayStartIso(next)),
       db.from('finance_entries').select('*').gte('entry_date', start).lt('entry_date', next).order('entry_date').order('created_at'),
       db.from('bank_accounts').select('id, account_name, bank_name, account_number').order('sort_order'),
       db.from('staff').select('id, full_name').order('full_name'),
       db.from('finance_day_closes').select('*').gte('business_date', start).lt('business_date', next),
-      findMissingBills(db).catch(error => { console.error('[admin/finance] missing bills', error); return null; }),
       readCategories(db),
     ]);
     for (const result of [entriesResult, accountsResult, staffResult]) if (result.error) throw result.error;
@@ -171,8 +217,10 @@ export async function GET(request) {
       customMonthlyEntries: entries.filter(e => e.kind === 'custom' && monthlyTabs.has(e.category)),
       accounts: (accountsResult.data || []).map(a => ({ id: a.id, name: [a.bank_name, a.account_name].filter(Boolean).join(' · ') || 'Tài khoản', last4: String(a.account_number || '').slice(-4) })),
       staff: (staffResult.data || []).map(s => s.full_name).filter(Boolean),
-      // null = không kiểm tra được (khác với [] = đã kiểm, không thiếu bill nào).
-      missingBills,
+      // Bill sổ tự bổ sung lần này từ lịch sử bàn, và bill chưa bổ sung được
+      // (null = không kiểm tra được).
+      recoveredBills: repair ? repair.recovered : null,
+      missingBills: repair ? repair.unrecovered : null,
     }, { headers });
   } catch (error) {
     console.error('[admin/finance] GET', error);

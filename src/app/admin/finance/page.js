@@ -416,9 +416,18 @@ export default function FinancePage() {
 
     {error && <p className="fin-error">{error}</p>}
 
+    {data?.recoveredBills?.length > 0 && <section className="fin-recovered" role="status">
+      <b>✓ Sổ vừa tự bổ sung {data.recoveredBills.length} bill bị sót</b>
+      <p>Lấy từ lịch sử bàn, đã cộng vào số liệu bên dưới. Nếu thông báo này hay xuất hiện, báo lại để kiểm tra.</p>
+      {data.recoveredBills.map(b => <div key={b.orderId} className="fin-row static">
+        <span>{clock(b.paidAt)} · Bàn {b.tableNumber ?? '?'} · {b.customerName || 'Khách'}<small>{b.paymentMethod === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt'}</small></span>
+        <b>{money(b.amount)}</b>
+      </div>)}
+    </section>}
+
     {data?.missingBills?.length > 0 && <section className="fin-alert" role="alert">
       <b>⚠ Có {data.missingBills.length} bill đã thanh toán nhưng chưa vào sổ</b>
-      <p>Sổ thu chi đang thiếu các bill này (kiểm tra trong 10 giờ gần nhất). Báo lại để kiểm tra.</p>
+      <p>Sổ chưa tự bổ sung được các bill này (kiểm tra trong 10 giờ gần nhất). Báo lại để kiểm tra.</p>
       {data.missingBills.map(b => <div key={b.orderId} className="fin-row static">
         <span>{clock(b.paidAt)} · Bàn {b.tableNumber ?? '?'} · {b.customerName || 'Khách'}<small>{b.paymentMethod === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt'}</small></span>
         <b>{money(b.amount)}</b>
