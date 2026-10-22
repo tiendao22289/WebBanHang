@@ -18,6 +18,7 @@ import {
   QrCode,
   Star,
   History,
+  PiggyBank,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './admin.css';
@@ -32,6 +33,7 @@ const ALL_NAV = [
   { href: '/admin/notes', label: 'Sổ tay', icon: ChefHat },
   { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
   { href: '/admin/stats', label: 'Thống kê', icon: BarChart3 },
+  { href: '/admin/finance', label: 'Sổ thu chi', icon: PiggyBank, adminOnly: true },
   { href: '/admin/settings', label: 'Cài đặt', icon: Settings, adminOnly: true },
   { href: '/admin/logs', label: 'Lịch sử bàn', icon: History, adminOnly: true },
 ];
@@ -211,7 +213,7 @@ export default function AdminLayout({ children }) {
   }
 
   // ── Logged in — render layout ─────────────────────────────────────────────
-  if (user.role !== 'admin' && pathname.startsWith('/admin/logs')) return null;
+  if (user.role !== 'admin' && (pathname.startsWith('/admin/logs') || pathname.startsWith('/admin/finance'))) return null;
   const navItems = user.role === 'admin' ? ALL_NAV : STAFF_NAV;
 
   return (
