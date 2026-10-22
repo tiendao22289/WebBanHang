@@ -10,7 +10,7 @@ const source = readFileSync(new URL('../src/app/api/admin/finance/route.js', imp
 // Bộ dựng truy vấn giả kiểu supabase-js, đủ cho route sổ thu chi.
 function fakeDb(state, { failTable } = {}) {
   return { from(table) {
-    let op = 'read', values, conditions = [], orders = [], range = null, single = false, maybe = false, max = Infinity, conflict = null;
+    let op = 'read', values, conditions = [], orders = [], range = null, single = false, maybe = false, max = Infinity, conflict = null, ignore = false;
     const q = {
       select() { return q; },
       eq(k, v) { conditions.push(r => r[k] === v); return q; },
@@ -18,9 +18,10 @@ function fakeDb(state, { failTable } = {}) {
       lt(k, v) { conditions.push(r => r[k] < v); return q; },
       gt(k, v) { conditions.push(r => r[k] > v); return q; },
       in(k, vs) { conditions.push(r => vs.includes(r[k])); return q; },
+      like(k, pattern) { const needle = pattern.replace(/%/g, ''); conditions.push(r => String(r[k] ?? '').includes(needle)); return q; },
       limit(n) { max = n; return q; },
       maybeSingle() { maybe = true; return q; },
-      upsert(v, opts) { op = 'upsert'; values = v; conflict = opts?.onConflict; return q; },
+      upsert(v, opts) { op = 'upsert'; values = v; conflict = opts?.onConflict; ignore = !!opts?.ignoreDuplicates; return q; },
       order(k) { orders.push(k); return q; },
       range(a, b) { range = [a, b]; return q; },
       insert(v) { op = 'insert'; values = v; return q; },
@@ -43,7 +44,7 @@ function fakeDb(state, { failTable } = {}) {
         }
         if (op === 'upsert') {
           const existing = state[table].find(r => r[conflict] === values[conflict]);
-          if (existing) Object.assign(existing, values); else state[table].push({ ...values });
+          if (existing && !ignore) Object.assign(existing, values); else if (!existing) state[table].push({ ...values });
           return resolve({ data: structuredClone(existing || values), error: null });
         }
         if (op === 'update') { rows.forEach(r => Object.assign(r, values)); return resolve({ data: structuredClone(rows), error: null }); }
@@ -222,28 +223,47 @@ test('fixed costs are copied from the previous month once and never over an exis
   assert.equal((await post(api, { action: 'copy_fixed', month: 'nov' })).status, 400);
 });
 
-test('bills paid after the ledger started but missing from it are reported', async () => {
+test('bills missing from the ledger are filled in from table history, except reopened ones', async () => {
   const state = empty();
   const started = new Date(Date.now() - 3 * 3600000).toISOString();
+  const paidAt = later(-30);
   state.finance_revenue_ledger.push({ order_id: 'in-ledger', business_date: '2026-10-23', amount: 1, payment_method: 'cash', recorded_at: started });
+  state.orders = [{ id: 'reopened', status: 'pending' }, { id: 'missing-cash', status: 'paid' }];
+  state.payment_transactions = [{ order_ids: 'x,missing', account_id: 'acc-b', status: 'completed' }];
   state.table_bill_history.push(
     { order_id: 'in-ledger', paid_at: later(-60), expires_at: later(500), snapshot: {} },
-    { order_id: 'missing', paid_at: later(-30), expires_at: later(500),
+    // Bill chuyển khoản đã bị dọn khỏi orders (định mức) → vẫn phải vào sổ.
+    { order_id: 'missing', paid_at: paidAt, expires_at: later(500),
       snapshot: { table_number: 7, customer_name: 'Lan', payment_method: 'transfer',
-        order_items: [{ unit_price: 50000, quantity: 2 }, { unit_price: -10000, quantity: 1 }] } },
-    { order_id: 'before-ledger', paid_at: new Date(Date.parse(started) - 60000).toISOString(), expires_at: later(500), snapshot: {} },
+        order_items: [{ unit_price: 50000, quantity: 2, menu_item: { name: 'Ốc' } }, { unit_price: -10000, quantity: 1, item_name: 'Giảm' }] } },
+    { order_id: 'missing-cash', paid_at: paidAt, expires_at: later(500),
+      snapshot: { table_number: 8, payment_method: 'cash', order_items: [{ unit_price: 20000, quantity: 1 }] } },
+    // Thu xong rồi mở lại → không còn là doanh thu.
+    { order_id: 'reopened', paid_at: paidAt, expires_at: later(500), snapshot: { payment_method: 'cash', order_items: [{ unit_price: 1, quantity: 1 }] } },
+    // Trước ngày sổ bắt đầu (23/10) thì không thuộc sổ.
+    { order_id: 'before-start', paid_at: '2026-10-22T16:59:00.000Z', expires_at: later(500), snapshot: { payment_method: 'cash', order_items: [{ unit_price: 5, quantity: 1 }] } },
     { order_id: 'expired', paid_at: later(-30), expires_at: later(-1), snapshot: {} });
   const res = await get(load({ state }), 'month=2026-10');
-  assert.deepEqual(res.body.missingBills.map(b => [b.orderId, b.tableNumber, b.amount, b.paymentMethod]),
-    [['missing', 7, 90000, 'transfer']]);
+  assert.deepEqual(res.body.recoveredBills.map(b => [b.orderId, b.amount]), [['missing', 90000], ['missing-cash', 20000]]);
+  assert.deepEqual(res.body.missingBills, []);
+  const row = plain(state.finance_revenue_ledger.find(r => r.order_id === 'missing'));
+  assert.deepEqual([row.amount, row.payment_method, row.account_id, row.table_number, row.business_date, row.items.map(i => i.name)],
+    [90000, 'transfer', 'acc-b', '7', finance.vnDate(paidAt), ['Ốc', 'Giảm']]);
+  assert.equal(state.finance_revenue_ledger.some(r => r.order_id === 'reopened'), false);
+  const today = res.body.days.find(d => d.date === finance.vnDate(paidAt));
+  if (today) assert.ok(today.revenue >= 110000, 'recovered bills are already in the totals');
 
+  const again = await get(load({ state }), 'month=2026-10');
+  assert.deepEqual(again.body.recoveredBills, [], 'nothing left to recover the second time');
+
+  // Sổ còn trống (vừa cài) vẫn bổ sung bill thu trong ngày từ lịch sử bàn.
   const fresh = empty();
-  fresh.table_bill_history.push({ order_id: 'x', paid_at: later(-5), expires_at: later(500), snapshot: {} });
-  assert.deepEqual((await get(load({ state: fresh }), 'month=2026-10')).body.missingBills, [],
-    'nothing is missing before the ledger has started');
+  fresh.table_bill_history.push({ order_id: 'x', paid_at: later(-5), expires_at: later(500),
+    snapshot: { payment_method: 'cash', order_items: [{ unit_price: 30000, quantity: 1 }] } });
+  assert.deepEqual((await get(load({ state: fresh }), 'month=2026-10')).body.recoveredBills.map(b => b.orderId), ['x']);
   const noHistory = await get(load({ state, failTable: 'table_bill_history' }), 'month=2026-10');
   assert.equal(noHistory.status, 200);
-  assert.deepEqual(noHistory.body.missingBills, []);
+  assert.deepEqual(noHistory.body.recoveredBills, []);
 });
 
 test('purchase notes with prices that look like a missing "k" are flagged', async () => {
