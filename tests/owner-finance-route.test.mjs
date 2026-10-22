@@ -108,7 +108,7 @@ test('day view lists bills, purchase notes with items, and that day entries', as
     items: [{ name: 'Ốc len', qty: '3kg', price: '300.000', paymentStatus: 'debt', creditor: 'Cô Ba' }, { name: '' }] });
   state.staff_notes.push(
     // 23:59 ngày 23 giờ VN vẫn thuộc ngày 23
-    { id: 'n1', created_at: '2026-10-23T16:59:00.000Z', note_type: 'expense', amount: 0, debt: 300000, content: structured, staff: { full_name: 'Lan' } },
+    { id: 'n1', created_at: '2026-10-23T16:59:00.000Z', note_type: 'expense', amount: 0, debt: 300000, paid_debt: 100000, content: structured, staff: { full_name: 'Lan' } },
     { id: 'n2', created_at: '2026-10-23T17:00:00.000Z', note_type: 'expense', amount: 5, debt: 0, content: 'hôm sau', staff: null });
   state.finance_entries.push({ id: 'e1', entry_date: '2026-10-23', kind: 'drink', label: 'Coca', amount: 100000, created_at: '1' });
   const res = await get(load({ state }), 'date=2026-10-23');
@@ -116,6 +116,7 @@ test('day view lists bills, purchase notes with items, and that day entries', as
   assert.deepEqual(res.body.bills.map(b => b.order_id), ['o1']);
   assert.equal(res.body.notes.length, 1);
   assert.equal(res.body.notes[0].cost, 300000);
+  assert.equal(res.body.notes[0].debtLeft, 200000, 'debt already paid back is not shown as still owed');
   assert.equal(res.body.notes[0].text, 'đi chợ sáng');
   assert.deepEqual(res.body.notes[0].items, [{ name: 'Ốc len', qty: '3kg', price: '300.000', paymentStatus: 'debt', creditor: 'Cô Ba' }]);
   assert.deepEqual(res.body.entries.map(e => e.id), ['e1']);

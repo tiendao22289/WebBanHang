@@ -58,11 +58,12 @@ function noteView(note) {
   let text = note.content || '';
   if (items) { try { text = JSON.parse(note.content).note || ''; } catch { text = ''; } }
   return { id: note.id, createdAt: note.created_at, staffName: note.staff?.full_name || '', cost: noteCost(note),
-    paid: Number(note.amount) || 0, debt: Number(note.debt) || 0, items, text: text.slice(0, 500) };
+    paid: Number(note.amount) || 0, debt: Number(note.debt) || 0,
+    debtLeft: Math.max(0, (Number(note.debt) || 0) - (Number(note.paid_debt) || 0)), items, text: text.slice(0, 500) };
 }
 
 const notesBetween = (db, fromIso, toIso) => readAll(() => db.from('staff_notes')
-  .select('id, created_at, note_type, amount, debt, content, staff ( full_name )')
+  .select('id, created_at, note_type, amount, debt, paid_debt, content, staff ( full_name )')
   .eq('note_type', 'expense').gte('created_at', fromIso).lt('created_at', toIso)
   .order('created_at', { ascending: true }));
 

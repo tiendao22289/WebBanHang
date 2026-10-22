@@ -64,7 +64,7 @@ function AddEntryForm({ data, month, onSaved }) {
       </label>}
       {kind === 'drink' && <label>Nội dung<input value={label} onChange={e => setLabel(e.target.value)} placeholder="Nước ngọt / bia" /></label>}
       <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''}
-        onChange={e => setAmount(digits(e.target.value))} placeholder="0" required /></label>
+        onChange={e => setAmount(digits(e.target.value))} placeholder="0" enterKeyHint="done" required /></label>
       <label className="fin-wide">Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
     </div>
     {kind === 'fixed' && <p className="fin-hint">Ghi cho cả tháng {month.slice(5)}/{month.slice(0, 4)}, tự chia đều cho từng ngày.</p>}
@@ -83,6 +83,14 @@ function DayDetail({ date, accounts, onClose, onChanged }) {
     try { setDetail(await api(`/api/admin/finance?date=${date}`)); } catch (err) { setError(err.message); }
   }
   useEffect(() => { load(); }, [date]);
+  // Khoá cuộn trang phía sau (iOS vẫn cuộn nền khi vuốt trong khung) + Esc để đóng.
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => { document.body.style.overflow = previous; window.removeEventListener('keydown', onKey); };
+  }, []);
 
   async function remove(entry) {
     if (!confirm(`Xoá "${entry.label}" ${money(entry.amount)}?`)) return;
@@ -115,7 +123,7 @@ function DayDetail({ date, accounts, onClose, onChanged }) {
         {detail.notes.length === 0 && <p className="fin-empty">Không có phiếu.</p>}
         {detail.notes.map(note => <div key={note.id} className="fin-row-block">
           <div className="fin-row static"><span>{clock(note.createdAt)} · {note.staffName || 'Nhân viên'}
-            {note.debt > 0 && <small>Còn nợ {money(note.debt)}</small>}</span><b>{money(note.cost)}</b></div>
+            {note.debtLeft > 0 ? <small>Còn nợ {money(note.debtLeft)}</small> : note.debt > 0 && <small>Đã trả hết nợ {money(note.debt)}</small>}</span><b>{money(note.cost)}</b></div>
           {note.items?.length > 0 && <ul className="fin-items">{note.items.map((item, i) =>
             <li key={i}><span>{item.qty ? `${item.qty} ` : ''}{item.name}{item.paymentStatus === 'debt' ? ' (nợ)' : ''}</span><span>{item.price}</span></li>)}</ul>}
           {!note.items && note.text && <p className="fin-note-text">{note.text}</p>}
