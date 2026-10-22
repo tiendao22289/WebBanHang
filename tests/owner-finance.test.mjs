@@ -126,3 +126,56 @@ test('the browser roles cannot read or write the finance tables', async () => {
     }
   } finally { await db.close(); }
 });
+
+test('Sổ tay prices are read like the Sổ tay page and prices under 1.000đ are flagged', async () => {
+  const { parseNotePrice, suspiciousNoteItems } = await import('../src/lib/ownerFinance.mjs');
+  assert.equal(parseNotePrice('250k'), 250000);
+  assert.equal(parseNotePrice('1.5k'), 1500);
+  assert.equal(parseNotePrice('250'), 250);
+  assert.equal(parseNotePrice('250.000'), 250, 'the Sổ tay page reads a dotted price as 250đ too');
+  assert.deepEqual(suspiciousNoteItems([
+    { name: 'Ốc', price: '250' }, { name: 'Hàu', price: '300k' }, { name: 'Tiền rau', price: '' }, { name: 'Mực', price: '250.000' },
+  ]).map(i => i.name), ['Ốc', 'Mực']);
+});
+
+test('a day close compares counted cash and bank money with the ledger', () => {
+  const s = summarizeMonth({
+    month: '2026-10', today: '2026-10-25', startDate: '2026-10-23',
+    revenue: [
+      { business_date: '2026-10-23', amount: 500000, payment_method: 'cash' },
+      { business_date: '2026-10-23', amount: 300000, payment_method: 'transfer', account_id: 'A' },
+    ],
+    notes: [{ note_type: 'expense', created_at: '2026-10-24T02:00:00Z', amount: 250, debt: 0,
+      content: JSON.stringify({ type: 'structured_expense', items: [{ name: 'Ốc', price: '250' }] }) }],
+    closes: [
+      { business_date: '2026-10-23', cash_counted: 480000, bank_counted: { A: 300000 }, closed_by_name: 'Chủ' },
+      { business_date: '2026-10-24', cash_counted: null, bank_counted: { A: 50000 } },
+    ],
+  });
+  const [d23, d24, d25] = s.days;
+  assert.deepEqual([d23.close.cashDiff, d23.close.bankDiffs.A, d23.close.closedBy], [-20000, 0, 'Chủ']);
+  assert.equal(d24.close.cashDiff, null, 'cash not counted is not a difference');
+  assert.equal(d24.close.bankDiffs.A, 50000);
+  assert.equal(d24.suspiciousNotes, 1);
+  assert.equal(d25.close, null);
+});
+
+test('the day close table is only reachable by the server', async () => {
+  const db = await financeDb();
+  try {
+    await db.exec('SET ROLE anon');
+    await assert.rejects(db.query('SELECT * FROM finance_day_closes'), /permission denied/);
+    await db.exec('RESET ROLE');
+  } finally { await db.close(); }
+});
+
+test('the migration can be run again without dropping the existing trigger', async () => {
+  const db = await financeDb();
+  try {
+    await db.exec(readFileSync(new URL('../supabase/migrations/owner_finance.sql', import.meta.url), 'utf8'));
+    const { rows } = await db.query(`SELECT count(*)::int AS n FROM pg_trigger WHERE tgname = 'capture_finance_revenue'`);
+    assert.equal(rows[0].n, 1);
+    await db.exec(`UPDATE orders SET status='paid', payment_method='cash', paid_at=now() WHERE customer_phone='0900';`);
+    assert.equal((await db.query('SELECT 1 FROM finance_revenue_ledger')).rows.length, 1, 'recorded once, not twice');
+  } finally { await db.close(); }
+});

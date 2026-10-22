@@ -8,7 +8,10 @@
 -- finance_entries: các khoản chủ quán tự nhập (nước ngọt, lương từng nhân
 -- viên, chi cố định theo tháng).
 --
--- Cả hai bảng chỉ service_role đọc/ghi: repo công khai và trang web dùng anon
+-- finance_day_closes: chốt sổ cuối ngày (tiền mặt đếm được, tiền thật từng
+-- tài khoản) để thấy chênh lệch với sổ.
+--
+-- Các bảng này chỉ service_role đọc/ghi: repo công khai và trang web dùng anon
 -- key, nên anon/authenticated không được chạm vào. Chạy lại được nhiều lần.
 BEGIN;
 
@@ -39,12 +42,26 @@ CREATE TABLE IF NOT EXISTS public.finance_entries (
 );
 CREATE INDEX IF NOT EXISTS finance_entries_date ON public.finance_entries(entry_date);
 
+-- Chốt sổ cuối ngày: tiền mặt đếm được trong két và số tiền thật từng tài
+-- khoản ngân hàng nhận được ({account_id: số tiền}), để so với sổ.
+CREATE TABLE IF NOT EXISTS public.finance_day_closes (
+  business_date date PRIMARY KEY,
+  cash_counted numeric CHECK (cash_counted >= 0),
+  bank_counted jsonb NOT NULL DEFAULT '{}'::jsonb,
+  note text,
+  closed_by_name text,
+  closed_at timestamptz NOT NULL DEFAULT now()
+);
+
 ALTER TABLE public.finance_revenue_ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.finance_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.finance_day_closes ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.finance_revenue_ledger FROM anon, authenticated;
 REVOKE ALL ON public.finance_entries FROM anon, authenticated;
+REVOKE ALL ON public.finance_day_closes FROM anon, authenticated;
 GRANT ALL ON public.finance_revenue_ledger TO service_role;
 GRANT ALL ON public.finance_entries TO service_role;
+GRANT ALL ON public.finance_day_closes TO service_role;
 
 CREATE OR REPLACE FUNCTION public.capture_finance_revenue()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -88,8 +105,16 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 REVOKE ALL ON FUNCTION public.capture_finance_revenue() FROM PUBLIC, anon, authenticated;
 
-DROP TRIGGER IF EXISTS capture_finance_revenue ON public.orders;
-CREATE TRIGGER capture_finance_revenue AFTER UPDATE OF status ON public.orders
-  FOR EACH ROW EXECUTE FUNCTION public.capture_finance_revenue();
+-- Chỉ tạo khi chưa có: orders thuộc supabase_admin nên vai trò postgres
+-- (SQL Editor) tạo được trigger nhưng không DROP được → DROP/CREATE lại sẽ
+-- làm file không chạy lại được. Sửa thân trigger qua CREATE OR REPLACE ở trên.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger
+      WHERE tgname = 'capture_finance_revenue' AND tgrelid = 'public.orders'::regclass) THEN
+    CREATE TRIGGER capture_finance_revenue AFTER UPDATE OF status ON public.orders
+      FOR EACH ROW EXECUTE FUNCTION public.capture_finance_revenue();
+  END IF;
+END $$;
 
 COMMIT;

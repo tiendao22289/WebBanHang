@@ -40,10 +40,61 @@ export function vnDayStartIso(date) {
   return new Date(`${date}T00:00:00.000+07:00`).toISOString();
 }
 
+/** Các dòng hàng của phiếu Sổ tay dạng bảng (structured_expense), hoặc []. */
+export function noteItems(note) {
+  try {
+    if (!note?.content?.includes('structured_expense')) return [];
+    return JSON.parse(note.content).items || [];
+  } catch { return []; }
+}
+
 /** Tiền hàng của 1 phiếu Sổ tay "Đi chợ / Chi tiêu": đã trả + còn nợ. */
 export function noteCost(note) {
   if (note?.note_type !== 'expense') return 0;
   return Math.max(0, Number(note.amount) || 0) + Math.max(0, Number(note.debt) || 0);
+}
+
+/**
+ * Đọc giá một dòng hàng Sổ tay giống trang Sổ tay: "250k" = 250.000, còn
+ * "250" là 250đ.
+ */
+export function parseNotePrice(value) {
+  const s = String(value ?? '').toLowerCase().trim();
+  const num = parseFloat(s.replace(/[^0-9.]/g, '')) || 0;
+  return s.includes('k') ? num * 1000 : num;
+}
+
+// Hàng chợ không có món nào dưới 1.000đ → nhiều khả năng gõ thiếu chữ "k".
+export const SUSPICIOUS_PRICE_BELOW = 1000;
+
+/** Các dòng hàng có giá đáng ngờ (có giá nhưng dưới 1.000đ). */
+export function suspiciousNoteItems(items) {
+  return (items || []).filter(i => {
+    const price = parseNotePrice(i.price);
+    return i.name && price > 0 && price < SUSPICIOUS_PRICE_BELOW;
+  });
+}
+
+/**
+ * So chốt sổ ngày với sổ: tiền mặt đếm được − tiền mặt sổ ghi, và từng tài
+ * khoản ngân hàng. Dương = thừa, âm = thiếu. null nếu chưa nhập ô đó.
+ */
+export function closeDifferences(day, close) {
+  if (!close) return null;
+  const cashCounted = close.cash_counted === null || close.cash_counted === undefined ? null : Number(close.cash_counted);
+  const banks = {};
+  for (const [acc, amount] of Object.entries(close.bank_counted || {})) {
+    if (amount === null || amount === '' || amount === undefined) continue;
+    banks[acc] = Number(amount) - (day.byAccount[acc] || 0);
+  }
+  return {
+    cashCounted,
+    cashDiff: cashCounted === null ? null : cashCounted - day.cash,
+    bankDiffs: banks,
+    closedBy: close.closed_by_name || null,
+    closedAt: close.closed_at || null,
+    note: close.note || null,
+  };
 }
 
 function datesBetween(from, toInclusive) {
@@ -59,7 +110,7 @@ function datesBetween(from, toInclusive) {
  * revenue: dòng finance_revenue_ledger; notes: staff_notes; entries: finance_entries.
  * Chỉ tính các ngày từ FINANCE_START_DATE đến hết hôm nay (giờ VN).
  */
-export function summarizeMonth({ month, revenue = [], notes = [], entries = [], today, startDate = FINANCE_START_DATE }) {
+export function summarizeMonth({ month, revenue = [], notes = [], entries = [], closes = [], today, startDate = FINANCE_START_DATE }) {
   const { start, next, daysInMonth } = monthBounds(month);
   const lastOfMonth = new Date(Date.parse(`${next}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
   const from = start > startDate ? start : startDate;
@@ -72,7 +123,7 @@ export function summarizeMonth({ month, revenue = [], notes = [], entries = [], 
 
   const days = dates.map(date => ({
     date, revenue: 0, bills: 0, cash: 0, transfer: 0, byAccount: {},
-    purchases: 0, purchaseNotes: 0, drinks: 0, salary: 0, fixedShare: fixedPerDay, profit: 0,
+    purchases: 0, purchaseNotes: 0, suspiciousNotes: 0, drinks: 0, salary: 0, fixedShare: fixedPerDay, profit: 0, close: null,
   }));
   const byDate = new Map(days.map(d => [d.date, d]));
 
@@ -96,6 +147,7 @@ export function summarizeMonth({ month, revenue = [], notes = [], entries = [], 
     if (!day || cost <= 0) continue;
     day.purchases += cost;
     day.purchaseNotes += 1;
+    if (suspiciousNoteItems(noteItems(note)).length) day.suspiciousNotes += 1;
   }
   for (const entry of entries) {
     const day = byDate.get(entry.entry_date);
@@ -103,6 +155,9 @@ export function summarizeMonth({ month, revenue = [], notes = [], entries = [], 
     if (entry.kind === 'drink') day.drinks += Number(entry.amount) || 0;
     if (entry.kind === 'salary') day.salary += Number(entry.amount) || 0;
   }
+
+  const closeByDate = new Map(closes.map(c => [c.business_date, c]));
+  for (const day of days) day.close = closeDifferences(day, closeByDate.get(day.date));
 
   const totals = { revenue: 0, bills: 0, cash: 0, transfer: 0, byAccount: {}, purchases: 0, drinks: 0, salary: 0, fixedShare: 0, profit: 0 };
   for (const day of days) {

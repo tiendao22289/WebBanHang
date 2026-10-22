@@ -10,12 +10,17 @@ const source = readFileSync(new URL('../src/app/api/admin/finance/route.js', imp
 // Bộ dựng truy vấn giả kiểu supabase-js, đủ cho route sổ thu chi.
 function fakeDb(state, { failTable } = {}) {
   return { from(table) {
-    let op = 'read', values, conditions = [], orders = [], range = null, single = false;
+    let op = 'read', values, conditions = [], orders = [], range = null, single = false, maybe = false, max = Infinity, conflict = null;
     const q = {
       select() { return q; },
       eq(k, v) { conditions.push(r => r[k] === v); return q; },
       gte(k, v) { conditions.push(r => r[k] >= v); return q; },
       lt(k, v) { conditions.push(r => r[k] < v); return q; },
+      gt(k, v) { conditions.push(r => r[k] > v); return q; },
+      in(k, vs) { conditions.push(r => vs.includes(r[k])); return q; },
+      limit(n) { max = n; return q; },
+      maybeSingle() { maybe = true; return q; },
+      upsert(v, opts) { op = 'upsert'; values = v; conflict = opts?.onConflict; return q; },
       order(k) { orders.push(k); return q; },
       range(a, b) { range = [a, b]; return q; },
       insert(v) { op = 'insert'; values = v; return q; },
@@ -26,10 +31,19 @@ function fakeDb(state, { failTable } = {}) {
     function run(resolve) {
         if (failTable === table) return resolve({ data: null, error: { code: '42P01', message: 'missing' } });
         let rows = (state[table] || []).filter(r => conditions.every(c => c(r)));
+        state[table] ||= [];
         if (op === 'insert') {
-          const row = { id: `00000000-0000-0000-0000-${String(state[table].length + 1).padStart(12, '0')}`, ...values };
-          state[table].push(row);
-          return resolve({ data: single ? row : [row], error: null });
+          const inserted = (Array.isArray(values) ? values : [values]).map(v => {
+            const row = { id: `00000000-0000-0000-0000-${String(state[table].length + 1).padStart(12, '0')}`, ...v };
+            state[table].push(row);
+            return row;
+          });
+          return resolve({ data: single ? inserted[0] : inserted, error: null });
+        }
+        if (op === 'upsert') {
+          const existing = state[table].find(r => r[conflict] === values[conflict]);
+          if (existing) Object.assign(existing, values); else state[table].push({ ...values });
+          return resolve({ data: structuredClone(existing || values), error: null });
         }
         if (op === 'delete') {
           const ids = new Set(rows.map(r => r.id));
@@ -38,7 +52,8 @@ function fakeDb(state, { failTable } = {}) {
         }
         for (const k of [...orders].reverse()) rows = [...rows].sort((a, b) => String(a[k]).localeCompare(String(b[k])));
         if (range) rows = rows.slice(range[0], range[1] + 1);
-        resolve({ data: structuredClone(rows), error: null });
+        rows = rows.slice(0, max);
+        resolve({ data: structuredClone(maybe ? rows[0] ?? null : rows), error: null });
     }
     return q;
   } };
@@ -57,7 +72,10 @@ function load({ role = 'admin', code = 200, state, failTable }) {
 const plain = res => JSON.parse(JSON.stringify(res));
 const get = async (api, query) => plain(await api.GET({ url: `http://x/api/admin/finance?${query}` }));
 const post = async (api, body) => plain(await api.POST({ json: async () => body }));
-const empty = () => ({ finance_revenue_ledger: [], staff_notes: [], finance_entries: [], bank_accounts: [], staff: [] });
+const empty = () => ({ finance_revenue_ledger: [], staff_notes: [], finance_entries: [], bank_accounts: [], staff: [],
+  finance_day_closes: [], table_bill_history: [] });
+const ACC_A = '00000000-0000-0000-0000-0000000000aa';
+const later = minutes => new Date(Date.now() + minutes * 60000).toISOString();
 
 test('only a logged-in admin can read or change the finance book', async () => {
   for (const [opts, status] of [[{ code: 401 }, 401], [{ role: 'staff' }, 403], [{ code: 503 }, 503]]) {
@@ -157,4 +175,81 @@ test('a database without the finance tables says setup is missing instead of fai
   const res = await get(load({ state: empty(), failTable: 'finance_revenue_ledger' }), 'month=2026-10');
   assert.equal(res.status, 503);
   assert.equal(res.body.setupMissing, true);
+});
+
+test('a day close is saved, updated in place, validated and shown with its differences', async () => {
+  const state = empty();
+  state.finance_revenue_ledger.push(
+    { order_id: 'o1', business_date: '2026-10-23', paid_at: '2026-10-23T05:00:00Z', amount: 500000, payment_method: 'cash' },
+    { order_id: 'o2', business_date: '2026-10-23', paid_at: '2026-10-23T06:00:00Z', amount: 300000, payment_method: 'transfer', account_id: ACC_A });
+  state.bank_accounts.push({ id: ACC_A, bank_name: 'MB', account_name: 'A', account_number: '1', sort_order: 0 });
+  const api = load({ state });
+  let res = await post(api, { action: 'close', date: '2026-10-23', cash_counted: 480000, bank_counted: { [ACC_A]: 300000 }, note: 'thiếu 20k' });
+  assert.equal(res.status, 200);
+  res = await post(api, { action: 'close', date: '2026-10-23', cash_counted: '500000', bank_counted: { [ACC_A]: '' } });
+  assert.equal(state.finance_day_closes.length, 1, 'closing again updates the same day');
+  const saved = plain(state.finance_day_closes[0]);
+  assert.deepEqual([saved.cash_counted, saved.bank_counted, saved.closed_by_name], [500000, {}, 'Chủ quán']);
+  const day = await get(api, 'date=2026-10-23');
+  assert.deepEqual([day.body.dayCash, day.body.dayByAccount[ACC_A], day.body.closeDiff.cashDiff], [500000, 300000, 0]);
+  const month = await get(api, 'month=2026-10');
+  assert.equal(month.body.days.find(d => d.date === '2026-10-23').close.cashDiff, 0);
+  for (const bad of [
+    { date: '2026-10-22', cash_counted: 1 },
+    { date: '2099-01-01', cash_counted: 1 },
+    { date: '2026-10-23', cash_counted: -5 },
+    { date: '2026-10-23', cash_counted: 'abc' },
+    { date: '2026-10-23', bank_counted: { 'not-an-account': 5 } },
+    { date: '2026-10-23', cash_counted: '', bank_counted: {} },
+  ]) assert.equal((await post(api, { action: 'close', ...bad })).status, 400, JSON.stringify(bad));
+});
+
+test('fixed costs are copied from the previous month once and never over an existing month', async () => {
+  const state = empty();
+  state.finance_entries.push(
+    { id: 'f1', entry_date: '2026-10-01', kind: 'fixed', category: 'rent', label: 'Thuê nhà', amount: 6000000, created_at: '1' },
+    { id: 'f2', entry_date: '2026-10-01', kind: 'fixed', category: 'electricity', label: 'Tiền điện', amount: 1500000, created_at: '2' },
+    { id: 'd1', entry_date: '2026-10-23', kind: 'drink', label: 'Bia', amount: 1, created_at: '3' });
+  const api = load({ state });
+  const res = await post(api, { action: 'copy_fixed', month: '2026-11' });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.entries.map(e => [e.entry_date, e.label, e.amount]),
+    [['2026-11-01', 'Thuê nhà', 6000000], ['2026-11-01', 'Tiền điện', 1500000]]);
+  assert.equal((await post(api, { action: 'copy_fixed', month: '2026-11' })).status, 409);
+  assert.equal((await post(api, { action: 'copy_fixed', month: '2027-01' })).status, 400, 'December has nothing to copy');
+  assert.equal((await post(api, { action: 'copy_fixed', month: 'nov' })).status, 400);
+});
+
+test('bills paid after the ledger started but missing from it are reported', async () => {
+  const state = empty();
+  const started = new Date(Date.now() - 3 * 3600000).toISOString();
+  state.finance_revenue_ledger.push({ order_id: 'in-ledger', business_date: '2026-10-23', amount: 1, payment_method: 'cash', recorded_at: started });
+  state.table_bill_history.push(
+    { order_id: 'in-ledger', paid_at: later(-60), expires_at: later(500), snapshot: {} },
+    { order_id: 'missing', paid_at: later(-30), expires_at: later(500),
+      snapshot: { table_number: 7, customer_name: 'Lan', payment_method: 'transfer',
+        order_items: [{ unit_price: 50000, quantity: 2 }, { unit_price: -10000, quantity: 1 }] } },
+    { order_id: 'before-ledger', paid_at: new Date(Date.parse(started) - 60000).toISOString(), expires_at: later(500), snapshot: {} },
+    { order_id: 'expired', paid_at: later(-30), expires_at: later(-1), snapshot: {} });
+  const res = await get(load({ state }), 'month=2026-10');
+  assert.deepEqual(res.body.missingBills.map(b => [b.orderId, b.tableNumber, b.amount, b.paymentMethod]),
+    [['missing', 7, 90000, 'transfer']]);
+
+  const fresh = empty();
+  fresh.table_bill_history.push({ order_id: 'x', paid_at: later(-5), expires_at: later(500), snapshot: {} });
+  assert.deepEqual((await get(load({ state: fresh }), 'month=2026-10')).body.missingBills, [],
+    'nothing is missing before the ledger has started');
+  const noHistory = await get(load({ state, failTable: 'table_bill_history' }), 'month=2026-10');
+  assert.equal(noHistory.status, 200);
+  assert.deepEqual(noHistory.body.missingBills, []);
+});
+
+test('purchase notes with prices that look like a missing "k" are flagged', async () => {
+  const state = empty();
+  state.staff_notes.push({ id: 'n1', created_at: '2026-10-23T02:00:00.000Z', note_type: 'expense', amount: 250, debt: 0, staff: null,
+    content: JSON.stringify({ type: 'structured_expense', items: [{ name: 'Ốc len', price: '250' }, { name: 'Hàu', price: '300k' }] }) });
+  const day = await get(load({ state }), 'date=2026-10-23');
+  assert.deepEqual(day.body.notes[0].suspicious, ['Ốc len: 250']);
+  const month = await get(load({ state }), 'month=2026-10');
+  assert.equal(month.body.days.find(d => d.date === '2026-10-23').suspiciousNotes, 1);
 });

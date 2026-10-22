@@ -73,6 +73,63 @@ function AddEntryForm({ data, month, onSaved }) {
   </form>;
 }
 
+// Chênh lệch chốt sổ: dương = thừa, âm = thiếu so với sổ.
+const diffText = diff => diff === 0 ? 'Khớp ✓' : diff > 0 ? `Thừa ${money(diff)}` : `Thiếu ${money(-diff)}`;
+const diffClass = diff => diff === 0 ? 'ok' : 'bad';
+
+function CloseForm({ detail, accounts, onSaved }) {
+  const saved = detail.close;
+  const [cash, setCash] = useState(saved?.cash_counted ?? '');
+  const [bank, setBank] = useState(() => Object.fromEntries(Object.entries(saved?.bank_counted || {}).map(([k, v]) => [k, String(v)])));
+  const [note, setNote] = useState(saved?.note || '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const canClose = detail.date >= detail.startDate && detail.date <= detail.today;
+  // Tài khoản có tiền trong sổ hôm đó + tài khoản đang hiện trong cài đặt.
+  const accountIds = [...new Set([...Object.keys(detail.dayByAccount || {}), ...accounts.map(a => a.id)])].filter(id => id !== 'unknown');
+  const name = id => accounts.find(a => a.id === id)?.name || 'Tài khoản khác';
+
+  async function save(event) {
+    event.preventDefault();
+    setBusy(true); setError('');
+    try {
+      await api('/api/admin/finance', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'close', date: detail.date, cash_counted: cash === '' ? null : Number(digits(cash)),
+          bank_counted: Object.fromEntries(Object.entries(bank).map(([k, v]) => [k, v === '' ? null : Number(digits(v))])), note }),
+      });
+      await onSaved();
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+
+  if (!canClose) return null;
+  const cashDiff = cash === '' ? null : Number(digits(cash)) - detail.dayCash;
+  const amountInput = (value, onChange, label) => <input inputMode="numeric" enterKeyHint="done" aria-label={label} placeholder="Chưa nhập"
+    value={value === '' ? '' : Number(digits(value)).toLocaleString('vi-VN')} onChange={e => onChange(digits(e.target.value))} />;
+
+  return <form className="fin-close" onSubmit={save}>
+    <h3>Chốt sổ cuối ngày</h3>
+    <p className="fin-hint">Đếm tiền mặt trong két và xem số tiền thật trên app ngân hàng, nhập vào để so với sổ.{saved && ` Đã chốt lúc ${clock(saved.closed_at)}${saved.closed_by_name ? ` bởi ${saved.closed_by_name}` : ''}.`}</p>
+    <div className="fin-close-row">
+      <div><b>Tiền mặt</b><small>Sổ ghi {money(detail.dayCash)}</small></div>
+      {amountInput(cash, setCash, 'Tiền mặt đếm được')}
+      {cashDiff !== null && <span className={`fin-diff ${diffClass(cashDiff)}`}>{diffText(cashDiff)}</span>}
+    </div>
+    {accountIds.map(id => {
+      const value = bank[id] ?? '';
+      const diff = value === '' ? null : Number(digits(value)) - (detail.dayByAccount?.[id] || 0);
+      return <div key={id} className="fin-close-row">
+        <div><b>{name(id)}</b><small>Sổ ghi {money(detail.dayByAccount?.[id] || 0)}</small></div>
+        {amountInput(value, v => setBank(prev => ({ ...prev, [id]: v })), `Tiền thật ${name(id)}`)}
+        {diff !== null && <span className={`fin-diff ${diffClass(diff)}`}>{diffText(diff)}</span>}
+      </div>;
+    })}
+    <label className="fin-close-note">Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
+    {error && <p className="fin-error">{error}</p>}
+    <button className="fin-primary" disabled={busy}>{busy ? 'Đang lưu...' : saved ? 'Cập nhật chốt sổ' : 'Chốt sổ ngày'}</button>
+  </form>;
+}
+
 function DayDetail({ date, accounts, onClose, onChanged }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
@@ -127,6 +184,7 @@ function DayDetail({ date, accounts, onClose, onChanged }) {
           {note.items?.length > 0 && <ul className="fin-items">{note.items.map((item, i) =>
             <li key={i}><span>{item.qty ? `${item.qty} ` : ''}{item.name}{item.paymentStatus === 'debt' ? ' (nợ)' : ''}</span><span>{item.price}</span></li>)}</ul>}
           {!note.items && note.text && <p className="fin-note-text">{note.text}</p>}
+          {note.suspicious?.length > 0 && <p className="fin-warn">⚠ Giá có thể gõ thiếu chữ "k" ({note.suspicious.join(', ')}). Sổ tay hiểu "250" là 250đ, "250k" mới là 250.000đ. Kiểm tra lại phiếu trong Sổ tay.</p>}
         </div>)}
 
         <h3>Khoản tự nhập</h3>
@@ -136,6 +194,8 @@ function DayDetail({ date, accounts, onClose, onChanged }) {
           <span className="fin-row-end"><b>{money(entry.amount)}</b>
             <button className="fin-icon danger" onClick={() => remove(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
         </div>)}
+
+        <CloseForm detail={detail} accounts={accounts} onSaved={async () => { await load(); onChanged(); }} />
       </>}
     </div>
   </div>;
@@ -160,6 +220,14 @@ export default function FinancePage() {
     } finally { if (ticket === pending.current) setBusy(false); }
   }
   useEffect(() => { load(); }, [month]);
+
+  async function copyFixed() {
+    try {
+      const result = await api('/api/admin/finance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'copy_fixed', month }) });
+      alert(`Đã chép ${result.entries.length} khoản chi cố định.`);
+      load();
+    } catch (err) { alert(err.message); }
+  }
 
   async function removeFixed(entry) {
     if (!confirm(`Xoá "${entry.label}" ${money(entry.amount)}?`)) return;
@@ -186,6 +254,15 @@ export default function FinancePage() {
 
     {error && <p className="fin-error">{error}</p>}
 
+    {data?.missingBills?.length > 0 && <section className="fin-alert" role="alert">
+      <b>⚠ Có {data.missingBills.length} bill đã thanh toán nhưng chưa vào sổ</b>
+      <p>Sổ thu chi đang thiếu các bill này (kiểm tra trong 10 giờ gần nhất). Báo lại để kiểm tra.</p>
+      {data.missingBills.map(b => <div key={b.orderId} className="fin-row static">
+        <span>{clock(b.paidAt)} · Bàn {b.tableNumber ?? '?'} · {b.customerName || 'Khách'}<small>{b.paymentMethod === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt'}</small></span>
+        <b>{money(b.amount)}</b>
+      </div>)}
+    </section>}
+
     {t && <>
       <section className="fin-cards">
         <div className="fin-card revenue"><span>Doanh thu</span><b>{money(t.revenue)}</b>
@@ -207,6 +284,9 @@ export default function FinancePage() {
     <section className="fin-section">
       <h2>Thêm khoản chi</h2>
       <AddEntryForm data={data} month={month} onSaved={load} />
+      {data && !data.fixedEntries?.length && month > '2026-10' && <button className="fin-secondary" onClick={copyFixed} disabled={busy}>
+        Chép chi cố định từ tháng trước
+      </button>}
       {data?.fixedEntries?.length > 0 && <div className="fin-fixed">
         <h3>Chi cố định tháng {month.slice(5)}/{month.slice(0, 4)}</h3>
         {data.fixedEntries.map(entry => <div key={entry.id} className="fin-row static">
@@ -231,6 +311,17 @@ export default function FinancePage() {
             <span>Nước ngọt <b>{money(d.drinks)}</b></span>
             <span>Lương <b>{money(d.salary)}</b></span>
             <span>Cố định <b>{money(d.fixedShare)}</b></span>
+          </div>
+          <div className="fin-day-tags">
+            {d.close
+              ? <>
+                  <span className="fin-tag ok">Đã chốt sổ</span>
+                  {d.close.cashDiff !== null && <span className={`fin-tag ${diffClass(d.close.cashDiff)}`}>Tiền mặt: {diffText(d.close.cashDiff)}</span>}
+                  {Object.entries(d.close.bankDiffs).filter(([, diff]) => diff !== 0).map(([id, diff]) =>
+                    <span key={id} className="fin-tag bad">{accountName(id)}: {diffText(diff)}</span>)}
+                </>
+              : d.date < data.today && <span className="fin-tag muted">Chưa chốt sổ</span>}
+            {d.suspiciousNotes > 0 && <span className="fin-tag bad">⚠ {d.suspiciousNotes} phiếu Sổ tay giá đáng ngờ</span>}
           </div>
         </button>)}
       </div>
