@@ -137,19 +137,31 @@ export function compareBlock({ day, prev, week, weekdayLabel, ledgerDay = [] }) 
   parts.push(prev ? `hôm qua ${vnd(prev.revenue)}${pct(day.revenue, prev.revenue) ? ` (${pct(day.revenue, prev.revenue)})` : ''}` : 'hôm qua chưa có số');
   parts.push(week ? `${weekdayLabel} tuần trước ${vnd(week.revenue)}${pct(day.revenue, week.revenue) ? ` (${pct(day.revenue, week.revenue)})` : ''}` : `${weekdayLabel} tuần trước chưa có số`);
   lines.push(parts.join(' · '));
-  if (day.bills) lines.push(`${day.bills} bill · trung bình ${vnd(day.revenue / day.bills)}/bill`);
+  const c = compareData({ day, prev, week, ledgerDay });
+  if (day.bills) lines.push(`${day.bills} bill · trung bình ${vnd(c.avgBill)}/bill`);
+  if (c.peak) lines.push(`Đông nhất ${c.peak.hour}h–${(c.peak.hour + 1) % 24}h: ${c.peak.bills} bill, ${vnd(c.peak.amount)}`);
+  if (c.top.length) lines.push(`Bán chạy: ${c.top.slice(0, 5).map(i => `${i.name} ${i.qty}`).join(', ')}`);
+  if (c.slow.length) lines.push(`Bán ít: ${c.slow.map(i => `${i.name} ${i.qty}`).join(', ')}`);
+  return lines.join('\n');
+}
+
+/** Số liệu của compareBlock dạng dữ liệu (cho biểu đồ trang /thongke). */
+export function compareData({ day, prev, week, ledgerDay = [] }) {
   const byHour = new Map();
   for (const b of ledgerDay) { const h = hourOf(b.paid_at); const v = byHour.get(h) || { bills: 0, amount: 0 }; byHour.set(h, { bills: v.bills + 1, amount: v.amount + (Number(b.amount) || 0) }); }
   const peak = [...byHour.entries()].sort((a, b) => b[1].amount - a[1].amount)[0];
-  if (peak) lines.push(`Đông nhất ${peak[0]}h–${(peak[0] + 1) % 24}h: ${peak[1].bills} bill, ${vnd(peak[1].amount)}`);
   const sold = new Map();
   for (const b of ledgerDay) for (const i of b.items || []) {
     // Bỏ món tặng, dòng giảm giá và đồ lặt vặt dưới 5.000đ (khăn, đá...).
     if ((Number(i.unit_price) || 0) < 5000 || i.is_gift) continue;
     sold.set(i.name, (sold.get(i.name) || 0) + (Number(i.quantity) || 0));
   }
-  const ranked = [...sold.entries()].sort((a, b) => b[1] - a[1]);
-  if (ranked.length) lines.push(`Bán chạy: ${ranked.slice(0, 5).map(([n, q]) => `${n} ${q}`).join(', ')}`);
-  if (ranked.length > 8) lines.push(`Bán ít: ${ranked.slice(-3).reverse().map(([n, q]) => `${n} ${q}`).join(', ')}`);
-  return lines.join('\n');
+  const ranked = [...sold.entries()].sort((a, b) => b[1] - a[1]).map(([name, qty]) => ({ name, qty }));
+  return {
+    prev: prev ? prev.revenue : null, week: week ? week.revenue : null,
+    avgBill: day.bills ? day.revenue / day.bills : 0,
+    hours: [...byHour.entries()].map(([hour, v]) => ({ hour, ...v })).sort((a, b) => a.hour - b.hour),
+    peak: peak ? { hour: peak[0], ...peak[1] } : null,
+    top: ranked.slice(0, 8), slow: ranked.length > 8 ? ranked.slice(-3).reverse() : [],
+  };
 }

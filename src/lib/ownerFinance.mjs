@@ -204,7 +204,7 @@ const signed = n => `${n < 0 ? '-' : '+'}${vnd(Math.abs(n))}`;
  * summarizeMonth().days, `monthTotals` là totals của tháng (tới ngày đó),
  * `alerts` = { missingPhoto, unchecked } của bill chuyển khoản trong tháng.
  */
-export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, title = 'Báo cáo' }) {
+export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, title = 'Báo cáo', forZalo = true }) {
   const [y, m, d] = day.date.split('-');
   const weekday = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][new Date(`${day.date}T00:00:00Z`).getUTCDay()];
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
@@ -219,6 +219,18 @@ export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, 
   lines.push(`${day.profit < 0 ? 'Lỗ' : 'Lãi'} ngày: ${signed(day.profit)}`);
   if (monthTotals) lines.push(`Tháng ${m} tới nay: thu ${vnd(monthTotals.revenue)} · ${monthTotals.profit < 0 ? 'lỗ' : 'lãi'} ${vnd(Math.abs(monthTotals.profit))}`);
 
+  const warnings = dailyWarnings({ day, accounts, alerts });
+  lines.push('');
+  if (warnings.length) lines.push(...warnings.map(w => `⚠ ${w}`));
+  else lines.push('✓ Không có gì bất thường');
+  // Zalo chỉ cho OA nhắn lại người vừa nhắn mình → nhắc chủ quán trả lời. Trang /thongke thì không cần.
+  if (forZalo) lines.push('', 'Nhắn "ok" để Zalo cho phép gửi tiếp báo cáo các ngày sau.');
+  return lines.join('\n');
+}
+
+/** Cảnh báo của một ngày (chưa chốt sổ, lệch két, bill CK thiếu ảnh...) — dùng cho Zalo và /thongke. */
+export function dailyWarnings({ day, accounts = [], alerts = {} }) {
+  const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
   const warnings = [];
   if (!day.close) warnings.push('Chưa chốt sổ ngày này');
   else {
@@ -231,11 +243,7 @@ export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, 
   if (alerts.unchecked) warnings.push(`${alerts.unchecked} bill CK chưa đối chiếu (tháng này)`);
   if (day.mismatchNotes) warnings.push(`${day.mismatchNotes} phiếu Sổ tay lệch tiền (tổng phiếu khác các dòng hàng)`);
   if (day.suspiciousNotes) warnings.push(`${day.suspiciousNotes} phiếu Sổ tay giá / số lượng đáng ngờ`);
-  lines.push('');
-  if (warnings.length) lines.push(...warnings.map(w => `⚠ ${w}`));
-  else lines.push('✓ Không có gì bất thường');
-  lines.push('', 'Nhắn "ok" để Zalo cho phép gửi tiếp báo cáo các ngày sau.');
-  return lines.join('\n');
+  return warnings;
 }
 
 /** Tên món / hàng để so khớp: bỏ dấu, chữ thường ("Ốc Hương" = "oc huong"). */

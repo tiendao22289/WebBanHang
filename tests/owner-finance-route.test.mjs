@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import * as finance from '../src/lib/ownerFinance.mjs';
 import * as zaloLink from '../src/lib/financeZaloLink.mjs';
 import { notesReportMessages, packMessages } from '../src/lib/notesReport.mjs';
-import { compareBlock, lossBlock, staffBlock } from '../src/lib/dailyInsights.mjs';
+import { compareBlock, compareData, lossBlock, staffBlock } from '../src/lib/dailyInsights.mjs';
 import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 
 const source = readFileSync(new URL('../src/app/api/admin/finance/route.js', import.meta.url), 'utf8')
@@ -72,7 +72,7 @@ function fakeDb(state, { failTable } = {}) {
 function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFails = false, env = {} }) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...finance, ...zaloLink, notesReportMessages, packMessages, compareBlock, lossBlock, staffBlock, createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
+    NextResponse, ...finance, ...zaloLink, notesReportMessages, packMessages, compareBlock, compareData, lossBlock, staffBlock, createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
     sendOaText: async (_db, id, text) => { sent.push({ id, text }); return zaloFails ? { ok: false, detail: { error: -230 } } : { ok: true }; },
     URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
@@ -570,4 +570,43 @@ test('report sections can be switched off one by one', async () => {
   assert.equal(sent.length, 2, 'summary + comparison only');
   assert.match(sent[1].text, /📈 So sánh/);
   assert.doesNotMatch(sent[1].text, /Kiểm soát thất thoát|Nhân viên|Sổ tay/);
+});
+
+test('the owner can switch the Zalo report off without unlinking, and still read it on /thongke', async () => {
+  const today = finance.vnDate(Date.now());
+  const state = empty();
+  state.finance_settings = [{ key: 'zalo_report', value: { ownerIds: ['owner-zalo'] } }];
+  state.finance_revenue_ledger.push({ order_id: 'r1', business_date: today, paid_at: later(-5), table_number: '4', amount: 80000, payment_method: 'cash', items: [{ name: 'Sò', quantity: 1, unit_price: 80000 }] });
+  const sent = [];
+  const env = { SUPABASE_SERVICE_ROLE_KEY: 'k'.repeat(40) };
+  const api = load({ state, sent, env });
+  assert.equal((await get(api, `month=${today.slice(0, 7)}`)).body.zaloReport.enabled, true, 'on by default');
+  assert.equal((await post(api, { action: 'zalo_set_enabled', enabled: 'no' })).status, 400);
+  const off = await post(api, { action: 'zalo_set_enabled', enabled: false });
+  assert.equal(off.body.zaloReport.enabled, false);
+  assert.equal(off.body.zaloReport.linked, 1, 'linked Zalo is kept');
+
+  const key = createHmac('sha256', 'k'.repeat(40)).update('finance-daily-report').digest('hex');
+  const cron = load({ state, sent, code: 401, env });
+  const run = async () => plain(await cron.POST({ json: async () => ({ action: 'daily_report', date: today }), headers: new Map([['x-finance-report-key', key]]) }));
+  assert.equal((await run()).body.skipped, 'đã tắt gửi Zalo');
+  assert.equal(sent.length, 0, 'nothing goes to Zalo while switched off');
+
+  const page = await get(api, `report=${today}`);
+  assert.equal(page.status, 200);
+  const { summary, compare, trend, sections } = page.body;
+  assert.equal(summary.revenue, 80000, 'the page shows the same numbers as Zalo');
+  assert.equal(summary.bills, 1);
+  assert.equal(summary.cash, 80000);
+  assert.ok(summary.warnings.includes('Chưa chốt sổ ngày này'));
+  assert.deepEqual(plain(compare.top), [{ name: 'Sò', qty: 1 }]);
+  assert.equal(trend.length, 7);
+  assert.equal(trend.at(-1).revenue, 80000, 'last bar is the day being read');
+  assert.deepEqual(sections.map(s => s.key), ['loss', 'staff', 'notes'], 'with every detail section');
+  assert.equal((await get(api, 'report=2099-01-01')).status, 400, 'no future days');
+  assert.equal((await get(load({ role: 'staff', state }), `report=${today}`)).status, 403, 'admins only');
+
+  await post(api, { action: 'zalo_set_enabled', enabled: true });
+  assert.equal((await run()).body.ok, true);
+  assert.match(sent[0].text, /Xem trên web: https:\/\/ocbaokhang\.online\/thongke\?date=/, 'the Zalo summary links to the page');
 });

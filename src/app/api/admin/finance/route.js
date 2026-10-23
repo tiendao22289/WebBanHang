@@ -5,12 +5,13 @@
  *                       tiền đi chợ trong Sổ tay, nước ngọt, lương, chi cố định.
  * GET ?date=YYYY-MM-DD → chi tiết 1 ngày: từng bill + từng phiếu Sổ tay.
  * GET ?items=1&from&to → bán ra theo món, nhập vào theo hàng Sổ tay, gom theo nhóm.
+ * GET ?report=YYYY-MM-DD → báo cáo ngày như tin Zalo, cho trang /thongke.
  * POST {action:'save_item_group'|'delete_item_group'} → nhóm so bán / nhập.
  * POST {action:'add'|'delete'} → thêm/xoá khoản tự nhập (nước ngọt, lương, cố định).
  * POST {action:'close'}       → chốt sổ ngày (tiền mặt đếm được, tiền thật từng tài khoản).
  * POST {action:'copy_fixed'}  → chép chi cố định của tháng trước sang tháng đang xem.
  * POST {action:'verify'}      → đánh dấu bill chuyển khoản đã / chưa đối chiếu.
- * POST {action:'zalo_link_code'|'zalo_unlink'|'zalo_test'} → báo cáo Zalo hằng ngày.
+ * POST {action:'zalo_link_code'|'zalo_unlink'|'zalo_test'|'zalo_set_enabled'} → báo cáo Zalo hằng ngày.
  * POST {action:'daily_report'} + header x-finance-report-key → gửi báo cáo
  *      (workflow "Finance Daily Report" gọi lúc 8 giờ sáng, không cần đăng nhập).
  *
@@ -21,11 +22,11 @@ import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server';
 import { sendOaText } from '@/lib/zaloOa';
 import { notesReportMessages, packMessages } from '@/lib/notesReport.mjs';
-import { compareBlock, lossBlock, staffBlock } from '@/lib/dailyInsights.mjs';
+import { compareBlock, compareData, lossBlock, staffBlock } from '@/lib/dailyInsights.mjs';
 import { LINK_CODE_MINUTES, REPORT_SECTIONS, readReportSettings, reportPlan, reportSections, reportStatus, saveReportSettings, validSendAt } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
-import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, dailyReportText, isMonthKey, itemKey, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
+import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, dailyReportText, dailyWarnings, isMonthKey, itemKey, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -222,7 +223,7 @@ function reportKeyOk(request) {
 
 const inChunks = (list, size = 150) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
 
-/** Thất thoát / nhân viên / so sánh của một ngày (lỗi từng phần không chặn phần khác). */
+/** Thất thoát / nhân viên / so sánh của một ngày: [{ key, text, data? }] (lỗi từng phần không chặn phần khác). */
 async function insightBlocks(db, { date, range, sections }) {
   const blocks = [];
   const ledgerDay = await readAll(() => db.from('finance_revenue_ledger').select('order_id, table_number, paid_at, amount, items').eq('business_date', date).order('order_id'));
@@ -255,7 +256,7 @@ async function insightBlocks(db, { date, range, sections }) {
         .gte('created_at', new Date(range.start.getTime() - 24 * 3600000).toISOString()).lt('created_at', range.end.toISOString())).data || [])
         .filter(o => { const t = new Date(o.cancelled_at || o.created_at).getTime(); return t >= range.start.getTime() && t < range.end.getTime(); })
         .map(o => ({ ...o, table_number: tables.get(o.table_id) }));
-      blocks.push(lossBlock({ ledgerDay, printed, movedIds, cancelled: cancelledRows, menuPrice }));
+      blocks.push({ key: 'loss', text: lossBlock({ ledgerDay, printed, movedIds, cancelled: cancelledRows, menuPrice }) });
     } catch (error) { console.error('[admin/finance] loss block', error); }
   }
   if (sections.staff) {
@@ -264,7 +265,7 @@ async function insightBlocks(db, { date, range, sections }) {
         db.from('attendance_sessions').select('staff_id, clock_in, clock_out').eq('date', date).then(r => r.data || []),
         db.from('payroll_requests').select('staff_id, request_type, amount, days, reason').eq('status', 'pending').then(r => r.data || []),
       ]);
-      blocks.push(staffBlock({ sessions, pending, staffNames }));
+      blocks.push({ key: 'staff', text: staffBlock({ sessions, pending, staffNames }) });
     } catch (error) { console.error('[admin/finance] staff block', error); }
   }
   if (sections.compare) {
@@ -279,21 +280,18 @@ async function insightBlocks(db, { date, range, sections }) {
       };
       const [day, prev, week] = await Promise.all([revenueOf(date), revenueOf(addDays(date, -1)), revenueOf(addDays(date, -7))]);
       const weekdayLabel = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][new Date(`${date}T00:00:00Z`).getUTCDay()];
-      blocks.push(compareBlock({ day: day || { revenue: 0, bills: 0 }, prev, week, weekdayLabel, ledgerDay }));
+      const totals = day || { revenue: 0, bills: 0 };
+      blocks.push({ key: 'compare', text: compareBlock({ day: totals, prev, week, weekdayLabel, ledgerDay }), data: { ...compareData({ day: totals, prev, week, ledgerDay }), weekdayLabel } });
     } catch (error) { console.error('[admin/finance] compare block', error); }
   }
   return blocks;
 }
 
 /**
- * Gửi báo cáo một ngày tới các Zalo đã liên kết. scheduled = lần gửi tự động
- * buổi sáng: mỗi ngày chỉ gửi một lần.
+ * Dựng báo cáo một ngày (tin tổng kết + các tin chi tiết) — dùng chung cho
+ * Zalo và trang /thongke, để hai nơi luôn cùng con số.
  */
-async function sendDailyReport(db, { date, today, scheduled }) {
-  const settings = await readReportSettings(db);
-  if (!settings) return { ok: false, error: 'Chưa cài bảng cài đặt sổ thu chi (owner_finance.sql).' };
-  if (!settings.ownerIds.length) return { ok: false, error: 'Chưa liên kết Zalo nhận báo cáo.' };
-  if (scheduled && settings.lastSentDate === date) return { ok: true, skipped: true };
+async function buildDailyReport(db, { date, today, title, sections, forZalo = true }) {
   if (date < FINANCE_START_DATE) return { ok: false, error: 'Ngày này trước khi sổ bắt đầu.' };
   try { await repairMissingBills(db); } catch (error) { console.error('[admin/finance] repair', error); }
   const { summary, accounts } = await loadMonth(db, date.slice(0, 7), today);
@@ -302,14 +300,15 @@ async function sendDailyReport(db, { date, today, scheduled }) {
   const upTo = summary.days.filter(d => d.date <= date);
   const monthTotals = { revenue: upTo.reduce((s, d) => s + d.revenue, 0), profit: upTo.reduce((s, d) => s + d.profit, 0) };
   const alerts = await transferAlerts(db, monthBounds(date.slice(0, 7)).start, date, today).catch(() => ({}));
-  const text = dailyReportText({ day, monthTotals, accounts, alerts, title: scheduled ? 'Báo cáo' : 'Gửi thử' });
+  const text = dailyReportText({ day, monthTotals, accounts, alerts, title, forZalo });
   // Các tin sau: thất thoát / nhân viên / so sánh, rồi Sổ tay của ngày (lỗi ở đây không chặn tin tổng kết).
-  const sections = reportSections(settings);
   const range = { start: new Date(vnDayStartIso(date)), end: new Date(vnDayStartIso(addDays(date, 1))) };
+  let insights = [];
   let insightMessages = [];
   try {
     const [, m, d] = date.split('-');
-    insightMessages = packMessages(`📊 Chi tiết ${d}/${m}`, await insightBlocks(db, { date, range, sections }));
+    insights = await insightBlocks(db, { date, range, sections });
+    insightMessages = packMessages(`📊 Chi tiết ${d}/${m}`, insights.map(b => b.text));
   } catch (error) { console.error('[admin/finance] insights', error); }
   let notesMessages = [];
   if (sections.notes) try {
@@ -326,12 +325,32 @@ async function sendDailyReport(db, { date, today, scheduled }) {
     const staffNames = Object.fromEntries(staff.map(x => [x.id, x.full_name]));
     notesMessages = notesReportMessages({ date, dayNotes, allNotes, payments, deleted, staffNames, range });
   } catch (error) { console.error('[admin/finance] notes report', error); }
+  return { ok: true, text, details: [...insightMessages, ...notesMessages],
+    // Dữ liệu cho trang /thongke vẽ thẻ số, biểu đồ.
+    view: { day, monthTotals, accounts, warnings: dailyWarnings({ day, accounts, alerts }), insights, notes: notesMessages } };
+}
+
+const REPORT_PAGE = 'https://ocbaokhang.online/thongke';
+
+/**
+ * Gửi báo cáo một ngày tới các Zalo đã liên kết. scheduled = lần gửi tự động
+ * buổi sáng: mỗi ngày chỉ gửi một lần, và không gửi khi chủ quán tắt Zalo.
+ */
+async function sendDailyReport(db, { date, today, scheduled }) {
+  const settings = await readReportSettings(db);
+  if (!settings) return { ok: false, error: 'Chưa cài bảng cài đặt sổ thu chi (owner_finance.sql).' };
+  if (!settings.ownerIds.length) return { ok: false, error: 'Chưa liên kết Zalo nhận báo cáo.' };
+  if (scheduled && settings.enabled === false) return { ok: true, skipped: 'đã tắt gửi Zalo' };
+  if (scheduled && settings.lastSentDate === date) return { ok: true, skipped: true };
+  const report = await buildDailyReport(db, { date, today, title: scheduled ? 'Báo cáo' : 'Gửi thử', sections: reportSections(settings) });
+  if (!report.ok) return report;
+  const text = `${report.text}\n\nXem trên web: ${REPORT_PAGE}?date=${date}`;
   const results = [];
   for (const id of settings.ownerIds) {
     const first = await sendOaText(db, id, text).catch(error => ({ ok: false, detail: error.message }));
     results.push(first);
     if (!first.ok) continue;
-    for (const message of [...insightMessages, ...notesMessages]) await sendOaText(db, id, message).catch(error => console.error('[admin/finance] report message', error));
+    for (const message of report.details) await sendOaText(db, id, message).catch(error => console.error('[admin/finance] report message', error));
   }
   const sent = results.filter(r => r.ok).length;
   const failed = results.find(r => !r.ok);
@@ -463,6 +482,46 @@ export async function GET(request) {
       return NextResponse.json({ from, to, results, tables, alerts, truncated: bills.length >= LIMIT || paper.length >= LIMIT }, { headers });
     }
 
+    // Báo cáo ngày cho trang /thongke — đúng nội dung tin Zalo, đủ mọi mục.
+    const reportDate = params.get('report');
+    if (reportDate) {
+      if (!DATE.test(reportDate) || reportDate > today) return NextResponse.json({ error: 'Ngày không hợp lệ.' }, { status: 400, headers });
+      const sections = Object.fromEntries(REPORT_SECTIONS.map(k => [k, true]));
+      const report = await buildDailyReport(db, { date: reportDate, today, title: 'Báo cáo', sections, forZalo: false });
+      if (!report.ok) return NextResponse.json({ date: reportDate, today, startDate: FINANCE_START_DATE, error: report.error }, { headers });
+      const { day, monthTotals, accounts, warnings, insights, notes } = report.view;
+      const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
+      // Doanh thu 7 ngày tới ngày đang xem (ngày trước khi sổ bắt đầu = null).
+      const trendFrom = addDays(reportDate, -6);
+      const [trendBills, trendPaper] = await Promise.all([
+        readAll(() => db.from('finance_revenue_ledger').select('order_id, business_date, amount').gte('business_date', trendFrom).lt('business_date', addDays(reportDate, 1)).order('order_id')),
+        readPaper(db, trendFrom, addDays(reportDate, 1)),
+      ]);
+      const trend = Array.from({ length: 7 }, (_, i) => {
+        const d = addDays(trendFrom, i);
+        const rows = [...trendBills, ...trendPaper].filter(r => r.business_date === d);
+        return { date: d, revenue: d < FINANCE_START_DATE ? null : rows.reduce((a, r) => a + (Number(r.amount) || 0), 0), bills: rows.length };
+      });
+      const textOf = key => insights.find(b => b.key === key)?.text || null;
+      // Tin Sổ tay đã chia cho Zalo → gộp lại, bỏ dòng đầu "(tiếp)".
+      const notesText = notes.map((m, i) => (i && /\(tiếp\)$/.test(m.split('\n')[0]) ? m.split('\n').slice(1).join('\n').trim() : m)).join('\n\n');
+      return NextResponse.json({
+        date: reportDate, today, startDate: FINANCE_START_DATE,
+        summary: {
+          revenue: day.revenue, bills: day.bills, paperBills: day.paperBills, cash: day.cash,
+          transfers: Object.entries(day.byAccount || {}).map(([id, amount]) => ({ name: accountName(id), amount })),
+          costs: [['Đi chợ', day.purchases], ['Nước ngọt / bia', day.drinks], ['Lương', day.salary], ['Chi cố định', day.fixedShare], ['Khác', day.customTotal]]
+            .filter(([, amount]) => amount > 0).map(([label, amount]) => ({ label, amount })),
+          cost: day.purchases + day.drinks + day.salary + day.fixedShare + day.customTotal,
+          profit: day.profit, month: monthTotals, closed: !!day.close, warnings,
+        },
+        compare: insights.find(b => b.key === 'compare')?.data || null,
+        trend,
+        sections: [['loss', 'Thất thoát', textOf('loss')], ['staff', 'Nhân viên', textOf('staff')], ['notes', 'Sổ tay', notesText || null]]
+          .filter(([, , text]) => text).map(([key, title, text]) => ({ key, title, text })),
+      }, { headers });
+    }
+
     const date = params.get('date');
     if (date) {
       if (!DATE.test(date)) return NextResponse.json({ error: 'Ngày không hợp lệ.' }, { status: 400, headers });
@@ -579,9 +638,15 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, verifiedAt: patch.verified_at, verifiedBy: patch.verified_by }, { headers });
     }
 
-    if (['zalo_link_code', 'zalo_unlink', 'zalo_test', 'zalo_set_time', 'zalo_set_sections'].includes(body.action)) {
+    if (['zalo_link_code', 'zalo_unlink', 'zalo_test', 'zalo_set_time', 'zalo_set_sections', 'zalo_set_enabled'].includes(body.action)) {
       const settings = await readReportSettings(db);
       if (!settings) return NextResponse.json({ error: 'Chưa cài bảng cài đặt sổ thu chi (owner_finance.sql).' }, { status: 503, headers });
+      if (body.action === 'zalo_set_enabled') {
+        if (typeof body.enabled !== 'boolean') return NextResponse.json({ error: 'Thiếu bật / tắt.' }, { status: 400, headers });
+        const next = { ...settings, enabled: body.enabled };
+        await saveReportSettings(db, next);
+        return NextResponse.json({ ok: true, zaloReport: reportStatus(next) }, { headers });
+      }
       if (body.action === 'zalo_set_sections') {
         const input = body.sections && typeof body.sections === 'object' ? body.sections : {};
         const next = { ...settings, sections: Object.fromEntries(REPORT_SECTIONS.map(k => [k, input[k] !== false])) };
