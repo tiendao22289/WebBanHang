@@ -4,6 +4,8 @@
  * GET ?month=YYYY-MM  → doanh thu thật từng ngày (finance_revenue_ledger),
  *                       tiền đi chợ trong Sổ tay, nước ngọt, lương, chi cố định.
  * GET ?date=YYYY-MM-DD → chi tiết 1 ngày: từng bill + từng phiếu Sổ tay.
+ * GET ?items=1&from&to → bán ra theo món, nhập vào theo hàng Sổ tay, gom theo nhóm.
+ * POST {action:'save_item_group'|'delete_item_group'} → nhóm so bán / nhập.
  * POST {action:'add'|'delete'} → thêm/xoá khoản tự nhập (nước ngọt, lương, cố định).
  * POST {action:'close'}       → chốt sổ ngày (tiền mặt đếm được, tiền thật từng tài khoản).
  * POST {action:'copy_fixed'}  → chép chi cố định của tháng trước sang tháng đang xem.
@@ -15,13 +17,13 @@
  * Chạy bằng service role vì các bảng sổ thu chi đã chặn anon. Không liên quan
  * tới /admin/stats.
  */
-import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { sendOaText } from '@/lib/zaloOa';
 import { LINK_CODE_MINUTES, readReportSettings, reportStatus, saveReportSettings } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
-import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, dailyReportText, isMonthKey, monthBounds, noteCost, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
+import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, dailyReportText, isMonthKey, itemKey, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -76,6 +78,8 @@ function noteView(note) {
   if (items) { try { text = JSON.parse(note.content).note || ''; } catch { text = ''; } }
   return { id: note.id, createdAt: note.created_at, staffName: note.staff?.full_name || '', cost: noteCost(note),
     suspicious: suspiciousNoteItems(items).map(i => `${i.name}: ${i.price}`),
+    // Tổng phiếu đã lưu khác tổng các dòng tính lại (lỗi cũ "2,5kg" → 25kg...); cảnh báo từng dòng.
+    mismatch: noteMismatch(note), lineWarnings: noteLineWarnings(note),
     paid: Number(note.amount) || 0, debt: Number(note.debt) || 0,
     debtLeft: Math.max(0, (Number(note.debt) || 0) - (Number(note.paid_debt) || 0)), items, text: text.slice(0, 500) };
 }
@@ -244,6 +248,18 @@ async function sendDailyReport(db, { date, today, scheduled }) {
     : { ok: false, error: 'Zalo không gửi được. Mở Zalo, nhắn "ok" cho OA của quán rồi thử lại.' };
 }
 
+// Nhóm so bán ra / nhập vào (vd "Ốc hương"): finance_settings['item_groups'].
+const MAX_ITEM_GROUPS = 60;
+async function readItemGroups(db) {
+  const { data, error } = await db.from('finance_settings').select('value').eq('key', 'item_groups').maybeSingle();
+  if (error) { if (missingTable(error)) return null; throw error; }
+  return Array.isArray(data?.value?.groups) ? data.value.groups : [];
+}
+async function saveItemGroups(db, groups) {
+  const { error } = await db.from('finance_settings').upsert({ key: 'item_groups', value: { groups }, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+  if (error) throw error;
+}
+
 export async function GET(request) {
   try {
     const session = await requireOwner(request);
@@ -251,6 +267,27 @@ export async function GET(request) {
     const params = new URL(request.url).searchParams;
     const db = statusDatabase();
     const today = vnDate(Date.now());
+
+    // Bán ra theo món / nhập vào theo Sổ tay trong khoảng ngày.
+    if (params.get('items')) {
+      const to = DATE.test(params.get('to') || '') ? params.get('to') : today;
+      const from = DATE.test(params.get('from') || '') ? params.get('from') : `${to.slice(0, 7)}-01`;
+      if (from > to) return NextResponse.json({ error: 'Từ ngày phải trước đến ngày.' }, { status: 400, headers });
+      if (addDays(from, 92) < to) return NextResponse.json({ error: 'Chỉ xem tối đa 3 tháng một lần.' }, { status: 400, headers });
+      const start = from < FINANCE_START_DATE ? FINANCE_START_DATE : from;
+      const next = addDays(to, 1);
+      const [bills, paper, notes, drinks, groups] = await Promise.all([
+        readAll(() => db.from('finance_revenue_ledger').select('order_id, items').gte('business_date', start).lt('business_date', next).order('order_id')),
+        readPaper(db, start, next),
+        notesBetween(db, vnDayStartIso(start), vnDayStartIso(next)),
+        db.from('finance_entries').select('amount, label').eq('kind', 'drink').gte('entry_date', start).lt('entry_date', next)
+          .then(r => { if (r.error) throw r.error; return r.data || []; }),
+        readItemGroups(db),
+      ]);
+      const summary = summarizeItems({ bills, notes, drinks, groups: groups || [],
+        paperRevenue: paper.reduce((s, p) => s + (Number(p.amount) || 0), 0) });
+      return NextResponse.json({ from, to, ...summary, groupsReady: groups !== null }, { headers });
+    }
 
     // Tra cứu bill (để đối chiếu ảnh chuyển khoản / ảnh bill giấy về sau).
     if (params.get('search')) {
@@ -410,6 +447,26 @@ export async function POST(request) {
     const session = await requireOwner(request);
     if (session.code !== 200) return deny(session.code);
     const db = statusDatabase();
+
+    if (body.action === 'save_item_group' || body.action === 'delete_item_group') {
+      const groups = await readItemGroups(db);
+      if (groups === null) return NextResponse.json({ error: 'Chưa cài bảng cài đặt sổ thu chi (owner_finance.sql).' }, { status: 503, headers });
+      if (body.action === 'delete_item_group') {
+        await saveItemGroups(db, groups.filter(g => g.id !== body.id));
+        return NextResponse.json({ ok: true }, { headers });
+      }
+      const name = String(body.name || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+      if (!name) return NextResponse.json({ error: 'Nhập tên nhóm, vd "Ốc hương".' }, { status: 400, headers });
+      const keywords = [...new Set((Array.isArray(body.keywords) ? body.keywords : String(body.keywords || '').split(','))
+        .map(k => String(k).trim().replace(/\s+/g, ' ').slice(0, 40)).filter(k => itemKey(k).length >= 2))].slice(0, 10);
+      const existing = body.id ? groups.find(g => g.id === body.id) : null;
+      if (body.id && !existing) return NextResponse.json({ error: 'Không tìm thấy nhóm.' }, { status: 404, headers });
+      if (groups.some(g => g.id !== body.id && itemKey(g.name) === itemKey(name))) return NextResponse.json({ error: `Đã có nhóm "${name}".` }, { status: 409, headers });
+      if (!existing && groups.length >= MAX_ITEM_GROUPS) return NextResponse.json({ error: 'Đã đủ số nhóm tối đa.' }, { status: 400, headers });
+      const group = { id: existing?.id || randomUUID(), name, keywords: keywords.length ? keywords : [name] };
+      await saveItemGroups(db, existing ? groups.map(g => g.id === group.id ? group : g) : [...groups, group]);
+      return NextResponse.json({ ok: true, group }, { headers });
+    }
 
     if (body.action === 'verify') {
       const table = body.kind === 'paper' ? 'finance_manual_receipts' : body.kind === 'bill' ? 'finance_revenue_ledger' : null;

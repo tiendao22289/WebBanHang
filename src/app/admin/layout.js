@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
 import {
   LayoutGrid,
   UtensilsCrossed,
@@ -130,8 +129,7 @@ export default function AdminLayout({ children }) {
     localStorage.setItem('staffUser', JSON.stringify(u));
     setUser(u);
     setLoading(false);
-
-    supabase.from('staff').update({ last_login: new Date().toISOString() }).eq('id', data.id);
+    // Giờ đăng nhập do máy chủ ghi (/api/admin/session).
   };
 
   const handleLogout = async () => {

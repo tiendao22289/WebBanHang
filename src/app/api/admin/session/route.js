@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getStatusSecret, getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { STATUS_COOKIE, SESSION_SECONDS, signSession } from '@/lib/statusSession.mjs';
+import { hashPin, isHashedPin, pinMatches } from '@/lib/staffPin.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,9 +46,16 @@ export async function POST(request) {
     if (typeof phone !== 'string' || typeof pin !== 'string' || phone.length > 30 || pin.length > 100) {
       return NextResponse.json({ error: 'Thông tin đăng nhập không hợp lệ.' }, { status: 400, headers });
     }
-    const { data, error } = await statusDatabase().from('staff').select('id,full_name,phone,role')
-      .eq('phone', phone.trim()).eq('pin', pin.trim()).single();
-    if (error || !data) return NextResponse.json({ error: 'Sai số điện thoại hoặc mã PIN!' }, { status: 401, headers });
+    const db = statusDatabase();
+    const secret = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const { data: rows, error } = await db.from('staff').select('id,full_name,phone,role,pin').eq('phone', phone.trim()).limit(5);
+    if (error) throw error;
+    const match = (rows || []).find(r => pinMatches(r.pin, r.id, pin, secret));
+    if (!match) return NextResponse.json({ error: 'Sai số điện thoại hoặc mã PIN!' }, { status: 401, headers });
+    const { pin: stored, ...data } = match;
+    // PIN cũ lưu chữ thường → băm luôn; ghi giờ đăng nhập (trước đây trang tự ghi bằng khoá công khai).
+    await db.from('staff').update({ last_login: new Date().toISOString(), ...(isHashedPin(stored) ? {} : { pin: hashPin(data.id, pin, secret) }) })
+      .eq('id', data.id).then(({ error: e }) => { if (e) console.error('[session] last_login', e); });
     const response = NextResponse.json({ user: data }, { headers });
     persistSession(response, request, data.id);
     attempts.delete(address);

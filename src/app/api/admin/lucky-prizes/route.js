@@ -11,6 +11,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { isGiftPrizeType } from '@/lib/luckyWheel';
+import { requireStatusAdmin } from '@/lib/statusAuth';
 
 function getServiceClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -23,7 +24,16 @@ function fail(message, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
+// Chỉ admin đã đăng nhập (cookie máy chủ ký) mới sửa được cơ cấu quà.
+async function denyUnlessAdmin(request) {
+  const code = await requireStatusAdmin(request).catch(() => 503);
+  if (code === 200) return null;
+  return fail(code === 503 ? 'Không kiểm tra được đăng nhập.' : 'Chỉ admin được sửa quà vòng xoay.', code);
+}
+
 export async function POST(request) {
+  const denied = await denyUnlessAdmin(request);
+  if (denied) return denied;
   const supabase = getServiceClient();
   if (!supabase) return fail('Thiếu cấu hình server', 500);
 
@@ -46,6 +56,8 @@ export async function POST(request) {
 }
 
 export async function PATCH(request) {
+  const denied = await denyUnlessAdmin(request);
+  if (denied) return denied;
   const supabase = getServiceClient();
   if (!supabase) return fail('Thiếu cấu hình server', 500);
 
@@ -82,6 +94,8 @@ export async function PATCH(request) {
 }
 
 export async function DELETE(request) {
+  const denied = await denyUnlessAdmin(request);
+  if (denied) return denied;
   const supabase = getServiceClient();
   if (!supabase) return fail('Thiếu cấu hình server', 500);
 

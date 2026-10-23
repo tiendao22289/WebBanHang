@@ -43,6 +43,7 @@ import {
   ChefHat,
 } from 'lucide-react';
 import './tables.css';
+import LongOpenTables from './LongOpenTables';
 
 // ─── Nhận diện nước ngọt / bia / khăn (không dựa vào category vì DB để trống) ───
 const DRINK_KEYWORDS = ['bia', 'coca', 'pepsi', '7 up', '7up', 'xa xi', 'sa xi', 'sting', 'siting', '0 do', 'nuoc', 'tra', 'khan', 'sprite', 'fanta', 'mirinda', 'aquafina', 'lavie', 'la vie', 'red bull', 'redbull', 'revive'];
@@ -3156,6 +3157,8 @@ export default function TablesPage() {
                   ))}
                 </div>
               </div>
+              {/* Bàn mở quá lâu (quên đóng / quên thanh toán) */}
+              <LongOpenTables tables={tables} onOpen={t => setSelectedTable(t)} />
               {/* Takeaway pinned card */}
               {takeawayTable && (
                 <div style={{ margin: '8px 8px 0', background: '#eff6ff', border: '2px solid #bfdbfe', borderRadius: 16, padding: '14px', gridColumn: '1 / -1' }}>
@@ -3739,6 +3742,7 @@ export default function TablesPage() {
                         </div>
                       ))}
                     </div>
+                    <LongOpenTables tables={tables} onOpen={t => setSelectedTable(t)} />
                     {/* Table grid */}
                     <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', background: '#f1f5f9' }}>
                       {/* Takeaway pinned card — desktop */}

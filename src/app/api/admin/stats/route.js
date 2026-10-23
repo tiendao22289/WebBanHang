@@ -1,5 +1,6 @@
 ﻿import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireStatusAdmin } from '@/lib/statusAuth';
 
 export const dynamic = 'force-dynamic';
 
@@ -241,6 +242,9 @@ function resolveRange(period, customStart, customEnd) {
 }
 
 export async function GET(request) {
+  // Doanh thu chỉ cho admin đã đăng nhập (trước đây ai biết đường dẫn cũng xem được).
+  const authCode = await requireStatusAdmin(request).catch(() => 503);
+  if (authCode !== 200) return NextResponse.json({ error: 'Chỉ admin được xem thống kê.' }, { status: authCode });
   try {
     const { searchParams } = new URL(request.url);
     const period = searchParams.get('period') || 'today';

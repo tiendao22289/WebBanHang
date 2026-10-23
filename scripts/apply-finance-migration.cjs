@@ -52,6 +52,29 @@ async function main() {
     throw new Error('Cài chưa đủ, xem kết quả kiểm tra ở trên.');
   }
   console.log('Đã cài sổ thu chi vào DB thật.');
+
+  // Khoá ghi trực tiếp từ trình duyệt + nhật ký + sổ trả nợ Sổ tay (staff_security.sql).
+  // Chạy SAU khi web mới đã deploy (Sổ tay / Lương / Chấm công đã ghi qua máy chủ).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'staff_security.sql'), 'utf8'));
+  const [lock] = await query(`SELECT
+    (SELECT count(*)::int FROM pg_trigger WHERE tgname = 'block_client_writes') AS write_locks,
+    (SELECT count(*)::int FROM pg_trigger WHERE tgname = 'audit_staff_data') AS audit_triggers,
+    to_regclass('public.staff_note_payments') IS NOT NULL AS payments,
+    NOT has_table_privilege('anon', 'public.staff_data_audit', 'SELECT') AS audit_hidden`);
+  console.log(JSON.stringify(lock));
+  if (lock.write_locks < 8 || lock.audit_triggers < 7 || !lock.payments || !lock.audit_hidden) throw new Error('Khoá dữ liệu nhân viên chưa đủ.');
+
+  // Băm mã PIN còn lưu chữ thường (web đang chạy ở 127.0.0.1:3000 làm việc này).
+  const crypto = require('node:crypto');
+  const serverKey = crypto.createHmac('sha256', key).update('staff-maintenance').digest('hex');
+  const response = await fetch('http://127.0.0.1:3000/api/admin/workforce', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-server-key': serverKey },
+    body: JSON.stringify({ action: 'hash_all_pins' }), signal: AbortSignal.timeout(60000),
+  });
+  const hashed = await response.json().catch(() => ({}));
+  console.log(`băm PIN: HTTP ${response.status} ${JSON.stringify(hashed)}`);
+  if (!response.ok) throw new Error('Chưa băm được PIN.');
+  console.log('Đã khoá dữ liệu nhân viên và băm PIN.');
 }
 
 main().catch(error => { console.error(error.message); process.exitCode = 1; });

@@ -4,9 +4,21 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { ChefHat, FileText, CheckCircle, XCircle, LogOut, Plus, Clock, Trash2, User, CornerDownRight } from 'lucide-react';
 import './notes.css';
+import MenuNameInput from '@/lib/MenuNameInput';
+import { normalizePriceInput, noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
+import { notesApi, workforce } from '@/lib/staffApi';
+import { LineHint, filterRange, notesSummary } from './notesStats';
 
 export default function StaffNotesPage() {
+  // Tên món trong menu để chọn nhanh ở ô tên hàng (vẫn gõ tự do được).
+  const [menuNames, setMenuNames] = useState([]);
+  useEffect(() => {
+    supabase.from('menu_items').select('name').order('name')
+      .then(({ data }) => setMenuNames([...new Set((data || []).map(m => String(m.name || '').trim()).filter(Boolean))]));
+  }, []);
   const [currentUser, setCurrentUser] = useState(null);
+  // Các lần trả nợ (staff_note_payments) — để thống kê theo đúng ngày trả.
+  const [payments, setPayments] = useState([]);
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -118,26 +130,22 @@ export default function StaffNotesPage() {
     setEmpRequests(reqRes.data || []);
   };
 
+  // Ghi qua máy chủ (giờ theo máy chủ, người ghi theo phiên đăng nhập).
   const handleClockIn = async () => {
-    await supabase.from('attendance_logs').insert({ staff_id: currentUser.id, clock_in: new Date().toISOString(), date: new Date().toISOString().split('T')[0] });
+    try { await workforce('legacy_clock_in'); } catch (err) { alert(err.message); }
     fetchEmpData(currentUser.id);
   };
 
   const handleClockOut = async () => {
     if (!todayAttendance) return;
-    const cin = new Date(todayAttendance.clock_in);
-    const cout = new Date();
-    const diffH = (cout - cin) / 3600000;
-    const workH = Math.round(diffH * 10) / 10;
-    const otH = Math.max(0, Math.round((diffH - 8) * 10) / 10);
-    await supabase.from('attendance_logs').update({ clock_out: cout.toISOString(), work_hours: workH, overtime_hours: otH }).eq('id', todayAttendance.id);
+    try { await workforce('legacy_clock_out'); } catch (err) { alert(err.message); }
     fetchEmpData(currentUser.id);
   };
 
   const handleSubmitAdvance = async () => {
     if (!advanceForm.amount || !advanceForm.reason) return alert('Vui lòng điền đầy đủ!');
-    const m = now.getMonth() + 1; const y = now.getFullYear();
-    await supabase.from('payroll_requests').insert({ staff_id: currentUser.id, request_type: 'advance', amount: Number(advanceForm.amount.replace(/\./g, '')), reason: advanceForm.reason, month: m, year: y });
+    try { await workforce('request', { type: 'advance', amount: advanceForm.amount, reason: advanceForm.reason }); }
+    catch (err) { return alert(err.message); }
     setAdvanceForm({ amount: '', reason: '' }); setShowAdvForm(false);
     fetchEmpData(currentUser.id);
     alert('Đã gửi yêu cầu ứng lương!');
@@ -145,8 +153,8 @@ export default function StaffNotesPage() {
 
   const handleSubmitAbsent = async () => {
     if (!absentForm.reason) return alert('Vui lòng điền lý do!');
-    const m = now.getMonth() + 1; const y = now.getFullYear();
-    await supabase.from('payroll_requests').insert({ staff_id: currentUser.id, request_type: 'absent', days: Number(absentForm.days), reason: absentForm.reason, month: m, year: y });
+    try { await workforce('request', { type: 'absent', days: absentForm.days, reason: absentForm.reason }); }
+    catch (err) { return alert(err.message); }
     setAbsentForm({ days: '1', reason: '' }); setShowAbsForm(false);
     fetchEmpData(currentUser.id);
     alert('Đã gửi báo nghỉ!');
@@ -192,15 +200,13 @@ export default function StaffNotesPage() {
     setSuccessMsg('');
 
     try {
-      const { data, error } = await supabase
-        .from('staff')
-        .select('*')
-        .eq('phone', phone)
-        .eq('pin', pin)
-        .single();
+      // Đăng nhập qua máy chủ (PIN đã băm, có giới hạn số lần thử).
+      const response = await fetch('/api/admin/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone, pin }) });
+      const result = await response.json().catch(() => ({}));
+      const data = response.ok ? result.user : null;
 
-      if (error || !data) {
-        setErrorMsg('Số điện thoại hoặc mã PIN không đúng!');
+      if (!data) {
+        setErrorMsg(result.error || 'Số điện thoại hoặc mã PIN không đúng!');
       } else {
         const userToSave = {
           id: data.id,
@@ -214,9 +220,7 @@ export default function StaffNotesPage() {
         if (data.role !== 'admin') {
           fetchEmpData(data.id);
         }
-        
-        // Update last login
-        await supabase.from('staff').update({ last_login: new Date().toISOString() }).eq('id', data.id);
+        // Giờ đăng nhập do máy chủ ghi.
       }
     } catch (err) {
       setErrorMsg('Đã có lỗi xảy ra. Hãy thử lại.');
@@ -231,53 +235,9 @@ export default function StaffNotesPage() {
     setErrorMsg('');
     setSuccessMsg('');
 
-    if (!regName || !regPhone || !regPin) {
-      setErrorMsg('Vui lòng điền đủ thông tin.');
-      setIsLoading(false);
-      return;
-    }
-
-    try {
-      const { data: existingUser } = await supabase
-        .from('staff')
-        .select('id')
-        .eq('phone', regPhone)
-        .single();
-
-      if (existingUser) {
-        setErrorMsg('Số điện thoại này đã được đăng ký!');
-        setIsLoading(false);
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from('staff')
-        .insert([{
-          full_name: regName,
-          phone: regPhone,
-          pin: regPin,
-          role: 'staff'
-        }])
-        .select()
-        .single();
-
-      if (error) {
-        setErrorMsg('Lỗi khi tạo tài khoản. Vui lòng thử lại.');
-      } else {
-        setSuccessMsg('Đăng ký thành công! Vui lòng làm mới trang và đăng nhập.');
-        setIsRegistering(false);
-        setPhone(regPhone);
-        setRegName('');
-        setRegPhone('');
-        setRegPin('');
-      }
-    } catch (err) {
-      // Supabase single() throws an error when no rows returned. This is expected if user doesn't exist.
-      // So if existingUser request throws, it means user does NOT exist, which is good. We should proceed to insert inside the catch block... 
-      // Actually better to handle it properly.
-    } finally {
-      setIsLoading(false);
-    }
+    // Tự đăng ký bị tắt: ai mở web cũng tạo được tài khoản. Admin tạo trong trang Tính Lương.
+    setErrorMsg('Liên hệ quản lý để được tạo tài khoản (trang Tính Lương → Tài khoản).');
+    setIsLoading(false);
   };
 
   const handleLogout = () => {
@@ -292,23 +252,15 @@ export default function StaffNotesPage() {
   const fetchNotes = async () => {
     if (!currentUser) return;
 
-    let query = supabase
-      .from('staff_notes')
-      .select(`
-        *,
-        staff ( full_name, phone )
-      `)
-      .order('created_at', { ascending: false });
-
-    // If staff, only see own notes. If admin, see all.
-    if (currentUser.role !== 'admin') {
-      query = query.eq('staff_id', currentUser.id);
-    }
-
-    const { data, error } = await query;
-    if (!error && data) {
-      setNotes(data);
-    }
+    // Máy chủ trả phiếu (admin: tất cả; nhân viên: của mình) kèm các lần trả nợ.
+    try {
+      const response = await fetch('/api/admin/notes', { cache: 'no-store' });
+      if (response.status === 401) window.dispatchEvent(new Event('staff-session-expired'));
+      if (!response.ok) return;
+      const result = await response.json();
+      setNotes(result.notes || []);
+      setPayments(result.payments || []);
+    } catch { /* mạng chập chờn → giữ danh sách đang có */ }
   };
 
   useEffect(() => {
@@ -345,23 +297,8 @@ export default function StaffNotesPage() {
     });
   };
 
-  const parseVal = (str, isQty = false) => {
-    if (!str) return 0;
-    // Extract numbers, allowing decimals
-    let s = str.toString().toLowerCase().trim();
-    
-    // Check if it has 'k' before stripping text, but ignore if it's explicitly marked as Quantity (which often has "ký")
-    const isK = !isQty && s.includes('k');
-    
-    // Strip everything except digits and dot
-    let numStr = s.replace(/[^0-9.]/g, '');
-    let num = parseFloat(numStr) || 0;
-    
-    if (isK) {
-      num = num * 1000;
-    }
-    return num;
-  };
+  // Cách đọc giá / số lượng dùng chung với máy chủ (notesMath): "2,5kg" = 2,5 · "250000" = 250.000đ.
+  const parseVal = (str, isQty = false) => (isQty ? parseQty(str) : parsePrice(str));
 
   const calculateTotals = () => {
     let totalPaid = 0;
@@ -408,118 +345,24 @@ export default function StaffNotesPage() {
       return;
     }
 
-    let finalContent = newNoteType === 'expense' ? formatExpenseContent() : newNoteContent.trim();
-    
-    // Add debt payment info to the new note's content
-    if (newNotePayDebtEnabled && payAmt > 0) {
-      const debtNotice = `[💰 Đã trả nợ cũ: ${formatMoney(payAmt).replace('₫', 'đ')}. Nợ cũ còn lại: ${formatMoney(oldDebt - payAmt).replace('₫', 'đ')}]`;
-      if (newNoteType === 'expense' && finalContent.startsWith('{')) {
-        try {
-          const data = JSON.parse(finalContent);
-          data.note = (data.note ? data.note + '\n\n' : '') + debtNotice;
-          finalContent = JSON.stringify(data);
-        } catch {
-          finalContent = finalContent + '\n\n' + debtNotice;
-        }
-      } else {
-        finalContent = (finalContent ? finalContent + '\n\n' : '') + debtNotice;
-      }
-    }
-
-    if (!finalContent && !newNotePayDebtEnabled) {
+    const hasItems = newNoteType === 'expense' && expenseItems.some(i => i.name.trim());
+    if (!hasItems && !newNoteContent.trim() && !(newNotePayDebtEnabled && payAmt > 0)) {
       alert('Vui lòng nhập nội dung!');
       return;
     }
 
-    let { paid, debt } = { paid: Number(newNoteAmount || 0), debt: Number(newNoteDebt || 0) };
-    if (newNoteType === 'expense' && expenseItems.some(i => i.name.trim())) {
-      const totals = calculateTotals();
-      paid = totals.paid;
-      debt = totals.debt;
-    }
-
     setIsLoading(true);
-
-    // Xử lý cấn trừ nợ vào các phiếu cũ
-    if (newNotePayDebtEnabled && payAmt > 0) {
-      let remainingPay = payAmt;
-      const notesToUpdate = notes
-        .filter(n => n.staff_id === currentUser.id && ((n.debt || 0) - (n.paid_debt || 0)) > 0)
-        .sort((a,b) => new Date(a.created_at) - new Date(b.created_at));
-
-      const timestampStr = new Date().toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
-
-      for (const oldNote of notesToUpdate) {
-        if (remainingPay <= 0) break;
-        const debtRem = (oldNote.debt || 0) - (oldNote.paid_debt || 0);
-        if (debtRem <= 0) continue;
-        const payForThisNote = Math.min(debtRem, remainingPay);
-        
-        const newPaidDebt = (oldNote.paid_debt || 0) + payForThisNote;
-        const isFullyPaid = newPaidDebt >= (oldNote.debt || 0);
-        const paymentLog = `[🔔 Thanh toán nợ cũ từ báo cáo mới ${formatMoney(payForThisNote).replace('₫', 'đ')} vào lúc ${timestampStr}${isFullyPaid ? ' — ✅ Đã trả đủ' : ''}]`;
-        
-        let updatedContent = oldNote.content;
-        try {
-          if (updatedContent && updatedContent.startsWith('{') && updatedContent.includes('"type":"structured_expense"')) {
-            const data = JSON.parse(updatedContent);
-            
-            // Phân bổ số tiền trả vào từng item nợ của phiếu cũ (theo thứ tự item)
-            let remainForItems = payForThisNote;
-            if (data.items && Array.isArray(data.items)) {
-              data.items = data.items.map(item => {
-                if (remainForItems <= 0) return item;
-                if (item.paymentStatus !== 'debt') return item;
-                const p = parseVal(item.price);
-                const q = parseVal(item.qty, true) || 1;
-                const itemTotal = p * q;
-                const debtBase = item.debtAmount ? Math.min(parseVal(item.debtAmount.replace(/\./g, '')), itemTotal) : itemTotal;
-                const alreadyPaid = item.paid_amount || 0;
-                const itemRemaining = debtBase - alreadyPaid;
-                if (itemRemaining <= 0) return item;
-                const payItem = Math.min(itemRemaining, remainForItems);
-                const newItemPaid = alreadyPaid + payItem;
-                remainForItems -= payItem;
-                const newPaymentLogs = [...(item.payment_logs || []), { amount: payItem, ts: timestampStr }];
-                const isItemDone = newItemPaid >= debtBase;
-                return {
-                  ...item,
-                  paid_amount: newItemPaid,
-                  paymentStatus: isItemDone ? 'full' : 'debt',
-                  payment_logs: newPaymentLogs,
-                };
-              });
-            }
-
-            data.note = (data.note ? data.note + '\n\n' : '') + paymentLog;
-            data.history = [...(data.history || []), { ts: timestampStr, by: currentUser.full_name, changes: `💰 Khấu trừ ${formatMoney(payForThisNote).replace('₫', 'đ')} (qua báo cáo mới)${isFullyPaid ? ' — ✅ Đã trả đủ' : ''}` }];
-            updatedContent = JSON.stringify(data);
-          } else {
-            updatedContent = updatedContent + '\n\n' + paymentLog;
-          }
-        } catch {
-          updatedContent = updatedContent + '\n\n' + paymentLog;
-        }
-
-        await supabase
-          .from('staff_notes')
-          .update({ paid_debt: newPaidDebt, content: updatedContent })
-          .eq('id', oldNote.id);
-        
-        remainingPay -= payForThisNote;
-      }
-    }
-
-    const { error } = await supabase
-      .from('staff_notes')
-      .insert({
-        staff_id: currentUser.id,
+    // Máy chủ tự tính tiền từ các dòng hàng, lưu phiếu trước rồi mới trừ nợ cũ.
+    let error = null;
+    try {
+      await notesApi('create', {
         note_type: newNoteType,
-        content: finalContent,
-        amount: paid,
-        debt: debt,
-        status: 'approved' // Auto-approve since admin approval is removed
+        items: newNoteType === 'expense' ? expenseItems.filter(i => i.name.trim()) : [],
+        note: newNoteContent,
+        input_amount: newNoteInputAmount,
+        pay_old_debt: newNotePayDebtEnabled ? payAmt : 0,
       });
+    } catch (err) { error = err; }
 
     setIsLoading(false);
     if (!error) {
@@ -533,12 +376,12 @@ export default function StaffNotesPage() {
       setNewNoteAmount(0);
       setNewNoteDebt(0);
       setNewNoteInputAmount('');
-      setNewNoteType('other');
+      setNewNoteType('expense');
       setNewNotePayDebtEnabled(false);
       setNewNotePayDebtAmount('');
       fetchNotes(currentUser); // Refresh list
     } else {
-      alert('Lỗi lưu báo cáo!');
+      alert(error.message || 'Lỗi lưu báo cáo!');
     }
   };
 
@@ -549,8 +392,9 @@ export default function StaffNotesPage() {
   const confirmDeleteNote = async () => {
     const noteId = deleteConfirmId;
     setDeleteConfirmId(null);
-    const { error } = await supabase.from('staff_notes').delete().eq('id', noteId);
-    if (error) alert('Xoá thất bại!');
+    let error = null;
+    try { await notesApi('delete', { id: noteId }); } catch (err) { error = err; }
+    if (error) alert(error.message || 'Xoá thất bại!');
     else {
       setNotes(prev => prev.filter(n => n.id !== noteId));
       if (viewingNote?.id === noteId) setViewingNote(null);
@@ -565,7 +409,8 @@ export default function StaffNotesPage() {
       try {
         const data = JSON.parse(note.content);
         const items = (data.items?.length ? data.items : []).map((item, idx) => {
-          const stableId = item._id || `existing-${idx}-${Date.now()}`;
+          // Dòng cũ chưa có mã: dùng "#vị trí" để máy chủ so đúng dòng khi ghi lịch sử.
+          const stableId = item._id || `#${idx}`;
           if (item.paymentStatus === 'debt' && !item.debtAmount) {
             const p = parseVal(item.price);
             const q = parseVal(item.qty, true) || 1;
@@ -632,8 +477,9 @@ export default function StaffNotesPage() {
     const value = e.target.value.trim();
     if (!value) return;
     let formatted = value;
-    if (field === 'price' && /^\d+$/.test(value)) formatted = value + 'k';
-    else if (field === 'qty' && /^\d+(\.\d+)?$/.test(value)) formatted = value + ' ký';
+    // Giá: chỉ số nhỏ mới thêm "k" (250 → 250k); gõ đủ 250000 thì giữ nguyên.
+    if (field === 'price') formatted = normalizePriceInput(value);
+    else if (field === 'qty' && /^\d+([.,]\d+)?$/.test(value)) formatted = value + ' ký';
     if (formatted !== value) {
       setEditExpenseItems(prev => prev.map((item, i) => i === index ? { ...item, [field]: formatted } : item));
     }
@@ -754,20 +600,23 @@ export default function StaffNotesPage() {
     const finalDebtToSave = (editNoteType === 'expense' && validItems.length > 0)
       ? debt  // always use calculated (even 0)
       : (manualDebt > 0 ? manualDebt : (note.debt || 0));
-    // FIX #2: Nếu nợ mới nhỏ hơn số đã trả thì cap paid_debt lại để tránh hiển thị sai
-    const safePaidDebt = Math.min(note.paid_debt || 0, finalDebtToSave);
     setIsSavingEdit(true);
-    const { error } = await supabase
-      .from('staff_notes')
-      .update({ note_type: editNoteType, content: finalContent, amount: paid || note.amount, debt: finalDebtToSave, paid_debt: safePaidDebt })
-      .eq('id', note.id);
+    // Máy chủ tính lại tiền từ các dòng (luôn lưu đúng số mới, kể cả 0), giữ số đã trả nợ
+    // của từng dòng và tự ghi lịch sử chỉnh sửa.
+    let saved = null, error = null;
+    try {
+      saved = (await notesApi('edit', {
+        id: note.id, note_type: editNoteType, items: validItems, note: editNoteContent,
+        input_amount: editInputAmount, debt: editNoteType !== 'expense' ? finalDebtToSave : undefined,
+      })).note;
+    } catch (err) { error = err; }
     setIsSavingEdit(false);
     if (!error) {
       closeEditNote();
       fetchNotes();
-      setViewingNote(prev => prev ? { ...prev, note_type: editNoteType, content: finalContent, amount: paid || note.amount, debt: finalDebtToSave } : null);
+      setViewingNote(prev => prev && saved ? { ...prev, ...saved } : prev);
     } else {
-      alert('Lưu thất bại!');
+      alert(error.message || 'Lưu thất bại!');
     }
   };
 
@@ -821,19 +670,11 @@ export default function StaffNotesPage() {
     const value = e.target.value.trim();
     if (!value) return;
     
-    const newItems = [...expenseItems];
-    if (field === 'price') {
-      // If it's just numbers, append 'k'
-      if (/^\d+$/.test(value)) {
-        newItems[index][field] = value + 'k';
-      }
-    } else if (field === 'qty') {
-      // If it's just numbers, append ' ký'
-      if (/^\d+(\.\d+)?$/.test(value)) {
-        newItems[index][field] = value + ' ký';
-      }
-    }
-    setExpenseItems(newItems);
+    // Giá: chỉ số nhỏ mới thêm "k" (250 → 250k), gõ đủ 250000 giữ nguyên. SL chỉ có số → thêm " ký".
+    let formatted = value;
+    if (field === 'price') formatted = normalizePriceInput(value);
+    else if (field === 'qty' && /^\d+([.,]\d+)?$/.test(value)) formatted = value + ' ký';
+    if (formatted !== value) setExpenseItems(prev => prev.map((item, i) => (i === index ? { ...item, [field]: formatted } : item)));
   };
 
   const removeExpenseItem = (index) => {
@@ -854,98 +695,14 @@ export default function StaffNotesPage() {
       const alreadyPaid = item.paid_amount || 0;
       const remaining = debtBase - alreadyPaid;
       if (payAmount <= 0 || payAmount > remaining) return alert('Số tiền không hợp lệ!');
-      data.items[itemIdx].paid_amount = alreadyPaid + payAmount;
-      if (data.items[itemIdx].paid_amount >= debtBase) {
-        data.items[itemIdx].paymentStatus = 'full';
-      }
-      // Append payment log to this item
-      const tsStr = new Date().toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
-      data.items[itemIdx].payment_logs = [...(item.payment_logs || []), { amount: payAmount, ts: tsStr }];
-      // Also log into shared history
-      const payEditor = currentUser?.full_name || 'Không rõ';
-      data.history = [...(data.history || []), { ts: tsStr, by: payEditor, changes: `💰 Trả nợ ${formatMoney(payAmount)} cho "${item.name}"` }];
-      const newContent = JSON.stringify(data);
-      const totalPaid = data.items.filter(i => i.name?.trim()).reduce((sum, i) => sum + (i.paid_amount || 0), 0);
-      await supabase.from('staff_notes').update({ content: newContent, paid_debt: totalPaid }).eq('id', note.id);
+      // Máy chủ ghi lần trả nợ (ngày trả, ai trả) và cập nhật dòng hàng + lịch sử.
+      const updated = (await notesApi('pay_item', { id: note.id, item_index: itemIdx, amount: payAmount })).note;
       setPayingItem(null); setPayItemInput('');
       // Directly update notes state so card turns green immediately
-      setNotes(prev => prev.map(n => n.id === note.id ? { ...n, content: newContent, paid_debt: totalPaid } : n));
-      setViewingNote(prev => prev ? { ...prev, content: newContent, paid_debt: totalPaid } : null);
-    } catch { alert('Lỗi cập nhật!'); }
-  };
-
-  const handlePayDebt = async (note) => {
-    const payAmount = Number(payDebtAmount);
-    if (!payAmount || payAmount <= 0) return alert('Vui lòng nhập số tiền hợp lệ');
-    const currentDebt = note.debt || 0;
-    const currentPaid = note.paid_debt || 0;
-    
-    if (payAmount > (currentDebt - currentPaid)) {
-      return alert('Số tiền trả không được vượt quá số dư nợ!');
-    }
-
-    setIsLoading(true);
-    const newPaidDebt = currentPaid + payAmount;
-    const isFullyPaid = newPaidDebt >= currentDebt;
-    
-    const timestampStr = new Date().toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
-    const paymentLog = `[🔔 Đã trả nợ ${formatMoney(payAmount)} vào lúc ${timestampStr}${isFullyPaid ? ' — ✅ Đã trả đủ' : ''}]`;
-    
-    let newContent = note.content;
-    try {
-      if (newContent && newContent.startsWith('{') && newContent.includes('"type":"structured_expense"')) {
-        const data = JSON.parse(newContent);
-        // FIX #1: Cập nhật item-level paid_amount và paymentStatus
-        let remainForItems = payAmount;
-        if (data.items && Array.isArray(data.items)) {
-          data.items = data.items.map(item => {
-            if (remainForItems <= 0) return item;
-            if (item.paymentStatus !== 'debt') return item;
-            const p = parseVal(item.price);
-            const q = parseVal(item.qty, true) || 1;
-            const itemTotal = p * q;
-            const debtBase = item.debtAmount ? Math.min(parseVal(item.debtAmount.replace(/\./g, '')), itemTotal) : itemTotal;
-            const alreadyPaid = item.paid_amount || 0;
-            const itemRemaining = debtBase - alreadyPaid;
-            if (itemRemaining <= 0) return item;
-            const payItem = Math.min(itemRemaining, remainForItems);
-            const newItemPaid = alreadyPaid + payItem;
-            remainForItems -= payItem;
-            const isItemDone = newItemPaid >= debtBase;
-            return {
-              ...item,
-              paid_amount: newItemPaid,
-              paymentStatus: isItemDone ? 'full' : 'debt',
-              payment_logs: [...(item.payment_logs || []), { amount: payItem, ts: timestampStr }],
-            };
-          });
-        }
-        data.note = (data.note ? data.note + '\n\n' : '') + paymentLog;
-        data.history = [...(data.history || []), { ts: timestampStr, by: currentUser?.full_name || 'Không rõ', changes: `💰 Trả nợ ${formatMoney(payAmount)}${isFullyPaid ? ' — ✅ Đã trả đủ' : ''}` }];
-        newContent = JSON.stringify(data);
-      } else {
-        newContent = newContent + '\n\n' + paymentLog;
-      }
-    } catch {
-      newContent = newContent + '\n\n' + paymentLog;
-    }
-
-    const { error } = await supabase
-      .from('staff_notes')
-      .update({ paid_debt: newPaidDebt, content: newContent })
-      .eq('id', note.id);
-
-    setIsLoading(false);
-    if (error) {
-      alert('Lỗi cập nhật!');
-    } else {
-      setPayDebtNoteId(null);
-      setPayDebtAmount('');
-      setViewingNote({...note, paid_debt: newPaidDebt, content: newContent});
-      // Cập nhật notes state ngay để card đổi màu
-      setNotes(prev => prev.map(n => n.id === note.id ? { ...n, paid_debt: newPaidDebt, content: newContent } : n));
+      setNotes(prev => prev.map(n => n.id === note.id ? { ...n, ...updated } : n));
+      setViewingNote(prev => prev ? { ...prev, ...updated } : null);
       fetchNotes();
-    }
+    } catch (err) { alert(err?.message || 'Lỗi cập nhật!'); }
   };
 
   // ── Render ──
@@ -953,7 +710,7 @@ export default function StaffNotesPage() {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
   };
 
-  const renderNoteContent = (content) => {
+  const renderNoteContent = (content, noteId = null) => {
     try {
       let jsonContent = content;
       let trailingLog = '';
@@ -1188,7 +945,11 @@ export default function StaffNotesPage() {
                 <span style={{ color: debtTotal > 0 ? '#dc2626' : '#15803d' }}>{formatMoney(grandTotal)}</span>
               </div>
               {data.input_amount > 0 && (() => {
-                const balance = data.input_amount - paidTotal;
+                // Trả lại chủ = tiền giao − trả ngay lúc mua − tiền trả nợ cũ lấy từ tiền của phiếu này.
+                // (Trả nợ của phiếu này về sau dùng tiền của phiếu khác nên không trừ ở đây.)
+                const paidAtPurchase = noteTotals(data.items || []).paid;
+                const fundedDebt = noteId ? payments.filter(p => p.paid_from_note_id === noteId).reduce((a, p) => a + Number(p.amount || 0), 0) : 0;
+                const balance = data.input_amount - paidAtPurchase - fundedDebt;
                 return (
                   <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 10, background: balance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1.5px solid ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginBottom: 4 }}>
@@ -1199,6 +960,12 @@ export default function StaffNotesPage() {
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginBottom: 4 }}>
                         <span style={{ color: '#dc2626' }}>📋 Nợ người bán:</span>
                         <strong style={{ color: '#dc2626' }}>{formatMoney(debtTotal)}</strong>
+                      </div>
+                    )}
+                    {fundedDebt > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginBottom: 4 }}>
+                        <span style={{ color: '#7c3aed' }}>💰 Dùng trả nợ cũ:</span>
+                        <strong style={{ color: '#7c3aed' }}>{formatMoney(fundedDebt)}</strong>
                       </div>
                     )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.92rem', fontWeight: 800, paddingTop: 4, borderTop: `1px dashed ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
@@ -1367,30 +1134,13 @@ export default function StaffNotesPage() {
   const filteredByDate = filterNotesByDate(
     notes.filter(n => currentUser.role !== 'admin' || selectedStaff === 'ALL' || n.staff?.full_name === selectedStaff)
   );
-  // FIX #5: totalSpent = tiền thực chi từ túi (amount) + tiền đã trả nợ người bán (paid_debt) — cả 2 đều là tiền thực ra tay
-  // paid_debt được tính riêng để tránh nhầm nhưng vẫn cần trong tổng chi tiêu thực tế
-  const totalSpent = filteredByDate.reduce((a, n) => a + (n.amount || 0), 0);
-  const totalPaidDebtAll = filteredByDate.reduce((a, n) => a + (n.paid_debt || 0), 0);
-  const totalDebt  = filteredByDate.reduce((a, n) => a + Math.max(0, (n.debt || 0) - (n.paid_debt || 0)), 0);
-  const totalOrigDebt = filteredByDate.reduce((a, n) => a + (n.debt || 0), 0);
-
-  // Tổng tiền chủ đưa và tổng tiền trả lại — đọc từ input_amount trong content JSON
-  const { totalInputAmount, totalReturnAmount } = filteredByDate.reduce((acc, n) => {
-    if (n.note_type === 'expense' && n.content?.includes('structured_expense')) {
-      try {
-        const data = JSON.parse(n.content);
-        const inputAmt = data.input_amount || 0;
-        if (inputAmt > 0) {
-          acc.totalInputAmount += inputAmt;
-          // Tiền thực chi Túi = amount (thực chi không tính nợ), còn thừa trả lại chủ = input - amount (tiền túi ra)
-          const cashSpent = n.amount || 0;
-          const balance = inputAmt - cashSpent;
-          if (balance > 0) acc.totalReturnAmount += balance;
-        }
-      } catch {}
-    }
-    return acc;
-  }, { totalInputAmount: 0, totalReturnAmount: 0 });
+  // Thống kê theo khoảng ngày đang lọc: trả nợ tính vào ngày trả (không phải ngày mua),
+  // "Còn nợ" là tổng nợ còn lại tính tới cuối khoảng (cả nợ cũ).
+  const staffNotes = notes.filter(n => currentUser.role !== 'admin' || selectedStaff === 'ALL' || n.staff?.full_name === selectedStaff);
+  const summary = notesSummary(staffNotes, payments, filterRange(filterDay, filterMonth, filterYear));
+  const totalInputAmount = summary.given;
+  const totalSpent = summary.cash;
+  const totalDebt = summary.debtLeft;
 
   // Label for current filter
   const filterLabel = filterDay
@@ -1584,25 +1334,43 @@ export default function StaffNotesPage() {
             <span style={{ fontSize: 10, background: '#e0e7ff', color: '#4338ca', padding: '2px 7px', borderRadius: 6, fontWeight: 600 }}>{selectedStaff}</span>
           )}
         </div>
-        {/* Evenly distributed tiles */}
-        <div style={{ display: 'flex', gap: 8 }}>
-          {totalInputAmount > 0 && (
-            <div style={{ flex: 1, background: '#f0f9ff', borderRadius: 9, padding: '8px 10px', border: '1px solid #bae6fd', textAlign: 'center', minWidth: 0 }}>
-              <div style={{ fontSize: 10, color: '#0369a1', fontWeight: 500, marginBottom: 2 }}>💵 Chủ đưa</div>
-              <div style={{ fontWeight: 800, color: '#0369a1', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(totalInputAmount)}</div>
-            </div>
-          )}
-          <div style={{ flex: 1, background: 'white', borderRadius: 9, padding: '8px 10px', border: '1px solid #e0e7ff', textAlign: 'center', minWidth: 0 }}>
-            <div style={{ fontSize: 10, color: '#374151', fontWeight: 500, marginBottom: 2 }}>🛒 Đã chi</div>
-            <div style={{ fontWeight: 800, color: '#16a34a', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(totalSpent)}</div>
-            {totalPaidDebtAll > 0 && <div style={{ fontSize: 9, color: '#7c3aed', marginTop: 1 }}>+{formatMoney(totalPaidDebtAll).replace('₫','đ')} nợ</div>}
+        {/* Ô thống kê: tiền hàng (khớp Sổ thu chi), tiền mặt đã chi (gồm trả nợ trong khoảng), còn nợ tới cuối khoảng */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))', gap: 8 }}>
+          {summary.hasGiven && (
+          <div style={{ background: '#f0f9ff', borderRadius: 9, padding: '8px 10px', border: '1px solid #bae6fd', textAlign: 'center', minWidth: 0 }}>
+            <div style={{ fontSize: 10, color: '#0369a1', fontWeight: 500, marginBottom: 2 }}>💵 Chủ đưa</div>
+            <div style={{ fontWeight: 800, color: '#0369a1', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(totalInputAmount)}</div>
           </div>
-
-          <div style={{ flex: 1, background: totalDebt > 0 ? '#fff1f2' : '#f0fdf4', borderRadius: 9, padding: '8px 10px', border: `1px solid ${totalDebt > 0 ? '#fca5a5' : '#86efac'}`, textAlign: 'center', minWidth: 0 }}>
+          )}
+          <div style={{ background: 'white', borderRadius: 9, padding: '8px 10px', border: '1px solid #e0e7ff', textAlign: 'center', minWidth: 0 }}>
+            <div style={{ fontSize: 10, color: '#374151', fontWeight: 500, marginBottom: 2 }}>📦 Tiền hàng</div>
+            <div style={{ fontWeight: 800, color: '#374151', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(summary.goods)}</div>
+            <div style={{ fontSize: 9, color: '#6b7280', marginTop: 1 }}>gồm mua nợ</div>
+          </div>
+          <div style={{ background: 'white', borderRadius: 9, padding: '8px 10px', border: '1px solid #e0e7ff', textAlign: 'center', minWidth: 0 }}>
+            <div style={{ fontSize: 10, color: '#16a34a', fontWeight: 500, marginBottom: 2 }}>🛒 Chi tiền mặt</div>
+            <div style={{ fontWeight: 800, color: '#16a34a', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(totalSpent)}</div>
+            {summary.debtPaid > 0 && <div style={{ fontSize: 9, color: '#7c3aed', marginTop: 1 }}>gồm {formatMoney(summary.debtPaid).replace('₫', 'đ')} trả nợ</div>}
+          </div>
+          {summary.hasGiven && (
+          <div style={{ background: summary.giveBack >= 0 ? '#f0fdf4' : '#fff1f2', borderRadius: 9, padding: '8px 10px', border: `1px solid ${summary.giveBack >= 0 ? '#86efac' : '#fca5a5'}`, textAlign: 'center', minWidth: 0 }}>
+            <div style={{ fontSize: 10, color: summary.giveBack >= 0 ? '#15803d' : '#dc2626', fontWeight: 500, marginBottom: 2 }}>{summary.giveBack >= 0 ? '↩ Trả lại chủ' : '⚠️ Bỏ thêm'}</div>
+            <div style={{ fontWeight: 800, color: summary.giveBack >= 0 ? '#15803d' : '#dc2626', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(Math.abs(summary.giveBack))}</div>
+          </div>
+          )}
+          <div style={{ background: totalDebt > 0 ? '#fff1f2' : '#f0fdf4', borderRadius: 9, padding: '8px 10px', border: `1px solid ${totalDebt > 0 ? '#fca5a5' : '#86efac'}`, textAlign: 'center', minWidth: 0 }}>
             <div style={{ fontSize: 10, color: totalDebt > 0 ? '#dc2626' : '#15803d', fontWeight: 500, marginBottom: 2 }}>{totalDebt > 0 ? '⚠️ Còn nợ' : '✅ Hết nợ'}</div>
             <div style={{ fontWeight: 800, color: totalDebt > 0 ? '#dc2626' : '#15803d', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(totalDebt)}</div>
+            {filterDay || filterMonth || filterYear ? <div style={{ fontSize: 9, color: '#6b7280', marginTop: 1 }}>tới cuối kỳ, gồm nợ cũ</div> : null}
           </div>
         </div>
+        {Object.keys(summary.creditors).length > 0 && (
+          <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {Object.entries(summary.creditors).sort((x, y) => y[1] - x[1]).map(([who, left]) => (
+              <span key={who} style={{ fontSize: 11, background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 999, padding: '2px 8px' }}>Nợ {who}: {formatMoney(left).replace('₫', 'đ')}</span>
+            ))}
+          </div>
+        )}
       </div>
 
 
@@ -1685,7 +1453,7 @@ export default function StaffNotesPage() {
                   ) : (
                     <>
                       <div className="keep-body hide-on-mobile">
-                        {renderNoteContent(note.content)}
+                        {renderNoteContent(note.content, note.id)}
                       </div>
                       {/* Mobile: tap hint always shown for non-stock */}
                       <div className="mobile-tap-hint">
@@ -1797,7 +1565,7 @@ export default function StaffNotesPage() {
                       {editExpenseItems.map((item, idx) => (
                         <div key={idx} style={{ marginBottom: 8, padding: '8px 10px', background: 'white', borderRadius: 8, border: '1px solid #e5e7eb' }}>
                           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
-                            <input type="text" placeholder="Tên món" value={item.name} onChange={e => updateEditExpenseItem(idx, 'name', e.target.value)}
+                            <MenuNameInput names={menuNames} placeholder="Tên món" value={item.name} onChange={v => updateEditExpenseItem(idx, 'name', v)}
                               style={{ flex: 1, minWidth: 90, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }} />
 
                             <input type="text" placeholder="Giá" value={item.price} onChange={e => updateEditExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleEditExpenseBlur(idx, 'price', e)}
@@ -1808,6 +1576,7 @@ export default function StaffNotesPage() {
                               <button onClick={() => removeEditExpenseItem(idx)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 2 }}><XCircle size={16} /></button>
                             )}
                           </div>
+                          <LineHint item={item} />
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer' }}>
                               <input type="radio" checked={item.paymentStatus === 'full'} onChange={() => updateEditExpenseItem(idx, 'paymentStatus', 'full')} /> ✓ Đủ
@@ -1901,7 +1670,7 @@ export default function StaffNotesPage() {
                 </div>
               )}
               <div style={{ marginBottom: 20, padding: 16, background: 'white', borderRadius: 12, border: '1px solid #f3f4f6', overflowX: 'auto' }}>
-                {renderNoteContent(viewingNote.content)}
+                {renderNoteContent(viewingNote.content, viewingNote.id)}
               </div>
               {(viewingNote.amount > 0 || viewingNote.debt > 0) && (() => {
                 const vDebtRemain = Math.max(0, (viewingNote.debt || 0) - (viewingNote.paid_debt || 0));
@@ -1995,9 +1764,9 @@ export default function StaffNotesPage() {
                     {expenseItems.map((item, idx) => (
                       <div key={idx} className="expense-row">
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                          <input type="text" className="expense-input-clean" style={{ flex: 1, minWidth: 100 }}
+                          <MenuNameInput names={menuNames} className="expense-input-clean" style={{ flex: 1, minWidth: 100 }}
                             placeholder={idx === expenseItems.length - 1 && !item.name ? 'Nhập tên đồ...' : 'Tên món'}
-                            value={item.name} onChange={e => updateExpenseItem(idx, 'name', e.target.value)} />
+                            value={item.name} onChange={v => updateExpenseItem(idx, 'name', v)} />
                           <input type="text" className="expense-input-clean" style={{ width: 72, textAlign: 'center' }}
                             placeholder="Giá" value={item.price} onChange={e => updateExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleExpenseBlur(idx, 'price', e)} />
                           <input type="text" className="expense-input-clean" style={{ width: 72, textAlign: 'center' }}
@@ -2006,19 +1775,8 @@ export default function StaffNotesPage() {
                             <button className="btn-remove-row" onClick={() => removeExpenseItem(idx)}><XCircle size={16} /></button>
                           )}
                         </div>
-                        {/* Live total per item */}
-                        {(() => {
-                          const p = parseVal(item.price);
-                          const q = parseVal(item.qty, true) || 1;
-                          const t = p * q;
-                          if (t <= 0) return null;
-                          const isDebtItem = item.paymentStatus === 'debt';
-                          return (
-                            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: isDebtItem ? '#dc2626' : '#15803d', marginTop: 3, paddingLeft: 2 }}>
-                              = {formatMoney(t)} {isDebtItem ? '🔴 (Nợ)' : '✓'}
-                            </div>
-                          );
-                        })()}
+                        {/* Thành tiền + cảnh báo (giá thiếu "k", số lượng nhiều số...) */}
+                        <LineHint item={item} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
                           <div className="expense-status-wrapper" style={{ flexShrink: 0 }}>
                             <label className={`status-label ${item.paymentStatus === 'full' ? 'checked-full' : ''}`}>
