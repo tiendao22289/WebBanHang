@@ -4,6 +4,9 @@
  * đang nợ của các phiếu cũ, tích khoản nào thì trả khoản đó (sửa được số tiền để
  * trả một phần), và tuỳ chọn lấy tiền dư của chuyến chợ để trả nợ.
  *
+ * Có thêm khung "Tiền thừa phiếu trước chưa trả chủ": tích để lấy tiền đó trả nợ,
+ * hoặc bấm "Đã trả chủ" khi người đi chợ đã đưa lại tiền thừa.
+ *
  * value: { [debtKey]: số tiền } — khoản đang chọn trả.
  */
 import { useEffect, useMemo } from 'react';
@@ -13,35 +16,61 @@ const money = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
 const dayMonth = iso => { const d = new Date(new Date(iso).getTime() + 7 * 3600000).toISOString(); return `${d.slice(8, 10)}/${d.slice(5, 7)}`; };
 const digits = v => String(v ?? '').replace(/\D/g, '');
 
-export default function DebtPicker({ notes, value, onChange, surplus, useSurplus, onUseSurplus }) {
+export default function DebtPicker({ notes, value, onChange, surplus, useSurplus, onUseSurplus,
+  leftovers = [], useLeftover, onUseLeftover, onReturnLeftover }) {
   const lines = useMemo(() => allOpenDebts(notes || []), [notes]);
   const total = lines.reduce((a, l) => a + l.left, 0);
   const chosen = Object.values(value || {}).reduce((a, v) => a + (Number(v) || 0), 0);
+  const leftoverTotal = leftovers.reduce((a, l) => a + l.left, 0);
 
-  // "Lấy tiền dư trả nợ": chia tiền dư vào khoản đã tích trước, rồi phiếu cũ nhất.
+  // "Lấy tiền dư / tiền thừa trả nợ": chia vào khoản đã tích trước, rồi phiếu cũ nhất.
   useEffect(() => {
-    if (!useSurplus) return;
-    const preferred = Object.keys(value || {});
-    const next = allocateToDebts(Math.max(0, surplus || 0), lines, preferred);
+    if (!useSurplus && !useLeftover) return;
+    const pool = (useLeftover ? leftoverTotal : 0) + (useSurplus ? Math.max(0, surplus || 0) : 0);
+    const next = allocateToDebts(pool, lines, Object.keys(value || {}));
     if (JSON.stringify(next) !== JSON.stringify(value || {})) onChange(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useSurplus, surplus, lines]);
+  }, [useSurplus, useLeftover, surplus, leftoverTotal, lines]);
 
-  if (!lines.length) return null;
+  if (!lines.length && !leftovers.length) return null;
   const toggle = line => {
     const key = debtKey(line);
     const next = { ...(value || {}) };
     if (next[key]) delete next[key]; else next[key] = line.left;
     onUseSurplus(false);
+    onUseLeftover?.(false);
     onChange(next);
   };
   const setAmount = (line, raw) => {
     const n = Math.min(line.left, Number(digits(raw)) || 0);
     onUseSurplus(false);
+    onUseLeftover?.(false);
     onChange({ ...(value || {}), [debtKey(line)]: n });
   };
 
   return (
+    <>
+    {leftovers.length > 0 && (
+      <div style={{ marginTop: 12, padding: '12px 14px', background: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 10 }}>
+        <div style={{ fontWeight: 700, color: '#15803d', fontSize: 13, marginBottom: 6 }}>💵 Tiền thừa phiếu trước chưa trả chủ: {money(leftoverTotal)}</div>
+        {leftovers.map(l => (
+          <div key={l.note_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 0', fontSize: 12.5 }}>
+            <span style={{ color: '#374151' }}>Phiếu {dayMonth(l.created_at)}{l.writer ? ` · ${l.writer}` : ''} · còn <b style={{ color: '#15803d' }}>{money(l.left)}</b></span>
+            <button type="button" onClick={() => onReturnLeftover?.(l)}
+              style={{ flexShrink: 0, minHeight: 32, padding: '4px 10px', borderRadius: 7, border: '1px solid #86efac', background: 'white', color: '#15803d', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+              Đã trả chủ
+            </button>
+          </div>
+        ))}
+        {lines.length > 0 && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, marginTop: 6, padding: '6px 10px', borderRadius: 8, background: 'white', border: '1px solid #86efac', fontSize: 13, fontWeight: 700, color: '#15803d', cursor: 'pointer' }}>
+            <input type="checkbox" checked={!!useLeftover} onChange={e => onUseLeftover?.(e.target.checked)} style={{ width: 18, height: 18, accentColor: '#16a34a' }} />
+            Dùng tiền thừa này để trả nợ
+          </label>
+        )}
+      </div>
+    )}
+    {lines.length > 0 && (
     <div style={{ marginTop: 12, padding: '12px 14px', background: '#fef2f2', border: '1.5px solid #fca5a5', borderRadius: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
         <span style={{ fontWeight: 700, color: '#dc2626', fontSize: 13 }}>📋 Nợ cũ còn lại: {money(total)}</span>
@@ -75,5 +104,7 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
         })}
       </div>
     </div>
+    )}
+    </>
   );
 }
