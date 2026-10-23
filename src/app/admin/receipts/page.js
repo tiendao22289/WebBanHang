@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Camera, RefreshCw, Trash2, X } from 'lucide-react';
-import { compressImage } from '@/lib/compressImage';
+import { Camera, Images, RefreshCw, Trash2, X } from 'lucide-react';
+import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
+import { useBackClose } from '@/lib/useBackClose';
 import '../finance/finance.css';
 import './receipts.css';
 
@@ -11,16 +12,20 @@ const clock = value => new Date(value).toLocaleTimeString('vi-VN', { timeZone: '
 const digits = value => String(value || '').replace(/\D/g, '');
 
 async function send(form) {
-  const response = await fetch('/api/admin/receipts', { method: 'POST', body: form, cache: 'no-store' });
+  const response = await fetchWithTimeout('/api/admin/receipts', { method: 'POST', body: form, cache: 'no-store' });
   const result = await response.json().catch(() => ({}));
   if (response.status === 401) window.dispatchEvent(new Event('staff-session-expired'));
   if (!response.ok) throw new Error(result.error || 'Không kết nối được máy chủ.');
   return result;
 }
 
-// Nút chụp / chọn ảnh: mở camera sau trên điện thoại, nén ảnh rồi trả về blob + ảnh xem trước.
-function PhotoPicker({ label, value, onChange, required }) {
-  const input = useRef(null);
+// Chụp ảnh (mở thẳng camera sau) hoặc chọn ảnh có sẵn trong máy (ảnh màn hình
+// chuyển khoản). Android: capture chỉ mở camera nên cần nút thư viện riêng;
+// iPhone: không có capture thì Safari tự hỏi Chụp ảnh / Thư viện. Nén rồi trả
+// về blob + ảnh xem trước.
+function PhotoPicker({ label, value, onChange, required, preferGallery }) {
+  const camera = useRef(null);
+  const gallery = useRef(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function pick(event) {
@@ -35,21 +40,27 @@ function PhotoPicker({ label, value, onChange, required }) {
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   return <div className="rc-photo">
-    <input ref={input} type="file" accept="image/*" capture="environment" onChange={pick} hidden />
+    <input ref={camera} type="file" accept="image/*" capture="environment" onChange={pick} hidden />
+    <input ref={gallery} type="file" accept="image/*" onChange={pick} hidden />
     {value
       ? <div className="rc-photo-preview">
           <img src={value.preview} alt={label} />
           <div><b>{label}</b><small>{Math.round(value.size / 1024)}KB</small>
-            <button type="button" className="fin-ghost" onClick={() => input.current.click()}>Chụp lại</button></div>
+            <button type="button" className="fin-ghost" onClick={() => (preferGallery ? gallery : camera).current.click()}>Đổi ảnh</button></div>
         </div>
-      : <button type="button" className={`rc-photo-button ${required ? 'required' : ''}`} onClick={() => input.current.click()} disabled={busy}>
-          <Camera size={22} />{busy ? 'Đang xử lý ảnh...' : label}{required && <small>bắt buộc</small>}
-        </button>}
+      : <div className={`rc-photo-pick ${required ? 'required' : ''}`}>
+          <span className="rc-photo-label">{busy ? 'Đang xử lý ảnh...' : label}{required && <small>bắt buộc</small>}</span>
+          <div className={preferGallery ? 'rc-photo-actions reverse' : 'rc-photo-actions'}>
+            <button type="button" onClick={() => camera.current.click()} disabled={busy}><Camera size={20} />Chụp ảnh</button>
+            <button type="button" onClick={() => gallery.current.click()} disabled={busy}><Images size={20} />Chọn ảnh có sẵn</button>
+          </div>
+        </div>}
     {error && <p className="fin-error">{error}</p>}
   </div>;
 }
 
 function Viewer({ url, onClose }) {
+  useBackClose(true, onClose);
   useEffect(() => {
     const onKey = e => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -82,7 +93,7 @@ export default function ReceiptsPage() {
   async function load() {
     setBusy(true); setError('');
     try {
-      const response = await fetch('/api/admin/receipts', { cache: 'no-store' });
+      const response = await fetchWithTimeout('/api/admin/receipts', { cache: 'no-store' }, 20000);
       const result = await response.json().catch(() => ({}));
       if (response.status === 401) window.dispatchEvent(new Event('staff-session-expired'));
       if (!response.ok) throw new Error(result.error || 'Không tải được dữ liệu.');
@@ -172,7 +183,7 @@ export default function ReceiptsPage() {
           {accounts.map(a => <button key={a.id} type="button" role="radio" aria-checked={account === a.id} className={account === a.id ? 'active' : ''}
             onClick={() => setAccount(a.id)}>{a.name}{a.last4 && <small>…{a.last4}</small>}</button>)}
         </div>
-        <PhotoPicker label="Ảnh chuyển khoản (nếu có)" value={transferPhoto} onChange={setTransferPhoto} />
+        <PhotoPicker label="Ảnh chuyển khoản (nếu có)" value={transferPhoto} onChange={setTransferPhoto} preferGallery />
       </>}
       <label className="rc-field">Bàn / ghi chú
         <input value={tableLabel} onChange={e => setTableLabel(e.target.value)} placeholder="VD: Bàn 5" maxLength={40} />

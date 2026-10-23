@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, PiggyBank, RefreshCw, Trash2, X } from 'lucide-react';
-import { compressImage } from '@/lib/compressImage';
+import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
+import { useBackClose } from '@/lib/useBackClose';
 import './finance.css';
 
 const money = value => `${Math.round(Number(value || 0)).toLocaleString('vi-VN')}đ`;
@@ -249,7 +250,7 @@ async function sendReceipt(fields, image) {
   const form = new FormData();
   for (const [k, v] of Object.entries(fields)) form.set(k, v);
   if (image) form.set('image', image, 'ck.jpg');
-  const response = await fetch('/api/admin/receipts', { method: 'POST', body: form, cache: 'no-store' });
+  const response = await fetchWithTimeout('/api/admin/receipts', { method: 'POST', body: form, cache: 'no-store' });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || 'Không lưu được.');
   return result;
@@ -262,6 +263,9 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
   const [view, setView] = useState(null);
   const [attaching, setAttaching] = useState(null);
   const attachInput = useRef(null);
+  // Back (Android) / vuốt lùi (iPhone): đóng ảnh đang xem trước, rồi mới đóng chi tiết ngày.
+  useBackClose(true, onClose);
+  useBackClose(!!view, () => setView(null));
 
   function startAttach(target) { setAttaching(target); attachInput.current.click(); }
   async function attach(event) {
