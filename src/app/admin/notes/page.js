@@ -11,8 +11,8 @@ import { LineHint, filterRange, notesSummary } from './notesStats';
 import DebtPicker from './DebtPicker';
 import { fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
 
-// Chỉ tính tiền thừa của phiếu từ ngày Sổ thu chi bắt đầu (phiếu cũ hơn có thể đã trả chủ).
-const LEFTOVER_SINCE = '2026-10-23';
+// Chỉ tính tiền thừa của phiếu từ tháng 10/2026 (khớp ô "Trả lại chủ" của tháng; phiếu cũ hơn đã trả chủ).
+const LEFTOVER_SINCE = '2026-10-01';
 
 export default function StaffNotesPage() {
   // Tên món trong menu để chọn nhanh ở ô tên hàng (vẫn gõ tự do được).
