@@ -241,13 +241,18 @@ async function sendDailyReport(db, { date, today, scheduled }) {
   let notesMessages = [];
   try {
     const range = { start: new Date(vnDayStartIso(date)), end: new Date(vnDayStartIso(addDays(date, 1))) };
-    const [allNotes, payments] = await Promise.all([
-      readAll(() => db.from('staff_notes').select('id, note_type, content, amount, debt, paid_debt, created_at, staff ( full_name )')
+    const [allNotes, payments, deleted, staff] = await Promise.all([
+      readAll(() => db.from('staff_notes').select('id, staff_id, note_type, content, amount, debt, paid_debt, created_at, staff ( full_name )')
         .lt('created_at', range.end.toISOString()).order('created_at')),
-      db.from('staff_note_payments').select('note_id, amount, paid_at, paid_from_note_id').then(r => (r.error ? [] : r.data || [])),
+      db.from('staff_note_payments').select('note_id, item_index, amount, paid_at, paid_from_note_id, created_by_name').then(r => (r.error ? [] : r.data || [])),
+      // Phiếu bị xoá trong ngày (nhật ký trong DB).
+      db.from('staff_data_audit').select('changed_at, old_row, staff_id').eq('table_name', 'staff_notes').eq('op', 'DELETE')
+        .gte('changed_at', range.start.toISOString()).lt('changed_at', range.end.toISOString()).then(r => (r.error ? [] : r.data || [])),
+      db.from('staff').select('id, full_name').then(r => (r.error ? [] : r.data || [])),
     ]);
     const dayNotes = allNotes.filter(n => new Date(n.created_at).getTime() >= range.start.getTime());
-    notesMessages = notesReportMessages({ date, dayNotes, allNotes, payments, range });
+    const staffNames = Object.fromEntries(staff.map(x => [x.id, x.full_name]));
+    notesMessages = notesReportMessages({ date, dayNotes, allNotes, payments, deleted, staffNames, range });
   } catch (error) { console.error('[admin/finance] notes report', error); }
   const results = [];
   for (const id of settings.ownerIds) {
