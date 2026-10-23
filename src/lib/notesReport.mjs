@@ -153,10 +153,14 @@ export function notesReportMessages({ date, dayNotes = [], allNotes = [], paymen
       `• ${who}: ${vnd(list.reduce((x, o) => x + o.left, 0))} — ${list.slice(0, 6).map(o => `${o.what} ${vnd(o.left)} (${dayMonth(o.at)})`).join(', ')}${list.length > 6 ? `, +${list.length - 6} món` : ''}`)].join('\n'));
   }
 
-  // Ghép thành các tin dưới giới hạn của Zalo.
+  return packMessages(head, blocks);
+}
+
+/** Ghép các khối chữ thành các tin dưới giới hạn của Zalo (khối quá dài thì cắt bớt). */
+export function packMessages(head, blocks) {
   const messages = [];
   let current = '';
-  for (const raw of blocks) {
+  for (const raw of blocks.filter(Boolean)) {
     const block = raw.length > ZALO_TEXT_LIMIT - 40 ? `${raw.slice(0, ZALO_TEXT_LIMIT - 60)}\n…(xem đủ trên web)` : raw;
     const next = current ? `${current}\n\n${block}` : block;
     if (next.length > ZALO_TEXT_LIMIT) { messages.push(current); current = `${head} (tiếp)\n\n${block}`; }

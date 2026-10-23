@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as finance from '../src/lib/ownerFinance.mjs';
 import * as zaloLink from '../src/lib/financeZaloLink.mjs';
-import { notesReportMessages } from '../src/lib/notesReport.mjs';
+import { notesReportMessages, packMessages } from '../src/lib/notesReport.mjs';
+import { compareBlock, lossBlock, staffBlock } from '../src/lib/dailyInsights.mjs';
 import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 
 const source = readFileSync(new URL('../src/app/api/admin/finance/route.js', import.meta.url), 'utf8')
@@ -71,7 +72,7 @@ function fakeDb(state, { failTable } = {}) {
 function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFails = false, env = {} }) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...finance, ...zaloLink, notesReportMessages, createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
+    NextResponse, ...finance, ...zaloLink, notesReportMessages, packMessages, compareBlock, lossBlock, staffBlock, createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
     sendOaText: async (_db, id, text) => { sent.push({ id, text }); return zaloFails ? { ok: false, detail: { error: -230 } } : { ok: true }; },
     URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
@@ -473,11 +474,12 @@ test('the owner links Zalo with a short code and gets one daily report a day', a
 
   const test1 = await post(api, { action: 'zalo_test' });
   assert.equal(test1.status, 200);
-  assert.equal(sent.length, 2, 'summary + Sổ tay of the day');
+  assert.equal(sent.length, 3, 'summary + details + Sổ tay of the day');
   assert.match(sent[0].text, /Doanh thu: 150\.000đ \(1 bill\)/);
   assert.match(sent[0].text, /CK Agribank · Chủ quán: 150\.000đ/);
   assert.match(sent[0].text, /1 bill CK chưa có ảnh/);
-  assert.match(sent[1]?.text || '', /🛒 Sổ tay/, 'the Sổ tay of the day follows the summary');
+  assert.match(sent[1]?.text || '', /🔍 Kiểm soát thất thoát[\s\S]*👥 Nhân viên[\s\S]*📈 So sánh/, 'loss, staff and comparison follow the summary');
+  assert.match(sent[2]?.text || '', /🛒 Sổ tay/, 'then the Sổ tay of the day');
 
   const key = createHmac('sha256', 'k'.repeat(40)).update('finance-daily-report').digest('hex');
   const cronApi = load({ state, sent, code: 401, env: { SUPABASE_SERVICE_ROLE_KEY: 'k'.repeat(40) } });
@@ -485,7 +487,7 @@ test('the owner links Zalo with a short code and gets one daily report a day', a
   assert.equal((await cron('0'.repeat(64))).status, 401, 'a wrong key still needs an owner login');
   assert.equal((await cron(key)).body.ok, true);
   assert.equal((await cron(key)).body.skipped, true, 'the morning report goes out once a day');
-  assert.equal(sent.length, 4, 'summary + Sổ tay, twice');
+  assert.equal(sent.length, 6, 'three messages, twice');
 
   const failing = load({ state, sent, zaloFails: true });
   const res = await post(failing, { action: 'zalo_test' });
@@ -553,4 +555,19 @@ test('the owner picks the send time; the half-hourly job only sends once that ti
     const r = await run();
     assert.ok(r.body.ok && !r.body.skipped || /trước khi sổ bắt đầu|Không có số liệu/.test(r.body.error || ''), JSON.stringify(r.body));
   }
+});
+
+test('report sections can be switched off one by one', async () => {
+  const today = finance.vnDate(Date.now());
+  const state = empty();
+  state.finance_settings = [{ key: 'zalo_report', value: { ownerIds: ['owner-zalo'] } }];
+  state.finance_revenue_ledger.push({ order_id: 'z1', business_date: today, paid_at: later(-5), table_number: '3', amount: 50000, payment_method: 'cash', items: [{ name: 'Tôm', quantity: 1, unit_price: 50000 }] });
+  const sent = [];
+  const api = load({ state, sent });
+  const off = await post(api, { action: 'zalo_set_sections', sections: { loss: false, staff: false, compare: true, notes: false } });
+  assert.deepEqual(plain(off.body.zaloReport.sections), { loss: false, staff: false, compare: true, notes: false });
+  await post(api, { action: 'zalo_test' });
+  assert.equal(sent.length, 2, 'summary + comparison only');
+  assert.match(sent[1].text, /📈 So sánh/);
+  assert.doesNotMatch(sent[1].text, /Kiểm soát thất thoát|Nhân viên|Sổ tay/);
 });
