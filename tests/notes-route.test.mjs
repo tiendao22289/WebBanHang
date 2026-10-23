@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as math from '../src/lib/notesMath.mjs';
-import { noteLeftover, openDebtLines } from '../src/lib/notesDebts.mjs';
+import { noteLeftover, noteMoney, openDebtLines } from '../src/lib/notesDebts.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
 
 const source = readFileSync(new URL('../src/app/api/admin/notes/route.js', import.meta.url), 'utf8')
@@ -14,7 +14,7 @@ const STAFF = { id: '00000000-0000-4000-8000-00000000bbbb', full_name: 'Thy', ro
 function load(state, user = ADMIN) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...math, openDebtLines, noteLeftover, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
+    NextResponse, ...math, openDebtLines, noteLeftover, noteMoney, crypto: globalThis.crypto, Object, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
     getStaffSession: async () => ({ code: 200, user }), staffDatabase: () => fakeDb(state),
   });
 }
@@ -153,4 +153,59 @@ test('old leftover can be carried into a new trip note, and survives later edits
   assert.equal(noteLeftover(state.staff_notes.find(n => n.id === trip.id), state.staff_note_payments), 0);
   assert.equal((await post(api, { action: 'edit', id: next.id, note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '50k' }], note: 'sửa', input_amount: 100000 })).status, 200);
   assert.equal(noteLeftover(state.staff_notes.find(n => n.id === next.id), state.staff_note_payments), 115000);
+});
+
+test('two taps at the same time pay a debt or move leftover only once', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Cua', qty: '1', price: '100k', paymentStatus: 'debt', creditor: 'Ba' }], input_amount: 300000 });
+  const [debtNote] = state.staff_notes; // dư 300k (nợ không trừ tiền giao)
+  const paid = await Promise.all([1, 2].map(() => post(api, { action: 'pay_item', id: debtNote.id, item_index: 0, amount: 100000 })));
+  assert.deepEqual(paid.map(r => r.status).sort(), [200, 409]);
+  assert.equal(state.staff_note_payments.reduce((a, p) => a + p.amount, 0), 100000);
+  const moved = await Promise.all([1, 2].map(() => post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '1k' }],
+    carry_leftovers: [{ note_id: debtNote.id, amount: 300000 }] })));
+  assert.deepEqual(moved.map(r => r.status).sort(), [200, 409]);
+  assert.equal(state.staff_notes.filter(n => /carried_in/.test(n.content)).length, 1, 'only one note received the leftover');
+});
+
+test('deleting a note gives back leftover it received and reopens debts it paid', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Mực', qty: '1', price: '200k', paymentStatus: 'debt', creditor: 'Hoa' }], input_amount: 500000 });
+  const [trip] = state.staff_notes; // dư 500k, nợ Mực 200k
+  const r = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '10k' }], input_amount: 100000,
+    carry_leftovers: [{ note_id: trip.id, amount: 300000 }], pay_debts: [{ note_id: trip.id, item_index: 0, amount: 200000, from_note_id: trip.id }] });
+  assert.equal(r.status, 200);
+  const next = r.body.note;
+  assert.equal(noteLeftover(state.staff_notes.find(n => n.id === trip.id), state.staff_note_payments), 0);
+  assert.equal((await post(api, { action: 'delete', id: next.id })).status, 200);
+  const back = state.staff_notes.find(n => n.id === trip.id);
+  assert.equal(noteLeftover(back, state.staff_note_payments), 300000, 'carried leftover is back on the old note');
+  assert.match(JSON.parse(back.content).history.at(-1).changes, /Nhận lại 300\.000/);
+  // Nợ trả bằng tiền thừa phiếu cũ vẫn còn (phiếu xoá không phải phiếu bỏ tiền).
+  assert.equal(openDebtLines(back).length, 0);
+  // Xoá phiếu đã bỏ tiền trả nợ → nợ mở lại, sổ trả nợ bỏ dòng đó.
+  const funder = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Ốc', qty: '1', price: '20k', paymentStatus: 'debt', creditor: 'Ba' }] });
+  const payer = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '1k' }], input_amount: 50000,
+    pay_debts: [{ note_id: funder.body.note.id, item_index: 0, amount: 20000 }] });
+  assert.equal(openDebtLines(state.staff_notes.find(n => n.id === funder.body.note.id)).length, 0);
+  assert.equal((await post(api, { action: 'delete', id: payer.body.note.id })).status, 200);
+  const reopened = state.staff_notes.find(n => n.id === funder.body.note.id);
+  assert.deepEqual(plain(openDebtLines(reopened).map(l => l.left)), [20000]);
+  assert.equal(state.staff_note_payments.some(p => p.paid_from_note_id === payer.body.note.id), false);
+});
+
+test('a note cannot be edited below the leftover it already handed back or moved on', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  const item = [{ name: 'Ốc', qty: '1', price: '400k' }];
+  await post(api, { action: 'create', note_type: 'expense', items: item, input_amount: 1000000 });
+  const [trip] = state.staff_notes; // dư 600k
+  assert.equal((await post(api, { action: 'return_leftover', id: trip.id, amount: 500000 })).status, 200);
+  const items = JSON.parse(state.staff_notes[0].content).items;
+  const low = await post(api, { action: 'edit', id: trip.id, note_type: 'expense', items, note: '', input_amount: 800000 });
+  assert.equal(low.status, 400);
+  assert.match(low.body.error, /500\.000/);
+  assert.equal((await post(api, { action: 'edit', id: trip.id, note_type: 'expense', items, note: '', input_amount: 950000 })).status, 200);
 });
