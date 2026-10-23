@@ -553,6 +553,9 @@ function SearchView({ accounts, preset }) {
   </section>;
 }
 
+// Giờ gửi báo cáo Zalo: mốc 30 phút trong ngày.
+const SEND_TIMES = Array.from({ length: 48 }, (_, i) => `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
+
 // Báo cáo thu chi gửi qua Zalo OA mỗi sáng tới chủ quán.
 function ZaloReportPanel({ status, onChanged }) {
   const [state, setState] = useState(status);
@@ -573,12 +576,17 @@ function ZaloReportPanel({ status, onChanged }) {
       setMessage(err.message);
     } finally { setBusy(''); }
   }
+  async function setTime(time) {
+    setBusy('time'); setMessage('');
+    try { setState((await post({ action: 'zalo_set_time', time })).zaloReport); setMessage(`✓ Sẽ gửi lúc ${time} mỗi ngày.`); }
+    catch (err) { setMessage(err.message); } finally { setBusy(''); }
+  }
   async function copyCode() {
     try { await navigator.clipboard.writeText(`BC ${state.linkCode}`); setMessage('Đã chép, dán vào Zalo.'); } catch { /* trình duyệt chặn → tự gõ */ }
   }
 
   return <section className="fin-panel fin-zalo">
-    <h2>Báo cáo Zalo mỗi sáng</h2>
+    <h2>Báo cáo Zalo hằng ngày</h2>
     {state.linkCode ? <>
       <p>Mở Zalo, nhắn cho <b>OA của quán</b> đúng nội dung:</p>
       <button className="fin-zalo-code" onClick={copyCode} aria-label="Chép mã">BC {state.linkCode}</button>
@@ -587,7 +595,12 @@ function ZaloReportPanel({ status, onChanged }) {
         <button className="fin-primary" onClick={onChanged}>Kiểm tra</button>
       </div>
     </> : state.linked > 0 ? <>
-      <p className="fin-zalo-ok">✓ Đang gửi tới {state.linked} Zalo · khoảng 8 giờ sáng gửi số liệu ngày hôm qua.</p>
+      <p className="fin-zalo-ok">✓ Đang gửi tới {state.linked} Zalo · khoảng {state.sendAt || '08:00'} gửi số liệu {Number(String(state.sendAt || '08:00').slice(0, 2)) < 12 ? 'ngày hôm qua' : 'hôm nay'}.</p>
+      <label className="fin-zalo-time">Giờ gửi
+        <select value={state.sendAt || '08:00'} disabled={!!busy} onChange={e => setTime(e.target.value)}>
+          {SEND_TIMES.map(t => <option key={t} value={t}>{t}{Number(t.slice(0, 2)) < 12 ? ' — số hôm qua' : ' — số hôm nay'}</option>)}
+        </select>
+      </label>
       {state.lastSentAt && <p className="fin-zalo-hint">Lần gửi gần nhất: {stamp(state.lastSentAt)}</p>}
       {state.lastError && <p className="fin-warn">⚠ Lần gần nhất Zalo không gửi được. Mở Zalo, nhắn “ok” cho OA của quán rồi bấm “Gửi thử”. Zalo chỉ cho OA nhắn lại người vừa nhắn mình trong vài ngày.</p>}
       <div className="fin-zalo-actions">

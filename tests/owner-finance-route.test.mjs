@@ -529,3 +529,28 @@ test('sales per dish and Sổ tay purchases per item are grouped so each group s
   assert.deepEqual((await items()).groups.map(g => [g.name, plain(g.keywords)]), [['Bia Tiger', ['tiger']]]);
   assert.equal((await get(load({ state, role: 'staff' }), `items=1`)).status, 403);
 });
+
+test('the owner picks the send time; the half-hourly job only sends once that time has come', async () => {
+  const state = empty();
+  state.finance_settings = [{ key: 'zalo_report', value: { ownerIds: ['owner-zalo'] } }];
+  const sent = [];
+  const env = { SUPABASE_SERVICE_ROLE_KEY: 'k'.repeat(40) };
+  const admin = load({ state, sent, env });
+  assert.equal((await post(admin, { action: 'zalo_set_time', time: '08:15' })).status, 400, 'half-hour steps only');
+  const vnNow = new Date(Date.now() + 7 * 3600000);
+  const slot = m => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${m % 60 < 30 ? '00' : '30'}`;
+  const nowMin = vnNow.getUTCHours() * 60 + vnNow.getUTCMinutes();
+  const later = slot(nowMin + 120);
+  if (later > slot(nowMin)) { // không chạy phần này sát nửa đêm
+    const set = await post(admin, { action: 'zalo_set_time', time: later });
+    assert.equal(set.body.zaloReport.sendAt, later);
+    const key = createHmac('sha256', env.SUPABASE_SERVICE_ROLE_KEY).update('finance-daily-report').digest('hex');
+    const cron = load({ state, sent, code: 401, env });
+    const run = async () => plain(await cron.POST({ json: async () => ({ action: 'daily_report' }), headers: new Map([['x-finance-report-key', key]]) }));
+    assert.match((await run()).body.skipped, /chưa tới giờ gửi/);
+    assert.equal(sent.length, 0);
+    await post(admin, { action: 'zalo_set_time', time: slot(nowMin) });
+    const r = await run();
+    assert.ok(r.body.ok && !r.body.skipped || /trước khi sổ bắt đầu|Không có số liệu/.test(r.body.error || ''), JSON.stringify(r.body));
+  }
+});

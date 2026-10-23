@@ -29,6 +29,21 @@ export async function saveReportSettings(db, value) {
   if (error) throw error;
 }
 
+// Giờ gửi báo cáo do chủ quán chọn (giờ VN, mốc 30 phút). Trước 12h trưa gửi số
+// liệu hôm qua, từ 12h trưa gửi số liệu hôm nay. Trễ tối đa 6 tiếng thì vẫn gửi bù.
+export const DEFAULT_SEND_AT = '08:00';
+export const validSendAt = v => /^([01]\d|2[0-3]):(00|30)$/.test(String(v || ''));
+const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+export function reportPlan(sendAt, now = Date.now()) {
+  const at = validSendAt(sendAt) ? sendAt : DEFAULT_SEND_AT;
+  const [h, m] = at.split(':').map(Number);
+  const vn = new Date(now + 7 * 3600000);
+  const today = vn.toISOString().slice(0, 10);
+  const minutes = vn.getUTCHours() * 60 + vn.getUTCMinutes();
+  const start = h * 60 + m;
+  return { sendAt: at, due: minutes >= start && minutes < start + 6 * 60, date: h < 12 ? addDays(today, -1) : today, reportsYesterday: h < 12 };
+}
+
 /** Trạng thái gửi về trang Sổ thu chi (không lộ Zalo id). */
 export function reportStatus(settings, now = Date.now()) {
   if (!settings) return null;
@@ -40,6 +55,7 @@ export function reportStatus(settings, now = Date.now()) {
     lastSentAt: settings.lastSentAt || null,
     lastSentDate: settings.lastSentDate || null,
     lastError: settings.lastError || null,
+    sendAt: validSendAt(settings.sendAt) ? settings.sendAt : DEFAULT_SEND_AT,
   };
 }
 
