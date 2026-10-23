@@ -19,6 +19,7 @@ import {
   Star,
   History,
   PiggyBank,
+  Camera,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import './admin.css';
@@ -34,11 +35,12 @@ const ALL_NAV = [
   { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
   { href: '/admin/stats', label: 'Thống kê', icon: BarChart3 },
   { href: '/admin/finance', label: 'Sổ thu chi', icon: PiggyBank, adminOnly: true },
+  { href: '/admin/receipts', label: 'Bill giấy', icon: Camera },
   { href: '/admin/settings', label: 'Cài đặt', icon: Settings, adminOnly: true },
   { href: '/admin/logs', label: 'Lịch sử bàn', icon: History, adminOnly: true },
 ];
 
-const STAFF_ALLOWED_HREFS = ['/admin/tables', '/admin/payroll', '/admin/qr'];
+const STAFF_ALLOWED_HREFS = ['/admin/tables', '/admin/payroll', '/admin/qr', '/admin/receipts'];
 const STAFF_NAV = ALL_NAV.filter(n => STAFF_ALLOWED_HREFS.some(a => n.href.startsWith(a)));
 
 export default function AdminLayout({ children }) {

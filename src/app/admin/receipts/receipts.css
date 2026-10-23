@@ -1,0 +1,26 @@
+.receipts .fin-panel { margin-top: 12px; }
+.rc-form { display: flex; flex-direction: column; gap: 12px; }
+.rc-form h2 { margin: 0; }
+.rc-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #4b5563; }
+.rc-field input { height: 46px; border: 1px solid #d1d5db; border-radius: 8px; padding: 0 12px; font: inherit; font-size: 16px; color: #111827; background: white; min-width: 0; -webkit-appearance: none; appearance: none; }
+.rc-photo-button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 100%; min-height: 96px; border: 2px dashed #93c5fd; border-radius: 12px; background: #eff6ff; color: #1d4ed8; font-size: 16px; font-weight: 700; }
+.rc-photo-button.required { border-color: #f97316; background: #fff7ed; color: #c2410c; }
+.rc-photo-button small { font-size: 12px; font-weight: 500; }
+.rc-photo-preview { display: flex; gap: 12px; align-items: center; }
+.rc-photo-preview img { width: 96px; height: 96px; object-fit: cover; border-radius: 10px; border: 1px solid #e5e7eb; flex-shrink: 0; }
+.rc-photo-preview div { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.rc-photo-preview small { color: #6b7280; font-size: 12px; }
+.rc-photo-preview .fin-ghost { min-height: 40px; font-size: 14px; }
+.rc-accounts { display: grid; gap: 8px; }
+.rc-accounts button { min-height: 46px; border: 1px solid #d1d5db; border-radius: 8px; background: white; color: #374151; font-size: 15px; text-align: left; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.rc-accounts button.active { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; font-weight: 700; }
+.rc-accounts small { color: #6b7280; font-weight: 400; }
+.rc-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f1f5f9; font-size: 14px; }
+.rc-item-main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.rc-item-main small { display: block; font-size: 12px; color: #6b7280; }
+.rc-item b { flex-shrink: 0; }
+.rc-thumb { width: 44px; height: 44px; flex-shrink: 0; border: 1px solid #e5e7eb; border-radius: 8px; padding: 0; overflow: hidden; background: #f1f5f9; }
+.rc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rc-thumb.empty { display: block; }
+.rc-attach { min-height: 40px; flex-shrink: 0; border: 1px solid #93c5fd; border-radius: 8px; background: #eff6ff; color: #1d4ed8; font-size: 13px; font-weight: 700; padding: 0 10px; }
+.rc-attach.done { border-color: #d1d5db; background: white; color: #4b5563; font-weight: 500; }

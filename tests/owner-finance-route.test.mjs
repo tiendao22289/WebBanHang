@@ -68,6 +68,7 @@ function load({ role = 'admin', code = 200, state, failTable }) {
     NextResponse, ...finance, URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
     statusDatabase: () => fakeDb(state, { failTable }),
+    signReceiptImages: async (_db, paths) => Object.fromEntries(paths.filter(Boolean).map(p => [p, `signed:${p}`])),
   });
 }
 
@@ -345,4 +346,21 @@ test('entries go into own tabs, salary types and fixed items with the right date
   assert.equal(day.profit, -(450000 + 100000 + 500000 + 10000));
   assert.equal(month.body.customMonthTotals[TAB_ADS], 3100000);
   assert.deepEqual(month.body.customMonthlyEntries.map(e => e.label), ['Facebook']);
+});
+
+test('paper bills show in the month totals and in the day detail with their photos', async () => {
+  const state = empty();
+  state.finance_manual_receipts = [
+    { id: 'p1', business_date: '2026-10-23', received_at: '2026-10-23T05:00:00Z', amount: 350000, payment_method: 'cash', image_path: 'bill.jpg', table_label: 'Bàn 5', created_by_name: 'Lan' },
+    { id: 'p2', business_date: '2026-10-23', received_at: '2026-10-23T06:00:00Z', amount: 420000, payment_method: 'transfer', account_id: ACC_A, image_path: 'bill2.jpg', transfer_image_path: 'ck.jpg' }];
+  state.finance_revenue_ledger.push({ order_id: 'o1', business_date: '2026-10-23', paid_at: '2026-10-23T04:00:00Z', amount: 100000, payment_method: 'transfer', account_id: ACC_A, transfer_image_path: 'ck-o1.jpg' });
+  const month = await get(load({ state }), 'month=2026-10');
+  const day = month.body.days.find(d => d.date === '2026-10-23');
+  assert.deepEqual([day.revenue, day.bills, day.paperBills, day.cash, day.transfer], [870000, 1, 2, 350000, 520000]);
+  const detail = await get(load({ state }), 'date=2026-10-23');
+  assert.deepEqual(detail.body.paperBills.map(b => [b.amount, b.imageUrl, b.transferImageUrl]),
+    [[350000, 'signed:bill.jpg', null], [420000, 'signed:bill2.jpg', 'signed:ck.jpg']]);
+  assert.equal(detail.body.bills[0].transfer_image_url, 'signed:ck-o1.jpg');
+  assert.equal('transfer_image_path' in detail.body.bills[0], false, 'storage paths are not sent to the page');
+  assert.deepEqual([detail.body.dayCash, detail.body.dayByAccount[ACC_A]], [350000, 520000], 'day close counts paper bills too');
 });

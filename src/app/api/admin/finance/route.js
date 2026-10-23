@@ -13,6 +13,7 @@
  */
 import { NextResponse } from 'next/server';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
+import { signReceiptImages } from '@/lib/receiptImages.mjs';
 import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, isMonthKey, monthBounds, noteCost, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
 
 export const runtime = 'nodejs';
@@ -76,6 +77,11 @@ const notesBetween = (db, fromIso, toIso) => readAll(() => db.from('staff_notes'
 
 // Mục / tab tự đặt (kể cả đã ẩn, để khoản cũ vẫn có tên). Chưa cài bảng → [].
 const readCategories = db => db.from('finance_categories').select('*').order('created_at')
+  .then(r => { if (r.error) { if (missingTable(r.error)) return []; throw r.error; } return r.data || []; });
+
+// Bill giấy (nhập tay). Chưa cài bảng → [].
+const readPaper = (db, from, to) => db.from('finance_manual_receipts').select('*')
+  .gte('business_date', from).lt('business_date', to).order('received_at', { ascending: true })
   .then(r => { if (r.error) { if (missingTable(r.error)) return []; throw r.error; } return r.data || []; });
 
 const readClose = (db, date) => db.from('finance_day_closes').select('*').eq('business_date', date).maybeSingle()
@@ -158,22 +164,28 @@ export async function GET(request) {
     if (date) {
       if (!DATE.test(date)) return NextResponse.json({ error: 'Ngày không hợp lệ.' }, { status: 400, headers });
       const nextDay = new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
-      const [bills, notes, entries, close] = await Promise.all([
+      const [bills, notes, entries, close, paper] = await Promise.all([
         readAll(() => db.from('finance_revenue_ledger')
-          .select('order_id, paid_at, table_number, customer_name, payment_method, account_id, amount, items')
+          .select('*')
           .eq('business_date', date).order('paid_at', { ascending: true })),
         notesBetween(db, vnDayStartIso(date), vnDayStartIso(nextDay)),
         db.from('finance_entries').select('*').eq('entry_date', date).order('created_at').then(r => { if (r.error) throw r.error; return r.data || []; }),
         readClose(db, date),
+        readPaper(db, date, nextDay),
       ]);
+      const urls = await signReceiptImages(db, [...bills.map(b => b.transfer_image_path), ...paper.flatMap(r => [r.image_path, r.transfer_image_path])]);
       const day = { cash: 0, byAccount: {} };
-      for (const bill of bills) {
+      for (const bill of [...bills, ...paper]) {
         const amount = Number(bill.amount) || 0;
         if (bill.payment_method !== 'transfer') { day.cash += amount; continue; }
         const key = bill.account_id || 'unknown';
         day.byAccount[key] = (day.byAccount[key] || 0) + amount;
       }
-      return NextResponse.json({ date, today, startDate: FINANCE_START_DATE, bills,
+      return NextResponse.json({ date, today, startDate: FINANCE_START_DATE,
+        bills: bills.map(({ transfer_image_path: path, ...b }) => ({ ...b, transfer_image_url: urls[path] || null })),
+        paperBills: paper.map(r => ({ id: r.id, receivedAt: r.received_at, amount: Number(r.amount), paymentMethod: r.payment_method,
+          accountId: r.account_id, tableLabel: r.table_label, note: r.note, createdByName: r.created_by_name,
+          imageUrl: urls[r.image_path] || null, transferImageUrl: urls[r.transfer_image_path] || null, imagesPurged: !!r.images_purged_at })),
         notes: notes.map(noteView).filter(n => n.cost > 0), entries,
         close, closeDiff: closeDifferences(day, close), dayCash: day.cash, dayByAccount: day.byAccount }, { headers });
     }
@@ -197,18 +209,19 @@ export async function GET(request) {
       if (missingTable(error)) return NextResponse.json({ error: 'Chưa cài bảng sổ thu chi trên cơ sở dữ liệu (owner_finance.sql).', setupMissing: true }, { status: 503, headers });
       throw error;
     }
-    const [notes, entriesResult, accountsResult, staffResult, closesResult, categories] = await Promise.all([
+    const [notes, entriesResult, accountsResult, staffResult, closesResult, categories, paperBills] = await Promise.all([
       notesBetween(db, vnDayStartIso(start), vnDayStartIso(next)),
       db.from('finance_entries').select('*').gte('entry_date', start).lt('entry_date', next).order('entry_date').order('created_at'),
       db.from('bank_accounts').select('id, account_name, bank_name, account_number').order('sort_order'),
       db.from('staff').select('id, full_name').order('full_name'),
       db.from('finance_day_closes').select('*').gte('business_date', start).lt('business_date', next),
       readCategories(db),
+      readPaper(db, start, next),
     ]);
     for (const result of [entriesResult, accountsResult, staffResult]) if (result.error) throw result.error;
     if (closesResult.error && !missingTable(closesResult.error)) throw closesResult.error;
     const entries = entriesResult.data || [];
-    const summary = summarizeMonth({ month, revenue, notes, entries, closes: closesResult.data || [], categories, today });
+    const summary = summarizeMonth({ month, revenue, paperBills, notes, entries, closes: closesResult.data || [], categories, today });
     const monthlyTabs = new Set(categories.filter(c => c.scope === 'tab' && c.schedule === 'monthly').map(c => c.id));
     return NextResponse.json({
       ...summary, today, startDate: FINANCE_START_DATE, fixedCategories: FIXED_CATEGORIES, categories,

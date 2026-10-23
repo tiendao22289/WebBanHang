@@ -71,6 +71,34 @@ CREATE TABLE IF NOT EXISTS public.finance_day_closes (
   closed_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Bill giấy: khách gọi món bằng giấy, không qua hệ thống. Thu ngân nhập số
+-- tiền tổng + ảnh tờ bill (bắt buộc), chuyển khoản thì kèm ảnh CK nếu có.
+-- Ảnh nằm trong bucket riêng tư finance-receipts, tự xoá sau 3 tháng.
+CREATE TABLE IF NOT EXISTS public.finance_manual_receipts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_date date NOT NULL,
+  received_at timestamptz NOT NULL DEFAULT now(),
+  amount numeric NOT NULL CHECK (amount > 0),
+  payment_method text NOT NULL CHECK (payment_method IN ('cash', 'transfer')),
+  account_id uuid,
+  table_label text,
+  note text,
+  image_path text,
+  transfer_image_path text,
+  images_purged_at timestamptz,
+  created_by_id uuid,
+  created_by_name text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS finance_manual_receipts_date ON public.finance_manual_receipts(business_date);
+-- Ảnh màn hình chuyển khoản của khách cho bill trên hệ thống.
+ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS transfer_image_path text;
+ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS transfer_image_by text;
+
+ALTER TABLE public.finance_manual_receipts ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.finance_manual_receipts FROM anon, authenticated;
+GRANT ALL ON public.finance_manual_receipts TO service_role;
+
 ALTER TABLE public.finance_revenue_ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.finance_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.finance_day_closes ENABLE ROW LEVEL SECURITY;

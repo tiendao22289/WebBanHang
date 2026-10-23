@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, PiggyBank, RefreshCw, Trash2, X } from 'lucide-react';
+import { compressImage } from '@/lib/compressImage';
 import './finance.css';
 
 const money = value => `${Math.round(Number(value || 0)).toLocaleString('vi-VN')}đ`;
@@ -243,10 +244,40 @@ function CloseForm({ detail, accounts, onSaved }) {
   </form>;
 }
 
+// Gửi lên /api/admin/receipts (thêm ảnh CK, xoá bill giấy) — dùng chung với trang Bill giấy.
+async function sendReceipt(fields, image) {
+  const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) form.set(k, v);
+  if (image) form.set('image', image, 'ck.jpg');
+  const response = await fetch('/api/admin/receipts', { method: 'POST', body: form, cache: 'no-store' });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'Không lưu được.');
+  return result;
+}
+
 function DayDetail({ date, accounts, categories, onClose, onChanged }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(null);
+  const [view, setView] = useState(null);
+  const [attaching, setAttaching] = useState(null);
+  const attachInput = useRef(null);
+
+  function startAttach(target) { setAttaching(target); attachInput.current.click(); }
+  async function attach(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !attaching) return;
+    try {
+      const blob = await compressImage(file);
+      await sendReceipt({ action: 'attach_transfer', ...attaching }, blob);
+      await load();
+    } catch (err) { alert(err.message); } finally { setAttaching(null); }
+  }
+  async function removePaper(bill) {
+    if (!confirm(`Xoá bill giấy ${money(bill.amount)}${bill.tableLabel ? ` (${bill.tableLabel})` : ''}?`)) return;
+    try { await sendReceipt({ action: 'delete_paper', id: bill.id }); await load(); onChanged(); } catch (err) { alert(err.message); }
+  }
 
   async function load() {
     setError('');
@@ -285,8 +316,32 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
               <small>{bill.payment_method === 'transfer' ? accountName(bill.account_id) : 'Tiền mặt'}</small></span>
             <b>{money(bill.amount)}</b>
           </button>
+          {bill.payment_method === 'transfer' && <div className="fin-ck">
+            {bill.transfer_image_url
+              ? <button className="fin-ck-view" onClick={() => setView(bill.transfer_image_url)}>📷 Xem ảnh chuyển khoản</button>
+              : <span className="fin-ck-none">Chưa có ảnh chuyển khoản</span>}
+            <button className="fin-ck-add" onClick={() => startAttach({ order_id: bill.order_id })} disabled={!!attaching}>{bill.transfer_image_url ? 'Đổi ảnh' : 'Thêm ảnh'}</button>
+          </div>}
           {open === bill.order_id && <ul className="fin-items">{(bill.items || []).map((item, i) =>
             <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>}
+        </div>)}
+
+        <h3>Bill giấy ({detail.paperBills?.length || 0})</h3>
+        {!detail.paperBills?.length && <p className="fin-empty">Không có bill giấy.</p>}
+        {(detail.paperBills || []).map(b => <div key={b.id} className="fin-row-block">
+          <div className="fin-paper">
+            {b.imageUrl ? <button className="fin-thumb" onClick={() => setView(b.imageUrl)} aria-label="Xem ảnh bill"><img src={b.imageUrl} alt="" /></button>
+              : <span className="fin-thumb empty" title={b.imagesPurged ? 'Ảnh đã xoá sau 3 tháng' : ''} />}
+            <span>{clock(b.receivedAt)}{b.tableLabel ? ` · ${b.tableLabel}` : ''}
+              <small>{b.paymentMethod === 'transfer' ? accountName(b.accountId) : 'Tiền mặt'}{b.createdByName ? ` · ${b.createdByName}` : ''}{b.note ? ` · ${b.note}` : ''}</small></span>
+            <b>{money(b.amount)}</b>
+            <button className="fin-icon danger" onClick={() => removePaper(b)} aria-label="Xoá bill giấy"><Trash2 size={16} /></button>
+          </div>
+          {b.paymentMethod === 'transfer' && <div className="fin-ck">
+            {b.transferImageUrl ? <button className="fin-ck-view" onClick={() => setView(b.transferImageUrl)}>📷 Xem ảnh chuyển khoản</button>
+              : <span className="fin-ck-none">Chưa có ảnh chuyển khoản</span>}
+            <button className="fin-ck-add" onClick={() => startAttach({ receipt_id: b.id })} disabled={!!attaching}>{b.transferImageUrl ? 'Đổi ảnh' : 'Thêm ảnh'}</button>
+          </div>}
         </div>)}
 
         <h3>Đi chợ / nhập hàng (Sổ tay)</h3>
@@ -310,6 +365,11 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
 
         <CloseForm detail={detail} accounts={accounts} onSaved={async () => { await load(); onChanged(); }} />
       </>}
+      <input ref={attachInput} type="file" accept="image/*" onChange={attach} hidden />
+      {view && <div className="rc-viewer" onClick={() => setView(null)} role="dialog" aria-label="Xem ảnh">
+        <button className="fin-icon" aria-label="Đóng"><X size={20} /></button>
+        <img src={view} alt="Ảnh" />
+      </div>}
     </div>
   </div>;
 }
@@ -442,7 +502,7 @@ export default function FinancePage() {
           <div><small>Thu</small><strong>{money(t.revenue)}</strong></div>
           <div><small>Chi</small><strong>{money(totalCost)}</strong></div>
         </div>
-        <p>{t.bills} bill · Tiền mặt {money(t.cash)} · Chuyển khoản {money(t.transfer)}</p>
+        <p>{t.bills} bill{t.paperBills ? ` + ${t.paperBills} bill giấy (${money(t.paperRevenue)})` : ''} · Tiền mặt {money(t.cash)} · Chuyển khoản {money(t.transfer)}</p>
       </section>
 
       {today && <button className="fin-today" onClick={() => setDay(today.date)}>
@@ -471,7 +531,7 @@ export default function FinancePage() {
       <div className="fin-days">
         {days.map(d => <button key={d.date} className="fin-day" onClick={() => setDay(d.date)}>
           <div className="fin-day-head">
-            <span className="fin-day-date"><b>{dayLabel(d.date)}</b><small>{d.bills} bill · Thu {money(d.revenue)} · Chi {money(dayCost(d))}</small></span>
+            <span className="fin-day-date"><b>{dayLabel(d.date)}</b><small>{d.bills} bill{d.paperBills ? ` + ${d.paperBills} giấy` : ''} · Thu {money(d.revenue)} · Chi {money(dayCost(d))}</small></span>
             <span className={d.profit < 0 ? 'loss' : 'gain'}>{d.profit < 0 ? 'Lỗ' : 'Lãi'}<br />{money(Math.abs(d.profit))}</span>
             <ChevronRight size={16} />
           </div>
