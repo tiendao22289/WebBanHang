@@ -20,6 +20,8 @@ function fakeDb(state, { failTable } = {}) {
       in(k, vs) { conditions.push(r => vs.includes(r[k])); return q; },
       like(k, pattern) { const needle = pattern.replace(/%/g, ''); conditions.push(r => String(r[k] ?? '').includes(needle)); return q; },
       limit(n) { max = n; return q; },
+      not(k, op, v) { if (op === 'is' && v === null) conditions.push(r => r[k] !== null && r[k] !== undefined); return q; },
+      ilike(k, pattern) { const needle = pattern.replace(/%/g, '').toLowerCase(); conditions.push(r => String(r[k] ?? '').toLowerCase().includes(needle)); return q; },
       maybeSingle() { maybe = true; return q; },
       upsert(v, opts) { op = 'upsert'; values = v; conflict = opts?.onConflict; ignore = !!opts?.ignoreDuplicates; return q; },
       order(k) { orders.push(k); return q; },
@@ -363,4 +365,37 @@ test('paper bills show in the month totals and in the day detail with their phot
   assert.equal(detail.body.bills[0].transfer_image_url, 'signed:ck-o1.jpg');
   assert.equal('transfer_image_path' in detail.body.bills[0], false, 'storage paths are not sent to the page');
   assert.deepEqual([detail.body.dayCash, detail.body.dayByAccount[ACC_A]], [350000, 520000], 'day close counts paper bills too');
+});
+
+test('bills can be looked up later by table, amount, type and photo to check transfer screenshots', async () => {
+  const state = empty();
+  state.finance_revenue_ledger.push(
+    { order_id: 'b1', business_date: '2026-10-23', paid_at: '2026-10-23T05:00:00Z', table_number: '43', amount: 39000, payment_method: 'transfer', account_id: ACC_A, transfer_image_path: 'ck1.jpg', items: [{ name: 'Ốc', quantity: 1, unit_price: 39000 }] },
+    { order_id: 'b2', business_date: '2026-10-23', paid_at: '2026-10-23T06:00:00Z', table_number: '43', amount: 120000, payment_method: 'cash' },
+    { order_id: 'b3', business_date: '2026-10-22', paid_at: '2026-10-22T06:00:00Z', table_number: '5', amount: 39000, payment_method: 'transfer', transfer_image_path: null },
+    { order_id: 'old', business_date: '2026-07-01', paid_at: '2026-07-01T06:00:00Z', table_number: '43', amount: 39000, payment_method: 'transfer', transfer_image_path: null });
+  state.finance_manual_receipts = [
+    { id: 'p1', business_date: '2026-10-23', received_at: '2026-10-23T07:00:00Z', table_label: 'Bàn 43', amount: 250000, payment_method: 'transfer', account_id: ACC_A, image_path: 'bill.jpg', transfer_image_path: 'ck2.jpg', created_by_name: 'Lan' }];
+  const api = load({ state });
+  const find = async q => (await get(api, `search=1&${q}`)).body;
+
+  let r = await find('from=2026-10-20&to=2026-10-23&table=43');
+  assert.deepEqual(r.results.map(x => x.id), ['p1', 'b2', 'b1'], 'newest first, paper bills matched by their table note');
+  const b1 = r.results.find(x => x.id === 'b1');
+  assert.deepEqual([b1.transferImageUrl, b1.items.length, b1.accountId], ['signed:ck1.jpg', 1, ACC_A]);
+  const p1 = r.results.find(x => x.id === 'p1');
+  assert.deepEqual([p1.billImageUrl, p1.transferImageUrl, p1.by], ['signed:bill.jpg', 'signed:ck2.jpg', 'Lan']);
+
+  r = await find('from=2026-10-20&to=2026-10-23&table=Bàn 43&type=transfer&image=1');
+  assert.deepEqual(r.results.map(x => x.id), ['p1', 'b1'], '"Bàn 43" works like "43"; only transfers with a photo');
+  r = await find('from=2026-10-20&to=2026-10-23&amount=39.000');
+  assert.deepEqual(r.results.map(x => x.id), ['b1', 'b3']);
+  r = await find('from=2026-10-20&to=2026-10-23&type=paper');
+  assert.deepEqual(r.results.map(x => x.id), ['p1']);
+  r = await find('from=2026-07-01&to=2026-07-01&table=43');
+  assert.equal(r.results[0].imageExpired, true, 'a photo older than 3 months shows as removed');
+
+  assert.equal((await get(api, 'search=1&from=2026-10-23&to=2026-10-01')).status, 400);
+  assert.equal((await get(api, 'search=1&from=2026-01-01&to=2026-10-23')).status, 400, 'at most 3 months per search');
+  assert.equal((await get(load({ state, role: 'staff' }), 'search=1')).status, 403, 'owner only');
 });

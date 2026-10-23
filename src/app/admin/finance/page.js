@@ -395,6 +395,88 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
   </div>;
 }
 
+// Tra cứu bill trong khoảng ngày để đối chiếu ảnh chuyển khoản / ảnh bill giấy.
+const shortDate = date => `${dayLabel(date)}`;
+const addDaysLocal = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+
+function SearchView({ accounts }) {
+  const today = vnToday();
+  const [table, setTable] = useState('');
+  const [amount, setAmount] = useState('');
+  const [from, setFrom] = useState(addDaysLocal(today, -6));
+  const [to, setTo] = useState(today);
+  const [type, setType] = useState('all');
+  const [onlyImage, setOnlyImage] = useState(false);
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(null);
+  const [view, setView] = useState(null);
+  useBackClose(!!view, () => setView(null));
+  const accountName = id => accounts.find(a => a.id === id)?.name || 'Chuyển khoản';
+
+  async function search(event) {
+    event?.preventDefault();
+    setBusy(true); setError('');
+    try {
+      const q = new URLSearchParams({ search: '1', from, to, type, image: onlyImage ? '1' : '' });
+      if (table.trim()) q.set('table', table.trim());
+      if (digits(amount)) q.set('amount', digits(amount));
+      setResult(await api(`/api/admin/finance?${q}`));
+      setOpen(null);
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+  useEffect(() => { search(); }, []);
+
+  const total = (result?.results || []).reduce((s, r) => s + r.amount, 0);
+  return <section className="fin-section">
+    <form className="fin-panel fin-search" onSubmit={search}>
+      <div className="fin-search-grid">
+        <label>Bàn<input value={table} onChange={e => setTable(e.target.value)} placeholder="VD: 43" inputMode="text" enterKeyHint="search" /></label>
+        <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''} onChange={e => setAmount(digits(e.target.value))} placeholder="Tất cả" enterKeyHint="search" /></label>
+        <label>Từ ngày<input type="date" value={from} min={FIRST_MONTH + '-01'} max={to} onChange={e => e.target.value && setFrom(e.target.value)} /></label>
+        <label>Đến ngày<input type="date" value={to} min={from} max={today} onChange={e => e.target.value && setTo(e.target.value)} /></label>
+      </div>
+      <div className="fin-search-types" role="radiogroup" aria-label="Loại bill">
+        {[['all', 'Tất cả'], ['transfer', 'Chuyển khoản'], ['cash', 'Tiền mặt'], ['paper', 'Bill giấy']].map(([k, t]) =>
+          <button key={k} type="button" role="radio" aria-checked={type === k} className={type === k ? 'active' : ''} onClick={() => setType(k)}>{t}</button>)}
+      </div>
+      <label className="fin-search-check"><input type="checkbox" checked={onlyImage} onChange={e => setOnlyImage(e.target.checked)} /> Chỉ bill có ảnh</label>
+      <button className="fin-primary" disabled={busy}>{busy ? 'Đang tìm...' : 'Tìm'}</button>
+    </form>
+
+    {error && <p className="fin-error">{error}</p>}
+    {result && <p className="fin-search-sum">{result.results.length} bill · {money(total)}{result.truncated ? ' · chỉ hiện 200 bill mới nhất, thu hẹp ngày để xem thêm' : ''}</p>}
+    {result && !result.results.length && <p className="fin-empty">Không có bill nào khớp.</p>}
+
+    <div className="fin-search-list">
+      {(result?.results || []).map(r => <div key={`${r.kind}-${r.id}`} className="fin-hit">
+        <button className="fin-hit-head" onClick={() => setOpen(open === r.id ? null : r.id)}>
+          <span><b>{shortDate(r.date)} · {clock(r.at)} · {r.kind === 'paper' ? (r.table || 'Bill giấy') : `Bàn ${r.table || '?'}`}</b>
+            <small>{r.kind === 'paper' ? 'Bill giấy' : (r.customer || 'Khách')} · {r.method === 'transfer' ? accountName(r.accountId) : 'Tiền mặt'}{r.by ? ` · ${r.by}` : ''}</small></span>
+          <b className="fin-hit-amount">{money(r.amount)}</b>
+        </button>
+        <div className="fin-hit-photos">
+          {r.method === 'transfer' && (r.transferImageUrl
+            ? <button className="fin-hit-photo" onClick={() => setView(r.transferImageUrl)}><img src={r.transferImageUrl} alt="" draggable={false} /><span>Ảnh CK</span></button>
+            : <span className="fin-hit-none">{r.imageExpired ? 'Ảnh CK đã xoá (quá 3 tháng)' : 'Chưa có ảnh CK'}</span>)}
+          {r.kind === 'paper' && (r.billImageUrl
+            ? <button className="fin-hit-photo" onClick={() => setView(r.billImageUrl)}><img src={r.billImageUrl} alt="" draggable={false} /><span>Ảnh bill</span></button>
+            : <span className="fin-hit-none">{r.imageExpired ? 'Ảnh bill đã xoá (quá 3 tháng)' : 'Không có ảnh bill'}</span>)}
+        </div>
+        {open === r.id && (r.kind === 'bill'
+          ? <ul className="fin-items">{(r.items || []).map((item, i) => <li key={i}><span>{item.quantity}× {item.name || 'Món'}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>
+          : r.note && <p className="fin-note-text">{r.note}</p>)}
+      </div>)}
+    </div>
+
+    {view && <div className="rc-viewer" onClick={() => setView(null)} onContextMenu={e => e.preventDefault()} role="dialog" aria-label="Xem ảnh">
+      <button className="fin-icon" aria-label="Đóng"><X size={20} /></button>
+      <img src={view} alt="Ảnh" draggable={false} />
+    </div>}
+  </section>;
+}
+
 export default function FinancePage() {
   const [month, setMonth] = useState(vnToday().slice(0, 7));
   const [data, setData] = useState(null);
@@ -408,7 +490,7 @@ export default function FinancePage() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem('financeView');
-      if (['overview', 'days', 'add'].includes(saved)) setView(saved);
+      if (['overview', 'days', 'add', 'search'].includes(saved)) setView(saved);
     } catch { /* trình duyệt chặn lưu trữ → dùng mặc định */ }
   }, []);
   function chooseView(next) {
@@ -491,7 +573,7 @@ export default function FinancePage() {
     </header>
 
     <nav className="fin-switch" role="tablist" aria-label="Mục sổ thu chi">
-      {[['overview', 'Tổng quan'], ['days', 'Từng ngày'], ['add', 'Thêm chi']].map(([key, text]) =>
+      {[['overview', 'Tổng quan'], ['days', 'Từng ngày'], ['add', 'Thêm chi'], ['search', 'Tra cứu']].map(([key, text]) =>
         <button key={key} role="tab" aria-selected={view === key} className={view === key ? 'active' : ''} onClick={() => chooseView(key)}>{text}</button>)}
     </nav>
 
@@ -560,6 +642,8 @@ export default function FinancePage() {
         </button>)}
       </div>
     </section>}
+
+    {view === 'search' && <SearchView accounts={accounts} />}
 
     {view === 'add' && <section className="fin-section">
       <AddEntryForm data={data} month={month} onSaved={load} />

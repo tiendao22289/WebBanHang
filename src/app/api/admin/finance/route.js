@@ -160,6 +160,54 @@ export async function GET(request) {
     const db = statusDatabase();
     const today = vnDate(Date.now());
 
+    // Tra cứu bill (để đối chiếu ảnh chuyển khoản / ảnh bill giấy về sau).
+    if (params.get('search')) {
+      const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+      const to = DATE.test(params.get('to') || '') ? params.get('to') : today;
+      const from = DATE.test(params.get('from') || '') ? params.get('from') : addDays(to, -6);
+      if (from > to) return NextResponse.json({ error: 'Từ ngày phải trước đến ngày.' }, { status: 400, headers });
+      if (addDays(from, 92) < to) return NextResponse.json({ error: 'Chỉ tra cứu tối đa 3 tháng một lần.' }, { status: 400, headers });
+      const table = String(params.get('table') || '').trim().replace(/^b(àn)?\s*/i, '').slice(0, 20);
+      const amount = Number(String(params.get('amount') || '').replace(/\D/g, '')) || null;
+      const type = ['transfer', 'cash', 'paper'].includes(params.get('type')) ? params.get('type') : 'all';
+      const onlyWithImage = params.get('image') === '1';
+      const LIMIT = 200;
+
+      let bills = [];
+      if (type !== 'paper') {
+        let q = db.from('finance_revenue_ledger').select('order_id, paid_at, business_date, table_number, customer_name, payment_method, account_id, amount, items, transfer_image_path')
+          .gte('business_date', from).lt('business_date', addDays(to, 1)).order('paid_at', { ascending: false }).limit(LIMIT);
+        if (table) q = q.eq('table_number', table);
+        if (amount) q = q.eq('amount', amount);
+        if (type === 'transfer' || type === 'cash') q = q.eq('payment_method', type);
+        if (onlyWithImage) q = q.not('transfer_image_path', 'is', null);
+        const r = await q;
+        if (r.error) throw r.error;
+        bills = r.data || [];
+      }
+      let paper = [];
+      if (type === 'all' || type === 'paper' || type === 'transfer' || type === 'cash') {
+        let q = db.from('finance_manual_receipts').select('*')
+          .gte('business_date', from).lt('business_date', addDays(to, 1)).order('received_at', { ascending: false }).limit(LIMIT);
+        if (table) q = q.ilike('table_label', `%${table}%`);
+        if (amount) q = q.eq('amount', amount);
+        if (type === 'transfer' || type === 'cash') q = q.eq('payment_method', type);
+        const r = await q;
+        if (r.error && !missingTable(r.error)) throw r.error;
+        paper = (r.data || []).filter(p => !onlyWithImage || p.transfer_image_path || p.image_path);
+      }
+      const urls = await signReceiptImages(db, [...bills.map(b => b.transfer_image_path), ...paper.flatMap(p => [p.image_path, p.transfer_image_path])]);
+      const results = [
+        ...bills.map(b => ({ kind: 'bill', id: b.order_id, at: b.paid_at, date: b.business_date, table: b.table_number, customer: b.customer_name,
+          method: b.payment_method, accountId: b.account_id, amount: Number(b.amount), items: b.items || [],
+          transferImageUrl: urls[b.transfer_image_path] || null, imageExpired: !b.transfer_image_path && b.business_date < addDays(today, -90) })),
+        ...paper.map(p => ({ kind: 'paper', id: p.id, at: p.received_at, date: p.business_date, table: p.table_label, customer: null,
+          method: p.payment_method, accountId: p.account_id, amount: Number(p.amount), note: p.note, by: p.created_by_name,
+          billImageUrl: urls[p.image_path] || null, transferImageUrl: urls[p.transfer_image_path] || null, imageExpired: !!p.images_purged_at })),
+      ].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, LIMIT);
+      return NextResponse.json({ from, to, results, truncated: bills.length >= LIMIT || paper.length >= LIMIT }, { headers });
+    }
+
     const date = params.get('date');
     if (date) {
       if (!DATE.test(date)) return NextResponse.json({ error: 'Ngày không hợp lệ.' }, { status: 400, headers });
