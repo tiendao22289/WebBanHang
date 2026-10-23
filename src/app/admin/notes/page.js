@@ -899,8 +899,14 @@ export default function StaffNotesPage() {
                                   {!isDebt && <div style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 700, marginBottom: 2 }}>✅ Đã trả đủ nợ</div>}
                                   {item.payment_logs.map((log, li) => (
                                     <div key={li} style={{ fontSize: '0.73rem', color: '#6b7280', padding: '1px 0', display: 'flex', gap: 5 }}>
-                                      <span style={{ color: '#16a34a' }}>🔔</span>
-                                      <span>Đã trả <strong style={{ color: '#16a34a' }}>{formatMoney(log.amount)}</strong> — {log.ts}</span>
+                                      {/* Số âm = lần trả bị huỷ do xoá phiếu đã bỏ tiền trả. */}
+                                      {log.amount < 0 ? (<>
+                                        <span>↩</span>
+                                        <span>Huỷ trả <strong style={{ color: '#dc2626' }}>{formatMoney(-log.amount)}</strong>{log.note ? ` (${log.note})` : ''} — {log.ts}</span>
+                                      </>) : (<>
+                                        <span style={{ color: '#16a34a' }}>🔔</span>
+                                        <span>Đã trả <strong style={{ color: '#16a34a' }}>{formatMoney(log.amount)}</strong> — {log.ts}</span>
+                                      </>)}
                                     </div>
                                   ))}
                                 </div>
