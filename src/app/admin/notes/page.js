@@ -8,6 +8,7 @@ import MenuNameInput from '@/lib/MenuNameInput';
 import { normalizePriceInput, noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
 import { notesApi, workforce } from '@/lib/staffApi';
 import { LineHint, filterRange, notesSummary } from './notesStats';
+import DebtPicker from './DebtPicker';
 
 export default function StaffNotesPage() {
   // Tên món trong menu để chọn nhanh ở ô tên hàng (vẫn gõ tự do được).
@@ -48,6 +49,10 @@ export default function StaffNotesPage() {
   
   // Pay Old Debt State (in new note modal)
   const [newNotePayDebtEnabled, setNewNotePayDebtEnabled] = useState(false);
+  // Khoản nợ cũ chọn trả trong phiếu mới: { 'noteId:itemIndex': số tiền }; tuỳ chọn lấy tiền dư trả nợ.
+  const [debtPays, setDebtPays] = useState({});
+  const [useSurplusForDebt, setUseSurplusForDebt] = useState(false);
+  const debtPayTotal = Object.values(debtPays).reduce((a, v) => a + (Number(v) || 0), 0);
   const [newNotePayDebtAmount, setNewNotePayDebtAmount] = useState('');
   
   // Modal / Review States
@@ -333,20 +338,14 @@ export default function StaffNotesPage() {
   };
 
   const submitNewNote = async () => {
-    // Calculate Old Debt
-    const oldDebt = notes.reduce((acc, n) => {
-      if (n.staff_id === currentUser.id) return acc + Math.max(0, (n.debt || 0) - (n.paid_debt || 0));
-      return acc;
-    }, 0);
-
-    const payAmt = newNotePayDebtEnabled ? Number(newNotePayDebtAmount.replace(/\./g, '')) : 0;
-    if (newNotePayDebtEnabled && payAmt > 0 && payAmt > oldDebt) {
-      alert('Số tiền trả nợ không được vượt quá tổng nợ cũ!');
-      return;
-    }
+    // Các khoản nợ cũ đã chọn trả (máy chủ kiểm lại số còn nợ từng khoản).
+    const payDebts = Object.entries(debtPays).filter(([, v]) => Number(v) > 0).map(([key, amount]) => {
+      const [noteId, index] = key.split(':');
+      return { note_id: noteId, item_index: index === 'note' ? null : Number(index), amount: Number(amount) };
+    });
 
     const hasItems = newNoteType === 'expense' && expenseItems.some(i => i.name.trim());
-    if (!hasItems && !newNoteContent.trim() && !(newNotePayDebtEnabled && payAmt > 0)) {
+    if (!hasItems && !newNoteContent.trim() && !payDebts.length) {
       alert('Vui lòng nhập nội dung!');
       return;
     }
@@ -360,7 +359,7 @@ export default function StaffNotesPage() {
         items: newNoteType === 'expense' ? expenseItems.filter(i => i.name.trim()) : [],
         note: newNoteContent,
         input_amount: newNoteInputAmount,
-        pay_old_debt: newNotePayDebtEnabled ? payAmt : 0,
+        pay_debts: payDebts,
       });
     } catch (err) { error = err; }
 
@@ -379,6 +378,8 @@ export default function StaffNotesPage() {
       setNewNoteType('expense');
       setNewNotePayDebtEnabled(false);
       setNewNotePayDebtAmount('');
+      setDebtPays({});
+      setUseSurplusForDebt(false);
       fetchNotes(currentUser); // Refresh list
     } else {
       alert(error.message || 'Lỗi lưu báo cáo!');
@@ -1735,11 +1736,6 @@ export default function StaffNotesPage() {
 
       {/* ── Add Note Modal ── */}
       {showAddModal && (() => {
-        const totalOldDebt = notes.reduce((acc, n) => {
-          if (n.staff_id === currentUser.id) return acc + Math.max(0, (n.debt || 0) - (n.paid_debt || 0));
-          return acc;
-        }, 0);
-
         return (
         <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '450px' }}>
@@ -1833,7 +1829,7 @@ export default function StaffNotesPage() {
                     const { paid: thucChi, debt: tienNo } = calculateTotals();
                     const tongMua = thucChi + tienNo;
                     const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
-                    const payOldDebt = (newNotePayDebtEnabled && newNotePayDebtAmount) ? Number(newNotePayDebtAmount.replace(/\./g, '')) : 0;
+                    const payOldDebt = debtPayTotal;
                     const balance = inputAmt > 0 ? inputAmt - thucChi - payOldDebt : null;
                     return (
                       <div style={{ marginTop: 10, padding: '12px 14px', background: '#fff7ed', borderRadius: 10, border: '1px solid #fed7aa', fontSize: 13 }}>
@@ -1889,28 +1885,15 @@ export default function StaffNotesPage() {
                 </div>
               )}
               
-              {/* ── Debt Payment Block ── */}
-              {totalOldDebt > 0 && (
-                 <div style={{ marginTop: 12, padding: '12px 14px', background: '#fef2f2', border: '1.5px solid #fca5a5', borderRadius: 10 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                       <span style={{ fontWeight: 700, color: '#dc2626', fontSize: 13 }}>⚠️ Tổng nợ cũ cần trả: {formatMoney(totalOldDebt)}</span>
-                       <label style={{ fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#111827' }}>
-                         <input type="checkbox" checked={newNotePayDebtEnabled} onChange={e => setNewNotePayDebtEnabled(e.target.checked)} style={{ width: 16, height: 16, accentColor: '#dc2626', cursor: 'pointer' }} />
-                         Trả nợ cũ
-                       </label>
-                    </div>
-                    {newNotePayDebtEnabled && (
-                       <div style={{ marginTop: 10 }}>
-                         <input type="text" inputMode="numeric" placeholder={`Nhập số tiền trả (Tối đa ${totalOldDebt.toLocaleString('vi-VN')}đ)`} value={newNotePayDebtAmount} onChange={e => {
-                            const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                            const num = Number(raw);
-                            if (num > totalOldDebt) { setNewNotePayDebtAmount(totalOldDebt.toLocaleString('vi-VN')); return; }
-                            setNewNotePayDebtAmount(raw ? num.toLocaleString('vi-VN') : '');
-                         }} style={{ width: '100%', padding: '8px 12px', border: '1.5px solid #fca5a5', borderRadius: 8, fontSize: 14, outline: 'none', background: 'white' }} autoFocus />
-                       </div>
-                    )}
-                 </div>
-              )}
+              {/* ── Nợ cũ còn lại: chọn khoản trả, tuỳ chọn lấy tiền dư trả nợ ── */}
+              {(() => {
+                const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
+                const surplus = inputAmt > 0 ? inputAmt - calculateTotals().paid : 0;
+                return (
+                  <DebtPicker notes={notes} value={debtPays} onChange={setDebtPays}
+                    surplus={surplus} useSurplus={useSurplusForDebt} onUseSurplus={setUseSurplusForDebt} />
+                );
+              })()}
             </div>
             <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '12px 16px', borderTop: '1px solid #f3f4f6' }}>
               <button className="btn btn-outline" onClick={() => setShowAddModal(false)}>Huỷ</button>
