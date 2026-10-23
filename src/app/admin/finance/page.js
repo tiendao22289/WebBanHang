@@ -398,65 +398,121 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
 // Tra cứu bill trong khoảng ngày để đối chiếu ảnh chuyển khoản / ảnh bill giấy.
 const shortDate = date => `${dayLabel(date)}`;
 const addDaysLocal = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const cardLabel = a => `${a.name.split(' · ')[0]}${a.last4 ? ` ·${a.last4}` : ''}`;
+const stamp = iso => { const d = new Date(Date.parse(iso) + 7 * 3600000).toISOString(); return `${clock(iso)} ${d.slice(8, 10)}/${d.slice(5, 7)}`; };
 
-function SearchView({ accounts }) {
+function Chips({ label, value, options, onPick }) {
+  return <div className="fin-filter-row">
+    <span>{label}</span>
+    <div className="fin-search-tables">
+      {options.map(([k, t]) => <button key={k} type="button" aria-pressed={value === k} className={value === k ? 'active' : ''} onClick={() => onPick(k)}>{t}</button>)}
+    </div>
+  </div>;
+}
+
+function SearchView({ accounts, preset }) {
   const today = vnToday();
-  const [table, setTable] = useState('');
-  const [amount, setAmount] = useState('');
-  const [from, setFrom] = useState(addDaysLocal(today, -6));
-  const [to, setTo] = useState(today);
-  const [type, setType] = useState('all');
-  const [onlyImage, setOnlyImage] = useState(false);
+  const [filters, setFilters] = useState(() => ({
+    table: '', amount: '', from: addDaysLocal(today, -6), to: today, type: 'all', account: '', photo: 'all', check: 'all', ...preset,
+  }));
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(null);
   const [view, setView] = useState(null);
+  const [saving, setSaving] = useState(null);
   useBackClose(!!view, () => setView(null));
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Chuyển khoản';
+  const set = patch => setFilters(f => ({ ...f, ...patch }));
 
-  async function search(event, pickTable = table) {
+  async function search(event, patch = {}) {
     event?.preventDefault();
+    const f = { ...filters, ...patch };
+    setFilters(f);
     setBusy(true); setError('');
     try {
-      const q = new URLSearchParams({ search: '1', from, to, type, image: onlyImage ? '1' : '' });
-      if (pickTable.trim()) q.set('table', pickTable.trim());
-      if (digits(amount)) q.set('amount', digits(amount));
+      const q = new URLSearchParams({ search: '1', from: f.from, to: f.to, type: f.type });
+      if (f.table.trim()) q.set('table', f.table.trim());
+      if (digits(f.amount)) q.set('amount', digits(f.amount));
+      if (f.account) q.set('account', f.account);
+      if (f.photo !== 'all') q.set('image', f.photo === 'has' ? '1' : 'missing');
+      if (f.check !== 'all') q.set('check', f.check);
       setResult(await api(`/api/admin/finance?${q}`));
       setOpen(null);
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   useEffect(() => { search(); }, []);
-  const pick = name => { setTable(name); search(null, name); };
 
+  // Đánh dấu đã đối chiếu với app ngân hàng (bấm lại để bỏ).
+  async function toggleVerify(r) {
+    const verified = !r.verifiedAt;
+    const patchHit = fields => setResult(res => ({ ...res, results: res.results.map(x => x.kind === r.kind && x.id === r.id ? { ...x, ...fields } : x) }));
+    setSaving(r.id);
+    try {
+      const res = await post({ action: 'verify', kind: r.kind, id: r.id, verified });
+      patchHit({ verifiedAt: res.verifiedAt, verifiedBy: res.verifiedBy });
+      setResult(cur => cur.alerts ? { ...cur, alerts: { ...cur.alerts, unchecked: Math.max(0, cur.alerts.unchecked + (verified ? -1 : 1)) } } : cur);
+    } catch (err) { alert(err.message); } finally { setSaving(null); }
+  }
+
+  // Chụp bổ sung ảnh CK cho bill chưa có ảnh.
+  const [cameraFor, setCameraFor] = useState(null);
+  const pendingGallery = useRef(null);
+  const galleryInput = useRef(null);
+  const captureInput = useRef(null);
+  const target = r => r.kind === 'paper' ? { receipt_id: r.id } : { order_id: r.id };
+  async function uploadProof(r, blob) {
+    setSaving(r.id);
+    try { await sendReceipt({ action: 'attach_transfer', ...target(r) }, blob); await search(); }
+    catch (err) { alert(err.message); } finally { setSaving(null); }
+  }
+  function startCamera(r) { if (cameraSupported()) setCameraFor(r); else { pendingGallery.current = r; captureInput.current.click(); } }
+  function startGallery(r) { pendingGallery.current = r; galleryInput.current.click(); }
+  async function picked(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    const r = pendingGallery.current;
+    pendingGallery.current = null;
+    if (!file || !r) return;
+    try { await uploadProof(r, await compressImage(file)); } catch (err) { alert(err.message); }
+  }
+
+  const { table, amount, from, to, type, account, photo, check } = filters;
   const total = (result?.results || []).reduce((s, r) => s + r.amount, 0);
+  const alerts = result?.alerts;
+  const normTable = table.trim().replace(/^b(àn)?\s*/i, '').toLowerCase();
   return <section className="fin-section">
     <form className="fin-panel fin-search" onSubmit={search}>
       <div className="fin-search-grid">
-        <label>Bàn<input value={table} onChange={e => setTable(e.target.value)} placeholder="VD: 43" inputMode="text" enterKeyHint="search" /></label>
-        <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''} onChange={e => setAmount(digits(e.target.value))} placeholder="Tất cả" enterKeyHint="search" /></label>
-        <label>Từ ngày<input type="date" value={from} min={FIRST_MONTH + '-01'} max={to} onChange={e => e.target.value && setFrom(e.target.value)} /></label>
-        <label>Đến ngày<input type="date" value={to} min={from} max={today} onChange={e => e.target.value && setTo(e.target.value)} /></label>
+        <label>Bàn<input value={table} onChange={e => set({ table: e.target.value })} placeholder="VD: 43" inputMode="text" enterKeyHint="search" /></label>
+        <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''} onChange={e => set({ amount: digits(e.target.value) })} placeholder="Tất cả" enterKeyHint="search" /></label>
+        <label>Từ ngày<input type="date" value={from} min={FIRST_MONTH + '-01'} max={to} onChange={e => e.target.value && set({ from: e.target.value })} /></label>
+        <label>Đến ngày<input type="date" value={to} min={from} max={today} onChange={e => e.target.value && set({ to: e.target.value })} /></label>
       </div>
       <div className="fin-search-types" role="radiogroup" aria-label="Loại bill">
         {[['all', 'Tất cả'], ['transfer', 'Chuyển khoản'], ['cash', 'Tiền mặt'], ['paper', 'Bill giấy']].map(([k, t]) =>
-          <button key={k} type="button" role="radio" aria-checked={type === k} className={type === k ? 'active' : ''} onClick={() => setType(k)}>{t}</button>)}
+          <button key={k} type="button" role="radio" aria-checked={type === k} className={type === k ? 'active' : ''} onClick={() => search(null, { type: k })}>{t}</button>)}
       </div>
-      {result?.tables?.length > 0 && <div className="fin-search-tables" aria-label="Chọn bàn">
-        <button type="button" className={!table.trim() ? 'active' : ''} onClick={() => pick('')}>Tất cả bàn</button>
-        {result.tables.map(t => <button key={t.name} type="button" className={table.trim().replace(/^b(àn)?\s*/i, '').toLowerCase() === t.name.toLowerCase() ? 'active' : ''}
-          onClick={() => pick(t.name)}>{/^\d/.test(t.name) ? `Bàn ${t.name}` : t.name}<small>{t.count}</small></button>)}
-      </div>}
-      <label className="fin-search-check"><input type="checkbox" checked={onlyImage} onChange={e => setOnlyImage(e.target.checked)} /> Chỉ bill có ảnh</label>
+      {result?.tables?.length > 0 && <Chips label="Bàn" value={result.tables.find(t => t.name.toLowerCase() === normTable)?.name || (normTable ? null : '')}
+        options={[['', 'Tất cả bàn'], ...result.tables.map(t => [t.name, <>{/^\d/.test(t.name) ? `Bàn ${t.name}` : t.name}<small>{t.count}</small></>])]}
+        onPick={name => search(null, { table: name })} />}
+      {accounts.length > 0 && <Chips label="Thẻ" value={account} options={[['', 'Mọi thẻ'], ...accounts.map(a => [a.id, cardLabel(a)])]}
+        onPick={id => search(null, { account: id })} />}
+      <Chips label="Ảnh" value={photo} options={[['all', 'Tất cả'], ['has', 'Có ảnh'], ['missing', 'Chưa có ảnh CK']]} onPick={k => search(null, { photo: k })} />
+      <Chips label="Đối chiếu" value={check} options={[['all', 'Tất cả'], ['unchecked', 'Chưa đối chiếu'], ['checked', 'Đã đối chiếu']]} onPick={k => search(null, { check: k })} />
       <button className="fin-primary" disabled={busy}>{busy ? 'Đang tìm...' : 'Tìm'}</button>
     </form>
 
     {error && <p className="fin-error">{error}</p>}
+    {alerts && (alerts.missingPhoto > 0 || alerts.unchecked > 0) && <div className="fin-pending">
+      {alerts.missingPhoto > 0 && photo !== 'missing' && <button onClick={() => search(null, { photo: 'missing', check: 'all' })}>📷 {alerts.missingPhoto} bill CK chưa có ảnh <ChevronRight size={16} /></button>}
+      {alerts.unchecked > 0 && check !== 'unchecked' && <button onClick={() => search(null, { check: 'unchecked', photo: 'all' })}>☐ {alerts.unchecked} bill CK chưa đối chiếu <ChevronRight size={16} /></button>}
+    </div>}
     {result && <p className="fin-search-sum">{result.results.length} bill · {money(total)}{result.truncated ? ' · chỉ hiện 200 bill mới nhất, thu hẹp ngày để xem thêm' : ''}</p>}
     {result && !result.results.length && <p className="fin-empty">Không có bill nào khớp.</p>}
 
     <div className="fin-search-list">
-      {(result?.results || []).map(r => <div key={`${r.kind}-${r.id}`} className="fin-hit">
+      {(result?.results || []).map(r => <div key={`${r.kind}-${r.id}`} className={`fin-hit${r.verifiedAt ? ' verified' : ''}`}>
         <button className="fin-hit-head" onClick={() => setOpen(open === r.id ? null : r.id)}>
           <span><b>{shortDate(r.date)} · {clock(r.at)} · {r.kind === 'paper' && !/^\d/.test(r.table || '') ? (r.table || 'Bill giấy') : `Bàn ${r.table || '?'}`}</b>
             <small>{r.kind === 'paper' ? 'Bill giấy' : (r.customer || 'Khách')} · {r.method === 'transfer' ? accountName(r.accountId) : 'Tiền mặt'}{r.by ? ` · ${r.by}` : ''}</small></span>
@@ -465,21 +521,85 @@ function SearchView({ accounts }) {
         <div className="fin-hit-photos">
           {r.method === 'transfer' && (r.transferImageUrl
             ? <button className="fin-hit-photo" onClick={() => setView(r.transferImageUrl)}><img src={r.transferImageUrl} alt="" draggable={false} /><span>Ảnh CK</span></button>
-            : <span className="fin-hit-none">{r.imageExpired ? 'Ảnh CK đã xoá (quá 3 tháng)' : 'Chưa có ảnh CK'}</span>)}
+            : r.imageExpired ? <span className="fin-hit-none">Ảnh CK đã xoá (quá 3 tháng)</span>
+            : <span className="fin-hit-add">
+                <button className="fin-ck-add primary" onClick={() => startCamera(r)} disabled={saving === r.id}>📷 Chụp ảnh CK</button>
+                <button className="fin-ck-add" onClick={() => startGallery(r)} disabled={saving === r.id}>Chọn ảnh</button>
+              </span>)}
           {r.kind === 'paper' && (r.billImageUrl
             ? <button className="fin-hit-photo" onClick={() => setView(r.billImageUrl)}><img src={r.billImageUrl} alt="" draggable={false} /><span>Ảnh bill</span></button>
             : <span className="fin-hit-none">{r.imageExpired ? 'Ảnh bill đã xoá (quá 3 tháng)' : 'Không có ảnh bill'}</span>)}
         </div>
+        {r.method === 'transfer' && <div className="fin-verify-row">
+          <button className={`fin-verify${r.verifiedAt ? ' on' : ''}`} onClick={() => toggleVerify(r)} disabled={saving === r.id} aria-pressed={!!r.verifiedAt}>
+            {r.verifiedAt ? '✓ Đã đối chiếu' : 'Đánh dấu đã đối chiếu'}</button>
+          {r.verifiedAt && <small>{r.verifiedBy ? `${r.verifiedBy} · ` : ''}{stamp(r.verifiedAt)}</small>}
+        </div>}
         {open === r.id && (r.kind === 'bill'
           ? <ul className="fin-items">{(r.items || []).map((item, i) => <li key={i}><span>{item.quantity}× {item.name || 'Món'}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>
           : r.note && <p className="fin-note-text">{r.note}</p>)}
       </div>)}
     </div>
 
+    <input ref={galleryInput} type="file" accept="image/*" onChange={picked} hidden />
+    <input ref={captureInput} type="file" accept="image/*" capture="environment" onChange={picked} hidden />
+    {cameraFor && <CameraCapture onCapture={blob => uploadProof(cameraFor, blob)} onClose={() => setCameraFor(null)} />}
     {view && <div className="rc-viewer" onClick={() => setView(null)} onContextMenu={e => e.preventDefault()} role="dialog" aria-label="Xem ảnh">
       <button className="fin-icon" aria-label="Đóng"><X size={20} /></button>
       <img src={view} alt="Ảnh" draggable={false} />
     </div>}
+  </section>;
+}
+
+// Báo cáo thu chi gửi qua Zalo OA mỗi sáng tới chủ quán.
+function ZaloReportPanel({ status, onChanged }) {
+  const [state, setState] = useState(status);
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  useEffect(() => { setState(status); }, [status]);
+  if (!state) return null;
+
+  async function act(action) {
+    if (action === 'zalo_unlink' && !confirm('Ngừng gửi báo cáo Zalo?')) return;
+    setBusy(action); setMessage('');
+    try {
+      const res = await post({ action });
+      setState(res.zaloReport);
+      if (action === 'zalo_test') setMessage('✓ Đã gửi, mở Zalo để xem.');
+    } catch (err) {
+      if (err.result?.zaloReport) setState(err.result.zaloReport);
+      setMessage(err.message);
+    } finally { setBusy(''); }
+  }
+  async function copyCode() {
+    try { await navigator.clipboard.writeText(`BC ${state.linkCode}`); setMessage('Đã chép, dán vào Zalo.'); } catch { /* trình duyệt chặn → tự gõ */ }
+  }
+
+  return <section className="fin-panel fin-zalo">
+    <h2>Báo cáo Zalo mỗi sáng</h2>
+    {state.linkCode ? <>
+      <p>Mở Zalo, nhắn cho <b>OA của quán</b> đúng nội dung:</p>
+      <button className="fin-zalo-code" onClick={copyCode} aria-label="Chép mã">BC {state.linkCode}</button>
+      <p className="fin-zalo-hint">Mã dùng trong 30 phút. Nhắn xong bấm “Kiểm tra”.</p>
+      <div className="fin-zalo-actions">
+        <button className="fin-primary" onClick={onChanged}>Kiểm tra</button>
+      </div>
+    </> : state.linked > 0 ? <>
+      <p className="fin-zalo-ok">✓ Đang gửi tới {state.linked} Zalo · khoảng 8 giờ sáng gửi số liệu ngày hôm qua.</p>
+      {state.lastSentAt && <p className="fin-zalo-hint">Lần gửi gần nhất: {stamp(state.lastSentAt)}</p>}
+      {state.lastError && <p className="fin-warn">⚠ Lần gần nhất Zalo không gửi được. Mở Zalo, nhắn “ok” cho OA của quán rồi bấm “Gửi thử”. Zalo chỉ cho OA nhắn lại người vừa nhắn mình trong vài ngày.</p>}
+      <div className="fin-zalo-actions">
+        <button className="fin-primary" onClick={() => act('zalo_test')} disabled={!!busy}>{busy === 'zalo_test' ? 'Đang gửi...' : 'Gửi thử số hôm nay'}</button>
+        <button className="fin-secondary" onClick={() => act('zalo_link_code')} disabled={!!busy}>Thêm Zalo khác</button>
+        <button className="fin-secondary danger" onClick={() => act('zalo_unlink')} disabled={!!busy}>Ngừng gửi</button>
+      </div>
+    </> : <>
+      <p>Nhận tổng kết thu chi, lệch két, bill CK chưa có ảnh / chưa đối chiếu qua Zalo mỗi sáng — không cần mở web.</p>
+      <div className="fin-zalo-actions">
+        <button className="fin-primary" onClick={() => act('zalo_link_code')} disabled={!!busy}>Liên kết Zalo</button>
+      </div>
+    </>}
+    {message && !(state.lastError && state.linked > 0 && !message.startsWith('✓')) && <p className="fin-zalo-hint" role="status">{message}</p>}
   </section>;
 }
 
@@ -491,6 +611,8 @@ export default function FinancePage() {
   const [day, setDay] = useState(null);
   // Mục đang xem (Tổng quan / Từng ngày / Thêm chi) — nhớ trên máy cho lần sau.
   const [view, setView] = useState('overview');
+  // Bộ lọc mở sẵn khi bấm cảnh báo ở Tổng quan → Tra cứu.
+  const [searchPreset, setSearchPreset] = useState({ key: 0, filters: {} });
   const pending = useRef(0);
 
   useEffect(() => {
@@ -502,6 +624,10 @@ export default function FinancePage() {
   function chooseView(next) {
     setView(next);
     try { localStorage.setItem('financeView', next); } catch { /* bỏ qua */ }
+  }
+  function openSearch(filters) {
+    setSearchPreset(p => ({ key: p.key + 1, filters }));
+    chooseView('search');
   }
 
   async function load() {
@@ -551,6 +677,8 @@ export default function FinancePage() {
   ].filter(r => !r.optional || r.amount > 0) : [];
   const today = days.find(d => d.date === data?.today);
   const monthText = `${month.slice(5)}/${month.slice(0, 4)}`;
+  const pendingCk = data?.transferAlerts;
+  const monthRange = data ? { from: data.from || `${month}-01`, to: data.to || data.today } : {};
 
   const dayTags = d => <>
     {d.close
@@ -620,6 +748,12 @@ export default function FinancePage() {
         <ChevronRight size={18} />
       </button>}
 
+      {pendingCk && (pendingCk.missingPhoto > 0 || pendingCk.unchecked > 0) && <section className="fin-pending">
+        <b>Bill chuyển khoản tháng {monthText}</b>
+        {pendingCk.missingPhoto > 0 && <button onClick={() => openSearch({ ...monthRange, photo: 'missing' })}>📷 {pendingCk.missingPhoto} bill chưa có ảnh CK <ChevronRight size={16} /></button>}
+        {pendingCk.unchecked > 0 && <button onClick={() => openSearch({ ...monthRange, check: 'unchecked' })}>☐ {pendingCk.unchecked} bill chưa đối chiếu <ChevronRight size={16} /></button>}
+      </section>}
+
       <section className="fin-panel">
         <h2>Các khoản chi</h2>
         {costRows.map(r => <div key={r.key} className="fin-cost">
@@ -633,6 +767,8 @@ export default function FinancePage() {
         <h2>Chuyển khoản theo tài khoản</h2>
         {Object.entries(t.byAccount).map(([id, amount]) => <div key={id} className="fin-row static"><span>{accountName(id)}</span><b>{money(amount)}</b></div>)}
       </section>}
+
+      <ZaloReportPanel status={data.zaloReport} onChanged={load} />
     </>}
 
     {view === 'days' && <section className="fin-section">
@@ -649,7 +785,7 @@ export default function FinancePage() {
       </div>
     </section>}
 
-    {view === 'search' && <SearchView accounts={accounts} />}
+    {view === 'search' && <SearchView key={searchPreset.key} accounts={accounts} preset={searchPreset.filters} />}
 
     {view === 'add' && <section className="fin-section">
       <AddEntryForm data={data} month={month} onSaved={load} />

@@ -192,3 +192,44 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
   }
   return { month, from, to, daysInMonth, fixedMonthTotal, fixedEntries, customMonthTotals, days, totals };
 }
+
+const vnd = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;
+const signed = n => `${n < 0 ? '-' : '+'}${vnd(Math.abs(n))}`;
+
+/**
+ * Tin Zalo báo cáo một ngày cho chủ quán. `day` là một phần tử của
+ * summarizeMonth().days, `monthTotals` là totals của tháng (tới ngày đó),
+ * `alerts` = { missingPhoto, unchecked } của bill chuyển khoản trong tháng.
+ */
+export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, title = 'Báo cáo' }) {
+  const [y, m, d] = day.date.split('-');
+  const weekday = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][new Date(`${day.date}T00:00:00Z`).getUTCDay()];
+  const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
+  const cost = day.purchases + day.drinks + day.salary + day.fixedShare + day.customTotal;
+  const lines = [`📒 ${title} Sổ thu chi · ${weekday} ${d}/${m}/${y}`, ''];
+  lines.push(`Doanh thu: ${vnd(day.revenue)} (${day.bills} bill${day.paperBills ? ` + ${day.paperBills} bill giấy` : ''})`);
+  lines.push(`• Tiền mặt: ${vnd(day.cash)}`);
+  for (const [id, amount] of Object.entries(day.byAccount || {})) lines.push(`• CK ${accountName(id)}: ${vnd(amount)}`);
+  const parts = [['đi chợ', day.purchases], ['nước', day.drinks], ['lương', day.salary], ['cố định', day.fixedShare], ['khác', day.customTotal]]
+    .filter(([, v]) => v > 0).map(([k, v]) => `${k} ${vnd(v)}`);
+  lines.push(`Chi: ${vnd(cost)}${parts.length ? ` (${parts.join(', ')})` : ''}`);
+  lines.push(`${day.profit < 0 ? 'Lỗ' : 'Lãi'} ngày: ${signed(day.profit)}`);
+  if (monthTotals) lines.push(`Tháng ${m} tới nay: thu ${vnd(monthTotals.revenue)} · ${monthTotals.profit < 0 ? 'lỗ' : 'lãi'} ${vnd(Math.abs(monthTotals.profit))}`);
+
+  const warnings = [];
+  if (!day.close) warnings.push('Chưa chốt sổ ngày này');
+  else {
+    if (day.close.cashDiff) warnings.push(`Tiền mặt ${day.close.cashDiff < 0 ? 'thiếu' : 'dư'} ${vnd(Math.abs(day.close.cashDiff))}`);
+    for (const [id, diff] of Object.entries(day.close.bankDiffs || {})) {
+      if (diff) warnings.push(`${accountName(id)} ${diff < 0 ? 'thiếu' : 'dư'} ${vnd(Math.abs(diff))}`);
+    }
+  }
+  if (alerts.missingPhoto) warnings.push(`${alerts.missingPhoto} bill CK chưa có ảnh (tháng này)`);
+  if (alerts.unchecked) warnings.push(`${alerts.unchecked} bill CK chưa đối chiếu (tháng này)`);
+  if (day.suspiciousNotes) warnings.push(`${day.suspiciousNotes} phiếu Sổ tay giá đáng ngờ`);
+  lines.push('');
+  if (warnings.length) lines.push(...warnings.map(w => `⚠ ${w}`));
+  else lines.push('✓ Không có gì bất thường');
+  lines.push('', 'Nhắn "ok" để Zalo cho phép gửi tiếp báo cáo các ngày sau.');
+  return lines.join('\n');
+}

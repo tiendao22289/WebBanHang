@@ -1,0 +1,29 @@
+name: Finance Daily Report
+# 8 giờ sáng (giờ VN) gửi báo cáo Sổ thu chi ngày hôm qua qua Zalo OA tới
+# chủ quán. Chạy trên runner của máy chủ quán, gọi web prod ở 127.0.0.1:3000.
+# Mỗi ngày chỉ gửi một lần (web tự chặn nếu chạy lại).
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+# Xếp hàng sau lần deploy đang chạy (web khởi động lại lúc deploy).
+concurrency:
+  group: local-production
+  cancel-in-progress: false
+jobs:
+  report:
+    if: github.ref == 'refs/heads/master' && github.repository == 'tiendao22289/WebBanHang'
+    runs-on: [self-hosted, Windows, X64, webbanhang-production]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Send yesterday's finance report to Zalo
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+        run: |
+          & node scripts/send-finance-report.cjs 'C:\Tool\SupabaseLocal\production.env'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

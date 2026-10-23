@@ -95,6 +95,22 @@ CREATE INDEX IF NOT EXISTS finance_manual_receipts_date ON public.finance_manual
 ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS transfer_image_path text;
 ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS transfer_image_by text;
 
+-- Chủ quán đánh dấu "đã đối chiếu" bill chuyển khoản với app ngân hàng.
+ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS verified_at timestamptz;
+ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS verified_by text;
+ALTER TABLE public.finance_manual_receipts ADD COLUMN IF NOT EXISTS verified_at timestamptz;
+ALTER TABLE public.finance_manual_receipts ADD COLUMN IF NOT EXISTS verified_by text;
+
+-- Cài đặt sổ thu chi (vd. 'zalo_report': Zalo nhận báo cáo hằng ngày).
+CREATE TABLE IF NOT EXISTS public.finance_settings (
+  key text PRIMARY KEY,
+  value jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.finance_settings ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.finance_settings FROM anon, authenticated;
+GRANT ALL ON public.finance_settings TO service_role;
+
 ALTER TABLE public.finance_manual_receipts ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.finance_manual_receipts FROM anon, authenticated;
 GRANT ALL ON public.finance_manual_receipts TO service_role;

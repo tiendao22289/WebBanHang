@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { monthBounds, noteCost, summarizeMonth, vnDate } from '../src/lib/ownerFinance.mjs';
+import * as finance from '../src/lib/ownerFinance.mjs';
 
 test('daily summary splits revenue, counts Sổ tay purchases with debt, entries and a fixed daily share', () => {
   const s = summarizeMonth({
@@ -178,4 +179,24 @@ test('the migration can be run again without dropping the existing trigger', asy
     await db.exec(`UPDATE orders SET status='paid', payment_method='cash', paid_at=now() WHERE customer_phone='0900';`);
     assert.equal((await db.query('SELECT 1 FROM finance_revenue_ledger')).rows.length, 1, 'recorded once, not twice');
   } finally { await db.close(); }
+});
+
+test('the daily Zalo report lists money per card, costs, profit and anything that needs a look', () => {
+  const day = { date: '2026-10-24', revenue: 1200000, bills: 10, paperBills: 1, cash: 500000, byAccount: { a: 700000 },
+    purchases: 400000, drinks: 100000, salary: 0, fixedShare: 50000, customTotal: 0, profit: 650000, suspiciousNotes: 1,
+    close: { cashDiff: -20000, bankDiffs: { a: 0 } } };
+  const text = finance.dailyReportText({ day, monthTotals: { revenue: 2000000, profit: -100000 }, accounts: [{ id: 'a', name: 'VCB' }], alerts: { missingPhoto: 2, unchecked: 0 } });
+  assert.match(text, /T7 24\/10\/2026/);
+  assert.match(text, /Doanh thu: 1\.200\.000đ \(10 bill \+ 1 bill giấy\)/);
+  assert.match(text, /• CK VCB: 700\.000đ/);
+  assert.match(text, /Chi: 550\.000đ \(đi chợ 400\.000đ, nước 100\.000đ, cố định 50\.000đ\)/);
+  assert.match(text, /Lãi ngày: \+650\.000đ/);
+  assert.match(text, /Tháng 10 tới nay: thu 2\.000\.000đ · lỗ 100\.000đ/);
+  assert.match(text, /⚠ Tiền mặt thiếu 20\.000đ/);
+  assert.match(text, /⚠ 2 bill CK chưa có ảnh/);
+  assert.match(text, /⚠ 1 phiếu Sổ tay/);
+  assert.doesNotMatch(text, /VCB (thiếu|dư)|chưa đối chiếu|Chưa chốt/);
+  const quiet = finance.dailyReportText({ day: { ...day, suspiciousNotes: 0, close: { cashDiff: 0, bankDiffs: {} } } });
+  assert.match(quiet, /✓ Không có gì bất thường/);
+  assert.match(finance.dailyReportText({ day: { ...day, close: null } }), /Chưa chốt sổ/);
 });

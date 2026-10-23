@@ -35,6 +35,8 @@
 import { NextResponse, after } from 'next/server';
 import crypto from 'crypto';
 import { getServiceClient, handleZaloEvent } from '@/lib/zaloRewardServer';
+import { sendOaText } from '@/lib/zaloOa';
+import { linkFinanceReport } from '@/lib/financeZaloLink.mjs';
 
 export const dynamic = 'force-dynamic';
 
@@ -113,6 +115,10 @@ export async function POST(request) {
     // (khớp SĐT, trừ tiền) chạy nền sau khi response đã gửi.
     after(async () => {
       try {
+        // Chủ quán nhắn "BC 123456" để nhận báo cáo Sổ thu chi — không phải tin của khách.
+        const linked = await linkFinanceReport(supabase, body, sendOaText)
+          .catch(err => { console.error('[Zalo Webhook] lien ket bao cao loi:', err); return false; });
+        if (linked) return;
         await handleZaloEvent(supabase, body, log);
       } catch (err) {
         console.error('[Zalo Webhook] xử lý nền lỗi:', err);
