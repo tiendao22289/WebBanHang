@@ -261,3 +261,5 @@
 .fin-zalo-sections { display: flex; flex-direction: column; gap: 2px; margin: 0 0 10px; }
 .fin-zalo-sections label { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 14px; color: #374151; }
 .fin-zalo-sections input { width: 20px; height: 20px; flex-shrink: 0; }
+.fin-zalo-switch { display: flex; align-items: center; gap: 10px; min-height: 44px; margin: 0 0 6px; font-size: 15px; font-weight: 700; color: #111827; }
+.fin-zalo-switch input { width: 22px; height: 22px; flex-shrink: 0; }

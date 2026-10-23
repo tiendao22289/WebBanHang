@@ -587,6 +587,11 @@ function ZaloReportPanel({ status, onChanged }) {
     try { setState((await post({ action: 'zalo_set_time', time })).zaloReport); setMessage(`✓ Sẽ gửi lúc ${time} mỗi ngày.`); }
     catch (err) { setMessage(err.message); } finally { setBusy(''); }
   }
+  async function setEnabled(enabled) {
+    setBusy('enabled'); setMessage('');
+    try { setState((await post({ action: 'zalo_set_enabled', enabled })).zaloReport); setMessage(enabled ? '✓ Đã bật gửi Zalo.' : '✓ Đã tắt gửi Zalo. Vẫn xem được ở trang Thống kê nhanh.'); }
+    catch (err) { setMessage(err.message); } finally { setBusy(''); }
+  }
   async function copyCode() {
     try { await navigator.clipboard.writeText(`BC ${state.linkCode}`); setMessage('Đã chép, dán vào Zalo.'); } catch { /* trình duyệt chặn → tự gõ */ }
   }
@@ -601,7 +606,10 @@ function ZaloReportPanel({ status, onChanged }) {
         <button className="fin-primary" onClick={onChanged}>Kiểm tra</button>
       </div>
     </> : state.linked > 0 ? <>
-      <p className="fin-zalo-ok">✓ Đang gửi tới {state.linked} Zalo · khoảng {state.sendAt || '08:00'} gửi số liệu {Number(String(state.sendAt || '08:00').slice(0, 2)) < 12 ? 'ngày hôm qua' : 'hôm nay'}.</p>
+      <label className="fin-zalo-switch"><input type="checkbox" checked={state.enabled !== false} disabled={!!busy} onChange={e => setEnabled(e.target.checked)} /> Gửi báo cáo qua Zalo mỗi ngày</label>
+      {state.enabled === false
+        ? <p className="fin-zalo-hint">Đang tắt — không gửi Zalo, Zalo đã liên kết vẫn giữ nguyên.</p>
+        : <p className="fin-zalo-ok">✓ Đang gửi tới {state.linked} Zalo · khoảng {state.sendAt || '08:00'} gửi số liệu {Number(String(state.sendAt || '08:00').slice(0, 2)) < 12 ? 'ngày hôm qua' : 'hôm nay'}.</p>}
       <label className="fin-zalo-time">Giờ gửi
         <select value={state.sendAt || '08:00'} disabled={!!busy} onChange={e => setTime(e.target.value)}>
           {SEND_TIMES.map(t => <option key={t} value={t}>{t}{Number(t.slice(0, 2)) < 12 ? ' — số hôm qua' : ' — số hôm nay'}</option>)}
@@ -626,6 +634,7 @@ function ZaloReportPanel({ status, onChanged }) {
       </div>
     </>}
     {message && !(state.lastError && state.linked > 0 && !message.startsWith('✓')) && <p className="fin-zalo-hint" role="status">{message}</p>}
+    <p className="fin-zalo-hint"><a href="/thongke" target="_blank" rel="noopener">Mở trang Thống kê nhanh (/thongke) ↗</a> — đọc báo cáo trên điện thoại, xem lại ngày cũ.</p>
   </section>;
 }
 

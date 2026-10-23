@@ -1,7 +1,8 @@
 /**
  * Báo cáo Sổ thu chi qua Zalo — cài đặt lưu ở finance_settings['zalo_report']:
  *   { ownerIds: [zalo user id], linkCode, linkCodeExpires, linkAttempts,
- *     lastSentDate, lastSentAt, lastError }
+ *     lastSentDate, lastSentAt, lastError, enabled }
+ * enabled = false: tạm ngừng gửi tự động (vẫn giữ Zalo đã liên kết, vẫn xem ở /thongke).
  *
  * Liên kết: chủ quán lấy mã 6 số trong Sổ thu chi rồi nhắn "BC 123456" cho OA.
  * Webhook Zalo chưa kiểm chữ ký, nên mã chỉ sống 30 phút và sai 5 lần là huỷ
@@ -54,6 +55,7 @@ export function reportStatus(settings, now = Date.now()) {
   const codeLive = !!settings.linkCode && Number(settings.linkCodeExpires) > now;
   return {
     linked: (settings.ownerIds || []).length,
+    enabled: settings.enabled !== false,
     linkCode: codeLive ? settings.linkCode : null,
     linkCodeExpires: codeLive ? settings.linkCodeExpires : null,
     lastSentAt: settings.lastSentAt || null,
