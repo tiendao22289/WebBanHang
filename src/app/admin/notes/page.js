@@ -1791,19 +1791,11 @@ export default function StaffNotesPage() {
         <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '450px' }}>
             <div className="modal-header">
-              <h3>Tạo báo cáo / ghi chú mới</h3>
+              <h3>Phiếu đi chợ mới</h3>
               <button className="btn btn-icon btn-ghost" onClick={() => setShowAddModal(false)}><XCircle size={20} /></button>
             </div>
             <div className="modal-body">
-              <div className="form-group mb-4">
-                <label className="form-label">Loại báo cáo</label>
-                <select className="input" value={newNoteType} onChange={e => setNewNoteType(e.target.value)}>
-                  <option value="expense">Đi chợ / Chi tiền</option>
-                  <option value="stock">Báo thiếu nguyên liệu</option>
-                  <option value="repair">Yêu cầu sửa chữa</option>
-                  <option value="other">Ghi chú khác</option>
-                </select>
-              </div>
+              {/* Phiếu mới giờ chỉ dùng cho đi chợ (newNoteType luôn là 'expense'). */}
               {newNoteType === 'expense' ? (
                 <div className="expense-fields-container mb-4">
                   {/* ── Tiền chủ giao (nhập trước khi ghi món) ── */}
