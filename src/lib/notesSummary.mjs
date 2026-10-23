@@ -30,7 +30,7 @@ const readContent = content => { try { const d = JSON.parse(content); return d &
  *  goods     — Tiền hàng (trả ngay + mua nợ, khớp Sổ thu chi)
  *  cash      — Chi tiền mặt: trả ngay lúc mua + tiền trả nợ trong khoảng
  *  debtPaid  — phần trả nợ trong khoảng (đã gồm trong cash)
- *  giveBack  — Trả lại chủ: tiền giao − trả ngay − trả nợ lấy từ tiền phiếu đó
+ *  giveBack  — Trả lại chủ: tiền giao (+ dư cũ cộng vào − dư chuyển đi) − trả ngay − trả nợ lấy từ tiền phiếu đó
  *  debtLeft  — Còn nợ tính tới cuối khoảng (cả nợ cũ), creditors: theo chủ nợ (hiện tại)
  */
 export function notesSummary(notes, payments, range) {
@@ -52,10 +52,13 @@ export function notesSummary(notes, payments, range) {
       sum.goods += (Number(n.amount) || 0) + (Number(n.debt) || 0);
       sum.cashNow += Number(n.amount) || 0;
       sum.debtPaid += legacy(n);
-      if (given > 0) {
+      // Tiền dư chuyển giữa các phiếu: cộng ở phiếu nhận, trừ ở phiếu chuyển đi.
+      const carried = list => (Array.isArray(list) ? list : []).reduce((a, r) => a + (Number(r?.amount) || 0), 0);
+      const carriedIn = carried(data?.carried_in);
+      if (given > 0 || carriedIn > 0) {
         sum.hasGiven = true;
         sum.given += given;
-        sum.giveBack += given - (Number(n.amount) || 0) - (fundedBy.get(n.id) || 0);
+        sum.giveBack += given + carriedIn - (Number(n.amount) || 0) - (fundedBy.get(n.id) || 0) - carried(data?.carried_out);
       }
     }
     if (created < end) {

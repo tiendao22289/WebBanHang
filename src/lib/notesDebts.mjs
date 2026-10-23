@@ -53,19 +53,29 @@ export function allocateToDebts(amount, lines, preferredKeys = []) {
   return out;
 }
 
+const sumAmounts = list => (Array.isArray(list) ? list : []).reduce((a, r) => a + (Number(r?.amount) || 0), 0);
+
 /**
- * Tiền thừa của một phiếu đi chợ người đi chợ còn cầm (chưa trả chủ):
- * tiền được giao − trả ngay − tiền phiếu này đã dùng trả nợ − số đã trả lại chủ.
+ * Tiền của một phiếu đi chợ: given (chủ giao), carriedIn (tiền dư phiếu cũ cộng vào),
+ * spent (trả ngay), funded (phiếu này dùng trả nợ cũ), returned (đã trả lại chủ),
+ * carriedOut (đã chuyển sang phiếu sau). balance = given + carriedIn − spent − funded
+ * (âm = bỏ thêm); left = số người đi chợ còn cầm chưa trả chủ.
  */
-export function noteLeftover(note, payments = []) {
-  if (note?.note_type !== 'expense') return 0;
-  const data = readContent(note.content);
+export function noteMoney(note, payments = []) {
+  const data = note?.note_type === 'expense' ? readContent(note.content) : null;
   const given = Number(data?.input_amount) || 0;
-  if (!given) return 0;
-  const funded = payments.filter(p => p.paid_from_note_id === note.id).reduce((a, p) => a + (Number(p.amount) || 0), 0);
-  const returned = (data.returned_logs || []).reduce((a, r) => a + (Number(r.amount) || 0), 0);
-  return Math.max(0, given - (Number(note.amount) || 0) - funded - returned);
+  const carriedIn = sumAmounts(data?.carried_in);
+  const spent = Number(note?.amount) || 0;
+  const funded = payments.filter(p => p.paid_from_note_id === note?.id).reduce((a, p) => a + (Number(p.amount) || 0), 0);
+  const returned = sumAmounts(data?.returned_logs);
+  const carriedOut = sumAmounts(data?.carried_out);
+  const balance = given + carriedIn - spent - funded;
+  const left = given + carriedIn > 0 ? Math.max(0, balance - returned - carriedOut) : 0;
+  return { given, carriedIn, spent, funded, returned, carriedOut, balance, left };
 }
+
+/** Tiền thừa người đi chợ còn cầm (chưa trả chủ, chưa chuyển sang phiếu sau). */
+export const noteLeftover = (note, payments = []) => noteMoney(note, payments).left;
 
 /** Các phiếu từ ngày `since` (YYYY-MM-DD, giờ VN) còn tiền thừa chưa trả chủ, cũ nhất trước. */
 export function openLeftovers(notes, payments, since) {

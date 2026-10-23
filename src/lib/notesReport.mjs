@@ -65,10 +65,13 @@ function noteBlock(note, index, ctx) {
   const paidNow = Number(note.amount) || 0;
   const funded = ctx.fundedBy.get(note.id) || 0;
   lines.push(`→ Tiền hàng ${vnd(saved)} · trả ngay ${vnd(paidNow)}${note.debt ? ` · nợ ${vnd(note.debt)}` : ''}${funded ? ` · trả nợ cũ ${vnd(funded)}` : ''}`);
-  if (given) {
-    const left = given - paidNow - funded;
-    lines.push(`→ Chủ đưa ${vnd(given)} − đã chi ${vnd(paidNow + funded)} = ${left >= 0 ? `dư ${vnd(left)} (trả lại chủ)` : `thiếu ${vnd(-left)} (người đi chợ bỏ thêm)`}`);
+  const sumOf = list => (Array.isArray(list) ? list : []).reduce((a, r) => a + (Number(r?.amount) || 0), 0);
+  const carriedIn = sumOf(data.carried_in), carriedOut = sumOf(data.carried_out);
+  if (given || carriedIn) {
+    const left = given + carriedIn - paidNow - funded;
+    lines.push(`→ Chủ đưa ${vnd(given)}${carriedIn ? ` + dư cũ ${vnd(carriedIn)}` : ''} − đã chi ${vnd(paidNow + funded)} = ${left >= 0 ? `dư ${vnd(left)} (trả lại chủ)` : `thiếu ${vnd(-left)} (người đi chợ bỏ thêm)`}`);
   }
+  if (carriedOut) lines.push(`→ Đã chuyển ${vnd(carriedOut)} tiền dư sang phiếu sau`);
   const t = noteTotals(named(data.items));
   if (Math.abs(saved - t.total) >= 1000) lines.push(`⚠ Phiếu lệch tiền: tổng ghi ${vnd(saved)} nhưng các món cộng lại ${vnd(t.total)}`);
   const text = String(data.note || '').replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();

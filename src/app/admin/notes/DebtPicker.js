@@ -5,6 +5,7 @@
  * trả một phần), và tuỳ chọn lấy tiền dư của chuyến chợ để trả nợ.
  *
  * Có thêm khung "Tiền thừa phiếu trước chưa trả chủ": tích để lấy tiền đó trả nợ,
+ * tích "Cộng tiền dư cũ vào phiếu này" để chuyển hẳn sang phiếu mới (hiện tách dư cũ / dư mới),
  * hoặc bấm "Đã trả chủ" khi người đi chợ đã đưa lại tiền thừa.
  *
  * value: { [debtKey]: số tiền } — khoản đang chọn trả.
@@ -17,7 +18,7 @@ const dayMonth = iso => { const d = new Date(new Date(iso).getTime() + 7 * 36000
 const digits = v => String(v ?? '').replace(/\D/g, '');
 
 export default function DebtPicker({ notes, value, onChange, surplus, useSurplus, onUseSurplus,
-  leftovers = [], useLeftover, onUseLeftover, onReturnLeftover }) {
+  leftovers = [], useLeftover, onUseLeftover, onReturnLeftover, canCarry, carry, onCarry, surplusOld = 0 }) {
   const lines = useMemo(() => allOpenDebts(notes || []), [notes]);
   const total = lines.reduce((a, l) => a + l.left, 0);
   const chosen = Object.values(value || {}).reduce((a, v) => a + (Number(v) || 0), 0);
@@ -62,7 +63,13 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
             </button>
           </div>
         ))}
-        {lines.length > 0 && (
+        {canCarry && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, marginTop: 6, padding: '6px 10px', borderRadius: 8, background: 'white', border: '1px solid #86efac', fontSize: 13, fontWeight: 700, color: '#15803d', cursor: 'pointer' }}>
+            <input type="checkbox" checked={!!carry} onChange={e => { onCarry?.(e.target.checked); if (e.target.checked) onUseLeftover?.(false); }} style={{ width: 18, height: 18, accentColor: '#16a34a' }} />
+            Cộng tiền dư cũ vào phiếu này
+          </label>
+        )}
+        {lines.length > 0 && !carry && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, marginTop: 6, padding: '6px 10px', borderRadius: 8, background: 'white', border: '1px solid #86efac', fontSize: 13, fontWeight: 700, color: '#15803d', cursor: 'pointer' }}>
             <input type="checkbox" checked={!!useLeftover} onChange={e => onUseLeftover?.(e.target.checked)} style={{ width: 18, height: 18, accentColor: '#16a34a' }} />
             Dùng tiền thừa này để trả nợ
@@ -80,7 +87,7 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
       {surplus > 0 && (
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, padding: '6px 10px', marginBottom: 8, borderRadius: 8, background: 'white', border: '1px solid #c4b5fd', fontSize: 13, fontWeight: 700, color: '#5b21b6', cursor: 'pointer' }}>
           <input type="checkbox" checked={!!useSurplus} onChange={e => onUseSurplus(e.target.checked)} style={{ width: 18, height: 18, accentColor: '#7c3aed' }} />
-          Lấy tiền dư {money(surplus)} trả nợ
+          Lấy tiền dư {money(surplus)} trả nợ{surplusOld > 0 && <span style={{ fontWeight: 500 }}>&nbsp;(mới {money(surplus - surplusOld)} + cũ {money(surplusOld)})</span>}
         </label>
       )}
 
