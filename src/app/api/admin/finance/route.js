@@ -205,7 +205,20 @@ export async function GET(request) {
           method: p.payment_method, accountId: p.account_id, amount: Number(p.amount), note: p.note, by: p.created_by_name,
           billImageUrl: urls[p.image_path] || null, transferImageUrl: urls[p.transfer_image_path] || null, imageExpired: !!p.images_purged_at })),
       ].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, LIMIT);
-      return NextResponse.json({ from, to, results, truncated: bills.length >= LIMIT || paper.length >= LIMIT }, { headers });
+      // Danh sách bàn có bill trong khoảng ngày (không theo bộ lọc) để chủ quán bấm chọn nhanh.
+      const [ledgerTables, paperTables] = await Promise.all([
+        readAll(() => db.from('finance_revenue_ledger').select('table_number').gte('business_date', from).lt('business_date', addDays(to, 1)).order('order_id')),
+        readAll(() => db.from('finance_manual_receipts').select('table_label').gte('business_date', from).lt('business_date', addDays(to, 1)).order('id'))
+          .catch(error => { if (missingTable(error)) return []; throw error; }),
+      ]);
+      const counts = {};
+      for (const label of [...ledgerTables.map(r => r.table_number), ...paperTables.map(r => r.table_label)]) {
+        const key = String(label || '').trim().replace(/^b(àn)?\s*/i, '');
+        if (key) counts[key] = (counts[key] || 0) + 1;
+      }
+      const tables = Object.entries(counts).map(([name, count]) => ({ name, count }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'vi', { numeric: true }));
+      return NextResponse.json({ from, to, results, tables, truncated: bills.length >= LIMIT || paper.length >= LIMIT }, { headers });
     }
 
     const date = params.get('date');

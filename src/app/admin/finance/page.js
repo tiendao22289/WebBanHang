@@ -415,18 +415,19 @@ function SearchView({ accounts }) {
   useBackClose(!!view, () => setView(null));
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Chuyển khoản';
 
-  async function search(event) {
+  async function search(event, pickTable = table) {
     event?.preventDefault();
     setBusy(true); setError('');
     try {
       const q = new URLSearchParams({ search: '1', from, to, type, image: onlyImage ? '1' : '' });
-      if (table.trim()) q.set('table', table.trim());
+      if (pickTable.trim()) q.set('table', pickTable.trim());
       if (digits(amount)) q.set('amount', digits(amount));
       setResult(await api(`/api/admin/finance?${q}`));
       setOpen(null);
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   useEffect(() => { search(); }, []);
+  const pick = name => { setTable(name); search(null, name); };
 
   const total = (result?.results || []).reduce((s, r) => s + r.amount, 0);
   return <section className="fin-section">
@@ -441,6 +442,11 @@ function SearchView({ accounts }) {
         {[['all', 'Tất cả'], ['transfer', 'Chuyển khoản'], ['cash', 'Tiền mặt'], ['paper', 'Bill giấy']].map(([k, t]) =>
           <button key={k} type="button" role="radio" aria-checked={type === k} className={type === k ? 'active' : ''} onClick={() => setType(k)}>{t}</button>)}
       </div>
+      {result?.tables?.length > 0 && <div className="fin-search-tables" aria-label="Chọn bàn">
+        <button type="button" className={!table.trim() ? 'active' : ''} onClick={() => pick('')}>Tất cả bàn</button>
+        {result.tables.map(t => <button key={t.name} type="button" className={table.trim().replace(/^b(àn)?\s*/i, '').toLowerCase() === t.name.toLowerCase() ? 'active' : ''}
+          onClick={() => pick(t.name)}>{/^\d/.test(t.name) ? `Bàn ${t.name}` : t.name}<small>{t.count}</small></button>)}
+      </div>}
       <label className="fin-search-check"><input type="checkbox" checked={onlyImage} onChange={e => setOnlyImage(e.target.checked)} /> Chỉ bill có ảnh</label>
       <button className="fin-primary" disabled={busy}>{busy ? 'Đang tìm...' : 'Tìm'}</button>
     </form>
@@ -452,7 +458,7 @@ function SearchView({ accounts }) {
     <div className="fin-search-list">
       {(result?.results || []).map(r => <div key={`${r.kind}-${r.id}`} className="fin-hit">
         <button className="fin-hit-head" onClick={() => setOpen(open === r.id ? null : r.id)}>
-          <span><b>{shortDate(r.date)} · {clock(r.at)} · {r.kind === 'paper' ? (r.table || 'Bill giấy') : `Bàn ${r.table || '?'}`}</b>
+          <span><b>{shortDate(r.date)} · {clock(r.at)} · {r.kind === 'paper' && !/^\d/.test(r.table || '') ? (r.table || 'Bill giấy') : `Bàn ${r.table || '?'}`}</b>
             <small>{r.kind === 'paper' ? 'Bill giấy' : (r.customer || 'Khách')} · {r.method === 'transfer' ? accountName(r.accountId) : 'Tiền mặt'}{r.by ? ` · ${r.by}` : ''}</small></span>
           <b className="fin-hit-amount">{money(r.amount)}</b>
         </button>

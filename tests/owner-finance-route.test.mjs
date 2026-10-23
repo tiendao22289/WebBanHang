@@ -386,6 +386,7 @@ test('bills can be looked up later by table, amount, type and photo to check tra
   const p1 = r.results.find(x => x.id === 'p1');
   assert.deepEqual([p1.billImageUrl, p1.transferImageUrl, p1.by], ['signed:bill.jpg', 'signed:ck2.jpg', 'Lan']);
 
+  assert.deepEqual(plain(r.tables), [{ name: '5', count: 1 }, { name: '43', count: 3 }], 'tables with bills in the range, ignoring the table filter, for quick picking');
   r = await find('from=2026-10-20&to=2026-10-23&table=Bàn 43&type=transfer&image=1');
   assert.deepEqual(r.results.map(x => x.id), ['p1', 'b1'], '"Bàn 43" works like "43"; only transfers with a photo');
   r = await find('from=2026-10-20&to=2026-10-23&amount=39.000');

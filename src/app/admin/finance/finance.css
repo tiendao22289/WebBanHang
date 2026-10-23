@@ -206,3 +206,8 @@
 .fin-hit-photo span { position: absolute; left: 0; right: 0; bottom: 0; font-size: 11px; color: white; background: rgba(15, 23, 42, .6); padding: 2px 0; text-align: center; }
 .fin-hit-none { font-size: 12px; color: #9ca3af; align-self: center; }
 @media (max-width: 380px) { .fin-switch button { font-size: 13px; } }
+.fin-search-tables { display: flex; flex-wrap: wrap; gap: 6px; max-height: 156px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.fin-search-tables button { display: inline-flex; align-items: center; gap: 5px; min-height: 40px; padding: 0 12px; border: 1px solid #d1d5db; border-radius: 999px; background: white; color: #374151; font-size: 14px; }
+.fin-search-tables button small { font-size: 11px; color: #6b7280; background: #f1f5f9; border-radius: 999px; padding: 1px 6px; }
+.fin-search-tables button.active { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; font-weight: 700; }
+.fin-search-tables button.active small { background: #dbeafe; color: #1d4ed8; }
