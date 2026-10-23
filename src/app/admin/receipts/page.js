@@ -25,7 +25,7 @@ async function send(form) {
 // cho chọn ảnh màn hình có sẵn (allowGallery) hoặc chụp trong web.
 // Máy không mở được camera trong web (trình duyệt quá cũ) thì mới dùng camera
 // của máy làm dự phòng. Trả về blob + ảnh xem trước.
-function PhotoPicker({ label, value, onChange, required, allowGallery }) {
+function PhotoPicker({ label, value, onChange, required, allowGallery, cameraText = 'Chụp ảnh' }) {
   const fallbackCamera = useRef(null);
   const gallery = useRef(null);
   const [cameraOpen, setCameraOpen] = useState(false);
@@ -53,13 +53,13 @@ function PhotoPicker({ label, value, onChange, required, allowGallery }) {
       ? <div className="rc-photo-preview">
           <img src={value.preview} alt={label} draggable={false} onContextMenu={e => e.preventDefault()} />
           <div><b>{label}</b><small>{Math.round(value.size / 1024)}KB</small>
-            <button type="button" className="fin-ghost" onClick={() => (allowGallery ? gallery.current.click() : openCamera())}>{allowGallery ? 'Đổi ảnh' : 'Chụp lại'}</button></div>
+            <button type="button" className="fin-ghost" onClick={openCamera}>Chụp lại</button></div>
         </div>
       : <div className={`rc-photo-pick ${required ? 'required' : ''}`}>
           <span className="rc-photo-label">{busy ? 'Đang xử lý ảnh...' : label}{required && <small>bắt buộc · chụp trực tiếp, không lưu vào máy</small>}</span>
-          <div className={allowGallery ? 'rc-photo-actions reverse' : 'rc-photo-actions single'}>
-            <button type="button" onClick={openCamera} disabled={busy}><Camera size={20} />Chụp ảnh</button>
-            {allowGallery && <button type="button" onClick={() => gallery.current.click()} disabled={busy}><Images size={20} />Chọn ảnh màn hình</button>}
+          <div className={allowGallery ? 'rc-photo-actions' : 'rc-photo-actions single'}>
+            <button type="button" onClick={openCamera} disabled={busy}><Camera size={20} />{cameraText}</button>
+            {allowGallery && <button type="button" onClick={() => gallery.current.click()} disabled={busy}><Images size={20} />Chọn ảnh có sẵn</button>}
           </div>
         </div>}
     {error && <p className="fin-error">{error}</p>}
@@ -142,19 +142,30 @@ export default function ReceiptsPage() {
     } catch (err) { alert(err.message); }
   }
 
-  function startAttach(target) { setAttaching(target); attachInput.current.click(); }
+  // Ảnh CK cho 1 bill: chụp màn hình ĐT khách ngay trong web (không lưu vào
+  // máy) hoặc chọn ảnh có sẵn (khách gửi qua Zalo).
+  const [cameraFor, setCameraFor] = useState(null);
+  async function uploadProof(target, blob) {
+    setAttaching(target);
+    try {
+      const form = new FormData();
+      form.set('action', 'attach_transfer');
+      form.set(target.orderId ? 'order_id' : 'receipt_id', target.orderId || target.id);
+      form.set('image', blob, 'ck.jpg');
+      await send(form); await load();
+    } catch (err) { alert(err.message); } finally { setAttaching(null); }
+  }
+  function startCamera(target) { if (cameraSupported()) setCameraFor(target); else { pendingGallery.current = target; attachCapture.current.click(); } }
+  function startGallery(target) { pendingGallery.current = target; attachInput.current.click(); }
+  const pendingGallery = useRef(null);
+  const attachCapture = useRef(null);
   async function attach(event) {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !attaching) return;
-    try {
-      const blob = await compressImage(file);
-      const form = new FormData();
-      form.set('action', 'attach_transfer');
-      form.set(attaching.orderId ? 'order_id' : 'receipt_id', attaching.orderId || attaching.id);
-      form.set('image', blob, 'ck.jpg');
-      await send(form); load();
-    } catch (err) { alert(err.message); } finally { setAttaching(null); }
+    const target = pendingGallery.current;
+    pendingGallery.current = null;
+    if (!file || !target) return;
+    try { await uploadProof(target, await compressImage(file)); } catch (err) { alert(err.message); }
   }
 
   const accounts = data?.accounts || [];
@@ -191,7 +202,7 @@ export default function ReceiptsPage() {
           {accounts.map(a => <button key={a.id} type="button" role="radio" aria-checked={account === a.id} className={account === a.id ? 'active' : ''}
             onClick={() => setAccount(a.id)}>{a.name}{a.last4 && <small>…{a.last4}</small>}</button>)}
         </div>
-        <PhotoPicker label="Ảnh chuyển khoản (nếu có)" value={transferPhoto} onChange={setTransferPhoto} allowGallery />
+        <PhotoPicker label="Ảnh chuyển khoản trên điện thoại khách (nếu có)" value={transferPhoto} onChange={setTransferPhoto} allowGallery cameraText="Chụp ĐT khách" />
       </>}
       <label className="rc-field">Bàn / ghi chú
         <input value={tableLabel} onChange={e => setTableLabel(e.target.value)} placeholder="VD: Bàn 5" maxLength={40} />
@@ -219,17 +230,24 @@ export default function ReceiptsPage() {
     <section className="fin-panel">
       <h2>Ảnh chuyển khoản hôm nay</h2>
       <input ref={attachInput} type="file" accept="image/*" onChange={attach} hidden />
+      <input ref={attachCapture} type="file" accept="image/*" capture="environment" onChange={attach} hidden />
       {data && !transferList.length && <p className="fin-empty">Chưa có bill chuyển khoản.</p>}
-      {transferList.map(t => <div key={t.key} className="rc-item">
-        {t.url ? <button className="rc-thumb" onClick={() => setView(t.url)} aria-label="Xem ảnh chuyển khoản"><img src={t.url} alt="" /></button> : <span className="rc-thumb empty" />}
-        <span className="rc-item-main">{clock(t.at)} · {t.title}<small>{accountName(t.accountId)}</small></span>
-        <b>{money(t.amount)}</b>
-        <button className={t.url ? 'rc-attach done' : 'rc-attach'} onClick={() => startAttach(t)} disabled={attaching?.key === t.key}>
-          {attaching?.key === t.key ? '...' : t.url ? 'Đổi ảnh' : '📷 Thêm'}
-        </button>
+      {transferList.map(t => <div key={t.key} className="rc-ck-block">
+        <div className="rc-item">
+          {t.url ? <button className="rc-thumb" onClick={() => setView(t.url)} aria-label="Xem ảnh chuyển khoản"><img src={t.url} alt="" /></button> : <span className="rc-thumb empty" />}
+          <span className="rc-item-main">{clock(t.at)} · {t.title}<small>{accountName(t.accountId)}{t.url ? ' · ✓ có ảnh CK' : ''}</small></span>
+          <b>{money(t.amount)}</b>
+        </div>
+        <div className="rc-ck-actions">
+          {attaching?.key === t.key ? <span className="rc-ck-busy">Đang gửi ảnh...</span> : <>
+            <button className="rc-attach" onClick={() => startCamera(t)}>📷 {t.url ? 'Chụp lại' : 'Chụp ĐT khách'}</button>
+            <button className="rc-attach done" onClick={() => startGallery(t)}>Chọn ảnh có sẵn</button>
+          </>}
+        </div>
       </div>)}
     </section>
 
     {view && <Viewer url={view} onClose={() => setView(null)} />}
+    {cameraFor && <CameraCapture onCapture={blob => uploadProof(cameraFor, blob)} onClose={() => setCameraFor(null)} />}
   </div>;
 }

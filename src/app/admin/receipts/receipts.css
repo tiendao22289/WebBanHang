@@ -32,3 +32,8 @@
 .rc-attach { min-height: 40px; flex-shrink: 0; border: 1px solid #93c5fd; border-radius: 8px; background: #eff6ff; color: #1d4ed8; font-size: 13px; font-weight: 700; padding: 0 10px; }
 .rc-attach.done { border-color: #d1d5db; background: white; color: #4b5563; font-weight: 500; }
 .rc-photo-actions.single { grid-template-columns: 1fr; }
+.rc-ck-block { border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; }
+.rc-ck-block .rc-item { border-bottom: 0; padding-bottom: 4px; }
+.rc-ck-actions { display: grid; grid-template-columns: 3fr 2fr; gap: 8px; }
+.rc-ck-actions .rc-attach { min-height: 44px; }
+.rc-ck-busy { grid-column: 1 / -1; text-align: center; color: #1d4ed8; font-size: 14px; padding: 10px 0; }

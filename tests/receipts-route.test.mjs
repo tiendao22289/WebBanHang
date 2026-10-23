@@ -13,6 +13,7 @@ function fakeDb(state) {
     const q = {
       select() { return q; },
       eq(k, v) { conditions.push(r => r[k] === v); return q; },
+      in(k, vs) { conditions.push(r => vs.includes(r[k])); return q; },
       order() { return q; },
       insert(v) { op = 'insert'; values = v; return q; },
       update(v) { op = 'update'; values = v; return q; },
@@ -148,4 +149,22 @@ test('paper bills count in revenue, cash, transfer and per card', () => {
   assert.deepEqual([d.revenue, d.bills, d.paperBills, d.paperRevenue, d.cash, d.transfer, d.byAccount.B],
     [870000, 1, 2, 770000, 450000, 420000, 420000]);
   assert.deepEqual([s.totals.paperBills, s.totals.paperRevenue], [2, 770000]);
+});
+
+test('right after "Đã nhận tiền" one customer-phone photo is attached to every transfer bill of the table', async () => {
+  const state = base();
+  const ids = ['00000000-0000-0000-0000-000000000301', '00000000-0000-0000-0000-000000000302', '00000000-0000-0000-0000-000000000303'];
+  state.finance_revenue_ledger.push(
+    { order_id: ids[0], business_date: today, payment_method: 'transfer', transfer_image_path: 'old.jpg', amount: 1 },
+    { order_id: ids[1], business_date: today, payment_method: 'transfer', amount: 1 },
+    { order_id: ids[2], business_date: '2000-01-01', payment_method: 'transfer', amount: 1 });
+  const staff = load({ state });
+  const res = await post(staff.api, { action: 'attach_transfer', order_ids: ids.join(','), image: image() });
+  assert.deepEqual([res.status, res.body.bills], [200, 2], 'staff: today bills only');
+  const rows = plain(state.finance_revenue_ledger);
+  assert.deepEqual(rows.map(r => r.transfer_image_path ?? null), ['2026-10/ck-1.jpg', '2026-10/ck-1.jpg', null]);
+  assert.deepEqual(staff.removed, ['old.jpg']);
+  assert.equal((await post(staff.api, { action: 'attach_transfer', order_ids: 'x,y', image: image() })).status, 400);
+  assert.equal((await post(staff.api, { action: 'attach_transfer', order_ids: '00000000-0000-0000-0000-000000000999', image: image() })).status, 404);
+  assert.equal(staff.uploads.length, 1, 'nothing uploaded for refused requests');
 });

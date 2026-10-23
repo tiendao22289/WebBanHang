@@ -31,8 +31,9 @@ for (const method of ['cash', 'transfer']) {
     for (const success of [true, false]) {
       let previewOpen = true;
       let selectedTable = { id: 'table-1' };
+      const lastSettledOrderIdsRef = { current: [] };
       const run = vm.runInNewContext(`(${completeSource.trim()})`, {
-        completingTablesRef: { current: new Set() }, setPayingHostId: () => {},
+        completingTablesRef: { current: new Set() }, setPayingHostId: () => {}, lastSettledOrderIdsRef,
         getFreshPaymentSnapshot: async () => ({ bills: [{ id: 'bill-1' }], total: 100000,
           unpricedItems: [], groupTableIds: ['table-1'] }),
         currentStaff: null, transactionCode: null,
@@ -44,6 +45,8 @@ for (const method of ['cash', 'transfer']) {
       assert.equal(await run({ id: 'table-1' }, method, false, 100000), success);
       assert.equal(previewOpen, !success);
       assert.equal(selectedTable === null, success);
+      // Mã bill vừa thu (để gắn ảnh CK) chỉ được ghi khi thanh toán thành công.
+      assert.deepEqual([...lastSettledOrderIdsRef.current], success ? ['bill-1'] : []);
     }
   });
 }

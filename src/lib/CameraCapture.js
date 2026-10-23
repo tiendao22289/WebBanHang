@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Camera, X } from 'lucide-react';
 import { useBackClose } from './useBackClose';
+import './cameraCapture.css';
 
 // Chụp ảnh NGAY TRONG WEB (camera sau) — ảnh chỉ nằm tạm trong bộ nhớ rồi
 // gửi thẳng lên máy chủ, KHÔNG bao giờ lưu vào thư viện ảnh của điện thoại
@@ -14,7 +15,7 @@ export function cameraSupported() {
   return typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
 }
 
-export default function CameraCapture({ onCapture, onClose }) {
+export default function CameraCapture({ onCapture, onClose, title, subtitle, closeText }) {
   const video = useRef(null);
   const stream = useRef(null);
   const [ready, setReady] = useState(false);
@@ -60,12 +61,13 @@ export default function CameraCapture({ onCapture, onClose }) {
     onClose();
   }
 
-  return <div className="cam" role="dialog" aria-label="Chụp ảnh">
+  return <div className="cam" role="dialog" aria-label={title || 'Chụp ảnh'}>
+    {title && <div className="cam-title">{title}{subtitle && <small>{subtitle}</small>}</div>}
     <video ref={video} playsInline muted autoPlay className="cam-video" />
     {!ready && !error && <p className="cam-msg">Đang mở camera...</p>}
     {error && <p className="cam-msg error">{error}</p>}
     <div className="cam-bar">
-      <button type="button" className="cam-close" onClick={onClose} aria-label="Huỷ"><X size={24} /></button>
+      <button type="button" className="cam-close" onClick={onClose} aria-label={closeText || 'Huỷ'}><X size={22} />{closeText}</button>
       <button type="button" className="cam-shoot" onClick={shoot} disabled={!ready || busy} aria-label="Chụp"><Camera size={30} /></button>
       <span className="cam-spacer" />
     </div>

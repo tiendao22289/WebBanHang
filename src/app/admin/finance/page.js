@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, PiggyBank, RefreshCw, Trash2, X } from 'lucide-react';
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import { useBackClose } from '@/lib/useBackClose';
+import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
 import './finance.css';
 
 const money = value => `${Math.round(Number(value || 0)).toLocaleString('vi-VN')}đ`;
@@ -267,16 +268,24 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
   useBackClose(true, onClose);
   useBackClose(!!view, () => setView(null));
 
-  function startAttach(target) { setAttaching(target); attachInput.current.click(); }
+  // Ảnh CK: chụp màn hình ĐT khách trong web (không lưu vào máy) hoặc chọn ảnh có sẵn.
+  const [cameraFor, setCameraFor] = useState(null);
+  const pendingGallery = useRef(null);
+  const attachCapture = useRef(null);
+  async function uploadProof(target, blob) {
+    setAttaching(target);
+    try { await sendReceipt({ action: 'attach_transfer', ...target }, blob); await load(); }
+    catch (err) { alert(err.message); } finally { setAttaching(null); }
+  }
+  function startCamera(target) { if (cameraSupported()) setCameraFor(target); else { pendingGallery.current = target; attachCapture.current.click(); } }
+  function startAttach(target) { pendingGallery.current = target; attachInput.current.click(); }
   async function attach(event) {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !attaching) return;
-    try {
-      const blob = await compressImage(file);
-      await sendReceipt({ action: 'attach_transfer', ...attaching }, blob);
-      await load();
-    } catch (err) { alert(err.message); } finally { setAttaching(null); }
+    const target = pendingGallery.current;
+    pendingGallery.current = null;
+    if (!file || !target) return;
+    try { await uploadProof(target, await compressImage(file)); } catch (err) { alert(err.message); }
   }
   async function removePaper(bill) {
     if (!confirm(`Xoá bill giấy ${money(bill.amount)}${bill.tableLabel ? ` (${bill.tableLabel})` : ''}?`)) return;
@@ -324,7 +333,10 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
             {bill.transfer_image_url
               ? <button className="fin-ck-view" onClick={() => setView(bill.transfer_image_url)}>📷 Xem ảnh chuyển khoản</button>
               : <span className="fin-ck-none">Chưa có ảnh chuyển khoản</span>}
-            <button className="fin-ck-add" onClick={() => startAttach({ order_id: bill.order_id })} disabled={!!attaching}>{bill.transfer_image_url ? 'Đổi ảnh' : 'Thêm ảnh'}</button>
+            <span className="fin-ck-buttons">
+              <button className="fin-ck-add primary" onClick={() => startCamera({ order_id: bill.order_id })} disabled={!!attaching}>📷 Chụp</button>
+              <button className="fin-ck-add" onClick={() => startAttach({ order_id: bill.order_id })} disabled={!!attaching}>Chọn ảnh</button>
+            </span>
           </div>}
           {open === bill.order_id && <ul className="fin-items">{(bill.items || []).map((item, i) =>
             <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>}
@@ -344,7 +356,10 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
           {b.paymentMethod === 'transfer' && <div className="fin-ck">
             {b.transferImageUrl ? <button className="fin-ck-view" onClick={() => setView(b.transferImageUrl)}>📷 Xem ảnh chuyển khoản</button>
               : <span className="fin-ck-none">Chưa có ảnh chuyển khoản</span>}
-            <button className="fin-ck-add" onClick={() => startAttach({ receipt_id: b.id })} disabled={!!attaching}>{b.transferImageUrl ? 'Đổi ảnh' : 'Thêm ảnh'}</button>
+            <span className="fin-ck-buttons">
+              <button className="fin-ck-add primary" onClick={() => startCamera({ receipt_id: b.id })} disabled={!!attaching}>📷 Chụp</button>
+              <button className="fin-ck-add" onClick={() => startAttach({ receipt_id: b.id })} disabled={!!attaching}>Chọn ảnh</button>
+            </span>
           </div>}
         </div>)}
 
@@ -370,6 +385,8 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
         <CloseForm detail={detail} accounts={accounts} onSaved={async () => { await load(); onChanged(); }} />
       </>}
       <input ref={attachInput} type="file" accept="image/*" onChange={attach} hidden />
+      <input ref={attachCapture} type="file" accept="image/*" capture="environment" onChange={attach} hidden />
+      {cameraFor && <CameraCapture onCapture={blob => uploadProof(cameraFor, blob)} onClose={() => setCameraFor(null)} />}
       {view && <div className="rc-viewer" onClick={() => setView(null)} onContextMenu={e => e.preventDefault()} role="dialog" aria-label="Xem ảnh">
         <button className="fin-icon" aria-label="Đóng"><X size={20} /></button>
         <img src={view} alt="Ảnh" draggable={false} />

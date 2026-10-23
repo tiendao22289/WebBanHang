@@ -131,6 +131,24 @@ export async function POST(request) {
       const image = form.get('image');
       const problem = receiptImageProblem(image);
       if (problem) return fail(problem);
+      // Ngay sau "Đã nhận tiền": một ảnh cho tất cả bill của bàn vừa thanh toán.
+      const orderIds = String(form.get('order_ids') || '').split(',').map(s => s.trim()).filter(Boolean);
+      if (orderIds.length) {
+        if (orderIds.length > 50 || !orderIds.every(id => UUID.test(id))) return fail('Danh sách bill không hợp lệ.');
+        const { data: rows, error } = await db.from('finance_revenue_ledger').select('order_id, transfer_image_path, payment_method, business_date').in('order_id', orderIds);
+        if (error) throw error;
+        const targets = (rows || []).filter(r => r.payment_method === 'transfer' && (isAdmin || r.business_date === today));
+        if (!targets.length) return fail('Không tìm thấy bill chuyển khoản vừa thanh toán trong sổ.', 404);
+        const path = await uploadReceiptImage(db, image, 'ck');
+        const update = await db.from('finance_revenue_ledger')
+          .update({ transfer_image_path: path, transfer_image_by: session.user.full_name || null })
+          .in('order_id', targets.map(r => r.order_id));
+        if (update.error) { await removeReceiptImages(db, [path]); throw update.error; }
+        // Ảnh cũ không còn dòng nào dùng thì xoá.
+        const old = [...new Set(targets.map(r => r.transfer_image_path).filter(p => p && p !== path))];
+        await removeReceiptImages(db, old);
+        return NextResponse.json({ ok: true, bills: targets.length }, { headers });
+      }
       const orderId = form.get('order_id');
       const receiptId = form.get('receipt_id');
       const table = orderId ? 'finance_revenue_ledger' : 'finance_manual_receipts';
