@@ -1806,34 +1806,49 @@ export default function StaffNotesPage() {
               </div>
               {newNoteType === 'expense' ? (
                 <div className="expense-fields-container mb-4">
-                  <label className="form-label mb-2 block">Chi tiết mua hàng</label>
-                  <div className="flex flex-col gap-3">
+                  {/* ── Tiền chủ giao (nhập trước khi ghi món) ── */}
+                  <div className="add-input-amount">
+                    <label htmlFor="new-note-input-amount">💵 Tiền chủ giao</label>
+                    <input
+                      id="new-note-input-amount"
+                      type="text" inputMode="numeric"
+                      placeholder="VD: 500.000"
+                      value={newNoteInputAmount}
+                      onChange={e => {
+                        const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
+                        setNewNoteInputAmount(raw ? Number(raw).toLocaleString('vi-VN') : '');
+                      }}
+                    />
+                  </div>
+                  <label className="form-label mb-2 block" style={{ marginTop: 12 }}>Chi tiết mua hàng</label>
+                  <div className="add-items">
                     {expenseItems.map((item, idx) => (
-                      <div key={idx} className="expense-row">
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                          <MenuNameInput names={menuNames} className="expense-input-clean" style={{ flex: 1, minWidth: 100 }}
+                      <div key={idx} className="add-item">
+                        <div className="add-item-top">
+                          <MenuNameInput names={menuNames} className="expense-input-clean" style={{ flex: 1, minWidth: 0 }}
                             placeholder={idx === expenseItems.length - 1 && !item.name ? 'Nhập tên đồ...' : 'Tên món'}
                             value={item.name} onChange={v => updateExpenseItem(idx, 'name', v)} />
-                          <input type="text" className="expense-input-clean" style={{ width: 72, textAlign: 'center' }}
-                            placeholder="Giá" value={item.price} onChange={e => updateExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleExpenseBlur(idx, 'price', e)} />
-                          <input type="text" className="expense-input-clean" style={{ width: 72, textAlign: 'center' }}
-                            placeholder="SL/Ký" value={item.qty} onChange={e => updateExpenseItem(idx, 'qty', e.target.value)} onBlur={e => handleExpenseBlur(idx, 'qty', e)} />
-                          {expenseItems.length > 1 && idx < expenseItems.length - 1 && (
-                            <button className="btn-remove-row" onClick={() => removeExpenseItem(idx)}><XCircle size={16} /></button>
-                          )}
+                          {expenseItems.length > 1 && idx < expenseItems.length - 1
+                            ? <button type="button" className="btn-remove-row" onClick={() => removeExpenseItem(idx)} aria-label="Xoá dòng"><XCircle size={16} /></button>
+                            : <span className="add-item-spacer" />}
                         </div>
-                        {/* Thành tiền + cảnh báo (giá thiếu "k", số lượng nhiều số...) */}
-                        <LineHint item={item} />
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-                          <div className="expense-status-wrapper" style={{ flexShrink: 0 }}>
+                        <div className="add-item-bottom">
+                          <input type="text" className="expense-input-clean" placeholder="Giá" value={item.price}
+                            onChange={e => updateExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleExpenseBlur(idx, 'price', e)} />
+                          <input type="text" className="expense-input-clean" placeholder="SL/Ký" value={item.qty}
+                            onChange={e => updateExpenseItem(idx, 'qty', e.target.value)} onBlur={e => handleExpenseBlur(idx, 'qty', e)} />
+                          <div className="expense-status-wrapper add-item-status">
                             <label className={`status-label ${item.paymentStatus === 'full' ? 'checked-full' : ''}`}>
-                              <input type="radio" name={`s-${idx}`} checked={item.paymentStatus === 'full'} onChange={() => updateExpenseItem(idx, 'paymentStatus', 'full')} /> ✓ Đủ
+                              <input type="radio" name={`s-${idx}`} checked={item.paymentStatus === 'full'} onChange={() => updateExpenseItem(idx, 'paymentStatus', 'full')} /> Đủ
                             </label>
                             <label className={`status-label ${item.paymentStatus === 'debt' ? 'checked-debt' : ''}`}>
                               <input type="radio" name={`s-${idx}`} checked={item.paymentStatus === 'debt'} onChange={() => updateExpenseItem(idx, 'paymentStatus', 'debt')} /> Nợ
                             </label>
                           </div>
-                          {item.paymentStatus === 'debt' && (() => {
+                        </div>
+                        {item.paymentStatus === 'debt' && (
+                          <div className="add-item-debt">
+                          {(() => {
                             const p = parseVal(item.price);
                             const q = parseVal(item.qty, true) || 1;
                             const cap = p * q;
@@ -1854,26 +1869,12 @@ export default function StaffNotesPage() {
                               <input type="text" className="expense-input-clean" style={{ flex: 1, minWidth: 70 }} placeholder="Nợ của ai?" value={item.creditor} onChange={e => updateExpenseItem(idx, 'creditor', e.target.value)} />
                             </>);
                           })()}
-                        </div>
+                          </div>
+                        )}
+                        {/* Thành tiền + cảnh báo (giá thiếu "k", số lượng nhiều số...) */}
+                        <LineHint item={item} />
                       </div>
                     ))}
-                  </div>
-                  {/* ── Tiền Đầu vào ── */}
-                  <div style={{ marginTop: 12, padding: '10px 14px', background: '#eff6ff', borderRadius: 10, border: '1.5px solid #bfdbfe' }}>
-                    <label style={{ fontSize: 12, fontWeight: 700, color: '#1d4ed8', display: 'block', marginBottom: 6 }}>
-                      💵 Tiền Đầu vào
-                      <span style={{ fontWeight: 400, color: '#6b7280', marginLeft: 4, fontSize: 11 }}>(tiền chủ giao trước khi đi chợ)</span>
-                    </label>
-                    <input
-                      type="text" inputMode="numeric"
-                      placeholder="Nhập số tiền được giao... (VD: 500k)"
-                      value={newNoteInputAmount}
-                      onChange={e => {
-                        const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                        setNewNoteInputAmount(raw ? Number(raw).toLocaleString('vi-VN') : '');
-                      }}
-                      style={{ width: '100%', padding: '8px 12px', border: '1.5px solid #93c5fd', borderRadius: 8, fontSize: 14, fontWeight: 700, color: '#1d4ed8', boxSizing: 'border-box', outline: 'none', background: 'white' }}
-                    />
                   </div>
                   {/* ── Tổng kết mở rộng ── */}
                   {(calculateTotals().paid > 0 || calculateTotals().debt > 0 || carryLeftover || (newNoteInputAmount && Number(newNoteInputAmount.replace(/\./g, '')) > 0)) && (() => {
