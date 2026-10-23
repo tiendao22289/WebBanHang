@@ -44,6 +44,10 @@ export function reportPlan(sendAt, now = Date.now()) {
   return { sendAt: at, due: minutes >= start && minutes < start + 6 * 60, date: h < 12 ? addDays(today, -1) : today, reportsYesterday: h < 12 };
 }
 
+// Các mục của báo cáo (bật / tắt được): thất thoát, nhân viên, so sánh, Sổ tay.
+export const REPORT_SECTIONS = ['loss', 'staff', 'compare', 'notes'];
+export const reportSections = settings => Object.fromEntries(REPORT_SECTIONS.map(k => [k, settings?.sections?.[k] !== false]));
+
 /** Trạng thái gửi về trang Sổ thu chi (không lộ Zalo id). */
 export function reportStatus(settings, now = Date.now()) {
   if (!settings) return null;
@@ -56,6 +60,7 @@ export function reportStatus(settings, now = Date.now()) {
     lastSentDate: settings.lastSentDate || null,
     lastError: settings.lastError || null,
     sendAt: validSendAt(settings.sendAt) ? settings.sendAt : DEFAULT_SEND_AT,
+    sections: reportSections(settings),
   };
 }
 

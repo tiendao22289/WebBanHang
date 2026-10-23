@@ -576,6 +576,12 @@ function ZaloReportPanel({ status, onChanged }) {
       setMessage(err.message);
     } finally { setBusy(''); }
   }
+  async function toggleSection(key) {
+    const sections = { ...(state.sections || {}), [key]: !(state.sections?.[key] !== false) };
+    setBusy('sections'); setMessage('');
+    try { setState((await post({ action: 'zalo_set_sections', sections })).zaloReport); }
+    catch (err) { setMessage(err.message); } finally { setBusy(''); }
+  }
   async function setTime(time) {
     setBusy('time'); setMessage('');
     try { setState((await post({ action: 'zalo_set_time', time })).zaloReport); setMessage(`✓ Sẽ gửi lúc ${time} mỗi ngày.`); }
@@ -601,6 +607,11 @@ function ZaloReportPanel({ status, onChanged }) {
           {SEND_TIMES.map(t => <option key={t} value={t}>{t}{Number(t.slice(0, 2)) < 12 ? ' — số hôm qua' : ' — số hôm nay'}</option>)}
         </select>
       </label>
+      <div className="fin-zalo-sections" role="group" aria-label="Mục trong báo cáo">
+        {[['loss', '🔍 Thất thoát (bill huỷ, món bớt, giảm giá, tặng)'], ['staff', '👥 Nhân viên (chấm công, chờ duyệt)'], ['compare', '📈 So sánh, món bán chạy'], ['notes', '🛒 Sổ tay chi tiết']].map(([key, text]) => (
+          <label key={key}><input type="checkbox" checked={state.sections?.[key] !== false} disabled={!!busy} onChange={() => toggleSection(key)} /> {text}</label>
+        ))}
+      </div>
       {state.lastSentAt && <p className="fin-zalo-hint">Lần gửi gần nhất: {stamp(state.lastSentAt)}</p>}
       {state.lastError && <p className="fin-warn">⚠ Lần gần nhất Zalo không gửi được. Mở Zalo, nhắn “ok” cho OA của quán rồi bấm “Gửi thử”. Zalo chỉ cho OA nhắn lại người vừa nhắn mình trong vài ngày.</p>}
       <div className="fin-zalo-actions">

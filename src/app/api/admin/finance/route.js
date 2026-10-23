@@ -20,8 +20,9 @@
 import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { sendOaText } from '@/lib/zaloOa';
-import { notesReportMessages } from '@/lib/notesReport.mjs';
-import { LINK_CODE_MINUTES, readReportSettings, reportPlan, reportStatus, saveReportSettings, validSendAt } from '@/lib/financeZaloLink.mjs';
+import { notesReportMessages, packMessages } from '@/lib/notesReport.mjs';
+import { compareBlock, lossBlock, staffBlock } from '@/lib/dailyInsights.mjs';
+import { LINK_CODE_MINUTES, REPORT_SECTIONS, readReportSettings, reportPlan, reportSections, reportStatus, saveReportSettings, validSendAt } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
 import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, dailyReportText, isMonthKey, itemKey, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
@@ -219,6 +220,71 @@ function reportKeyOk(request) {
   return given.length === want.length && timingSafeEqual(Buffer.from(given), Buffer.from(want));
 }
 
+const inChunks = (list, size = 150) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
+
+/** Thất thoát / nhân viên / so sánh của một ngày (lỗi từng phần không chặn phần khác). */
+async function insightBlocks(db, { date, range, sections }) {
+  const blocks = [];
+  const ledgerDay = await readAll(() => db.from('finance_revenue_ledger').select('order_id, table_number, paid_at, amount, items').eq('business_date', date).order('order_id'));
+  const staffNames = Object.fromEntries(((await db.from('staff').select('id, full_name')).data || []).map(s => [s.id, s.full_name]));
+  if (sections.loss) {
+    try {
+      const menu = (await db.from('menu_items').select('id, name, price')).data || [];
+      const menuName = new Map(menu.map(m => [m.id, m.name]));
+      const menuPrice = new Map(menu.map(m => [String(m.name || '').trim().toLowerCase(), Number(m.price) || 0]));
+      const from = new Date(range.start.getTime() - 12 * 3600000).toISOString();
+      const jobs = await readAll(() => db.from('print_jobs').select('id, order_id, order_ids, order_items_at_queue').gte('created_at', from).lt('created_at', range.end.toISOString()).order('id'));
+      const printed = new Map();
+      const printedIn = new Map();
+      for (const job of jobs) {
+        const snap = (job.order_items_at_queue || []).map(i => ({ ...i, name: i.item_name || menuName.get(i.menu_item_id) || 'Món' }));
+        for (const orderId of new Set([job.order_id, ...(job.order_ids || [])].filter(Boolean))) {
+          const own = snap.filter(i => !i.order_id || i.order_id === orderId);
+          printed.set(orderId, [...(printed.get(orderId) || []), own]);
+          for (const i of own) if (i.id) printedIn.set(i.id, orderId);
+        }
+      }
+      // Món đang nằm ở bill khác (chuyển / gộp bàn) thì không phải bị bớt.
+      const movedIds = new Set();
+      for (const part of inChunks([...printedIn.keys()])) {
+        const { data } = await db.from('order_items').select('id, order_id').in('id', part);
+        for (const row of data || []) if (printedIn.get(row.id) && row.order_id !== printedIn.get(row.id)) movedIds.add(row.id);
+      }
+      const tables = new Map(((await db.from('tables').select('id, table_number')).data || []).map(t => [t.id, t.table_number]));
+      const cancelledRows = ((await db.from('orders').select('id, table_id, total_amount, cancelled_by_name, cancelled_at, created_at').eq('status', 'cancelled')
+        .gte('created_at', new Date(range.start.getTime() - 24 * 3600000).toISOString()).lt('created_at', range.end.toISOString())).data || [])
+        .filter(o => { const t = new Date(o.cancelled_at || o.created_at).getTime(); return t >= range.start.getTime() && t < range.end.getTime(); })
+        .map(o => ({ ...o, table_number: tables.get(o.table_id) }));
+      blocks.push(lossBlock({ ledgerDay, printed, movedIds, cancelled: cancelledRows, menuPrice }));
+    } catch (error) { console.error('[admin/finance] loss block', error); }
+  }
+  if (sections.staff) {
+    try {
+      const [sessions, pending] = await Promise.all([
+        db.from('attendance_sessions').select('staff_id, clock_in, clock_out').eq('date', date).then(r => r.data || []),
+        db.from('payroll_requests').select('staff_id, request_type, amount, days, reason').eq('status', 'pending').then(r => r.data || []),
+      ]);
+      blocks.push(staffBlock({ sessions, pending, staffNames }));
+    } catch (error) { console.error('[admin/finance] staff block', error); }
+  }
+  if (sections.compare) {
+    try {
+      const revenueOf = async d => {
+        if (d < FINANCE_START_DATE) return null;
+        const [bills, paper] = await Promise.all([
+          readAll(() => db.from('finance_revenue_ledger').select('order_id, amount').eq('business_date', d).order('order_id')),
+          db.from('finance_manual_receipts').select('amount').eq('business_date', d).then(r => r.data || []),
+        ]);
+        return { revenue: [...bills, ...paper].reduce((a, x) => a + (Number(x.amount) || 0), 0), bills: bills.length + paper.length };
+      };
+      const [day, prev, week] = await Promise.all([revenueOf(date), revenueOf(addDays(date, -1)), revenueOf(addDays(date, -7))]);
+      const weekdayLabel = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][new Date(`${date}T00:00:00Z`).getUTCDay()];
+      blocks.push(compareBlock({ day: day || { revenue: 0, bills: 0 }, prev, week, weekdayLabel, ledgerDay }));
+    } catch (error) { console.error('[admin/finance] compare block', error); }
+  }
+  return blocks;
+}
+
 /**
  * Gửi báo cáo một ngày tới các Zalo đã liên kết. scheduled = lần gửi tự động
  * buổi sáng: mỗi ngày chỉ gửi một lần.
@@ -237,10 +303,16 @@ async function sendDailyReport(db, { date, today, scheduled }) {
   const monthTotals = { revenue: upTo.reduce((s, d) => s + d.revenue, 0), profit: upTo.reduce((s, d) => s + d.profit, 0) };
   const alerts = await transferAlerts(db, monthBounds(date.slice(0, 7)).start, date, today).catch(() => ({}));
   const text = dailyReportText({ day, monthTotals, accounts, alerts, title: scheduled ? 'Báo cáo' : 'Gửi thử' });
-  // Tin thứ hai trở đi: chi tiết Sổ tay của ngày (lỗi ở phần này không chặn tin tổng kết).
-  let notesMessages = [];
+  // Các tin sau: thất thoát / nhân viên / so sánh, rồi Sổ tay của ngày (lỗi ở đây không chặn tin tổng kết).
+  const sections = reportSections(settings);
+  const range = { start: new Date(vnDayStartIso(date)), end: new Date(vnDayStartIso(addDays(date, 1))) };
+  let insightMessages = [];
   try {
-    const range = { start: new Date(vnDayStartIso(date)), end: new Date(vnDayStartIso(addDays(date, 1))) };
+    const [, m, d] = date.split('-');
+    insightMessages = packMessages(`📊 Chi tiết ${d}/${m}`, await insightBlocks(db, { date, range, sections }));
+  } catch (error) { console.error('[admin/finance] insights', error); }
+  let notesMessages = [];
+  if (sections.notes) try {
     const [allNotes, payments, deleted, staff] = await Promise.all([
       readAll(() => db.from('staff_notes').select('id, staff_id, note_type, content, amount, debt, paid_debt, created_at, staff ( full_name )')
         .lt('created_at', range.end.toISOString()).order('created_at')),
@@ -259,7 +331,7 @@ async function sendDailyReport(db, { date, today, scheduled }) {
     const first = await sendOaText(db, id, text).catch(error => ({ ok: false, detail: error.message }));
     results.push(first);
     if (!first.ok) continue;
-    for (const message of notesMessages) await sendOaText(db, id, message).catch(error => console.error('[admin/finance] notes message', error));
+    for (const message of [...insightMessages, ...notesMessages]) await sendOaText(db, id, message).catch(error => console.error('[admin/finance] report message', error));
   }
   const sent = results.filter(r => r.ok).length;
   const failed = results.find(r => !r.ok);
@@ -507,9 +579,15 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, verifiedAt: patch.verified_at, verifiedBy: patch.verified_by }, { headers });
     }
 
-    if (['zalo_link_code', 'zalo_unlink', 'zalo_test', 'zalo_set_time'].includes(body.action)) {
+    if (['zalo_link_code', 'zalo_unlink', 'zalo_test', 'zalo_set_time', 'zalo_set_sections'].includes(body.action)) {
       const settings = await readReportSettings(db);
       if (!settings) return NextResponse.json({ error: 'Chưa cài bảng cài đặt sổ thu chi (owner_finance.sql).' }, { status: 503, headers });
+      if (body.action === 'zalo_set_sections') {
+        const input = body.sections && typeof body.sections === 'object' ? body.sections : {};
+        const next = { ...settings, sections: Object.fromEntries(REPORT_SECTIONS.map(k => [k, input[k] !== false])) };
+        await saveReportSettings(db, next);
+        return NextResponse.json({ ok: true, zaloReport: reportStatus(next) }, { headers });
+      }
       if (body.action === 'zalo_set_time') {
         if (!validSendAt(body.time)) return NextResponse.json({ error: 'Giờ gửi không hợp lệ.' }, { status: 400, headers });
         const next = { ...settings, sendAt: body.time };

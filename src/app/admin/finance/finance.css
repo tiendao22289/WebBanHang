@@ -258,3 +258,6 @@
 .fin-group-actions .fin-secondary { border-style: solid; }
 .fin-zalo-time { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; font-size: 14px; font-weight: 600; color: #374151; }
 .fin-zalo-time select { flex: 1; max-width: 220px; height: 44px; border: 1px solid #d1d5db; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 16px; background: white; color: #111827; }
+.fin-zalo-sections { display: flex; flex-direction: column; gap: 2px; margin: 0 0 10px; }
+.fin-zalo-sections label { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 14px; color: #374151; }
+.fin-zalo-sections input { width: 20px; height: 20px; flex-shrink: 0; }
