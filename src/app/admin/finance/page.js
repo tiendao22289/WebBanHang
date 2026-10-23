@@ -603,6 +603,142 @@ function ZaloReportPanel({ status, onChanged }) {
   </section>;
 }
 
+// Bán ra theo món (bill) / nhập vào theo hàng (Sổ tay), gom theo nhóm để biết từng thứ lời lỗ.
+const pct = ratio => ratio === null || ratio === undefined ? '' : `${Math.round(ratio * 100)}%`;
+
+function GroupForm({ group, onSaved, onCancel }) {
+  const [name, setName] = useState(group?.name || '');
+  const [keywords, setKeywords] = useState((group?.keywords || []).join(', '));
+  const [busy, setBusy] = useState(false);
+  async function save(event) {
+    event.preventDefault();
+    setBusy(true);
+    try { await post({ action: 'save_item_group', id: group?.id, name, keywords }); onSaved(); }
+    catch (err) { alert(err.message); } finally { setBusy(false); }
+  }
+  return <form className="fin-group-form" onSubmit={save}>
+    <label>Tên nhóm<input value={name} onChange={e => setName(e.target.value)} placeholder="VD: Ốc hương" autoFocus /></label>
+    <label>Từ khoá (cách nhau dấu phẩy)<input value={keywords} onChange={e => setKeywords(e.target.value)} placeholder="Bỏ trống = dùng tên nhóm" /></label>
+    <p className="fin-hint">Món bán và hàng Sổ tay có chứa từ khoá sẽ vào nhóm (không phân biệt dấu, hoa thường).</p>
+    <div className="fin-group-actions">
+      <button type="button" className="fin-secondary" onClick={onCancel}>Huỷ</button>
+      <button className="fin-primary" disabled={busy}>{busy ? 'Đang lưu...' : 'Lưu nhóm'}</button>
+    </div>
+  </form>;
+}
+
+function ItemsView({ month, today }) {
+  const lastOfMonth = addDaysLocal(shiftMonth(month, 1) + '-01', -1);
+  const monthTo = lastOfMonth < today ? lastOfMonth : today;
+  const monthFrom = `${month}-01`;
+  const [range, setRange] = useState({ from: monthFrom, to: monthTo });
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [list, setList] = useState('groups');
+  useEffect(() => { setRange({ from: monthFrom, to: monthTo }); }, [month]);
+
+  async function load(r = range) {
+    setBusy(true); setError('');
+    try { setData(await api(`/api/admin/finance?items=1&from=${r.from}&to=${r.to}`)); } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+  useEffect(() => { load(range); }, [range.from, range.to]);
+  async function quickGroup(name) {
+    try { await post({ action: 'save_item_group', name }); await load(); } catch (err) { alert(err.message); }
+  }
+  async function removeGroup(g) {
+    if (!confirm(`Xoá nhóm "${g.name}"? (Không xoá bill hay Sổ tay)`)) return;
+    try { await post({ action: 'delete_item_group', id: g.id }); setOpen(null); await load(); } catch (err) { alert(err.message); }
+  }
+
+  const presets = [['month', 'Cả tháng', { from: monthFrom, to: monthTo }], ['today', 'Hôm nay', { from: today, to: today }],
+    ['7', '7 ngày', { from: addDaysLocal(today, -6), to: today }]];
+  const presetKey = presets.find(([, , r]) => r.from === range.from && r.to === range.to)?.[0] || '';
+  const t = data?.totals;
+  const soldBy = key => data.sold.find(s => s.key === key);
+  const boughtBy = key => data.bought.find(b => b.key === key);
+  const groupName = id => data.groups.find(g => g.id === id)?.name;
+
+  return <section className="fin-section">
+    <div className="fin-panel fin-search">
+      <div className="fin-search-types" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+        {presets.map(([k, text, r]) => <button key={k} type="button" className={presetKey === k ? 'active' : ''} onClick={() => setRange(r)}>{text}</button>)}
+      </div>
+      <div className="fin-search-grid">
+        <label>Từ ngày<input type="date" value={range.from} min={FIRST_MONTH + '-01'} max={range.to} onChange={e => e.target.value && setRange(r => ({ ...r, from: e.target.value }))} /></label>
+        <label>Đến ngày<input type="date" value={range.to} min={range.from} max={today} onChange={e => e.target.value && setRange(r => ({ ...r, to: e.target.value }))} /></label>
+      </div>
+    </div>
+
+    {error && <p className="fin-error">{error}</p>}
+    {!data && !error && <p className="fin-empty">{busy ? 'Đang tính...' : ''}</p>}
+    {data && <>
+      <div className="fin-items-sum">
+        <div><small>Bán ra (theo món)</small><b>{money(t.revenue)}</b></div>
+        <div><small>Nhập vào (Sổ tay)</small><b>{money(t.cost)}</b></div>
+      </div>
+      {t.paperRevenue > 0 && <p className="fin-hint">Bill giấy {money(t.paperRevenue)} không có chi tiết món nên không tính ở đây.</p>}
+
+      <nav className="fin-switch fin-items-switch" role="tablist">
+        {[['groups', `Theo nhóm (${data.groups.length})`], ['sold', `Món bán (${data.sold.length})`], ['bought', `Hàng nhập (${data.bought.length})`]].map(([k, text]) =>
+          <button key={k} role="tab" aria-selected={list === k} className={list === k ? 'active' : ''} onClick={() => setList(k)}>{text}</button>)}
+      </nav>
+
+      {list === 'groups' && <>
+        {data.groups.length === 0 && <p className="fin-empty">Chưa có nhóm. Tạo nhóm như "Ốc hương", "Bia" để so bán ra và nhập vào của từng thứ.</p>}
+        <div className="fin-search-list">
+          {data.groups.map(g => <div key={g.id} className="fin-hit">
+            {editing === g.id ? <GroupForm group={g} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} /> : <>
+              <button className="fin-hit-head" onClick={() => setOpen(open === g.id ? null : g.id)}>
+                <span><b>{g.name}</b><small>Bán {g.qty} phần · {money(g.revenue)} · Nhập {money(g.cost)}{g.costRatio !== null ? ` (${pct(g.costRatio)})` : ''}</small></span>
+                <b className={`fin-hit-amount ${g.profit < 0 ? 'loss' : 'gain'}`}>{g.profit < 0 ? '-' : g.profit > 0 ? '+' : ''}{money(Math.abs(g.profit))}</b>
+              </button>
+              {g.revenue > 0 && <div className="fin-bar" aria-hidden="true"><i className={g.costRatio > 1 ? 'over' : ''} style={{ width: `${Math.min(100, (g.costRatio || 0) * 100)}%` }} /></div>}
+              {open === g.id && <div className="fin-group-detail">
+                <h4>Món bán</h4>
+                {g.dishes.length === 0 && <p className="fin-empty">Không có món nào khớp.</p>}
+                <ul className="fin-items">{g.dishes.map(k => { const s = soldBy(k); return <li key={k}><span>{s.qty}× {s.name}{s.giftQty ? ` (+${s.giftQty} tặng)` : ''}</span><span>{money(s.revenue)}</span></li>; })}</ul>
+                <h4>Hàng nhập (Sổ tay)</h4>
+                {g.goods.length === 0 && <p className="fin-empty">Không có hàng nào khớp.</p>}
+                <ul className="fin-items">{g.goods.map(k => { const b = boughtBy(k); return <li key={k}><span>{b.name}{b.qty ? ` · ${b.qty}` : ''} · {b.times} lần</span><span>{money(b.cost)}</span></li>; })}</ul>
+                <p className="fin-hint">Từ khoá: {g.keywords.join(', ')}</p>
+                <div className="fin-group-actions">
+                  <button className="fin-secondary" onClick={() => setEditing(g.id)}>Sửa nhóm</button>
+                  <button className="fin-secondary danger" onClick={() => removeGroup(g)}>Xoá nhóm</button>
+                </div>
+              </div>}
+            </>}
+          </div>)}
+        </div>
+        {data.groups.length > 0 && <p className="fin-hint">Chưa vào nhóm: bán {money(t.ungroupedRevenue)} · nhập {money(t.ungroupedCost)}</p>}
+        {data.suggestions.length > 0 && <div className="fin-filter-row"><span>Gợi ý nhóm (bấm để tạo)</span>
+          <div className="fin-search-tables">{data.suggestions.map(name => <button key={name} type="button" onClick={() => quickGroup(name)}>+ {name}</button>)}</div></div>}
+        {editing === 'new' ? <div className="fin-panel"><GroupForm onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} /></div>
+          : data.groupsReady && <button className="fin-secondary" onClick={() => setEditing('new')}>+ Thêm nhóm</button>}
+      </>}
+
+      {list === 'sold' && <div className="fin-panel">
+        {data.sold.length === 0 && <p className="fin-empty">Chưa bán món nào.</p>}
+        {data.sold.map(s => <div key={s.key} className="fin-row static">
+          <span>{s.discount ? s.name : `${s.qty}× ${s.name}`}{(s.giftQty > 0 || s.group) && <small>{s.giftQty > 0 ? `+${s.giftQty} phần tặng` : ''}{s.giftQty > 0 && s.group ? ' · ' : ''}{s.group ? `Nhóm ${groupName(s.group)}` : ''}</small>}</span>
+          <b>{money(s.revenue)}</b>
+        </div>)}
+      </div>}
+
+      {list === 'bought' && <div className="fin-panel">
+        {data.bought.length === 0 && t.unitemized === 0 && <p className="fin-empty">Chưa có hàng nhập.</p>}
+        {data.bought.map(b => <div key={b.key} className="fin-row static">
+          <span>{b.name}<small>{b.qty ? `${b.qty} · ` : ''}{b.times} lần{b.group ? ` · Nhóm ${groupName(b.group)}` : ''}</small></span>
+          <b>{money(b.cost)}</b>
+        </div>)}
+        {t.unitemized > 0 && <div className="fin-row static"><span>Phiếu Sổ tay không ghi chi tiết hàng</span><b>{money(t.unitemized)}</b></div>}
+      </div>}
+    </>}
+  </section>;
+}
+
 export default function FinancePage() {
   const [month, setMonth] = useState(vnToday().slice(0, 7));
   const [data, setData] = useState(null);
@@ -618,7 +754,7 @@ export default function FinancePage() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem('financeView');
-      if (['overview', 'days', 'add', 'search'].includes(saved)) setView(saved);
+      if (['overview', 'days', 'items', 'add', 'search'].includes(saved)) setView(saved);
     } catch { /* trình duyệt chặn lưu trữ → dùng mặc định */ }
   }, []);
   function chooseView(next) {
@@ -707,7 +843,7 @@ export default function FinancePage() {
     </header>
 
     <nav className="fin-switch" role="tablist" aria-label="Mục sổ thu chi">
-      {[['overview', 'Tổng quan'], ['days', 'Từng ngày'], ['add', 'Thêm chi'], ['search', 'Tra cứu']].map(([key, text]) =>
+      {[['overview', 'Tổng quan'], ['days', 'Từng ngày'], ['items', 'Món'], ['add', 'Thêm chi'], ['search', 'Tra cứu']].map(([key, text]) =>
         <button key={key} role="tab" aria-selected={view === key} className={view === key ? 'active' : ''} onClick={() => chooseView(key)}>{text}</button>)}
     </nav>
 
@@ -784,6 +920,8 @@ export default function FinancePage() {
         </button>)}
       </div>
     </section>}
+
+    {view === 'items' && <ItemsView month={month} today={data?.today || vnToday()} />}
 
     {view === 'search' && <SearchView key={searchPreset.key} accounts={accounts} preset={searchPreset.filters} />}
 

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as finance from '../src/lib/ownerFinance.mjs';
 import * as zaloLink from '../src/lib/financeZaloLink.mjs';
-import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 
 const source = readFileSync(new URL('../src/app/api/admin/finance/route.js', import.meta.url), 'utf8')
   .replace(/^import [\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
@@ -70,7 +70,7 @@ function fakeDb(state, { failTable } = {}) {
 function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFails = false, env = {} }) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...finance, ...zaloLink, createHmac, randomInt, timingSafeEqual, Buffer, process: { env },
+    NextResponse, ...finance, ...zaloLink, createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
     sendOaText: async (_db, id, text) => { sent.push({ id, text }); return zaloFails ? { ok: false, detail: { error: -230 } } : { ok: true }; },
     URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
@@ -490,4 +490,40 @@ test('the owner links Zalo with a short code and gets one daily report a day', a
   assert.equal(res.status, 400);
   assert.match(res.body.zaloReport.lastError, /-230/, 'the page shows why Zalo refused');
   assert.equal((await post(api, { action: 'zalo_unlink' })).body.zaloReport.linked, 0);
+});
+
+test('sales per dish and Sổ tay purchases per item are grouped so each group shows sold, bought and profit', async () => {
+  const today = finance.vnDate(Date.now());
+  const state = empty();
+  state.finance_settings = [];
+  state.finance_revenue_ledger.push(
+    { order_id: 'i1', business_date: today, paid_at: later(-30), amount: 370000, payment_method: 'cash', items: [
+      { name: 'Ốc hương xào bơ', quantity: 2, unit_price: 120000 }, { name: 'Ốc Hương nướng', quantity: 1, unit_price: 130000 }] },
+    { order_id: 'i2', business_date: today, paid_at: later(-20), amount: 70000, payment_method: 'cash', items: [
+      { name: 'Bia Tiger', quantity: 5, unit_price: 20000 }, { name: 'Giảm 8%', quantity: 1, unit_price: -30000 }] });
+  state.staff_notes.push({ id: 'n1', created_at: later(-60), note_type: 'expense', amount: 450000, debt: 0, content: JSON.stringify({ type: 'structured_expense',
+    items: [{ name: 'oc huong', qty: '2kg', price: '200k' }, { name: 'Tiền rau', qty: '', price: '50k' }] }) });
+  state.finance_entries.push({ id: 'd1', kind: 'drink', entry_date: today, amount: 150000, label: 'Bia Tiger thùng' });
+  const api = load({ state });
+  const items = async () => (await get(api, `items=1&from=${today}&to=${today}`)).body;
+
+  let r = await items();
+  assert.deepEqual(r.sold.map(s => [s.name, s.qty, s.revenue]), [['Ốc hương xào bơ', 2, 240000], ['Ốc Hương nướng', 1, 130000], ['Bia Tiger', 5, 100000], ['Giảm giá / khuyến mãi', 0, -30000]]);
+  assert.deepEqual(r.bought.map(b => [b.name, b.qty, b.cost]), [['oc huong', '2kg', 400000], ['Bia Tiger thùng', '', 150000], ['Tiền rau', '', 50000]]);
+  assert.deepEqual(plain(r.suggestions), ['oc huong', 'Bia Tiger thùng'], 'purchases whose name matches a dish are offered as groups');
+  assert.equal(r.totals.revenue, 440000, 'matches what the bills took');
+  assert.equal(r.totals.cost, 600000, 'Sổ tay + drinks');
+
+  assert.equal((await post(api, { action: 'save_item_group', name: 'Ốc hương' })).status, 200);
+  const beer = (await post(api, { action: 'save_item_group', name: 'Bia', keywords: 'bia tiger, tiger' })).body.group;
+  assert.equal((await post(api, { action: 'save_item_group', name: 'ốc HƯƠNG' })).status, 409);
+  r = await items();
+  assert.deepEqual(r.groups.map(g => [g.name, g.revenue, g.cost, g.profit]), [['Ốc hương', 370000, 400000, -30000], ['Bia', 100000, 150000, -50000]]);
+  assert.equal(r.totals.ungroupedRevenue, -30000);
+  assert.equal(r.totals.ungroupedCost, 50000);
+
+  await post(api, { action: 'save_item_group', id: beer.id, name: 'Bia Tiger', keywords: ['tiger'] });
+  await post(api, { action: 'delete_item_group', id: (await items()).groups[0].id });
+  assert.deepEqual((await items()).groups.map(g => [g.name, plain(g.keywords)]), [['Bia Tiger', ['tiger']]]);
+  assert.equal((await get(load({ state, role: 'staff' }), `items=1`)).status, 403);
 });

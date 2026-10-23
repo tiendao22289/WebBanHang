@@ -22,7 +22,7 @@
 .fin-hint { font-size: 12px; color: #6b7280; margin: 0 0 10px; }
 
 /* 3 mục chuyển nhanh. (Không dùng sticky: .admin-main đặt overflow: hidden.) */
-.fin-switch { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 14px -4px 14px; padding: 4px; background: #e2e8f0; border-radius: 12px; }
+.fin-switch { display: grid; grid-template-columns: repeat(5, auto); gap: 4px; margin: 14px -4px 14px; padding: 4px; background: #e2e8f0; border-radius: 12px; }
 .fin-switch button { min-height: 40px; border: 0; border-radius: 9px; background: transparent; color: #475569; font-size: 14px; font-weight: 600; padding: 0 2px; }
 .fin-switch button.active { background: white; color: #1d4ed8; box-shadow: 0 1px 3px rgba(15, 23, 42, .15); }
 
@@ -234,3 +234,25 @@
 .fin-filter-row .fin-search-tables { flex-wrap: nowrap; overflow-x: auto; max-height: none; margin: 0 -14px; padding: 0 14px 2px; scrollbar-width: none; overscroll-behavior-x: contain; }
 .fin-filter-row .fin-search-tables::-webkit-scrollbar { display: none; }
 .fin-filter-row .fin-search-tables button { flex-shrink: 0; white-space: nowrap; }
+
+/* Món: bán ra / nhập vào theo nhóm */
+.fin-switch.fin-items-switch { grid-template-columns: repeat(3, 1fr); margin-top: 10px; }
+.fin-switch.fin-items-switch button { font-size: 13px; }
+.fin-items-sum { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.fin-items-sum div { border: 1px solid #e5e7eb; border-radius: 12px; background: white; padding: 10px 12px; min-width: 0; }
+.fin-items-sum small { display: block; font-size: 12px; color: #6b7280; }
+.fin-items-sum b { font-size: 18px; color: #111827; }
+.fin-hit-amount.gain { color: #15803d; }
+.fin-hit-amount.loss { color: #b91c1c; }
+.fin-hit .fin-bar { margin-top: 8px; }
+.fin-bar i.over { background: #ef4444; }
+.fin-group-detail h4 { font-size: 13px; color: #374151; margin: 10px 0 4px; }
+.fin-group-form { display: flex; flex-direction: column; gap: 8px; }
+.fin-group-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #4b5563; }
+.fin-group-form input { height: 44px; border: 1px solid #d1d5db; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 16px; -webkit-appearance: none; appearance: none; }
+.fin-group-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.fin-group-actions .fin-secondary, .fin-group-actions .fin-primary { margin-top: 0; min-height: 44px; height: auto; }
+.fin-section > .fin-secondary { border-style: solid; }
+.fin-hint { font-size: 12px; color: #6b7280; margin: 8px 2px; line-height: 1.45; }
+.fin-group-actions .fin-secondary.danger { border-color: #fecaca; background: #fef2f2; color: #b91c1c; }
+.fin-group-actions .fin-secondary { border-style: solid; }

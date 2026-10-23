@@ -233,3 +233,97 @@ export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, 
   lines.push('', 'Nhắn "ok" để Zalo cho phép gửi tiếp báo cáo các ngày sau.');
   return lines.join('\n');
 }
+
+/** Tên món / hàng để so khớp: bỏ dấu, chữ thường ("Ốc Hương" = "oc huong"). */
+export function itemKey(name) {
+  return String(name || '').replace(/[đĐ]/g, 'd').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+const qtyNumber = qty => parseFloat(String(qty ?? '').replace(',', '.').replace(/[^0-9.]/g, '')) || 0;
+
+/** Tiền một dòng hàng Sổ tay — giống trang Sổ tay: giá × số lượng (không ghi số lượng = 1). */
+export function noteLineCost(item) {
+  return parseNotePrice(item?.price) * (qtyNumber(item?.qty) || 1);
+}
+
+const groupWords = g => (g.keywords?.length ? g.keywords : [g.name]).map(itemKey).filter(Boolean);
+
+/**
+ * Bán ra theo món (món trong bill của sổ) và nhập vào theo hàng (dòng hàng
+ * Sổ tay + nước ngọt nhập tay), rồi gom theo nhóm chủ quán đặt: món / hàng
+ * nào có chứa từ khoá của nhóm thì vào nhóm đó (nhóm đứng trước được ưu tiên).
+ */
+export function summarizeItems({ bills = [], notes = [], drinks = [], paperRevenue = 0, groups = [] }) {
+  const sold = new Map();
+  for (const bill of bills) {
+    for (const item of bill.items || []) {
+      const qty = Number(item.quantity) || 0;
+      const amount = (Number(item.unit_price) || 0) * qty;
+      const discount = amount < 0;
+      const name = discount ? 'Giảm giá / khuyến mãi' : String(item.name || 'Món không tên').trim();
+      const key = discount ? '__discount' : itemKey(name);
+      const row = sold.get(key) || { key, name, qty: 0, giftQty: 0, revenue: 0, discount };
+      if (!discount) { if (item.is_gift) row.giftQty += qty; else row.qty += qty; }
+      row.revenue += amount;
+      sold.set(key, row);
+    }
+  }
+
+  const bought = new Map();
+  const addBought = (name, cost, qty) => {
+    const key = itemKey(name);
+    const row = bought.get(key) || { key, name: String(name).trim(), times: 0, cost: 0, qtyTotal: 0, units: new Set() };
+    row.times += 1;
+    row.cost += cost;
+    const n = qtyNumber(qty);
+    if (n) { row.qtyTotal += n; row.units.add(String(qty).replace(/[0-9.,\s]/g, '').toLowerCase()); }
+    bought.set(key, row);
+  };
+  let notesTotal = 0, itemizedTotal = 0;
+  for (const note of notes) {
+    const total = noteCost(note);
+    if (!total) continue;
+    notesTotal += total;
+    for (const item of noteItems(note)) {
+      const cost = noteLineCost(item);
+      if (!item.name || !cost) continue;
+      itemizedTotal += cost;
+      addBought(item.name, cost, item.qty);
+    }
+  }
+  const drinksTotal = drinks.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  for (const e of drinks) if (Number(e.amount) > 0) addBought(e.label || 'Nước ngọt / bia', Number(e.amount), '');
+
+  const pick = key => groups.find(g => groupWords(g).some(w => key.includes(w))) || null;
+  const soldRows = [...sold.values()].map(r => ({ ...r, group: r.discount ? null : pick(r.key)?.id || null }))
+    .sort((a, b) => b.revenue - a.revenue);
+  const boughtRows = [...bought.values()].map(({ units, qtyTotal, ...r }) => ({
+    ...r, qty: qtyTotal && units.size === 1 ? `${Math.round(qtyTotal * 100) / 100}${[...units][0]}` : '',
+    group: pick(r.key)?.id || null,
+  })).sort((a, b) => b.cost - a.cost);
+
+  const groupRows = groups.map(g => {
+    const dishes = soldRows.filter(r => r.group === g.id);
+    const goods = boughtRows.filter(r => r.group === g.id);
+    const revenue = dishes.reduce((s, r) => s + r.revenue, 0);
+    const cost = goods.reduce((s, r) => s + r.cost, 0);
+    return { id: g.id, name: g.name, keywords: g.keywords || [], revenue, qty: dishes.reduce((s, r) => s + r.qty, 0), cost,
+      profit: revenue - cost, costRatio: revenue > 0 ? cost / revenue : null, dishes: dishes.map(r => r.key), goods: goods.map(r => r.key) };
+  });
+
+  // Gợi ý nhóm: hàng nhập chưa vào nhóm mà tên có trong tên món bán ra.
+  const suggestions = boughtRows.filter(r => !r.group && r.key.length >= 3 && soldRows.some(s => !s.discount && s.key.length >= 3 && (s.key.includes(r.key) || r.key.includes(s.key))))
+    .slice(0, 8).map(r => r.name);
+
+  const revenue = soldRows.reduce((s, r) => s + r.revenue, 0);
+  return {
+    sold: soldRows, bought: boughtRows, groups: groupRows, suggestions,
+    totals: {
+      revenue, paperRevenue, cost: itemizedTotal + drinksTotal + Math.max(0, notesTotal - itemizedTotal),
+      notesTotal, drinksTotal, unitemized: Math.max(0, notesTotal - itemizedTotal),
+      ungroupedRevenue: soldRows.filter(r => !r.group).reduce((s, r) => s + r.revenue, 0),
+      ungroupedCost: boughtRows.filter(r => !r.group).reduce((s, r) => s + r.cost, 0) + Math.max(0, notesTotal - itemizedTotal),
+    },
+  };
+}
