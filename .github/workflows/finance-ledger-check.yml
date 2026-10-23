@@ -1,0 +1,27 @@
+name: Finance Ledger Check
+# Chạy tay: liệt kê bill trong Sổ thu chi của một ngày trên DB thật (chỉ đọc, không in tên / SĐT khách).
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Ngày YYYY-MM-DD (bỏ trống = hôm nay)'
+        required: false
+permissions:
+  contents: read
+jobs:
+  check:
+    if: github.ref == 'refs/heads/master' && github.repository == 'tiendao22289/WebBanHang'
+    runs-on: [self-hosted, Windows, X64, webbanhang-production]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: List ledger bills
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+        env:
+          CHECK_DATE: ${{ inputs.date }}
+        run: |
+          & node scripts/finance-ledger-check.cjs 'C:\Tool\SupabaseLocal\production.env' "$env:CHECK_DATE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
