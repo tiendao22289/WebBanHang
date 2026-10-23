@@ -64,6 +64,13 @@ async function main() {
   console.log(JSON.stringify(lock));
   if (lock.write_locks < 8 || lock.audit_triggers < 7 || !lock.payments || !lock.audit_hidden) throw new Error('Khoá dữ liệu nhân viên chưa đủ.');
 
+  // Sổ tay ghi mỗi thao tác trong một giao dịch (staff_notes_commit.sql) — cài TRƯỚC khi web dùng.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'staff_notes_commit.sql'), 'utf8'));
+  const [commitFn] = await query(`SELECT to_regprocedure('public.staff_notes_commit(jsonb)') IS NOT NULL AS installed,
+    NOT has_function_privilege('anon', 'public.staff_notes_commit(jsonb)', 'EXECUTE') AS anon_blocked`);
+  console.log(JSON.stringify(commitFn));
+  if (!commitFn.installed || !commitFn.anon_blocked) throw new Error('Chưa cài được staff_notes_commit.');
+
   // Băm mã PIN còn lưu chữ thường (web đang chạy ở 127.0.0.1:3000 làm việc này).
   const crypto = require('node:crypto');
   const serverKey = crypto.createHmac('sha256', key).update('staff-maintenance').digest('hex');
