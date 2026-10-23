@@ -4,8 +4,15 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { ChefHat, FileText, CheckCircle, XCircle, LogOut, Plus, Clock, Trash2, User, CornerDownRight } from 'lucide-react';
 import './notes.css';
+import MenuNameInput from '@/lib/MenuNameInput';
 
 export default function StaffNotesPage() {
+  // Tên món trong menu để chọn nhanh ở ô tên hàng (vẫn gõ tự do được).
+  const [menuNames, setMenuNames] = useState([]);
+  useEffect(() => {
+    supabase.from('menu_items').select('name').order('name')
+      .then(({ data }) => setMenuNames([...new Set((data || []).map(m => String(m.name || '').trim()).filter(Boolean))]));
+  }, []);
   const [currentUser, setCurrentUser] = useState(null);
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
@@ -1797,7 +1804,7 @@ export default function StaffNotesPage() {
                       {editExpenseItems.map((item, idx) => (
                         <div key={idx} style={{ marginBottom: 8, padding: '8px 10px', background: 'white', borderRadius: 8, border: '1px solid #e5e7eb' }}>
                           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
-                            <input type="text" placeholder="Tên món" value={item.name} onChange={e => updateEditExpenseItem(idx, 'name', e.target.value)}
+                            <MenuNameInput names={menuNames} placeholder="Tên món" value={item.name} onChange={v => updateEditExpenseItem(idx, 'name', v)}
                               style={{ flex: 1, minWidth: 90, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }} />
 
                             <input type="text" placeholder="Giá" value={item.price} onChange={e => updateEditExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleEditExpenseBlur(idx, 'price', e)}
@@ -1995,9 +2002,9 @@ export default function StaffNotesPage() {
                     {expenseItems.map((item, idx) => (
                       <div key={idx} className="expense-row">
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                          <input type="text" className="expense-input-clean" style={{ flex: 1, minWidth: 100 }}
+                          <MenuNameInput names={menuNames} className="expense-input-clean" style={{ flex: 1, minWidth: 100 }}
                             placeholder={idx === expenseItems.length - 1 && !item.name ? 'Nhập tên đồ...' : 'Tên món'}
-                            value={item.name} onChange={e => updateExpenseItem(idx, 'name', e.target.value)} />
+                            value={item.name} onChange={v => updateExpenseItem(idx, 'name', v)} />
                           <input type="text" className="expense-input-clean" style={{ width: 72, textAlign: 'center' }}
                             placeholder="Giá" value={item.price} onChange={e => updateExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleExpenseBlur(idx, 'price', e)} />
                           <input type="text" className="expense-input-clean" style={{ width: 72, textAlign: 'center' }}
