@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { workforce } from '@/lib/staffApi';
 import { QRCodeSVG } from 'qrcode.react';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users, RefreshCw } from 'lucide-react';
 import './payroll.css';
@@ -10,8 +11,8 @@ const now = new Date();
 const fmt = (n) => String(n).padStart(2, '0');
 const formatMoney = (v) => Number(v || 0).toLocaleString('vi-VN') + 'đ';
 
-// Returns token that changes every 5 minutes
-function getQRToken() { return String(Math.floor(Date.now() / (5 * 60 * 1000))); }
+// Mã QR chấm công do máy chủ ký, đổi mỗi 5 phút (không tự tính được ở máy nhân viên).
+const qrWindow = () => Math.floor(Date.now() / (5 * 60 * 1000));
 // Seconds left in current 5-min window
 function secsLeft() { return 300 - (Math.floor(Date.now() / 1000) % 300); }
 
@@ -75,21 +76,16 @@ export default function PayrollPage() {
 
   const handleClockAction = async () => {
     if (!currentUser) return;
-    const today = new Date().toISOString().split('T')[0];
-    const { data: sessions } = await supabase.from('attendance_sessions').select('*').eq('staff_id', currentUser.id).eq('date', today).order('clock_in');
-    const openSession = (sessions || []).find(s => !s.clock_out);
-    if (openSession) {
-      await supabase.from('attendance_sessions').update({ clock_out: new Date().toISOString() }).eq('id', openSession.id);
-    } else {
-      await supabase.from('attendance_sessions').insert({ staff_id: currentUser.id, date: today, clock_in: new Date().toISOString() });
-    }
+    // Nhân viên chấm công bằng cách quét mã QR ở quán; máy chủ từ chối nếu không có mã.
+    try { await workforce('clock'); } catch (err) { alert(err.message); }
     fetchStaffData(currentUser.id);
   };
 
   const handleSubmitAdvance = async () => {
     if (!advForm.amount || !advForm.reason) return alert('Vui long dien day du!');
     const m = now.getMonth() + 1; const y = now.getFullYear();
-    await supabase.from('payroll_requests').insert({ staff_id: currentUser.id, request_type: 'advance', amount: Number(advForm.amount.replace(/\./g, '')), reason: advForm.reason, month: m, year: y });
+    try { await workforce('request', { type: 'advance', amount: advForm.amount, reason: advForm.reason }); }
+    catch (err) { return alert(err.message); }
     setAdvForm({ amount: '', reason: '' }); setShowAdvForm(false);
     fetchStaffData(currentUser.id);
     alert('Da gui yeu cau ung luong!');
@@ -98,33 +94,44 @@ export default function PayrollPage() {
   const handleSubmitAbsent = async () => {
     if (!absForm.reason) return alert('Vui long dien ly do!');
     const m = now.getMonth() + 1; const y = now.getFullYear();
-    await supabase.from('payroll_requests').insert({ staff_id: currentUser.id, request_type: 'absent', days: Number(absForm.days), reason: absForm.reason, month: m, year: y });
+    try { await workforce('request', { type: 'absent', days: absForm.days, reason: absForm.reason }); }
+    catch (err) { return alert(err.message); }
     setAbsForm({ days: '1', reason: '' }); setShowAbsForm(false);
     fetchStaffData(currentUser.id);
     alert('Da gui bao nghi!');
   };
 
   // QR state
-  const [qrToken, setQrToken] = useState(getQRToken());
+  const [qrToken, setQrToken] = useState('');
   const [qrCountdown, setQrCountdown] = useState(secsLeft());
   const [networkUrl, setNetworkUrl] = useState('');
+  const isAdminUser = currentUser?.role === 'admin';
 
   useEffect(() => {
+    if (!qrToken) { setNetworkUrl(''); return; }
     // Detect network URL for QR
     const host = window.location.hostname;
     const port = window.location.port;
-    setNetworkUrl(`http://${host}${port ? ':' + port : ''}/checkin?t=${qrToken}`);
+    setNetworkUrl(`${window.location.protocol}//${host}${port ? ':' + port : ''}/checkin?t=${encodeURIComponent(qrToken)}`);
   }, [qrToken]);
 
   useEffect(() => {
+    if (!isAdminUser) return undefined;
+    let shownWindow = null, cancelled = false;
+    const refresh = async () => {
+      try {
+        const r = await fetch('/api/admin/workforce?qr=1', { cache: 'no-store' });
+        const j = await r.json().catch(() => ({}));
+        if (!cancelled && r.ok && j.token) { setQrToken(j.token); shownWindow = Number(j.token.split('.')[0]); }
+      } catch { /* mạng chập chờn → thử lại ở giây sau */ }
+    };
+    refresh();
     const interval = setInterval(() => {
-      const secs = secsLeft();
-      setQrCountdown(secs);
-      const newToken = getQRToken();
-      if (newToken !== qrToken) setQrToken(newToken);
+      setQrCountdown(secsLeft());
+      if (shownWindow !== qrWindow()) { shownWindow = qrWindow(); refresh(); }
     }, 1000);
-    return () => clearInterval(interval);
-  }, [qrToken]);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [isAdminUser]);
 
   // Violation form
   const [vForm, setVForm] = useState({ staff_id: '', amount: '', reason: '' });
@@ -150,22 +157,11 @@ export default function PayrollPage() {
     if (!orig) return;
 
     // Only clock_in, clock_out, note are editable (hours computed automatically)
-    const updates = {};
-    const fields = ['clock_in', 'clock_out', 'note'];
-    const logs = [];
-    fields.forEach(f => {
-      const oldVal = String(orig[f] ?? '');
-      const newVal = String(editingAtt[f] ?? '');
-      if (oldVal !== newVal) {
-        updates[f] = editingAtt[f] || null;
-        logs.push({ attendance_id: orig.id, staff_id: orig.staff_id, field_name: f, old_value: oldVal, new_value: newVal });
-      }
-    });
-
-    if (Object.keys(updates).length === 0) { setEditingAtt(null); return; }
-
-    await supabase.from('attendance_sessions').update(updates).eq('id', orig.id);
-    if (logs.length) await supabase.from('attendance_edit_log').insert(logs);
+    // Ô giờ là giờ trên máy (VN) → gửi giờ chuẩn để máy chủ không lưu lệch 7 tiếng.
+    const iso = v => (v ? new Date(v).toISOString() : null);
+    try {
+      await workforce('edit_attendance', { id: orig.id, clock_in: iso(editingAtt.clock_in), clock_out: iso(editingAtt.clock_out), note: editingAtt.note ?? '' });
+    } catch (err) { return alert(err.message); }
 
     setEditingAtt(null);
     fetchAll();
@@ -176,7 +172,7 @@ export default function PayrollPage() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     const [staffRes, cfgRes, reqRes, vioRes, attRes] = await Promise.all([
-      supabase.from('staff').select('*').order('full_name'),
+      supabase.from('staff').select('id, full_name, phone, role, created_at, last_login').order('full_name'),
       supabase.from('payroll_config').select('*'),
       supabase.from('payroll_requests').select('*, staff(full_name,phone)').order('created_at', { ascending: false }),
       supabase.from('payroll_violations').select('*, staff(full_name)').eq('month', selMonth).eq('year', selYear),
@@ -243,14 +239,15 @@ export default function PayrollPage() {
 
   // --- Approve / Reject request ---
   const handleDecision = async (reqId, decision, adminNote = '') => {
-    await supabase.from('payroll_requests').update({ status: decision, admin_note: adminNote, updated_at: new Date().toISOString() }).eq('id', reqId);
+    try { await workforce('decide_request', { id: reqId, status: decision, admin_note: adminNote }); } catch (err) { alert(err.message); }
     fetchAll();
   };
 
   // --- Add violation ---
   const handleAddViolation = async () => {
     if (!vForm.staff_id || !vForm.amount || !vForm.reason) return alert('Vui lòng điền đầy đủ!');
-    await supabase.from('payroll_violations').insert({ staff_id: vForm.staff_id, amount: Number(vForm.amount.replace(/\./g, '')), reason: vForm.reason, month: selMonth, year: selYear });
+    try { await workforce('add_violation', { staff_id: vForm.staff_id, amount: vForm.amount, reason: vForm.reason, month: selMonth, year: selYear }); }
+    catch (err) { return alert(err.message); }
     setVForm({ staff_id: '', amount: '', reason: '' });
     fetchAll();
   };
@@ -259,13 +256,8 @@ export default function PayrollPage() {
   const handleSaveConfig = async (staffId) => {
     const edit = configEdits[staffId];
     if (!edit) return;
-    const payload = { staff_id: staffId, base_salary: Number(edit.base_salary) || 0, overtime_rate: Number(edit.overtime_rate) || 25000, pay_day: Number(edit.pay_day) || 5, updated_at: new Date().toISOString() };
-    const existing = configs[staffId];
-    if (existing) {
-      await supabase.from('payroll_config').update(payload).eq('staff_id', staffId);
-    } else {
-      await supabase.from('payroll_config').insert(payload);
-    }
+    try { await workforce('save_config', { staff_id: staffId, base_salary: edit.base_salary, overtime_rate: edit.overtime_rate, pay_day: edit.pay_day }); }
+    catch (err) { return alert(err.message); }
     fetchAll();
     alert('Đã lưu cấu hình!');
   };
@@ -273,7 +265,7 @@ export default function PayrollPage() {
   // --- Delete violation ---
   const handleDeleteViolation = async (id) => {
     if (!confirm('Xoá khoản phạt này?')) return;
-    await supabase.from('payroll_violations').delete().eq('id', id);
+    try { await workforce('delete_violation', { id }); } catch (err) { alert(err.message); }
     fetchAll();
   };
 
@@ -281,8 +273,8 @@ export default function PayrollPage() {
   const handleCreateAccount = async () => {
     if (!accForm.full_name || !accForm.phone || !accForm.pin) return setAccMsg('Vui lòng điền đầy đủ!');
     if (accForm.pin.length < 4) return setAccMsg('PIN cần ít nhất 4 ký tự!');
-    const { error } = await supabase.from('staff').insert({ full_name: accForm.full_name.trim(), phone: accForm.phone.trim(), pin: accForm.pin, role: accForm.role });
-    if (error) { setAccMsg(error.message.includes('unique') ? '⚠️ Số điện thoại đã tồn tại!' : error.message); return; }
+    try { await workforce('create_account', { full_name: accForm.full_name, phone: accForm.phone, pin: accForm.pin, role: accForm.role }); }
+    catch (err) { setAccMsg(err.message); return; }
     setAccForm({ full_name: '', phone: '', pin: '', role: 'staff' });
     setAccMsg('✅ Tạo tài khoản thành công!');
     fetchAll();
@@ -292,7 +284,7 @@ export default function PayrollPage() {
   const handleUpdatePin = async (staffId) => {
     const newPin = editingPin[staffId];
     if (!newPin || newPin.length < 4) return alert('PIN cần ít nhất 4 ký tự!');
-    await supabase.from('staff').update({ pin: newPin }).eq('id', staffId);
+    try { await workforce('set_pin', { staff_id: staffId, pin: newPin }); } catch (err) { return alert(err.message); }
     setEditingPin(p => ({ ...p, [staffId]: '' }));
     fetchAll();
     alert('Đã cập nhật PIN!');
@@ -300,7 +292,7 @@ export default function PayrollPage() {
 
   const handleDeleteAccount = async (staffId, name) => {
     if (!confirm(`Xoá tài khoản "${name}"? Hành động này không thể hoàn tác.`)) return;
-    await supabase.from('staff').delete().eq('id', staffId);
+    try { await workforce('delete_account', { staff_id: staffId }); } catch (err) { alert(err.message); }
     fetchAll();
   };
 

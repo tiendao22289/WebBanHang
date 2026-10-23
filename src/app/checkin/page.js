@@ -2,11 +2,15 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { workforce } from '@/lib/staffApi';
 import { Suspense } from 'react';
 
+// Mã QR có dạng "<số 5 phút>.<chữ ký máy chủ>"; ở đây chỉ xem còn hạn không,
+// máy chủ mới là nơi kiểm chữ ký khi chấm công.
 function getExpectedToken() {
   return String(Math.floor(Date.now() / (5 * 60 * 1000)));
 }
+const tokenWindow = token => String(token || '').split('.')[0];
 
 // Lấy ngày hiện tại theo giờ Việt Nam (+07:00) — tránh lỗi timezone sai ngày
 function getTodayVN() {
@@ -52,7 +56,7 @@ function CheckinContent() {
   useEffect(() => {
     const now  = getExpectedToken();
     const prev = String(Number(now) - 1);
-    if (token === now || token === prev) {
+    if (tokenWindow(token) === now || tokenWindow(token) === prev) {
       try {
         const saved = localStorage.getItem('staffUser');
         if (saved) { setStaff(JSON.parse(saved)); setPhase('confirm'); }
@@ -78,14 +82,18 @@ function CheckinContent() {
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
-    const { data } = await supabase.from('staff').select('*').eq('phone', phone).eq('pin', pin).single();
-    if (data) {
-      localStorage.setItem('staffUser', JSON.stringify(data));
-      setStaff(data);
-      setPhase('confirm');
-    } else {
-      setMsg('Sai số điện thoại hoặc PIN!');
-    }
+    try {
+      const response = await fetch('/api/admin/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone, pin }) });
+      const result = await response.json().catch(() => ({}));
+      if (response.ok && result.user) {
+        localStorage.setItem('staffUser', JSON.stringify(result.user));
+        setStaff(result.user);
+        setMsg('');
+        setPhase('confirm');
+      } else {
+        setMsg(result.error || 'Sai số điện thoại hoặc PIN!');
+      }
+    } catch { setMsg('Mạng yếu, thử lại.'); }
     setLoading(false);
   };
 
@@ -94,40 +102,31 @@ function CheckinContent() {
     setLoading(true);
     const today = getTodayVN();
 
-    // Fetch today's sessions fresh
-    const { data: sessions } = await supabase
-      .from('attendance_sessions')
-      .select('*')
-      .eq('staff_id', staff.id)
-      .eq('date', today)
-      .order('clock_in');
-
-    const allSessions = sessions || [];
-    const openSession = allSessions.find(s => !s.clock_out);
-
+    let result;
+    try {
+      result = await workforce('clock', { token });
+    } catch (err) {
+      setMsg(err.message);
+      if (/đăng nhập/i.test(err.message)) { localStorage.removeItem('staffUser'); setStaff(null); setPhase('login'); }
+      setLoading(false);
+      return;
+    }
+    const allSessions = result.sessions || [];
+    setTodaySessions(allSessions);
     let resultMsg = '';
-
-    if (openSession) {
+    if (result.clocked === 'out') {
       // ── CLOCK OUT ──
-      const clockOut = new Date();
-      const durH = Math.round(((clockOut - new Date(openSession.clock_in)) / 3600000) * 10) / 10;
-      await supabase.from('attendance_sessions')
-        .update({ clock_out: clockOut.toISOString() })
-        .eq('id', openSession.id);
-
-      // Recalc total for today after close
-      const closedSessions = [...allSessions.filter(s => s.id !== openSession.id && s.clock_out), { ...openSession, clock_out: clockOut.toISOString() }];
-      const totalH = sumHours(closedSessions);
+      const clockOut = new Date(result.at);
+      const durH = Math.round(((clockOut - new Date(result.session.clock_in)) / 3600000) * 10) / 10;
+      const totalH = sumHours(allSessions);
       const otH    = Math.max(0, Math.round((totalH - 8) * 10) / 10);
-
-      resultMsg = `🔴 Ra ca lúc ${formatTime(clockOut)} · Ca này: ${durH}h\n✅ Tổng hôm nay: ${totalH}h${otH > 0 ? ` (tăng ca ${otH}h)` : ''}`;
+      resultMsg = `🔴 Ra ca lúc ${formatTime(clockOut)} · Ca này: ${durH}h
+✅ Tổng hôm nay: ${totalH}h${otH > 0 ? ` (tăng ca ${otH}h)` : ''}`;
     } else {
       // ── CLOCK IN ──
-      await supabase.from('attendance_sessions')
-        .insert({ staff_id: staff.id, date: today, clock_in: new Date().toISOString() });
-
       const totalSoFar = sumHours(allSessions);
-      resultMsg = `🟢 Vào ca lúc ${formatTime(new Date())}\n⏱ Tổng tích luỹ hôm nay: ${totalSoFar}h`;
+      resultMsg = `🟢 Vào ca lúc ${formatTime(new Date(result.at))}
+⏱ Tổng tích luỹ hôm nay: ${totalSoFar}h`;
     }
 
     setMsg(resultMsg);
