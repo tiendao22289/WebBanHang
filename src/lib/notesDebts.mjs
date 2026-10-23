@@ -52,3 +52,48 @@ export function allocateToDebts(amount, lines, preferredKeys = []) {
   }
   return out;
 }
+
+/**
+ * Tiền thừa của một phiếu đi chợ người đi chợ còn cầm (chưa trả chủ):
+ * tiền được giao − trả ngay − tiền phiếu này đã dùng trả nợ − số đã trả lại chủ.
+ */
+export function noteLeftover(note, payments = []) {
+  if (note?.note_type !== 'expense') return 0;
+  const data = readContent(note.content);
+  const given = Number(data?.input_amount) || 0;
+  if (!given) return 0;
+  const funded = payments.filter(p => p.paid_from_note_id === note.id).reduce((a, p) => a + (Number(p.amount) || 0), 0);
+  const returned = (data.returned_logs || []).reduce((a, r) => a + (Number(r.amount) || 0), 0);
+  return Math.max(0, given - (Number(note.amount) || 0) - funded - returned);
+}
+
+/** Các phiếu từ ngày `since` (YYYY-MM-DD, giờ VN) còn tiền thừa chưa trả chủ, cũ nhất trước. */
+export function openLeftovers(notes, payments, since) {
+  const from = since ? Date.parse(`${since}T00:00:00+07:00`) : 0;
+  return notes.filter(n => Date.parse(n.created_at) >= from)
+    .map(n => ({ note_id: n.id, created_at: n.created_at, writer: n.staff?.full_name || '', staff_id: n.staff_id, left: noteLeftover(n, payments) }))
+    .filter(l => l.left > 0)
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+}
+
+/**
+ * Gán nguồn tiền cho từng khoản trả nợ: lần lượt dùng các nguồn (tiền thừa phiếu
+ * trước, rồi tiền của phiếu mới = id null). pays: [{ key, amount }], sources:
+ * [{ id, left }] (id null = phiếu mới, không giới hạn). Trả về [{ key, amount, from_note_id }].
+ */
+export function fundDebtPayments(pays, sources) {
+  const pool = sources.map(s => ({ id: s.id ?? null, left: s.id ? Math.max(0, Number(s.left) || 0) : Infinity }));
+  if (!pool.some(s => s.id === null)) pool.push({ id: null, left: Infinity });
+  const out = [];
+  for (const p of pays) {
+    let need = Math.max(0, Math.round(Number(p.amount) || 0));
+    for (const s of pool) {
+      if (need <= 0) break;
+      if (s.left <= 0) continue;
+      const take = Math.min(need, s.left);
+      out.push({ key: p.key, amount: take, from_note_id: s.id });
+      s.left -= take; need -= take;
+    }
+  }
+  return out;
+}

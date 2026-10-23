@@ -9,6 +9,10 @@ import { normalizePriceInput, noteTotals, parsePrice, parseQty } from '@/lib/not
 import { notesApi, workforce } from '@/lib/staffApi';
 import { LineHint, filterRange, notesSummary } from './notesStats';
 import DebtPicker from './DebtPicker';
+import { fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
+
+// Chỉ tính tiền thừa của phiếu từ ngày Sổ thu chi bắt đầu (phiếu cũ hơn có thể đã trả chủ).
+const LEFTOVER_SINCE = '2026-10-23';
 
 export default function StaffNotesPage() {
   // Tên món trong menu để chọn nhanh ở ô tên hàng (vẫn gõ tự do được).
@@ -52,6 +56,7 @@ export default function StaffNotesPage() {
   // Khoản nợ cũ chọn trả trong phiếu mới: { 'noteId:itemIndex': số tiền }; tuỳ chọn lấy tiền dư trả nợ.
   const [debtPays, setDebtPays] = useState({});
   const [useSurplusForDebt, setUseSurplusForDebt] = useState(false);
+  const [useLeftoverForDebt, setUseLeftoverForDebt] = useState(false);
   const debtPayTotal = Object.values(debtPays).reduce((a, v) => a + (Number(v) || 0), 0);
   const [newNotePayDebtAmount, setNewNotePayDebtAmount] = useState('');
   
@@ -339,10 +344,13 @@ export default function StaffNotesPage() {
 
   const submitNewNote = async () => {
     // Các khoản nợ cũ đã chọn trả (máy chủ kiểm lại số còn nợ từng khoản).
-    const payDebts = Object.entries(debtPays).filter(([, v]) => Number(v) > 0).map(([key, amount]) => {
-      const [noteId, index] = key.split(':');
-      return { note_id: noteId, item_index: index === 'note' ? null : Number(index), amount: Number(amount) };
-    });
+    // Nguồn tiền: tiền thừa phiếu trước (nếu tích dùng) trước, rồi tiền của phiếu này.
+    const leftovers = useLeftoverForDebt ? openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ id: l.note_id, left: l.left })) : [];
+    const payDebts = fundDebtPayments(Object.entries(debtPays).filter(([, v]) => Number(v) > 0).map(([key, amount]) => ({ key, amount })), leftovers)
+      .map(({ key, amount, from_note_id }) => {
+        const [noteId, index] = key.split(':');
+        return { note_id: noteId, item_index: index === 'note' ? null : Number(index), amount, from_note_id };
+      });
 
     const hasItems = newNoteType === 'expense' && expenseItems.some(i => i.name.trim());
     if (!hasItems && !newNoteContent.trim() && !payDebts.length) {
@@ -380,6 +388,7 @@ export default function StaffNotesPage() {
       setNewNotePayDebtAmount('');
       setDebtPays({});
       setUseSurplusForDebt(false);
+      setUseLeftoverForDebt(false);
       fetchNotes(currentUser); // Refresh list
     } else {
       alert(error.message || 'Lỗi lưu báo cáo!');
@@ -951,6 +960,7 @@ export default function StaffNotesPage() {
                 const paidAtPurchase = noteTotals(data.items || []).paid;
                 const fundedDebt = noteId ? payments.filter(p => p.paid_from_note_id === noteId).reduce((a, p) => a + Number(p.amount || 0), 0) : 0;
                 const balance = data.input_amount - paidAtPurchase - fundedDebt;
+                const returned = (data.returned_logs || []).reduce((a, r) => a + Number(r.amount || 0), 0);
                 return (
                   <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 10, background: balance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1.5px solid ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginBottom: 4 }}>
@@ -975,6 +985,18 @@ export default function StaffNotesPage() {
                       </span>
                       <strong style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>{formatMoney(Math.abs(balance))}</strong>
                     </div>
+                    {returned > 0 && (
+                      <>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginTop: 4 }}>
+                          <span style={{ color: '#15803d' }}>↩ Đã trả lại chủ:</span>
+                          <strong style={{ color: '#15803d' }}>{formatMoney(returned)}</strong>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem' }}>
+                          <span style={{ color: '#6b7280' }}>Còn cầm chưa trả chủ:</span>
+                          <strong>{formatMoney(Math.max(0, balance - returned))}</strong>
+                        </div>
+                      </>
+                    )}
                   </div>
                 );
               })()}
@@ -1679,7 +1701,9 @@ export default function StaffNotesPage() {
                 const vCleared = (viewingNote.paid_debt || 0) > 0 && vDebtRemain === 0;
                 let vInputAmt = 0;
                 try { const d = JSON.parse(viewingNote.content); if (d.input_amount > 0) vInputAmt = d.input_amount; } catch {}
-                const vBalance = vInputAmt > 0 ? vInputAmt - (viewingNote.amount || 0) : null;
+                // Trừ cả tiền phiếu này đã dùng trả nợ cũ (giống phần chi tiết phiếu).
+                const vFunded = payments.filter(p => p.paid_from_note_id === viewingNote.id).reduce((a, p) => a + Number(p.amount || 0), 0);
+                const vBalance = vInputAmt > 0 ? vInputAmt - (viewingNote.amount || 0) - vFunded : null;
                 return (
                   <div style={{
                     display: 'flex', flexDirection: 'column', gap: 8, padding: 14, borderRadius: 10, marginBottom: 16,
@@ -1829,7 +1853,10 @@ export default function StaffNotesPage() {
                     const { paid: thucChi, debt: tienNo } = calculateTotals();
                     const tongMua = thucChi + tienNo;
                     const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
-                    const payOldDebt = debtPayTotal;
+                    // Phần trả nợ lấy từ tiền thừa phiếu trước không trừ vào tiền được giao của phiếu này.
+                    const fromLeftover = useLeftoverForDebt ? fundDebtPayments(Object.entries(debtPays).map(([key, amount]) => ({ key, amount })),
+                      openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ id: l.note_id, left: l.left }))).filter(x => x.from_note_id).reduce((a, x) => a + x.amount, 0) : 0;
+                    const payOldDebt = debtPayTotal - fromLeftover;
                     const balance = inputAmt > 0 ? inputAmt - thucChi - payOldDebt : null;
                     return (
                       <div style={{ marginTop: 10, padding: '12px 14px', background: '#fff7ed', borderRadius: 10, border: '1px solid #fed7aa', fontSize: 13 }}>
@@ -1891,7 +1918,12 @@ export default function StaffNotesPage() {
                 const surplus = inputAmt > 0 ? inputAmt - calculateTotals().paid : 0;
                 return (
                   <DebtPicker notes={notes} value={debtPays} onChange={setDebtPays}
-                    surplus={surplus} useSurplus={useSurplusForDebt} onUseSurplus={setUseSurplusForDebt} />
+                    surplus={surplus} useSurplus={useSurplusForDebt} onUseSurplus={setUseSurplusForDebt}
+                    leftovers={openLeftovers(notes, payments, LEFTOVER_SINCE)} useLeftover={useLeftoverForDebt} onUseLeftover={setUseLeftoverForDebt}
+                    onReturnLeftover={async l => {
+                      if (!confirm(`Người đi chợ đã đưa lại ${l.left.toLocaleString('vi-VN')}đ tiền thừa của phiếu này cho chủ?`)) return;
+                      try { await notesApi('return_leftover', { id: l.note_id, amount: l.left }); await fetchNotes(); } catch (err) { alert(err.message); }
+                    }} />
                 );
               })()}
             </div>

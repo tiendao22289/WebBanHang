@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as math from '../src/lib/notesMath.mjs';
-import { openDebtLines } from '../src/lib/notesDebts.mjs';
+import { noteLeftover, openDebtLines } from '../src/lib/notesDebts.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
 
 const source = readFileSync(new URL('../src/app/api/admin/notes/route.js', import.meta.url), 'utf8')
@@ -14,7 +14,7 @@ const STAFF = { id: '00000000-0000-4000-8000-00000000bbbb', full_name: 'Thy', ro
 function load(state, user = ADMIN) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...math, openDebtLines, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
+    NextResponse, ...math, openDebtLines, noteLeftover, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
     getStaffSession: async () => ({ code: 200, user }), staffDatabase: () => fakeDb(state),
   });
 }
@@ -109,4 +109,25 @@ test('staff only touch their own notes on the day; only admins delete', async ()
   assert.deepEqual(list.body.notes.map(n => n.staff_id), [STAFF.id], 'staff only see their own notes');
   assert.equal((await post(load(state), { action: 'delete', id: state.staff_notes[1].id })).status, 200);
   assert.equal(state.staff_notes.length, 1);
+});
+
+test('leftover money from an earlier trip can pay old debts, and can be marked as handed back', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Mực', qty: '2', price: '100k', paymentStatus: 'debt', creditor: 'Chị Hoa' }] });
+  await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Ốc', qty: '2', price: '220k' }], input_amount: 1000000 });
+  const [debtNote, trip] = state.staff_notes; // trip còn thừa 560.000
+  assert.equal((await post(api, { action: 'create', note_type: 'other', note: 'trả nợ',
+    pay_debts: [{ note_id: debtNote.id, item_index: 0, amount: 200000, from_note_id: debtNote.id }] })).status, 400, 'a note without leftover cannot fund payments');
+  assert.equal((await post(api, { action: 'return_leftover', id: trip.id, amount: 600000 })).status, 400, 'cannot hand back more than is left');
+  const r = await post(api, { action: 'create', note_type: 'other', note: 'trả nợ chị Hoa',
+    pay_debts: [{ note_id: debtNote.id, item_index: 0, amount: 150000, from_note_id: trip.id }, { note_id: debtNote.id, item_index: 0, amount: 50000 }] });
+  assert.equal(r.status, 200);
+  assert.deepEqual(plain(state.staff_note_payments.map(p => [p.amount, p.paid_from_note_id])), [[150000, trip.id], [50000, r.body.note.id]]);
+  assert.match(JSON.parse(state.staff_notes.find(n => n.id === debtNote.id).content).history.at(-2).changes, /lấy tiền thừa phiếu/);
+  assert.equal(noteLeftover(state.staff_notes.find(n => n.id === trip.id), state.staff_note_payments), 410000);
+  assert.equal((await post(api, { action: 'return_leftover', id: trip.id, amount: 410000 })).status, 200);
+  const handed = state.staff_notes.find(n => n.id === trip.id);
+  assert.equal(noteLeftover(handed, state.staff_note_payments), 0);
+  assert.match(JSON.parse(handed.content).history.at(-1).changes, /Đã trả lại chủ 410\.000/);
 });

@@ -9,12 +9,13 @@
  *
  * GET  → { notes (kèm staff), payments }  (admin: tất cả; nhân viên: của mình)
  * POST {action}: create (kèm pay_debts: [{ note_id, item_index|null, amount }] — trả đúng các khoản
- *       nợ cũ đã chọn bằng tiền của phiếu mới), edit, pay_item (item_index null = cả phiếu), delete (admin)
+ *       nợ cũ đã chọn; from_note_id = lấy từ tiền thừa của phiếu trước, bỏ trống = tiền phiếu mới),
+ *       edit, pay_item (item_index null = cả phiếu), return_leftover (đã trả tiền thừa cho chủ), delete (admin)
  */
 import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
-import { openDebtLines } from '@/lib/notesDebts.mjs';
+import { noteLeftover, openDebtLines } from '@/lib/notesDebts.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -144,7 +145,7 @@ export async function POST(request) {
       const noteText = str(body.note, 4000);
       // Các khoản nợ cũ người ghi chọn trả bằng tiền của phiếu này — kiểm tra hết trước khi lưu.
       const requested = Array.isArray(body.pay_debts) ? body.pay_debts.slice(0, 60) : [];
-      const targetIds = [...new Set(requested.map(r => r?.note_id).filter(id => UUID.test(id || '')))];
+      const targetIds = [...new Set(requested.flatMap(r => [r?.note_id, r?.from_note_id]).filter(id => UUID.test(id || '')))];
       const { data: targets, error: targetErr } = targetIds.length ? await db.from('staff_notes').select('*').in('id', targetIds) : { data: [], error: null };
       if (targetErr) throw targetErr;
       const byId = new Map((targets || []).map(n => [n.id, n]));
@@ -160,11 +161,27 @@ export async function POST(request) {
         const already = used.get(key) || 0;
         if (!line || pay + already > line.left) return fail(`Số trả vượt số còn nợ${line ? ` (${line.name}: còn ${vnd(line.left - already)})` : ' — khoản này đã trả hết'}.`);
         used.set(key, already + pay);
-        plan.push({ id: target.id, idx, pay, line, at: target.created_at });
+        const from = UUID.test(r.from_note_id || '') ? r.from_note_id : null;
+        plan.push({ id: target.id, idx, pay, line, at: target.created_at, from });
+      }
+      // Tiền thừa phiếu trước: phiếu nguồn phải còn đủ tiền thừa chưa trả chủ.
+      const sourceIds = [...new Set(plan.map(x => x.from).filter(Boolean))];
+      if (sourceIds.length) {
+        const { data: sourcePays, error: sourceErr } = await db.from('staff_note_payments').select('paid_from_note_id, amount').in('paid_from_note_id', sourceIds);
+        if (sourceErr) throw sourceErr;
+        for (const id of sourceIds) {
+          const source = byId.get(id);
+          if (!source) return fail('Phiếu lấy tiền thừa không hợp lệ.');
+          if (!isAdmin && source.staff_id !== user.id) return fail('Không dùng được tiền thừa trên phiếu của người khác.', 403);
+          const want = plan.filter(x => x.from === id).reduce((a, x) => a + x.pay, 0);
+          const left = noteLeftover(source, sourcePays || []);
+          if (want > left) return fail(`Tiền thừa phiếu ${vnDay(source.created_at).split('-').reverse().slice(0, 2).join('/')} chỉ còn ${vnd(left)}.`);
+        }
       }
       const payTotal = plan.reduce((a, x) => a + x.pay, 0);
       const dm = iso => vnDay(iso).split('-').reverse().slice(0, 2).join('/');
-      const notice = payTotal > 0 ? `[💰 Trả nợ cũ ${vnd(payTotal)}: ${plan.map(x => `${x.line.creditor || 'không ghi tên'} — ${x.line.name} ${vnd(x.pay)} (phiếu ${dm(x.at)})`).join('; ')}]` : '';
+      const sourceText = x => (x.from ? `, lấy tiền thừa phiếu ${dm(byId.get(x.from).created_at)}` : '');
+      const notice = payTotal > 0 ? `[💰 Trả nợ cũ ${vnd(payTotal)}: ${plan.map(x => `${x.line.creditor || 'không ghi tên'} — ${x.line.name} ${vnd(x.pay)} (phiếu ${dm(x.at)}${sourceText(x)})`).join('; ')}]` : '';
       let content, amount = 0, debt = 0;
       if (items.length) {
         const t = noteTotals(items);
@@ -181,8 +198,8 @@ export async function POST(request) {
       // Chỉ trả nợ cũ sau khi phiếu mới đã lưu (mất mạng giữa chừng thì không lệch).
       for (const x of plan) {
         const current = byId.get(x.id);
-        byId.set(x.id, await applyPayment(db, current, x.idx, x.pay, { user, fromNoteId: created.id,
-          logText: item => `💰 Khấu trừ ${vnd(x.pay)}${item?.name ? ` cho "${item.name}"` : ''} (lấy từ phiếu đi chợ mới)${item?.paymentStatus === 'full' ? ' — ✅ Đã trả đủ' : ''}` }));
+        byId.set(x.id, await applyPayment(db, current, x.idx, x.pay, { user, fromNoteId: x.from || created.id,
+          logText: item => `💰 Khấu trừ ${vnd(x.pay)}${item?.name ? ` cho "${item.name}"` : ''} (${x.from ? `lấy tiền thừa phiếu ${dm(byId.get(x.from).created_at)}` : 'lấy từ phiếu đi chợ mới'})${item?.paymentStatus === 'full' ? ' — ✅ Đã trả đủ' : ''}` }));
       }
       return NextResponse.json({ ok: true, note: created }, { headers });
     }
@@ -199,6 +216,22 @@ export async function POST(request) {
       const r = await db.from('staff_notes').delete().eq('id', note.id);
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true }, { headers });
+    }
+
+    if (body.action === 'return_leftover') {
+      // Người đi chợ đã đưa lại tiền thừa cho chủ → bớt khỏi "tiền thừa chưa trả chủ".
+      const amount = money(body.amount);
+      const { data: pays, error: paysErr } = await db.from('staff_note_payments').select('paid_from_note_id, amount').eq('paid_from_note_id', note.id);
+      if (paysErr) throw paysErr;
+      const left = noteLeftover(note, pays || []);
+      if (!amount || amount > left) return fail(`Phiếu này còn ${vnd(left)} tiền thừa.`);
+      const data = parseContent(note.content) || {};
+      const ts = stamp(), by = user.full_name || 'Không rõ';
+      data.returned_logs = [...(data.returned_logs || []), { amount, ts, by }];
+      data.history = [...(data.history || []), { ts, by, changes: `↩ Đã trả lại chủ ${vnd(amount)} tiền thừa` }];
+      const { data: saved, error } = await db.from('staff_notes').update({ content: JSON.stringify(data) }).eq('id', note.id).select('*').single();
+      if (error) throw error;
+      return NextResponse.json({ ok: true, note: saved }, { headers });
     }
 
     if (body.action === 'pay_item') {
