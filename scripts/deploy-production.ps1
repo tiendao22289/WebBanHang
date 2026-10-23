@@ -19,7 +19,8 @@ try {
     & npm.cmd ci --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed; production is unchanged.' }
     $tests = @(Get-ChildItem -LiteralPath tests -Filter '*.test.*' | ForEach-Object FullName)
-    & node --test @tests
+    # Few test files at a time: the shop server runs out of memory when all start together.
+    & node --test --test-concurrency=3 @tests
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed; production is unchanged.' }
     & npm.cmd run build
     if ($LASTEXITCODE -ne 0) { throw 'Build failed; production is unchanged.' }
