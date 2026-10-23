@@ -612,6 +612,57 @@
   transform: scale(1.1);
 }
 
+/* ── Form "Tạo báo cáo": mỗi món 2 dòng thẳng hàng ── */
+.add-input-amount {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+}
+.add-input-amount label {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1d4ed8;
+}
+.add-input-amount input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid #93c5fd;
+  border-radius: 8px;
+  background: white;
+  font-size: 15px;
+  font-weight: 700;
+  color: #1d4ed8;
+  text-align: right;
+  outline: none;
+}
+.add-items { display: flex; flex-direction: column; gap: 6px; }
+.add-item {
+  padding: 6px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+}
+.add-item:focus-within { border-color: #fca5a5; }
+.add-item-top { display: flex; align-items: center; gap: 6px; }
+.add-item-top .btn-remove-row, .add-item-spacer { flex-shrink: 0; width: 28px; height: 28px; }
+.add-item-bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-top: 6px;
+  margin-right: 34px;
+}
+.add-item-bottom .expense-input-clean { width: 100%; min-width: 0; text-align: center; box-sizing: border-box; }
+.add-item-status { padding: 3px; gap: 2px; }
+.add-item-status .status-label { padding: 4px 10px; font-size: 0.82rem; }
+.add-item-debt { display: flex; gap: 6px; margin-top: 6px; margin-right: 34px; }
+
 /* ── Expense dual-view (desktop table / mobile cards) ── */
 .expense-desktop-table { display: block; }
 .expense-mobile-cards  { display: none; }
