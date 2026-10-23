@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as finance from '../src/lib/ownerFinance.mjs';
+import * as zaloLink from '../src/lib/financeZaloLink.mjs';
+import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 
 const source = readFileSync(new URL('../src/app/api/admin/finance/route.js', import.meta.url), 'utf8')
   .replace(/^import [\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
@@ -20,6 +22,9 @@ function fakeDb(state, { failTable } = {}) {
       in(k, vs) { conditions.push(r => vs.includes(r[k])); return q; },
       like(k, pattern) { const needle = pattern.replace(/%/g, ''); conditions.push(r => String(r[k] ?? '').includes(needle)); return q; },
       limit(n) { max = n; return q; },
+      is(k, v) { conditions.push(r => (r[k] ?? null) === v); return q; },
+      not(k, op, v) { if (op === 'is' && v === null) conditions.push(r => r[k] !== null && r[k] !== undefined); return q; },
+      ilike(k, pattern) { const needle = pattern.replace(/%/g, '').toLowerCase(); conditions.push(r => String(r[k] ?? '').toLowerCase().includes(needle)); return q; },
       maybeSingle() { maybe = true; return q; },
       upsert(v, opts) { op = 'upsert'; values = v; conflict = opts?.onConflict; ignore = !!opts?.ignoreDuplicates; return q; },
       order(k) { orders.push(k); return q; },
@@ -62,12 +67,15 @@ function fakeDb(state, { failTable } = {}) {
   } };
 }
 
-function load({ role = 'admin', code = 200, state, failTable }) {
+function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFails = false, env = {} }) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...finance, URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
+    NextResponse, ...finance, ...zaloLink, createHmac, randomInt, timingSafeEqual, Buffer, process: { env },
+    sendOaText: async (_db, id, text) => { sent.push({ id, text }); return zaloFails ? { ok: false, detail: { error: -230 } } : { ok: true }; },
+    URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
     statusDatabase: () => fakeDb(state, { failTable }),
+    signReceiptImages: async (_db, paths) => Object.fromEntries(paths.filter(Boolean).map(p => [p, `signed:${p}`])),
   });
 }
 
@@ -345,4 +353,141 @@ test('entries go into own tabs, salary types and fixed items with the right date
   assert.equal(day.profit, -(450000 + 100000 + 500000 + 10000));
   assert.equal(month.body.customMonthTotals[TAB_ADS], 3100000);
   assert.deepEqual(month.body.customMonthlyEntries.map(e => e.label), ['Facebook']);
+});
+
+test('paper bills show in the month totals and in the day detail with their photos', async () => {
+  const state = empty();
+  state.finance_manual_receipts = [
+    { id: 'p1', business_date: '2026-10-23', received_at: '2026-10-23T05:00:00Z', amount: 350000, payment_method: 'cash', image_path: 'bill.jpg', table_label: 'Bàn 5', created_by_name: 'Lan' },
+    { id: 'p2', business_date: '2026-10-23', received_at: '2026-10-23T06:00:00Z', amount: 420000, payment_method: 'transfer', account_id: ACC_A, image_path: 'bill2.jpg', transfer_image_path: 'ck.jpg' }];
+  state.finance_revenue_ledger.push({ order_id: 'o1', business_date: '2026-10-23', paid_at: '2026-10-23T04:00:00Z', amount: 100000, payment_method: 'transfer', account_id: ACC_A, transfer_image_path: 'ck-o1.jpg' });
+  const month = await get(load({ state }), 'month=2026-10');
+  const day = month.body.days.find(d => d.date === '2026-10-23');
+  assert.deepEqual([day.revenue, day.bills, day.paperBills, day.cash, day.transfer], [870000, 1, 2, 350000, 520000]);
+  const detail = await get(load({ state }), 'date=2026-10-23');
+  assert.deepEqual(detail.body.paperBills.map(b => [b.amount, b.imageUrl, b.transferImageUrl]),
+    [[350000, 'signed:bill.jpg', null], [420000, 'signed:bill2.jpg', 'signed:ck.jpg']]);
+  assert.equal(detail.body.bills[0].transfer_image_url, 'signed:ck-o1.jpg');
+  assert.equal('transfer_image_path' in detail.body.bills[0], false, 'storage paths are not sent to the page');
+  assert.deepEqual([detail.body.dayCash, detail.body.dayByAccount[ACC_A]], [350000, 520000], 'day close counts paper bills too');
+});
+
+test('bills can be looked up later by table, amount, type and photo to check transfer screenshots', async () => {
+  const state = empty();
+  state.finance_revenue_ledger.push(
+    { order_id: 'b1', business_date: '2026-10-23', paid_at: '2026-10-23T05:00:00Z', table_number: '43', amount: 39000, payment_method: 'transfer', account_id: ACC_A, transfer_image_path: 'ck1.jpg', items: [{ name: 'Ốc', quantity: 1, unit_price: 39000 }] },
+    { order_id: 'b2', business_date: '2026-10-23', paid_at: '2026-10-23T06:00:00Z', table_number: '43', amount: 120000, payment_method: 'cash' },
+    { order_id: 'b3', business_date: '2026-10-22', paid_at: '2026-10-22T06:00:00Z', table_number: '5', amount: 39000, payment_method: 'transfer', transfer_image_path: null },
+    { order_id: 'old', business_date: '2026-07-01', paid_at: '2026-07-01T06:00:00Z', table_number: '43', amount: 39000, payment_method: 'transfer', transfer_image_path: null });
+  state.finance_manual_receipts = [
+    { id: 'p1', business_date: '2026-10-23', received_at: '2026-10-23T07:00:00Z', table_label: 'Bàn 43', amount: 250000, payment_method: 'transfer', account_id: ACC_A, image_path: 'bill.jpg', transfer_image_path: 'ck2.jpg', created_by_name: 'Lan' }];
+  const api = load({ state });
+  const find = async q => (await get(api, `search=1&${q}`)).body;
+
+  let r = await find('from=2026-10-20&to=2026-10-23&table=43');
+  assert.deepEqual(r.results.map(x => x.id), ['p1', 'b2', 'b1'], 'newest first, paper bills matched by their table note');
+  const b1 = r.results.find(x => x.id === 'b1');
+  assert.deepEqual([b1.transferImageUrl, b1.items.length, b1.accountId], ['signed:ck1.jpg', 1, ACC_A]);
+  const p1 = r.results.find(x => x.id === 'p1');
+  assert.deepEqual([p1.billImageUrl, p1.transferImageUrl, p1.by], ['signed:bill.jpg', 'signed:ck2.jpg', 'Lan']);
+
+  assert.deepEqual(plain(r.tables), [{ name: '5', count: 1 }, { name: '43', count: 3 }], 'tables with bills in the range, ignoring the table filter, for quick picking');
+  r = await find('from=2026-10-20&to=2026-10-23&table=Bàn 43&type=transfer&image=1');
+  assert.deepEqual(r.results.map(x => x.id), ['p1', 'b1'], '"Bàn 43" works like "43"; only transfers with a photo');
+  r = await find('from=2026-10-20&to=2026-10-23&amount=39.000');
+  assert.deepEqual(r.results.map(x => x.id), ['b1', 'b3']);
+  r = await find('from=2026-10-20&to=2026-10-23&type=paper');
+  assert.deepEqual(r.results.map(x => x.id), ['p1']);
+  r = await find('from=2026-07-01&to=2026-07-01&table=43');
+  assert.equal(r.results[0].imageExpired, true, 'a photo older than 3 months shows as removed');
+
+  assert.equal((await get(api, 'search=1&from=2026-10-23&to=2026-10-01')).status, 400);
+  assert.equal((await get(api, 'search=1&from=2026-01-01&to=2026-10-23')).status, 400, 'at most 3 months per search');
+  assert.equal((await get(load({ state, role: 'staff' }), 'search=1')).status, 403, 'owner only');
+});
+
+test('transfer bills can be filtered by card, missing photo and checked state, and ticked off after checking the bank', async () => {
+  const today = finance.vnDate(Date.now());
+  const ACC_B = '00000000-0000-0000-0000-0000000000bb';
+  const P1 = '00000000-0000-0000-0000-000000000001';
+  const state = empty();
+  state.finance_revenue_ledger.push(
+    { order_id: '00000000-0000-0000-0000-000000000b01', business_date: today, paid_at: later(-30), table_number: '3', amount: 50000, payment_method: 'transfer', account_id: ACC_A, transfer_image_path: 'ck.jpg' },
+    { order_id: '00000000-0000-0000-0000-000000000b02', business_date: today, paid_at: later(-20), table_number: '4', amount: 70000, payment_method: 'transfer', account_id: ACC_B, transfer_image_path: null },
+    { order_id: '00000000-0000-0000-0000-000000000b03', business_date: today, paid_at: later(-10), table_number: '5', amount: 90000, payment_method: 'cash' });
+  state.finance_manual_receipts = [
+    { id: P1, business_date: today, received_at: later(-5), table_label: '6', amount: 30000, payment_method: 'transfer', account_id: ACC_B, image_path: 'b.jpg', transfer_image_path: null }];
+  const api = load({ state });
+  const ids = async q => (await get(api, `search=1&from=${today}&to=${today}&${q}`)).body.results.map(r => r.id);
+
+  let r = (await get(api, `search=1&from=${today}&to=${today}`)).body;
+  assert.deepEqual(plain(r.alerts), { missingPhoto: 2, unchecked: 3 }, 'cash bills never count');
+  assert.deepEqual(await ids('image=missing'), [P1, '00000000-0000-0000-0000-000000000b02']);
+  assert.deepEqual(await ids(`account=${ACC_B}`), [P1, '00000000-0000-0000-0000-000000000b02']);
+  assert.deepEqual(await ids(`account=${ACC_A}&type=cash`), [], 'a card filter means transfer bills only');
+
+  const ok = await post(api, { action: 'verify', kind: 'bill', id: '00000000-0000-0000-0000-000000000b01' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.verifiedBy, 'Chủ quán');
+  assert.equal((await post(api, { action: 'verify', kind: 'paper', id: P1 })).status, 200);
+  assert.equal((await post(api, { action: 'verify', kind: 'bill', id: '00000000-0000-0000-0000-000000000b03' })).status, 404, 'cash bills cannot be ticked');
+  assert.deepEqual(await ids('check=unchecked'), ['00000000-0000-0000-0000-000000000b02']);
+  assert.deepEqual(await ids('check=checked'), [P1, '00000000-0000-0000-0000-000000000b01']);
+  const checked = (await get(api, `search=1&from=${today}&to=${today}&check=checked`)).body.results[0];
+  assert.ok(checked.verifiedAt && checked.verifiedBy === 'Chủ quán');
+
+  await post(api, { action: 'verify', kind: 'paper', id: P1, verified: false });
+  assert.deepEqual(await ids('check=unchecked'), [P1, '00000000-0000-0000-0000-000000000b02'], 'a tick can be undone');
+  const month = await get(api, `month=${today.slice(0, 7)}`);
+  assert.deepEqual(plain(month.body.transferAlerts), { missingPhoto: 2, unchecked: 2 }, 'the overview shows the same counts');
+  assert.equal((await post(load({ state, role: 'staff' }), { action: 'verify', kind: 'bill', id: '00000000-0000-0000-0000-000000000b02' })).status, 403);
+});
+
+test('the owner links Zalo with a short code and gets one daily report a day', async () => {
+  const today = finance.vnDate(Date.now());
+  const state = empty();
+  state.finance_settings = [];
+  state.finance_revenue_ledger.push({ order_id: 'x1', business_date: today, paid_at: later(-10), table_number: '3', amount: 150000, payment_method: 'transfer', account_id: ACC_A, transfer_image_path: null });
+  state.bank_accounts.push({ id: ACC_A, bank_name: 'Agribank', account_name: 'Chủ quán', account_number: '123456789' });
+  const sent = [];
+  const api = load({ state, sent, env: { SUPABASE_SERVICE_ROLE_KEY: 'k'.repeat(40) } });
+  const replies = [];
+  const send = async (_db, uid, text) => replies.push({ uid, text });
+  const db = fakeDb(state);
+
+  assert.equal((await post(api, { action: 'zalo_test' })).body.error, 'Chưa liên kết Zalo nhận báo cáo.');
+  const { zaloReport } = (await post(api, { action: 'zalo_link_code' })).body;
+  assert.match(zaloReport.linkCode, /^\d{6}$/);
+  const wrong = zaloReport.linkCode === '000000' ? '111111' : '000000';
+  const msg = text => ({ event_name: 'user_send_text', sender: { id: 'owner-zalo' }, message: { text } });
+  assert.equal(await zaloLink.linkFinanceReport(db, msg('hello 0912345678'), send), false, 'normal messages go to the wheel flow');
+  assert.equal(await zaloLink.linkFinanceReport(db, msg(`BC ${wrong}`), send), true);
+  assert.equal(replies.at(-1).text, 'Mã liên kết không đúng.');
+  assert.equal(await zaloLink.linkFinanceReport(db, msg(`bc ${zaloReport.linkCode}`), send), true);
+  assert.match(replies.at(-1).text, /Đã liên kết/);
+  assert.deepEqual(plain(state.finance_settings[0].value.ownerIds), ['owner-zalo']);
+  const broken = async () => { throw new Error('Chưa uỷ quyền Zalo OA'); };
+  assert.equal(await zaloLink.linkFinanceReport(db, msg('BC 123456'), broken), true, 'a failed reply still keeps the code message out of the wheel flow');
+  assert.equal((await get(api, `month=${today.slice(0, 7)}`)).body.zaloReport.linked, 1);
+
+  const test1 = await post(api, { action: 'zalo_test' });
+  assert.equal(test1.status, 200);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /Doanh thu: 150\.000đ \(1 bill\)/);
+  assert.match(sent[0].text, /CK Agribank · Chủ quán: 150\.000đ/);
+  assert.match(sent[0].text, /1 bill CK chưa có ảnh/);
+
+  const key = createHmac('sha256', 'k'.repeat(40)).update('finance-daily-report').digest('hex');
+  const cronApi = load({ state, sent, code: 401, env: { SUPABASE_SERVICE_ROLE_KEY: 'k'.repeat(40) } });
+  const cron = async k => plain(await cronApi.POST({ json: async () => ({ action: 'daily_report', date: today }), headers: new Map([['x-finance-report-key', k]]) }));
+  assert.equal((await cron('0'.repeat(64))).status, 401, 'a wrong key still needs an owner login');
+  assert.equal((await cron(key)).body.ok, true);
+  assert.equal((await cron(key)).body.skipped, true, 'the morning report goes out once a day');
+  assert.equal(sent.length, 2);
+
+  const failing = load({ state, sent, zaloFails: true });
+  const res = await post(failing, { action: 'zalo_test' });
+  assert.equal(res.status, 400);
+  assert.match(res.body.zaloReport.lastError, /-230/, 'the page shows why Zalo refused');
+  assert.equal((await post(api, { action: 'zalo_unlink' })).body.zaloReport.linked, 0);
 });

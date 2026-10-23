@@ -14,6 +14,11 @@ export const FIXED_CATEGORIES = [
 
 const DAY_MS = 86400000;
 
+// Ảnh bill giấy / ảnh chuyển khoản giữ 3 tháng rồi tự xoá (số tiền vẫn giữ).
+export const RECEIPT_IMAGE_DAYS = 90;
+export const RECEIPT_BUCKET = 'finance-receipts';
+export const RECEIPT_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+
 /** Ngày theo giờ Việt Nam (YYYY-MM-DD) của một thời điểm. */
 export function vnDate(value) {
   return new Date(new Date(value).getTime() + 7 * 3600000).toISOString().slice(0, 10);
@@ -108,10 +113,11 @@ function datesBetween(from, toInclusive) {
 /**
  * Gom số liệu 1 tháng thành từng ngày + tổng tháng.
  * revenue: dòng finance_revenue_ledger; notes: staff_notes; entries: finance_entries;
- * categories: finance_categories (để biết tab tự tạo nhập theo ngày hay theo tháng).
+ * categories: finance_categories (để biết tab tự tạo nhập theo ngày hay theo tháng);
+ * paperBills: finance_manual_receipts (bill giấy nhập tay, cộng vào doanh thu).
  * Chỉ tính các ngày từ FINANCE_START_DATE đến hết hôm nay (giờ VN).
  */
-export function summarizeMonth({ month, revenue = [], notes = [], entries = [], closes = [], categories = [], today, startDate = FINANCE_START_DATE }) {
+export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [], entries = [], closes = [], categories = [], today, startDate = FINANCE_START_DATE }) {
   const { start, next, daysInMonth } = monthBounds(month);
   const lastOfMonth = new Date(Date.parse(`${next}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
   const from = start > startDate ? start : startDate;
@@ -132,18 +138,20 @@ export function summarizeMonth({ month, revenue = [], notes = [], entries = [], 
   const customDailyShare = Object.fromEntries(Object.entries(customMonthTotals).map(([id, total]) => [id, total / daysInMonth]));
 
   const days = dates.map(date => ({
-    date, revenue: 0, bills: 0, cash: 0, transfer: 0, byAccount: {},
+    date, revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {},
     purchases: 0, purchaseNotes: 0, suspiciousNotes: 0, drinks: 0, salary: 0, fixedShare: fixedPerDay,
     custom: { ...customDailyShare }, customTotal: 0, profit: 0, close: null,
   }));
   const byDate = new Map(days.map(d => [d.date, d]));
 
-  for (const row of revenue) {
+  // Bill trên hệ thống và bill giấy cùng cộng vào doanh thu, tiền mặt / từng thẻ.
+  const receipts = [...revenue.map(r => ({ ...r, paper: false })), ...paperBills.map(r => ({ ...r, paper: true }))];
+  for (const row of receipts) {
     const day = byDate.get(row.business_date);
     if (!day) continue;
     const amount = Number(row.amount) || 0;
     day.revenue += amount;
-    day.bills += 1;
+    if (row.paper) { day.paperBills += 1; day.paperRevenue += amount; } else day.bills += 1;
     if (row.payment_method === 'transfer') {
       day.transfer += amount;
       const key = row.account_id || 'unknown';
@@ -173,14 +181,55 @@ export function summarizeMonth({ month, revenue = [], notes = [], entries = [], 
   const closeByDate = new Map(closes.map(c => [c.business_date, c]));
   for (const day of days) day.close = closeDifferences(day, closeByDate.get(day.date));
 
-  const totals = { revenue: 0, bills: 0, cash: 0, transfer: 0, byAccount: {}, purchases: 0, drinks: 0, salary: 0, fixedShare: 0,
+  const totals = { revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {}, purchases: 0, drinks: 0, salary: 0, fixedShare: 0,
     custom: {}, customTotal: 0, profit: 0 };
   for (const day of days) {
     day.customTotal = Object.values(day.custom).reduce((sum, v) => sum + v, 0);
     day.profit = day.revenue - day.purchases - day.drinks - day.salary - day.fixedShare - day.customTotal;
-    for (const key of ['revenue', 'bills', 'cash', 'transfer', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit']) totals[key] += day[key];
+    for (const key of ['revenue', 'bills', 'paperBills', 'paperRevenue', 'cash', 'transfer', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit']) totals[key] += day[key];
     for (const [acc, amount] of Object.entries(day.byAccount)) totals.byAccount[acc] = (totals.byAccount[acc] || 0) + amount;
     for (const [id, amount] of Object.entries(day.custom)) totals.custom[id] = (totals.custom[id] || 0) + amount;
   }
   return { month, from, to, daysInMonth, fixedMonthTotal, fixedEntries, customMonthTotals, days, totals };
+}
+
+const vnd = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;
+const signed = n => `${n < 0 ? '-' : '+'}${vnd(Math.abs(n))}`;
+
+/**
+ * Tin Zalo báo cáo một ngày cho chủ quán. `day` là một phần tử của
+ * summarizeMonth().days, `monthTotals` là totals của tháng (tới ngày đó),
+ * `alerts` = { missingPhoto, unchecked } của bill chuyển khoản trong tháng.
+ */
+export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, title = 'Báo cáo' }) {
+  const [y, m, d] = day.date.split('-');
+  const weekday = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][new Date(`${day.date}T00:00:00Z`).getUTCDay()];
+  const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
+  const cost = day.purchases + day.drinks + day.salary + day.fixedShare + day.customTotal;
+  const lines = [`📒 ${title} Sổ thu chi · ${weekday} ${d}/${m}/${y}`, ''];
+  lines.push(`Doanh thu: ${vnd(day.revenue)} (${day.bills} bill${day.paperBills ? ` + ${day.paperBills} bill giấy` : ''})`);
+  lines.push(`• Tiền mặt: ${vnd(day.cash)}`);
+  for (const [id, amount] of Object.entries(day.byAccount || {})) lines.push(`• CK ${accountName(id)}: ${vnd(amount)}`);
+  const parts = [['đi chợ', day.purchases], ['nước', day.drinks], ['lương', day.salary], ['cố định', day.fixedShare], ['khác', day.customTotal]]
+    .filter(([, v]) => v > 0).map(([k, v]) => `${k} ${vnd(v)}`);
+  lines.push(`Chi: ${vnd(cost)}${parts.length ? ` (${parts.join(', ')})` : ''}`);
+  lines.push(`${day.profit < 0 ? 'Lỗ' : 'Lãi'} ngày: ${signed(day.profit)}`);
+  if (monthTotals) lines.push(`Tháng ${m} tới nay: thu ${vnd(monthTotals.revenue)} · ${monthTotals.profit < 0 ? 'lỗ' : 'lãi'} ${vnd(Math.abs(monthTotals.profit))}`);
+
+  const warnings = [];
+  if (!day.close) warnings.push('Chưa chốt sổ ngày này');
+  else {
+    if (day.close.cashDiff) warnings.push(`Tiền mặt ${day.close.cashDiff < 0 ? 'thiếu' : 'dư'} ${vnd(Math.abs(day.close.cashDiff))}`);
+    for (const [id, diff] of Object.entries(day.close.bankDiffs || {})) {
+      if (diff) warnings.push(`${accountName(id)} ${diff < 0 ? 'thiếu' : 'dư'} ${vnd(Math.abs(diff))}`);
+    }
+  }
+  if (alerts.missingPhoto) warnings.push(`${alerts.missingPhoto} bill CK chưa có ảnh (tháng này)`);
+  if (alerts.unchecked) warnings.push(`${alerts.unchecked} bill CK chưa đối chiếu (tháng này)`);
+  if (day.suspiciousNotes) warnings.push(`${day.suspiciousNotes} phiếu Sổ tay giá đáng ngờ`);
+  lines.push('');
+  if (warnings.length) lines.push(...warnings.map(w => `⚠ ${w}`));
+  else lines.push('✓ Không có gì bất thường');
+  lines.push('', 'Nhắn "ok" để Zalo cho phép gửi tiếp báo cáo các ngày sau.');
+  return lines.join('\n');
 }

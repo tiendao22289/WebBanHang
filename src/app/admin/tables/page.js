@@ -17,6 +17,8 @@ import { getMenuCached } from '@/lib/menuCache';
 import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders';
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
+import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
+import { saveTransferProof } from '@/lib/transferProof';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
 import { flushSync } from 'react-dom';
@@ -368,6 +370,10 @@ export default function TablesPage() {
   const isFirstLoad = useRef(true);
   // Nhóm bàn đang chạy completeTable() — chặn bấm 2 lần / realtime đua với nút bấm
   const completingTablesRef = useRef(new Set());
+  // Mã các bill vừa thanh toán xong — để gắn ảnh chuyển khoản của khách vào Sổ thu chi.
+  const lastSettledOrderIdsRef = useRef([]);
+  // Sau khi bấm "Đã nhận tiền": mở camera chụp màn hình ĐT khách (bỏ qua được).
+  const [transferProof, setTransferProof] = useState(null);
   const [payingHostId, setPayingHostId] = useState(null); // để làm mờ & khoá nút khi đang xử lý
   const [isMobile, setIsMobile] = useState(true);
   const [printToast, setPrintToast] = useState(''); // '' | 'sending' | 'ok' | 'err'
@@ -1280,6 +1286,7 @@ export default function TablesPage() {
       setShowBillPreview(false);
       setSelectedTable(null);
       fetchTables(snapshot.groupTableIds);
+      lastSettledOrderIdsRef.current = snapshot.bills.map(o => o.id);
       return true;
     } catch (error) {
       console.error('[completeTable]', error);
@@ -6633,6 +6640,11 @@ export default function TablesPage() {
                       timer: 3000, timerProgressBar: true, showConfirmButton: false,
                       position: 'top-end', toast: true, background: '#1d4ed8', color: '#fff', iconColor: '#fff',
                     });
+                    // Bill đã thanh toán xong ở trên; giờ mới mở camera chụp màn hình ĐT
+                    // khách (không chặn, không ảnh hưởng việc thanh toán).
+                    if (cameraSupported() && lastSettledOrderIdsRef.current.length) {
+                      setTransferProof({ orderIds: lastSettledOrderIdsRef.current, tableNumber: paymentModal.table.table_number, total: paymentModal.total });
+                    }
                   }}
                   style={{ flex: 2, padding: '12px', border: 'none', borderRadius: 12, background: (qrAccount && !payingHostId) ? '#2563eb' : '#93c5fd', color: 'white', fontWeight: 800, cursor: (qrAccount && !payingHostId) ? 'pointer' : 'not-allowed', fontSize: '0.95rem' }}>
                   {payingHostId ? '⏳ Đang xử lý...' : '✅ Đã nhận tiền'}
@@ -7185,6 +7197,22 @@ export default function TablesPage() {
           </div>
         )
       }
+      {/* Chụp màn hình chuyển khoản trên ĐT khách ngay sau "Đã nhận tiền" → Sổ thu chi. */}
+      {transferProof && <CameraCapture
+        title={`Chụp màn hình CK trên điện thoại khách`}
+        subtitle={`Bàn B${transferProof.tableNumber} · ${Number(transferProof.total).toLocaleString('vi-VN')}đ · đã thanh toán xong`}
+        closeText="Bỏ qua"
+        onClose={() => setTransferProof(null)}
+        onCapture={async blob => {
+          const proof = transferProof;
+          try {
+            await saveTransferProof(proof.orderIds, blob);
+            Swal.fire({ icon: 'success', title: '📷 Đã lưu ảnh chuyển khoản', toast: true, position: 'top-end', timer: 2500, showConfirmButton: false });
+          } catch (error) {
+            Swal.fire('Bill đã thanh toán xong', `Chưa lưu được ảnh chuyển khoản (${error.message}). Thêm lại ở trang Bill giấy.`, 'warning');
+          }
+        }}
+      />}
     </div >
   );
 }

@@ -22,8 +22,8 @@
 .fin-hint { font-size: 12px; color: #6b7280; margin: 0 0 10px; }
 
 /* 3 mục chuyển nhanh. (Không dùng sticky: .admin-main đặt overflow: hidden.) */
-.fin-switch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 14px -4px 14px; padding: 4px; background: #e2e8f0; border-radius: 12px; }
-.fin-switch button { min-height: 40px; border: 0; border-radius: 9px; background: transparent; color: #475569; font-size: 15px; font-weight: 600; }
+.fin-switch { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 14px -4px 14px; padding: 4px; background: #e2e8f0; border-radius: 12px; }
+.fin-switch button { min-height: 40px; border: 0; border-radius: 9px; background: transparent; color: #475569; font-size: 14px; font-weight: 600; padding: 0 2px; }
 .fin-switch button.active { background: white; color: #1d4ed8; box-shadow: 0 1px 3px rgba(15, 23, 42, .15); }
 
 /* Tổng quan */
@@ -160,3 +160,77 @@
 .fin-new-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; }
 .fin-ghost { min-height: 46px; border: 1px solid #d1d5db; border-radius: 6px; background: white; color: #374151; font-size: 16px; }
 .fin-link { display: block; margin: 10px auto 0; min-height: 40px; border: 0; background: none; color: #6b7280; font-size: 13px; text-decoration: underline; }
+
+/* Bill giấy + ảnh chuyển khoản trong chi tiết ngày */
+.fin-paper { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f3f4f6; font-size: 14px; }
+.fin-paper > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.fin-paper small { display: block; font-size: 11px; color: #6b7280; }
+.fin-paper > b { flex-shrink: 0; }
+.fin-thumb { width: 44px; height: 44px; flex-shrink: 0; border: 1px solid #e5e7eb; border-radius: 8px; padding: 0; overflow: hidden; background: #f1f5f9; display: block; }
+.fin-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fin-ck { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0 8px; font-size: 13px; }
+.fin-ck-view { min-height: 40px; border: 0; background: none; color: #1d4ed8; font-weight: 600; padding: 0; text-align: left; }
+.fin-ck-none { color: #9ca3af; }
+.fin-ck-add { min-height: 40px; min-width: 76px; border: 1px solid #d1d5db; border-radius: 8px; background: white; color: #374151; font-size: 13px; }
+.rc-viewer { position: fixed; inset: 0; height: 100vh; height: 100dvh; z-index: 1100; background: rgba(15, 23, 42, .9); display: flex; align-items: center; justify-content: center; padding: calc(56px + env(safe-area-inset-top)) 12px calc(24px + env(safe-area-inset-bottom)); }
+.rc-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
+.rc-viewer .fin-icon { position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 12px; }
+
+/* Không cho nhấn giữ để "Lưu ảnh" (iPhone) / tải ảnh (Android) ảnh bill, ảnh CK. */
+.rc-viewer img, .fin-thumb img, .rc-thumb img, .rc-photo-preview img { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.rc-viewer, .fin-thumb, .rc-thumb { -webkit-touch-callout: none; }
+
+.fin-ck-buttons { display: flex; gap: 6px; flex-shrink: 0; }
+.fin-ck-add.primary { border-color: #2563eb; color: #1d4ed8; font-weight: 700; }
+
+/* Tra cứu bill */
+.fin-search { display: flex; flex-direction: column; gap: 10px; }
+.fin-search-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.fin-search-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #4b5563; min-width: 0; }
+.fin-search-grid input { width: 100%; height: 44px; border: 1px solid #d1d5db; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 16px; color: #111827; background: white; min-width: 0; -webkit-appearance: none; appearance: none; }
+.fin-search-types { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.fin-search-types button { min-height: 40px; line-height: 1.15; border: 1px solid #d1d5db; border-radius: 8px; background: white; color: #374151; font-size: 13px; padding: 0 2px; }
+.fin-search-types button.active { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; font-weight: 700; }
+.fin-search-check { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 14px; color: #374151; }
+.fin-search-check input { width: 20px; height: 20px; }
+.fin-search-sum { font-size: 13px; color: #4b5563; margin: 12px 2px 8px; }
+.fin-search-list { display: grid; gap: 8px; }
+.fin-hit { border: 1px solid #e5e7eb; border-radius: 12px; background: white; padding: 10px 12px; }
+.fin-hit-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; width: 100%; border: 0; background: none; padding: 0; text-align: left; color: #111827; }
+.fin-hit-head > span { min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
+.fin-hit-head small { display: block; font-size: 12px; color: #6b7280; margin-top: 2px; }
+.fin-hit-amount { flex-shrink: 0; font-size: 15px; }
+.fin-hit-photos { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.fin-hit-photo { position: relative; width: 72px; height: 72px; border: 1px solid #e5e7eb; border-radius: 10px; padding: 0; overflow: hidden; background: #f1f5f9; }
+.fin-hit-photo img { width: 100%; height: 100%; object-fit: cover; display: block; -webkit-touch-callout: none; user-select: none; pointer-events: none; }
+.fin-hit-photo span { position: absolute; left: 0; right: 0; bottom: 0; font-size: 11px; color: white; background: rgba(15, 23, 42, .6); padding: 2px 0; text-align: center; }
+.fin-hit-none { font-size: 12px; color: #9ca3af; align-self: center; }
+@media (max-width: 380px) { .fin-switch button { font-size: 13px; } }
+.fin-search-tables { display: flex; flex-wrap: wrap; gap: 6px; max-height: 156px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.fin-search-tables button { display: inline-flex; align-items: center; gap: 5px; min-height: 40px; padding: 0 12px; border: 1px solid #d1d5db; border-radius: 999px; background: white; color: #374151; font-size: 14px; }
+.fin-search-tables button small { font-size: 11px; color: #6b7280; background: #f1f5f9; border-radius: 999px; padding: 1px 6px; }
+.fin-search-tables button.active { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; font-weight: 700; }
+.fin-search-tables button.active small { background: #dbeafe; color: #1d4ed8; }
+
+/* Lọc theo thẻ / ảnh / đối chiếu */
+.fin-filter-row { display: flex; flex-direction: column; gap: 4px; }
+.fin-filter-row > span { font-size: 12px; color: #4b5563; }
+.fin-pending { display: flex; flex-direction: column; gap: 6px; border: 1px solid #fde68a; background: #fffbeb; border-radius: 12px; padding: 10px 12px; margin: 10px 0; }
+.fin-pending > b { font-size: 13px; color: #92400e; }
+.fin-pending button { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; border: 1px solid #fcd34d; border-radius: 10px; background: white; color: #78350f; font-size: 14px; font-weight: 600; padding: 0 12px; text-align: left; }
+.fin-hit.verified { border-color: #86efac; box-shadow: inset 4px 0 0 #22c55e; }
+.fin-hit-add { display: flex; gap: 6px; flex-wrap: wrap; }
+.fin-verify-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 8px; }
+.fin-verify-row small { font-size: 12px; color: #15803d; }
+.fin-verify { min-height: 40px; padding: 0 14px; border: 1px solid #d1d5db; border-radius: 999px; background: white; color: #374151; font-size: 13px; font-weight: 600; }
+.fin-verify.on { border-color: #22c55e; background: #f0fdf4; color: #15803d; }
+.fin-zalo p { font-size: 14px; color: #374151; margin: 0 0 8px; line-height: 1.45; }
+.fin-zalo .fin-zalo-hint { font-size: 12px; color: #6b7280; }
+.fin-zalo .fin-zalo-ok { color: #15803d; font-weight: 600; }
+.fin-zalo-code { display: block; width: 100%; margin: 4px 0 8px; padding: 12px; border: 2px dashed #2563eb; border-radius: 10px; background: #eff6ff; color: #1d4ed8; font-size: 26px; font-weight: 800; letter-spacing: 3px; text-align: center; font-variant-numeric: tabular-nums; }
+.fin-zalo-actions { display: flex; flex-direction: column; gap: 0; }
+.fin-zalo-actions .fin-secondary { border-style: solid; }
+.fin-zalo-actions .fin-secondary.danger { border-color: #fecaca; background: #fef2f2; color: #b91c1c; }
+.fin-filter-row .fin-search-tables { flex-wrap: nowrap; overflow-x: auto; max-height: none; margin: 0 -14px; padding: 0 14px 2px; scrollbar-width: none; overscroll-behavior-x: contain; }
+.fin-filter-row .fin-search-tables::-webkit-scrollbar { display: none; }
+.fin-filter-row .fin-search-tables button { flex-shrink: 0; white-space: nowrap; }

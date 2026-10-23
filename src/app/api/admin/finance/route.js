@@ -7,13 +7,21 @@
  * POST {action:'add'|'delete'} → thêm/xoá khoản tự nhập (nước ngọt, lương, cố định).
  * POST {action:'close'}       → chốt sổ ngày (tiền mặt đếm được, tiền thật từng tài khoản).
  * POST {action:'copy_fixed'}  → chép chi cố định của tháng trước sang tháng đang xem.
+ * POST {action:'verify'}      → đánh dấu bill chuyển khoản đã / chưa đối chiếu.
+ * POST {action:'zalo_link_code'|'zalo_unlink'|'zalo_test'} → báo cáo Zalo hằng ngày.
+ * POST {action:'daily_report'} + header x-finance-report-key → gửi báo cáo
+ *      (workflow "Finance Daily Report" gọi lúc 8 giờ sáng, không cần đăng nhập).
  *
  * Chạy bằng service role vì các bảng sổ thu chi đã chặn anon. Không liên quan
  * tới /admin/stats.
  */
+import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
+import { sendOaText } from '@/lib/zaloOa';
+import { LINK_CODE_MINUTES, readReportSettings, reportStatus, saveReportSettings } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
-import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, isMonthKey, monthBounds, noteCost, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
+import { signReceiptImages } from '@/lib/receiptImages.mjs';
+import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, dailyReportText, isMonthKey, monthBounds, noteCost, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,6 +33,9 @@ const CATEGORY_SCOPES = ['salary', 'fixed', 'tab'];
 const MAX_CATEGORIES_PER_SCOPE = 30;
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
 const MAX_AMOUNT = 10_000_000_000;
+const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+// Ảnh CK chỉ giữ 3 tháng — bill cũ hơn thì không còn "thiếu ảnh" để chụp bổ sung.
+const photoKeepFrom = today => addDays(today, -90);
 
 async function requireOwner(request) {
   const session = await getStaffSession(request);
@@ -76,6 +87,11 @@ const notesBetween = (db, fromIso, toIso) => readAll(() => db.from('staff_notes'
 
 // Mục / tab tự đặt (kể cả đã ẩn, để khoản cũ vẫn có tên). Chưa cài bảng → [].
 const readCategories = db => db.from('finance_categories').select('*').order('created_at')
+  .then(r => { if (r.error) { if (missingTable(r.error)) return []; throw r.error; } return r.data || []; });
+
+// Bill giấy (nhập tay). Chưa cài bảng → [].
+const readPaper = (db, from, to) => db.from('finance_manual_receipts').select('*')
+  .gte('business_date', from).lt('business_date', to).order('received_at', { ascending: true })
   .then(r => { if (r.error) { if (missingTable(r.error)) return []; throw r.error; } return r.data || []; });
 
 const readClose = (db, date) => db.from('finance_day_closes').select('*').eq('business_date', date).maybeSingle()
@@ -146,6 +162,88 @@ async function repairMissingBills(db) {
   return { recovered, unrecovered };
 }
 
+// Bill chuyển khoản trong khoảng ngày: chưa có ảnh CK / chưa đối chiếu.
+async function transferAlerts(db, from, to, today) {
+  const keepFrom = photoKeepFrom(today);
+  const [bills, paper] = await Promise.all([
+    readAll(() => db.from('finance_revenue_ledger').select('order_id, business_date, transfer_image_path, verified_at')
+      .eq('payment_method', 'transfer').gte('business_date', from).lt('business_date', addDays(to, 1)).order('order_id')),
+    readAll(() => db.from('finance_manual_receipts').select('id, business_date, transfer_image_path, verified_at')
+      .eq('payment_method', 'transfer').gte('business_date', from).lt('business_date', addDays(to, 1)).order('id'))
+      .catch(error => { if (missingTable(error)) return []; throw error; }),
+  ]);
+  const rows = [...bills, ...paper];
+  return {
+    missingPhoto: rows.filter(r => !r.transfer_image_path && r.business_date >= keepFrom).length,
+    unchecked: rows.filter(r => !r.verified_at).length,
+  };
+}
+
+// Số liệu cả tháng (dùng cho trang Tổng quan và báo cáo Zalo).
+async function loadMonth(db, month, today) {
+  const { start, next } = monthBounds(month);
+  const revenue = await readAll(() => db.from('finance_revenue_ledger')
+    .select('order_id, business_date, amount, payment_method, account_id')
+    .gte('business_date', start).lt('business_date', next).order('order_id'));
+  const [notes, entriesResult, accountsResult, staffResult, closesResult, categories, paperBills] = await Promise.all([
+    notesBetween(db, vnDayStartIso(start), vnDayStartIso(next)),
+    db.from('finance_entries').select('*').gte('entry_date', start).lt('entry_date', next).order('entry_date').order('created_at'),
+    db.from('bank_accounts').select('id, account_name, bank_name, account_number').order('sort_order'),
+    db.from('staff').select('id, full_name').order('full_name'),
+    db.from('finance_day_closes').select('*').gte('business_date', start).lt('business_date', next),
+    readCategories(db),
+    readPaper(db, start, next),
+  ]);
+  for (const result of [entriesResult, accountsResult, staffResult]) if (result.error) throw result.error;
+  if (closesResult.error && !missingTable(closesResult.error)) throw closesResult.error;
+  const entries = entriesResult.data || [];
+  return {
+    entries, categories,
+    summary: summarizeMonth({ month, revenue, paperBills, notes, entries, closes: closesResult.data || [], categories, today }),
+    accounts: (accountsResult.data || []).map(a => ({ id: a.id, name: [a.bank_name, a.account_name].filter(Boolean).join(' · ') || 'Tài khoản', last4: String(a.account_number || '').slice(-4) })),
+    staff: (staffResult.data || []).map(s => s.full_name).filter(Boolean),
+  };
+}
+
+// Workflow báo cáo trên máy chủ ký bằng khoá service role (không cần thêm bí mật mới).
+function reportKeyOk(request) {
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  const given = String(request.headers?.get?.('x-finance-report-key') || '');
+  if (secret.length < 20 || !given) return false;
+  const want = createHmac('sha256', secret).update('finance-daily-report').digest('hex');
+  return given.length === want.length && timingSafeEqual(Buffer.from(given), Buffer.from(want));
+}
+
+/**
+ * Gửi báo cáo một ngày tới các Zalo đã liên kết. scheduled = lần gửi tự động
+ * buổi sáng: mỗi ngày chỉ gửi một lần.
+ */
+async function sendDailyReport(db, { date, today, scheduled }) {
+  const settings = await readReportSettings(db);
+  if (!settings) return { ok: false, error: 'Chưa cài bảng cài đặt sổ thu chi (owner_finance.sql).' };
+  if (!settings.ownerIds.length) return { ok: false, error: 'Chưa liên kết Zalo nhận báo cáo.' };
+  if (scheduled && settings.lastSentDate === date) return { ok: true, skipped: true };
+  if (date < FINANCE_START_DATE) return { ok: false, error: 'Ngày này trước khi sổ bắt đầu.' };
+  try { await repairMissingBills(db); } catch (error) { console.error('[admin/finance] repair', error); }
+  const { summary, accounts } = await loadMonth(db, date.slice(0, 7), today);
+  const day = summary.days.find(d => d.date === date);
+  if (!day) return { ok: false, error: 'Không có số liệu ngày này.' };
+  const upTo = summary.days.filter(d => d.date <= date);
+  const monthTotals = { revenue: upTo.reduce((s, d) => s + d.revenue, 0), profit: upTo.reduce((s, d) => s + d.profit, 0) };
+  const alerts = await transferAlerts(db, monthBounds(date.slice(0, 7)).start, date, today).catch(() => ({}));
+  const text = dailyReportText({ day, monthTotals, accounts, alerts, title: scheduled ? 'Báo cáo' : 'Gửi thử' });
+  const results = [];
+  for (const id of settings.ownerIds) results.push(await sendOaText(db, id, text).catch(error => ({ ok: false, detail: error.message })));
+  const sent = results.filter(r => r.ok).length;
+  const failed = results.find(r => !r.ok);
+  const lastError = failed ? `${new Date().toISOString()} ${JSON.stringify(failed.detail ?? '')}`.slice(0, 300) : null;
+  const latest = await readReportSettings(db);
+  await saveReportSettings(db, { ...latest, lastSentAt: new Date().toISOString(), lastError, ...(scheduled && sent ? { lastSentDate: date } : {}) });
+  return sent
+    ? { ok: true, sent, total: results.length }
+    : { ok: false, error: 'Zalo không gửi được. Mở Zalo, nhắn "ok" cho OA của quán rồi thử lại.' };
+}
+
 export async function GET(request) {
   try {
     const session = await requireOwner(request);
@@ -154,26 +252,111 @@ export async function GET(request) {
     const db = statusDatabase();
     const today = vnDate(Date.now());
 
+    // Tra cứu bill (để đối chiếu ảnh chuyển khoản / ảnh bill giấy về sau).
+    if (params.get('search')) {
+      const to = DATE.test(params.get('to') || '') ? params.get('to') : today;
+      const from = DATE.test(params.get('from') || '') ? params.get('from') : addDays(to, -6);
+      if (from > to) return NextResponse.json({ error: 'Từ ngày phải trước đến ngày.' }, { status: 400, headers });
+      if (addDays(from, 92) < to) return NextResponse.json({ error: 'Chỉ tra cứu tối đa 3 tháng một lần.' }, { status: 400, headers });
+      const table = String(params.get('table') || '').trim().replace(/^b(àn)?\s*/i, '').slice(0, 20);
+      const amount = Number(String(params.get('amount') || '').replace(/\D/g, '')) || null;
+      const type = ['transfer', 'cash', 'paper'].includes(params.get('type')) ? params.get('type') : 'all';
+      const onlyWithImage = params.get('image') === '1';
+      // Bill CK chưa có ảnh (ảnh còn giữ được) — để chụp bổ sung.
+      const missingImage = params.get('image') === 'missing';
+      const account = UUID.test(params.get('account') || '') ? params.get('account') : null;
+      const check = ['checked', 'unchecked'].includes(params.get('check')) ? params.get('check') : null;
+      const keepFrom = photoKeepFrom(today);
+      // Thẻ / thiếu ảnh / đối chiếu chỉ có nghĩa với bill chuyển khoản.
+      const transferOnly = !!(account || missingImage || check);
+      const LIMIT = 200;
+
+      let bills = [];
+      if (type !== 'paper') {
+        let q = db.from('finance_revenue_ledger').select('order_id, paid_at, business_date, table_number, customer_name, payment_method, account_id, amount, items, transfer_image_path, verified_at, verified_by')
+          .gte('business_date', from).lt('business_date', addDays(to, 1)).order('paid_at', { ascending: false }).limit(LIMIT);
+        if (table) q = q.eq('table_number', table);
+        if (amount) q = q.eq('amount', amount);
+        if (type === 'transfer' || type === 'cash') q = q.eq('payment_method', type);
+        if (onlyWithImage) q = q.not('transfer_image_path', 'is', null);
+        if (transferOnly) q = q.eq('payment_method', 'transfer');
+        if (account) q = q.eq('account_id', account);
+        if (missingImage) q = q.is('transfer_image_path', null).gte('business_date', keepFrom);
+        if (check === 'unchecked') q = q.is('verified_at', null);
+        if (check === 'checked') q = q.not('verified_at', 'is', null);
+        const r = await q;
+        if (r.error) throw r.error;
+        bills = r.data || [];
+      }
+      let paper = [];
+      if (type === 'all' || type === 'paper' || type === 'transfer' || type === 'cash') {
+        let q = db.from('finance_manual_receipts').select('*')
+          .gte('business_date', from).lt('business_date', addDays(to, 1)).order('received_at', { ascending: false }).limit(LIMIT);
+        if (table) q = q.ilike('table_label', `%${table}%`);
+        if (amount) q = q.eq('amount', amount);
+        if (type === 'transfer' || type === 'cash') q = q.eq('payment_method', type);
+        const r = await q;
+        if (r.error && !missingTable(r.error)) throw r.error;
+        paper = (r.data || []).filter(p => (!onlyWithImage || p.transfer_image_path || p.image_path)
+          && (!transferOnly || p.payment_method === 'transfer')
+          && (!account || p.account_id === account)
+          && (!missingImage || (!p.transfer_image_path && p.business_date >= keepFrom))
+          && (check !== 'unchecked' || !p.verified_at) && (check !== 'checked' || !!p.verified_at));
+      }
+      const urls = await signReceiptImages(db, [...bills.map(b => b.transfer_image_path), ...paper.flatMap(p => [p.image_path, p.transfer_image_path])]);
+      const results = [
+        ...bills.map(b => ({ kind: 'bill', id: b.order_id, at: b.paid_at, date: b.business_date, table: b.table_number, customer: b.customer_name,
+          method: b.payment_method, accountId: b.account_id, amount: Number(b.amount), items: b.items || [],
+          transferImageUrl: urls[b.transfer_image_path] || null, imageExpired: !b.transfer_image_path && b.business_date < keepFrom,
+          verifiedAt: b.verified_at || null, verifiedBy: b.verified_by || null })),
+        ...paper.map(p => ({ kind: 'paper', id: p.id, at: p.received_at, date: p.business_date, table: p.table_label, customer: null,
+          method: p.payment_method, accountId: p.account_id, amount: Number(p.amount), note: p.note, by: p.created_by_name,
+          billImageUrl: urls[p.image_path] || null, transferImageUrl: urls[p.transfer_image_path] || null, imageExpired: !!p.images_purged_at,
+          verifiedAt: p.verified_at || null, verifiedBy: p.verified_by || null })),
+      ].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, LIMIT);
+      // Danh sách bàn có bill trong khoảng ngày (không theo bộ lọc) để chủ quán bấm chọn nhanh.
+      const [ledgerTables, paperTables] = await Promise.all([
+        readAll(() => db.from('finance_revenue_ledger').select('table_number').gte('business_date', from).lt('business_date', addDays(to, 1)).order('order_id')),
+        readAll(() => db.from('finance_manual_receipts').select('table_label').gte('business_date', from).lt('business_date', addDays(to, 1)).order('id'))
+          .catch(error => { if (missingTable(error)) return []; throw error; }),
+      ]);
+      const counts = {};
+      for (const label of [...ledgerTables.map(r => r.table_number), ...paperTables.map(r => r.table_label)]) {
+        const key = String(label || '').trim().replace(/^b(àn)?\s*/i, '');
+        if (key) counts[key] = (counts[key] || 0) + 1;
+      }
+      const tables = Object.entries(counts).map(([name, count]) => ({ name, count }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'vi', { numeric: true }));
+      const alerts = await transferAlerts(db, from, to, today).catch(() => null);
+      return NextResponse.json({ from, to, results, tables, alerts, truncated: bills.length >= LIMIT || paper.length >= LIMIT }, { headers });
+    }
+
     const date = params.get('date');
     if (date) {
       if (!DATE.test(date)) return NextResponse.json({ error: 'Ngày không hợp lệ.' }, { status: 400, headers });
       const nextDay = new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
-      const [bills, notes, entries, close] = await Promise.all([
+      const [bills, notes, entries, close, paper] = await Promise.all([
         readAll(() => db.from('finance_revenue_ledger')
-          .select('order_id, paid_at, table_number, customer_name, payment_method, account_id, amount, items')
+          .select('*')
           .eq('business_date', date).order('paid_at', { ascending: true })),
         notesBetween(db, vnDayStartIso(date), vnDayStartIso(nextDay)),
         db.from('finance_entries').select('*').eq('entry_date', date).order('created_at').then(r => { if (r.error) throw r.error; return r.data || []; }),
         readClose(db, date),
+        readPaper(db, date, nextDay),
       ]);
+      const urls = await signReceiptImages(db, [...bills.map(b => b.transfer_image_path), ...paper.flatMap(r => [r.image_path, r.transfer_image_path])]);
       const day = { cash: 0, byAccount: {} };
-      for (const bill of bills) {
+      for (const bill of [...bills, ...paper]) {
         const amount = Number(bill.amount) || 0;
         if (bill.payment_method !== 'transfer') { day.cash += amount; continue; }
         const key = bill.account_id || 'unknown';
         day.byAccount[key] = (day.byAccount[key] || 0) + amount;
       }
-      return NextResponse.json({ date, today, startDate: FINANCE_START_DATE, bills,
+      return NextResponse.json({ date, today, startDate: FINANCE_START_DATE,
+        bills: bills.map(({ transfer_image_path: path, ...b }) => ({ ...b, transfer_image_url: urls[path] || null })),
+        paperBills: paper.map(r => ({ id: r.id, receivedAt: r.received_at, amount: Number(r.amount), paymentMethod: r.payment_method,
+          accountId: r.account_id, tableLabel: r.table_label, note: r.note, createdByName: r.created_by_name,
+          imageUrl: urls[r.image_path] || null, transferImageUrl: urls[r.transfer_image_path] || null, imagesPurged: !!r.images_purged_at })),
         notes: notes.map(noteView).filter(n => n.cost > 0), entries,
         close, closeDiff: closeDifferences(day, close), dayCash: day.cash, dayByAccount: day.byAccount }, { headers });
     }
@@ -188,35 +371,23 @@ export async function GET(request) {
       if (missingTable(error)) return NextResponse.json({ error: 'Chưa cài bảng sổ thu chi trên cơ sở dữ liệu (owner_finance.sql).', setupMissing: true }, { status: 503, headers });
       console.error('[admin/finance] repair', error);
     }
-    let revenue;
-    try {
-      revenue = await readAll(() => db.from('finance_revenue_ledger')
-        .select('order_id, business_date, amount, payment_method, account_id')
-        .gte('business_date', start).lt('business_date', next).order('order_id'));
-    } catch (error) {
+    let loaded;
+    try { loaded = await loadMonth(db, month, today); } catch (error) {
       if (missingTable(error)) return NextResponse.json({ error: 'Chưa cài bảng sổ thu chi trên cơ sở dữ liệu (owner_finance.sql).', setupMissing: true }, { status: 503, headers });
       throw error;
     }
-    const [notes, entriesResult, accountsResult, staffResult, closesResult, categories] = await Promise.all([
-      notesBetween(db, vnDayStartIso(start), vnDayStartIso(next)),
-      db.from('finance_entries').select('*').gte('entry_date', start).lt('entry_date', next).order('entry_date').order('created_at'),
-      db.from('bank_accounts').select('id, account_name, bank_name, account_number').order('sort_order'),
-      db.from('staff').select('id, full_name').order('full_name'),
-      db.from('finance_day_closes').select('*').gte('business_date', start).lt('business_date', next),
-      readCategories(db),
-    ]);
-    for (const result of [entriesResult, accountsResult, staffResult]) if (result.error) throw result.error;
-    if (closesResult.error && !missingTable(closesResult.error)) throw closesResult.error;
-    const entries = entriesResult.data || [];
-    const summary = summarizeMonth({ month, revenue, notes, entries, closes: closesResult.data || [], categories, today });
+    const { summary, entries, categories } = loaded;
+    // Bill CK chưa có ảnh / chưa đối chiếu trong tháng; cột chưa cài thì bỏ qua.
+    const alertTo = addDays(next, -1) < today ? addDays(next, -1) : today;
+    const pending = start <= alertTo ? await transferAlerts(db, start, alertTo, today).catch(error => { console.error('[admin/finance] alerts', error); return null; }) : null;
+    const zaloReport = reportStatus(await readReportSettings(db).catch(() => null));
     const monthlyTabs = new Set(categories.filter(c => c.scope === 'tab' && c.schedule === 'monthly').map(c => c.id));
     return NextResponse.json({
       ...summary, today, startDate: FINANCE_START_DATE, fixedCategories: FIXED_CATEGORIES, categories,
       entries: entries.filter(e => e.kind !== 'fixed'),
       // Khoản của tab nhập theo tháng — liệt kê riêng như chi cố định.
       customMonthlyEntries: entries.filter(e => e.kind === 'custom' && monthlyTabs.has(e.category)),
-      accounts: (accountsResult.data || []).map(a => ({ id: a.id, name: [a.bank_name, a.account_name].filter(Boolean).join(' · ') || 'Tài khoản', last4: String(a.account_number || '').slice(-4) })),
-      staff: (staffResult.data || []).map(s => s.full_name).filter(Boolean),
+      accounts: loaded.accounts, staff: loaded.staff, transferAlerts: pending, zaloReport,
       // Bill sổ tự bổ sung lần này từ lịch sử bàn, và bill chưa bổ sung được
       // (null = không kiểm tra được).
       recoveredBills: repair ? repair.recovered : null,
@@ -230,10 +401,44 @@ export async function GET(request) {
 
 export async function POST(request) {
   try {
+    const body = await request.json().catch(() => ({}));
+    if (body.action === 'daily_report' && reportKeyOk(request)) {
+      const today = vnDate(Date.now());
+      const date = DATE.test(body.date || '') ? body.date : addDays(today, -1);
+      return NextResponse.json(await sendDailyReport(statusDatabase(), { date, today, scheduled: true }), { headers });
+    }
     const session = await requireOwner(request);
     if (session.code !== 200) return deny(session.code);
-    const body = await request.json().catch(() => ({}));
     const db = statusDatabase();
+
+    if (body.action === 'verify') {
+      const table = body.kind === 'paper' ? 'finance_manual_receipts' : body.kind === 'bill' ? 'finance_revenue_ledger' : null;
+      const key = body.kind === 'paper' ? 'id' : 'order_id';
+      if (!table || typeof body.id !== 'string' || !UUID.test(body.id)) return NextResponse.json({ error: 'Thiếu bill cần đối chiếu.' }, { status: 400, headers });
+      const patch = body.verified === false ? { verified_at: null, verified_by: null }
+        : { verified_at: new Date().toISOString(), verified_by: session.user.full_name || null };
+      const { data, error } = await db.from(table).update(patch).eq(key, body.id).eq('payment_method', 'transfer').select(key);
+      if (error) throw error;
+      if (!data?.length) return NextResponse.json({ error: 'Không tìm thấy bill chuyển khoản này.' }, { status: 404, headers });
+      return NextResponse.json({ ok: true, verifiedAt: patch.verified_at, verifiedBy: patch.verified_by }, { headers });
+    }
+
+    if (['zalo_link_code', 'zalo_unlink', 'zalo_test'].includes(body.action)) {
+      const settings = await readReportSettings(db);
+      if (!settings) return NextResponse.json({ error: 'Chưa cài bảng cài đặt sổ thu chi (owner_finance.sql).' }, { status: 503, headers });
+      if (body.action === 'zalo_test') {
+        const today = vnDate(Date.now());
+        const result = await sendDailyReport(db, { date: today, today, scheduled: false });
+        const zaloReport = reportStatus(await readReportSettings(db));
+        if (!result.ok) return NextResponse.json({ error: result.error, zaloReport }, { status: 400, headers });
+        return NextResponse.json({ ok: true, sent: result.sent, zaloReport }, { headers });
+      }
+      const next = body.action === 'zalo_unlink'
+        ? { ...settings, ownerIds: [], linkCode: null, linkCodeExpires: null }
+        : { ...settings, linkCode: String(randomInt(0, 1_000_000)).padStart(6, '0'), linkCodeExpires: Date.now() + LINK_CODE_MINUTES * 60000, linkAttempts: 0 };
+      await saveReportSettings(db, next);
+      return NextResponse.json({ ok: true, zaloReport: reportStatus(next) }, { headers });
+    }
 
     if (body.action === 'delete') {
       if (typeof body.id !== 'string' || !UUID.test(body.id)) return NextResponse.json({ error: 'Thiếu mã khoản chi.' }, { status: 400, headers });
