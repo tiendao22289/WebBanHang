@@ -31,3 +31,4 @@
 .rc-thumb.empty { display: block; }
 .rc-attach { min-height: 40px; flex-shrink: 0; border: 1px solid #93c5fd; border-radius: 8px; background: #eff6ff; color: #1d4ed8; font-size: 13px; font-weight: 700; padding: 0 10px; }
 .rc-attach.done { border-color: #d1d5db; background: white; color: #4b5563; font-weight: 500; }
+.rc-photo-actions.single { grid-template-columns: 1fr; }

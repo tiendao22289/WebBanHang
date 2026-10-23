@@ -370,9 +370,9 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
         <CloseForm detail={detail} accounts={accounts} onSaved={async () => { await load(); onChanged(); }} />
       </>}
       <input ref={attachInput} type="file" accept="image/*" onChange={attach} hidden />
-      {view && <div className="rc-viewer" onClick={() => setView(null)} role="dialog" aria-label="Xem ảnh">
+      {view && <div className="rc-viewer" onClick={() => setView(null)} onContextMenu={e => e.preventDefault()} role="dialog" aria-label="Xem ảnh">
         <button className="fin-icon" aria-label="Đóng"><X size={20} /></button>
-        <img src={view} alt="Ảnh" />
+        <img src={view} alt="Ảnh" draggable={false} />
       </div>}
     </div>
   </div>;

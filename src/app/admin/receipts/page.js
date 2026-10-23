@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Camera, Images, RefreshCw, Trash2, X } from 'lucide-react';
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import { useBackClose } from '@/lib/useBackClose';
+import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
 import '../finance/finance.css';
 import './receipts.css';
 
@@ -19,43 +20,50 @@ async function send(form) {
   return result;
 }
 
-// Chụp ảnh (mở thẳng camera sau) hoặc chọn ảnh có sẵn trong máy (ảnh màn hình
-// chuyển khoản). Android: capture chỉ mở camera nên cần nút thư viện riêng;
-// iPhone: không có capture thì Safari tự hỏi Chụp ảnh / Thư viện. Nén rồi trả
-// về blob + ảnh xem trước.
-function PhotoPicker({ label, value, onChange, required, preferGallery }) {
-  const camera = useRef(null);
+// Ảnh bill giấy: CHỈ chụp trực tiếp trong web (CameraCapture) — ảnh không lưu
+// vào điện thoại, và không dùng lại được ảnh cũ trong máy. Ảnh chuyển khoản:
+// cho chọn ảnh màn hình có sẵn (allowGallery) hoặc chụp trong web.
+// Máy không mở được camera trong web (trình duyệt quá cũ) thì mới dùng camera
+// của máy làm dự phòng. Trả về blob + ảnh xem trước.
+function PhotoPicker({ label, value, onChange, required, allowGallery }) {
+  const fallbackCamera = useRef(null);
   const gallery = useRef(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  function accept(blob) {
+    if (value?.preview) URL.revokeObjectURL(value.preview);
+    onChange({ blob, preview: URL.createObjectURL(blob), size: blob.size });
+  }
   async function pick(event) {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
     setBusy(true); setError('');
-    try {
-      const blob = await compressImage(file);
-      if (value?.preview) URL.revokeObjectURL(value.preview);
-      onChange({ blob, preview: URL.createObjectURL(blob), size: blob.size });
-    } catch (err) { setError(err.message); } finally { setBusy(false); }
+    try { accept(await compressImage(file)); } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+  function openCamera() {
+    setError('');
+    if (cameraSupported()) setCameraOpen(true); else fallbackCamera.current.click();
   }
   return <div className="rc-photo">
-    <input ref={camera} type="file" accept="image/*" capture="environment" onChange={pick} hidden />
-    <input ref={gallery} type="file" accept="image/*" onChange={pick} hidden />
+    <input ref={fallbackCamera} type="file" accept="image/*" capture="environment" onChange={pick} hidden />
+    {allowGallery && <input ref={gallery} type="file" accept="image/*" onChange={pick} hidden />}
     {value
       ? <div className="rc-photo-preview">
-          <img src={value.preview} alt={label} />
+          <img src={value.preview} alt={label} draggable={false} onContextMenu={e => e.preventDefault()} />
           <div><b>{label}</b><small>{Math.round(value.size / 1024)}KB</small>
-            <button type="button" className="fin-ghost" onClick={() => (preferGallery ? gallery : camera).current.click()}>Đổi ảnh</button></div>
+            <button type="button" className="fin-ghost" onClick={() => (allowGallery ? gallery.current.click() : openCamera())}>{allowGallery ? 'Đổi ảnh' : 'Chụp lại'}</button></div>
         </div>
       : <div className={`rc-photo-pick ${required ? 'required' : ''}`}>
-          <span className="rc-photo-label">{busy ? 'Đang xử lý ảnh...' : label}{required && <small>bắt buộc</small>}</span>
-          <div className={preferGallery ? 'rc-photo-actions reverse' : 'rc-photo-actions'}>
-            <button type="button" onClick={() => camera.current.click()} disabled={busy}><Camera size={20} />Chụp ảnh</button>
-            <button type="button" onClick={() => gallery.current.click()} disabled={busy}><Images size={20} />Chọn ảnh có sẵn</button>
+          <span className="rc-photo-label">{busy ? 'Đang xử lý ảnh...' : label}{required && <small>bắt buộc · chụp trực tiếp, không lưu vào máy</small>}</span>
+          <div className={allowGallery ? 'rc-photo-actions reverse' : 'rc-photo-actions single'}>
+            <button type="button" onClick={openCamera} disabled={busy}><Camera size={20} />Chụp ảnh</button>
+            {allowGallery && <button type="button" onClick={() => gallery.current.click()} disabled={busy}><Images size={20} />Chọn ảnh màn hình</button>}
           </div>
         </div>}
     {error && <p className="fin-error">{error}</p>}
+    {cameraOpen && <CameraCapture onCapture={accept} onClose={() => setCameraOpen(false)} />}
   </div>;
 }
 
@@ -66,9 +74,9 @@ function Viewer({ url, onClose }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
-  return <div className="rc-viewer" onClick={onClose} role="dialog" aria-label="Xem ảnh">
+  return <div className="rc-viewer" onClick={onClose} onContextMenu={e => e.preventDefault()} role="dialog" aria-label="Xem ảnh">
     <button className="fin-icon" aria-label="Đóng"><X size={20} /></button>
-    <img src={url} alt="Ảnh bill" />
+    <img src={url} alt="Ảnh bill" draggable={false} />
   </div>;
 }
 
@@ -183,7 +191,7 @@ export default function ReceiptsPage() {
           {accounts.map(a => <button key={a.id} type="button" role="radio" aria-checked={account === a.id} className={account === a.id ? 'active' : ''}
             onClick={() => setAccount(a.id)}>{a.name}{a.last4 && <small>…{a.last4}</small>}</button>)}
         </div>
-        <PhotoPicker label="Ảnh chuyển khoản (nếu có)" value={transferPhoto} onChange={setTransferPhoto} preferGallery />
+        <PhotoPicker label="Ảnh chuyển khoản (nếu có)" value={transferPhoto} onChange={setTransferPhoto} allowGallery />
       </>}
       <label className="rc-field">Bàn / ghi chú
         <input value={tableLabel} onChange={e => setTableLabel(e.target.value)} placeholder="VD: Bàn 5" maxLength={40} />
