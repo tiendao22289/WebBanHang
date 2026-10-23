@@ -23,7 +23,7 @@ import { sendOaText } from '@/lib/zaloOa';
 import { LINK_CODE_MINUTES, readReportSettings, reportStatus, saveReportSettings } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
-import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, dailyReportText, isMonthKey, itemKey, summarizeItems, monthBounds, noteCost, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
+import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, dailyReportText, isMonthKey, itemKey, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -78,6 +78,8 @@ function noteView(note) {
   if (items) { try { text = JSON.parse(note.content).note || ''; } catch { text = ''; } }
   return { id: note.id, createdAt: note.created_at, staffName: note.staff?.full_name || '', cost: noteCost(note),
     suspicious: suspiciousNoteItems(items).map(i => `${i.name}: ${i.price}`),
+    // Tổng phiếu đã lưu khác tổng các dòng tính lại (lỗi cũ "2,5kg" → 25kg...); cảnh báo từng dòng.
+    mismatch: noteMismatch(note), lineWarnings: noteLineWarnings(note),
     paid: Number(note.amount) || 0, debt: Number(note.debt) || 0,
     debtLeft: Math.max(0, (Number(note.debt) || 0) - (Number(note.paid_debt) || 0)), items, text: text.slice(0, 500) };
 }

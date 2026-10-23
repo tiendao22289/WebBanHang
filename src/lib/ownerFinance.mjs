@@ -2,6 +2,8 @@
 // để route server và test dùng chung.
 
 // Sổ bắt đầu tính từ ngày này; dữ liệu trước đó không đưa vào.
+import { lineWarnings, noteTotals, parsePrice as linePrice, parseQty } from './notesMath.mjs';
+
 export const FINANCE_START_DATE = '2026-10-23';
 
 export const FIXED_CATEGORIES = [
@@ -139,7 +141,7 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
 
   const days = dates.map(date => ({
     date, revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {},
-    purchases: 0, purchaseNotes: 0, suspiciousNotes: 0, drinks: 0, salary: 0, fixedShare: fixedPerDay,
+    purchases: 0, purchaseNotes: 0, suspiciousNotes: 0, mismatchNotes: 0, drinks: 0, salary: 0, fixedShare: fixedPerDay,
     custom: { ...customDailyShare }, customTotal: 0, profit: 0, close: null,
   }));
   const byDate = new Map(days.map(d => [d.date, d]));
@@ -166,7 +168,8 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     if (!day || cost <= 0) continue;
     day.purchases += cost;
     day.purchaseNotes += 1;
-    if (suspiciousNoteItems(noteItems(note)).length) day.suspiciousNotes += 1;
+    if (suspiciousNoteItems(noteItems(note)).length || noteLineWarnings(note).length) day.suspiciousNotes += 1;
+    if (noteMismatch(note)) day.mismatchNotes += 1;
   }
   for (const entry of entries) {
     const day = byDate.get(entry.entry_date);
@@ -186,7 +189,7 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
   for (const day of days) {
     day.customTotal = Object.values(day.custom).reduce((sum, v) => sum + v, 0);
     day.profit = day.revenue - day.purchases - day.drinks - day.salary - day.fixedShare - day.customTotal;
-    for (const key of ['revenue', 'bills', 'paperBills', 'paperRevenue', 'cash', 'transfer', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit']) totals[key] += day[key];
+    for (const key of ['revenue', 'bills', 'paperBills', 'paperRevenue', 'cash', 'transfer', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit', 'suspiciousNotes', 'mismatchNotes']) totals[key] = (totals[key] || 0) + day[key];
     for (const [acc, amount] of Object.entries(day.byAccount)) totals.byAccount[acc] = (totals.byAccount[acc] || 0) + amount;
     for (const [id, amount] of Object.entries(day.custom)) totals.custom[id] = (totals.custom[id] || 0) + amount;
   }
@@ -226,7 +229,8 @@ export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, 
   }
   if (alerts.missingPhoto) warnings.push(`${alerts.missingPhoto} bill CK chưa có ảnh (tháng này)`);
   if (alerts.unchecked) warnings.push(`${alerts.unchecked} bill CK chưa đối chiếu (tháng này)`);
-  if (day.suspiciousNotes) warnings.push(`${day.suspiciousNotes} phiếu Sổ tay giá đáng ngờ`);
+  if (day.mismatchNotes) warnings.push(`${day.mismatchNotes} phiếu Sổ tay lệch tiền (tổng phiếu khác các dòng hàng)`);
+  if (day.suspiciousNotes) warnings.push(`${day.suspiciousNotes} phiếu Sổ tay giá / số lượng đáng ngờ`);
   lines.push('');
   if (warnings.length) lines.push(...warnings.map(w => `⚠ ${w}`));
   else lines.push('✓ Không có gì bất thường');
@@ -244,8 +248,22 @@ const qtyNumber = qty => parseFloat(String(qty ?? '').replace(',', '.').replace(
 
 /** Tiền một dòng hàng Sổ tay — giống trang Sổ tay: giá × số lượng (không ghi số lượng = 1). */
 export function noteLineCost(item) {
-  return parseNotePrice(item?.price) * (qtyNumber(item?.qty) || 1);
+  return Math.round(linePrice(item?.price) * parseQty(item?.qty));
 }
+
+/**
+ * Phiếu có dòng hàng mà tổng tiền đã lưu (đã trả + nợ) khác tổng các dòng tính lại
+ * — thường do lỗi cũ của Sổ tay ("2,5kg" bị hiểu thành 25kg). 0 = khớp (lệch < 1.000đ).
+ */
+export function noteMismatch(note) {
+  const items = noteItems(note).filter(i => String(i?.name || '').trim());
+  if (!items.length || note?.note_type !== 'expense') return 0;
+  const diff = noteCost(note) - noteTotals(items).total;
+  return Math.abs(diff) >= 1000 ? diff : 0;
+}
+
+/** Dòng hàng đáng ngờ: giá thiếu "k", số lượng có nhiều số... */
+export const noteLineWarnings = note => noteItems(note).filter(i => String(i?.name || '').trim()).flatMap(i => lineWarnings(i).map(w => `${i.name}: ${w}`));
 
 const groupWords = g => (g.keywords?.length ? g.keywords : [g.name]).map(itemKey).filter(Boolean);
 
@@ -280,17 +298,22 @@ export function summarizeItems({ bills = [], notes = [], drinks = [], paperReven
     if (n) { row.qtyTotal += n; row.units.add(String(qty).replace(/[0-9.,\s]/g, '').toLowerCase()); }
     bought.set(key, row);
   };
-  let notesTotal = 0, itemizedTotal = 0;
+  // unitemized: phiếu không ghi dòng hàng; mismatch: tổng phiếu đã lưu − tổng các dòng (phiếu lệch tiền).
+  let notesTotal = 0, itemizedTotal = 0, unitemized = 0, mismatch = 0, mismatchNotes = 0;
   for (const note of notes) {
     const total = noteCost(note);
     if (!total) continue;
     notesTotal += total;
+    let lines = 0;
     for (const item of noteItems(note)) {
       const cost = noteLineCost(item);
       if (!item.name || !cost) continue;
-      itemizedTotal += cost;
+      lines += cost;
       addBought(item.name, cost, item.qty);
     }
+    itemizedTotal += lines;
+    if (!lines) unitemized += total;
+    else if (Math.abs(total - lines) >= 1000) { mismatch += total - lines; mismatchNotes += 1; }
   }
   const drinksTotal = drinks.reduce((s, e) => s + (Number(e.amount) || 0), 0);
   for (const e of drinks) if (Number(e.amount) > 0) addBought(e.label || 'Nước ngọt / bia', Number(e.amount), '');
@@ -320,10 +343,10 @@ export function summarizeItems({ bills = [], notes = [], drinks = [], paperReven
   return {
     sold: soldRows, bought: boughtRows, groups: groupRows, suggestions,
     totals: {
-      revenue, paperRevenue, cost: itemizedTotal + drinksTotal + Math.max(0, notesTotal - itemizedTotal),
-      notesTotal, drinksTotal, unitemized: Math.max(0, notesTotal - itemizedTotal),
+      revenue, paperRevenue, cost: notesTotal + drinksTotal,
+      notesTotal, drinksTotal, unitemized, mismatch, mismatchNotes,
       ungroupedRevenue: soldRows.filter(r => !r.group).reduce((s, r) => s + r.revenue, 0),
-      ungroupedCost: boughtRows.filter(r => !r.group).reduce((s, r) => s + r.cost, 0) + Math.max(0, notesTotal - itemizedTotal),
+      ungroupedCost: boughtRows.filter(r => !r.group).reduce((s, r) => s + r.cost, 0) + unitemized + mismatch,
     },
   };
 }

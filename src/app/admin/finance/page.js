@@ -371,6 +371,8 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
           {note.items?.length > 0 && <ul className="fin-items">{note.items.map((item, i) =>
             <li key={i}><span>{item.qty ? `${item.qty} ` : ''}{item.name}{item.paymentStatus === 'debt' ? ' (nợ)' : ''}</span><span>{item.price}</span></li>)}</ul>}
           {!note.items && note.text && <p className="fin-note-text">{note.text}</p>}
+          {note.mismatch !== 0 && note.mismatch !== undefined && <p className="fin-warn">⚠ Phiếu lệch tiền: tổng phiếu ghi {money(note.cost)} nhưng các dòng hàng cộng lại {money(note.cost - note.mismatch)} (lệch {money(Math.abs(note.mismatch))}). Thường do lỗi cũ của Sổ tay, ví dụ "2,5kg" bị tính thành 25kg. Mở phiếu trong Sổ tay, bấm Sửa rồi Lưu để tính lại.</p>}
+          {note.lineWarnings?.length > 0 && <p className="fin-warn">⚠ {note.lineWarnings.join(' · ')}</p>}
           {note.suspicious?.length > 0 && <p className="fin-warn">⚠ Giá có thể gõ thiếu chữ "k" ({note.suspicious.join(', ')}). Sổ tay hiểu "250" là 250đ, "250k" mới là 250.000đ. Kiểm tra lại phiếu trong Sổ tay.</p>}
         </div>)}
 
@@ -734,6 +736,7 @@ function ItemsView({ month, today }) {
           <b>{money(b.cost)}</b>
         </div>)}
         {t.unitemized > 0 && <div className="fin-row static"><span>Phiếu Sổ tay không ghi chi tiết hàng</span><b>{money(t.unitemized)}</b></div>}
+        {t.mismatch !== 0 && t.mismatch !== undefined && <div className="fin-row static"><span>⚠ Phiếu lệch tiền ({t.mismatchNotes} phiếu)<small>Tổng phiếu đã lưu khác các dòng hàng — xem Từng ngày để sửa</small></span><b>{t.mismatch > 0 ? '+' : ''}{money(t.mismatch)}</b></div>}
       </div>}
     </>}
   </section>;
@@ -825,6 +828,7 @@ export default function FinancePage() {
             <span key={id} className="fin-tag bad">{accountName(id)}: {diffText(diff)}</span>)}
         </>
       : d.date < data.today && <span className="fin-tag muted">Chưa chốt sổ</span>}
+    {d.mismatchNotes > 0 && <span className="fin-tag bad">⚠ {d.mismatchNotes} phiếu Sổ tay lệch tiền</span>}
     {d.suspiciousNotes > 0 && <span className="fin-tag bad">⚠ {d.suspiciousNotes} phiếu Sổ tay giá đáng ngờ</span>}
   </>;
 
@@ -883,6 +887,11 @@ export default function FinancePage() {
         <span className={today.profit < 0 ? 'loss' : 'gain'}>{today.profit < 0 ? 'Lỗ' : 'Lãi'} {money(Math.abs(today.profit))}</span>
         <ChevronRight size={18} />
       </button>}
+
+      {(t.mismatchNotes > 0 || t.suspiciousNotes > 0) && <section className="fin-pending">
+        <b>Phiếu Sổ tay cần xem lại tháng {monthText}</b>
+        <button onClick={() => chooseView('days')}>⚠ {[t.mismatchNotes > 0 && `${t.mismatchNotes} phiếu lệch tiền`, t.suspiciousNotes > 0 && `${t.suspiciousNotes} phiếu giá / số lượng đáng ngờ`].filter(Boolean).join(' · ')} <ChevronRight size={16} /></button>
+      </section>}
 
       {pendingCk && (pendingCk.missingPhoto > 0 || pendingCk.unchecked > 0) && <section className="fin-pending">
         <b>Bill chuyển khoản tháng {monthText}</b>

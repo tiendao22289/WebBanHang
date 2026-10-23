@@ -145,6 +145,16 @@ const printerNameCache = new Map();
 export default function PrintErrorAlert({ isAdmin = false, customerOrderId = null, customerOrderIds = [], onRecovered = null }) {
   const [errors, setErrors] = useState([]);
   const [mutedErrorIds, setMutedErrorIds] = useState(() => new Set());
+  // Điện thoại (admin): gom thông báo thành 1 nút nhỏ để không che lưới bàn; bấm mới mở.
+  const [expanded, setExpanded] = useState(false);
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 768px)');
+    const update = () => setNarrow(media.matches);
+    update();
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
   // Job bị khách/nhân viên bấm X bỏ qua — không cho lần poll sau "hồi sinh" lại
   // (job vẫn pending thật trong DB, nhưng người dùng đã chủ động ẩn rồi).
   const dismissedIdsRef = useRef(new Set());
@@ -337,8 +347,35 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
 
   if (errors.length === 0) return null;
 
+  const compact = isAdmin && narrow;
+  const activeCount = errors.filter(e => !e.isDone).length;
+  if (compact && !expanded) {
+    return (
+      <button
+        onClick={() => setExpanded(true)}
+        aria-label={`${activeCount ? `${activeCount} lỗi máy in` : 'Máy in đã hồi phục'} — bấm để xem`}
+        style={{
+          // Góc dưới, ngay trên thanh menu — không che tab lọc / lưới bàn.
+          position: 'fixed', bottom: 'calc(84px + env(safe-area-inset-bottom, 0px))', right: 10, zIndex: 99999,
+          display: 'flex', alignItems: 'center', gap: 6, minHeight: 36, padding: '6px 12px', borderRadius: 999,
+          border: `1.5px solid ${activeCount ? '#fecaca' : '#86efac'}`, background: activeCount ? '#fef2f2' : '#f0fdf4',
+          color: activeCount ? '#dc2626' : '#16a34a', fontWeight: 800, fontSize: 13, boxShadow: '0 4px 12px rgba(0,0,0,.12)', cursor: 'pointer',
+        }}>
+        <Printer size={15} />
+        {activeCount ? `${activeCount} lỗi máy in` : 'Máy in đã hồi phục'}
+        {activeCount > 0 && <span style={{ width: 6, height: 6, background: '#ef4444', borderRadius: '50%', animation: 'pulse 1s infinite' }} />}
+      </button>
+    );
+  }
+
   return (
-    <div style={{ position: 'fixed', top: 20, right: 20, zIndex: 99999, display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ position: 'fixed', top: compact ? 8 : 20, right: compact ? 8 : 20, zIndex: 99999, display: 'flex', flexDirection: 'column', gap: compact ? 8 : 12, maxHeight: compact ? '70vh' : undefined, overflowY: compact ? 'auto' : undefined }}>
+       {compact && (
+         <button onClick={() => setExpanded(false)}
+           style={{ alignSelf: 'flex-end', minHeight: 32, padding: '4px 12px', borderRadius: 999, border: '1px solid #d1d5db', background: 'white', fontSize: 12, fontWeight: 700, color: '#374151', cursor: 'pointer' }}>
+           Thu gọn ▲
+         </button>
+       )}
        {errors.map(err => {
          const isDone = err.isDone;
          return (
