@@ -20,6 +20,7 @@
 import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { sendOaText } from '@/lib/zaloOa';
+import { notesReportMessages } from '@/lib/notesReport.mjs';
 import { LINK_CODE_MINUTES, readReportSettings, reportStatus, saveReportSettings } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
@@ -236,8 +237,25 @@ async function sendDailyReport(db, { date, today, scheduled }) {
   const monthTotals = { revenue: upTo.reduce((s, d) => s + d.revenue, 0), profit: upTo.reduce((s, d) => s + d.profit, 0) };
   const alerts = await transferAlerts(db, monthBounds(date.slice(0, 7)).start, date, today).catch(() => ({}));
   const text = dailyReportText({ day, monthTotals, accounts, alerts, title: scheduled ? 'Báo cáo' : 'Gửi thử' });
+  // Tin thứ hai trở đi: chi tiết Sổ tay của ngày (lỗi ở phần này không chặn tin tổng kết).
+  let notesMessages = [];
+  try {
+    const range = { start: new Date(vnDayStartIso(date)), end: new Date(vnDayStartIso(addDays(date, 1))) };
+    const [allNotes, payments] = await Promise.all([
+      readAll(() => db.from('staff_notes').select('id, note_type, content, amount, debt, paid_debt, created_at, staff ( full_name )')
+        .lt('created_at', range.end.toISOString()).order('created_at')),
+      db.from('staff_note_payments').select('note_id, amount, paid_at, paid_from_note_id').then(r => (r.error ? [] : r.data || [])),
+    ]);
+    const dayNotes = allNotes.filter(n => new Date(n.created_at).getTime() >= range.start.getTime());
+    notesMessages = notesReportMessages({ date, dayNotes, allNotes, payments, range });
+  } catch (error) { console.error('[admin/finance] notes report', error); }
   const results = [];
-  for (const id of settings.ownerIds) results.push(await sendOaText(db, id, text).catch(error => ({ ok: false, detail: error.message })));
+  for (const id of settings.ownerIds) {
+    const first = await sendOaText(db, id, text).catch(error => ({ ok: false, detail: error.message }));
+    results.push(first);
+    if (!first.ok) continue;
+    for (const message of notesMessages) await sendOaText(db, id, message).catch(error => console.error('[admin/finance] notes message', error));
+  }
   const sent = results.filter(r => r.ok).length;
   const failed = results.find(r => !r.ok);
   const lastError = failed ? `${new Date().toISOString()} ${JSON.stringify(failed.detail ?? '')}`.slice(0, 300) : null;

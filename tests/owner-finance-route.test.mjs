@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as finance from '../src/lib/ownerFinance.mjs';
 import * as zaloLink from '../src/lib/financeZaloLink.mjs';
+import { notesReportMessages } from '../src/lib/notesReport.mjs';
 import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 
 const source = readFileSync(new URL('../src/app/api/admin/finance/route.js', import.meta.url), 'utf8')
@@ -70,7 +71,7 @@ function fakeDb(state, { failTable } = {}) {
 function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFails = false, env = {} }) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...finance, ...zaloLink, createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
+    NextResponse, ...finance, ...zaloLink, notesReportMessages, createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
     sendOaText: async (_db, id, text) => { sent.push({ id, text }); return zaloFails ? { ok: false, detail: { error: -230 } } : { ok: true }; },
     URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
@@ -472,10 +473,11 @@ test('the owner links Zalo with a short code and gets one daily report a day', a
 
   const test1 = await post(api, { action: 'zalo_test' });
   assert.equal(test1.status, 200);
-  assert.equal(sent.length, 1);
+  assert.equal(sent.length, 2, 'summary + Sổ tay of the day');
   assert.match(sent[0].text, /Doanh thu: 150\.000đ \(1 bill\)/);
   assert.match(sent[0].text, /CK Agribank · Chủ quán: 150\.000đ/);
   assert.match(sent[0].text, /1 bill CK chưa có ảnh/);
+  assert.match(sent[1]?.text || '', /🛒 Sổ tay/, 'the Sổ tay of the day follows the summary');
 
   const key = createHmac('sha256', 'k'.repeat(40)).update('finance-daily-report').digest('hex');
   const cronApi = load({ state, sent, code: 401, env: { SUPABASE_SERVICE_ROLE_KEY: 'k'.repeat(40) } });
@@ -483,7 +485,7 @@ test('the owner links Zalo with a short code and gets one daily report a day', a
   assert.equal((await cron('0'.repeat(64))).status, 401, 'a wrong key still needs an owner login');
   assert.equal((await cron(key)).body.ok, true);
   assert.equal((await cron(key)).body.skipped, true, 'the morning report goes out once a day');
-  assert.equal(sent.length, 2);
+  assert.equal(sent.length, 4, 'summary + Sổ tay, twice');
 
   const failing = load({ state, sent, zaloFails: true });
   const res = await post(failing, { action: 'zalo_test' });
