@@ -21,7 +21,7 @@ import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server';
 import { sendOaText } from '@/lib/zaloOa';
 import { notesReportMessages } from '@/lib/notesReport.mjs';
-import { LINK_CODE_MINUTES, readReportSettings, reportStatus, saveReportSettings } from '@/lib/financeZaloLink.mjs';
+import { LINK_CODE_MINUTES, readReportSettings, reportPlan, reportStatus, saveReportSettings, validSendAt } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
 import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, dailyReportText, isMonthKey, itemKey, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
@@ -463,9 +463,13 @@ export async function POST(request) {
   try {
     const body = await request.json().catch(() => ({}));
     if (body.action === 'daily_report' && reportKeyOk(request)) {
+      // Workflow gọi mỗi 30 phút; chỉ gửi khi tới giờ chủ quán chọn (mỗi ngày 1 lần).
+      const db = statusDatabase();
       const today = vnDate(Date.now());
-      const date = DATE.test(body.date || '') ? body.date : addDays(today, -1);
-      return NextResponse.json(await sendDailyReport(statusDatabase(), { date, today, scheduled: true }), { headers });
+      const plan = reportPlan((await readReportSettings(db))?.sendAt);
+      if (!DATE.test(body.date || '') && !plan.due) return NextResponse.json({ ok: true, skipped: `chưa tới giờ gửi ${plan.sendAt}` }, { headers });
+      const date = DATE.test(body.date || '') ? body.date : plan.date;
+      return NextResponse.json(await sendDailyReport(db, { date, today, scheduled: true }), { headers });
     }
     const session = await requireOwner(request);
     if (session.code !== 200) return deny(session.code);
@@ -503,9 +507,15 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, verifiedAt: patch.verified_at, verifiedBy: patch.verified_by }, { headers });
     }
 
-    if (['zalo_link_code', 'zalo_unlink', 'zalo_test'].includes(body.action)) {
+    if (['zalo_link_code', 'zalo_unlink', 'zalo_test', 'zalo_set_time'].includes(body.action)) {
       const settings = await readReportSettings(db);
       if (!settings) return NextResponse.json({ error: 'Chưa cài bảng cài đặt sổ thu chi (owner_finance.sql).' }, { status: 503, headers });
+      if (body.action === 'zalo_set_time') {
+        if (!validSendAt(body.time)) return NextResponse.json({ error: 'Giờ gửi không hợp lệ.' }, { status: 400, headers });
+        const next = { ...settings, sendAt: body.time };
+        await saveReportSettings(db, next);
+        return NextResponse.json({ ok: true, zaloReport: reportStatus(next) }, { headers });
+      }
       if (body.action === 'zalo_test') {
         const today = vnDate(Date.now());
         const result = await sendDailyReport(db, { date: today, today, scheduled: false });

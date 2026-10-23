@@ -256,3 +256,5 @@
 .fin-hint { font-size: 12px; color: #6b7280; margin: 8px 2px; line-height: 1.45; }
 .fin-group-actions .fin-secondary.danger { border-color: #fecaca; background: #fef2f2; color: #b91c1c; }
 .fin-group-actions .fin-secondary { border-style: solid; }
+.fin-zalo-time { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; font-size: 14px; font-weight: 600; color: #374151; }
+.fin-zalo-time select { flex: 1; max-width: 220px; height: 44px; border: 1px solid #d1d5db; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 16px; background: white; color: #111827; }

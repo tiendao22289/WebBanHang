@@ -1,10 +1,10 @@
 name: Finance Daily Report
-# 8 giờ sáng (giờ VN) gửi báo cáo Sổ thu chi ngày hôm qua qua Zalo OA tới
-# chủ quán. Chạy trên runner của máy chủ quán, gọi web prod ở 127.0.0.1:3000.
-# Mỗi ngày chỉ gửi một lần (web tự chặn nếu chạy lại).
+# Mỗi 30 phút hỏi web prod (127.0.0.1:3000) có tới giờ gửi báo cáo Sổ thu chi
+# qua Zalo chưa — giờ gửi do chủ quán chọn trong Sổ thu chi. Web chỉ gửi khi
+# tới giờ và mỗi ngày đúng một lần.
 on:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '0,30 * * * *'
   workflow_dispatch:
 permissions:
   contents: read
