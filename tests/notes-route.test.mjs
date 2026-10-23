@@ -131,3 +131,26 @@ test('leftover money from an earlier trip can pay old debts, and can be marked a
   assert.equal(noteLeftover(handed, state.staff_note_payments), 0);
   assert.match(JSON.parse(handed.content).history.at(-1).changes, /Đã trả lại chủ 410\.000/);
 });
+
+test('old leftover can be carried into a new trip note, and survives later edits', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Ốc', qty: '1', price: '435k' }], input_amount: 500000 });
+  const [trip] = state.staff_notes; // dư 65.000
+  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '50k' }],
+    carry_leftovers: [{ note_id: trip.id, amount: 70000 }] })).status, 400, 'cannot carry more than is left');
+  const r = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '50k' }], input_amount: 100000,
+    carry_leftovers: [{ note_id: trip.id, amount: 65000 }] });
+  assert.equal(r.status, 200);
+  const next = state.staff_notes.find(n => n.id === r.body.note.id);
+  assert.deepEqual(plain(JSON.parse(next.content).carried_in.map(c => [c.from_note_id, c.amount])), [[trip.id, 65000]]);
+  const old = state.staff_notes.find(n => n.id === trip.id);
+  assert.equal(noteLeftover(old, state.staff_note_payments), 0);
+  assert.match(JSON.parse(old.content).history.at(-1).changes, /Chuyển 65\.000/);
+  assert.equal(noteLeftover(next, state.staff_note_payments), 115000);
+  // Sửa phiếu không làm mất sổ tiền dư.
+  assert.equal((await post(api, { action: 'edit', id: trip.id, note_type: 'expense', items: [{ name: 'Ốc', qty: '1', price: '435k' }], note: 'sửa', input_amount: 500000 })).status, 200);
+  assert.equal(noteLeftover(state.staff_notes.find(n => n.id === trip.id), state.staff_note_payments), 0);
+  assert.equal((await post(api, { action: 'edit', id: next.id, note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '50k' }], note: 'sửa', input_amount: 100000 })).status, 200);
+  assert.equal(noteLeftover(state.staff_notes.find(n => n.id === next.id), state.staff_note_payments), 115000);
+});

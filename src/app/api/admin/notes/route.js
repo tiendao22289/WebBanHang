@@ -9,7 +9,8 @@
  *
  * GET  → { notes (kèm staff), payments }  (admin: tất cả; nhân viên: của mình)
  * POST {action}: create (kèm pay_debts: [{ note_id, item_index|null, amount }] — trả đúng các khoản
- *       nợ cũ đã chọn; from_note_id = lấy từ tiền thừa của phiếu trước, bỏ trống = tiền phiếu mới),
+ *       nợ cũ đã chọn; from_note_id = lấy từ tiền thừa của phiếu trước, bỏ trống = tiền phiếu mới;
+ *       carry_leftovers [{ note_id, amount }] = cộng tiền dư phiếu cũ vào phiếu mới),
  *       edit, pay_item (item_index null = cả phiếu), return_leftover (đã trả tiền thừa cho chủ), delete (admin)
  */
 import { NextResponse } from 'next/server';
@@ -145,7 +146,8 @@ export async function POST(request) {
       const noteText = str(body.note, 4000);
       // Các khoản nợ cũ người ghi chọn trả bằng tiền của phiếu này — kiểm tra hết trước khi lưu.
       const requested = Array.isArray(body.pay_debts) ? body.pay_debts.slice(0, 60) : [];
-      const targetIds = [...new Set(requested.flatMap(r => [r?.note_id, r?.from_note_id]).filter(id => UUID.test(id || '')))];
+      const carryReq = type === 'expense' && items.length && Array.isArray(body.carry_leftovers) ? body.carry_leftovers.slice(0, 30) : [];
+      const targetIds = [...new Set([...requested.flatMap(r => [r?.note_id, r?.from_note_id]), ...carryReq.map(c => c?.note_id)].filter(id => UUID.test(id || '')))];
       const { data: targets, error: targetErr } = targetIds.length ? await db.from('staff_notes').select('*').in('id', targetIds) : { data: [], error: null };
       if (targetErr) throw targetErr;
       const byId = new Map((targets || []).map(n => [n.id, n]));
@@ -165,7 +167,13 @@ export async function POST(request) {
         plan.push({ id: target.id, idx, pay, line, at: target.created_at, from });
       }
       // Tiền thừa phiếu trước: phiếu nguồn phải còn đủ tiền thừa chưa trả chủ.
-      const sourceIds = [...new Set(plan.map(x => x.from).filter(Boolean))];
+      const carry = [];
+      for (const c of carryReq) {
+        const amount = money(c?.amount);
+        if (!byId.has(c?.note_id) || !amount) return fail('Tiền dư phiếu cũ không hợp lệ.');
+        carry.push({ id: c.note_id, amount });
+      }
+      const sourceIds = [...new Set([...plan.map(x => x.from), ...carry.map(c => c.id)].filter(Boolean))];
       if (sourceIds.length) {
         const { data: sourcePays, error: sourceErr } = await db.from('staff_note_payments').select('paid_from_note_id, amount').in('paid_from_note_id', sourceIds);
         if (sourceErr) throw sourceErr;
@@ -173,7 +181,7 @@ export async function POST(request) {
           const source = byId.get(id);
           if (!source) return fail('Phiếu lấy tiền thừa không hợp lệ.');
           if (!isAdmin && source.staff_id !== user.id) return fail('Không dùng được tiền thừa trên phiếu của người khác.', 403);
-          const want = plan.filter(x => x.from === id).reduce((a, x) => a + x.pay, 0);
+          const want = plan.filter(x => x.from === id).reduce((a, x) => a + x.pay, 0) + carry.filter(c => c.id === id).reduce((a, c) => a + c.amount, 0);
           const left = noteLeftover(source, sourcePays || []);
           if (want > left) return fail(`Tiền thừa phiếu ${vnDay(source.created_at).split('-').reverse().slice(0, 2).join('/')} chỉ còn ${vnd(left)}.`);
         }
@@ -187,7 +195,8 @@ export async function POST(request) {
         const t = noteTotals(items);
         amount = t.paid; debt = t.debt;
         content = JSON.stringify({ type: 'structured_expense', items, note: [noteText, notice].filter(Boolean).join('\n\n'),
-          input_amount: money(body.input_amount) });
+          input_amount: money(body.input_amount),
+          ...(carry.length ? { carried_in: carry.map(c => ({ from_note_id: c.id, from_at: byId.get(c.id).created_at, amount: c.amount })) } : {}) });
       } else {
         content = [noteText.trim(), notice].filter(Boolean).join('\n\n');
       }
@@ -195,6 +204,16 @@ export async function POST(request) {
       const { data: created, error } = await db.from('staff_notes')
         .insert({ staff_id: user.id, note_type: type, content, amount, debt, status: 'approved' }).select('*').single();
       if (error) throw error;
+      // Phiếu cũ ghi lại số tiền dư đã chuyển sang phiếu mới.
+      for (const c of carry) {
+        const data = parseContent(byId.get(c.id).content) || {};
+        const ts = stamp(), by = user.full_name || 'Không rõ';
+        data.carried_out = [...(data.carried_out || []), { amount: c.amount, ts, by, to_note_id: created.id }];
+        data.history = [...(data.history || []), { ts, by, changes: `➡ Chuyển ${vnd(c.amount)} tiền dư sang phiếu ${dm(created.created_at)}` }];
+        const { data: saved, error: carryErr } = await db.from('staff_notes').update({ content: JSON.stringify(data) }).eq('id', c.id).select('*').single();
+        if (carryErr) throw carryErr;
+        byId.set(c.id, saved);
+      }
       // Chỉ trả nợ cũ sau khi phiếu mới đã lưu (mất mạng giữa chừng thì không lệch).
       for (const x of plan) {
         const current = byId.get(x.id);
@@ -260,7 +279,9 @@ export async function POST(request) {
         const before = (Number(note.amount) || 0) + (Number(note.debt) || 0);
         if (Math.abs(before - (amount + debt)) >= 1) lines.push(`💲 Tổng phiếu: ${vnd(before)} → ${vnd(amount + debt)}`);
         const inputAmount = money(body.input_amount);
-        content = JSON.stringify({ type: 'structured_expense', items, note: noteText, ...(inputAmount > 0 ? { input_amount: inputAmount } : {}),
+        // Giữ sổ tiền dư (đã trả chủ, chuyển đi / nhận vào) khi sửa phiếu.
+        const moneyLogs = Object.fromEntries(['returned_logs', 'carried_in', 'carried_out'].filter(k => Array.isArray(stored?.[k])).map(k => [k, stored[k]]));
+        content = JSON.stringify({ type: 'structured_expense', items, note: noteText, ...(inputAmount > 0 ? { input_amount: inputAmount } : {}), ...moneyLogs,
           history: [...(stored?.history || []), { ts, by, changes: lines.length ? lines.join('\n') : '✏️ Cập nhật ghi chú' }] });
       } else if (stored) {
         content = JSON.stringify({ ...stored, history: [...(stored.history || []), { ts, by, changes: '✏️ Sửa nội dung' }], note: noteText });

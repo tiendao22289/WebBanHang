@@ -57,6 +57,7 @@ export default function StaffNotesPage() {
   const [debtPays, setDebtPays] = useState({});
   const [useSurplusForDebt, setUseSurplusForDebt] = useState(false);
   const [useLeftoverForDebt, setUseLeftoverForDebt] = useState(false);
+  const [carryLeftover, setCarryLeftover] = useState(false);
   const debtPayTotal = Object.values(debtPays).reduce((a, v) => a + (Number(v) || 0), 0);
   const [newNotePayDebtAmount, setNewNotePayDebtAmount] = useState('');
   
@@ -345,7 +346,7 @@ export default function StaffNotesPage() {
   const submitNewNote = async () => {
     // Các khoản nợ cũ đã chọn trả (máy chủ kiểm lại số còn nợ từng khoản).
     // Nguồn tiền: tiền thừa phiếu trước (nếu tích dùng) trước, rồi tiền của phiếu này.
-    const leftovers = useLeftoverForDebt ? openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ id: l.note_id, left: l.left })) : [];
+    const leftovers = useLeftoverForDebt && !carryLeftover ? openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ id: l.note_id, left: l.left })) : [];
     const payDebts = fundDebtPayments(Object.entries(debtPays).filter(([, v]) => Number(v) > 0).map(([key, amount]) => ({ key, amount })), leftovers)
       .map(({ key, amount, from_note_id }) => {
         const [noteId, index] = key.split(':');
@@ -368,6 +369,7 @@ export default function StaffNotesPage() {
         note: newNoteContent,
         input_amount: newNoteInputAmount,
         pay_debts: payDebts,
+        carry_leftovers: carryLeftover && newNoteType === 'expense' ? openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ note_id: l.note_id, amount: l.left })) : [],
       });
     } catch (err) { error = err; }
 
@@ -389,6 +391,7 @@ export default function StaffNotesPage() {
       setDebtPays({});
       setUseSurplusForDebt(false);
       setUseLeftoverForDebt(false);
+      setCarryLeftover(false);
       fetchNotes(currentUser); // Refresh list
     } else {
       alert(error.message || 'Lỗi lưu báo cáo!');
@@ -954,19 +957,28 @@ export default function StaffNotesPage() {
                 <span>Tổng cộng</span>
                 <span style={{ color: debtTotal > 0 ? '#dc2626' : '#15803d' }}>{formatMoney(grandTotal)}</span>
               </div>
-              {data.input_amount > 0 && (() => {
+              {(data.input_amount > 0 || data.carried_in?.length > 0) && (() => {
                 // Trả lại chủ = tiền giao − trả ngay lúc mua − tiền trả nợ cũ lấy từ tiền của phiếu này.
                 // (Trả nợ của phiếu này về sau dùng tiền của phiếu khác nên không trừ ở đây.)
                 const paidAtPurchase = noteTotals(data.items || []).paid;
                 const fundedDebt = noteId ? payments.filter(p => p.paid_from_note_id === noteId).reduce((a, p) => a + Number(p.amount || 0), 0) : 0;
-                const balance = data.input_amount - paidAtPurchase - fundedDebt;
-                const returned = (data.returned_logs || []).reduce((a, r) => a + Number(r.amount || 0), 0);
+                const sumOf = list => (list || []).reduce((a, r) => a + Number(r.amount || 0), 0);
+                const carriedIn = sumOf(data.carried_in), carriedOut = sumOf(data.carried_out);
+                const balance = (Number(data.input_amount) || 0) + carriedIn - paidAtPurchase - fundedDebt;
+                const returned = sumOf(data.returned_logs);
+                const dm = iso => new Date(new Date(iso).getTime() + 7 * 3600000).toISOString().slice(5, 10).split('-').reverse().join('/');
                 return (
                   <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 10, background: balance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1.5px solid ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginBottom: 4 }}>
                       <span style={{ color: '#6b7280' }}>💵 Tiền được giao:</span>
-                      <strong style={{ color: '#1d4ed8' }}>{formatMoney(data.input_amount)}</strong>
+                      <strong style={{ color: '#1d4ed8' }}>{formatMoney(Number(data.input_amount) || 0)}</strong>
                     </div>
+                    {(data.carried_in || []).map((c, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginBottom: 4 }}>
+                        <span style={{ color: '#15803d' }}>➕ Tiền dư cũ cộng vào{c.from_at ? ` (phiếu ${dm(c.from_at)})` : ''}:</span>
+                        <strong style={{ color: '#15803d' }}>{formatMoney(c.amount)}</strong>
+                      </div>
+                    ))}
                     {debtTotal > 0 && (
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginBottom: 4 }}>
                         <span style={{ color: '#dc2626' }}>📋 Nợ người bán:</span>
@@ -985,15 +997,29 @@ export default function StaffNotesPage() {
                       </span>
                       <strong style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>{formatMoney(Math.abs(balance))}</strong>
                     </div>
-                    {returned > 0 && (
+                    {carriedIn > 0 && balance > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#15803d', marginTop: 2 }}>
+                        <span>Dư mới: <b>{formatMoney(Math.max(0, balance - carriedIn))}</b></span>
+                        <span>Dư cũ: <b>{formatMoney(Math.min(carriedIn, balance))}</b></span>
+                      </div>
+                    )}
+                    {carriedOut > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginTop: 4 }}>
+                        <span style={{ color: '#6b7280' }}>➡ Đã chuyển sang phiếu sau:</span>
+                        <strong>{formatMoney(carriedOut)}</strong>
+                      </div>
+                    )}
+                    {(returned > 0 || carriedOut > 0) && (
                       <>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginTop: 4 }}>
-                          <span style={{ color: '#15803d' }}>↩ Đã trả lại chủ:</span>
-                          <strong style={{ color: '#15803d' }}>{formatMoney(returned)}</strong>
-                        </div>
+                        {returned > 0 && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginTop: 4 }}>
+                            <span style={{ color: '#15803d' }}>↩ Đã trả lại chủ:</span>
+                            <strong style={{ color: '#15803d' }}>{formatMoney(returned)}</strong>
+                          </div>
+                        )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem' }}>
                           <span style={{ color: '#6b7280' }}>Còn cầm chưa trả chủ:</span>
-                          <strong>{formatMoney(Math.max(0, balance - returned))}</strong>
+                          <strong>{formatMoney(Math.max(0, balance - returned - carriedOut))}</strong>
                         </div>
                       </>
                     )}
@@ -1700,7 +1726,8 @@ export default function StaffNotesPage() {
                 const vHasDebt = vDebtRemain > 0;
                 const vCleared = (viewingNote.paid_debt || 0) > 0 && vDebtRemain === 0;
                 let vInputAmt = 0;
-                try { const d = JSON.parse(viewingNote.content); if (d.input_amount > 0) vInputAmt = d.input_amount; } catch {}
+                // Tiền dư cũ cộng vào phiếu này tính như tiền được giao thêm.
+                try { const d = JSON.parse(viewingNote.content); vInputAmt = (Number(d.input_amount) || 0) + (d.carried_in || []).reduce((a, c) => a + Number(c.amount || 0), 0); } catch {}
                 // Trừ cả tiền phiếu này đã dùng trả nợ cũ (giống phần chi tiết phiếu).
                 const vFunded = payments.filter(p => p.paid_from_note_id === viewingNote.id).reduce((a, p) => a + Number(p.amount || 0), 0);
                 const vBalance = vInputAmt > 0 ? vInputAmt - (viewingNote.amount || 0) - vFunded : null;
@@ -1849,7 +1876,7 @@ export default function StaffNotesPage() {
                     />
                   </div>
                   {/* ── Tổng kết mở rộng ── */}
-                  {(calculateTotals().paid > 0 || calculateTotals().debt > 0 || (newNoteInputAmount && Number(newNoteInputAmount.replace(/\./g, '')) > 0)) && (() => {
+                  {(calculateTotals().paid > 0 || calculateTotals().debt > 0 || carryLeftover || (newNoteInputAmount && Number(newNoteInputAmount.replace(/\./g, '')) > 0)) && (() => {
                     const { paid: thucChi, debt: tienNo } = calculateTotals();
                     const tongMua = thucChi + tienNo;
                     const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
@@ -1857,7 +1884,11 @@ export default function StaffNotesPage() {
                     const fromLeftover = useLeftoverForDebt ? fundDebtPayments(Object.entries(debtPays).map(([key, amount]) => ({ key, amount })),
                       openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ id: l.note_id, left: l.left }))).filter(x => x.from_note_id).reduce((a, x) => a + x.amount, 0) : 0;
                     const payOldDebt = debtPayTotal - fromLeftover;
-                    const balance = inputAmt > 0 ? inputAmt - thucChi - payOldDebt : null;
+                    // Tiền dư cũ cộng vào: tiêu tiền mới trước, thiếu mới lấy sang dư cũ.
+                    const carried = carryLeftover ? openLeftovers(notes, payments, LEFTOVER_SINCE).reduce((a, l) => a + l.left, 0) : 0;
+                    const balance = inputAmt > 0 || carried > 0 ? inputAmt + carried - thucChi - payOldDebt : null;
+                    const newPart = inputAmt - thucChi - payOldDebt;
+                    const oldLeft = carried > 0 ? Math.max(0, carried + Math.min(0, newPart)) : 0;
                     return (
                       <div style={{ marginTop: 10, padding: '12px 14px', background: '#fff7ed', borderRadius: 10, border: '1px solid #fed7aa', fontSize: 13 }}>
                         <div style={{ fontWeight: 700, color: '#c2410c', marginBottom: 8 }}>📊 Tổng kết chuyến chợ</div>
@@ -1892,12 +1923,24 @@ export default function StaffNotesPage() {
                                 <span style={{ color: '#1d4ed8' }}>💵 Tiền được giao:</span>
                                 <strong style={{ color: '#1d4ed8' }}>{formatMoney(inputAmt)}</strong>
                               </div>
+                              {carried > 0 && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                  <span style={{ color: '#15803d' }}>➕ Tiền dư cũ cộng vào:</span>
+                                  <strong style={{ color: '#15803d' }}>{formatMoney(carried)}</strong>
+                                </div>
+                              )}
                               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 10px', borderRadius: 8, marginTop: 4, fontWeight: 800, background: balance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1.5px solid ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
                                 <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>
                                   {balance >= 0 ? '✅ Còn thừa — trả lại chủ:' : '⚠️ Còn thiếu — nhân viên bỏ thêm:'}
                                 </span>
                                 <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>{formatMoney(Math.abs(balance))}</span>
                               </div>
+                              {carried > 0 && balance > 0 && (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#15803d', padding: '0 10px' }}>
+                                  <span>Dư mới: <b>{formatMoney(Math.max(0, newPart))}</b></span>
+                                  <span>Dư cũ: <b>{formatMoney(oldLeft)}</b></span>
+                                </div>
+                              )}
                             </>
                           )}
                         </div>
@@ -1915,11 +1958,16 @@ export default function StaffNotesPage() {
               {/* ── Nợ cũ còn lại: chọn khoản trả, tuỳ chọn lấy tiền dư trả nợ ── */}
               {(() => {
                 const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
-                const surplus = inputAmt > 0 ? inputAmt - calculateTotals().paid : 0;
+                const leftoverList = openLeftovers(notes, payments, LEFTOVER_SINCE);
+                const carried = carryLeftover && newNoteType === 'expense' ? leftoverList.reduce((a, l) => a + l.left, 0) : 0;
+                const newSurplus = inputAmt > 0 ? inputAmt - calculateTotals().paid : 0;
+                const surplus = newSurplus + carried;
                 return (
                   <DebtPicker notes={notes} value={debtPays} onChange={setDebtPays}
                     surplus={surplus} useSurplus={useSurplusForDebt} onUseSurplus={setUseSurplusForDebt}
-                    leftovers={openLeftovers(notes, payments, LEFTOVER_SINCE)} useLeftover={useLeftoverForDebt} onUseLeftover={setUseLeftoverForDebt}
+                    leftovers={leftoverList} useLeftover={useLeftoverForDebt} onUseLeftover={setUseLeftoverForDebt}
+                    canCarry={newNoteType === 'expense'} carry={carryLeftover && newNoteType === 'expense'} onCarry={setCarryLeftover}
+                    surplusOld={carried > 0 ? Math.min(carried, Math.max(0, surplus)) : 0}
                     onReturnLeftover={async l => {
                       if (!confirm(`Người đi chợ đã đưa lại ${l.left.toLocaleString('vi-VN')}đ tiền thừa của phiếu này cho chủ?`)) return;
                       try { await notesApi('return_leftover', { id: l.note_id, amount: l.left }); await fetchNotes(); } catch (err) { alert(err.message); }
