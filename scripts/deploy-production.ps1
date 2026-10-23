@@ -6,6 +6,21 @@ if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[a-f0-9]{40}$') { throw 'Invalid de
 $branch = ((& git -C $source branch --show-current) -join '').Trim()
 if ($branch -ne 'master' -and $env:GITHUB_REF -ne 'refs/heads/master') { throw 'Only master may deploy production.' }
 if ($ValidateOnly) { Write-Output $sha; exit 0 }
+# Remove old release folders (each holds a full build; the shop disk filled up).
+# Keep the running release and the 3 newest; skip cleanup if the running one is unknown.
+$releases = 'C:\Tool\WebBanHangReleases'
+$current = $null
+try { $current = [IO.Path]::GetFullPath((Get-Content 'C:\Tool\SupabaseLocal\production-current.json' -Raw | ConvertFrom-Json).path).TrimEnd('\') } catch { $current = $null }
+if ($current -and (Test-Path $releases)) {
+    $old = @(Get-ChildItem -LiteralPath $releases -Directory | Sort-Object CreationTime -Descending | Select-Object -Skip 3 |
+        Where-Object { $_.FullName.TrimEnd('\') -ne $current })
+    $removed = 0
+    foreach ($dir in $old) {
+        try { Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction Stop; $removed++ } catch { Write-Warning "Cannot remove old release $($dir.Name)" }
+    }
+    $free = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
+    Write-Output "Old releases removed: $removed of $($old.Count); free on C: $free GB"
+}
 $release = "C:\Tool\WebBanHangReleases\$($sha.Substring(0,12))-$(Get-Date -Format yyyyMMddHHmmss)"
 New-Item -ItemType Directory -Path $release -Force | Out-Null
 $archive = Join-Path $release 'source.zip'
