@@ -1868,78 +1868,6 @@ export default function StaffNotesPage() {
                       </div>
                     ))}
                   </div>
-                  {/* ── Tổng kết mở rộng ── */}
-                  {(calculateTotals().paid > 0 || calculateTotals().debt > 0 || carryLeftover || (newNoteInputAmount && Number(newNoteInputAmount.replace(/\./g, '')) > 0)) && (() => {
-                    const { paid: thucChi, debt: tienNo } = calculateTotals();
-                    const tongMua = thucChi + tienNo;
-                    const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
-                    // Phần trả nợ lấy từ tiền thừa phiếu trước không trừ vào tiền được giao của phiếu này.
-                    const fromLeftover = useLeftoverForDebt ? fundDebtPayments(Object.entries(debtPays).map(([key, amount]) => ({ key, amount })),
-                      openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ id: l.note_id, left: l.left }))).filter(x => x.from_note_id).reduce((a, x) => a + x.amount, 0) : 0;
-                    const payOldDebt = debtPayTotal - fromLeftover;
-                    // Tiền dư cũ cộng vào: tiêu tiền mới trước, thiếu mới lấy sang dư cũ.
-                    const carried = carryLeftover ? openLeftovers(notes, payments, LEFTOVER_SINCE).reduce((a, l) => a + l.left, 0) : 0;
-                    const balance = inputAmt > 0 || carried > 0 ? inputAmt + carried - thucChi - payOldDebt : null;
-                    const newPart = inputAmt - thucChi - payOldDebt;
-                    const oldLeft = carried > 0 ? Math.max(0, carried + Math.min(0, newPart)) : 0;
-                    return (
-                      <div style={{ marginTop: 10, padding: '12px 14px', background: '#fff7ed', borderRadius: 10, border: '1px solid #fed7aa', fontSize: 13 }}>
-                        <div style={{ fontWeight: 700, color: '#c2410c', marginBottom: 8 }}>📊 Tổng kết chuyến chợ</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                          {tongMua > 0 && (
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span style={{ color: '#6b7280' }}>🛒 Tổng mua hàng:</span>
-                              <strong>{formatMoney(tongMua)}</strong>
-                            </div>
-                          )}
-                          {tienNo > 0 && (
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span style={{ color: '#dc2626' }}>📋 Nợ người bán:</span>
-                              <strong style={{ color: '#dc2626' }}>- {formatMoney(tienNo)}</strong>
-                            </div>
-                          )}
-                          {thucChi > 0 && (
-                            <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 5, borderTop: '1px dashed #fed7aa' }}>
-                              <span style={{ color: '#6b7280' }}>💸 Thực chi (tiền túi ra):</span>
-                              <strong style={{ color: '#c2410c' }}>{formatMoney(thucChi)}</strong>
-                            </div>
-                          )}
-                          {payOldDebt > 0 && (
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span style={{ color: '#7c3aed' }}>💳 Trả nợ cũ (từ tiền được giao):</span>
-                              <strong style={{ color: '#7c3aed' }}>- {formatMoney(payOldDebt)}</strong>
-                            </div>
-                          )}
-                          {balance !== null && (
-                            <>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 5, borderTop: '1px solid #fed7aa' }}>
-                                <span style={{ color: '#1d4ed8' }}>💵 Tiền được giao:</span>
-                                <strong style={{ color: '#1d4ed8' }}>{formatMoney(inputAmt)}</strong>
-                              </div>
-                              {carried > 0 && (
-                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                  <span style={{ color: '#15803d' }}>➕ Tiền dư cũ cộng vào:</span>
-                                  <strong style={{ color: '#15803d' }}>{formatMoney(carried)}</strong>
-                                </div>
-                              )}
-                              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 10px', borderRadius: 8, marginTop: 4, fontWeight: 800, background: balance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1.5px solid ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
-                                <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>
-                                  {balance >= 0 ? '✅ Còn thừa — trả lại chủ:' : '⚠️ Còn thiếu — nhân viên bỏ thêm:'}
-                                </span>
-                                <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>{formatMoney(Math.abs(balance))}</span>
-                              </div>
-                              {carried > 0 && balance > 0 && (
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#15803d', padding: '0 10px' }}>
-                                  <span>Dư mới: <b>{formatMoney(Math.max(0, newPart))}</b></span>
-                                  <span>Dư cũ: <b>{formatMoney(oldLeft)}</b></span>
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })()}
                 </div>
               ) : (
                 <div className="form-group mb-4">
@@ -1965,6 +1893,64 @@ export default function StaffNotesPage() {
                       if (!confirm(`Người đi chợ đã đưa lại ${l.left.toLocaleString('vi-VN')}đ tiền thừa của phiếu này cho chủ?`)) return;
                       try { await notesApi('return_leftover', { id: l.note_id, amount: l.left }); await fetchNotes(); } catch (err) { alert(err.message); }
                     }} />
+                );
+              })()}
+              {/* ── Tổng kết chuyến chợ: tính như hoá đơn, kết quả ở cuối ── */}
+              {newNoteType === 'expense' && (() => {
+                const { paid: thucChi, debt: tienNo } = calculateTotals();
+                const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
+                const leftoverList = openLeftovers(notes, payments, LEFTOVER_SINCE);
+                // Phần trả nợ lấy từ tiền thừa phiếu trước không trừ vào tiền của phiếu này.
+                const fromLeftover = useLeftoverForDebt && !carryLeftover ? fundDebtPayments(Object.entries(debtPays).map(([key, amount]) => ({ key, amount })),
+                  leftoverList.map(l => ({ id: l.note_id, left: l.left }))).filter(x => x.from_note_id).reduce((a, x) => a + x.amount, 0) : 0;
+                const payOldDebt = debtPayTotal - fromLeftover;
+                // Tiền dư cũ cộng vào: tiêu tiền mới trước, thiếu mới lấy sang dư cũ.
+                const carried = carryLeftover ? leftoverList.reduce((a, l) => a + l.left, 0) : 0;
+                if (!inputAmt && !carried && !thucChi && !tienNo && !debtPayTotal) return null;
+                const hasMoney = inputAmt > 0 || carried > 0;
+                const balance = inputAmt + carried - thucChi - payOldDebt;
+                const newPart = inputAmt - thucChi - payOldDebt;
+                const oldLeft = carried > 0 ? Math.max(0, carried + Math.min(0, newPart)) : 0;
+                const row = (label, value, color, sign = '') => (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ color }}>{label}</span>
+                    <strong style={{ color, whiteSpace: 'nowrap' }}>{sign}{formatMoney(value)}</strong>
+                  </div>
+                );
+                return (
+                  <div style={{ marginTop: 12, padding: '12px 14px', background: '#fff7ed', borderRadius: 10, border: '1px solid #fed7aa', fontSize: 13 }}>
+                    <div style={{ fontWeight: 700, color: '#c2410c', marginBottom: 8 }}>📊 Tổng kết chuyến chợ</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                      {hasMoney && row('💵 Tiền chủ giao', inputAmt, '#1d4ed8')}
+                      {carried > 0 && row('➕ Tiền dư cũ cộng vào', carried, '#15803d', '+ ')}
+                      {thucChi > 0 && row('💸 Trả tiền hàng', thucChi, '#c2410c', '− ')}
+                      {payOldDebt > 0 && row('💳 Trả nợ cũ', payOldDebt, '#7c3aed', '− ')}
+                      {hasMoney ? (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '7px 10px', borderRadius: 8, marginTop: 4, fontWeight: 800, background: balance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1.5px solid ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
+                          <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>{balance >= 0 ? '✅ Còn thừa — trả lại chủ' : '⚠️ Còn thiếu — nhân viên bỏ thêm'}</span>
+                          <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626', whiteSpace: 'nowrap' }}>{formatMoney(Math.abs(balance))}</span>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, paddingTop: 5, borderTop: '1px solid #fed7aa', fontWeight: 800 }}>
+                          <span style={{ color: '#c2410c' }}>Tổng tiền chi</span>
+                          <span style={{ color: '#c2410c' }}>{formatMoney(thucChi + payOldDebt)}</span>
+                        </div>
+                      )}
+                      {carried > 0 && balance > 0 && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#15803d', padding: '0 10px' }}>
+                          <span>Dư mới: <b>{formatMoney(Math.max(0, newPart))}</b></span>
+                          <span>Dư cũ: <b>{formatMoney(oldLeft)}</b></span>
+                        </div>
+                      )}
+                      {/* Thông tin thêm, không tính vào tiền trên. */}
+                      {(tienNo > 0 || fromLeftover > 0) && (
+                        <div style={{ marginTop: 4, paddingTop: 6, borderTop: '1px dashed #fed7aa', display: 'flex', flexDirection: 'column', gap: 3, fontSize: 12 }}>
+                          {tienNo > 0 && row(`🛒 Tiền hàng ${formatMoney(thucChi + tienNo)}, mua nợ`, tienNo, '#dc2626')}
+                          {fromLeftover > 0 && row('💵 Trả nợ bằng tiền thừa phiếu cũ', fromLeftover, '#15803d')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 );
               })()}
             </div>
