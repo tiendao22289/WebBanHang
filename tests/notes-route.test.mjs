@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as math from '../src/lib/notesMath.mjs';
+import { openDebtLines } from '../src/lib/notesDebts.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
 
 const source = readFileSync(new URL('../src/app/api/admin/notes/route.js', import.meta.url), 'utf8')
@@ -13,7 +14,7 @@ const STAFF = { id: '00000000-0000-4000-8000-00000000bbbb', full_name: 'Thy', ro
 function load(state, user = ADMIN) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...math, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
+    NextResponse, ...math, openDebtLines, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
     getStaffSession: async () => ({ code: 200, user }), staffDatabase: () => fakeDb(state),
   });
 }
@@ -36,18 +37,37 @@ test('the server works out the money of a note itself and records who wrote it',
   assert.equal(JSON.parse(note.content).input_amount, 1000000);
 });
 
-test('paying old debt from a new report is saved after the report and logged per payment', async () => {
+test('a new report pays exactly the old debts the owner picked, after the report is saved', async () => {
   const state = { staff_notes: [], staff_note_payments: [] };
   const api = load(state, STAFF);
+  // Phiếu cũ: nợ chị Hoa (cũ hơn) và nợ chị Lan.
+  await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Mực', qty: '2', price: '100k', paymentStatus: 'debt', creditor: 'Chị Hoa' }] });
   await post(api, { action: 'create', note_type: 'expense', items: items() });
-  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Bia', price: '340k' }], pay_old_debt: 500000 })).status, 400, 'cannot pay more than owed');
-  const r = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Bia', price: '340k' }], input_amount: 800000, pay_old_debt: 200000 });
+  const [hoa, lan] = state.staff_notes;
+  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Bia', price: '340k' }],
+    pay_debts: [{ note_id: lan.id, item_index: 1, amount: 300000 }] })).status, 400, 'cannot pay more than what is owed on that line');
+  assert.equal(state.staff_notes.length, 2, 'nothing saved when a payment is invalid');
+  const r = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Bia', price: '340k' }], input_amount: 800000,
+    pay_debts: [{ note_id: lan.id, item_index: 1, amount: 200000 }] });
   assert.equal(r.status, 200);
-  const old = state.staff_notes[0];
-  assert.equal(old.paid_debt, 200000);
-  assert.equal(JSON.parse(old.content).items[1].paid_amount, 200000);
-  assert.deepEqual(plain(state.staff_note_payments.map(p => [p.note_id, p.amount, p.paid_from_note_id])), [[old.id, 200000, r.body.note.id]]);
-  assert.match(JSON.parse(state.staff_notes[1].content).note, /Đã trả nợ cũ: 200\.000/);
+  assert.equal(state.staff_notes.find(n => n.id === hoa.id).paid_debt || 0, 0, 'the older debt to Hoa is untouched');
+  const paidLan = state.staff_notes.find(n => n.id === lan.id);
+  assert.equal(paidLan.paid_debt, 200000);
+  assert.equal(JSON.parse(paidLan.content).items[1].paid_amount, 200000);
+  assert.deepEqual(plain(state.staff_note_payments.map(p => [p.note_id, p.item_index, p.amount, p.paid_from_note_id])), [[lan.id, 1, 200000, r.body.note.id]]);
+  assert.match(JSON.parse(state.staff_notes.at(-1).content).note, /Trả nợ cũ 200\.000 đ: Chị Lan — Sò điệp 200\.000 đ/);
+});
+
+test("staff cannot pay debts on other people's notes; notes with only a debt amount can be paid as a whole", async () => {
+  const state = { staff_notes: [
+    { id: '00000000-0000-4000-8000-0000000000c1', staff_id: ADMIN.id, note_type: 'other', content: 'nợ tiền đá', amount: 0, debt: 150000, paid_debt: 0, created_at: new Date(Date.now() - 86400000).toISOString() },
+  ], staff_note_payments: [] };
+  const staff = load(state, STAFF);
+  assert.equal((await post(staff, { action: 'create', note_type: 'other', note: 'x', pay_debts: [{ note_id: state.staff_notes[0].id, item_index: null, amount: 50000 }] })).status, 403);
+  const admin = load(state);
+  assert.equal((await post(admin, { action: 'pay_item', id: state.staff_notes[0].id, item_index: null, amount: 50000 })).status, 200);
+  assert.equal(state.staff_notes[0].paid_debt, 50000);
+  assert.equal((await post(admin, { action: 'pay_item', id: state.staff_notes[0].id, item_index: null, amount: 200000 })).status, 400);
 });
 
 test('editing recalculates the total, keeps what was already paid and writes the change history', async () => {

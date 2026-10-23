@@ -505,7 +505,7 @@ test('sales per dish and Sổ tay purchases per item are grouped so each group s
       { name: 'Ốc hương xào bơ', quantity: 2, unit_price: 120000 }, { name: 'Ốc Hương nướng', quantity: 1, unit_price: 130000 }] },
     { order_id: 'i2', business_date: today, paid_at: later(-20), amount: 70000, payment_method: 'cash', items: [
       { name: 'Bia Tiger', quantity: 5, unit_price: 20000 }, { name: 'Giảm 8%', quantity: 1, unit_price: -30000 }] });
-  state.staff_notes.push({ id: 'n1', created_at: later(-60), note_type: 'expense', amount: 450000, debt: 0, content: JSON.stringify({ type: 'structured_expense',
+  state.staff_notes.push({ id: 'n1', created_at: new Date(`${today}T12:00:00+07:00`).toISOString(), note_type: 'expense', amount: 450000, debt: 0, content: JSON.stringify({ type: 'structured_expense',
     items: [{ name: 'oc huong', qty: '2kg', price: '200k' }, { name: 'Tiền rau', qty: '', price: '50k' }] }) });
   state.finance_entries.push({ id: 'd1', kind: 'drink', entry_date: today, amount: 150000, label: 'Bia Tiger thùng' });
   const api = load({ state });

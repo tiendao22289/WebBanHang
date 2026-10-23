@@ -8,11 +8,13 @@
  * trigger trong DB ghi vào staff_data_audit.
  *
  * GET  → { notes (kèm staff), payments }  (admin: tất cả; nhân viên: của mình)
- * POST {action}: create, edit, pay_item, delete (admin)
+ * POST {action}: create (kèm pay_debts: [{ note_id, item_index|null, amount }] — trả đúng các khoản
+ *       nợ cũ đã chọn bằng tiền của phiếu mới), edit, pay_item (item_index null = cả phiếu), delete (admin)
  */
 import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
+import { openDebtLines } from '@/lib/notesDebts.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -106,18 +108,6 @@ async function applyPayment(db, note, itemIndex, amount, { user, fromNoteId, log
   return { ...note, content, paid_debt: paidDebt };
 }
 
-/** Các dòng còn nợ của một phiếu (theo thứ tự dòng). */
-function openDebts(note) {
-  const data = parseContent(note.content);
-  if (data?.type !== 'structured_expense' || !Array.isArray(data.items)) return [];
-  return data.items.map((item, idx) => {
-    if (!String(item?.name || '').trim()) return null;
-    const wasDebt = item.paymentStatus === 'debt' || Number(item.paid_amount) > 0;
-    const left = wasDebt ? debtBase(item) - (Number(item.paid_amount) || 0) : 0;
-    return left > 0 ? { idx, left } : null;
-  }).filter(Boolean);
-}
-
 export async function GET(request) {
   try {
     const s = await getStaffSession(request);
@@ -152,13 +142,29 @@ export async function POST(request) {
       const type = TYPES.includes(body.note_type) ? body.note_type : 'other';
       const items = type === 'expense' ? cleanItems(body.items) : [];
       const noteText = str(body.note, 4000);
-      const payOld = money(body.pay_old_debt);
-      // Nợ cũ của chính người ghi.
-      const { data: mine, error: mineErr } = await db.from('staff_notes').select('*').eq('staff_id', user.id).order('created_at');
-      if (mineErr) throw mineErr;
-      const oldDebt = (mine || []).reduce((a, n) => a + Math.max(0, (n.debt || 0) - (n.paid_debt || 0)), 0);
-      if (payOld > oldDebt) return fail('Số tiền trả nợ không được vượt quá tổng nợ cũ!');
-      const notice = payOld > 0 ? `[💰 Đã trả nợ cũ: ${vnd(payOld)}. Nợ cũ còn lại: ${vnd(oldDebt - payOld)}]` : '';
+      // Các khoản nợ cũ người ghi chọn trả bằng tiền của phiếu này — kiểm tra hết trước khi lưu.
+      const requested = Array.isArray(body.pay_debts) ? body.pay_debts.slice(0, 60) : [];
+      const targetIds = [...new Set(requested.map(r => r?.note_id).filter(id => UUID.test(id || '')))];
+      const { data: targets, error: targetErr } = targetIds.length ? await db.from('staff_notes').select('*').in('id', targetIds) : { data: [], error: null };
+      if (targetErr) throw targetErr;
+      const byId = new Map((targets || []).map(n => [n.id, n]));
+      const plan = [], used = new Map();
+      for (const r of requested) {
+        const target = byId.get(r?.note_id);
+        const pay = money(r?.amount);
+        if (!target || !pay) return fail('Khoản nợ cần trả không hợp lệ.');
+        if (!isAdmin && target.staff_id !== user.id) return fail('Không trả được nợ trên phiếu của người khác.', 403);
+        const idx = r.item_index === null || r.item_index === undefined ? null : Number(r.item_index);
+        const line = openDebtLines(target).find(l => l.item_index === idx);
+        const key = `${target.id}:${idx}`;
+        const already = used.get(key) || 0;
+        if (!line || pay + already > line.left) return fail(`Số trả vượt số còn nợ${line ? ` (${line.name}: còn ${vnd(line.left - already)})` : ' — khoản này đã trả hết'}.`);
+        used.set(key, already + pay);
+        plan.push({ id: target.id, idx, pay, line, at: target.created_at });
+      }
+      const payTotal = plan.reduce((a, x) => a + x.pay, 0);
+      const dm = iso => vnDay(iso).split('-').reverse().slice(0, 2).join('/');
+      const notice = payTotal > 0 ? `[💰 Trả nợ cũ ${vnd(payTotal)}: ${plan.map(x => `${x.line.creditor || 'không ghi tên'} — ${x.line.name} ${vnd(x.pay)} (phiếu ${dm(x.at)})`).join('; ')}]` : '';
       let content, amount = 0, debt = 0;
       if (items.length) {
         const t = noteTotals(items);
@@ -172,27 +178,11 @@ export async function POST(request) {
       const { data: created, error } = await db.from('staff_notes')
         .insert({ staff_id: user.id, note_type: type, content, amount, debt, status: 'approved' }).select('*').single();
       if (error) throw error;
-      // Chỉ trừ nợ cũ sau khi phiếu mới đã lưu (trước đây trừ trước, mất mạng là lệch).
-      let left = payOld;
-      for (const old of (mine || []).filter(n => (n.debt || 0) - (n.paid_debt || 0) > 0)) {
-        if (left <= 0) break;
-        let current = old;
-        const lines = openDebts(current);
-        let noteLeft = Math.min((old.debt || 0) - (old.paid_debt || 0), left);
-        if (!lines.length) {
-          // Phiếu cũ không có dòng hàng: trả cả phiếu.
-          const pay = noteLeft;
-          await applyPayment(db, current, null, pay, { user, fromNoteId: created.id, logText: () => `💰 Khấu trừ ${vnd(pay)} (qua báo cáo mới)` });
-          left -= pay;
-          continue;
-        }
-        for (const line of lines) {
-          if (noteLeft <= 0) break;
-          const pay = Math.min(line.left, noteLeft);
-          current = await applyPayment(db, current, line.idx, pay, { user, fromNoteId: created.id,
-            logText: item => `💰 Khấu trừ ${vnd(pay)} cho "${item.name}" (qua báo cáo mới)${item.paymentStatus === 'full' ? ' — ✅ Đã trả đủ' : ''}` });
-          noteLeft -= pay; left -= pay;
-        }
+      // Chỉ trả nợ cũ sau khi phiếu mới đã lưu (mất mạng giữa chừng thì không lệch).
+      for (const x of plan) {
+        const current = byId.get(x.id);
+        byId.set(x.id, await applyPayment(db, current, x.idx, x.pay, { user, fromNoteId: created.id,
+          logText: item => `💰 Khấu trừ ${vnd(x.pay)}${item?.name ? ` cho "${item.name}"` : ''} (lấy từ phiếu đi chợ mới)${item?.paymentStatus === 'full' ? ' — ✅ Đã trả đủ' : ''}` }));
       }
       return NextResponse.json({ ok: true, note: created }, { headers });
     }
@@ -212,11 +202,11 @@ export async function POST(request) {
     }
 
     if (body.action === 'pay_item') {
-      const idx = Number(body.item_index), amount = money(body.amount);
-      const line = openDebts(note).find(l => l.idx === idx);
+      const idx = body.item_index === null || body.item_index === undefined ? null : Number(body.item_index), amount = money(body.amount);
+      const line = openDebtLines(note).find(l => l.item_index === idx);
       if (!line) return fail('Dòng này không còn nợ.');
       if (!amount || amount > line.left) return fail('Số tiền không hợp lệ!');
-      const updated = await applyPayment(db, note, idx, amount, { user, logText: item => `💰 Trả nợ ${vnd(amount)} cho "${item.name}"` });
+      const updated = await applyPayment(db, note, idx, amount, { user, logText: item => `💰 Trả nợ ${vnd(amount)}${item?.name ? ` cho "${item.name}"` : ''}` });
       return NextResponse.json({ ok: true, note: updated }, { headers });
     }
 
