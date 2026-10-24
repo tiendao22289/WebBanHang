@@ -6,6 +6,8 @@
  *   lương ngày công = lương cơ bản ÷ 26 × số ngày đi làm (làm dư thì cộng thêm;
  *   ngày có giờ trong ca dưới nửa ca tính nửa ngày), tăng ca = giờ ngoài ca chủ đã
  *   cho tính × giá tăng ca. Đơn báo nghỉ chỉ để ghi lý do, không trừ thêm.
+ *   Về sớm từ 30 phút: trừ tiền theo giờ về sớm (lương ngày ÷ số giờ của ca), không trừ
+ *   quá số tiền ngày đó được tính.
  * Tháng trước đó giữ cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày,
  *   trừ ngày nghỉ có đơn × lương cơ bản ÷ 26.
  * Thưởng chuyên cần chủ đã duyệt cộng vào thực lĩnh; phạt trừ ra.
@@ -18,6 +20,8 @@ export const DEFAULT_OT_RATE = 25000;
 // Thưởng chuyên cần: mặc định phải đủ 22 ngày công; gợi ý phạt khi trễ quá 30 phút.
 export const BONUS_MIN_DAYS = 22;
 export const LATE_FINE_MINUTES = 30;
+// Về sớm từ chừng này phút thì trừ tiền theo giờ về sớm.
+export const EARLY_CUT_MINUTES = 30;
 const HOUR = 3600000;
 const round1 = n => Math.round(n * 10) / 10;
 
@@ -52,23 +56,35 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
     // ngày công mới; ngày làm nằm ngoài tháng (ca đêm cuối tháng trước) không tính vào tháng này.
     const days = [...groupByWorkDay(sessions, rules).entries()].filter(([day]) => day.slice(0, 7) === key);
     const workDays = days.filter(([, list]) => list.some(s => s.clock_out)).length;
+    const dayRate = base / STANDARD_DAYS;
+    const earlyList = [];
     let otMs = 0;
     for (const [day, list] of days) {
       const hs = list.map(s => sessionHours(s, rules, reviewOf.get(s.id)));
       const inShiftMs = hs.reduce((a, h) => a + h.countedMs - h.approvedMs, 0);
       const shift = shiftOf(rules, staffId, day);
       const w = shiftWindow(day, shift.start, shift.end);
-      if (inShiftMs > 0) workUnits += inShiftMs >= (w.end - w.start) / 2 ? 1 : 0.5;
+      const unit = inShiftMs > 0 ? (inShiftMs >= (w.end - w.start) / 2 ? 1 : 0.5) : 0;
+      workUnits += unit;
+      // Về sớm từ 30 phút: ngày đó chỉ được lương ngày × phần ca có mặt tới lúc về (trừ đúng số giờ về sớm),
+      // không hơn số tiền ngày công đã tính (ngày làm dưới nửa ca vẫn tối đa nửa ngày).
+      const early = unit ? dayFlags(list, rules).leftEarly : 0;
+      if (early >= EARLY_CUT_MINUTES) {
+        const shiftMin = (w.end - w.start) / 60000;
+        const cut = Math.round(Math.max(0, dayRate * unit - dayRate * Math.max(0, 1 - early / shiftMin)));
+        if (cut > 0) earlyList.push({ day, minutes: early, amount: cut });
+      }
       otMs += hs.reduce((a, h) => a + h.approvedMs, 0);
       pendingMs += hs.reduce((a, h) => a + h.pendingMs, 0);
       totalWorkH += hs.reduce((a, h) => a + h.countedMs, 0) / HOUR;
     }
     otHours = round1(otMs / HOUR);
     const basePay = Math.round(base * workUnits / STANDARD_DAYS);
+    const earlyAmt = earlyList.reduce((a, x) => a + x.amount, 0);
     // Tiền tăng ca theo đúng số phút đã duyệt (45 phút × 30.000đ/giờ = 22.500đ); số giờ chỉ làm tròn để hiện.
     const otAmt = Math.round(otMs / HOUR * otRate);
-    return { rule: 'days', base, standardDays: STANDARD_DAYS, workDays, workUnits, basePay, totalWorkH: round1(totalWorkH), otHours, otAmt,
-      bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, pendingH: round1(pendingMs / HOUR), net: basePay + otAmt + bonusAmt - advAmt - vioAmt };
+    return { rule: 'days', base, standardDays: STANDARD_DAYS, workDays, workUnits, basePay, earlyAmt, earlyList, totalWorkH: round1(totalWorkH), otHours, otAmt,
+      bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, pendingH: round1(pendingMs / HOUR), net: basePay - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt };
   }
 
   // Cách cũ (giữ nguyên số của các tháng trước): tính từng ngày ghi, làm tròn 0,1 giờ.
@@ -87,7 +103,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
   otHours = round1(otHours);
   const otAmt = Math.round(otHours * otRate);
   const absAmt = Math.round(absDays * (base > 0 ? Math.round(base / STANDARD_DAYS) : 0));
-  return { rule: 'hours', base, standardDays: STANDARD_DAYS, workDays, workUnits: workDays, basePay: base, totalWorkH, otHours, otAmt,
+  return { rule: 'hours', base, standardDays: STANDARD_DAYS, workDays, workUnits: workDays, basePay: base, earlyAmt: 0, earlyList: [], totalWorkH, otHours, otAmt,
     bonusAmt, advAmt, absDays, absAmt, vioAmt, pendingH: round1(pendingMs / HOUR), net: base + otAmt + bonusAmt - advAmt - absAmt - vioAmt };
 }
 
@@ -183,8 +199,9 @@ export function staffMonthStats({ year, month, staff = [], configs = [], session
     year, month, rule: usesDayPay(year, month) ? 'days' : 'hours', people,
     totals: {
       staff: people.length,
-      gross: sum(p => p.salary.basePay + p.salary.otAmt + p.salary.bonusAmt),
+      gross: sum(p => p.salary.basePay - (p.salary.earlyAmt || 0) + p.salary.otAmt + p.salary.bonusAmt),
       net: sum(p => p.salary.net), advances: sum(p => p.salary.advAmt), fines: sum(p => p.salary.vioAmt), bonuses: sum(p => p.salary.bonusAmt),
+      earlyCuts: sum(p => p.salary.earlyAmt || 0),
       otAmt: sum(p => p.salary.otAmt), hours: round1(sum(p => p.salary.totalWorkH)), pendingH: round1(sum(p => p.salary.pendingH)),
       late: sum(p => p.late.count), forgot: sum(p => p.forgot), closed: people.filter(p => p.salary.locked).length,
       paid: people.filter(p => p.salary.paid_at).length,

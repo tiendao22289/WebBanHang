@@ -259,19 +259,20 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
   const closed = await ownerPost(DEC1 + 240000, { action: 'close_month', year: 2026, month: 11 });
   assert.equal(closed.status, 200);
   const slip = p => state.payroll_closes.find(c => c.staff_id === p.id && c.month === 11)?.snapshot;
-  const show = s => s && { units: s.workUnits, basePay: s.basePay, otHours: s.otHours, otAmt: s.otAmt, pendingH: s.pendingH, bonusAmt: s.bonusAmt, advAmt: s.advAmt, vioAmt: s.vioAmt, absDays: s.absDays, net: s.net };
+  const show = s => s && { units: s.workUnits, basePay: s.basePay, earlyAmt: s.earlyAmt, otHours: s.otHours, otAmt: s.otAmt, pendingH: s.pendingH, bonusAmt: s.bonusAmt, advAmt: s.advAmt, vioAmt: s.vioAmt, absDays: s.absDays, net: s.net };
   assert.deepEqual(state.payroll_violations.filter(v => v.staff_id === CHI.id).map(v => v.reason), ['Quên bấm ra ca (13/11)', 'Quên bấm ra ca (25/11)']);
 
   // Không có lần quét nào bị lỗi ngoài lần Bình lỡ quét 2 lần liền.
   assert.deepEqual(results.filter(r => r.status !== 200).map(r => [r.who, r.at, r.status]), [['Binh', iso(T(11, '14:01')), 409]]);
 
   // Số tính tay (lương cơ bản 5.200.000đ = 200.000đ/ngày công, tăng ca 30.000đ/giờ = 500đ/phút).
-  assert.deepEqual(show(slip(AN)), { units: 26, basePay: 5200000, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 300000, advAmt: 0, vioAmt: 0, absDays: 0, net: 5500000 }, 'An: thưởng chuyên cần 300.000đ');
-  assert.deepEqual(show(slip(BINH)), { units: 25, basePay: 5000000, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 0, advAmt: 1000000, vioAmt: 200000, absDays: 0, net: 3800000 }, 'Bình: phạt tay 100.000đ + 2 lần trễ quá 30 phút');
-  assert.deepEqual(show(slip(CHI)), { units: 26, basePay: 5200000, otHours: 2.1, otAmt: 62500, pendingH: 1.3, bonusAmt: 0, advAmt: 0, vioAmt: 60000, absDays: 0, net: 5202500 }, 'Chi: 45 + 40 + 40 phút cho tính, 50 + 30 phút chưa duyệt, 2 lần quên ra ca bị phạt');
-  assert.deepEqual(show(slip(DUNG)), { units: 23.5, basePay: 4700000, otHours: 1.1, otAmt: 32500, pendingH: 0, bonusAmt: 250000, advAmt: 0, vioAmt: 0, absDays: 0, net: 4982500 }, 'Dũng: 24 ngày, 1 nửa ngày, ra vào lại sau nửa đêm không thành ngày công mới; thưởng 250.000đ');
-  assert.deepEqual(show(slip(EM)), { units: 14, basePay: 2800000, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 0, advAmt: 3000000, vioAmt: 0, absDays: 0, net: -200000 }, 'Em: kết toán 25/11, còn nợ quán 200.000đ');
-  assert.deepEqual(show(slip(PHAT)), { units: 20, basePay: 4000000, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 0, advAmt: 500000, vioAmt: 50000, absDays: 2, net: 3450000 }, 'Phát: đổi ca 15/11 không tính lại ngày cũ');
+  assert.deepEqual(show(slip(AN)), { units: 26, basePay: 5200000, earlyAmt: 0, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 300000, advAmt: 0, vioAmt: 0, absDays: 0, net: 5500000 }, 'An: thưởng chuyên cần 300.000đ');
+  assert.deepEqual(show(slip(BINH)), { units: 25, basePay: 5000000, earlyAmt: 0, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 0, advAmt: 1000000, vioAmt: 200000, absDays: 0, net: 3800000 }, 'Bình: phạt tay 100.000đ + 2 lần trễ quá 30 phút');
+  assert.deepEqual(show(slip(CHI)), { units: 26, basePay: 5200000, earlyAmt: 0, otHours: 2.1, otAmt: 62500, pendingH: 1.3, bonusAmt: 0, advAmt: 0, vioAmt: 60000, absDays: 0, net: 5202500 }, 'Chi: 45 + 40 + 40 phút cho tính, 50 + 30 phút chưa duyệt, 2 lần quên ra ca bị phạt');
+  assert.deepEqual(show(slip(DUNG)), { units: 23.5, basePay: 4700000, earlyAmt: 14286, otHours: 1.1, otAmt: 32500, pendingH: 0, bonusAmt: 250000, advAmt: 0, vioAmt: 0, absDays: 0, net: 4968214 },
+    'Dũng: 24 ngày, 1 nửa ngày (12/11 về sớm 4 giờ trên ca 7 giờ: được 200.000 × 3/7 = 85.714đ thay vì nửa ngày → trừ 14.286đ), ra vào lại sau nửa đêm không thành ngày công mới; thưởng 250.000đ');
+  assert.deepEqual(show(slip(EM)), { units: 14, basePay: 2800000, earlyAmt: 0, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 0, advAmt: 3000000, vioAmt: 0, absDays: 0, net: -200000 }, 'Em: kết toán 25/11, còn nợ quán 200.000đ');
+  assert.deepEqual(show(slip(PHAT)), { units: 20, basePay: 4000000, earlyAmt: 0, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 0, advAmt: 500000, vioAmt: 50000, absDays: 2, net: 3450000 }, 'Phát: đổi ca 15/11 không tính lại ngày cũ');
   assert.ok(state.payroll_closes.find(c => c.staff_id === EM.id).paid_at, 'Em đã được trả khi nghỉ');
   assert.equal(state.payroll_closes.find(c => c.staff_id === EM.id).closed_at, iso(T(25, '23:50')), 'chốt cả tháng giữ nguyên số đã kết toán của Em');
 
@@ -281,7 +282,8 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
   assert.equal(st('Chi').forgot, 3);
   assert.deepEqual([st('Dung').late.count, st('Dung').leftEarly.count], [0, 1], 'ca đêm: không báo trễ sai, về sớm đúng 1 lần (nửa ngày)');
   assert.deepEqual([st('Phat').warnings, st('An').late.count, st('An').stayed.count, st('An').early.count], [6, 0, 0, 0], 'Phát: 3 ngày khác wifi / máy lạ = 6 lần quét bị cảnh báo (vào + ra)');
-  assert.equal(stats.totals.gross, 5200000 + 5000000 + 5262500 + 4732500 + 2800000 + 4000000 + 300000 + 250000);
+  assert.equal(stats.totals.gross, 5200000 + 5000000 + 5262500 + 4732500 - 14286 + 2800000 + 4000000 + 300000 + 250000);
+  assert.equal(stats.totals.earlyCuts, 14286);
   assert.deepEqual([stats.totals.bonuses, stats.totals.fines], [550000, 100000 + 100000 + 60000 + 50000]);
   assert.equal(await departure.hasLeft(fakeDb(state), EM.id, '2026-11-26'), true, 'Em không đăng nhập được nữa từ 26/11');
 

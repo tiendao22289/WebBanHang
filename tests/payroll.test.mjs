@@ -12,7 +12,7 @@ test('from November: pay by days worked, half a day under half a shift, overtime
   assert.deepEqual([usesDayPay(2026, 10), usesDayPay(2026, 11), usesDayPay(2027, 1)], [false, true, true]);
   const sessions = [
     ses('n2', '2026-11-02', '07:00', '16:00'), // đủ ca → 1 ngày
-    ses('n3', '2026-11-03', '07:05', '11:00'), // 4 giờ < nửa ca 4,5 giờ → nửa ngày
+    ses('n3', '2026-11-03', '07:05', '11:00'), // 4 giờ < nửa ca 4,5 giờ → nửa ngày; về sớm 5 giờ → còn 4/9 ngày
     ses('n4', '2026-11-04', '06:00', '16:30'), // vào sớm 60, ở lại 30 phút, chủ cho tính 90 phút → 1 ngày + 1,5 giờ tăng ca
     ses('n5', '2026-11-05', '07:00', '16:00'),
     ses('n6', '2026-11-06', '07:00', '16:40'), // ở lại 40 phút chưa duyệt
@@ -31,7 +31,9 @@ test('from November: pay by days worked, half a day under half a shift, overtime
   assert.deepEqual([c.otHours, c.otAmt, c.pendingH], [1.5, 45000, 0.7]);
   assert.deepEqual([c.absDays, c.absAmt], [1, 0], 'a leave request is not deducted again');
   assert.equal(c.totalWorkH, 41.5);
-  assert.equal(c.net, 900000 + 45000 - 200000 - 50000);
+  // Về sớm 5 giờ ngày 3/11: được 200.000đ × 4/9 = 88.889đ thay vì nửa ngày 100.000đ → trừ 11.111đ.
+  assert.deepEqual([c.earlyAmt, c.earlyList], [11111, [{ day: '2026-11-03', minutes: 300, amount: 11111 }]]);
+  assert.equal(c.net, 900000 - 11111 + 45000 - 200000 - 50000);
 });
 
 test('working more than 26 days adds pay, and an overtime rate of 0 pays no overtime', () => {
@@ -116,4 +118,19 @@ test('attendance bonus: no late day, no forgotten clock-out and enough work days
   assert.deepEqual(activeFineKinds([]), ['late', 'forgot']);
   // Không có khoản nào tự trừ: lương không đổi khi chỉ có gợi ý.
   assert.equal(full.vioAmt, 0);
+});
+
+test('leaving 30 minutes or more early costs the early hours: day pay ÷ shift hours', () => {
+  // Ca 14:00–23:00 (9 giờ), lương 5.200.000đ → 200.000đ/ngày ≈ 22.222đ/giờ.
+  const pay = (from, to) => computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: [ses('x', '2026-11-04', from, to)], config: CONFIG, rules: RULES });
+  assert.deepEqual([pay('07:00', '15:31').earlyAmt, pay('07:00', '15:31').net], [0, 200000], 'left 29 minutes early: no cut');
+  assert.deepEqual([pay('07:00', '15:30').earlyAmt, pay('07:00', '15:30').net], [11111, 188889], '30 minutes early: 30 minutes cut');
+  const tired = pay('07:00', '13:00'); // xin về lúc 20:00, sớm 3 giờ
+  assert.deepEqual([tired.workUnits, tired.earlyAmt, tired.net], [1, 66667, 133333]);
+  assert.deepEqual(tired.earlyList, [{ day: '2026-11-04', minutes: 180, amount: 66667 }]);
+  // Vào trễ không bị trừ tự động; chỉ về sớm.
+  assert.equal(pay('08:00', '16:00').earlyAmt, 0);
+  // Tháng cũ (tháng 10) không trừ.
+  const oct = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: [ses('o', '2026-10-27', '07:00', '13:00')], config: CONFIG, rules: RULES });
+  assert.deepEqual([oct.earlyAmt, oct.net], [0, 5200000]);
 });

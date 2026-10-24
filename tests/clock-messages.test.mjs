@@ -38,3 +38,11 @@ test('after a scan the staff see the time, today\'s hours and whether they were 
   assert.equal(punctuality('out', out, outResult.sessions, R, 'a'), '✅ Ra ca đúng giờ.');
   assert.equal(punctuality('in', second, [], null, 'a'), '', 'nothing before the shop hours are set');
 });
+
+test('leaving 30 minutes or more early tells the staff it is cut from pay (from November)', () => {
+  const R = normalizeRules({ hours_from: '2026-10-25' }, [], [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }]);
+  const out = (date, time) => { const s = { id: 's', staff_id: 'a', date, clock_in: `${date}T07:00:00Z`, clock_out: `${date}T${time}:00Z` }; return punctuality('out', s, [s], R, 'a'); };
+  assert.equal(out('2026-11-04', '13:00'), '⏰ Về sớm 3 giờ so với giờ hết ca 23:00. Về sớm từ 30 phút bị trừ lương theo giờ về sớm.');
+  assert.equal(out('2026-11-04', '15:40'), '⏰ Về sớm 20 phút so với giờ hết ca 23:00.');
+  assert.equal(out('2026-10-27', '13:00'), '⏰ Về sớm 3 giờ so với giờ hết ca 23:00.');
+});

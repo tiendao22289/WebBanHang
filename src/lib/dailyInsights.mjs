@@ -6,6 +6,7 @@
  * Mỗi hàm trả về chuỗi (hoặc '' nếu không có gì đáng báo).
  */
 import { dayFlags, durationText, flagTexts, normalizeRules, sessionHours, workDayOf } from './attendanceRules.mjs';
+import { DAY_PAY_FROM, EARLY_CUT_MINUTES } from './payroll.mjs';
 
 const vnd =n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;
 const clock = iso => new Date(new Date(iso).getTime() + 7 * 3600000).toISOString().slice(11, 16);
@@ -131,7 +132,10 @@ export function staffBlock({ sessions = [], pending = [], fixes = [], alerts = [
     const open = sorted.some(s => !s.clock_out);
     const spans = sorted.map(s => `${clock(s.clock_in)}–${s.clock_out ? clock(s.clock_out) : '…'}`).join(', ');
     const forgot = sorted.some(s => s.auto_closed);
-    const flags = flagTexts(dayFlags(sorted, rules));
+    const dayFlag = dayFlags(sorted, rules);
+    const flags = flagTexts(dayFlag);
+    // Về sớm từ 30 phút (từ tháng 11) bị trừ lương theo giờ.
+    if (dayFlag.leftEarly >= EARLY_CUT_MINUTES && date && date.slice(0, 7) >= DAY_PAY_FROM) flags[flags.findIndex(t => t.startsWith('về sớm'))] += ' (trừ lương)';
     lines.push(`• ${staffNames[id] || 'Không rõ'}: ${spans} (${(Math.round(hours * 10) / 10).toString().replace('.', ',')} giờ)${flags.length ? ` ⚠ ${flags.join(', ')}` : ''}${open ? ' ⚠ chưa bấm ra ca' : ''}${forgot ? ' ⚠ quên ra ca, máy tự tính giờ ra' : ''}`);
   }
   // Gộp cảnh báo theo người: "Phát: không dùng wifi quán ×2; bị chặn 1 lần".
