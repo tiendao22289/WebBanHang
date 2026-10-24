@@ -57,13 +57,15 @@ export function fakeDb(state) {
       let rows = state[table].filter(r => conditions.every(c => c(r)));
       if (op === 'insert') {
         // Cột UNIQUE / khoá chính như trong DB (chấm công: mỗi mã QR dùng 1 lần, một người một máy).
-        const unique = { checkin_nonces: ['nonce'], staff_checkin_devices: ['staff_id', 'device_id'] }[table] || [];
+        // Mỗi phần tử là một khoá (một hay nhiều cột): gợi ý phạt / thưởng tháng là khoá ghép.
+        const unique = { checkin_nonces: [['nonce']], staff_checkin_devices: [['staff_id'], ['device_id']], payroll_fine_reviews: [['attendance_id', 'kind']],
+          payroll_bonuses: [['year', 'month', 'staff_id']], payroll_closes: [['year', 'month', 'staff_id']] }[table] || [];
         const list = Array.isArray(values) ? values : [values];
         // Như DB thật: attendance_edit_log cũ có khoá ngoại sang attendance_logs cũ, không nhận mã ca attendance_sessions.
         if (table === 'attendance_edit_log' && list.some(v => !(state.attendance_logs || []).some(l => l.id === v.attendance_id))) {
           return resolve({ data: null, error: { code: '23503', message: 'violates foreign key constraint "attendance_edit_log_attendance_id_fkey"' } });
         }
-        if (list.some(v => unique.some(k => state[table].some(r => r[k] === v[k])))) {
+        if (list.some(v => unique.some(keys => state[table].some(r => keys.every(k => r[k] === v[k]))))) {
           return resolve({ data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } });
         }
         const added = list.map(v => {

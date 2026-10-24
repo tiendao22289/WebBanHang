@@ -6,7 +6,8 @@
  *
  * GET  ?me=1                 → ca đang mở, các ca hôm nay, đơn sửa giờ, lương tạm tính tháng này của mình
  * GET  ?checkin=1            → máy quầy, cài đặt, điện thoại đã đăng ký, lịch sử quét, đơn sửa giờ (admin)
- * GET  ?payroll=1&year&month → số lương đã chốt của tháng + ngày nghỉ của đơn báo nghỉ (admin)
+ * GET  ?payroll=1&year&month → số lương đã chốt của tháng, ngày nghỉ của đơn báo nghỉ, thưởng chuyên cần,
+ *                              danh sách lỗi, gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt (admin)
  * GET  ?stats=1&year&month   → thống kê nhân sự + quỹ lương cả quán một tháng (admin, trang Thống kê)
  * POST {action}:
  *   clock {token}            → vào / ra ca bằng mã QR trên máy quầy: mỗi mã dùng 1 lần,
@@ -15,7 +16,9 @@
  *   request_fix {attendance_id, clock_in, clock_out, reason} → xin sửa giờ một ca của mình
  *   cancel_request {id, kind}  → huỷ đơn của mình khi còn chờ duyệt (kind 'fix' = đơn xin sửa giờ)
  *   edit_attendance, decide_request, decide_fix, decide_extra, close_month, reopen_month, mark_paid,
- *   staff_depart, staff_return, add_violation, delete_violation,
+ *   staff_depart, staff_return, add_violation {staff_id, date, rule_id?, reason, amount}, delete_violation,
+ *   decide_fine {attendance_id, kind, status, amount, reason} / reopen_fine → gợi ý phạt từ chấm công,
+ *   save_fine_rule, save_bonus_settings, decide_bonus {staff_id, year, month, amount} / remove_bonus,
  *   save_config, save_checkin_settings, save_shift, revoke_kiosk, reset_device,
  *   create_account, set_pin, delete_account   (admin)
  *   hash_all_pins            → băm PIN còn lưu chữ thường (admin / workflow)
@@ -26,7 +29,7 @@ import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { hashPin, isHashedPin, validPin } from '@/lib/staffPin.mjs';
 import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, newDeviceId, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
 import { AUTO_CLOSE_BY, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { DEFAULT_OT_RATE, computeSalary, monthKey, staffMonthStats } from '@/lib/payroll.mjs';
+import { BONUS_MIN_DAYS, DEFAULT_OT_RATE, activeFineKinds, computeSalary, monthKey, monthTallies, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 
 export const runtime = 'nodejs';
@@ -41,6 +44,21 @@ const dayBefore = d => new Date(Date.parse(`${d}T00:00:00Z`) - 86400000).toISOSt
 const secret = () => process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const money = v => { const n = Math.round(Number(String(v ?? '').replace(/\./g, ''))); return Number.isFinite(n) && n >= 0 && n <= MAX_MONEY ? n : null; };
 const text = (v, max = 300) => String(v ?? '').trim().slice(0, max);
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const ddmm = d => `${String(d).slice(8, 10)}/${String(d).slice(5, 7)}`;
+const monthRange = (year, month) => {
+  const pad = n => String(n).padStart(2, '0');
+  return { start: `${year}-${pad(month)}-01`, end: month === 12 ? `${year + 1}-01-01` : `${year}-${pad(month + 1)}-01` };
+};
+// Tháng đã hết chưa (giờ Việt Nam): thưởng chuyên cần chỉ duyệt khi đã hết tháng.
+const monthOver = (year, month) => vnToday() >= monthRange(year, month).end;
+
+// Mức thưởng chuyên cần gợi ý + số ngày công tối thiểu (chưa cài thì 0đ / 22 ngày).
+async function readPayrollSettings(db) {
+  const { data, error } = await db.from('payroll_settings').select('*').eq('id', 1).maybeSingle();
+  if (error) throw error;
+  return { bonus_amount: Number(data?.bonus_amount) || 0, bonus_min_days: data?.bonus_min_days === undefined || data?.bonus_min_days === null ? BONUS_MIN_DAYS : Number(data.bonus_min_days) };
+}
 
 // Workflow trên máy chủ ký bằng khoá service role (như báo cáo Sổ thu chi).
 function serverKeyOk(request) {
@@ -114,42 +132,47 @@ async function myStatus(db, staffId) {
   const rules = { hours_from: settings.hours_from, hours: settings.hours, shifts: settings.shifts[staffId] ? { [staffId]: settings.shifts[staffId] } : {} };
   const day = currentWorkDay(settings, staffId, Date.now());
   return { open: last && !last.clock_out ? last : null, sessions: (today.data || []).filter(x => workDayOf(x, settings) === day), fixes: fixes.data || [], auto_closed: autoClosed, reviews: reviews.data || [],
-    leave_days: leaveDays.data || [], rules, ...await mySalary(db, staffId, settings, reviews.data || []) };
+    leave_days: leaveDays.data || [], rules, ...await mySalary(db, staffId, settings, reviews.data || [], autoClosed) };
 }
 
 // Lương tạm tính tháng này của chính người đó (cùng công thức với bảng lương của chủ);
 // tháng đã chốt thì đưa số đã chốt. Lỗi ở phần này không làm hỏng phần chấm công.
-async function mySalary(db, staffId, settings, reviews) {
+async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
   try {
     const now = vnNow(), year = now.getUTCFullYear(), month = now.getUTCMonth() + 1;
-    const pad = n => String(n).padStart(2, '0');
-    const start = `${year}-${pad(month)}-01`, end = month === 12 ? `${year + 1}-01-01` : `${year}-${pad(month + 1)}-01`;
-    const [sessions, config, requests, violations, closed] = await Promise.all([
+    const { start, end } = monthRange(year, month);
+    const [sessions, config, requests, violations, closed, bonuses, meta, payroll] = await Promise.all([
       db.from('attendance_sessions').select('*').eq('staff_id', staffId).gte('date', start).lte('date', end), // cả ngày 1 tháng sau: lượt dọn quán sau nửa đêm của ca cuối tháng
       db.from('payroll_config').select('*').eq('staff_id', staffId).maybeSingle(),
       db.from('payroll_requests').select('*').eq('staff_id', staffId).eq('month', month).eq('year', year),
       db.from('payroll_violations').select('*').eq('staff_id', staffId).eq('month', month).eq('year', year),
       db.from('payroll_closes').select('*').eq('staff_id', staffId).eq('year', year).eq('month', month).maybeSingle(),
+      db.from('payroll_bonuses').select('*').eq('staff_id', staffId).eq('year', year).eq('month', month),
+      db.from('payroll_violation_meta').select('violation_id, fine_date').eq('staff_id', staffId).gte('fine_date', start).lt('fine_date', end),
+      readPayrollSettings(db),
     ]);
-    for (const r of [sessions, config, requests, violations, closed]) if (r.error) throw r.error;
+    for (const r of [sessions, config, requests, violations, closed, bonuses, meta]) if (r.error) throw r.error;
     const live = computeSalary({ year, month, staffId, sessions: sessions.data || [], config: config.data, requests: requests.data || [],
-      violations: violations.data || [], rules: settings, reviews });
+      violations: violations.data || [], bonuses: bonuses.data || [], rules: settings, reviews });
     const salary = closed.data
-      ? { ...closed.data.snapshot, year, month, locked: true, closed_at: closed.data.closed_at, paid_at: closed.data.paid_at || null }
+      ? { bonusAmt: 0, ...closed.data.snapshot, year, month, locked: true, closed_at: closed.data.closed_at, paid_at: closed.data.paid_at || null }
       : { ...live, year, month, locked: false };
     delete salary.name;
-    return { salary, violations: (violations.data || []).map(v => ({ amount: v.amount, reason: v.reason })) };
+    // Thưởng chuyên cần (khi chủ có dùng): tới hôm nay đã trễ / quên ra ca chưa. Không đưa mức thưởng gợi ý.
+    const t = monthTallies({ sessions: sessions.data || [], rules: settings, key: monthKey(year, month), autoClosed });
+    const bonus = payroll.bonus_amount > 0 && usesDayPay(year, month) ? { late: t.late.count, forgot: t.forgot, minDays: payroll.bonus_min_days, units: live.workUnits, approved: bonuses.data?.[0]?.amount || null } : null;
+    const dateOf = new Map((meta.data || []).map(m => [m.violation_id, m.fine_date]));
+    return { salary, bonus, violations: (violations.data || []).map(v => ({ amount: v.amount, reason: v.reason, date: dateOf.get(v.id) || null })) };
   } catch (error) {
     console.error('[workforce] my salary', error);
-    return { salary: null, violations: [] };
+    return { salary: null, bonus: null, violations: [] };
   }
 }
 
 // Mọi thứ cần để tính lương cả quán một tháng (dùng cho chốt lương và trang Thống kê).
 async function loadPayrollMonth(db, year, month) {
-  const pad = n => String(n).padStart(2, '0');
-  const start = `${year}-${pad(month)}-01`, end = month === 12 ? `${year + 1}-01-01` : `${year}-${pad(month + 1)}-01`;
-  const [staff, configs, sessions, requests, violations, reviews, closes, departures, rules] = await Promise.all([
+  const { start, end } = monthRange(year, month);
+  const [staff, configs, sessions, requests, violations, reviews, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules] = await Promise.all([
     db.from('staff').select('id, full_name, role'),
     db.from('payroll_config').select('*'),
     db.from('attendance_sessions').select('*').gte('date', start).lte('date', end), // cả ngày 1 tháng sau (ca đêm cuối tháng)
@@ -159,10 +182,15 @@ async function loadPayrollMonth(db, year, month) {
     db.from('payroll_closes').select('*').eq('year', year).eq('month', month),
     db.from('staff_departures').select('*'),
     readCheckinSettings(db),
+    db.from('payroll_bonuses').select('*').eq('year', year).eq('month', month),
+    readPayrollSettings(db),
+    db.from('payroll_fine_reviews').select('*').gte('work_day', start).lt('work_day', end),
+    db.from('payroll_fine_rules').select('kind, active'),
   ]);
-  for (const r of [staff, configs, sessions, requests, violations, reviews, closes, departures]) if (r.error) throw r.error;
+  for (const r of [staff, configs, sessions, requests, violations, reviews, closes, departures, bonuses, fineReviews, fineRules]) if (r.error) throw r.error;
   return { start, end, staff: staff.data || [], configs: configs.data || [], sessions: sessions.data || [], requests: requests.data || [],
-    violations: violations.data || [], reviews: reviews.data || [], closes: closes.data || [], departures: departures.data || [], rules };
+    violations: violations.data || [], reviews: reviews.data || [], closes: closes.data || [], departures: departures.data || [], rules,
+    bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data) };
 }
 
 // Trang Thống kê: nhân sự + lương cả quán một tháng, kèm số việc đang chờ chủ duyệt.
@@ -177,20 +205,31 @@ async function staffStats(db, year, month) {
   ]);
   for (const r of [auto, scans, fixes, pendingReqs]) if (r.error) throw r.error;
   const stats = staffMonthStats({ year, month, ...m, autoClosed: (auto.data || []).map(r => r.attendance_id), scans: scans.data || [] });
-  return { ...stats, pending: { fixes: (fixes.data || []).length, requests: (pendingReqs.data || []).length, extras: (await pendingExtras(db, m.rules, m.reviews)).length } };
+  // Người đủ điều kiện thưởng chuyên cần mà chủ chưa duyệt (chỉ khi đã hết tháng và chủ có dùng thưởng).
+  const bonusWaiting = monthOver(year, month) && m.bonusSettings.bonus_amount > 0 ? stats.people.filter(p => p.bonus.eligible && !p.bonus.approved && !p.salary.locked).length : 0;
+  return { ...stats, pending: { fixes: (fixes.data || []).length, requests: (pendingReqs.data || []).length, extras: (await pendingExtras(db, m.rules, m.reviews)).length,
+    fines: stats.people.reduce((a, p) => a + p.fineSuggestions, 0), bonuses: bonusWaiting } };
 }
 
-// Bảng lương của một tháng: số đã chốt (nếu có) và ngày nghỉ của các đơn báo nghỉ.
+// Bảng lương của một tháng: số đã chốt (nếu có), ngày nghỉ của các đơn báo nghỉ, thưởng chuyên
+// cần đã duyệt, danh sách lỗi, gợi ý phạt đã xử lý và ngày / người ghi của các khoản phạt.
 async function payrollMonth(db, year, month) {
-  const start = `${year}-${String(month).padStart(2, '0')}-01`;
-  const [closes, leaveDays, auto] = await Promise.all([
+  const { start, end } = monthRange(year, month);
+  const [closes, leaveDays, auto, bonuses, bonusSettings, fineRules, fineReviews, meta] = await Promise.all([
     db.from('payroll_closes').select('*').eq('year', year).eq('month', month),
     db.from('payroll_leave_days').select('*').limit(5000),
     // Ca máy tự đóng vì quên ra ca (ghi sau ngày làm nên lọc theo giờ ghi) để tab Chấm công đánh dấu.
     db.from('attendance_changes').select('attendance_id').eq('changed_by', AUTO_CLOSE_BY).gte('changed_at', start).limit(5000),
+    db.from('payroll_bonuses').select('*').eq('year', year).eq('month', month),
+    readPayrollSettings(db),
+    db.from('payroll_fine_rules').select('*').order('sort').order('created_at'),
+    db.from('payroll_fine_reviews').select('*').gte('work_day', start).lt('work_day', end),
+    db.from('payroll_violation_meta').select('*').gte('fine_date', start).lt('fine_date', end),
   ]);
-  for (const r of [closes, leaveDays, auto]) if (r.error) throw r.error;
-  return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set((auto.data || []).map(r => r.attendance_id))] };
+  for (const r of [closes, leaveDays, auto, bonuses, fineRules, fineReviews, meta]) if (r.error) throw r.error;
+  return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set((auto.data || []).map(r => r.attendance_id))],
+    bonuses: bonuses.data || [], bonusSettings, fineRules: fineRules.data || [], fineReviews: fineReviews.data || [], violationMeta: meta.data || [],
+    monthOver: monthOver(year, month) };
 }
 
 // Ca 45 ngày gần đây có giờ ngoài ca (vào sớm / ở lại) mà chủ chưa duyệt.
@@ -537,7 +576,7 @@ export async function POST(request) {
         const of = rows => rows.filter(x => x.staff_id === p.id);
         const config = of(m.configs)[0] || null, mine = of(m.sessions), reqs = of(m.requests), vios = of(m.violations);
         if (!config && !mine.length && !reqs.length && !vios.length) return null;
-        const salary = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, rules: m.rules, reviews: m.reviews });
+        const salary = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, bonuses: of(m.bonuses), rules: m.rules, reviews: m.reviews });
         return { year, month, staff_id: p.id, snapshot: { name: p.full_name, ...salary }, closed_by: user.full_name || null, closed_at: closedAt };
       }).filter(Boolean);
       if (only) {
@@ -613,11 +652,74 @@ export async function POST(request) {
       return NextResponse.json({ ok: true }, { headers });
     }
 
+    // Ghi phạt: ngày phạt (tính vào lương tháng của ngày đó), lỗi có sẵn hoặc lý do tự ghi, người ghi.
     if (body.action === 'add_violation') {
       const amount = money(body.amount);
-      const month = Number(body.month), year = Number(body.year);
-      if (!UUID.test(body.staff_id || '') || !amount || !text(body.reason) || !(month >= 1 && month <= 12) || !(year >= 2024 && year <= 2100)) return fail('Vui lòng điền đầy đủ!');
-      const r = await db.from('payroll_violations').insert({ staff_id: body.staff_id, amount, reason: text(body.reason), month, year });
+      const date = DATE.test(body.date || '') ? body.date : null;
+      // Không có ngày (trang cũ) thì theo tháng / năm gửi lên.
+      const year = date ? Number(date.slice(0, 4)) : Number(body.year), month = date ? Number(date.slice(5, 7)) : Number(body.month);
+      let reason = text(body.reason, 200), ruleId = null;
+      if (UUID.test(body.rule_id || '')) {
+        const { data: rule, error } = await db.from('payroll_fine_rules').select('*').eq('id', body.rule_id).maybeSingle();
+        if (error) throw error;
+        if (!rule) return fail('Lỗi này không còn trong danh sách.');
+        ruleId = rule.id;
+        if (!reason) reason = rule.name;
+      }
+      if (!UUID.test(body.staff_id || '') || !amount || !reason || !(month >= 1 && month <= 12) || !(year >= 2024 && year <= 2100)) return fail('Vui lòng điền đầy đủ!');
+      const r = await db.from('payroll_violations').insert({ staff_id: body.staff_id, amount, reason, month, year }).select('id').single();
+      if (r.error) throw r.error;
+      if (date) {
+        const meta = await db.from('payroll_violation_meta').insert({ violation_id: r.data.id, staff_id: body.staff_id, fine_date: date, rule_id: ruleId, recorded_by: user.full_name || null });
+        if (meta.error) console.error('[workforce] fine meta', meta.error);
+      }
+      return NextResponse.json({ ok: true, id: r.data.id }, { headers });
+    }
+
+    // Gợi ý phạt từ chấm công (trễ quá 30 phút / quên ra ca): chủ phạt (tự điền tiền) hoặc bỏ qua.
+    // Mỗi gợi ý xử lý đúng một lần: giữ chỗ bằng khoá chính (ca + lỗi) trước khi ghi tiền phạt.
+    if (body.action === 'decide_fine') {
+      const kind = ['late', 'forgot'].includes(body.kind) ? body.kind : null;
+      const status = ['fined', 'skipped'].includes(body.status) ? body.status : null;
+      if (!UUID.test(body.attendance_id || '') || !kind || !status) return fail('Yêu cầu không hợp lệ.');
+      const amount = money(body.amount);
+      if (status === 'fined' && !amount) return fail('Nhập số tiền phạt.');
+      const [found, settings, ruleRow] = await Promise.all([
+        db.from('attendance_sessions').select('*').eq('id', body.attendance_id).maybeSingle(),
+        readCheckinSettings(db),
+        db.from('payroll_fine_rules').select('*').eq('kind', kind).maybeSingle(),
+      ]);
+      if (found.error) throw found.error;
+      if (ruleRow.error) throw ruleRow.error;
+      const ses = found.data;
+      if (!ses) return fail('Không tìm thấy ca này.', 404);
+      const day = workDayOf(ses, settings), by = user.full_name || null;
+      const claim = await db.from('payroll_fine_reviews').insert({ attendance_id: ses.id, kind, staff_id: ses.staff_id, work_day: day, status, decided_by: by, decided_at: new Date().toISOString() });
+      if (claim.error) {
+        if (claim.error.code === '23505') return fail('Gợi ý này đã được xử lý rồi.', 409);
+        throw claim.error;
+      }
+      if (status === 'skipped') return NextResponse.json({ ok: true }, { headers });
+      const rule = ruleRow.data;
+      const reason = text(body.reason, 200) || `${rule?.name || (kind === 'late' ? 'Đi trễ' : 'Quên bấm ra ca')} (${ddmm(day)})`;
+      const v = await db.from('payroll_violations').insert({ staff_id: ses.staff_id, amount, reason, month: Number(day.slice(5, 7)), year: Number(day.slice(0, 4)) }).select('id').single();
+      if (v.error) {
+        await db.from('payroll_fine_reviews').delete().eq('attendance_id', ses.id).eq('kind', kind);
+        throw v.error;
+      }
+      const links = await Promise.all([
+        db.from('payroll_fine_reviews').update({ violation_id: v.data.id }).eq('attendance_id', ses.id).eq('kind', kind),
+        db.from('payroll_violation_meta').insert({ violation_id: v.data.id, staff_id: ses.staff_id, fine_date: day, rule_id: rule?.id || null, attendance_id: ses.id, kind, recorded_by: by }),
+      ]);
+      for (const x of links) if (x.error) console.error('[workforce] fine links', x.error);
+      return NextResponse.json({ ok: true, id: v.data.id }, { headers });
+    }
+
+    // Xem lại một gợi ý phạt đã bỏ qua: nó hiện lại trong danh sách gợi ý.
+    if (body.action === 'reopen_fine') {
+      const kind = ['late', 'forgot'].includes(body.kind) ? body.kind : null;
+      if (!UUID.test(body.attendance_id || '') || !kind) return fail('Yêu cầu không hợp lệ.');
+      const r = await db.from('payroll_fine_reviews').delete().eq('attendance_id', body.attendance_id).eq('kind', kind).eq('status', 'skipped');
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true }, { headers });
     }
@@ -626,6 +728,68 @@ export async function POST(request) {
       if (!UUID.test(body.id || '')) return fail('Thiếu khoản phạt.');
       const r = await db.from('payroll_violations').delete().eq('id', body.id);
       if (r.error) throw r.error;
+      // Xoá cả ngày / người ghi; khoản từ gợi ý chấm công thì gợi ý hiện lại để chủ xử lý lại.
+      const cleanup = await Promise.all([
+        db.from('payroll_violation_meta').delete().eq('violation_id', body.id),
+        db.from('payroll_fine_reviews').delete().eq('violation_id', body.id),
+      ]);
+      for (const x of cleanup) if (x.error) console.error('[workforce] fine cleanup', x.error);
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Danh sách lỗi có sẵn: tên + tiền phạt gợi ý (0 = điền mỗi lần), ẩn / hiện. Lỗi máy tự gợi ý giữ nguyên loại.
+    if (body.action === 'save_fine_rule') {
+      const name = text(body.name, 80);
+      const amount = money(String(body.amount ?? '').trim() === '' ? 0 : body.amount);
+      if (!name || amount === null) return fail('Nhập tên lỗi và số tiền (để 0 nếu muốn điền mỗi lần).');
+      const payload = { name, amount, active: body.active !== false, updated_at: new Date().toISOString() };
+      const r = UUID.test(body.id || '')
+        ? await db.from('payroll_fine_rules').update(payload).eq('id', body.id).select('id')
+        : await db.from('payroll_fine_rules').insert({ ...payload, sort: 100 }).select('id');
+      if (r.error) throw r.error;
+      if (!r.data?.length) return fail('Không tìm thấy lỗi này.', 404);
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Thưởng chuyên cần: mức gợi ý (0 = không dùng) và số ngày công tối thiểu.
+    if (body.action === 'save_bonus_settings') {
+      const amount = money(body.bonus_amount);
+      const minDays = Math.round(Number(String(body.bonus_min_days ?? '').replace(',', '.')) * 10) / 10;
+      if (amount === null || String(body.bonus_min_days ?? '').trim() === '' || !(minDays >= 0 && minDays <= 31)) return fail('Mức thưởng hoặc số ngày công không hợp lệ.');
+      const row = { bonus_amount: amount, bonus_min_days: minDays, updated_by: user.full_name || null, updated_at: new Date().toISOString() };
+      const up = await db.from('payroll_settings').update(row).eq('id', 1).select('id');
+      if (up.error) throw up.error;
+      if (!up.data?.length) {
+        const ins = await db.from('payroll_settings').insert({ id: 1, ...row });
+        if (ins.error) throw ins.error;
+      }
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Duyệt thưởng chuyên cần một người (số tiền chủ tự điền) — chỉ khi đã hết tháng; bỏ thưởng thì xoá.
+    if (body.action === 'decide_bonus' || body.action === 'remove_bonus') {
+      const year = Number(body.year), month = Number(body.month);
+      if (!UUID.test(body.staff_id || '') || !(month >= 1 && month <= 12) || !(year >= 2024 && year <= 2100)) return fail('Yêu cầu không hợp lệ.');
+      const mine = q => q.eq('year', year).eq('month', month).eq('staff_id', body.staff_id);
+      if (body.action === 'remove_bonus') {
+        const r = await mine(db.from('payroll_bonuses').delete());
+        if (r.error) throw r.error;
+        return NextResponse.json({ ok: true }, { headers });
+      }
+      if (!monthOver(year, month)) return fail('Hết tháng mới duyệt thưởng chuyên cần được.');
+      const amount = money(body.amount);
+      if (!amount) return fail('Nhập số tiền thưởng.');
+      const row = { amount, note: text(body.note, 200) || null, decided_by: user.full_name || null, decided_at: new Date().toISOString() };
+      const update = () => mine(db.from('payroll_bonuses').update(row)).select('staff_id');
+      let up = await update();
+      if (up.error) throw up.error;
+      if (!up.data?.length) {
+        const ins = await db.from('payroll_bonuses').insert({ year, month, staff_id: body.staff_id, ...row });
+        // Hai lần bấm cùng lúc: lần sau ghi đè số tiền.
+        if (ins.error?.code === '23505') up = await update();
+        else if (ins.error) throw ins.error;
+        if (up.error) throw up.error;
+      }
       return NextResponse.json({ ok: true }, { headers });
     }
 
