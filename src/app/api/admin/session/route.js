@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getStatusSecret, getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { STATUS_COOKIE, SESSION_SECONDS, signSession } from '@/lib/statusSession.mjs';
 import { hashPin, isHashedPin, pinMatches } from '@/lib/staffPin.mjs';
+import { hasLeft } from '@/lib/staffDeparture.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,6 +53,7 @@ export async function POST(request) {
     if (error) throw error;
     const match = (rows || []).find(r => pinMatches(r.pin, r.id, pin, secret));
     if (!match) return NextResponse.json({ error: 'Sai số điện thoại hoặc mã PIN!' }, { status: 401, headers });
+    if (await hasLeft(db, match.id)) return NextResponse.json({ error: 'Tài khoản này đã nghỉ việc. Liên hệ chủ quán nếu cần.' }, { status: 403, headers });
     const { pin: stored, ...data } = match;
     // PIN cũ lưu chữ thường → băm luôn; ghi giờ đăng nhập (trước đây trang tự ghi bằng khoá công khai).
     await db.from('staff').update({ last_login: new Date().toISOString(), ...(isHashedPin(stored) ? {} : { pin: hashPin(data.id, pin, secret) }) })

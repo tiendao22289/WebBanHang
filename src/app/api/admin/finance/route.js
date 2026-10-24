@@ -23,6 +23,7 @@ import { NextResponse } from 'next/server';
 import { sendOaText } from '@/lib/zaloOa';
 import { notesReportMessages, packMessages } from '@/lib/notesReport.mjs';
 import { compareBlock, compareData, lossBlock, staffBlock } from '@/lib/dailyInsights.mjs';
+import { AUTO_CLOSE_BY } from '@/lib/attendanceRules.mjs';
 import { LINK_CODE_MINUTES, REPORT_SECTIONS, readReportSettings, reportPlan, reportSections, reportStatus, saveReportSettings, validSendAt } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
@@ -261,11 +262,27 @@ async function insightBlocks(db, { date, range, sections }) {
   }
   if (sections.staff) {
     try {
-      const [sessions, pending] = await Promise.all([
-        db.from('attendance_sessions').select('staff_id, clock_in, clock_out').eq('date', date).then(r => r.data || []),
+      const [sessions, pending, fixes, scans, settings, shifts, hours] = await Promise.all([
+        // Lấy cả hôm trước / hôm sau: lượt dọn quán sau nửa đêm (ghi ngày hôm sau) vẫn thuộc ca của ngày báo cáo.
+        db.from('attendance_sessions').select('*').gte('date', addDays(date, -1)).lte('date', addDays(date, 1)).then(r => r.data || []),
         db.from('payroll_requests').select('staff_id, request_type, amount, days, reason').eq('status', 'pending').then(r => r.data || []),
+        db.from('attendance_fix_requests').select('staff_id, reason').eq('status', 'pending').then(r => r.data || []),
+        // Lần chấm công bị cảnh báo / bị chặn trong ngày (khác wifi quán, máy lạ, admin chấm không quét mã).
+        db.from('checkin_scans').select('staff_id, action, warnings').gte('created_at', range.start.toISOString()).lt('created_at', range.end.toISOString()).then(r => r.data || []),
+        // Giờ làm (chung / riêng từng người) để báo trễ, sớm và giờ ngoài ca.
+        db.from('checkin_settings').select('*').eq('id', 1).maybeSingle().then(r => r.data || null),
+        db.from('staff_shifts').select('*').then(r => r.data || []),
+        db.from('checkin_hours').select('*').then(r => r.data || []),
       ]);
-      blocks.push({ key: 'staff', text: staffBlock({ sessions, pending, staffNames }) });
+      const ids = sessions.map(s => s.id);
+      const [autoRows, reviews] = ids.length ? await Promise.all([
+        // Ca máy tự đóng vì quên ra ca: dấu nằm ở nhật ký sửa giờ.
+        db.from('attendance_changes').select('attendance_id').eq('changed_by', AUTO_CLOSE_BY).in('attendance_id', ids).then(r => r.data || []),
+        db.from('attendance_extra_reviews').select('*').in('attendance_id', ids).then(r => r.data || []),
+      ]) : [[], []];
+      const autoIds = new Set(autoRows.map(r => r.attendance_id));
+      sessions.forEach(s => { s.auto_closed = autoIds.has(s.id); });
+      blocks.push({ key: 'staff', text: staffBlock({ sessions, pending, fixes, alerts: scans.filter(s => s.action === 'blocked' || s.warnings?.length), settings, shifts, hours, reviews, staffNames, date }) });
     } catch (error) { console.error('[admin/finance] staff block', error); }
   }
   if (sections.compare) {

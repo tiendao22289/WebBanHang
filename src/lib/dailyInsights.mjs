@@ -1,11 +1,13 @@
 /**
  * Các mục thêm của báo cáo Zalo hằng ngày:
  *  - lossBlock:    bill huỷ, món bị bớt sau khi in bếp, giảm giá, món tặng
- *  - staffBlock:   chấm công trong ngày, ai quên ra ca, đơn chờ duyệt
+ *  - staffBlock:   chấm công trong ngày, trễ / sớm, ai quên ra ca, đơn chờ duyệt
  *  - compareBlock: so với hôm qua / cùng thứ tuần trước, bill, giờ đông, món bán chạy
  * Mỗi hàm trả về chuỗi (hoặc '' nếu không có gì đáng báo).
  */
-const vnd = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;
+import { dayFlags, durationText, flagTexts, normalizeRules, sessionHours, workDayOf } from './attendanceRules.mjs';
+
+const vnd =n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;
 const clock = iso => new Date(new Date(iso).getTime() + 7 * 3600000).toISOString().slice(11, 16);
 const hourOf = iso => new Date(new Date(iso).getTime() + 7 * 3600000).getUTCHours();
 const optionsText = options => (Array.isArray(options) ? options.map(o => o?.choice).filter(Boolean).join(', ') : '');
@@ -101,28 +103,57 @@ function maxByItem(snapshots) {
 }
 const latestByItem = maxByItem;
 
+const ALERT_TEXT = { other_network: 'không dùng wifi quán', unknown_device: 'chấm bằng máy lạ', shared_device: 'dùng máy của người khác', admin_no_qr: 'admin chấm không quét mã' };
+
 /**
- * sessions: attendance_sessions của ngày { staff_id, clock_in, clock_out };
+ * sessions: attendance_sessions quanh ngày báo cáo { id, staff_id, date, clock_in, clock_out, auto_closed };
+ * date: ngày báo cáo — chỉ giữ các lượt thuộc ca của ngày đó (lượt dọn quán sau nửa đêm tính về ca hôm trước);
  * pending: payroll_requests đang chờ { staff_id, request_type, amount, days, reason };
- * staffNames: { id: tên }.
+ * fixes: đơn xin sửa giờ đang chờ; alerts: lần quét bị cảnh báo / bị chặn;
+ * settings / shifts / hours: dòng checkin_settings, staff_shifts, checkin_hours (null = tính cả ca như cũ);
+ * reviews: chủ đã cho / không cho tính giờ ngoài ca; staffNames: { id: tên }.
  */
-export function staffBlock({ sessions = [], pending = [], staffNames = {} }) {
+export function staffBlock({ sessions = [], pending = [], fixes = [], alerts = [], settings = null, shifts = [], hours = [], reviews = [], staffNames = {}, date = null }) {
+  const rules = settings ? normalizeRules(settings, shifts, hours) : null;
+  if (date) sessions = sessions.filter(s => workDayOf(s, rules) === date);
+  const reviewOf = new Map(reviews.map(r => [r.attendance_id, r]));
   const lines = ['👥 Nhân viên'];
-  const byStaff = new Map();
+  const byStaff = new Map(), outside = [];
   for (const s of sessions) byStaff.set(s.staff_id, [...(byStaff.get(s.staff_id) || []), s]);
   if (!byStaff.size) lines.push('Không ai chấm công trong ngày.');
   for (const [id, list] of [...byStaff.entries()].sort((a, b) => String(a[1][0].clock_in).localeCompare(String(b[1][0].clock_in)))) {
     const sorted = [...list].sort((a, b) => String(a.clock_in).localeCompare(String(b.clock_in)));
-    const hours = sorted.filter(s => s.clock_out).reduce((a, s) => a + (new Date(s.clock_out) - new Date(s.clock_in)) / 3600000, 0);
+    // Giờ tính lương: cả ca, hoặc (từ ngày tính theo ca) chỉ trong ca + giờ ngoài ca chủ đã cho.
+    const counted = sorted.map(s => sessionHours(s, rules, reviewOf.get(s.id)));
+    const hours = counted.reduce((a, h) => a + h.countedMs, 0) / 3600000;
+    const waitMs = counted.reduce((a, h) => a + h.pendingMs, 0);
+    if (waitMs) outside.push({ id, minutes: Math.round(waitMs / 60000) });
     const open = sorted.some(s => !s.clock_out);
     const spans = sorted.map(s => `${clock(s.clock_in)}–${s.clock_out ? clock(s.clock_out) : '…'}`).join(', ');
-    lines.push(`• ${staffNames[id] || 'Không rõ'}: ${spans} (${(Math.round(hours * 10) / 10).toString().replace('.', ',')} giờ)${open ? ' ⚠ chưa bấm ra ca' : ''}`);
+    const forgot = sorted.some(s => s.auto_closed);
+    const flags = flagTexts(dayFlags(sorted, rules));
+    lines.push(`• ${staffNames[id] || 'Không rõ'}: ${spans} (${(Math.round(hours * 10) / 10).toString().replace('.', ',')} giờ)${flags.length ? ` ⚠ ${flags.join(', ')}` : ''}${open ? ' ⚠ chưa bấm ra ca' : ''}${forgot ? ' ⚠ quên ra ca, máy tự tính giờ ra' : ''}`);
   }
-  if (pending.length) {
-    lines.push(`Chờ bạn duyệt (${pending.length}):`);
+  // Gộp cảnh báo theo người: "Phát: không dùng wifi quán ×2; bị chặn 1 lần".
+  const byPerson = new Map();
+  for (const a of alerts) {
+    const m = byPerson.get(a.staff_id) || new Map();
+    for (const w of a.warnings || []) m.set(ALERT_TEXT[w] || w, (m.get(ALERT_TEXT[w] || w) || 0) + 1);
+    if (a.action === 'blocked') m.set('bị chặn không cho chấm', (m.get('bị chặn không cho chấm') || 0) + 1);
+    byPerson.set(a.staff_id, m);
+  }
+  if (byPerson.size) {
+    lines.push('⚠ Cảnh báo chấm công:');
+    for (const [id, m] of byPerson) lines.push(`• ${staffNames[id] || 'Không rõ'}: ${[...m].map(([t, n]) => (n > 1 ? `${t} ×${n}` : t)).join('; ')}`);
+  }
+  const waiting = pending.length + fixes.length + outside.length;
+  if (waiting) {
+    lines.push(`Chờ bạn duyệt (${waiting}):`);
     for (const r of pending.slice(0, 8)) {
       lines.push(`• ${staffNames[r.staff_id] || 'Không rõ'} ${r.request_type === 'advance' ? `xin ứng ${vnd(r.amount)}` : `báo nghỉ ${r.days || 1} ngày`}${r.reason ? ` — ${String(r.reason).slice(0, 60)}` : ''}`);
     }
+    for (const f of fixes.slice(0, 8)) lines.push(`• ${staffNames[f.staff_id] || 'Không rõ'} xin sửa giờ chấm công${f.reason ? ` — ${String(f.reason).slice(0, 60)}` : ''}`);
+    for (const o of outside) lines.push(`• ${staffNames[o.id] || 'Không rõ'} có ${durationText(o.minutes)} ngoài ca chưa tính lương`);
   }
   return lines.join('\n');
 }

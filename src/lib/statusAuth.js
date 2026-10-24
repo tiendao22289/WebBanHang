@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { STATUS_COOKIE, verifySession } from './statusSession.mjs';
+import { hasLeft } from './staffDeparture.mjs';
 
 let secret;
 export function getStatusSecret() {
@@ -39,9 +40,13 @@ export function staffDatabase(staffId) {
 export async function getStaffSession(request) {
   const session = verifySession(request.cookies.get(STATUS_COOKIE)?.value, getStatusSecret());
   if (!session) return { code: 401 };
-  const { data, error } = await statusDatabase().from('staff').select('id,full_name,phone,role').eq('id', session.staffId).maybeSingle();
+  const db = statusDatabase();
+  const { data, error } = await db.from('staff').select('id,full_name,phone,role').eq('id', session.staffId).maybeSingle();
   if (error) return { code: 503 };
-  return data ? { code: 200, user: data } : { code: 401 };
+  if (!data) return { code: 401 };
+  // Đã nghỉ việc (qua ngày làm cuối): phiên đăng nhập cũ trên điện thoại cũng hết hiệu lực.
+  if (await hasLeft(db, data.id)) return { code: 401 };
+  return { code: 200, user: data };
 }
 
 export async function requireStatusAdmin(request) {

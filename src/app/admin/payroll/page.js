@@ -3,18 +3,41 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
-import { QRCodeSVG } from 'qrcode.react';
+import { dayFlags, durationText, flagTexts, groupByWorkDay, hoursOn, sessionHours, shiftOf, workDayOf } from '@/lib/attendanceRules.mjs';
+import { STANDARD_DAYS, computeSalary, usesDayPay } from '@/lib/payroll.mjs';
+import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users, RefreshCw } from 'lucide-react';
 import './payroll.css';
 
 const now = new Date();
 const fmt = (n) => String(n).padStart(2, '0');
 const formatMoney = (v) => Number(v || 0).toLocaleString('vi-VN') + 'đ';
+const vnToday = () => new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
+const ddmm = d => d.slice(8, 10) + '/' + d.slice(5, 7);
+// " (02/11 – 03/11)" cho đơn báo nghỉ có ngày nghỉ.
+const leaveText = l => (l ? ` (${ddmm(l.from_date)}${l.to_date !== l.from_date ? ` – ${ddmm(l.to_date)}` : ''})` : '');
+const fmtNum = n => String(n).replace('.', ',');
 
-// Mã QR chấm công do máy chủ ký, đổi mỗi 5 phút (không tự tính được ở máy nhân viên).
-const qrWindow = () => Math.floor(Date.now() / (5 * 60 * 1000));
-// Seconds left in current 5-min window
-function secsLeft() { return 300 - (Math.floor(Date.now() / 1000) % 300); }
+// Ở từng dòng bảng lương: kết toán người nghỉ việc trong tháng, đánh dấu đã trả lương khi đã chốt.
+function PayActions({ s, c, left, onClose, onPaid, compact }) {
+  if (!left && !c.locked) return null;
+  const btn = { fontSize: '0.75rem', padding: '3px 10px', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap', border: '1px solid #e2e8f0', background: '#f8fafc' };
+  const paidDay = c.paid_at ? ddmm(new Date(Date.parse(c.paid_at) + 7 * 3600000).toISOString().slice(0, 10)) : null;
+  return (
+    <div style={compact
+      ? { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4, alignItems: 'flex-start' }
+      : { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: '8px 12px', borderTop: '1px solid #f1f5f9', fontSize: '0.8rem' }}>
+      {left && <span style={{ color: '#9a3412', fontWeight: 600, fontSize: '0.75rem' }}>🚪 Nghỉ việc, làm đến {ddmm(left.last_day)}</span>}
+      {left && !c.locked && (
+        <button style={{ ...btn, background: '#fff7ed', borderColor: '#fed7aa', color: '#9a3412', fontWeight: 700 }} onClick={() => onClose(s.id, s.full_name)}>🔒 Kết toán</button>
+      )}
+      {c.locked && (paidDay
+        ? <button style={{ ...btn, background: '#dcfce7', borderColor: '#bbf7d0', color: '#15803d', fontWeight: 700 }} title="Bấm để bỏ đánh dấu" onClick={() => onPaid(s.id, false)}>✅ Đã trả {paidDay}</button>
+        : <button style={{ ...btn, color: '#1d4ed8', fontWeight: 700 }} onClick={() => onPaid(s.id, true)}>💵 Đánh dấu đã trả</button>)}
+    </div>
+  );
+}
+
 
 export default function PayrollPage() {
   const [activeTab, setActiveTab] = useState('salary');
@@ -22,7 +45,7 @@ export default function PayrollPage() {
   const [configs, setConfigs] = useState({});
   const [requests, setRequests] = useState([]);
   const [violations, setViolations] = useState([]);
-  const [attendance, setAttendance] = useState([]);
+  const [attendanceRows, setAttendance] = useState([]);
   const [selMonth, setSelMonth] = useState(now.getMonth() + 1);
   const [selYear, setSelYear] = useState(now.getFullYear());
   const [loading, setLoading] = useState(false);
@@ -51,87 +74,160 @@ export default function PayrollPage() {
   const [showAdvForm,    setShowAdvForm]    = useState(false);
   const [showAbsForm,    setShowAbsForm]    = useState(false);
   const [advForm,        setAdvForm]        = useState({ amount: '', reason: '' });
-  const [absForm,        setAbsForm]        = useState({ days: '1', reason: '' });
+  const [absForm,        setAbsForm]        = useState({ from: '', to: '', reason: '' });
   const [myAllSessions,  setMyAllSessions]  = useState([]); // current month, for history
 
+  const [myOpen,     setMyOpen]     = useState(null); // ca đang mở (có thể từ hôm qua, làm qua 12h đêm)
+  const [myFixes,    setMyFixes]    = useState([]);
+  const [myAuto,     setMyAuto]     = useState([]); // ca máy tự đóng vì quên ra ca
+  const [fixForm,    setFixForm]    = useState(null); // { attendance_id, clock_in, clock_out, reason }
+  const [myRules,    setMyRules]    = useState(null); // giờ làm + ca của mình
+  const [myReviews,  setMyReviews]  = useState([]);   // chủ đã cho / không cho tính giờ ngoài ca
+  const [myLeaveDays, setMyLeaveDays] = useState([]); // ngày nghỉ của các đơn báo nghỉ
+  const [mySalary,   setMySalary]   = useState(null); // lương tạm tính tháng này (máy chủ tính)
+  const [myFines,    setMyFines]    = useState([]);   // tiền phạt tháng này kèm lý do
+  const [sending,    setSending]    = useState('');   // đang gửi đơn nào (chặn bấm 2 lần)
+  const [notice,     setNotice]     = useState(null); // { text, ok } — báo ngay trên trang thay cho hộp thoại
+  const noticeTimer = React.useRef(null);
+  const say = (text, ok = true) => {
+    setNotice({ text, ok });
+    clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(null), 5000);
+  };
+  // Gửi một đơn: không cho bấm lần 2 khi đang gửi (kể cả bấm đúp thật nhanh), báo kết quả ngay trên trang.
+  const sendingRef = React.useRef('');
+  const send = async (key, action, body, done) => {
+    if (sendingRef.current) return false;
+    sendingRef.current = key;
+    setSending(key);
+    try {
+      await workforce(action, body);
+      done?.();
+      fetchStaffData(currentUser.id);
+      return true;
+    } catch (err) { say(err.message, false); return false; }
+    finally { sendingRef.current = ''; setSending(''); }
+  };
+  // Đăng xuất thật (xoá phiên trên máy chủ), không chỉ xoá tên lưu trong máy.
+  const logout = async () => {
+    await fetch('/api/admin/session', { method: 'DELETE' }).catch(() => {});
+    localStorage.removeItem('staffUser');
+    window.location.reload();
+  };
+
   const fetchStaffData = async (staffId) => {
-    const today = new Date().toISOString().split('T')[0];
     const m = now.getMonth() + 1; const y = now.getFullYear();
     const mStart = `${y}-${fmt(m)}-01`;
     const mEnd   = m === 12 ? `${y + 1}-01-01` : `${y}-${fmt(m + 1)}-01`;
-    const [todayRes, monthRes, reqRes] = await Promise.all([
-      supabase.from('attendance_sessions').select('*').eq('staff_id', staffId).eq('date', today).order('clock_in'),
-      supabase.from('attendance_sessions').select('*').eq('staff_id', staffId).gte('date', mStart).lt('date', mEnd).order('clock_in'),
-      supabase.from('payroll_requests').select('*').eq('staff_id', staffId).eq('month', m).eq('year', y).order('created_at', { ascending: false }),
+    // Hỏi máy chủ trước: lúc đó máy tự đóng các ca quên ra ca, rồi mới đọc lịch sử tháng (không thì vẫn hiện "đang làm").
+    const meRes = await fetch('/api/admin/workforce?me=1', { cache: 'no-store' }).then(r => {
+      if (r.status === 401) window.dispatchEvent(new Event('staff-session-expired'));
+      return r.json();
+    }).catch(() => ({}));
+    const [monthRes, reqRes] = await Promise.all([
+      supabase.from('attendance_sessions').select('*').eq('staff_id', staffId).gte('date', mStart).lte('date', mEnd).order('clock_in'),
+      // Đơn 60 ngày gần đây (đơn báo nghỉ thuộc tháng của ngày nghỉ, có thể là tháng sau).
+      supabase.from('payroll_requests').select('*').eq('staff_id', staffId).gte('created_at', new Date(Date.now() - 60 * 86400000).toISOString()).order('created_at', { ascending: false }),
     ]);
-    setTodaySessions(todayRes.data || []);
+    setTodaySessions(meRes.sessions || []);
+    setMyOpen(meRes.open || null);
+    setMyFixes(meRes.fixes || []);
+    setMyAuto(meRes.auto_closed || []);
+    setMyRules(meRes.rules || null);
+    setMyReviews(meRes.reviews || []);
+    setMyLeaveDays(meRes.leave_days || []);
+    setMySalary(meRes.salary || null);
+    setMyFines(meRes.violations || []);
     setMyAllSessions(monthRes.data || []);
     setEmpReqs(reqRes.data || []);
   };
 
-  const sessionsWorkHStaff = (sessions) =>
-    Math.round(sessions.filter(s => s.clock_out).reduce((acc, s) => {
-      return acc + (new Date(s.clock_out) - new Date(s.clock_in)) / 3600000;
-    }, 0) * 10) / 10;
-
-  const handleClockAction = async () => {
-    if (!currentUser) return;
-    // Nhân viên chấm công bằng cách quét mã QR ở quán; máy chủ từ chối nếu không có mã.
-    try { await workforce('clock'); } catch (err) { alert(err.message); }
-    fetchStaffData(currentUser.id);
+  const handleSubmitFix = async () => {
+    if (!fixForm?.reason?.trim()) return say('Ghi rõ lý do xin sửa giờ.', false);
+    const iso = v => (v ? new Date(v).toISOString() : null);
+    const ok = await send('fix', 'request_fix', { attendance_id: fixForm.attendance_id, clock_in: iso(fixForm.clock_in), clock_out: iso(fixForm.clock_out), reason: fixForm.reason },
+      () => setFixForm(null));
+    if (ok) say('Đã gửi đơn xin sửa giờ, chờ chủ quán duyệt.');
   };
 
   const handleSubmitAdvance = async () => {
-    if (!advForm.amount || !advForm.reason) return alert('Vui long dien day du!');
-    const m = now.getMonth() + 1; const y = now.getFullYear();
-    try { await workforce('request', { type: 'advance', amount: advForm.amount, reason: advForm.reason }); }
-    catch (err) { return alert(err.message); }
-    setAdvForm({ amount: '', reason: '' }); setShowAdvForm(false);
-    fetchStaffData(currentUser.id);
-    alert('Da gui yeu cau ung luong!');
+    if (!advForm.amount || !advForm.reason.trim()) return say('Điền số tiền và lý do cần ứng.', false);
+    const ok = await send('adv', 'request', { type: 'advance', amount: advForm.amount, reason: advForm.reason },
+      () => { setAdvForm({ amount: '', reason: '' }); setShowAdvForm(false); });
+    if (ok) say('Đã gửi yêu cầu ứng lương, chờ chủ quán duyệt.');
   };
 
   const handleSubmitAbsent = async () => {
-    if (!absForm.reason) return alert('Vui long dien ly do!');
-    const m = now.getMonth() + 1; const y = now.getFullYear();
-    try { await workforce('request', { type: 'absent', days: absForm.days, reason: absForm.reason }); }
-    catch (err) { return alert(err.message); }
-    setAbsForm({ days: '1', reason: '' }); setShowAbsForm(false);
-    fetchStaffData(currentUser.id);
-    alert('Da gui bao nghi!');
+    if (!absForm.from) return say('Chọn ngày nghỉ.', false);
+    if (!absForm.reason.trim()) return say('Ghi lý do nghỉ.', false);
+    const ok = await send('abs', 'request', { type: 'absent', from_date: absForm.from, to_date: absForm.to || absForm.from, reason: absForm.reason },
+      () => { setAbsForm({ from: '', to: '', reason: '' }); setShowAbsForm(false); });
+    if (ok) say('Đã gửi báo nghỉ, chờ chủ quán duyệt.');
   };
 
-  // QR state
-  const [qrToken, setQrToken] = useState('');
-  const [qrCountdown, setQrCountdown] = useState(secsLeft());
-  const [networkUrl, setNetworkUrl] = useState('');
-  const isAdminUser = currentUser?.role === 'admin';
+  // Huỷ đơn của mình khi còn chờ duyệt (lỡ gửi nhầm).
+  const handleCancel = async (id, kind) => {
+    if (!confirm('Huỷ đơn này?')) return;
+    if (await send(`cancel-${id}`, 'cancel_request', { id, kind })) say('Đã huỷ đơn.');
+  };
 
-  useEffect(() => {
-    if (!qrToken) { setNetworkUrl(''); return; }
-    // Detect network URL for QR
-    const host = window.location.hostname;
-    const port = window.location.port;
-    setNetworkUrl(`${window.location.protocol}//${host}${port ? ':' + port : ''}/checkin?t=${encodeURIComponent(qrToken)}`);
-  }, [qrToken]);
+  // Cài chấm công: giờ làm, máy quầy, chạy thử / chặn thật, điện thoại đã đăng ký, lịch sử quét, đơn sửa giờ.
+  const [checkin, setCheckin] = useState(null);
+  const [hoursEdit, setHoursEdit] = useState(null); // { opening_time, closing_time, grace_minutes }
+  const [shiftEdit, setShiftEdit] = useState(null); // { staff_id, start, end }
+  const [onlyWarnings, setOnlyWarnings] = useState(true);
+  const fetchCheckin = useCallback(async () => {
+    try {
+      const r = await fetch('/api/admin/workforce?checkin=1', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        setCheckin(j);
+        const h = hoursOn(j.settings, vnToday());
+        setHoursEdit({ opening_time: h.opening, closing_time: h.closing, grace_minutes: h.grace });
+      }
+    } catch { /* tab Cài chấm công hiện "đang tải" và thử lại khi đồng bộ */ }
+  }, []);
+  // Số lương đã chốt của tháng đang xem + ngày nghỉ của các đơn báo nghỉ.
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [] });
+  const fetchPayrollMonth = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [] });
+    } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
+  }, [selMonth, selYear]);
+  const checkinAction = async (action, body, confirmText) => {
+    if (confirmText && !confirm(confirmText)) return false;
+    try { await workforce(action, body); } catch (err) { alert(err.message); return false; }
+    fetchCheckin();
+    if (action === 'decide_fix') fetchAll();
+    return true;
+  };
 
-  useEffect(() => {
-    if (!isAdminUser) return undefined;
-    let shownWindow = null, cancelled = false;
-    const refresh = async () => {
-      try {
-        const r = await fetch('/api/admin/workforce?qr=1', { cache: 'no-store' });
-        const j = await r.json().catch(() => ({}));
-        if (!cancelled && r.ok && j.token) { setQrToken(j.token); shownWindow = Number(j.token.split('.')[0]); }
-      } catch { /* mạng chập chờn → thử lại ở giây sau */ }
-    };
-    refresh();
-    const interval = setInterval(() => {
-      setQrCountdown(secsLeft());
-      if (shownWindow !== qrWindow()) { shownWindow = qrWindow(); refresh(); }
-    }, 1000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [isAdminUser]);
+  // Giờ làm theo ca (từ ngày bật): chỉ tính lương trong ca, giờ ngoài ca chờ chủ duyệt.
+  const rules = checkin?.settings || null;
+  const reviewMap = Object.fromEntries((checkin?.reviews || []).map(r => [r.attendance_id, r]));
+  const hoursOf = s => sessionHours(s, rules, reviewMap[s.id]);
+  // Các lượt thuộc ngày làm trong tháng đang xem: lượt dọn quán sau nửa đêm thuộc ca hôm trước
+  // (ngày 1 tháng sau vẫn là ca cuối tháng này, ngày 1 tháng này có thể là ca cuối tháng trước).
+  const attendance = attendanceRows.filter(a => workDayOf(a, rules).slice(0, 7) === `${selYear}-${fmt(selMonth)}`);
+  // Ngày ghi khác ngày làm thì ghi rõ ca của ngày nào.
+  const dateLabel = a => { const d = workDayOf(a, rules); return d === a.date ? a.date : `${a.date} (ca ngày ${d.slice(8, 10)}/${d.slice(5, 7)})`; };
+  const hoursText = ms => `${fmtNum(Math.round(ms / 360000) / 10)} giờ`;
+  // Trễ / vào sớm ở ca đầu ngày, về sớm / ở lại ở ca cuối ngày.
+  const rowFlags = a => {
+    const wd = workDayOf(a, rules);
+    const day = attendance.filter(x => x.staff_id === a.staff_id && workDayOf(x, rules) === wd).sort((x, y) => String(x.clock_in).localeCompare(String(y.clock_in)));
+    const f = dayFlags(day, rules), first = day[0]?.id === a.id, last = day[day.length - 1]?.id === a.id;
+    const texts = flagTexts({ late: first ? f.late : 0, early: first ? f.early : 0, leftEarly: last ? f.leftEarly : 0, stayed: last ? f.stayed : 0 });
+    return (payrollMonth.autoClosed || []).includes(a.id) ? [...texts, 'quên ra ca (máy tự đóng)'] : texts;
+  };
+  const extraText = a => {
+    const h = hoursOf(a), outside = h.earlyMs + h.stayMs;
+    if (!outside) return '';
+    const r = reviewMap[a.id];
+    return `ngoài ca ${durationText(outside / 60000)}: ${r ? (r.status === 'approved' ? 'đã cho tính' : 'không tính') : 'chờ duyệt'}`;
+  };
 
   // Violation form
   const [vForm, setVForm] = useState({ staff_id: '', amount: '', reason: '' });
@@ -170,13 +266,16 @@ export default function PayrollPage() {
   const [expandedSalaryStaff, setExpandedSalaryStaff] = useState(null);
 
   const fetchAll = useCallback(async () => {
+    fetchCheckin();
+    fetchPayrollMonth();
     setLoading(true);
     const [staffRes, cfgRes, reqRes, vioRes, attRes] = await Promise.all([
       supabase.from('staff').select('id, full_name, phone, role, created_at, last_login').order('full_name'),
       supabase.from('payroll_config').select('*'),
       supabase.from('payroll_requests').select('*, staff(full_name,phone)').order('created_at', { ascending: false }),
       supabase.from('payroll_violations').select('*, staff(full_name)').eq('month', selMonth).eq('year', selYear),
-      supabase.from('attendance_sessions').select('*').gte('date', `${selYear}-${fmt(selMonth)}-01`).lt('date', selMonth === 12 ? `${selYear + 1}-01-01` : `${selYear}-${fmt(selMonth + 1)}-01`),
+      // Lấy cả ngày 1 tháng sau: lượt dọn quán sau nửa đêm của ca cuối tháng (lọc theo ngày làm ở dưới).
+      supabase.from('attendance_sessions').select('*').gte('date', `${selYear}-${fmt(selMonth)}-01`).lte('date', selMonth === 12 ? `${selYear + 1}-01-01` : `${selYear}-${fmt(selMonth + 1)}-01`),
     ]);
     setStaffList(staffRes.data || []);
     const cfgMap = {};
@@ -192,49 +291,76 @@ export default function PayrollPage() {
     setHasSynced(true);
     setLastSyncedAt(new Date());
     setLoading(false);
+  }, [selMonth, selYear, fetchCheckin, fetchPayrollMonth]);
+
+
+  // Đổi tháng / năm sau khi đã đồng bộ thì tải lại ngay: trước đây vẫn dùng giờ công tháng cũ để tính.
+  useEffect(() => {
+    if (hasSynced) fetchAll();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selMonth, selYear]);
 
-
-  // Helper: compute total work hours for a set of sessions (closed only)
-  const sessionsWorkH = (sessions) =>
-    sessions.filter(s => s.clock_out).reduce((acc, s) => {
-      const h = (new Date(s.clock_out) - new Date(s.clock_in)) / 3600000;
-      return acc + Math.round(h * 10) / 10;
-    }, 0);
-
-  // --- Salary calculation using attendance_sessions ---
-  const calcSalary = (staffId) => {
-    const cfg = configs[staffId];
-    const base = cfg?.base_salary || 0;
-    const otRate = cfg?.overtime_rate || 25000;
-    const dailyRate = base > 0 ? Math.round(base / 26) : 0;
-
-    // Group sessions by date
-    const staffSessions = attendance.filter(a => a.staff_id === staffId);
-    const byDate = {};
-    staffSessions.forEach(s => {
-      if (!byDate[s.date]) byDate[s.date] = [];
-      byDate[s.date].push(s);
+  // Lương tháng đang xem (cùng công thức với nút "Chốt lương" trên máy chủ).
+  const calcSalary = (staffId) => computeSalary({
+    year: selYear, month: selMonth, staffId,
+    sessions: attendance.filter(a => a.staff_id === staffId),
+    config: configs[staffId] || null,
+    requests: requests.filter(r => r.staff_id === staffId),
+    violations: violations.filter(v => v.staff_id === staffId),
+    rules, reviews: checkin?.reviews || [],
+  });
+  // Tháng đã chốt: hiện số đã chốt, kèm số tính lại bây giờ để thấy có gì thay đổi sau khi chốt.
+  const closeOf = id => payrollMonth.closes.find(c => c.staff_id === id);
+  const salaryOf = id => {
+    const live = calcSalary(id), closed = closeOf(id);
+    return closed ? { ...closed.snapshot, locked: true, liveNet: live.net, paid_at: closed.paid_at || null } : { ...live, locked: false };
+  };
+  // Kết toán riêng một người (vd. nghỉ việc giữa tháng) và đánh dấu đã trả lương.
+  const closeOne = async (staffId, name) => {
+    if (!confirm(`Kết toán (chốt lương) tháng ${selMonth}/${selYear} cho ${name}? Số lương lúc này sẽ được lưu lại.`)) return;
+    try { await workforce('close_month', { year: selYear, month: selMonth, staff_id: staffId }); } catch (err) { return alert(err.message); }
+    fetchPayrollMonth();
+  };
+  const markPaid = async (staffId, paid) => {
+    try { await workforce('mark_paid', { year: selYear, month: selMonth, staff_id: staffId, paid }); } catch (err) { return alert(err.message); }
+    fetchPayrollMonth();
+  };
+  // Tải bảng lương tháng đang xem ra file Excel (để in / lưu / chuyển khoản).
+  const exportPayroll = async rows => {
+    const XLSX = await import('xlsx');
+    const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
+      'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Thực lĩnh', 'Trạng thái', 'Nghỉ việc'];
+    const data = rows.map(({ s, c }) => {
+      const d = departureOf(s.id);
+      return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.workUnits : c.workDays, c.basePay, c.totalWorkH, c.otHours, c.otAmt,
+        c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.net, c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
+        d ? `Làm đến ${d.last_day.split('-').reverse().join('/')}` : ''];
     });
-    const days = Object.values(byDate);
-    const workDays = days.filter(d => d.some(s => s.clock_out)).length;
-    let totalWorkH = 0, otHours = 0;
-    days.forEach(daySessions => {
-      const dayH = Math.round(sessionsWorkH(daySessions) * 10) / 10;
-      totalWorkH += dayH;
-      if (dayH > 8) otHours += Math.round((dayH - 8) * 10) / 10;
-    });
-    totalWorkH = Math.round(totalWorkH * 10) / 10;
-    otHours    = Math.round(otHours * 10) / 10;
-    const otAmt = Math.round(otHours * otRate);
-
-    const approved = requests.filter(r => r.staff_id === staffId && r.status === 'approved' && r.month === selMonth && r.year === selYear);
-    const advAmt  = approved.filter(r => r.request_type === 'advance').reduce((s, r) => s + Number(r.amount || 0), 0);
-    const absDays = approved.filter(r => r.request_type === 'absent').reduce((s, r) => s + Number(r.days || 0), 0);
-    const absAmt  = Math.round(absDays * dailyRate);
-    const vioAmt  = violations.filter(v => v.staff_id === staffId).reduce((s, v) => s + Number(v.amount || 0), 0);
-    const net     = base + otAmt - advAmt - absAmt - vioAmt;
-    return { base, workDays, totalWorkH, otHours, otAmt, advAmt, absDays, absAmt, vioAmt, net };
+    const sheet = XLSX.utils.aoa_to_sheet([[`Bảng lương tháng ${selMonth}/${selYear}`], [], head, ...data]);
+    sheet['!cols'] = head.map((h, i) => ({ wch: i === 0 ? 22 : Math.max(10, h.length + 2) }));
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, `Lương ${selMonth}-${selYear}`);
+    XLSX.writeFile(book, `bang-luong-${selYear}-${fmt(selMonth)}.xlsx`);
+  };
+  const closeMonth = async (reopen, rows = []) => {
+    const label = `${selMonth}/${selYear}`;
+    // Nhắc trước khi chốt những thứ sẽ nằm ngoài số chốt: ngày còn lại của tháng, giờ ngoài ca và đơn chưa duyệt.
+    const lastDay = `${selYear}-${fmt(selMonth)}-${fmt(new Date(Date.UTC(selYear, selMonth, 0)).getUTCDate())}`;
+    const pendingH = Math.round(rows.filter(r => !r.c.locked).reduce((a, r) => a + (r.c.pendingH || 0), 0) * 10) / 10;
+    const waiting = requests.filter(r => r.status === 'pending' && r.month === selMonth && r.year === selYear).length
+      + (checkin?.fixes || []).filter(f => f.status === 'pending' && attendance.some(a => a.id === f.attendance_id)).length;
+    const notes = reopen ? [] : [
+      vnToday() <= lastDay && `• Tháng ${label} chưa hết: những ngày còn lại sẽ không có trong số chốt.`,
+      pendingH > 0 && `• Còn ${fmtNum(pendingH)} giờ ngoài ca chưa duyệt (chưa được tính lương).`,
+      waiting > 0 && `• Còn ${waiting} đơn chờ duyệt.`,
+    ].filter(Boolean);
+    const ask = reopen
+      ? `Mở chốt lương tháng ${label}? Bảng sẽ tính lại theo số mới nhất cho tới khi bạn chốt lại.`
+      : `Chốt lương tháng ${label}? Số lương của từng người sẽ được lưu lại; sau này có gì thay đổi, máy sẽ báo.${notes.length ? `\n\nLưu ý:\n${notes.join('\n')}` : ''}`;
+    if (!confirm(ask)) return;
+    try { await workforce(reopen ? 'reopen_month' : 'close_month', { year: selYear, month: selMonth }); }
+    catch (err) { return alert(err.message); }
+    fetchPayrollMonth();
   };
 
   // --- Approve / Reject request ---
@@ -292,7 +418,25 @@ export default function PayrollPage() {
 
   const handleDeleteAccount = async (staffId, name) => {
     if (!confirm(`Xoá tài khoản "${name}"? Hành động này không thể hoàn tác.`)) return;
-    try { await workforce('delete_account', { staff_id: staffId }); } catch (err) { alert(err.message); }
+    try { await workforce('delete_account', { staff_id: staffId }); }
+    catch (err) { return alert(`${err.message} Người đã có giờ công thì bấm "Cho nghỉ việc" thay vì xoá.`); }
+    fetchAll();
+  };
+
+  // Nghỉ việc: qua ngày làm cuối thì không đăng nhập / chấm công được, lương tháng cuối tính tới ngày đó.
+  const [departForm, setDepartForm] = useState(null); // { staff_id, name, last_day, reason }
+  const departureOf = id => (checkin?.departures || []).find(d => d.staff_id === id) || null;
+  const handleDepart = async () => {
+    if (!departForm?.last_day) return alert('Chọn ngày làm việc cuối cùng.');
+    if (!confirm(`Cho ${departForm.name} nghỉ việc, làm đến hết ngày ${departForm.last_day.split('-').reverse().join('/')}?`)) return;
+    try { await workforce('staff_depart', { staff_id: departForm.staff_id, last_day: departForm.last_day, reason: departForm.reason }); }
+    catch (err) { return alert(err.message); }
+    setDepartForm(null);
+    fetchAll();
+  };
+  const handleReturn = async (staffId, name) => {
+    if (!confirm(`Cho ${name} đi làm lại? Người này đăng nhập và chấm công lại được.`)) return;
+    try { await workforce('staff_return', { staff_id: staffId }); } catch (err) { return alert(err.message); }
     fetchAll();
   };
 
@@ -306,13 +450,19 @@ export default function PayrollPage() {
     const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : null;
     return (
       <div className="payroll-page">
+        {notice && (
+          <div role="status" onClick={() => setNotice(null)}
+            style={{ position: 'fixed', left: 16, right: 16, bottom: 96, zIndex: 60, maxWidth: 480, margin: '0 auto', background: notice.ok ? '#15803d' : '#b91c1c', color: 'white', borderRadius: 12, padding: '12px 16px', fontSize: '0.88rem', fontWeight: 600, boxShadow: '0 8px 24px rgba(0,0,0,0.2)', textAlign: 'center' }}>
+            {notice.ok ? '✅ ' : '⚠ '}{notice.text}
+          </div>
+        )}
         <div className="payroll-header">
           <div className="payroll-title">💰 Tính Lương của tôi</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', background: '#dbeafe', borderRadius: 20, fontSize: '0.78rem', fontWeight: 700, color: '#1d4ed8', flexShrink: 0 }}>
             <span>👤</span>
             <span>{currentUser.full_name}</span>
             <button
-              onClick={() => { localStorage.removeItem('staffUser'); window.location.reload(); }}
+              onClick={logout}
               title="Đăng xuất"
               style={{ marginLeft: 4, background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1, padding: '2px 4px', borderRadius: 6, opacity: 0.7 }}
             >🚪</button>
@@ -339,8 +489,38 @@ export default function PayrollPage() {
             };
             const fmtDurMin = (minutes) => fmtDurMs(minutes * 60000);
 
-            const openSession = todaySessions.find(s => !s.clock_out);
+            const openSession = myOpen || todaySessions.find(s => !s.clock_out);
             const isWorking   = !!openSession;
+            const toLocalDT = ts => ts ? new Date(new Date(ts) - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
+            const forgot = s => myAuto.includes(s.id);
+            // Giờ tính lương theo ca của mình; giờ ngoài ca chỉ tính khi chủ cho.
+            const myReviewMap = Object.fromEntries(myReviews.map(r => [r.attendance_id, r]));
+            const myHours = s => sessionHours(s, myRules, myReviewMap[s.id]);
+            const myExtra = s => {
+              const h = myHours(s), outside = h.earlyMs + h.stayMs;
+              if (!outside) return '';
+              const r = myReviewMap[s.id];
+              return `ngoài ca ${durationText(outside / 60000)}: ${r ? (r.status === 'approved' ? 'được tính' : 'không tính') : 'chờ chủ duyệt'}`;
+            };
+            const myShift = myRules && currentUser ? shiftOf(myRules, currentUser.id, vnToday()) : null;
+            const pendingFix = id => myFixes.some(f => f.attendance_id === id && f.status === 'pending');
+            const fixButton = s => pendingFix(s.id)
+              ? <span style={{ fontSize: '0.72rem', color: '#92400e', fontWeight: 600 }}>⏳ chờ duyệt sửa giờ</span>
+              : <button onClick={() => setFixForm({ attendance_id: s.id, clock_in: toLocalDT(s.clock_in), clock_out: toLocalDT(s.clock_out), reason: '' })}
+                  style={{ fontSize: '0.72rem', padding: '1px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}>✏️ Xin sửa giờ</button>;
+            const fixFormFor = s => fixForm?.attendance_id === s.id && (
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: 10, margin: '6px 0 8px', display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.8rem' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>Giờ vào đúng
+                  <input type="datetime-local" value={fixForm.clock_in} onChange={e => setFixForm(p => ({ ...p, clock_in: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} /></label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>Giờ ra đúng
+                  <input type="datetime-local" value={fixForm.clock_out} onChange={e => setFixForm(p => ({ ...p, clock_out: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} /></label>
+                <input type="text" value={fixForm.reason} placeholder="Lý do (vd: quên bấm ra ca, về lúc 23:30)" onChange={e => setFixForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={handleSubmitFix} disabled={sending === 'fix'} style={{ flex: 1, padding: 8, background: '#111827', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer', opacity: sending === 'fix' ? 0.6 : 1 }}>{sending === 'fix' ? 'Đang gửi…' : 'Gửi chủ quán duyệt'}</button>
+                  <button onClick={() => setFixForm(null)} style={{ padding: '8px 12px', background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}>Huỷ</button>
+                </div>
+              </div>
+            );
             const closedCount = todaySessions.filter(s => s.clock_out).length;
 
             // Total work ms (closed sessions only)
@@ -348,13 +528,9 @@ export default function PayrollPage() {
               acc + (new Date(s.clock_out) - new Date(s.clock_in)), 0);
             const totalWorkH = Math.round((totalWorkMs / 3600000) * 10) / 10;
 
-            // Group myAllSessions by date for history
-            const byDate = {};
-            myAllSessions.forEach(s => {
-              if (!byDate[s.date]) byDate[s.date] = [];
-              byDate[s.date].push(s);
-            });
-            const histDays = Object.entries(byDate).sort((a, b) => b[0].localeCompare(a[0]));
+            // Lịch sử tháng này theo ngày làm (lượt dọn quán sau nửa đêm nằm chung ca hôm trước).
+            const thisMonth = `${now.getFullYear()}-${fmt(now.getMonth() + 1)}`;
+            const histDays = [...groupByWorkDay(myAllSessions, myRules).entries()].filter(([d]) => d.slice(0, 7) === thisMonth).sort((a, b) => b[0].localeCompare(a[0]));
 
             // Header status text
             const headerStatus = isWorking
@@ -433,16 +609,22 @@ export default function PayrollPage() {
                     </div>
                   )}
 
-                  {/* Action button */}
-                  <button onClick={handleClockAction}
-                    style={{ width: '100%', padding: '13px', background: isWorking ? '#dc2626' : '#16a34a', color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer' }}>
-                    {isWorking ? '🔴 Kết thúc ca' : '🟢 Bắt đầu ca'}
-                  </button>
+                  {/* Chấm công chỉ bằng mã QR trên máy quầy (máy chủ kiểm mã, wifi quán, điện thoại). */}
+                  {isWorking && !todaySessions.some(s => s.id === openSession.id) && (
+                    <div style={{ fontSize: '0.8rem', color: '#15803d', marginBottom: 8 }}>🟢 Ca bắt đầu hôm qua lúc {fmtTime(openSession.clock_in)} vẫn đang mở.</div>
+                  )}
+                  <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '12px 14px', fontSize: '0.85rem', color: '#1e3a8a', lineHeight: 1.6 }}>
+                    📶 Vào <strong>wifi quán</strong> → 📷 mở <strong>camera điện thoại</strong> → quét mã QR trên <strong>máy quầy</strong> để {isWorking ? 'ra ca' : 'vào ca'}.
+                    {myShift && (
+                      <div style={{ marginTop: 6 }}>🕑 Ca của bạn: <strong>{myShift.start} – {myShift.end}</strong> (cho lệch {hoursOn(myRules, vnToday()).grace} phút). Vào sớm / ở lại ngoài ca chỉ được tính khi chủ quán đồng ý.</div>
+                    )}
+                    <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>Quên ra ca thì máy tự tính ra ca lúc hết ca; bấm "Xin sửa giờ" để chủ quán sửa lại.</div>
+                  </div>
                 </div>
 
                 {/* Monthly history (read-only) */}
                 {histDays.length > 0 && (
-                  <details style={{ borderTop: '1px solid #e5e7eb' }}>
+                  <details open style={{ borderTop: '1px solid #e5e7eb' }}>
                     <summary style={{ padding: '10px 18px', fontSize: '0.82rem', fontWeight: 700, color: '#64748b', cursor: 'pointer', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
                       📋 Lịch sử chấm công tháng {now.getMonth() + 1} ({histDays.length} ngày)
                     </summary>
@@ -450,20 +632,30 @@ export default function PayrollPage() {
                       {histDays.map(([date, daySessions]) => {
                         const dayMs = daySessions.filter(s => s.clock_out).reduce((a, s) =>
                           a + (new Date(s.clock_out) - new Date(s.clock_in)), 0);
+                        const dayCounted = daySessions.reduce((a, s) => a + myHours(s).countedMs, 0);
+                        const dayWarn = flagTexts(dayFlags(daySessions, myRules));
                         return (
                           <div key={date} style={{ marginBottom: 10 }}>
                             <div style={{ fontSize: '0.79rem', fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>
                               {new Date(date + 'T00:00:00').toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit' })}
-                              <span style={{ marginLeft: 8, color: '#16a34a', fontWeight: 600 }}>· {fmtDurMs(dayMs)}</span>
+                              <span style={{ marginLeft: 8, color: '#16a34a', fontWeight: 600 }}>· {dayMs === 0 && daySessions.some(s => !s.clock_out) ? 'đang làm' : fmtDurMs(dayMs)}</span>
+                              {dayCounted !== dayMs && <span style={{ marginLeft: 6, color: '#0f766e', fontWeight: 600 }}>(tính lương {fmtDurMs(dayCounted)})</span>}
+                              {dayWarn.length > 0 && <span style={{ marginLeft: 6, color: '#c2410c', fontWeight: 600 }}>⚠ {dayWarn.join(', ')}</span>}
                             </div>
                             {daySessions.map((s, i) => {
                               const durMs = s.clock_out ? new Date(s.clock_out) - new Date(s.clock_in) : null;
                               return (
-                                <div key={s.id} style={{ display: 'flex', gap: 8, fontSize: '0.78rem', color: '#475569', marginLeft: 8, marginBottom: 2 }}>
-                                  <span style={{ color: '#94a3b8', minWidth: 30 }}>Ca {i + 1}:</span>
-                                  <span>Vào {fmtTime(s.clock_in)} → {s.clock_out ? `Ra ${fmtTime(s.clock_out)}` : '–'}</span>
-                                  {durMs && <span style={{ color: '#16a34a', fontWeight: 600 }}>{fmtDurMs(durMs)}</span>}
-                                </div>
+                                <React.Fragment key={s.id}>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: '0.78rem', color: '#475569', marginLeft: 8, marginBottom: 2 }}>
+                                    <span style={{ color: '#94a3b8', minWidth: 30 }}>Ca {i + 1}:</span>
+                                    <span>Vào {fmtTime(s.clock_in)} → {s.clock_out ? `Ra ${fmtTime(s.clock_out)}` : '–'}</span>
+                                    {durMs && <span style={{ color: '#16a34a', fontWeight: 600 }}>{fmtDurMs(durMs)}</span>}
+                                    {forgot(s) && <span style={{ color: '#c2410c', fontWeight: 700 }}>⚠ quên ra ca</span>}
+                                    {myExtra(s) && <span style={{ color: '#b45309' }}>⏱ {myExtra(s)}</span>}
+                                    {fixButton(s)}
+                                  </div>
+                                  {fixFormFor(s)}
+                                </React.Fragment>
                               );
                             })}
                           </div>
@@ -472,10 +664,72 @@ export default function PayrollPage() {
                     </div>
                   </details>
                 )}
+
+                {myFixes.length > 0 && (
+                  <div style={{ borderTop: '1px solid #e5e7eb', padding: '10px 18px 14px' }}>
+                    <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#64748b', marginBottom: 6 }}>✏️ Đơn xin sửa giờ</div>
+                    {myFixes.slice(0, 8).map(f => (
+                      <div key={f.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: '0.78rem', color: '#475569', padding: '3px 0' }}>
+                        <span>{f.clock_in ? `Vào ${fmtTime(f.clock_in)} ` : ''}{f.clock_out ? `Ra ${fmtTime(f.clock_out)} ` : ''}— {f.reason}</span>
+                        <span style={{ fontWeight: 700, whiteSpace: 'nowrap', color: f.status === 'approved' ? '#15803d' : f.status === 'rejected' ? '#dc2626' : '#92400e' }}>
+                          {f.status === 'approved' ? '✅ Đã sửa' : f.status === 'rejected' ? '❌ Từ chối' : '⏳ Chờ duyệt'}
+                          {f.status === 'pending' && (
+                            <button onClick={() => handleCancel(f.id, 'fix')} disabled={!!sending}
+                              style={{ marginLeft: 6, fontSize: '0.7rem', padding: '1px 6px', background: 'none', border: '1px solid #e2e8f0', borderRadius: 6, color: '#64748b', cursor: 'pointer', fontWeight: 400 }}>
+                              {sending === `cancel-${f.id}` ? '…' : 'Huỷ'}
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })()}
 
+          {/* 💰 Lương tạm tính tháng này (máy chủ tính bằng cùng công thức với bảng lương của chủ quán) */}
+          {mySalary && (() => {
+            const c = mySalary;
+            const row = (label, value, color) => (
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '6px 0', borderBottom: '1px solid #f1f5f9', fontSize: '0.86rem' }}>
+                <span style={{ color: '#475569' }}>{label}</span>
+                <span style={{ fontWeight: 700, color: color || '#0f172a', textAlign: 'right' }}>{value}</span>
+              </div>
+            );
+            return (
+              <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+                  <div style={{ fontWeight: 800 }}>💰 Lương tháng {c.month}/{c.year}</div>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: c.locked ? '#dcfce7' : '#fef9c3', color: c.locked ? '#15803d' : '#92400e' }}>
+                    {c.paid_at ? `✅ Đã nhận lương ${ddmm(new Date(Date.parse(c.paid_at) + 7 * 3600000).toISOString().slice(0, 10))}` : c.locked ? '🔒 Đã chốt' : '⏳ Tạm tính đến hôm nay'}
+                  </span>
+                </div>
+                {!c.base && <div style={{ fontSize: '0.8rem', color: '#b45309', marginBottom: 6 }}>Chủ quán chưa nhập lương cơ bản của bạn.</div>}
+                {c.rule === 'days'
+                  ? row('Ngày công', `${fmtNum(c.workUnits)} / ${c.standardDays} ngày → ${formatMoney(c.basePay)}`)
+                  : <>{row('Lương cơ bản', formatMoney(c.base))}{row('Ngày công', `${c.workDays} ngày`)}</>}
+                {row('Giờ làm', `${fmtNum(c.totalWorkH)} giờ`)}
+                {row('Tăng ca', `${fmtNum(c.otHours)} giờ → +${formatMoney(c.otAmt)}`, '#15803d')}
+                {c.pendingH > 0 && row('Ngoài ca chờ chủ duyệt', `${fmtNum(c.pendingH)} giờ (chưa tính)`, '#b45309')}
+                {c.advAmt > 0 && row('Ứng lương', `−${formatMoney(c.advAmt)}`, '#dc2626')}
+                {c.absDays > 0 && (c.rule === 'days'
+                  ? row('Nghỉ có đơn', `${fmtNum(c.absDays)} ngày (không trừ thêm)`, '#64748b')
+                  : row('Nghỉ có đơn', `−${formatMoney(c.absAmt)} (${fmtNum(c.absDays)} ngày)`, '#dc2626'))}
+                {c.vioAmt > 0 && row(`Phạt${myFines.length ? ` (${myFines.map(v => v.reason).filter(Boolean).join(', ')})` : ''}`, `−${formatMoney(c.vioAmt)}`, '#dc2626')}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, paddingTop: 10 }}>
+                  <span style={{ fontWeight: 800 }}>{c.locked ? 'Thực lĩnh' : 'Thực lĩnh tạm tính'}</span>
+                  <span style={{ fontWeight: 800, fontSize: '1.2rem', color: c.net >= 0 ? '#15803d' : '#dc2626' }}>{formatMoney(c.net)}</span>
+                </div>
+                <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: 6, lineHeight: 1.5 }}>
+                  {c.rule === 'days'
+                    ? `Lương = lương cơ bản ÷ ${c.standardDays} × số ngày đi làm (ngày làm dưới nửa ca tính nửa ngày). Tăng ca là giờ ngoài ca chủ quán đã đồng ý.`
+                    : 'Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca là giờ làm quá 8 tiếng mỗi ngày.'}
+                  {!c.locked && ' Số còn thay đổi tới khi chủ quán chốt lương cuối tháng.'}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Ứng lương */}
           <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
@@ -492,8 +746,8 @@ export default function PayrollPage() {
                   style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
                 <textarea placeholder="Lý do cần ứng..." value={advForm.reason} onChange={e => setAdvForm(p => ({ ...p, reason: e.target.value }))}
                   style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} />
-                <button onClick={handleSubmitAdvance} style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer' }}>
-                  Gửi yêu cầu
+                <button onClick={handleSubmitAdvance} disabled={sending === 'adv'} style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer', opacity: sending === 'adv' ? 0.6 : 1 }}>
+                  {sending === 'adv' ? 'Đang gửi…' : 'Gửi yêu cầu'}
                 </button>
               </div>
             )}
@@ -509,13 +763,18 @@ export default function PayrollPage() {
             </div>
             {showAbsForm && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <input type="number" min="0.5" max="30" step="0.5" placeholder="Số ngày nghỉ" value={absForm.days}
-                  onChange={e => setAbsForm(p => ({ ...p, days: e.target.value }))}
-                  style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <label style={{ flex: 1, minWidth: 130, display: 'flex', flexDirection: 'column', gap: 3, fontSize: '0.8rem', color: '#475569' }}>Nghỉ từ ngày
+                    <input type="date" value={absForm.from} onChange={e => setAbsForm(p => ({ ...p, from: e.target.value, to: p.to && p.to >= e.target.value ? p.to : e.target.value }))}
+                      style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} /></label>
+                  <label style={{ flex: 1, minWidth: 130, display: 'flex', flexDirection: 'column', gap: 3, fontSize: '0.8rem', color: '#475569' }}>Đến ngày
+                    <input type="date" value={absForm.to} min={absForm.from || undefined} onChange={e => setAbsForm(p => ({ ...p, to: e.target.value }))}
+                      style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} /></label>
+                </div>
                 <textarea placeholder="Lý do nghỉ..." value={absForm.reason} onChange={e => setAbsForm(p => ({ ...p, reason: e.target.value }))}
                   style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} />
-                <button onClick={handleSubmitAbsent} style={{ background: '#f59e0b', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer' }}>
-                  Gửi báo nghỉ
+                <button onClick={handleSubmitAbsent} disabled={sending === 'abs'} style={{ background: '#f59e0b', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer', opacity: sending === 'abs' ? 0.6 : 1 }}>
+                  {sending === 'abs' ? 'Đang gửi…' : 'Gửi báo nghỉ'}
                 </button>
               </div>
             )}
@@ -524,21 +783,29 @@ export default function PayrollPage() {
           {/* Lịch sử yêu cầu tháng này */}
           {empReqs.length > 0 && (
             <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
-              <div style={{ fontWeight: 800, marginBottom: 10 }}>📄 Yêu cầu tháng {now.getMonth() + 1}</div>
+              <div style={{ fontWeight: 800, marginBottom: 10 }}>📄 Yêu cầu gần đây</div>
               {empReqs.map(r => (
                 <div key={r.id} style={{ padding: '10px 0', borderBottom: '1px solid #f3f4f6', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
                     <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>
-                      {r.request_type === 'advance' ? `💵 Ứng ${Number(r.amount || 0).toLocaleString('vi-VN')}đ` : `🏖 Nghỉ ${r.days} ngày`}
+                      {r.request_type === 'advance' ? `💵 Ứng ${Number(r.amount || 0).toLocaleString('vi-VN')}đ` : `🏖 Nghỉ ${r.days} ngày${leaveText(myLeaveDays.find(l => l.request_id === r.id))}`}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{r.reason}</div>
                     {r.admin_note && <div style={{ fontSize: '0.73rem', color: '#9ca3af', marginTop: 2 }}>💬 {r.admin_note}</div>}
                   </div>
-                  <span style={{ flexShrink: 0, padding: '2px 8px', borderRadius: 5, fontSize: '0.72rem', fontWeight: 700,
-                    background: r.status === 'approved' ? '#dcfce7' : r.status === 'rejected' ? '#fee2e2' : '#fef9c3',
-                    color: r.status === 'approved' ? '#15803d' : r.status === 'rejected' ? '#dc2626' : '#92400e' }}>
-                    {r.status === 'pending' ? '⏳ Chờ' : r.status === 'approved' ? '✅ Duyệt' : '❌ Từ chối'}
-                  </span>
+                  <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+                    <span style={{ padding: '2px 8px', borderRadius: 5, fontSize: '0.72rem', fontWeight: 700,
+                      background: r.status === 'approved' ? '#dcfce7' : r.status === 'rejected' ? '#fee2e2' : '#fef9c3',
+                      color: r.status === 'approved' ? '#15803d' : r.status === 'rejected' ? '#dc2626' : '#92400e' }}>
+                      {r.status === 'pending' ? '⏳ Chờ duyệt' : r.status === 'approved' ? '✅ Đã duyệt' : '❌ Từ chối'}
+                    </span>
+                    {r.status === 'pending' && (
+                      <button onClick={() => handleCancel(r.id)} disabled={!!sending}
+                        style={{ fontSize: '0.72rem', padding: '2px 8px', background: 'none', border: '1px solid #e2e8f0', borderRadius: 6, color: '#64748b', cursor: 'pointer' }}>
+                        {sending === `cancel-${r.id}` ? 'Đang huỷ…' : 'Huỷ đơn'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -570,7 +837,7 @@ export default function PayrollPage() {
               <span>{currentUser.full_name}</span>
               <span style={{ fontWeight: 400, opacity: 0.7 }}>· {currentUser.role === 'admin' ? 'Admin' : 'Nhân viên'}</span>
               <button
-                onClick={() => { localStorage.removeItem('staffUser'); window.location.reload(); }}
+                onClick={logout}
                 title="Đăng xuất"
                 style={{ marginLeft: 4, background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1, padding: '2px 4px', borderRadius: 6, opacity: 0.6 }}
               >🚪</button>
@@ -589,10 +856,10 @@ export default function PayrollPage() {
       <div className="payroll-tabs">
         {[
           { key: 'salary', label: '📊 Bảng Lương' },
-          { key: 'requests', label: '📋 Yêu cầu', badge: pendingCount },
+          { key: 'requests', label: '📋 Yêu cầu', badge: pendingCount + (checkin?.fixes || []).filter(f => f.status === 'pending').length + (checkin?.extras || []).length },
           { key: 'violations', label: '⚠️ Vi phạm' },
           { key: 'attendance', label: '⏰ Chấm công' },
-          { key: 'qr', label: '📱 QR Chấm công' },
+          { key: 'qr', label: '📱 Cài chấm công' },
           { key: 'accounts', label: '👤 Tài khoản' },
           { key: 'config', label: '⚙️ Cấu hình' },
         ].map(tab => (
@@ -623,7 +890,20 @@ export default function PayrollPage() {
           {/* === BẢNG LƯƠNG === */}
           {activeTab === 'salary' && (() => {
             const isAdmin = currentUser?.role === 'admin';
-            const filtered = staffList.filter(s => !salarySearch || s.full_name === salarySearch);
+            const dayPay = usesDayPay(selYear, selMonth);
+            const today = vnToday(), thisMonth = `${selYear}-${fmt(selMonth)}`;
+            const running = today.slice(0, 7) === thisMonth;
+            // Người nghỉ việc trước tháng này không hiện; nghỉ trong tháng thì vẫn hiện để kết toán.
+            const activeStaff = staffList.filter(s => activeInMonth(departureOf(s.id), thisMonth));
+            const filtered = activeStaff.filter(s => !salarySearch || s.full_name === salarySearch);
+            const rows = activeStaff.map(s => ({ s, c: salaryOf(s.id) }));
+            const withData = rows.filter(({ c }) => c.locked || c.base || c.totalWorkH || c.advAmt || c.vioAmt || c.absDays);
+            const closedCount = withData.filter(r => r.c.locked).length, fullyClosed = withData.length > 0 && closedCount === withData.length;
+            const closes = payrollMonth.closes, closedAt = closes[0]?.closed_at, closedBy = closes[0]?.closed_by;
+            const changed = rows.filter(x => x.c.locked && x.c.liveNet !== x.c.net);
+            const leftThisMonth = s => { const d = departureOf(s.id); return d && d.last_day.slice(0, 7) === thisMonth ? d : null; };
+            // Ngày công: "24 / 26" (theo ngày công) hoặc "24 ngày" (cách cũ).
+            const daysText = c => (c.rule === 'days' ? `${fmtNum(c.workUnits)} / ${c.standardDays || STANDARD_DAYS} ngày` : `${c.workDays} ngày`);
             return (
               <div>
                 {/* Filter bar */}
@@ -640,16 +920,48 @@ export default function PayrollPage() {
                   </select>
                 </div>
 
+                {/* Cách tính + chốt lương tháng */}
+                <div style={{ background: closes.length ? '#f0fdf4' : 'white', border: `1px solid ${closes.length ? '#bbf7d0' : '#e5e7eb'}`, borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155', lineHeight: 1.6 }}>
+                  <div>
+                    {dayPay
+                      ? <>📐 <strong>Tính theo ngày công:</strong> lương cơ bản ÷ {STANDARD_DAYS} × số ngày đi làm (làm dư thì cộng thêm, ngày làm dưới nửa ca tính nửa ngày). Tăng ca = giờ ngoài ca bạn đã bấm "Cho tính". Đơn báo nghỉ không trừ thêm.</>
+                      : <>📐 Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày, trừ ngày nghỉ có đơn.</>}
+                  </div>
+                  {isAdmin && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
+                      {fullyClosed
+                        ? <span>🔒 <strong>Đã chốt lương tháng {selMonth}/{selYear}</strong> lúc {new Date(closedAt).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}{closedBy ? ` (${closedBy})` : ''}</span>
+                        : closedCount > 0
+                          ? <span>🔒 Đã chốt {closedCount}/{withData.length} người, còn lại chưa chốt.</span>
+                          : <span>{running ? '⏳ Tháng đang chạy: số dưới đây là tạm tính đến hôm nay.' : 'Tháng này chưa chốt lương.'}</span>}
+                      {!fullyClosed && <button className="btn-primary" style={{ marginTop: 0 }} onClick={() => closeMonth(false, rows)}>🔒 Chốt lương tháng {selMonth}/{selYear}{closedCount > 0 ? ' (người còn lại)' : ''}</button>}
+                      {closes.length > 0 && <button className="btn-danger" style={{ marginTop: 0 }} onClick={() => closeMonth(true)}>Mở chốt{fullyClosed ? '' : ' tất cả'}</button>}
+                      <button style={{ padding: '6px 12px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}
+                        onClick={() => exportPayroll(rows)}>⬇️ Tải bảng lương (Excel)</button>
+                    </div>
+                  )}
+                  {isAdmin && fullyClosed && (
+                    <div style={{ marginTop: 6, fontSize: '0.8rem', color: '#475569' }}>
+                      Đã trả lương: {withData.filter(r => r.c.paid_at).length}/{withData.length} người. Trả xong người nào thì bấm "Đánh dấu đã trả" ở người đó.
+                    </div>
+                  )}
+                  {changed.length > 0 && (
+                    <div style={{ marginTop: 8, color: '#b45309' }}>
+                      ⚠ Có số thay đổi sau khi chốt: {changed.map(x => `${x.s.full_name} (đã chốt ${formatMoney(x.c.net)}, nay tính ra ${formatMoney(x.c.liveNet)})`).join('; ')}. Muốn lấy số mới thì bấm Mở chốt rồi chốt lại.
+                    </div>
+                  )}
+                </div>
+
                 {/* Mobile cards */}
                 <div className="mobile-cards">
                   {filtered.length === 0 && <div className="empty-state">Chưa có nhân viên</div>}
                   {filtered.map(s => {
-                    const c = calcSalary(s.id);
+                    const c = salaryOf(s.id);
                     return (
                       <div key={s.id} className="salary-card">
                         <div className="salary-card-header">
                           <div>
-                            <div className="salary-card-name">{s.full_name}</div>
+                            <div className="salary-card-name">{c.locked ? '🔒 ' : ''}{s.full_name}</div>
                             <div className="salary-card-phone">{s.phone}</div>
                           </div>
                           <div className={`salary-card-net ${c.net < 0 ? 'negative' : ''}`}>{formatMoney(c.net)}</div>
@@ -661,15 +973,21 @@ export default function PayrollPage() {
                           </div>
                           <div className="salary-card-row">
                             <span className="salary-card-label">Ngày công</span>
-                            <span className="salary-card-value">{c.workDays} ngày</span>
+                            <span className="salary-card-value">{daysText(c)}{c.rule === 'days' && <> → {formatMoney(c.basePay)}</>}</span>
                           </div>
                           <div className="salary-card-row">
                             <span className="salary-card-label">Tổng giờ làm</span>
-                            <span className="salary-card-value">{c.totalWorkH}h</span>
+                            <span className="salary-card-value">{fmtNum(c.totalWorkH)} giờ</span>
                           </div>
+                          {c.pendingH > 0 && (
+                            <div className="salary-card-row">
+                              <span className="salary-card-label">Ngoài ca chờ duyệt</span>
+                              <span className="salary-card-value" style={{ color: '#b45309' }}>{fmtNum(c.pendingH)} giờ (chưa tính)</span>
+                            </div>
+                          )}
                           <div className="salary-card-row">
                             <span className="salary-card-label">Tăng ca</span>
-                            <span className="salary-card-value green">+{formatMoney(c.otAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({c.otHours}h)</small></span>
+                            <span className="salary-card-value green">+{formatMoney(c.otAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({fmtNum(c.otHours)} giờ)</small></span>
                           </div>
                           <div className="salary-card-row">
                             <span className="salary-card-label">Ứng lương</span>
@@ -677,17 +995,26 @@ export default function PayrollPage() {
                           </div>
                           <div className="salary-card-row">
                             <span className="salary-card-label">Nghỉ</span>
-                            <span className="salary-card-value red">-{formatMoney(c.absAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({c.absDays}d)</small></span>
+                            {c.rule === 'days'
+                              ? <span className="salary-card-value muted">{c.absDays ? `${fmtNum(c.absDays)} ngày có đơn (không trừ thêm)` : '—'}</span>
+                              : <span className="salary-card-value red">-{formatMoney(c.absAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({fmtNum(c.absDays)} ngày)</small></span>}
                           </div>
                           <div className="salary-card-row">
                             <span className="salary-card-label">Vi phạm</span>
                             <span className={`salary-card-value ${c.vioAmt > 0 ? 'red' : 'muted'}`}>{c.vioAmt > 0 ? `-${formatMoney(c.vioAmt)}` : '—'}</span>
                           </div>
                           <div className="salary-card-row">
-                            <span className="salary-card-label">Thực lĩnh</span>
+                            <span className="salary-card-label">{c.locked ? 'Thực lĩnh (đã chốt)' : running ? 'Thực lĩnh (tạm tính)' : 'Thực lĩnh'}</span>
                             <span className={`salary-card-value ${c.net >= 0 ? 'green' : 'red'}`}>{formatMoney(c.net)}</span>
                           </div>
+                          {c.locked && c.liveNet !== c.net && (
+                            <div className="salary-card-row">
+                              <span className="salary-card-label" style={{ color: '#b45309' }}>Nay tính ra</span>
+                              <span className="salary-card-value" style={{ color: '#b45309' }}>{formatMoney(c.liveNet)}</span>
+                            </div>
+                          )}
                         </div>
+                        {isAdmin && <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} />}
                         {isAdmin && (
                           <button
                             onClick={() => setExpandedSalaryStaff(expandedSalaryStaff === s.id ? null : s.id)}
@@ -710,13 +1037,16 @@ export default function PayrollPage() {
                                 return (
                                   <div key={a.id} style={{ background: isEd ? '#eff6ff' : 'white', border: `1.5px solid ${isEd ? '#3b82f6' : '#e2e8f0'}`, borderRadius: 8, padding: '8px 10px', marginBottom: 6 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isEd ? 8 : 0 }}>
-                                      <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{a.date}</span>
+                                      <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{dateLabel(a)}</span>
                                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{tIn} → {tOut} · {a.clock_out ? `${Math.round(((new Date(a.clock_out) - new Date(a.clock_in)) / 3600000) * 10) / 10}h` : '0h'}</span>
                                       {!isEd
                                         ? <button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })} style={{ fontSize: '0.72rem', padding: '2px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 5, cursor: 'pointer' }}>✏️ Sửa</button>
                                         : <button onClick={() => setEditingAtt(null)} style={{ fontSize: '0.72rem', padding: '2px 8px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 5, cursor: 'pointer', color: '#dc2626' }}>✕ Huỷ</button>
                                       }
                                     </div>
+                                    {!isEd && [...rowFlags(a), extraText(a)].some(Boolean) && (
+                                      <div style={{ fontSize: '0.72rem', color: '#c2410c', marginTop: 3 }}>⚠ {[...rowFlags(a), extraText(a)].filter(Boolean).join(' · ')}</div>
+                                    )}
                                     {isEd && (
                                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                         {[{label:'Giờ vào',key:'clock_in',type:'datetime-local'},{label:'Giờ ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
@@ -729,7 +1059,7 @@ export default function PayrollPage() {
                                           <span style={{ width: 65, fontSize: '0.76rem', fontWeight: 600, color: '#475569', flexShrink: 0 }}>Ghi chú</span>
                                           <input type="text" value={editingAtt.note||''} placeholder="Lý do sửa..." onChange={e=>setEditingAtt(p=>({...p,note:e.target.value}))} style={{ flex:1, padding:'4px 7px', border:'1.5px solid #cbd5e1', borderRadius:6, fontSize:'0.8rem' }}/>
                                         </div>
-                                        <button onClick={handleSaveAttEdit} style={{ padding:'7px', background:'#0f172a', color:'white', border:'none', borderRadius:7, fontWeight:700, fontSize:'0.82rem', cursor:'pointer' }}>💾 Lưu thày đổi</button>
+                                        <button onClick={handleSaveAttEdit} style={{ padding:'7px', background:'#0f172a', color:'white', border:'none', borderRadius:7, fontWeight:700, fontSize:'0.82rem', cursor:'pointer' }}>💾 Lưu thay đổi</button>
                                       </div>
                                     )}
                                   </div>
@@ -754,21 +1084,28 @@ export default function PayrollPage() {
                     </tr></thead>
                     <tbody>
                       {filtered.map(s => {
-                        const c = calcSalary(s.id);
+                        const c = salaryOf(s.id);
                         return (
                           <React.Fragment key={s.id}>
                             <tr>
-                            <td><div style={{fontWeight:700}}>{s.full_name}</div><div style={{fontSize:'0.73rem',color:'#94a3b8'}}>{s.phone}</div></td>
+                            <td><div style={{fontWeight:700}}>{c.locked ? '🔒 ' : ''}{s.full_name}</div><div style={{fontSize:'0.73rem',color:'#94a3b8'}}>{s.phone}</div></td>
                             <td>{formatMoney(c.base)}</td>
-                            <td>{c.workDays} ngày</td>
-                            <td>{c.totalWorkH}h</td>
-                            <td><span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{c.otHours}h</div></td>
+                            <td>{daysText(c)}{c.rule === 'days' && <div style={{fontSize:'0.72rem',color:'#94a3b8'}}>= {formatMoney(c.basePay)}</div>}</td>
+                            <td>{fmtNum(c.totalWorkH)} giờ{c.pendingH > 0 && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>+{fmtNum(c.pendingH)} giờ ngoài ca chờ duyệt</div>}</td>
+                            <td><span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.otHours)} giờ</div></td>
                             <td><span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span></td>
-                            <td><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{c.absDays}d</div></td>
+                            <td>{c.rule === 'days'
+                              ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không trừ)` : '—'}</span>
+                              : <><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.absDays)} ngày</div></>}</td>
                             <td>{c.vioAmt > 0 ? <span style={{color:'#ef4444'}}>-{formatMoney(c.vioAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}</td>
-                            <td><strong style={{color: c.net >= 0 ? '#16a34a' : '#ef4444', fontSize:'0.95rem'}}>{formatMoney(c.net)}</strong></td>
+                            <td>
+                              <strong style={{color: c.net >= 0 ? '#16a34a' : '#ef4444', fontSize:'0.95rem'}}>{formatMoney(c.net)}</strong>
+                              {c.locked && c.liveNet !== c.net && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>nay tính ra {formatMoney(c.liveNet)}</div>}
+                              {!c.locked && running && <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>tạm tính</div>}
+                            </td>
                             {isAdmin && <td><button onClick={() => setExpandedSalaryStaff(expandedSalaryStaff === s.id ? null : s.id)}
-                              style={{ fontSize: '0.75rem', padding: '3px 10px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#1d4ed8', whiteSpace: 'nowrap' }}>{expandedSalaryStaff === s.id ? '▴ Ộn' : '✏️ Sửa'}</button></td>}
+                              style={{ fontSize: '0.75rem', padding: '3px 10px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#1d4ed8', whiteSpace: 'nowrap' }}>{expandedSalaryStaff === s.id ? '▴ Ẩn' : '✏️ Sửa'}</button>
+                              <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} compact /></td>}
                           </tr>
                           {/* Inline attendance sub-panel for desktop */}
                           {isAdmin && expandedSalaryStaff === s.id && (() => {
@@ -786,7 +1123,7 @@ export default function PayrollPage() {
                                     return (
                                       <div key={a.id} style={{ background: isEd ? '#eff6ff' : 'white', border: `1px solid ${isEd ? '#3b82f6' : '#e2e8f0'}`, borderRadius: 8, padding: '8px 12px', marginBottom: 6 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                                          <span style={{ fontWeight: 700, fontSize: '0.82rem', minWidth: 90 }}>{a.date}</span>
+                                          <span style={{ fontWeight: 700, fontSize: '0.82rem', minWidth: 90 }}>{dateLabel(a)}</span>
                                           <span style={{ fontSize: '0.8rem', color: '#64748b' }}>{tIn} → {tOut}</span>
                                           <span style={{ fontSize: '0.8rem', color: '#16a34a', fontWeight: 600 }}>{a.clock_out ? `${Math.round(((new Date(a.clock_out) - new Date(a.clock_in)) / 3600000) * 10) / 10}h làm` : 'Đang làm...'}</span>
 
@@ -797,6 +1134,9 @@ export default function PayrollPage() {
                                             }
                                           </div>
                                         </div>
+                                        {!isEd && [...rowFlags(a), extraText(a)].some(Boolean) && (
+                                          <div style={{ fontSize: '0.75rem', color: '#c2410c', marginTop: 4 }}>⚠ {[...rowFlags(a), extraText(a)].filter(Boolean).join(' · ')}</div>
+                                        )}
                                         {isEd && (
                                           <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
                                             {[{label:'Giờ vào',key:'clock_in',type:'datetime-local'},{label:'Giờ ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
@@ -834,7 +1174,59 @@ export default function PayrollPage() {
           {/* === YÊU CẦU === */}
           {activeTab === 'requests' && (
             <div className="request-list">
-              {requests.length === 0 && <div className="empty-state">Không có yêu cầu nào</div>}
+              {/* Giờ ngoài ca (vào sớm / ở lại) chưa tính lương, chờ chủ cho tính hoặc không. */}
+              {(checkin?.extras || []).map(x => {
+                const t = ts => new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+                return (
+                  <div key={x.attendance_id} className="request-card pending">
+                    <div className="request-info">
+                      <div className="name">{staffList.find(s => s.id === x.staff_id)?.full_name || 'Không rõ'}</div>
+                      <div style={{ marginTop: 4 }}>
+                        <span style={{ display: 'inline-block', background: '#ffedd5', color: '#9a3412', borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>⏱ Giờ ngoài ca</span>
+                        <span className="status-badge pending">⏳ Chờ duyệt</span>
+                      </div>
+                      <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
+                        <div>Ca ngày {x.date.split('-').reverse().join('/')}: vào {t(x.clock_in)}{x.early_minutes ? ` (sớm ${durationText(x.early_minutes)})` : ''} → ra {t(x.clock_out)}{x.stay_minutes ? ` (ở lại ${durationText(x.stay_minutes)})` : ''}</div>
+                        <div>Chưa tính lương: <strong>{durationText(x.early_minutes + x.stay_minutes)}</strong></div>
+                      </div>
+                    </div>
+                    <div className="request-actions">
+                      <button className="btn-success" onClick={() => checkinAction('decide_extra', { attendance_id: x.attendance_id, status: 'approved' })}>✓ Cho tính</button>
+                      <button className="btn-danger" onClick={() => checkinAction('decide_extra', { attendance_id: x.attendance_id, status: 'rejected' })}>✗ Không tính</button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Đơn xin sửa giờ chấm công (duyệt thì giờ được sửa và ghi vào nhật ký sửa). */}
+              {(checkin?.fixes || []).map(f => {
+                const att = (checkin.fixSessions || []).find(s => s.id === f.attendance_id);
+                const t = ts => ts ? new Date(ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '—';
+                return (
+                  <div key={f.id} className={`request-card ${f.status}`}>
+                    <div className="request-info">
+                      <div className="name">{staffList.find(s => s.id === f.staff_id)?.full_name || 'Không rõ'}</div>
+                      <div style={{ marginTop: 4 }}>
+                        <span style={{ display: 'inline-block', background: '#ede9fe', color: '#5b21b6', borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>✏️ Xin sửa giờ</span>
+                        <span className={`status-badge ${f.status}`}>{f.status === 'pending' ? '⏳ Chờ duyệt' : f.status === 'approved' ? '✅ Đã sửa' : '❌ Từ chối'}</span>
+                      </div>
+                      <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
+                        {att && <div>Đang ghi: vào {t(att.clock_in)} → ra {att.clock_out ? t(att.clock_out) : 'chưa ra'}{(checkin.autoClosed || []).includes(att.id) ? ' (máy tự đóng vì quên ra ca)' : ''}</div>}
+                        <div>Xin sửa: {f.clock_in ? `vào ${t(f.clock_in)} ` : ''}{f.clock_out ? `ra ${t(f.clock_out)}` : ''}</div>
+                        <div>Lý do: {f.reason}</div>
+                      </div>
+                      {f.admin_note && <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 4 }}>💬 {f.admin_note}</div>}
+                    </div>
+                    {f.status === 'pending' && (
+                      <div className="request-actions">
+                        <button className="btn-success" onClick={() => checkinAction('decide_fix', { id: f.id, status: 'approved' })}>✓ Duyệt</button>
+                        <button className="btn-danger" onClick={() => { const note = prompt('Lý do từ chối (tuỳ chọn):') || ''; checkinAction('decide_fix', { id: f.id, status: 'rejected', admin_note: note }); }}>✗ Từ chối</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {requests.length === 0 && !(checkin?.fixes || []).length && !(checkin?.extras || []).length && <div className="empty-state">Không có yêu cầu nào</div>}
               {requests.map(req => {
                 const typeInfo = requestTypeMap[req.request_type] || {};
                 return (
@@ -847,9 +1239,21 @@ export default function PayrollPage() {
                       </div>
                       <div className="meta" style={{ marginTop: 4 }}>
                         {req.request_type === 'advance' && <span>💵 Ứng: <strong>{formatMoney(req.amount)}</strong> — </span>}
-                        {req.request_type === 'absent' && <span>🗓 Nghỉ: <strong>{req.days} ngày</strong> — </span>}
+                        {req.request_type === 'absent' && <span>🗓 Nghỉ: <strong>{fmtNum(req.days)} ngày</strong>{leaveText(payrollMonth.leaveDays.find(l => l.request_id === req.id))} — </span>}
                         Tháng {req.month}/{req.year} • {req.reason}
                       </div>
+                      {/* Duyệt ứng lương: xem người này đã làm ra bao nhiêu và đã ứng bao nhiêu trong tháng. */}
+                      {req.request_type === 'advance' && req.status === 'pending' && req.month === selMonth && req.year === selYear && (() => {
+                        const c = calcSalary(req.staff_id);
+                        // Cách cũ (tháng trước 11/2026) trả đủ lương cơ bản nên chỉ đếm ngày đi làm, không tính "đã làm ra".
+                        if (c.rule !== 'days') return <div style={{ fontSize: '0.78rem', marginTop: 4, color: '#475569' }}>Tháng này đã đi làm {c.workDays} ngày · đã ứng {formatMoney(c.advAmt)}</div>;
+                        const earned = c.basePay + c.otAmt, over = c.advAmt + Number(req.amount || 0) > earned;
+                        return (
+                          <div style={{ fontSize: '0.78rem', marginTop: 4, color: over ? '#b91c1c' : '#475569' }}>
+                            Tháng này đã làm ra {formatMoney(earned)} · đã ứng {formatMoney(c.advAmt)}{over ? ' · ⚠ duyệt đơn này thì ứng quá số đã làm' : ''}
+                          </div>
+                        );
+                      })()}
                       {req.admin_note && <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 4 }}>💬 {req.admin_note}</div>}
                     </div>
                     {req.status === 'pending' && (
@@ -913,7 +1317,7 @@ export default function PayrollPage() {
             const filtered = attendance.filter(a => {
               const staff = staffList.find(s => s.id === a.staff_id);
               const nameOk = !attSearch || (staff?.full_name || '') === attSearch;
-              const dayOk  = !attDayFilter || (a.date || '').slice(8, 10) === attDayFilter;
+              const dayOk  = !attDayFilter || workDayOf(a, rules).slice(8, 10) === attDayFilter;
               return nameOk && dayOk;
             });
             return (
@@ -958,7 +1362,7 @@ export default function PayrollPage() {
                               <div className="att-card-header">
                                 <span className="att-card-name">{staff?.full_name || '—'}</span>
                                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                                  <span className="att-card-date">{a.date}</span>
+                                  <span className="att-card-date">{dateLabel(a)}</span>
                                   {!isEditing
                                     ? <button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })}
                                         style={{ fontSize: '0.75rem', padding: '2px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#475569' }}>✏️ Sửa</button>
@@ -981,17 +1385,6 @@ export default function PayrollPage() {
                                         style={{ flex: 1, padding: '5px 8px', border: '1.5px solid #cbd5e1', borderRadius: 7, fontSize: '0.82rem' }} />
                                     </div>
                                   ))}
-                                  {[
-                                    { label: 'Giờ làm', key: 'work_hours',     placeholder: 'h (vd: 8)' },
-                                    { label: 'Tăng ca',  key: 'overtime_hours', placeholder: 'h (vd: 2)' },
-                                  ].map(({ label, key, placeholder }) => (
-                                    <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                      <span style={{ width: 70, fontSize: '0.78rem', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>{label}</span>
-                                      <input type="number" step="0.1" min="0" value={editingAtt[key] ?? ''} placeholder={placeholder}
-                                        onChange={e => setEditingAtt(p => ({ ...p, [key]: e.target.value }))}
-                                        style={{ width: 80, padding: '5px 8px', border: '1.5px solid #cbd5e1', borderRadius: 7, fontSize: '0.82rem' }} />
-                                    </div>
-                                  ))}
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                     <span style={{ width: 70, fontSize: '0.78rem', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>Ghi chú</span>
                                     <input type="text" value={editingAtt.note || ''} placeholder="Lý do sửa..."
@@ -1004,12 +1397,17 @@ export default function PayrollPage() {
                                   </button>
                                 </div>
                               ) : (
-                                <div className="att-card-grid">
-                                  <div className="att-card-item"><span className="att-card-item-label">Vào</span><span className="att-card-item-value">{timeIn}</span></div>
-                                  <div className="att-card-item"><span className="att-card-item-label">Ra</span><span className="att-card-item-value" style={!timeOut ? { color: '#f59e0b' } : {}}>{timeOut || 'Chưa ra'}</span></div>
-                                  <div className="att-card-item"><span className="att-card-item-label">Giờ làm</span><span className="att-card-item-value">{a.work_hours ? `${a.work_hours}h` : '—'}</span></div>
-                                  <div className="att-card-item"><span className="att-card-item-label">Tăng ca</span><span className="att-card-item-value" style={{ color: a.overtime_hours > 0 ? '#16a34a' : '#94a3b8' }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}</span></div>
-                                </div>
+                                <>
+                                  <div className="att-card-grid">
+                                    <div className="att-card-item"><span className="att-card-item-label">Vào</span><span className="att-card-item-value">{timeIn}</span></div>
+                                    <div className="att-card-item"><span className="att-card-item-label">Ra</span><span className="att-card-item-value" style={!timeOut ? { color: '#f59e0b' } : {}}>{timeOut || 'Chưa ra'}</span></div>
+                                    <div className="att-card-item"><span className="att-card-item-label">Có mặt</span><span className="att-card-item-value">{a.clock_out ? hoursText(hoursOf(a).totalMs) : '—'}</span></div>
+                                    <div className="att-card-item"><span className="att-card-item-label">Tính lương</span><span className="att-card-item-value" style={{ color: '#16a34a' }}>{a.clock_out ? hoursText(hoursOf(a).countedMs) : '—'}</span></div>
+                                  </div>
+                                  {[...rowFlags(a), extraText(a)].some(Boolean) && (
+                                    <div style={{ padding: '0 14px 10px', fontSize: '0.76rem', color: '#c2410c' }}>⚠ {[...rowFlags(a), extraText(a)].filter(Boolean).join(' · ')}</div>
+                                  )}
+                                </>
                               )}
                             </div>
                           );
@@ -1019,7 +1417,7 @@ export default function PayrollPage() {
                       {/* Desktop table */}
                       <div className="desktop-table">
                         <table className="payroll-table">
-                          <thead><tr><th>Nhân viên</th><th>Ngày</th><th>Vào</th><th>Ra</th><th>Giờ làm</th><th>Tăng ca</th><th></th></tr></thead>
+                          <thead><tr><th>Nhân viên</th><th>Ngày</th><th>Vào</th><th>Ra</th><th>Có mặt</th><th>Tính lương</th><th></th></tr></thead>
                           <tbody>
                             {filtered.map(a => {
                               const staff = staffList.find(s => s.id === a.staff_id);
@@ -1032,11 +1430,6 @@ export default function PayrollPage() {
                                       {[{label:'Giờ vào',key:'clock_in',type:'datetime-local'},{label:'Giờ ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
                                         <label key={key} style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
                                           {label}<input type={type} value={editingAtt[key]||''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.82rem'}}/>
-                                        </label>
-                                      ))}
-                                      {[{label:'Giờ làm',key:'work_hours'},{label:'Tăng ca (h)',key:'overtime_hours'}].map(({label,key})=>(
-                                        <label key={key} style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
-                                          {label}<input type="number" step="0.1" min="0" value={editingAtt[key]??''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.82rem',width:90}}/>
                                         </label>
                                       ))}
                                       <label style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
@@ -1052,11 +1445,14 @@ export default function PayrollPage() {
                               ) : (
                                 <tr key={a.id}>
                                   <td>{staff?.full_name || '—'}</td>
-                                  <td>{a.date}</td>
+                                  <td>{dateLabel(a)}</td>
                                   <td>{a.clock_in ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                                   <td>{a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : <span style={{ color: '#f59e0b' }}>Chưa ra</span>}</td>
-                                  <td>{a.work_hours ? `${a.work_hours}h` : '—'}</td>
-                                  <td style={{ color: '#16a34a', fontWeight: 600 }}>{a.overtime_hours > 0 ? `${a.overtime_hours}h` : '—'}</td>
+                                  <td>{a.clock_out ? hoursText(hoursOf(a).totalMs) : '—'}</td>
+                                  <td>
+                                    <span style={{ color: '#16a34a', fontWeight: 600 }}>{a.clock_out ? hoursText(hoursOf(a).countedMs) : '—'}</span>
+                                    {[...rowFlags(a), extraText(a)].some(Boolean) && <div style={{ fontSize: '0.72rem', color: '#c2410c' }}>⚠ {[...rowFlags(a), extraText(a)].filter(Boolean).join(' · ')}</div>}
+                                  </td>
                                   <td><button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })}
                                     style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#475569' }}>✏️ Sửa</button>
                                   </td>
@@ -1072,32 +1468,158 @@ export default function PayrollPage() {
             );
           })()}
 
-          {/* === QR CHẤM CÔNG === */}
-          {activeTab === 'qr' && (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, padding: '20px 0' }}>
-              <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 16, padding: 24, textAlign: 'center', maxWidth: 340, width: '100%' }}>
-                <div style={{ fontWeight: 800, fontSize: '1rem', marginBottom: 4 }}>📱 QR Chấm công</div>
-                <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: 16 }}>Nhân viên quét mã để vào/ra ca</div>
-                <div style={{ display: 'inline-block', padding: 12, background: 'white', border: '2px solid #111827', borderRadius: 12 }}>
-                  <QRCodeSVG value={networkUrl || 'loading...'} size={200} level="M" />
+          {/* === CÀI CHẤM CÔNG: giờ làm, máy quầy, chạy thử / chặn thật === */}
+          {activeTab === 'qr' && (() => {
+            if (!checkin || !hoursEdit) return <div className="empty-state">Đang tải phần cài chấm công… (bấm Đồng bộ nếu lâu)</div>;
+            const nameOf = id => staffList.find(s => s.id === id)?.full_name || 'Không rõ';
+            const when = ts => ts ? new Date(ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '—';
+            const serverNow = Date.parse(checkin.now) || Date.now();
+            const warnText = { other_network: 'không dùng wifi quán', unknown_device: 'máy lạ', shared_device: 'máy của người khác', admin_no_qr: 'admin chấm không quét mã' };
+            const card = { background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 16, marginBottom: 14 };
+            const kiosks = checkin.kiosks.filter(k => !k.revoked_at);
+            const scans = checkin.scans.filter(s => !onlyWarnings || s.warnings?.length || s.action === 'blocked');
+            const shortUa = ua => /iPhone/.test(ua || '') ? 'iPhone' : /iPad/.test(ua || '') ? 'iPad' : /Android/.test(ua || '') ? (String(ua).match(/;\s*([^;)]+?)\s+Build/)?.[1] || 'Android') : 'Máy khác';
+            const st = checkin.settings;
+            const nowHours = hoursOn(st, vnToday());
+            const hoursChanged = hoursEdit.opening_time !== nowHours.opening || hoursEdit.closing_time !== nowHours.closing || Number(hoursEdit.grace_minutes) !== nowHours.grace;
+            const timeInput = { padding: '4px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 };
+            return (
+              <div style={{ maxWidth: 760 }}>
+                {/* Giờ làm: chỉ tính lương trong ca, ngoài ca chờ chủ duyệt */}
+                <div style={card}>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>🕑 Giờ làm</div>
+                  <div style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.6, marginBottom: 10 }}>
+                    Nhân viên quét mã lúc nào cũng được, nhưng <strong>chỉ tính lương giờ trong ca</strong>. Vào sớm / ở lại quá số phút cho lệch là <strong>giờ ngoài ca</strong>: chưa tính, chờ bạn bấm "Cho tính" ở tab Yêu cầu.
+                    Quên ra ca thì máy tính ra ca lúc hết ca.
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: '0.86rem' }}>
+                    <span>Quán mở</span>
+                    <input type="time" value={hoursEdit.opening_time} onChange={e => setHoursEdit(p => ({ ...p, opening_time: e.target.value }))} style={timeInput} />
+                    <span>đóng</span>
+                    <input type="time" value={hoursEdit.closing_time} onChange={e => setHoursEdit(p => ({ ...p, closing_time: e.target.value }))} style={timeInput} />
+                    <span>· cho lệch</span>
+                    <input type="number" min="0" max="60" value={hoursEdit.grace_minutes} onChange={e => setHoursEdit(p => ({ ...p, grace_minutes: e.target.value }))} style={{ ...timeInput, width: 64 }} />
+                    <span>phút</span>
+                    {hoursChanged && (
+                      <button className="btn-primary" style={{ marginTop: 0, padding: '5px 12px' }}
+                        onClick={() => checkinAction('save_checkin_settings', { opening_time: hoursEdit.opening_time, closing_time: hoursEdit.closing_time, grace_minutes: Number(hoursEdit.grace_minutes) })}>Lưu</button>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 8 }}>
+                    Tính giờ theo ca từ ngày <strong>{st.hours_from.split('-').reverse().join('/')}</strong>; những ngày trước đó vẫn tính như cũ. Đổi giờ hay đổi ca thì áp dụng từ hôm nay, ngày đã làm giữ giờ cũ.
+                  </div>
+
+                  <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>Ca riêng từng người</div>
+                  <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 6 }}>Ai làm khác giờ quán (ví dụ 17:00–23:00) thì đặt riêng. Giờ hết ca trước giờ vào ca nghĩa là làm qua nửa đêm.</div>
+                  {staffList.filter(s => !departureOf(s.id) || departureOf(s.id).last_day >= vnToday()).map(s => {
+                    const shift = shiftOf(st, s.id, vnToday()), own = shift.own, editing = shiftEdit?.staff_id === s.id;
+                    return (
+                      <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', fontSize: '0.85rem' }}>
+                        <strong style={{ minWidth: 110 }}>{s.full_name}</strong>
+                        {editing ? (
+                          <>
+                            <input type="time" value={shiftEdit.start} onChange={e => setShiftEdit(p => ({ ...p, start: e.target.value }))} style={timeInput} />
+                            <span>–</span>
+                            <input type="time" value={shiftEdit.end} onChange={e => setShiftEdit(p => ({ ...p, end: e.target.value }))} style={timeInput} />
+                            <button className="btn-primary" style={{ marginTop: 0, padding: '5px 12px' }}
+                              onClick={async () => { if (await checkinAction('save_shift', { staff_id: s.id, start_time: shiftEdit.start, end_time: shiftEdit.end })) setShiftEdit(null); }}>Lưu</button>
+                            <button style={{ fontSize: '0.78rem', padding: '4px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }} onClick={() => setShiftEdit(null)}>Huỷ</button>
+                          </>
+                        ) : (
+                          <>
+                            <span style={{ color: own ? '#1d4ed8' : '#64748b' }}>{shift.start} – {shift.end}{own ? ' (ca riêng)' : ' (giờ quán)'}</span>
+                            <button style={{ fontSize: '0.78rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}
+                              onClick={() => setShiftEdit({ staff_id: s.id, start: shift.start, end: shift.end })}>Đặt ca riêng</button>
+                            {own && <button style={{ fontSize: '0.78rem', padding: '3px 10px', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', textDecoration: 'underline' }}
+                              onClick={() => checkinAction('save_shift', { staff_id: s.id, clear: true })}>Dùng giờ quán</button>}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-                <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: qrCountdown > 30 ? '#16a34a' : '#f59e0b', animation: 'pulse 1s infinite' }} />
-                  <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>Hết hạn sau: <strong style={{ color: qrCountdown > 30 ? '#15803d' : '#dc2626' }}>{qrCountdown}s</strong></span>
+
+                {/* Chế độ */}
+                <div style={{ ...card, background: checkin.settings.enforce ? '#f0fdf4' : '#fffbeb', borderColor: checkin.settings.enforce ? '#bbf7d0' : '#fde68a' }}>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>{checkin.settings.enforce ? '🔒 Đang chặn thật' : '🧪 Đang chạy thử'}</div>
+                  <div style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.6, marginBottom: 10 }}>
+                    {checkin.settings.enforce
+                      ? 'Nhân viên không vào wifi quán, hoặc dùng điện thoại khác máy đã đăng ký, sẽ KHÔNG chấm được.'
+                      : 'Máy chỉ ghi lại ai không dùng wifi quán / dùng máy lạ, CHƯA chặn. Chạy thử khoảng 1 tuần, xem lịch sử bên dưới không có ai bị cảnh báo oan thì bật chặn thật.'}
+                    <br />Mã QR luôn đổi liên tục và mỗi mã chỉ dùng 1 lần (phần này không có chạy thử).
+                  </div>
+                  <button className={checkin.settings.enforce ? 'btn-danger' : 'btn-success'}
+                    onClick={() => checkinAction('save_checkin_settings', { enforce: !checkin.settings.enforce }, checkin.settings.enforce ? 'Tắt chặn, quay về chạy thử?' : 'Bật chặn thật? Nhân viên không vào wifi quán hoặc dùng máy lạ sẽ không chấm được.')}>
+                    {checkin.settings.enforce ? 'Quay về chạy thử' : 'Bật chặn thật'}
+                  </button>
                 </div>
-                <div style={{ marginTop: 10, fontSize: '0.72rem', color: '#9ca3af', wordBreak: 'break-all', background: '#f9fafb', borderRadius: 8, padding: '6px 10px' }}>
-                  {networkUrl}
+
+                {/* Máy quầy */}
+                <div style={card}>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>📱 Máy quầy hiện mã QR</div>
+                  <div style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.7, marginBottom: 10 }}>
+                    1️⃣ Lấy một điện thoại / máy tính bảng để cố định ở quầy, cắm sạc, cho vào <strong>wifi quán</strong>.<br />
+                    2️⃣ Trên máy đó mở <strong>{typeof window !== 'undefined' ? window.location.host : 'ocbaokhang.online'}/chamcong</strong>, đăng nhập admin để bật. Xong máy tự đăng xuất admin.<br />
+                    3️⃣ Nhân viên vào wifi quán, mở camera điện thoại quét mã trên máy quầy.
+                  </div>
+                  {kiosks.length === 0 && <div style={{ fontSize: '0.84rem', color: '#b45309', fontWeight: 600 }}>Chưa có máy quầy nào — nhân viên chưa chấm công được.</div>}
+                  {kiosks.map(k => {
+                    const online = k.last_seen_at && serverNow - Date.parse(k.last_seen_at) < 90000;
+                    return (
+                      <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap' }}>
+                        <span style={{ width: 10, height: 10, borderRadius: '50%', background: online ? '#16a34a' : '#94a3b8' }} />
+                        <div style={{ flex: 1, minWidth: 160 }}>
+                          <div style={{ fontWeight: 700 }}>{k.name}</div>
+                          <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{online ? 'Đang mở' : `Mở lần cuối ${when(k.last_seen_at)}`} · bật ngày {when(k.created_at)}</div>
+                        </div>
+                        <button className="btn-danger" onClick={() => checkinAction('revoke_kiosk', { id: k.id }, `Tắt máy quầy "${k.name}"? Mã trên máy đó sẽ không dùng được nữa.`)}>Tắt máy này</button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Điện thoại đã đăng ký */}
+                <div style={card}>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>🔐 Điện thoại chấm công của nhân viên</div>
+                  <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 8 }}>Mỗi người một máy. Lần chấm công đầu tiên tự ghi máy đó. Nhân viên đổi / mất điện thoại thì bấm "Cho đổi máy".</div>
+                  {staffList.filter(s => s.role !== 'admin' && (!departureOf(s.id) || departureOf(s.id).last_day >= vnToday())).map(s => {
+                    const d = checkin.devices.find(x => x.staff_id === s.id);
+                    return (
+                      <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', fontSize: '0.85rem' }}>
+                        <div style={{ flex: 1, minWidth: 160 }}>
+                          <strong>{s.full_name}</strong>
+                          <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{d ? `${shortUa(d.user_agent)} · đăng ký ${when(d.created_at)}` : 'Chưa đăng ký (lần chấm đầu sẽ tự ghi)'}</div>
+                        </div>
+                        {d && <button style={{ fontSize: '0.78rem', padding: '4px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}
+                          onClick={() => checkinAction('reset_device', { staff_id: s.id }, `Cho ${s.full_name} đổi điện thoại? Lần chấm công tới sẽ ghi máy mới.`)}>Cho đổi máy</button>}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Lịch sử quét */}
+                <div style={card}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <div style={{ fontWeight: 800 }}>📜 Lịch sử chấm công 14 ngày</div>
+                    <label style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={onlyWarnings} onChange={e => setOnlyWarnings(e.target.checked)} /> Chỉ lần có cảnh báo
+                    </label>
+                  </div>
+                  {scans.length === 0 && <div style={{ fontSize: '0.84rem', color: '#16a34a' }}>{onlyWarnings ? '✅ Không có lần nào bị cảnh báo.' : 'Chưa có ai chấm công.'}</div>}
+                  {scans.slice(0, 150).map(s => (
+                    <div key={s.id} style={{ display: 'flex', gap: 10, padding: '5px 0', borderTop: '1px solid #f1f5f9', fontSize: '0.82rem', flexWrap: 'wrap' }}>
+                      <span style={{ color: '#64748b', minWidth: 92 }}>{when(s.created_at)}</span>
+                      <strong style={{ minWidth: 90 }}>{nameOf(s.staff_id)}</strong>
+                      <span style={{ fontWeight: 700, color: s.action === 'blocked' ? '#dc2626' : s.action === 'out' ? '#b45309' : '#15803d' }}>
+                        {s.action === 'blocked' ? '⛔ Bị chặn' : s.action === 'out' ? 'Ra ca' : 'Vào ca'}
+                      </span>
+                      {s.warnings?.length > 0 && <span style={{ color: '#c2410c' }}>⚠ {s.warnings.map(w => warnText[w] || w).join(', ')}</span>}
+                    </div>
+                  ))}
                 </div>
               </div>
-              <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 12, padding: 16, maxWidth: 340, width: '100%', fontSize: '0.82rem', color: '#0369a1' }}>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>Hướng dẫn sử dụng:</div>
-                <div>1️⃣ Mở trang này trên máy tính / tablet tại nhà hàng</div>
-                <div style={{ marginTop: 4 }}>2️⃣ Nhân viên dùng điện thoại quét mã QR</div>
-                <div style={{ marginTop: 4 }}>3️⃣ Đăng nhập (nếu chưa) và bấm <strong>Xác nhận chấm công</strong></div>
-                <div style={{ marginTop: 4 }}>4️⃣ Mã tự làm mới mỗi 5 phút — không thể dùng mã cũ</div>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* === TÀI KHOẢN === */}
           {activeTab === 'accounts' && (
@@ -1132,7 +1654,7 @@ export default function PayrollPage() {
 
               {/* Staff list */}
               <div className="config-list">
-                {staffList.map(s => (
+                {staffList.filter(s => !departureOf(s.id)).map(s => (
                   <div key={s.id} className="config-row" style={{ flexWrap: 'wrap', gap: 10 }}>
                     <div style={{ minWidth: 140 }}>
                       <div style={{ fontWeight: 700 }}>{s.full_name}</div>
@@ -1150,11 +1672,47 @@ export default function PayrollPage() {
                         <button className="btn-primary" style={{ padding: '6px 12px', marginTop: 0, whiteSpace: 'nowrap' }} onClick={() => handleUpdatePin(s.id)}>Lưu</button>
                       </div>
                     </div>
+                    {s.id !== currentUser?.id && (
+                      <button style={{ marginTop: 18, alignSelf: 'flex-end', padding: '6px 12px', background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}
+                        onClick={() => setDepartForm({ staff_id: s.id, name: s.full_name, last_day: vnToday(), reason: '' })}>Cho nghỉ việc</button>
+                    )}
                     <button className="btn-danger" style={{ marginTop: 18, alignSelf: 'flex-end' }} onClick={() => handleDeleteAccount(s.id, s.full_name)}>Xoá</button>
+                    {departForm?.staff_id === s.id && (
+                      <div style={{ flexBasis: '100%', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.84rem' }}>
+                        <div><strong>Cho {s.full_name} nghỉ việc.</strong> Qua ngày làm cuối, người này không đăng nhập và không chấm công được nữa; lương tháng cuối tính tới ngày đó, kết toán ở tab Bảng Lương.</div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>Ngày làm việc cuối cùng
+                          <input type="date" value={departForm.last_day} onChange={e => setDepartForm(p => ({ ...p, last_day: e.target.value }))} style={{ padding: '4px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} /></label>
+                        <input type="text" placeholder="Lý do (tuỳ chọn)" value={departForm.reason} onChange={e => setDepartForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} />
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button className="btn-danger" style={{ marginTop: 0 }} onClick={handleDepart}>Xác nhận nghỉ việc</button>
+                          <button style={{ padding: '6px 12px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer' }} onClick={() => setDepartForm(null)}>Huỷ</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
                 {staffList.length === 0 && <div className="empty-state">Chưa có nhân viên nào</div>}
               </div>
+
+              {/* Đã nghỉ việc: không đăng nhập / chấm công được, vẫn giữ lịch sử và lương các tháng đã làm. */}
+              {staffList.some(s => departureOf(s.id)) && (
+                <div className="config-list" style={{ marginTop: 14 }}>
+                  <div style={{ fontWeight: 800, fontSize: '0.9rem', padding: '4px 2px' }}>🚪 Đã nghỉ việc</div>
+                  {staffList.filter(s => departureOf(s.id)).map(s => {
+                    const d = departureOf(s.id);
+                    return (
+                      <div key={s.id} className="config-row" style={{ flexWrap: 'wrap', gap: 10, opacity: 0.85 }}>
+                        <div style={{ flex: 1, minWidth: 160 }}>
+                          <div style={{ fontWeight: 700 }}>{s.full_name}</div>
+                          <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Làm đến hết {d.last_day.split('-').reverse().join('/')}{d.reason ? ` · ${d.reason}` : ''}{d.last_day >= vnToday() ? ' (vẫn đang làm tới ngày đó)' : ''}</div>
+                        </div>
+                        <button style={{ padding: '6px 12px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer' }}
+                          onClick={() => handleReturn(s.id, s.full_name)}>Cho đi làm lại</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -1162,7 +1720,7 @@ export default function PayrollPage() {
           {activeTab === 'config' && (
             <div>
               <div className="payroll-form" style={{ marginBottom: 8 }}>
-                <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>💡 Thiết lập lương cơ bản, giá tăng ca và ngày phát lương cho từng nhân viên.</p>
+                <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>💡 Thiết lập lương cơ bản (lương đủ {STANDARD_DAYS} ngày công), giá tăng ca mỗi giờ (để 0 nếu không trả tăng ca) và ngày phát lương cho từng nhân viên.</p>
               </div>
               <div className="config-list">
                 {staffList.map(s => {
@@ -1178,7 +1736,7 @@ export default function PayrollPage() {
                       </div>
                       <div className="form-group" style={{ margin: 0 }}>
                         <label>Giá tăng ca/h</label>
-                        <input type="number" value={edit.overtime_rate || 25000}
+                        <input type="number" min="0" value={edit.overtime_rate ?? 25000}
                           onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value } }))} />
                       </div>
                       <div className="form-group" style={{ margin: 0 }}>

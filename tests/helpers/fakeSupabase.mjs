@@ -41,6 +41,7 @@ export function fakeDb(state) {
       or(expr) { const parts = expr.split(',').map(e => e.split('.')); conditions.push(r => parts.some(([k, , v]) => String(r[k]) === v)); return q; },
       gte(k, v) { conditions.push(r => r[k] >= v); return q; },
       lt(k, v) { conditions.push(r => r[k] < v); return q; },
+      lte(k, v) { conditions.push(r => r[k] <= v); return q; },
       is(k, v) { conditions.push(r => (r[k] ?? null) === v); return q; },
       order(k, o) { orders.push([k, o?.ascending !== false]); return q; },
       limit(n) { max = n; return q; },
@@ -55,9 +56,20 @@ export function fakeDb(state) {
       state[table] ||= [];
       let rows = state[table].filter(r => conditions.every(c => c(r)));
       if (op === 'insert') {
-        const added = (Array.isArray(values) ? values : [values]).map(v => {
+        // Cột UNIQUE / khoá chính như trong DB (chấm công: mỗi mã QR dùng 1 lần, một người một máy).
+        const unique = { checkin_nonces: ['nonce'], staff_checkin_devices: ['staff_id', 'device_id'] }[table] || [];
+        const list = Array.isArray(values) ? values : [values];
+        // Như DB thật: attendance_edit_log cũ có khoá ngoại sang attendance_logs cũ, không nhận mã ca attendance_sessions.
+        if (table === 'attendance_edit_log' && list.some(v => !(state.attendance_logs || []).some(l => l.id === v.attendance_id))) {
+          return resolve({ data: null, error: { code: '23503', message: 'violates foreign key constraint "attendance_edit_log_attendance_id_fkey"' } });
+        }
+        if (list.some(v => unique.some(k => state[table].some(r => r[k] === v[k])))) {
+          return resolve({ data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } });
+        }
+        const added = list.map(v => {
           const n = ++state.__seq;
-          const at = new Date(Date.now() + n).toISOString();
+          // state.__clock: đồng hồ giả của test (giả lập cả tháng) để created_at đúng giờ giả lập.
+          const at = new Date(state.__clock ? state.__clock() : Date.now() + n).toISOString();
           const row = { id: v.id || `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, created_at: at, updated_at: at, ...v };
           state[table].push(row);
           return row;
