@@ -82,3 +82,12 @@ test('staff block shows late / early by each shift and outside time waiting for 
   assert.match(text, /• Lan: 16:30–23:00 \(6 giờ\) ⚠ vào sớm 30 phút/);
   assert.match(text, /Chờ bạn duyệt \(1\):\n• Phát có 45 phút ngoài ca chưa tính lương/);
 });
+
+test('from November the daily report says an early leave of 30 minutes or more is cut from pay', () => {
+  const settings = { hours_from: '2026-10-25' }, hours = [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }];
+  const block = (date, out) => staffBlock({ date, settings, hours, staffNames: { a: 'Mai' },
+    sessions: [{ id: 's', staff_id: 'a', date, clock_in: `${date}T07:00:00Z`, clock_out: `${date}T${out}:00Z` }] });
+  assert.match(block('2026-11-04', '13:00'), /Mai: .*⚠ về sớm 3 giờ \(trừ lương\)/);
+  assert.doesNotMatch(block('2026-11-04', '15:40'), /trừ lương/, '20 minutes early: flagged, not cut');
+  assert.doesNotMatch(block('2026-10-27', '13:00'), /trừ lương/, 'October keeps the old formula');
+});

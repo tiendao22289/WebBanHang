@@ -259,6 +259,7 @@ function StaffReport({ date, monthRevenue }) {
         p.forgot ? <span className="warn">quên ra ca {p.forgot}</span> : null,
         c.otHours ? `tăng ca ${num(c.otHours)} giờ` : null,
         c.pendingH ? `${num(c.pendingH)} giờ ngoài ca chờ duyệt` : null,
+        c.earlyAmt ? <span className="warn">trừ về sớm {money(c.earlyAmt)}</span> : null,
         c.bonusAmt ? `thưởng ${money(c.bonusAmt)}` : null,
         c.advAmt ? `ứng ${money(c.advAmt)}` : null,
         c.vioAmt ? `phạt ${money(c.vioAmt)}` : null,
@@ -271,7 +272,7 @@ function StaffReport({ date, monthRevenue }) {
         <div className="tk-person-meta">{meta.map((m, i) => <Fragment key={i}>{i > 0 && ' · '}{m}</Fragment>)}</div>
       </li>;
     })}</ul> : <p className="tk-empty">Chưa có giờ công hay lương tháng này.</p>}
-    <p className="tk-caption">Số lương là thực lĩnh {t.staff && t.closed === t.staff ? 'đã chốt' : 'tạm tính tới hôm nay'} (đã cộng thưởng, trừ ứng, phạt). Quỹ lương so với doanh thu tháng tới ngày đang xem.</p>
+    <p className="tk-caption">Số lương là thực lĩnh {t.staff && t.closed === t.staff ? 'đã chốt' : 'tạm tính tới hôm nay'} (đã cộng thưởng, trừ về sớm, ứng, phạt). Quỹ lương so với doanh thu tháng tới ngày đang xem.</p>
     <a className="tk-link" href="/admin/payroll">Mở bảng lương →</a>
   </Card>;
 }

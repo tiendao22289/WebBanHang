@@ -4,6 +4,7 @@
  * mới, câu báo sau khi vào / ra ca. Máy chủ mới là nơi kiểm chữ ký, wifi, điện thoại.
  */
 import { dayFlags, durationText, shiftOf, workDayOf } from './attendanceRules.mjs';
+import { DAY_PAY_FROM, EARLY_CUT_MINUTES } from './payroll.mjs';
 
 // Mã QR trên máy quầy có dạng "<giờ tạo>.<máy quầy>.<số riêng>.<chữ ký>", hết hạn sau 2 phút — máy chủ
 // kiểm bằng đồng hồ của chính nó. Điện thoại chỉ loại mã rõ ràng là cũ (ảnh chụp mã từ hôm trước), vì
@@ -74,7 +75,11 @@ export function punctuality(clocked, session, sessions, rules, staffId) {
     if (f.early) return `🌅 Vào sớm ${durationText(f.early)}: giờ trước ${shift.start} chỉ được tính khi chủ quán đồng ý.`;
     return `✅ Đúng giờ (ca ${shift.start} – ${shift.end}).`;
   }
-  if (f.leftEarly) return `⏰ Về sớm ${durationText(f.leftEarly)} so với giờ hết ca ${shift.end}.`;
+  if (f.leftEarly) {
+    // Từ tháng 11 về sớm từ 30 phút bị trừ lương theo giờ về sớm.
+    const cut = f.leftEarly >= EARLY_CUT_MINUTES && workDayOf(session, rules).slice(0, 7) >= DAY_PAY_FROM;
+    return `⏰ Về sớm ${durationText(f.leftEarly)} so với giờ hết ca ${shift.end}.${cut ? ' Về sớm từ 30 phút bị trừ lương theo giờ về sớm.' : ''}`;
+  }
   if (f.stayed) return `🌙 Ở lại ${durationText(f.stayed)} sau ca: giờ này chờ chủ quán duyệt mới được tính.`;
   return '✅ Ra ca đúng giờ.';
 }

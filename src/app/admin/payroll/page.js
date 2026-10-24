@@ -381,11 +381,17 @@ export default function PayrollPage() {
   const dateLabel = a => { const d = workDayOf(a, rules); return d === a.date ? a.date : `${a.date} (ca ngày ${d.slice(8, 10)}/${d.slice(5, 7)})`; };
   const hoursText = ms => `${fmtNum(Math.round(ms / 360000) / 10)} giờ`;
   // Trễ / vào sớm ở ca đầu ngày, về sớm / ở lại ở ca cuối ngày.
+  // Tiền trừ vì về sớm theo từng ngày (tính một lần mỗi người mỗi lần vẽ trang).
+  const earlyCuts = {};
+  const earlyCutOf = (staffId, day) => (earlyCuts[staffId] ||= calcSalary(staffId).earlyList || []).find(x => x.day === day) || null;
   const rowFlags = a => {
     const wd = workDayOf(a, rules);
     const day = attendance.filter(x => x.staff_id === a.staff_id && workDayOf(x, rules) === wd).sort((x, y) => String(x.clock_in).localeCompare(String(y.clock_in)));
     const f = dayFlags(day, rules), first = day[0]?.id === a.id, last = day[day.length - 1]?.id === a.id;
     const texts = flagTexts({ late: first ? f.late : 0, early: first ? f.early : 0, leftEarly: last ? f.leftEarly : 0, stayed: last ? f.stayed : 0 });
+    // Về sớm từ 30 phút (từ tháng 11): ghi số tiền bị trừ của ngày đó.
+    const cut = last ? earlyCutOf(a.staff_id, wd) : null;
+    if (cut) texts.push(`trừ lương ${formatMoney(cut.amount)} vì về sớm`);
     return (payrollMonth.autoClosed || []).includes(a.id) ? [...texts, 'quên ra ca (máy tự đóng)'] : texts;
   };
   const extraText = a => {
@@ -499,11 +505,11 @@ export default function PayrollPage() {
   // Tải bảng lương tháng đang xem ra file Excel (để in / lưu / chuyển khoản).
   const exportPayroll = async rows => {
     const XLSX = await import('xlsx');
-    const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
+    const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Trừ về sớm', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
       'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Thực lĩnh', 'Trạng thái', 'Nghỉ việc'];
     const data = rows.map(({ s, c }) => {
       const d = departureOf(s.id);
-      return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.workUnits : c.workDays, c.basePay, c.totalWorkH, c.otHours, c.otAmt,
+      return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.workUnits : c.workDays, c.basePay, c.earlyAmt || 0, c.totalWorkH, c.otHours, c.otAmt,
         c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.net, c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
         d ? `Làm đến ${d.last_day.split('-').reverse().join('/')}` : ''];
     });
@@ -907,6 +913,12 @@ export default function PayrollPage() {
                 {c.rule === 'days'
                   ? row('Ngày công', `${fmtNum(c.workUnits)} / ${c.standardDays} ngày → ${formatMoney(c.basePay)}`)
                   : <>{row('Lương cơ bản', formatMoney(c.base))}{row('Ngày công', `${c.workDays} ngày`)}</>}
+                {c.earlyAmt > 0 && row(`Trừ về sớm (${c.earlyList?.length || 0} lần)`, `−${formatMoney(c.earlyAmt)}`, '#dc2626')}
+                {c.earlyAmt > 0 && (
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', padding: '2px 0 6px', borderBottom: '1px solid #f1f5f9' }}>
+                    {(c.earlyList || []).map(x => <div key={x.day}>• {ddmm(x.day)} · về sớm {durationText(x.minutes)} — −{formatMoney(x.amount)}</div>)}
+                  </div>
+                )}
                 {row('Giờ làm', `${fmtNum(c.totalWorkH)} giờ`)}
                 {row('Tăng ca', `${fmtNum(c.otHours)} giờ → +${formatMoney(c.otAmt)}`, '#15803d')}
                 {c.bonusAmt > 0 && row('⭐ Thưởng chuyên cần', `+${formatMoney(c.bonusAmt)}`, '#15803d')}
@@ -934,7 +946,7 @@ export default function PayrollPage() {
                 )}
                 <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: 6, lineHeight: 1.5 }}>
                   {c.rule === 'days'
-                    ? `Lương = lương cơ bản ÷ ${c.standardDays} × số ngày đi làm (ngày làm dưới nửa ca tính nửa ngày). Tăng ca là giờ ngoài ca chủ quán đã đồng ý.`
+                    ? `Lương = lương cơ bản ÷ ${c.standardDays} × số ngày đi làm (ngày làm dưới nửa ca tính nửa ngày). Về sớm từ 30 phút bị trừ lương theo giờ về sớm. Tăng ca là giờ ngoài ca chủ quán đã đồng ý.`
                     : 'Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca là giờ làm quá 8 tiếng mỗi ngày.'}
                   {!c.locked && ' Số còn thay đổi tới khi chủ quán chốt lương cuối tháng.'}
                 </div>
@@ -1135,7 +1147,7 @@ export default function PayrollPage() {
                 <div style={{ background: closes.length ? '#f0fdf4' : 'white', border: `1px solid ${closes.length ? '#bbf7d0' : '#e5e7eb'}`, borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155', lineHeight: 1.6 }}>
                   <div>
                     {dayPay
-                      ? <>📐 <strong>Tính theo ngày công:</strong> lương cơ bản ÷ {STANDARD_DAYS} × số ngày đi làm (làm dư thì cộng thêm, ngày làm dưới nửa ca tính nửa ngày). Tăng ca = giờ ngoài ca bạn đã bấm "Cho tính". Đơn báo nghỉ không trừ thêm.</>
+                      ? <>📐 <strong>Tính theo ngày công:</strong> lương cơ bản ÷ {STANDARD_DAYS} × số ngày đi làm (làm dư thì cộng thêm, ngày làm dưới nửa ca tính nửa ngày). Về sớm từ 30 phút: trừ lương theo giờ về sớm (lương ngày ÷ số giờ của ca). Tăng ca = giờ ngoài ca bạn đã bấm "Cho tính". Đơn báo nghỉ không trừ thêm.</>
                       : <>📐 Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày, trừ ngày nghỉ có đơn.</>}
                   </div>
                   {isAdmin && (
@@ -1191,6 +1203,12 @@ export default function PayrollPage() {
                             <span className="salary-card-label">Ngày công</span>
                             <span className="salary-card-value">{daysText(c)}{c.rule === 'days' && <> → {formatMoney(c.basePay)}</>}</span>
                           </div>
+                          {c.earlyAmt > 0 && (
+                            <div className="salary-card-row">
+                              <span className="salary-card-label">Trừ về sớm ({c.earlyList?.length || 0} lần)</span>
+                              <span className="salary-card-value red">−{formatMoney(c.earlyAmt)}</span>
+                            </div>
+                          )}
                           <div className="salary-card-row">
                             <span className="salary-card-label">Tổng giờ làm</span>
                             <span className="salary-card-value">{fmtNum(c.totalWorkH)} giờ</span>
@@ -1312,7 +1330,8 @@ export default function PayrollPage() {
                             <tr>
                             <td><div style={{fontWeight:700}}>{c.locked ? '🔒 ' : ''}{s.full_name}</div><div style={{fontSize:'0.73rem',color:'#94a3b8'}}>{s.phone}</div></td>
                             <td>{formatMoney(c.base)}</td>
-                            <td>{daysText(c)}{c.rule === 'days' && <div style={{fontSize:'0.72rem',color:'#94a3b8'}}>= {formatMoney(c.basePay)}</div>}</td>
+                            <td>{daysText(c)}{c.rule === 'days' && <div style={{fontSize:'0.72rem',color:'#94a3b8'}}>= {formatMoney(c.basePay)}</div>}
+                              {c.earlyAmt > 0 && <div style={{fontSize:'0.72rem',color:'#ef4444'}}>−{formatMoney(c.earlyAmt)} về sớm ({c.earlyList?.length || 0} lần)</div>}</td>
                             <td>{fmtNum(c.totalWorkH)} giờ{c.pendingH > 0 && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>+{fmtNum(c.pendingH)} giờ ngoài ca chờ duyệt</div>}</td>
                             <td><span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.otHours)} giờ</div></td>
                             <td>{c.bonusAmt > 0 ? <span style={{color:'#16a34a'}}>+{formatMoney(c.bonusAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}</td>
