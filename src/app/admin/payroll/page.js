@@ -1746,6 +1746,22 @@ export default function PayrollPage() {
             const timeInput = { padding: '4px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 };
             return (
               <div style={{ maxWidth: 760 }}>
+                {/* Chấm công theo giờ internet; báo khi đồng hồ máy tính chạy web lệch (bill, báo cáo vẫn theo giờ máy). */}
+                {(() => {
+                  const c = checkin.clock;
+                  if (!c) return null;
+                  const skew = -c.offsetMs, mins = Math.round(Math.abs(skew) / 60000);
+                  const bad = c.synced && Math.abs(skew) > 60000;
+                  return (
+                    <div style={{ ...card, padding: '10px 14px', fontSize: '0.84rem', lineHeight: 1.6, background: !c.synced || bad ? '#fff7ed' : '#f0fdf4', borderColor: !c.synced || bad ? '#fed7aa' : '#bbf7d0' }}>
+                      {!c.synced
+                        ? '⚠ Chưa so được giờ với internet: chấm công tạm theo giờ máy tính ở quán. Kiểm tra mạng của máy tính chạy web.'
+                        : bad
+                          ? <>🕒 Chấm công đang theo <strong>giờ internet</strong>. Đồng hồ máy tính chạy web ở quán đang <strong>{skew < 0 ? 'chậm' : 'nhanh'} {mins} phút</strong> — nên chỉnh lại (bật &quot;Đặt giờ tự động&quot;), vì bill và báo cáo vẫn theo giờ máy tính.</>
+                          : '🕒 Chấm công theo giờ internet. Đồng hồ máy tính ở quán đúng giờ.'}
+                    </div>
+                  );
+                })()}
                 {/* Giờ làm: chỉ tính lương trong ca, ngoài ca chờ chủ duyệt */}
                 <div style={card}>
                   <div style={{ fontWeight: 800, marginBottom: 6 }}>🕑 Giờ làm</div>

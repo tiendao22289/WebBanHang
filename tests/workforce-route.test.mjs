@@ -19,8 +19,9 @@ const LAN = { id: '00000000-0000-4000-8000-00000000cccc', full_name: 'Lan', role
 const KIOSK = '00000000-0000-4000-8000-00000000eeee';
 const SHOP_IP = '113.161.1.2';
 
-// `now`: chạy route ở một giờ cố định (ca qua nửa đêm, quên ra ca).
-function load(state, user, { now } = {}) {
+// `now`: chạy route ở một giờ cố định (ca qua nửa đêm, quên ra ca). `internetAhead`: giờ internet đi
+// trước đồng hồ máy tính bao nhiêu ms (máy tính ở quán chạy chậm).
+function load(state, user, { now, internetAhead = 0 } = {}) {
   const NextResponse = { json: (body, init = {}) => {
     const res = { status: init.status || 200, body, cookies: {} };
     Object.defineProperty(res, 'cookies', { value: { set: (k, v) => { res.setCookies = { ...res.setCookies, [k]: v }; } }, enumerable: false });
@@ -34,9 +35,10 @@ function load(state, user, { now } = {}) {
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
     NextResponse, ...pin, ...token, ...rules, ...payroll, ...departure, createHmac, randomUUID, timingSafeEqual, Buffer, URL, Number, Math, String, JSON, Promise,
     Date: now ? FixedDate : Date,
-    readKioskQrToken: (t, s) => token.readKioskQrToken(t, s, at),
-    onKioskNetwork: (ip, k) => rules.onKioskNetwork(ip, k, at),
-    closeForgottenSessions: (db, c, id) => rules.closeForgottenSessions(db, c, id, at),
+    readKioskQrToken: (t, s, n) => token.readKioskQrToken(t, s, n ?? at),
+    onKioskNetwork: (ip, k, n) => rules.onKioskNetwork(ip, k, n ?? at),
+    closeForgottenSessions: (db, c, id, n) => rules.closeForgottenSessions(db, c, id, n ?? at),
+    nowMs: () => (now ?? Date.now()) + internetAhead, refreshClock: async () => {}, clockStatus: () => ({ offsetMs: 0, synced: true, checkedAt: null, source: 'test' }),
     console: { error() {} }, process: { env: { SUPABASE_SERVICE_ROLE_KEY: SECRET } },
     getStaffSession: async () => (user ? { code: 200, user } : { code: 401 }), staffDatabase: () => fakeDb(state),
   });
@@ -509,4 +511,19 @@ test('the owner keeps the list of mistakes with suggested amounts and can hide o
   assert.deepEqual(state.payroll_fine_rules.map(r => [r.name, r.amount, r.kind ?? null, r.active]), [['Đi trễ quá 30 phút', 50000, 'late', false], ['Quên đeo tạp dề', 0, null, true]]);
   assert.equal((await post(owner, { action: 'save_fine_rule', name: '', amount: '1' })).status, 400);
   assert.equal((await post(load(state, STAFF), { action: 'save_fine_rule', name: 'x' })).status, 403);
+});
+
+test('a slow shop computer clock does not move clock-in times: the internet time is recorded', async () => {
+  const computer = Date.parse('2026-11-03T06:55:00.000Z'), internet = computer + 9.5 * 60000; // máy tính 13:55, giờ thật 14:04:30
+  const state = shop({ checkin_kiosks: [{ id: KIOSK, name: 'Quầy', revoked_at: null, recent_ips: [{ ip: SHOP_IP, at: new Date(internet).toISOString() }] }] });
+  const staff = load(state, STAFF, { now: computer, internetAhead: internet - computer });
+  // Máy quầy tạo mã theo giờ internet; máy chủ kiểm mã cũng theo giờ internet nên mã vẫn hợp lệ.
+  const r = await scan(staff, token.kioskQrToken(SECRET, KIOSK, internet));
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.warnings, [], 'same wifi: the kiosk address time is internet time too');
+  assert.equal(state.attendance_sessions[0].clock_in, new Date(internet).toISOString(), 'clock-in at the real 14:04:30, not the computer 13:55');
+  assert.equal(state.checkin_scans[0].created_at, new Date(internet).toISOString());
+  // Mã tạo theo đồng hồ máy tính chậm (9 phút rưỡi trước giờ thật) bị coi là quá 2 phút.
+  const late = await scan(load(state, LAN, { now: computer, internetAhead: internet - computer }), token.kioskQrToken(SECRET, KIOSK, computer));
+  assert.equal(late.status, 403);
 });

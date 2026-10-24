@@ -6,6 +6,7 @@ import { QRCodeSVG } from 'qrcode.react';
 
 const POLL_MS = 2500;
 const pad = n => String(n).padStart(2, '0');
+const warnBox = { background: '#7c2d12', color: '#fed7aa', borderRadius: 10, padding: '8px 12px', margin: '-8px 0 14px', fontSize: '0.88rem', textAlign: 'center', maxWidth: 440, lineHeight: 1.5 };
 
 export default function KioskPage() {
   const [state, setState] = useState('loading'); // loading | setup | ready
@@ -13,6 +14,7 @@ export default function KioskPage() {
   const [name, setName] = useState('');
   const [refreshAt, setRefreshAt] = useState(0);
   const [offset, setOffset] = useState(0); // giờ máy chủ - giờ máy này
+  const [computerClock, setComputerClock] = useState(null); // đồng hồ máy tính chạy web - giờ internet (null = chưa so được)
   const [lastScan, setLastScan] = useState(null);
   const [offline, setOffline] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -33,6 +35,7 @@ export default function KioskPage() {
       setName(j.name || '');
       setRefreshAt(Date.now() + (j.refreshInMs || 30000));
       if (j.serverTime) setOffset(Date.parse(j.serverTime) - Date.now());
+      setComputerClock(Number.isFinite(j.computerClockMs) ? j.computerClockMs : null);
       if (j.lastScan) setLastScan({ ...j.lastScan, shownAt: Date.now() });
       setState('ready');
     } catch {
@@ -73,9 +76,16 @@ export default function KioskPage() {
     <Screen>
       <div style={{ fontSize: 'clamp(2.2rem, 9vw, 4rem)', fontWeight: 800, letterSpacing: 2, fontVariantNumeric: 'tabular-nums' }}>{clock}</div>
       <div style={{ color: '#94a3b8', marginBottom: 18 }}>{day} · {name || 'Máy quầy'}</div>
-      {/* Giờ chấm công lấy theo đồng hồ máy chủ: lệch thì giờ vào / ra, trễ / sớm đều sai theo. */}
-      {Math.abs(offset) > 2 * 60000 && (
-        <div style={{ background: '#7c2d12', color: '#fed7aa', borderRadius: 10, padding: '8px 12px', margin: '-8px 0 14px', fontSize: '0.88rem', textAlign: 'center', maxWidth: 440, lineHeight: 1.5 }}>
+      {/* Chấm công đã theo giờ internet; máy tính chạy web lệch giờ thì nhắc chủ chỉnh (bill, báo cáo vẫn theo giờ máy). */}
+      {computerClock !== null && Math.abs(computerClock) > 2 * 60000 && (
+        <div style={warnBox}>
+          ⚠ Đồng hồ máy tính chạy web ở quán đang {computerClock < 0 ? 'chậm' : 'nhanh'} {Math.round(Math.abs(computerClock) / 60000)} phút.
+          Chấm công đã tự lấy giờ internet nên vẫn đúng; nên chỉnh lại giờ máy tính (bật &quot;Đặt giờ tự động&quot;) cho bill và báo cáo.
+        </div>
+      )}
+      {/* Chưa so được với internet: giờ máy chủ lệch điện thoại này nhiều thì giờ chấm công có thể sai. */}
+      {computerClock === null && Math.abs(offset) > 2 * 60000 && (
+        <div style={warnBox}>
           ⚠ Giờ máy chủ quán đang {offset < 0 ? 'chậm' : 'nhanh'} {Math.round(Math.abs(offset) / 60000)} phút so với điện thoại này.
           Chỉnh giờ máy tính chạy web ở quán (bật &quot;Đặt giờ tự động&quot;) để giờ chấm công đúng.
         </div>

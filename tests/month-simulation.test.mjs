@@ -60,6 +60,7 @@ function compile(file, state) {
     onKioskNetwork: (ip, k) => rules.onKioskNetwork(ip, k, env.now),
     rememberIp: (list, ip) => rules.rememberIp(list, ip, env.now),
     closeForgottenSessions: (db, r, id) => rules.closeForgottenSessions(db, r, id, env.now),
+    nowMs: () => env.now, refreshClock: async () => {}, clockStatus: () => ({ offsetMs: 0, synced: true, checkedAt: null, source: 'test' }),
     console: { error: (...a) => { if (process.env.SIM_DEBUG) console.error(...a); } }, process: { env: { SUPABASE_SERVICE_ROLE_KEY: SECRET } },
     getStaffSession: async () => (env.user ? { code: 200, user: env.user } : { code: 401 }),
     staffDatabase: () => fakeDb(state), statusDatabase: () => fakeDb(state),

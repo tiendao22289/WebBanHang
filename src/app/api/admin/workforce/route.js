@@ -31,6 +31,7 @@ import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, newDeviceId, readKioskQrToken, va
 import { AUTO_CLOSE_BY, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
 import { BONUS_MIN_DAYS, DEFAULT_OT_RATE, activeFineKinds, computeSalary, monthKey, monthTallies, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
+import { clockStatus, nowMs, refreshClock } from '@/lib/trueTime.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,7 +39,9 @@ const headers = { 'Cache-Control': 'private, no-store' };
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
 const MAX_MONEY = 1_000_000_000;
 const fail = (error, status = 400) => NextResponse.json({ error }, { status, headers });
-const vnNow = () => new Date(Date.now() + 7 * 3600000);
+// Mọi giờ chấm công / lương theo giờ internet (nowMs), không theo đồng hồ máy tính ở quán (có thể sai).
+const isoNow = () => new Date(nowMs()).toISOString();
+const vnNow = () => new Date(nowMs() + 7 * 3600000);
 const vnToday = () => vnNow().toISOString().slice(0, 10);
 const dayBefore = d => new Date(Date.parse(`${d}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
 const secret = () => process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -116,8 +119,8 @@ async function latestSession(db, staffId) {
 
 async function myStatus(db, staffId) {
   const settings = await readCheckinSettings(db);
-  await closeForgottenSessions(db, settings, staffId);
-  const since = new Date(Date.now() - 40 * 86400000).toISOString();
+  await closeForgottenSessions(db, settings, staffId, nowMs());
+  const since = new Date(nowMs() - 40 * 86400000).toISOString();
   const [last, today, fixes, autoClosed, reviews, leaveDays] = await Promise.all([
     latestSession(db, staffId),
     // "Hôm nay" là ngày làm đang diễn ra: lượt dọn quán sau nửa đêm vẫn thuộc ca hôm trước.
@@ -130,7 +133,7 @@ async function myStatus(db, staffId) {
   for (const r of [today, fixes, reviews, leaveDays]) if (r.error) throw r.error;
   // Giờ làm để tự tính trễ / ngoài ca; không cho nhân viên biết đang chạy thử hay chặn thật.
   const rules = { hours_from: settings.hours_from, hours: settings.hours, shifts: settings.shifts[staffId] ? { [staffId]: settings.shifts[staffId] } : {} };
-  const day = currentWorkDay(settings, staffId, Date.now());
+  const day = currentWorkDay(settings, staffId, nowMs());
   return { open: last && !last.clock_out ? last : null, sessions: (today.data || []).filter(x => workDayOf(x, settings) === day), fixes: fixes.data || [], auto_closed: autoClosed, reviews: reviews.data || [],
     leave_days: leaveDays.data || [], rules, ...await mySalary(db, staffId, settings, reviews.data || [], autoClosed) };
 }
@@ -234,7 +237,7 @@ async function payrollMonth(db, year, month) {
 
 // Ca 45 ngày gần đây có giờ ngoài ca (vào sớm / ở lại) mà chủ chưa duyệt.
 async function pendingExtras(db, rules, reviews) {
-  const since = new Date(Date.now() + 7 * 3600000 - 45 * 86400000).toISOString().slice(0, 10);
+  const since = new Date(nowMs() + 7 * 3600000 - 45 * 86400000).toISOString().slice(0, 10);
   const from = rules.hours_from > since ? rules.hours_from : since;
   if (from > vnToday()) return [];
   const { data, error } = await db.from('attendance_sessions').select('*').gte('date', from).order('clock_in');
@@ -248,13 +251,13 @@ async function pendingExtras(db, rules, reviews) {
 }
 
 async function checkinOverview(db) {
-  const since = new Date(Date.now() - 14 * 86400000).toISOString();
+  const since = new Date(nowMs() - 14 * 86400000).toISOString();
   const [settings, kiosks, devices, scans, fixes, reviews, departures] = await Promise.all([
     readCheckinSettings(db),
     db.from('checkin_kiosks').select('*').order('created_at', { ascending: false }),
     db.from('staff_checkin_devices').select('*'),
     db.from('checkin_scans').select('*').gte('created_at', since).order('created_at', { ascending: false }).limit(300),
-    db.from('attendance_fix_requests').select('*').gte('created_at', new Date(Date.now() - 45 * 86400000).toISOString()).order('created_at', { ascending: false }),
+    db.from('attendance_fix_requests').select('*').gte('created_at', new Date(nowMs() - 45 * 86400000).toISOString()).order('created_at', { ascending: false }),
     db.from('attendance_extra_reviews').select('*').order('decided_at', { ascending: false }).limit(5000),
     db.from('staff_departures').select('*'),
   ]);
@@ -265,11 +268,12 @@ async function checkinOverview(db) {
   if (error) throw error;
   return { settings, kiosks: kiosks.data || [], devices: devices.data || [], scans: scans.data || [], fixes: fixes.data || [], fixSessions: fixSessions || [],
     autoClosed: await autoClosedIds(db, { ids }), reviews: reviews.data || [], extras: await pendingExtras(db, settings, reviews.data || []),
-    departures: departures.data || [], now: new Date().toISOString() };
+    departures: departures.data || [], now: isoNow(), clock: clockStatus() };
 }
 
 export async function GET(request) {
   try {
+    await refreshClock();
     const s = await session(request);
     if (s.error) return s.error;
     const params = new URL(request.url).searchParams;
@@ -290,6 +294,7 @@ export async function GET(request) {
 
 export async function POST(request) {
   try {
+    await refreshClock();
     const body = await request.json().catch(() => ({}));
     if (body.action === 'hash_all_pins' && serverKeyOk(request)) {
       return NextResponse.json({ ok: true, hashed: await hashAllPins(staffDatabase(null)) }, { headers });
@@ -303,18 +308,18 @@ export async function POST(request) {
     if (body.action === 'clock') {
       // Nhân viên quét mã trên máy quầy; admin chấm không cần mã (ghi lại là admin tự chấm).
       const settings = await readCheckinSettings(db);
-      await closeForgottenSessions(db, settings, user.id);
+      await closeForgottenSessions(db, settings, user.id, nowMs());
       const device = deviceOf(request);
       const ip = clientIp(request.headers);
       const warnings = [];
       let qr = null;
       if (body.token || !isAdmin) {
-        qr = readKioskQrToken(body.token, secret());
+        qr = readKioskQrToken(body.token, secret(), nowMs());
         if (!qr) return fail('Mã QR đã hết hạn hoặc không đúng. Quét lại mã trên máy quầy.', 403);
         const { data: kiosk, error } = await db.from('checkin_kiosks').select('*').eq('id', qr.kioskId).maybeSingle();
         if (error) throw error;
         if (!kiosk || kiosk.revoked_at) return fail('Máy quầy này đã bị tắt. Quét mã trên máy quầy đang dùng.', 403);
-        if (!onKioskNetwork(ip, kiosk)) warnings.push('other_network');
+        if (!onKioskNetwork(ip, kiosk, nowMs())) warnings.push('other_network');
       } else warnings.push('admin_no_qr');
 
       let mine = null, holder = null;
@@ -329,7 +334,7 @@ export async function POST(request) {
         if (holder && holder.staff_id !== user.id) warnings.push('shared_device');
         else if (mine && mine.device_id !== device.id) warnings.push('unknown_device');
       }
-      const scan = { staff_id: user.id, kiosk_id: qr?.kioskId || null, nonce: qr?.nonce || null, warnings, enforced: settings.enforce, ip, device_id: device.id, user_agent: text(request.headers?.get?.('user-agent'), 200) };
+      const scan = { staff_id: user.id, kiosk_id: qr?.kioskId || null, nonce: qr?.nonce || null, warnings, enforced: settings.enforce, ip, device_id: device.id, created_at: isoNow(), user_agent: text(request.headers?.get?.('user-agent'), 200) };
 
       // Đang bật "chặn thật": khác wifi / máy lạ thì không cho chấm (admin vẫn được, chỉ ghi lại).
       const blocking = !isAdmin && settings.enforce ? warnings.find(w => BLOCK_MESSAGE[w]) : null;
@@ -342,13 +347,13 @@ export async function POST(request) {
       const last = await latestSession(db, user.id);
       const open = last && !last.clock_out ? last : null;
       const lastAt = open ? open.clock_in : last?.clock_out;
-      if (lastAt && Date.now() - Date.parse(lastAt) < MIN_TOGGLE_MS) {
+      if (lastAt && nowMs() - Date.parse(lastAt) < MIN_TOGGLE_MS) {
         return fail(`Bạn vừa ${open ? 'vào' : 'ra'} ca lúc ${hhmm(lastAt)}. Đợi 3 phút rồi quét lại nếu muốn ${open ? 'ra' : 'vào'} ca.`, 409);
       }
 
       // Mỗi mã chỉ dùng được một lần: hai người cùng dùng một mã thì người sau bị từ chối.
       if (qr) {
-        const claim = await db.from('checkin_nonces').insert({ nonce: qr.nonce, staff_id: user.id });
+        const claim = await db.from('checkin_nonces').insert({ nonce: qr.nonce, staff_id: user.id, used_at: isoNow() });
         if (claim.error) {
           if (claim.error.code === '23505') return fail('Mã này vừa có người dùng. Đợi mã mới trên máy quầy rồi quét lại.', 409);
           throw claim.error;
@@ -356,11 +361,11 @@ export async function POST(request) {
       }
       // Lần đầu chấm công: ghi điện thoại này là máy của người đó.
       if (!isAdmin && !mine && !holder) {
-        await db.from('staff_checkin_devices').insert({ staff_id: user.id, device_id: device.id, user_agent: scan.user_agent })
+        await db.from('staff_checkin_devices').insert({ staff_id: user.id, device_id: device.id, user_agent: scan.user_agent, created_at: isoNow() })
           .then(({ error: e }) => { if (e) console.error('[workforce] device bind', e); });
       }
 
-      const at = new Date().toISOString();
+      const at = isoNow();
       const result = open
         ? await db.from('attendance_sessions').update({ clock_out: at }).eq('id', open.id).select('*').single()
         : await db.from('attendance_sessions').insert({ staff_id: user.id, date: today, clock_in: at }).select('*').single();
@@ -389,10 +394,10 @@ export async function POST(request) {
       if (!clockIn && !clockOut) return fail('Chọn giờ vào hoặc giờ ra muốn sửa (khác giờ đang ghi).');
       const start = clockIn || new Date(att.clock_in), end = clockOut || (att.clock_out ? new Date(att.clock_out) : null);
       if (end && (end <= start || end - start > 20 * 3600000)) return fail('Giờ ra phải sau giờ vào và ca không quá 20 tiếng.');
-      if ((clockOut || clockIn) > new Date(Date.now() + 5 * 60000)) return fail('Không xin giờ ở tương lai.');
+      if ((clockOut || clockIn) > new Date(nowMs() + 5 * 60000)) return fail('Không xin giờ ở tương lai.');
       const { data: pending } = await db.from('attendance_fix_requests').select('id').eq('attendance_id', att.id).eq('status', 'pending').limit(1);
       if (pending?.length) return fail('Ca này đã có đơn xin sửa đang chờ chủ duyệt.', 409);
-      const r = await db.from('attendance_fix_requests').insert({ staff_id: user.id, attendance_id: att.id, clock_in: clockIn?.toISOString() || null, clock_out: clockOut?.toISOString() || null, reason, status: 'pending' });
+      const r = await db.from('attendance_fix_requests').insert({ staff_id: user.id, attendance_id: att.id, clock_in: clockIn?.toISOString() || null, clock_out: clockOut?.toISOString() || null, reason, status: 'pending', created_at: isoNow() });
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true }, { headers });
     }
@@ -422,12 +427,12 @@ export async function POST(request) {
       }
       // Bấm đúp / mạng chập chờn gửi lại: đơn giống hệt vừa gửi trong 30 giây thì coi như đã gửi, không tạo đơn thứ hai.
       const { data: recent, error: recentError } = await db.from('payroll_requests').select('*').eq('staff_id', user.id).eq('request_type', type)
-        .eq('status', 'pending').gte('created_at', new Date(Date.now() - 30000).toISOString());
+        .eq('status', 'pending').gte('created_at', new Date(nowMs() - 30000).toISOString());
       if (recentError) throw recentError;
       const same = x => x.reason === row.reason && Number(x.amount || 0) === Number(row.amount || 0) && Number(x.days || 0) === Number(row.days || 0)
         && x.month === row.month && x.year === row.year;
       if ((recent || []).some(same)) return NextResponse.json({ ok: true, duplicate: true }, { headers });
-      const r = await db.from('payroll_requests').insert(row).select('id').single();
+      const r = await db.from('payroll_requests').insert({ ...row, created_at: isoNow(), updated_at: isoNow() }).select('id').single();
       if (r.error) throw r.error;
       if (leave) {
         await db.from('payroll_leave_days').insert({ request_id: r.data.id, staff_id: user.id, ...leave })
@@ -471,7 +476,7 @@ export async function POST(request) {
         if (same) continue;
         if (f === 'note' && !('note' in orig)) continue;
         updates[f] = value;
-        logs.push({ attendance_id: orig.id, staff_id: orig.staff_id, field_name: f, old_value: String(orig[f] ?? ''), new_value: String(value ?? ''), changed_by: changedBy });
+        logs.push({ attendance_id: orig.id, staff_id: orig.staff_id, field_name: f, old_value: String(orig[f] ?? ''), new_value: String(value ?? ''), changed_by: changedBy, changed_at: isoNow() });
       }
       if (!logs.length) return 0;
       const r = await db.from('attendance_sessions').update(updates).eq('id', orig.id);
@@ -503,13 +508,13 @@ export async function POST(request) {
         const changed = await editAttendance(fix.attendance_id, fields, `${user.full_name || 'Admin'} (duyệt đơn xin sửa giờ)`);
         if (typeof changed !== 'number') return changed;
       }
-      const r = await db.from('attendance_fix_requests').update({ status: body.status, admin_note: text(body.admin_note), decided_by: user.full_name || null, decided_at: new Date().toISOString() }).eq('id', fix.id).eq('status', 'pending');
+      const r = await db.from('attendance_fix_requests').update({ status: body.status, admin_note: text(body.admin_note), decided_by: user.full_name || null, decided_at: isoNow() }).eq('id', fix.id).eq('status', 'pending');
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true }, { headers });
     }
 
     if (body.action === 'save_checkin_settings') {
-      const now = new Date().toISOString();
+      const now = isoNow();
       if ('enforce' in body) {
         const r = await db.from('checkin_settings').update({ enforce: body.enforce === true, updated_at: now }).eq('id', 1);
         if (r.error) throw r.error;
@@ -537,7 +542,7 @@ export async function POST(request) {
       // Ca riêng của một nhân viên từ hôm nay; clear = từ hôm nay quay về giờ quán. Ngày cũ giữ ca cũ.
       if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
       if (!body.clear && (!validTime(body.start_time) || !validTime(body.end_time) || body.start_time === body.end_time)) return fail('Giờ vào ca và hết ca dạng 14:00, và phải khác nhau.');
-      const row = { staff_id: body.staff_id, valid_from: today, start_time: body.clear ? null : body.start_time, end_time: body.clear ? null : body.end_time, updated_at: new Date().toISOString() };
+      const row = { staff_id: body.staff_id, valid_from: today, start_time: body.clear ? null : body.start_time, end_time: body.clear ? null : body.end_time, updated_at: isoNow() };
       const { data: old, error } = await db.from('staff_shifts').select('staff_id').eq('staff_id', body.staff_id).eq('valid_from', today).maybeSingle();
       if (error) throw error;
       const r = old ? await db.from('staff_shifts').update(row).eq('staff_id', body.staff_id).eq('valid_from', today) : await db.from('staff_shifts').insert(row);
@@ -552,7 +557,7 @@ export async function POST(request) {
       const only = UUID.test(body.staff_id || '') ? body.staff_id : null;
       if (body.action === 'mark_paid') {
         if (!only) return fail('Thiếu nhân viên.');
-        const r = await db.from('payroll_closes').update(body.paid === false ? { paid_at: null, paid_by: null } : { paid_at: new Date().toISOString(), paid_by: user.full_name || null })
+        const r = await db.from('payroll_closes').update(body.paid === false ? { paid_at: null, paid_by: null } : { paid_at: isoNow(), paid_by: user.full_name || null })
           .eq('year', year).eq('month', month).eq('staff_id', only).select('staff_id');
         if (r.error) throw r.error;
         if (!r.data?.length) return fail('Chốt lương người này trước rồi mới đánh dấu đã trả.', 409);
@@ -569,7 +574,7 @@ export async function POST(request) {
       // nguyên người đã chốt riêng trước đó; người nghỉ việc trước tháng này không tính.
       const m = await loadPayrollMonth(db, year, month);
       const closedIds = new Set(m.closes.map(c => c.staff_id));
-      const closedAt = new Date().toISOString();
+      const closedAt = isoNow();
       const rows = m.staff.filter(p => (only ? p.id === only : !closedIds.has(p.id))).map(p => {
         const departure = m.departures.find(d => d.staff_id === p.id);
         if (!activeInMonth(departure, monthKey(year, month))) return null;
@@ -604,7 +609,7 @@ export async function POST(request) {
       const { data: person, error } = await db.from('staff').select('id').eq('id', body.staff_id).maybeSingle();
       if (error) throw error;
       if (!person) return fail('Không tìm thấy nhân viên.', 404);
-      const row = { staff_id: body.staff_id, last_day: lastDay, reason: text(body.reason), decided_by: user.full_name || null };
+      const row = { staff_id: body.staff_id, last_day: lastDay, reason: text(body.reason), decided_by: user.full_name || null, created_at: isoNow() };
       const { data: old } = await db.from('staff_departures').select('staff_id').eq('staff_id', body.staff_id).maybeSingle();
       const r = old ? await db.from('staff_departures').update(row).eq('staff_id', body.staff_id) : await db.from('staff_departures').insert(row);
       if (r.error) throw r.error;
@@ -621,7 +626,7 @@ export async function POST(request) {
       if (!att || !att.clock_out) return fail('Không tìm thấy ca đã ra ca.', 404);
       const h = sessionHours(att, await readCheckinSettings(db));
       const row = { attendance_id: att.id, staff_id: att.staff_id, status: body.status, minutes: body.status === 'approved' ? Math.round((h.earlyMs + h.stayMs) / 60000) : 0,
-        decided_by: user.full_name || null, decided_at: new Date().toISOString() };
+        decided_by: user.full_name || null, decided_at: isoNow() };
       // Duyệt lại (lỡ bấm nhầm) thì ghi đè.
       const { data: old, error: e } = await db.from('attendance_extra_reviews').select('attendance_id').eq('attendance_id', att.id).maybeSingle();
       if (e) throw e;
@@ -632,7 +637,7 @@ export async function POST(request) {
 
     if (body.action === 'revoke_kiosk') {
       if (!UUID.test(body.id || '')) return fail('Thiếu máy quầy.');
-      const r = await db.from('checkin_kiosks').update({ revoked_at: new Date().toISOString() }).eq('id', body.id);
+      const r = await db.from('checkin_kiosks').update({ revoked_at: isoNow() }).eq('id', body.id);
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true }, { headers });
     }
@@ -647,7 +652,7 @@ export async function POST(request) {
 
     if (body.action === 'decide_request') {
       if (!UUID.test(body.id || '') || !['approved', 'rejected'].includes(body.status)) return fail('Yêu cầu không hợp lệ.');
-      const r = await db.from('payroll_requests').update({ status: body.status, admin_note: text(body.admin_note), updated_at: new Date().toISOString() }).eq('id', body.id);
+      const r = await db.from('payroll_requests').update({ status: body.status, admin_note: text(body.admin_note), updated_at: isoNow() }).eq('id', body.id);
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true }, { headers });
     }
@@ -667,10 +672,10 @@ export async function POST(request) {
         if (!reason) reason = rule.name;
       }
       if (!UUID.test(body.staff_id || '') || !amount || !reason || !(month >= 1 && month <= 12) || !(year >= 2024 && year <= 2100)) return fail('Vui lòng điền đầy đủ!');
-      const r = await db.from('payroll_violations').insert({ staff_id: body.staff_id, amount, reason, month, year }).select('id').single();
+      const r = await db.from('payroll_violations').insert({ staff_id: body.staff_id, amount, reason, month, year, created_at: isoNow() }).select('id').single();
       if (r.error) throw r.error;
       if (date) {
-        const meta = await db.from('payroll_violation_meta').insert({ violation_id: r.data.id, staff_id: body.staff_id, fine_date: date, rule_id: ruleId, recorded_by: user.full_name || null });
+        const meta = await db.from('payroll_violation_meta').insert({ violation_id: r.data.id, staff_id: body.staff_id, fine_date: date, rule_id: ruleId, recorded_by: user.full_name || null, created_at: isoNow() });
         if (meta.error) console.error('[workforce] fine meta', meta.error);
       }
       return NextResponse.json({ ok: true, id: r.data.id }, { headers });
@@ -694,7 +699,7 @@ export async function POST(request) {
       const ses = found.data;
       if (!ses) return fail('Không tìm thấy ca này.', 404);
       const day = workDayOf(ses, settings), by = user.full_name || null;
-      const claim = await db.from('payroll_fine_reviews').insert({ attendance_id: ses.id, kind, staff_id: ses.staff_id, work_day: day, status, decided_by: by, decided_at: new Date().toISOString() });
+      const claim = await db.from('payroll_fine_reviews').insert({ attendance_id: ses.id, kind, staff_id: ses.staff_id, work_day: day, status, decided_by: by, decided_at: isoNow() });
       if (claim.error) {
         if (claim.error.code === '23505') return fail('Gợi ý này đã được xử lý rồi.', 409);
         throw claim.error;
@@ -702,14 +707,14 @@ export async function POST(request) {
       if (status === 'skipped') return NextResponse.json({ ok: true }, { headers });
       const rule = ruleRow.data;
       const reason = text(body.reason, 200) || `${rule?.name || (kind === 'late' ? 'Đi trễ' : 'Quên bấm ra ca')} (${ddmm(day)})`;
-      const v = await db.from('payroll_violations').insert({ staff_id: ses.staff_id, amount, reason, month: Number(day.slice(5, 7)), year: Number(day.slice(0, 4)) }).select('id').single();
+      const v = await db.from('payroll_violations').insert({ staff_id: ses.staff_id, amount, reason, month: Number(day.slice(5, 7)), year: Number(day.slice(0, 4)), created_at: isoNow() }).select('id').single();
       if (v.error) {
         await db.from('payroll_fine_reviews').delete().eq('attendance_id', ses.id).eq('kind', kind);
         throw v.error;
       }
       const links = await Promise.all([
         db.from('payroll_fine_reviews').update({ violation_id: v.data.id }).eq('attendance_id', ses.id).eq('kind', kind),
-        db.from('payroll_violation_meta').insert({ violation_id: v.data.id, staff_id: ses.staff_id, fine_date: day, rule_id: rule?.id || null, attendance_id: ses.id, kind, recorded_by: by }),
+        db.from('payroll_violation_meta').insert({ violation_id: v.data.id, staff_id: ses.staff_id, fine_date: day, rule_id: rule?.id || null, attendance_id: ses.id, kind, recorded_by: by, created_at: isoNow() }),
       ]);
       for (const x of links) if (x.error) console.error('[workforce] fine links', x.error);
       return NextResponse.json({ ok: true, id: v.data.id }, { headers });
@@ -742,7 +747,7 @@ export async function POST(request) {
       const name = text(body.name, 80);
       const amount = money(String(body.amount ?? '').trim() === '' ? 0 : body.amount);
       if (!name || amount === null) return fail('Nhập tên lỗi và số tiền (để 0 nếu muốn điền mỗi lần).');
-      const payload = { name, amount, active: body.active !== false, updated_at: new Date().toISOString() };
+      const payload = { name, amount, active: body.active !== false, updated_at: isoNow() };
       const r = UUID.test(body.id || '')
         ? await db.from('payroll_fine_rules').update(payload).eq('id', body.id).select('id')
         : await db.from('payroll_fine_rules').insert({ ...payload, sort: 100 }).select('id');
@@ -756,7 +761,7 @@ export async function POST(request) {
       const amount = money(body.bonus_amount);
       const minDays = Math.round(Number(String(body.bonus_min_days ?? '').replace(',', '.')) * 10) / 10;
       if (amount === null || String(body.bonus_min_days ?? '').trim() === '' || !(minDays >= 0 && minDays <= 31)) return fail('Mức thưởng hoặc số ngày công không hợp lệ.');
-      const row = { bonus_amount: amount, bonus_min_days: minDays, updated_by: user.full_name || null, updated_at: new Date().toISOString() };
+      const row = { bonus_amount: amount, bonus_min_days: minDays, updated_by: user.full_name || null, updated_at: isoNow() };
       const up = await db.from('payroll_settings').update(row).eq('id', 1).select('id');
       if (up.error) throw up.error;
       if (!up.data?.length) {
@@ -779,7 +784,7 @@ export async function POST(request) {
       if (!monthOver(year, month)) return fail('Hết tháng mới duyệt thưởng chuyên cần được.');
       const amount = money(body.amount);
       if (!amount) return fail('Nhập số tiền thưởng.');
-      const row = { amount, note: text(body.note, 200) || null, decided_by: user.full_name || null, decided_at: new Date().toISOString() };
+      const row = { amount, note: text(body.note, 200) || null, decided_by: user.full_name || null, decided_at: isoNow() };
       const update = () => mine(db.from('payroll_bonuses').update(row)).select('staff_id');
       let up = await update();
       if (up.error) throw up.error;
@@ -798,7 +803,7 @@ export async function POST(request) {
       // Giá tăng ca để 0 được (không trả tăng ca); bỏ trống / sai thì 25.000đ.
       const otRate = money(body.overtime_rate);
       const payload = { staff_id: body.staff_id, base_salary: money(body.base_salary) || 0, overtime_rate: otRate === null || String(body.overtime_rate ?? '').trim() === '' ? DEFAULT_OT_RATE : otRate,
-        pay_day: Math.min(31, Math.max(1, Math.round(Number(body.pay_day) || 5))), updated_at: new Date().toISOString() };
+        pay_day: Math.min(31, Math.max(1, Math.round(Number(body.pay_day) || 5))), updated_at: isoNow() };
       const { data: existing, error } = await db.from('payroll_config').select('id').eq('staff_id', body.staff_id).maybeSingle();
       if (error) throw error;
       const r = existing ? await db.from('payroll_config').update(payload).eq('staff_id', body.staff_id) : await db.from('payroll_config').insert(payload);
