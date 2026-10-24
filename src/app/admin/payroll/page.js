@@ -6,6 +6,7 @@ import { workforce } from '@/lib/staffApi';
 import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, workDayOf } from '@/lib/attendanceRules.mjs';
 import { LATE_FINE_MINUTES, STANDARD_DAYS, bonusCheck, computeSalary, fineSuggestions, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
+import QrClockScanner from '@/components/QrClockScanner';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users, RefreshCw } from 'lucide-react';
 import './payroll.css';
 
@@ -219,6 +220,15 @@ export default function PayrollPage() {
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Quét mã chấm công ngay trong app (nút ở đây hoặc trên thanh menu): xong thì tải lại giờ công hôm nay.
+  const [scanOpen, setScanOpen] = useState(false);
+  useEffect(() => {
+    const refresh = () => { if (currentUser && currentUser.role !== 'admin') fetchStaffData(currentUser.id); };
+    window.addEventListener('staff-clocked', refresh);
+    return () => window.removeEventListener('staff-clocked', refresh);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser]);
 
   // Staff self-service state
   const [todaySessions, setTodaySessions]  = useState([]);
@@ -633,6 +643,7 @@ export default function PayrollPage() {
     const fmtTime = (iso) => iso ? new Date(iso).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : null;
     return (
       <div className="payroll-page">
+        {scanOpen && <QrClockScanner onClose={() => setScanOpen(false)} />}
         {notice && (
           <div role="status" onClick={() => setNotice(null)}
             style={{ position: 'fixed', left: 16, right: 16, bottom: 96, zIndex: 60, maxWidth: 480, margin: '0 auto', background: notice.ok ? '#15803d' : '#b91c1c', color: 'white', borderRadius: 12, padding: '12px 16px', fontSize: '0.88rem', fontWeight: 600, boxShadow: '0 8px 24px rgba(0,0,0,0.2)', textAlign: 'center' }}>
@@ -796,8 +807,12 @@ export default function PayrollPage() {
                   {isWorking && !todaySessions.some(s => s.id === openSession.id) && (
                     <div style={{ fontSize: '0.8rem', color: '#15803d', marginBottom: 8 }}>🟢 Ca bắt đầu hôm qua lúc {fmtTime(openSession.clock_in)} vẫn đang mở.</div>
                   )}
+                  <button onClick={() => setScanOpen(true)}
+                    style={{ width: '100%', padding: '14px', marginBottom: 10, borderRadius: 12, border: 'none', background: isWorking ? '#dc2626' : '#16a34a', color: 'white', fontWeight: 800, fontSize: '1.02rem', cursor: 'pointer' }}>
+                    📷 Quét mã chấm công — {isWorking ? 'ra ca' : 'vào ca'}
+                  </button>
                   <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '12px 14px', fontSize: '0.85rem', color: '#1e3a8a', lineHeight: 1.6 }}>
-                    📶 Vào <strong>wifi quán</strong> → 📷 mở <strong>camera điện thoại</strong> → quét mã QR trên <strong>máy quầy</strong> để {isWorking ? 'ra ca' : 'vào ca'}.
+                    📶 Vào <strong>wifi quán</strong> → bấm nút trên rồi đưa camera vào mã QR trên <strong>máy quầy</strong>. Dùng app Camera của điện thoại quét cũng được.
                     {myShift && (
                       <div style={{ marginTop: 6 }}>🕑 Ca của bạn: <strong>{myShift.start} – {myShift.end}</strong> (cho lệch {hoursOn(myRules, vnToday()).grace} phút). Vào sớm / ở lại ngoài ca chỉ được tính khi chủ quán đồng ý.</div>
                     )}
@@ -1806,7 +1821,7 @@ export default function PayrollPage() {
                   <div style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.7, marginBottom: 10 }}>
                     1️⃣ Lấy một điện thoại / máy tính bảng để cố định ở quầy, cắm sạc, cho vào <strong>wifi quán</strong>.<br />
                     2️⃣ Trên máy đó mở <strong>{typeof window !== 'undefined' ? window.location.host : 'ocbaokhang.online'}/chamcong</strong>, đăng nhập admin để bật. Xong máy tự đăng xuất admin.<br />
-                    3️⃣ Nhân viên vào wifi quán, mở camera điện thoại quét mã trên máy quầy.
+                    3️⃣ Nhân viên vào wifi quán, mở app bấm nút 📷 xanh trên thanh menu (hoặc mở camera điện thoại) quét mã trên máy quầy.
                   </div>
                   {kiosks.length === 0 && <div style={{ fontSize: '0.84rem', color: '#b45309', fontWeight: 600 }}>Chưa có máy quầy nào — nhân viên chưa chấm công được.</div>}
                   {kiosks.map(k => {

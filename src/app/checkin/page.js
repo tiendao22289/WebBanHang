@@ -2,65 +2,14 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { workforce } from '@/lib/staffApi';
-import { dayFlags, durationText, shiftOf, workDayOf } from '@/lib/attendanceRules.mjs';
+import { shiftOf } from '@/lib/attendanceRules.mjs';
+import { STAFF_WARNING_TEXT as WARNING_TEXT, clockSummary, clockTime as formatTime, hoursText, punctuality, sumHours, tokenFresh } from '@/lib/clockMessages.mjs';
 import { Suspense } from 'react';
-
-// Mã QR trên máy quầy có dạng "<giờ tạo>.<máy quầy>.<số riêng>.<chữ ký>". Ở đây
-// chỉ xem mã còn mới không (2 phút); máy chủ mới là nơi kiểm chữ ký, wifi, điện thoại.
-const MAX_AGE_MS = 2 * 60 * 1000;
-function tokenFresh(token) {
-  const parts = String(token || '').split('.');
-  if (parts.length !== 4) return false;
-  const issued = parseInt(parts[0], 36) * 1000;
-  return Number.isFinite(issued) && Date.now() - issued < MAX_AGE_MS + 60000;
-}
 
 // Trình duyệt trong Zalo / Facebook giữ cookie riêng → máy chủ tưởng là điện thoại khác.
 const inAppBrowser = () => typeof navigator !== 'undefined' && /Zalo|FBAN|FBAV|Instagram|Messenger/i.test(navigator.userAgent);
 
-// Sum hours of all closed sessions for today
-function sumHours(sessions) {
-  return sessions.reduce((acc, s) => {
-    if (s.clock_out) {
-      const h = (new Date(s.clock_out) - new Date(s.clock_in)) / 3600000;
-      return acc + Math.round(h * 10) / 10;
-    }
-    return acc;
-  }, 0);
-}
-
-// "2,6 giờ" (dấu phẩy như cách viết số ở Việt Nam).
-const hoursText = h => `${String(Math.round(h * 10) / 10).replace('.', ',')} giờ`;
-
-function formatTime(ts) {
-  if (!ts) return '—';
-  const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-}
-
-const WARNING_TEXT = {
-  other_network: 'Lần này điện thoại không dùng wifi quán.',
-  unknown_device: 'Lần này bạn chấm bằng điện thoại khác máy đã đăng ký.',
-  shared_device: 'Điện thoại này đã đăng ký chấm công cho người khác.',
-};
-
 const vnDate = () => new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
-
-// Đúng giờ / trễ / sớm so với ca của người đó, báo ngay sau khi quét (chỉ từ ngày tính giờ theo ca).
-function punctuality(clocked, session, sessions, rules, staffId) {
-  if (!rules || !session || !(String(session.date) >= rules.hours_from)) return '';
-  const day = sessions.some(s => s.id === session.id) ? sessions : [session];
-  // Ca của ngày làm: vào lại sau nửa đêm để dọn quán vẫn so với ca hôm trước.
-  const f = dayFlags(day, rules), shift = shiftOf(rules, staffId, workDayOf(session, rules));
-  if (clocked === 'in') {
-    if (f.late) return `⏰ Trễ ${durationText(f.late)} so với ca ${shift.start}.`;
-    if (f.early) return `🌅 Vào sớm ${durationText(f.early)}: giờ trước ${shift.start} chỉ được tính khi chủ quán đồng ý.`;
-    return `✅ Đúng giờ (ca ${shift.start} – ${shift.end}).`;
-  }
-  if (f.leftEarly) return `⏰ Về sớm ${durationText(f.leftEarly)} so với giờ hết ca ${shift.end}.`;
-  if (f.stayed) return `🌙 Ở lại ${durationText(f.stayed)} sau ca: giờ này chờ chủ quán duyệt mới được tính.`;
-  return '✅ Ra ca đúng giờ.';
-}
 
 function CheckinContent() {
   const params = useSearchParams();
@@ -138,19 +87,9 @@ function CheckinContent() {
     const allSessions = result.sessions || [];
     setTodaySessions(allSessions);
     setOpenSession(result.clocked === 'in' ? result.session : null);
-    let resultMsg = '';
-    if (result.clocked === 'out') {
-      const clockOut = new Date(result.at);
-      const durH = Math.round(((clockOut - new Date(result.session.clock_in)) / 3600000) * 10) / 10;
-      resultMsg = `🔴 Ra ca lúc ${formatTime(clockOut)} · Ca này: ${hoursText(durH)}
-✅ Tổng hôm nay: ${hoursText(sumHours(allSessions))}`;
-    } else {
-      resultMsg = `🟢 Vào ca lúc ${formatTime(new Date(result.at))}
-⏱ Tổng tích luỹ hôm nay: ${hoursText(sumHours(allSessions))}`;
-    }
     setOnTime(punctuality(result.clocked, result.session, allSessions, rules, staff.id));
     setWarn((result.warnings || []).map(w => WARNING_TEXT[w]).filter(Boolean).join(' '));
-    setMsg(resultMsg);
+    setMsg(clockSummary(result));
     setPhase('done');
     setLoading(false);
   };
@@ -170,7 +109,7 @@ function CheckinContent() {
         <div style={{ fontSize: '0.78rem', color: '#9ca3af', marginBottom: 20 }}>{timeStr} — {today}</div>
         {inApp && phase !== 'invalid' && (
           <div style={{ background: '#fef3c7', color: '#92400e', borderRadius: 10, padding: '8px 12px', fontSize: '0.8rem', marginBottom: 14, textAlign: 'left' }}>
-            ⚠ Bạn đang mở trong Zalo / Facebook. Lần sau hãy quét mã bằng <strong>camera điện thoại</strong> để máy nhận đúng điện thoại của bạn.
+            ⚠ Bạn đang mở trong Zalo / Facebook. Lần sau hãy quét bằng nút <strong>📷 quét mã</strong> trong app nhân viên (hoặc camera điện thoại) để máy nhận đúng điện thoại của bạn.
           </div>
         )}
         {content}
