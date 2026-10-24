@@ -224,153 +224,115 @@ export default function QrGeneratorPage() {
     });
   };
 
+  // Gọn cho điện thoại: lúc chờ khách chuyển thì ẩn ô nhập (không dùng được), mã QR + số tiền +
+  // 2 nút nằm trọn một màn hình phía trên thanh menu; thanh toán xong chỉ còn một dòng báo.
+  const waiting = paymentStatus === 'pending' && activeQr;
+  const paid = paymentStatus === 'completed' && activeQr;
+  const formOff = isGenerating || !amount || waiting;
+  const actionButton = (on, color) => ({
+    flex: 1, background: on ? color : '#cbd5e1', color: 'white', border: 'none', borderRadius: 12, padding: '13px 8px',
+    fontSize: '0.98rem', fontWeight: 700, cursor: on ? 'pointer' : 'not-allowed',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap',
+  });
+
   return (
-    <div className="page-content" style={{ background: '#f8fafc', minHeight: '100vh', padding: '20px' }}>
-      <div style={{ maxWidth: 500, margin: '0 auto' }}>
-        
-        <div style={{ background: 'white', borderRadius: 24, padding: 24, boxShadow: '0 10px 40px rgba(0,0,0,0.05)', border: '1px solid #e2e8f0' }}>
-          
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24, borderBottom: '1px solid #f1f5f9', paddingBottom: 16 }}>
-            <div style={{ background: '#eff6ff', padding: 10, borderRadius: 12, color: '#2563eb' }}>
-              <QrCode size={28} />
+    <div className="page-content" style={{ background: '#f8fafc', padding: 12 }}>
+      <div style={{ maxWidth: 460, margin: '0 auto' }}>
+
+        <div style={{ background: 'white', borderRadius: 20, padding: 14, boxShadow: '0 10px 40px rgba(0,0,0,0.05)', border: '1px solid #e2e8f0' }}>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <div style={{ background: '#eff6ff', padding: 7, borderRadius: 10, color: '#2563eb', display: 'flex' }}>
+              <QrCode size={20} />
             </div>
-            <div style={{ flex: 1 }}>
-              <h2 style={{ margin: 0, fontSize: '1.3rem', fontWeight: 800, color: '#0f172a' }}>Tạo mã QR Tùy chỉnh</h2>
-              <p style={{ margin: '4px 0 0', fontSize: '0.85rem', color: '#64748b' }}>
-                {qrAccount
-                  ? `Tài khoản: ${qrAccount.bank_name} - ${qrAccount.account_number}`
-                  : 'Nhập số tiền để sinh mã QR thanh toán nhanh'}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <h2 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: '#0f172a' }}>Tạo mã QR tuỳ chỉnh</h2>
+              <p style={{ margin: '1px 0 0', fontSize: '0.78rem', color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {qrAccount ? `${qrAccount.bank_name} · ${qrAccount.account_number}` : 'Nhập số tiền để tạo mã QR'}
               </p>
             </div>
             <button
               onClick={() => router.push('/admin/tables')}
-              style={{ background: '#f1f5f9', border: 'none', borderRadius: '50%', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#64748b', transition: 'background 0.2s', flexShrink: 0 }}
-              onMouseOver={(e) => e.currentTarget.style.background = '#e2e8f0'}
-              onMouseOut={(e) => e.currentTarget.style.background = '#f1f5f9'}
+              style={{ background: '#f1f5f9', border: 'none', borderRadius: '50%', width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#64748b', flexShrink: 0 }}
               title="Đóng"
             >
-              <X size={20} strokeWidth={2.5} />
+              <X size={18} strokeWidth={2.5} />
             </button>
           </div>
 
-          {/* Form */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 24 }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, color: '#334155', marginBottom: 6 }}>
-                Số tiền cần thu (VNĐ)
-              </label>
+          {!waiting && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {paid && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', borderRadius: 12, padding: '10px 12px', fontWeight: 700 }}>
+                  <CheckCircle2 size={20} style={{ flexShrink: 0 }} />
+                  <span>Đã nhận {activeQr.amount.toLocaleString('vi-VN')}đ · mã {activeQr.code}</span>
+                </div>
+              )}
               <input
                 type="text"
+                inputMode="numeric"
                 value={amount}
                 onChange={handleAmountChange}
-                disabled={paymentStatus === 'pending'}
-                placeholder="Ví dụ: 100,000"
+                placeholder="Số tiền cần thu, vd 100.000"
+                aria-label="Số tiền cần thu (VNĐ)"
                 style={{
-                  width: '100%', padding: '14px 16px', borderRadius: 12, border: '1.5px solid #cbd5e1',
-                  fontSize: '1.2rem', fontWeight: 700, color: '#0f172a', boxSizing: 'border-box',
-                  outline: 'none', transition: 'border-color 0.2s', opacity: paymentStatus === 'pending' ? 0.6 : 1
+                  width: '100%', padding: '12px 14px', borderRadius: 12, border: '1.5px solid #cbd5e1',
+                  fontSize: '1.15rem', fontWeight: 700, color: '#0f172a', boxSizing: 'border-box', outline: 'none',
                 }}
                 onFocus={e => e.target.style.borderColor = '#3b82f6'}
                 onBlur={e => e.target.style.borderColor = '#cbd5e1'}
               />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={handleGenerateQR} disabled={formOff} style={actionButton(!formOff, '#2563eb')}>
+                  {isGenerating ? <RefreshCw className="animate-spin" size={18} /> : <QrCode size={18} />}
+                  Tạo mã QR
+                </button>
+                <button onClick={handleCashPayment} disabled={formOff} style={actionButton(!formOff, '#16a34a')}>
+                  <Banknote size={18} />
+                  Nhận tiền mặt
+                </button>
+              </div>
             </div>
-            
-            <button
-              onClick={handleGenerateQR}
-              disabled={isGenerating || !amount || paymentStatus === 'pending'}
-              style={{
-                background: isGenerating || !amount || paymentStatus === 'pending' ? '#94a3b8' : '#2563eb',
-                color: 'white', border: 'none', borderRadius: 12, padding: '14px',
-                fontSize: '1rem', fontWeight: 700, cursor: isGenerating || !amount || paymentStatus === 'pending' ? 'not-allowed' : 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                transition: 'background 0.2s'
-              }}
-            >
-              {isGenerating ? <RefreshCw className="animate-spin" size={20} /> : <QrCode size={20} />}
-              Tạo mã QR
-            </button>
-            
-            <button
-              onClick={handleCashPayment}
-              disabled={isGenerating || !amount || paymentStatus === 'pending'}
-              style={{
-                background: isGenerating || !amount || paymentStatus === 'pending' ? '#cbd5e1' : '#16a34a',
-                color: 'white', border: 'none', borderRadius: 12, padding: '14px',
-                fontSize: '1rem', fontWeight: 700, cursor: isGenerating || !amount || paymentStatus === 'pending' ? 'not-allowed' : 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                transition: 'background 0.2s', marginTop: -6
-              }}
-            >
-              <Banknote size={20} />
-              Nhận tiền mặt (chụp bill)
-            </button>
-          </div>
+          )}
 
-          {/* QR Display */}
-          {paymentStatus !== 'idle' && activeQr && (
-            <div style={{ background: '#f8fafc', borderRadius: 16, padding: 20, border: '1px solid #e2e8f0', textAlign: 'center', animation: 'fadeIn 0.3s ease' }}>
-              
-              <div style={{ background: 'white', borderRadius: 12, padding: 12, display: 'inline-block', border: '1px solid #cbd5e1', marginBottom: 16 }}>
-                <img
-                  src={buildQrUrl(activeQr.account, activeQr.amount, activeQr.code)}
-                  alt="QR Code"
-                  style={{ width: 220, height: 220, display: 'block', objectFit: 'contain' }}
-                />
+          {waiting && (
+            <div style={{ textAlign: 'center', animation: 'fadeIn 0.3s ease' }}>
+              <img
+                src={buildQrUrl(activeQr.account, activeQr.amount, activeQr.code)}
+                alt="QR Code"
+                style={{ width: 'min(200px, 52vw)', aspectRatio: '1', display: 'block', margin: '0 auto', objectFit: 'contain', border: '1px solid #e2e8f0', borderRadius: 12, padding: 6, background: 'white' }}
+              />
+              <div style={{ marginTop: 8, color: '#b91c1c', fontSize: '1.45rem', fontWeight: 900, lineHeight: 1.2 }}>
+                {activeQr.amount.toLocaleString('vi-VN')}đ
               </div>
-
-              <div style={{ marginBottom: 16, color: '#b91c1c', fontSize: '1.35rem', fontWeight: 900 }}>
-                Khách chuyển: {activeQr.amount.toLocaleString('vi-VN')}đ
-              </div>
-
-              <div style={{ marginBottom: 16, background: 'white', padding: 12, borderRadius: 12, border: '1px dashed #cbd5e1' }}>
-                <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#0f172a' }}>{activeQr.account.bank_name}</div>
-                <div style={{ fontSize: '1.4rem', letterSpacing: 1.5, fontWeight: 900, color: '#1d4ed8', marginTop: 4 }}>
-                  {activeQr.account.account_number}
+              <div style={{ marginTop: 6, background: '#f8fafc', borderRadius: 12, border: '1px dashed #cbd5e1', padding: '8px 10px' }}>
+                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#1d4ed8', letterSpacing: 1 }}>
+                  {activeQr.account.bank_name} · {activeQr.account.account_number}
                 </div>
-                <div style={{ fontSize: '0.9rem', color: '#475569', marginTop: 4, textTransform: 'uppercase', fontWeight: 700 }}>
-                  {activeQr.account.account_name}
+                <div style={{ fontSize: '0.78rem', color: '#475569', textTransform: 'uppercase', fontWeight: 700 }}>{activeQr.account.account_name}</div>
+                <div style={{ marginTop: 4, fontSize: '0.85rem', color: '#64748b' }}>
+                  Nội dung CK: <b style={{ fontSize: '1.05rem', color: '#0f172a', letterSpacing: 2 }}>{transactionCode}</b>
                 </div>
               </div>
-
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: 4 }}>Nội dung chuyển khoản (Tự động):</div>
-                <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#0f172a', letterSpacing: 2, background: '#e2e8f0', display: 'inline-block', padding: '4px 12px', borderRadius: 8 }}>
-                  {transactionCode}
-                </div>
+              <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, color: '#d97706', fontWeight: 600, fontSize: '0.9rem' }}>
+                <RefreshCw className="animate-spin" size={15} />
+                Đang chờ khách chuyển khoản...
               </div>
-
-              {/* Status Indicator */}
-              <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px dashed #cbd5e1' }}>
-                {paymentStatus === 'pending' ? (
-                  <>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#d97706', fontWeight: 600 }}>
-                      <RefreshCw className="animate-spin" size={18} />
-                      Đang chờ khách thanh toán...
-                    </div>
-                    <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-                      <button
-                        onClick={handleCancel}
-                        style={{ flex: 1, background: '#fff1f2', color: '#dc2626', border: '1px solid #fecdd3', padding: '12px', borderRadius: 12, fontWeight: 700, cursor: 'pointer', transition: 'background 0.2s' }}
-                      >
-                        Hủy mã
-                      </button>
-                      <button
-                        onClick={handleConfirmManual}
-                        disabled={saving}
-                        style={{ flex: 2, background: '#16a34a', color: 'white', border: 'none', padding: '12px', borderRadius: 12, fontWeight: 700, cursor: 'pointer', transition: 'background 0.2s' }}
-                      >
-                        📷 Xác nhận đã nhận tiền
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#16a34a', fontWeight: 700, fontSize: '1.1rem' }}>
-                    <CheckCircle2 size={24} />
-                    Thanh toán thành công!
-                  </div>
-                )}
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <button
+                  onClick={handleCancel}
+                  style={{ flex: 1, background: '#fff1f2', color: '#dc2626', border: '1px solid #fecdd3', padding: '13px 8px', borderRadius: 12, fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Hủy mã
+                </button>
+                <button
+                  onClick={handleConfirmManual}
+                  disabled={saving}
+                  style={{ flex: 2, background: '#16a34a', color: 'white', border: 'none', padding: '13px 8px', borderRadius: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                >
+                  📷 Xác nhận đã nhận tiền
+                </button>
               </div>
-
             </div>
           )}
 
