@@ -4,6 +4,10 @@
 import { RECEIPT_BUCKET, RECEIPT_IMAGE_DAYS, RECEIPT_IMAGE_MAX_BYTES } from './ownerFinance.mjs';
 
 const TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+// Đường dẫn do uploadReceiptImage đặt: YYYY-MM/<loại>-<uuid>.<đuôi>
+const RECEIPT_PATH = /^\d{4}-\d{2}\/[a-z]+-[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\.(jpg|png|webp)$/;
+const SIGN_TOKEN = /^[\w-]+\.[\w-]+\.[\w-]+$/;
+export const RECEIPT_IMAGE_ROUTE = '/api/admin/receipts/image';
 let bucketReady = false;
 
 export async function ensureReceiptBucket(db) {
@@ -44,13 +48,32 @@ export async function removeReceiptImages(db, paths) {
   if (error) console.error('[receipt images] remove', error);
 }
 
-/** { path: signedUrl } cho các ảnh còn giữ. */
+/**
+ * Link ký của Supabase mang địa chỉ nội bộ của máy quán (prod: http://localhost:8000)
+ * — điện thoại mở ocbaokhang.online không vào được, ảnh trắng. Nên trả link cùng tên
+ * miền với web: RECEIPT_IMAGE_ROUTE lấy hộ ảnh từ Supabase. Mã ký giữ nguyên (1 ảnh, 1 giờ).
+ */
+export function receiptImageLink(path, signedUrl) {
+  let token = null;
+  try { token = new URL(signedUrl).searchParams.get('token'); } catch {}
+  if (!RECEIPT_PATH.test(path || '') || !SIGN_TOKEN.test(token || '')) return null;
+  return `${RECEIPT_IMAGE_ROUTE}?p=${encodeURIComponent(path)}&token=${token}`;
+}
+
+/** Địa chỉ ảnh trong Supabase cho RECEIPT_IMAGE_ROUTE; null nếu đường dẫn / mã ký lạ. */
+export function receiptImageSource(path, token, supabaseUrl) {
+  if (!RECEIPT_PATH.test(path || '') || !SIGN_TOKEN.test(token || '') || !supabaseUrl) return null;
+  return `${supabaseUrl.replace(/\/+$/, '')}/storage/v1/object/sign/${RECEIPT_BUCKET}/${path}?token=${token}`;
+}
+
+/** { path: link xem ảnh } cho các ảnh còn giữ. */
 export async function signReceiptImages(db, paths) {
   const list = [...new Set(paths.filter(Boolean))];
   if (!list.length) return {};
   const { data, error } = await db.storage.from(RECEIPT_BUCKET).createSignedUrls(list, 3600);
   if (error) { console.error('[receipt images] sign', error); return {}; }
-  return Object.fromEntries((data || []).filter(d => d.signedUrl && !d.error).map(d => [d.path, d.signedUrl]));
+  return Object.fromEntries((data || []).filter(d => d.signedUrl && !d.error)
+    .map(d => [d.path, receiptImageLink(d.path, d.signedUrl)]).filter(([, link]) => link));
 }
 
 /**
