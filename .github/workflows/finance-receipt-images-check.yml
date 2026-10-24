@@ -1,0 +1,21 @@
+name: Finance Receipt Images Check
+# Chạy tay: ảnh bill giấy / ảnh CK trên DB thật còn file không, và mở thử 1 ảnh qua web (chỉ đọc, không in tên / SĐT khách).
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    if: github.ref == 'refs/heads/master' && github.repository == 'tiendao22289/WebBanHang'
+    runs-on: [self-hosted, Windows, X64, webbanhang-production]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Check receipt photos
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+        run: |
+          & node scripts/finance-receipt-images-check.cjs 'C:\Tool\SupabaseLocal\production.env'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
