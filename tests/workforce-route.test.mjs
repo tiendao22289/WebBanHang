@@ -527,3 +527,40 @@ test('a slow shop computer clock does not move clock-in times: the internet time
   const late = await scan(load(state, LAN, { now: computer, internetAhead: internet - computer }), token.kioskQrToken(SECRET, KIOSK, computer));
   assert.equal(late.status, 403);
 });
+
+test('staying to clean until 01:30 and scanning out closes the shift, it does not open a new one', async () => {
+  const day = '2026-11-10', open = { id: '00000000-0000-4000-8000-000000000201', staff_id: STAFF.id, date: day, clock_in: '2026-11-10T07:00:00.000Z', clock_out: null };
+  const at = Date.parse('2026-11-10T18:30:00.000Z'); // 01:30 ngày 11/11
+  const state = shop({ ...{ checkin_settings: [{ id: 1, enforce: false, hours_from: '2026-10-25' }], checkin_hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }] },
+    attendance_sessions: [open], checkin_kiosks: [{ id: KIOSK, name: 'Quầy', revoked_at: null, recent_ips: [{ ip: SHOP_IP, at: new Date(at).toISOString() }] }] });
+  const out = await scan(load(state, STAFF, { now: at }), token.kioskQrToken(SECRET, KIOSK, at));
+  assert.deepEqual([out.status, out.body.clocked], [200, 'out']);
+  assert.equal(state.attendance_sessions.length, 1);
+  assert.equal(state.attendance_sessions[0].clock_out, new Date(at).toISOString(), 'left at 01:30 (2h30 outside time for the owner to approve)');
+  assert.equal(state.attendance_changes.length, 0, 'not marked as a forgotten clock-out');
+  // Hôm sau 14:00 quét → vào ca mới.
+  const next = Date.parse('2026-11-11T07:00:00.000Z');
+  state.checkin_kiosks[0].recent_ips = [{ ip: SHOP_IP, at: new Date(next).toISOString() }];
+  const back = await scan(load(state, STAFF, { now: next }), token.kioskQrToken(SECRET, KIOSK, next));
+  assert.deepEqual([back.status, back.body.clocked, state.attendance_sessions.length], [200, 'in', 2]);
+});
+
+test('reopening a month keeps whoever is already paid; editing at minute precision keeps the seconds', async () => {
+  const sid = '00000000-0000-4000-8000-000000000301';
+  const state = shop({ ...HOURS, payroll_config: [{ staff_id: STAFF.id, base_salary: 5200000 }, { staff_id: LAN.id, base_salary: 5200000 }],
+    attendance_sessions: [{ id: sid, staff_id: STAFF.id, date: '2026-11-03', clock_in: '2026-11-03T07:10:30.000Z', clock_out: null }],
+    payroll_closes: [], payroll_requests: [], payroll_violations: [], payroll_bonuses: [], attendance_changes: [] });
+  const owner = load(state, ADMIN, { now: Date.parse('2026-12-01T03:00:00Z') });
+  // Ô giờ chỉ đến phút: gửi lại giờ vào 14:10 (đang ghi 14:10:30) kèm giờ ra mới → chỉ đổi giờ ra.
+  assert.equal((await post(owner, { action: 'edit_attendance', id: sid, clock_in: '2026-11-03T07:10:00.000Z', clock_out: '2026-11-03T16:00:00.000Z', note: '' })).status, 200);
+  assert.equal(state.attendance_sessions[0].clock_in, '2026-11-03T07:10:30.000Z', 'late 10 minutes 30 seconds stays late');
+  assert.deepEqual(state.attendance_changes.map(c => c.field_name), ['clock_out']);
+
+  assert.equal((await post(owner, { action: 'close_month', year: 2026, month: 11 })).status, 200);
+  assert.equal(state.payroll_closes.length, 2);
+  assert.equal((await post(owner, { action: 'mark_paid', year: 2026, month: 11, staff_id: STAFF.id })).status, 200);
+  assert.equal((await post(owner, { action: 'reopen_month', year: 2026, month: 11, staff_id: STAFF.id })).status, 409, 'unmark "paid" first');
+  const reopened = await post(owner, { action: 'reopen_month', year: 2026, month: 11 });
+  assert.deepEqual([reopened.status, reopened.body.reopened, reopened.body.keptPaid], [200, 1, 1]);
+  assert.deepEqual(state.payroll_closes.map(c => [c.staff_id, !!c.paid_at]), [[STAFF.id, true]], 'the paid slip is kept');
+});

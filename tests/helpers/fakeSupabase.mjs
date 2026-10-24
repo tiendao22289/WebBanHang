@@ -30,7 +30,7 @@ export function fakeDb(state) {
     return { data: structuredClone(created), error: null };
   },
   from(table) {
-    let op = 'read', values, single = false, maybe = false, max = Infinity;
+    let op = 'read', values, single = false, maybe = false, max = Infinity, skip = 0;
     const conditions = [], orders = [];
     const q = {
       select() { return q; },
@@ -45,6 +45,7 @@ export function fakeDb(state) {
       is(k, v) { conditions.push(r => (r[k] ?? null) === v); return q; },
       order(k, o) { orders.push([k, o?.ascending !== false]); return q; },
       limit(n) { max = n; return q; },
+      range(a, b) { skip = a; max = b - a + 1; return q; },
       maybeSingle() { maybe = true; return q; },
       single() { single = true; return q; },
       insert(v) { op = 'insert'; values = v; return q; },
@@ -87,7 +88,7 @@ export function fakeDb(state) {
         return resolve({ data: structuredClone(rows), error: null });
       }
       for (const [k, asc] of [...orders].reverse()) rows = [...rows].sort((a, b) => (asc ? 1 : -1) * String(a[k]).localeCompare(String(b[k])));
-      rows = rows.slice(0, max);
+      rows = rows.slice(skip, skip + max);
       resolve({ data: structuredClone(single || maybe ? rows[0] ?? null : rows), error: null });
     }
     return q;

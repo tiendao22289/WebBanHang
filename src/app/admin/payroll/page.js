@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
 import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, workDayOf } from '@/lib/attendanceRules.mjs';
-import { LATE_FINE_MINUTES, STANDARD_DAYS, bonusCheck, computeSalary, fineSuggestions, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
+import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users, RefreshCw } from 'lucide-react';
@@ -18,6 +18,16 @@ const ddmm = d => d.slice(8, 10) + '/' + d.slice(5, 7);
 // " (02/11 – 03/11)" cho đơn báo nghỉ có ngày nghỉ.
 const leaveText = l => (l ? ` (${ddmm(l.from_date)}${l.to_date !== l.from_date ? ` – ${ddmm(l.to_date)}` : ''})` : '');
 const fmtNum = n => String(n).replace('.', ',');
+// Supabase trả tối đa 1000 dòng mỗi lần: đọc từng trang (giờ công cả quán một tháng có thể quá 1000 lượt).
+async function readAllRows(build) {
+  const rows = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await build().range(from, from + 999);
+    if (error) return { data: rows, error };
+    rows.push(...(data || []));
+    if (!data || data.length < 1000) return { data: rows, error: null };
+  }
+}
 // Ô nhập tiền: chỉ giữ số, chấm hàng nghìn (50.000).
 const typedMoney = v => { const raw = String(v ?? '').replace(/\./g, '').replace(/\D/g, ''); return raw ? Number(raw).toLocaleString('vi-VN') : ''; };
 const shownMoney = n => (Number(n) > 0 ? Number(n).toLocaleString('vi-VN') : '');
@@ -248,6 +258,7 @@ export default function PayrollPage() {
   const [myLeaveDays, setMyLeaveDays] = useState([]); // ngày nghỉ của các đơn báo nghỉ
   const [mySalary,   setMySalary]   = useState(null); // lương tạm tính tháng này (máy chủ tính)
   const [myFines,    setMyFines]    = useState([]);   // tiền phạt tháng này kèm lý do
+  const [myMonth,    setMyMonth]    = useState({ y: now.getFullYear(), m: now.getMonth() + 1 }); // tháng của lịch sử chấm công
   const [myBonus,    setMyBonus]    = useState(null); // thưởng chuyên cần: đã trễ / quên ra ca chưa (khi chủ có dùng)
   const [sending,    setSending]    = useState('');   // đang gửi đơn nào (chặn bấm 2 lần)
   const [notice,     setNotice]     = useState(null); // { text, ok } — báo ngay trên trang thay cho hộp thoại
@@ -279,7 +290,9 @@ export default function PayrollPage() {
   };
 
   const fetchStaffData = async (staffId) => {
-    const m = now.getMonth() + 1; const y = now.getFullYear();
+    // Tháng của hôm nay lúc tải (app để mở qua cuối tháng thì sang tháng mới).
+    const today = new Date(), m = today.getMonth() + 1, y = today.getFullYear();
+    setMyMonth({ y, m });
     const mStart = `${y}-${fmt(m)}-01`;
     const mEnd   = m === 12 ? `${y + 1}-01-01` : `${y}-${fmt(m + 1)}-01`;
     // Hỏi máy chủ trước: lúc đó máy tự đóng các ca quên ra ca, rồi mới đọc lịch sử tháng (không thì vẫn hiện "đang làm").
@@ -359,7 +372,7 @@ export default function PayrollPage() {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], monthOver: !!j.monthOver });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], monthOver: !!j.monthOver, reviews: j.reviews || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   const checkinAction = async (action, body, confirmText) => {
@@ -372,7 +385,9 @@ export default function PayrollPage() {
 
   // Giờ làm theo ca (từ ngày bật): chỉ tính lương trong ca, giờ ngoài ca chờ chủ duyệt.
   const rules = checkin?.settings || null;
-  const reviewMap = Object.fromEntries((checkin?.reviews || []).map(r => [r.attendance_id, r]));
+  // Lần duyệt giờ ngoài ca: của đúng tháng đang xem (máy chủ chốt bằng chính số này) + các lần gần đây.
+  const reviewList = [...(checkin?.reviews || []), ...(payrollMonth.reviews || [])];
+  const reviewMap = Object.fromEntries(reviewList.map(r => [r.attendance_id, r]));
   const hoursOf = s => sessionHours(s, rules, reviewMap[s.id]);
   // Các lượt thuộc ngày làm trong tháng đang xem: lượt dọn quán sau nửa đêm thuộc ca hôm trước
   // (ngày 1 tháng sau vẫn là ca cuối tháng này, ngày 1 tháng này có thể là ca cuối tháng trước).
@@ -447,7 +462,7 @@ export default function PayrollPage() {
       supabase.from('payroll_requests').select('*, staff(full_name,phone)').order('created_at', { ascending: false }),
       supabase.from('payroll_violations').select('*, staff(full_name)').eq('month', selMonth).eq('year', selYear),
       // Lấy cả ngày 1 tháng sau: lượt dọn quán sau nửa đêm của ca cuối tháng (lọc theo ngày làm ở dưới).
-      supabase.from('attendance_sessions').select('*').gte('date', `${selYear}-${fmt(selMonth)}-01`).lte('date', selMonth === 12 ? `${selYear + 1}-01-01` : `${selYear}-${fmt(selMonth + 1)}-01`),
+      readAllRows(() => supabase.from('attendance_sessions').select('*').gte('date', `${selYear}-${fmt(selMonth)}-01`).lte('date', selMonth === 12 ? `${selYear + 1}-01-01` : `${selYear}-${fmt(selMonth + 1)}-01`).order('clock_in')),
     ]);
     setStaffList(staffRes.data || []);
     const cfgMap = {};
@@ -480,7 +495,7 @@ export default function PayrollPage() {
     requests: requests.filter(r => r.staff_id === staffId),
     violations: violations.filter(v => v.staff_id === staffId),
     bonuses: payrollMonth.bonuses.filter(b => b.staff_id === staffId),
-    rules, reviews: checkin?.reviews || [],
+    rules, reviews: reviewList,
   });
   // Trễ / quên ra ca trong tháng (theo ngày làm) → xét thưởng chuyên cần và gợi ý phạt.
   const talliesOf = staffId => monthTallies({ sessions: attendance.filter(a => a.staff_id === staffId), rules, key: `${selYear}-${fmt(selMonth)}`, autoClosed: payrollMonth.autoClosed });
@@ -539,8 +554,10 @@ export default function PayrollPage() {
       ? `Mở chốt lương tháng ${label}? Bảng sẽ tính lại theo số mới nhất cho tới khi bạn chốt lại.`
       : `Chốt lương tháng ${label}? Số lương của từng người sẽ được lưu lại; sau này có gì thay đổi, máy sẽ báo.${notes.length ? `\n\nLưu ý:\n${notes.join('\n')}` : ''}`;
     if (!confirm(ask)) return;
-    try { await workforce(reopen ? 'reopen_month' : 'close_month', { year: selYear, month: selMonth }); }
+    let result;
+    try { result = await workforce(reopen ? 'reopen_month' : 'close_month', { year: selYear, month: selMonth }); }
     catch (err) { return alert(err.message); }
+    if (reopen && result?.keptPaid) alert(`Đã mở chốt. ${result.keptPaid} người đã được đánh dấu đã trả nên vẫn giữ số đã chốt; muốn tính lại người nào thì bỏ dấu "Đã trả" của người đó trước.`);
     fetchPayrollMonth();
   };
 
@@ -617,7 +634,7 @@ export default function PayrollPage() {
   const departureOf = id => (checkin?.departures || []).find(d => d.staff_id === id) || null;
   // Gợi ý phạt chưa xử lý của cả quán trong tháng (người nghỉ việc trước tháng này không tính).
   const fineHints = staffList.filter(s => activeInMonth(departureOf(s.id), `${selYear}-${fmt(selMonth)}`))
-    .flatMap(s => fineSuggestions({ staffId: s.id, tallies: talliesOf(s.id), reviews: payrollMonth.fineReviews }));
+    .flatMap(s => fineSuggestions({ staffId: s.id, tallies: talliesOf(s.id), reviews: payrollMonth.fineReviews, kinds: activeFineKinds(payrollMonth.fineRules) }));
   // Thưởng / phạt: gửi lên máy chủ rồi tải lại (khoản phạt đọc lại cả bảng lương).
   const payrollAction = async (action, body, confirmText) => {
     if (confirmText && !confirm(confirmText)) return false;
@@ -729,7 +746,7 @@ export default function PayrollPage() {
             const totalWorkH = Math.round((totalWorkMs / 3600000) * 10) / 10;
 
             // Lịch sử tháng này theo ngày làm (lượt dọn quán sau nửa đêm nằm chung ca hôm trước).
-            const thisMonth = `${now.getFullYear()}-${fmt(now.getMonth() + 1)}`;
+            const thisMonth = `${myMonth.y}-${fmt(myMonth.m)}`;
             const histDays = [...groupByWorkDay(myAllSessions, myRules).entries()].filter(([d]) => d.slice(0, 7) === thisMonth).sort((a, b) => b[0].localeCompare(a[0]));
 
             // Header status text
@@ -787,7 +804,8 @@ export default function PayrollPage() {
                           if (todaySessions[i - 1].clock_out)
                             totalBreakMs += new Date(todaySessions[i].clock_in) - new Date(todaySessions[i - 1].clock_out);
                         }
-                        const otMs = totalWorkMs > 8 * 3600000 ? totalWorkMs - 8 * 3600000 : 0;
+                        // Tháng cũ: giờ quá 8 tiếng là tăng ca. Từ tháng 11 tăng ca là giờ ngoài ca chủ duyệt (hiện ở từng ca).
+                        const otMs = !usesDayPay(myMonth.y, myMonth.m) && totalWorkMs > 8 * 3600000 ? totalWorkMs - 8 * 3600000 : 0;
                         return (
                           <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1.5px solid #e2e8f0', fontSize: '0.82rem' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: '#0f172a', marginBottom: 3 }}>
@@ -830,7 +848,7 @@ export default function PayrollPage() {
                 {histDays.length > 0 && (
                   <details open style={{ borderTop: '1px solid #e5e7eb' }}>
                     <summary style={{ padding: '10px 18px', fontSize: '0.82rem', fontWeight: 700, color: '#64748b', cursor: 'pointer', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
-                      📋 Lịch sử chấm công tháng {now.getMonth() + 1} ({histDays.length} ngày)
+                      📋 Lịch sử chấm công tháng {myMonth.m} ({histDays.length} ngày)
                     </summary>
                     <div style={{ padding: '0 18px 14px' }}>
                       {histDays.map(([date, daySessions]) => {

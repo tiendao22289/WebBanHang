@@ -127,7 +127,7 @@ async function myStatus(db, staffId) {
     db.from('attendance_sessions').select('*').eq('staff_id', staffId).gte('date', dayBefore(vnToday())).lte('date', vnToday()).order('clock_in'),
     db.from('attendance_fix_requests').select('*').eq('staff_id', staffId).gte('created_at', since).order('created_at', { ascending: false }),
     autoClosedIds(db, { staffId }),
-    db.from('attendance_extra_reviews').select('*').eq('staff_id', staffId).limit(1000),
+    db.from('attendance_extra_reviews').select('*').eq('staff_id', staffId).order('decided_at', { ascending: false }).limit(1000),
     db.from('payroll_leave_days').select('*').eq('staff_id', staffId).limit(500),
   ]);
   for (const r of [today, fixes, reviews, leaveDays]) if (r.error) throw r.error;
@@ -172,16 +172,40 @@ async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
   }
 }
 
+// Supabase trả tối đa 1000 dòng mỗi lần: đọc từng trang cho đủ (giờ công cả tháng, lượt quét…).
+async function readAll(build) {
+  const rows = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await build().range(from, from + 999);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < 1000) return rows;
+  }
+}
+// Lần chủ duyệt giờ ngoài ca của đúng các ca đang tính (bảng này chỉ lớn dần, không đọc hết được).
+async function reviewsFor(db, sessionIds) {
+  const rows = [];
+  for (let i = 0; i < sessionIds.length; i += 200) {
+    const { data, error } = await db.from('attendance_extra_reviews').select('*').in('attendance_id', sessionIds.slice(i, i + 200));
+    if (error) throw error;
+    rows.push(...(data || []));
+  }
+  return rows;
+}
+// Ca máy tự đóng vì quên ra ca: ghi nhật ký vài giờ sau ngày làm (lọc tới 3 ngày sau tháng).
+const autoClosedInMonth = (db, start, end) => readAll(() => db.from('attendance_changes').select('attendance_id').eq('changed_by', AUTO_CLOSE_BY)
+  .gte('changed_at', start).lt('changed_at', new Date(Date.parse(`${end}T00:00:00Z`) + 3 * 86400000).toISOString().slice(0, 10)).order('changed_at'));
+
 // Mọi thứ cần để tính lương cả quán một tháng (dùng cho chốt lương và trang Thống kê).
 async function loadPayrollMonth(db, year, month) {
   const { start, end } = monthRange(year, month);
-  const [staff, configs, sessions, requests, violations, reviews, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules] = await Promise.all([
+  const [staff, configs, sessions, requests, violations, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules] = await Promise.all([
     db.from('staff').select('id, full_name, role'),
     db.from('payroll_config').select('*'),
-    db.from('attendance_sessions').select('*').gte('date', start).lte('date', end), // cả ngày 1 tháng sau (ca đêm cuối tháng)
+    // Cả ngày 1 tháng sau (ca đêm cuối tháng); đọc từng trang.
+    readAll(() => db.from('attendance_sessions').select('*').gte('date', start).lte('date', end).order('clock_in')),
     db.from('payroll_requests').select('*').eq('month', month).eq('year', year),
     db.from('payroll_violations').select('*').eq('month', month).eq('year', year),
-    db.from('attendance_extra_reviews').select('*').limit(5000),
     db.from('payroll_closes').select('*').eq('year', year).eq('month', month),
     db.from('staff_departures').select('*'),
     readCheckinSettings(db),
@@ -190,27 +214,28 @@ async function loadPayrollMonth(db, year, month) {
     db.from('payroll_fine_reviews').select('*').gte('work_day', start).lt('work_day', end),
     db.from('payroll_fine_rules').select('kind, active'),
   ]);
-  for (const r of [staff, configs, sessions, requests, violations, reviews, closes, departures, bonuses, fineReviews, fineRules]) if (r.error) throw r.error;
-  return { start, end, staff: staff.data || [], configs: configs.data || [], sessions: sessions.data || [], requests: requests.data || [],
-    violations: violations.data || [], reviews: reviews.data || [], closes: closes.data || [], departures: departures.data || [], rules,
+  for (const r of [staff, configs, requests, violations, closes, departures, bonuses, fineReviews, fineRules]) if (r.error) throw r.error;
+  const reviews = await reviewsFor(db, sessions.map(x => x.id));
+  return { start, end, staff: staff.data || [], configs: configs.data || [], sessions, requests: requests.data || [],
+    violations: violations.data || [], reviews, closes: closes.data || [], departures: departures.data || [], rules,
     bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data) };
 }
 
 // Trang Thống kê: nhân sự + lương cả quán một tháng, kèm số việc đang chờ chủ duyệt.
 async function staffStats(db, year, month) {
   const m = await loadPayrollMonth(db, year, month);
-  const [auto, scans, fixes, pendingReqs] = await Promise.all([
-    // Ca máy tự đóng vì quên ra ca được ghi sau ngày làm, nên lọc theo giờ ghi nhật ký.
-    db.from('attendance_changes').select('attendance_id').eq('changed_by', AUTO_CLOSE_BY).gte('changed_at', m.start).limit(5000),
-    db.from('checkin_scans').select('staff_id, action, warnings').gte('created_at', new Date(`${m.start}T00:00:00+07:00`).toISOString()).lt('created_at', new Date(`${m.end}T00:00:00+07:00`).toISOString()),
+  const [auto, scans, fixes, pendingReqs, extras] = await Promise.all([
+    autoClosedInMonth(db, m.start, m.end),
+    readAll(() => db.from('checkin_scans').select('staff_id, action, warnings').gte('created_at', new Date(`${m.start}T00:00:00+07:00`).toISOString()).lt('created_at', new Date(`${m.end}T00:00:00+07:00`).toISOString()).order('created_at')),
     db.from('attendance_fix_requests').select('id').eq('status', 'pending'),
     db.from('payroll_requests').select('id').eq('status', 'pending'),
+    pendingExtras(db, m.rules),
   ]);
-  for (const r of [auto, scans, fixes, pendingReqs]) if (r.error) throw r.error;
-  const stats = staffMonthStats({ year, month, ...m, autoClosed: (auto.data || []).map(r => r.attendance_id), scans: scans.data || [] });
+  for (const r of [fixes, pendingReqs]) if (r.error) throw r.error;
+  const stats = staffMonthStats({ year, month, ...m, autoClosed: auto.map(r => r.attendance_id), scans });
   // Người đủ điều kiện thưởng chuyên cần mà chủ chưa duyệt (chỉ khi đã hết tháng và chủ có dùng thưởng).
   const bonusWaiting = monthOver(year, month) && m.bonusSettings.bonus_amount > 0 ? stats.people.filter(p => p.bonus.eligible && !p.bonus.approved && !p.salary.locked).length : 0;
-  return { ...stats, pending: { fixes: (fixes.data || []).length, requests: (pendingReqs.data || []).length, extras: (await pendingExtras(db, m.rules, m.reviews)).length,
+  return { ...stats, pending: { fixes: (fixes.data || []).length, requests: (pendingReqs.data || []).length, extras: extras.length,
     fines: stats.people.reduce((a, p) => a + p.fineSuggestions, 0), bonuses: bonusWaiting } };
 }
 
@@ -218,32 +243,35 @@ async function staffStats(db, year, month) {
 // cần đã duyệt, danh sách lỗi, gợi ý phạt đã xử lý và ngày / người ghi của các khoản phạt.
 async function payrollMonth(db, year, month) {
   const { start, end } = monthRange(year, month);
-  const [closes, leaveDays, auto, bonuses, bonusSettings, fineRules, fineReviews, meta] = await Promise.all([
+  const [closes, leaveDays, auto, bonuses, bonusSettings, fineRules, fineReviews, meta, sessionIds] = await Promise.all([
     db.from('payroll_closes').select('*').eq('year', year).eq('month', month),
-    db.from('payroll_leave_days').select('*').limit(5000),
+    // Ngày nghỉ của các đơn có ngày chạm tháng này.
+    db.from('payroll_leave_days').select('*').lt('from_date', end).gte('to_date', start),
     // Ca máy tự đóng vì quên ra ca (ghi sau ngày làm nên lọc theo giờ ghi) để tab Chấm công đánh dấu.
-    db.from('attendance_changes').select('attendance_id').eq('changed_by', AUTO_CLOSE_BY).gte('changed_at', start).limit(5000),
+    autoClosedInMonth(db, start, end),
     db.from('payroll_bonuses').select('*').eq('year', year).eq('month', month),
     readPayrollSettings(db),
     db.from('payroll_fine_rules').select('*').order('sort').order('created_at'),
     db.from('payroll_fine_reviews').select('*').gte('work_day', start).lt('work_day', end),
     db.from('payroll_violation_meta').select('*').gte('fine_date', start).lt('fine_date', end),
+    readAll(() => db.from('attendance_sessions').select('id').gte('date', start).lte('date', end).order('clock_in')),
   ]);
-  for (const r of [closes, leaveDays, auto, bonuses, fineRules, fineReviews, meta]) if (r.error) throw r.error;
-  return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set((auto.data || []).map(r => r.attendance_id))],
+  for (const r of [closes, leaveDays, bonuses, fineRules, fineReviews, meta]) if (r.error) throw r.error;
+  // reviews: lần duyệt giờ ngoài ca của các ca trong tháng (trang Lương tính bằng đúng dữ liệu máy chủ chốt).
+  return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set(auto.map(r => r.attendance_id))],
+    reviews: await reviewsFor(db, sessionIds.map(x => x.id)),
     bonuses: bonuses.data || [], bonusSettings, fineRules: fineRules.data || [], fineReviews: fineReviews.data || [], violationMeta: meta.data || [],
     monthOver: monthOver(year, month) };
 }
 
 // Ca 45 ngày gần đây có giờ ngoài ca (vào sớm / ở lại) mà chủ chưa duyệt.
-async function pendingExtras(db, rules, reviews) {
+async function pendingExtras(db, rules) {
   const since = new Date(nowMs() + 7 * 3600000 - 45 * 86400000).toISOString().slice(0, 10);
   const from = rules.hours_from > since ? rules.hours_from : since;
   if (from > vnToday()) return [];
-  const { data, error } = await db.from('attendance_sessions').select('*').gte('date', from).order('clock_in');
-  if (error) throw error;
-  const reviewed = new Set(reviews.map(r => r.attendance_id));
-  return (data || []).filter(s => s.clock_out && !reviewed.has(s.id))
+  const data = await readAll(() => db.from('attendance_sessions').select('*').gte('date', from).order('clock_in'));
+  const reviewed = new Set((await reviewsFor(db, data.map(x => x.id))).map(r => r.attendance_id));
+  return data.filter(s => s.clock_out && !reviewed.has(s.id))
     .map(s => ({ s, h: sessionHours(s, rules) })).filter(x => x.h.pendingMs > 0)
     // date = ngày của ca (lượt dọn quán sau nửa đêm hiện là ca hôm trước).
     .map(({ s, h }) => ({ attendance_id: s.id, staff_id: s.staff_id, date: workDayOf(s, rules), clock_in: s.clock_in, clock_out: s.clock_out,
@@ -258,7 +286,8 @@ async function checkinOverview(db) {
     db.from('staff_checkin_devices').select('*'),
     db.from('checkin_scans').select('*').gte('created_at', since).order('created_at', { ascending: false }).limit(300),
     db.from('attendance_fix_requests').select('*').gte('created_at', new Date(nowMs() - 45 * 86400000).toISOString()).order('created_at', { ascending: false }),
-    db.from('attendance_extra_reviews').select('*').order('decided_at', { ascending: false }).limit(5000),
+    // 1000 lần duyệt gần nhất (để hiện); tính lương dùng lần duyệt của đúng tháng (?payroll=1).
+    db.from('attendance_extra_reviews').select('*').order('decided_at', { ascending: false }).limit(1000),
     db.from('staff_departures').select('*'),
   ]);
   for (const r of [kiosks, devices, scans, fixes, reviews, departures]) if (r.error) throw r.error;
@@ -267,7 +296,7 @@ async function checkinOverview(db) {
   const { data: fixSessions, error } = ids.length ? await db.from('attendance_sessions').select('*').in('id', ids) : { data: [] };
   if (error) throw error;
   return { settings, kiosks: kiosks.data || [], devices: devices.data || [], scans: scans.data || [], fixes: fixes.data || [], fixSessions: fixSessions || [],
-    autoClosed: await autoClosedIds(db, { ids }), reviews: reviews.data || [], extras: await pendingExtras(db, settings, reviews.data || []),
+    autoClosed: await autoClosedIds(db, { ids }), reviews: reviews.data || [], extras: await pendingExtras(db, settings),
     departures: departures.data || [], now: isoNow(), clock: clockStatus() };
 }
 
@@ -388,7 +417,8 @@ export async function POST(request) {
       let clockIn = when(body.clock_in), clockOut = when(body.clock_out);
       if ([clockIn, clockOut].some(d => d && Number.isNaN(d.getTime()))) return fail('Giờ không hợp lệ.');
       // Ô nào giữ nguyên giờ đang ghi thì coi như không xin sửa ô đó (chủ chỉ thấy phần thay đổi).
-      const same = (d, v) => d && v && d.getTime() === Date.parse(v);
+      // Ô giờ trên điện thoại chỉ có đến phút: trùng phút với giờ đang ghi là không đổi.
+      const same = (d, v) => d && v && Math.floor(d.getTime() / 60000) === Math.floor(Date.parse(v) / 60000);
       if (same(clockIn, att.clock_in)) clockIn = null;
       if (same(clockOut, att.clock_out)) clockOut = null;
       if (!clockIn && !clockOut) return fail('Chọn giờ vào hoặc giờ ra muốn sửa (khác giờ đang ghi).');
@@ -471,8 +501,9 @@ export async function POST(request) {
         const next = fields[f] === '' || fields[f] === null ? null : f === 'note' ? text(fields[f]) : new Date(fields[f]);
         if (f !== 'note' && next && Number.isNaN(next.getTime())) return fail('Giờ không hợp lệ.');
         const value = next instanceof Date ? next.toISOString() : next;
-        const same = f === 'note' ? String(orig[f] ?? '') === String(value ?? '')
-          : (orig[f] ? new Date(orig[f]).getTime() : null) === (value ? new Date(value).getTime() : null);
+        // Ô giờ chỉ đến phút: trùng phút thì giữ nguyên giờ đang ghi (không làm mất giây, không ghi nhật ký sai).
+        const minute = v => (v ? Math.floor(new Date(v).getTime() / 60000) : null);
+        const same = f === 'note' ? String(orig[f] ?? '') === String(value ?? '') : minute(orig[f]) === minute(value);
         if (same) continue;
         if (f === 'note' && !('note' in orig)) continue;
         updates[f] = value;
@@ -564,11 +595,19 @@ export async function POST(request) {
         return NextResponse.json({ ok: true }, { headers });
       }
       if (body.action === 'reopen_month') {
-        let q = db.from('payroll_closes').delete().eq('year', year).eq('month', month);
+        // Người đã đánh dấu "đã trả" giữ nguyên số đã chốt: mở chốt sẽ mất dấu đã trả, dễ trả lương hai lần.
+        if (only) {
+          const { data: row, error: e } = await db.from('payroll_closes').select('paid_at').eq('year', year).eq('month', month).eq('staff_id', only).maybeSingle();
+          if (e) throw e;
+          if (row?.paid_at) return fail('Người này đã được đánh dấu đã trả lương. Bỏ dấu "Đã trả" trước rồi mới mở chốt.', 409);
+        }
+        let q = db.from('payroll_closes').delete().eq('year', year).eq('month', month).is('paid_at', null);
         if (only) q = q.eq('staff_id', only);
-        const r = await q;
+        const r = await q.select('staff_id');
         if (r.error) throw r.error;
-        return NextResponse.json({ ok: true }, { headers });
+        const kept = await db.from('payroll_closes').select('staff_id').eq('year', year).eq('month', month);
+        if (kept.error) throw kept.error;
+        return NextResponse.json({ ok: true, reopened: r.data?.length || 0, keptPaid: (kept.data || []).length }, { headers });
       }
       // Chốt lương: máy chủ tự tính lại bằng cùng công thức với trang Lương rồi lưu lại. Cả tháng thì giữ
       // nguyên người đã chốt riêng trước đó; người nghỉ việc trước tháng này không tính.
