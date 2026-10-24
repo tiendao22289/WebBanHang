@@ -15,8 +15,10 @@ export function cameraSupported() {
   return typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
 }
 
-export default function CameraCapture({ onCapture, onClose, title, subtitle, closeText }) {
+// choices: [{ key, label }] → chọn đang chụp gì (vd. màn hình khách / tờ bill); onCapture(blob, key).
+export default function CameraCapture({ onCapture, onClose, title, subtitle, closeText, choices }) {
   const video = useRef(null);
+  const [choice, setChoice] = useState(choices?.[0]?.key);
   const stream = useRef(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
@@ -57,12 +59,16 @@ export default function CameraCapture({ onCapture, onClose, title, subtitle, clo
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', QUALITY));
     setBusy(false);
     if (!blob) { setError('Không chụp được, thử lại.'); return; }
-    onCapture(blob);
+    onCapture(blob, choice);
     onClose();
   }
 
   return <div className="cam" role="dialog" aria-label={title || 'Chụp ảnh'}>
     {title && <div className="cam-title">{title}{subtitle && <small>{subtitle}</small>}</div>}
+    {choices && <div className="cam-choices" role="radiogroup" aria-label="Chụp gì">
+      {choices.map(c => <button key={c.key} type="button" role="radio" aria-checked={choice === c.key}
+        className={choice === c.key ? 'active' : ''} onClick={() => setChoice(c.key)}>{c.label}</button>)}
+    </div>}
     <video ref={video} playsInline muted autoPlay className="cam-video" />
     {!ready && !error && <p className="cam-msg">Đang mở camera...</p>}
     {error && <p className="cam-msg error">{error}</p>}

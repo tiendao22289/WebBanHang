@@ -223,11 +223,11 @@ export default function ReceiptsPage() {
         <div className="rc-item">
           {b.imageUrl ? <button className="rc-thumb" onClick={() => setView(b.imageUrl)} aria-label="Xem ảnh bill"><img src={b.imageUrl} alt="" /></button> : <span className="rc-thumb empty" />}
           <span className="rc-item-main">{clock(b.receivedAt)}{b.tableLabel ? ` · ${b.tableLabel}` : ''}
-            <small>{b.paymentMethod === 'transfer' ? accountName(b.accountId) : 'Tiền mặt'}{b.createdByName ? ` · ${b.createdByName}` : ''}{b.imageUrl ? '' : ' · chưa có ảnh bill'}</small></span>
+            <small>{b.paymentMethod === 'transfer' ? accountName(b.accountId) : 'Tiền mặt'}{b.createdByName ? ` · ${b.createdByName}` : ''}{b.imageUrl || b.transferImageUrl ? '' : ' · chưa có ảnh bill'}</small></span>
           <b>{money(b.amount)}</b>
           {(b.mine || data.me?.role === 'admin') && <button className="fin-icon danger" onClick={() => remove(b)} aria-label="Xoá"><Trash2 size={16} /></button>}
         </div>
-        {!b.imageUrl && <div className="rc-ck-actions">
+        {!b.imageUrl && !b.transferImageUrl && <div className="rc-ck-actions">
           {attaching?.key === `bill-${b.id}` ? <span className="rc-ck-busy">Đang gửi ảnh...</span> : <>
             <button className="rc-attach" onClick={() => startCamera({ key: `bill-${b.id}`, id: b.id, bill: true })}>📷 Chụp tờ bill</button>
             <button className="rc-attach done" onClick={() => startGallery({ key: `bill-${b.id}`, id: b.id, bill: true })}>Chọn ảnh có sẵn</button>

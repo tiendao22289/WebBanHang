@@ -19,32 +19,24 @@ import Swal from 'sweetalert2';
 //   - Không có bill nào (order) được tạo / cập nhật qua cổng này.
 //     → Không ảnh hưởng gì đến sổ sách thống kê / báo cáo S2a-HKD.
 //   - Sổ thu chi vẫn tính đủ: DB tự ghi mỗi lần thu thành 1 bill giấy
-//     (owner_finance.sql, capture_qr_page_receipt); ảnh bill chụp sau, không bắt buộc.
+//     (owner_finance.sql, capture_qr_page_receipt).
+//   - BẮT BUỘC chụp tờ bill hoặc màn hình ĐT khách: bấm xác nhận / nhận tiền mặt
+//     là mở camera ngay; ảnh và việc ghi tiền gửi lên máy chủ cùng một lần
+//     (/api/admin/receipts qr_confirm / qr_cash) — đóng camera thì chưa ghi gì.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Ảnh tờ bill / màn hình CK cho bill giấy DB vừa ghi (tìm theo source).
-async function savePhoto(source, kind, blob) {
+async function postQrPayment(fields, blob, kind) {
   const form = new FormData();
-  form.set('action', kind === 'bill' ? 'attach_bill' : 'attach_transfer');
-  form.set('source', source);
+  for (const [key, value] of Object.entries(fields)) form.set(key, String(value));
   form.set('image', blob, `${kind}.jpg`);
   const response = await fetchWithTimeout('/api/admin/receipts', { method: 'POST', body: form, cache: 'no-store' });
   const result = await response.json().catch(() => ({}));
   if (response.status === 401) window.dispatchEvent(new Event('staff-session-expired'));
-  if (!response.ok) throw new Error(result.error || 'Không lưu được ảnh.');
+  if (!response.ok) throw new Error(result.error || 'Chưa ghi được tiền, thử lại.');
+  return result;
 }
 
-function PhotoRow({ label, done, busy, onCamera, onGallery }) {
-  const button = { flex: 1, padding: '10px 8px', borderRadius: 10, fontWeight: 700, cursor: busy ? 'wait' : 'pointer', fontSize: '0.9rem' };
-  return <div style={{ marginTop: 12 }}>
-    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: done ? '#16a34a' : '#334155', marginBottom: 6 }}>{done ? `✓ ${label}: đã lưu` : label}</div>
-    {busy ? <div style={{ color: '#64748b', fontSize: '0.9rem' }}>Đang gửi ảnh...</div>
-      : <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={onCamera} style={{ ...button, background: '#2563eb', color: 'white', border: 'none' }}>📷 {done ? 'Chụp lại' : 'Chụp'}</button>
-        <button onClick={onGallery} style={{ ...button, background: 'white', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>Chọn ảnh có sẵn</button>
-      </div>}
-  </div>;
-}
+const TRANSFER_SHOTS = [{ key: 'ck', label: 'Màn hình khách' }, { key: 'bill', label: 'Tờ bill' }];
 
 export default function QrGeneratorPage() {
   const [amount, setAmount] = useState('');
@@ -53,41 +45,41 @@ export default function QrGeneratorPage() {
   const [activeQr, setActiveQr] = useState(null);
   const [paymentStatus, setPaymentStatus] = useState('idle'); // idle | pending | completed
   const [isGenerating, setIsGenerating] = useState(false);
-  // Lần thu vừa xong → cho chụp bill: { source, method, amount, bill, ck }
-  const [receipt, setReceipt] = useState(null);
-  const [camera, setCamera] = useState(null); // 'bill' | 'ck'
-  const [uploading, setUploading] = useState(null);
-  const galleryInput = useRef(null);
+  // Camera mở cho lần thu nào: { method: 'transfer' | 'cash', amount }
+  const [camera, setCamera] = useState(null);
+  const [saving, setSaving] = useState(false);
   const captureInput = useRef(null);
-  const pendingKind = useRef(null);
+  const pendingShot = useRef(null);
 
   const router = useRouter();
 
-  async function uploadPhoto(kind, blob) {
-    const target = receipt;
-    if (!target) return;
-    setUploading(kind);
-    try {
-      await savePhoto(target.source, kind, blob);
-      setReceipt(r => r?.source === target.source ? { ...r, [kind]: true } : r);
-    } catch (err) {
-      Swal.fire('Chưa lưu được ảnh', err.message, 'error');
-    } finally {
-      setUploading(null);
-    }
+  // Máy không mở được camera trong web → dùng ứng dụng camera của máy.
+  function openCamera(shot) {
+    if (cameraSupported()) setCamera(shot);
+    else { pendingShot.current = shot; captureInput.current.click(); }
   }
-  function startCamera(kind) {
-    if (cameraSupported()) setCamera(kind);
-    else { pendingKind.current = kind; captureInput.current.click(); }
-  }
-  function startGallery(kind) { pendingKind.current = kind; galleryInput.current.click(); }
   async function picked(event) {
     const file = event.target.files?.[0];
     event.target.value = '';
-    const kind = pendingKind.current;
-    pendingKind.current = null;
-    if (!file || !kind) return;
-    try { await uploadPhoto(kind, await compressImage(file)); } catch (err) { Swal.fire('Lỗi ảnh', err.message, 'error'); }
+    const shot = pendingShot.current;
+    pendingShot.current = null;
+    if (!file || !shot) return;
+    try { await saveShot(shot, await compressImage(file), shot.method === 'cash' ? 'bill' : 'ck'); }
+    catch (err) { Swal.fire('Lỗi ảnh', err.message, 'error'); }
+  }
+
+  // Ảnh vừa chụp + ghi tiền, một lần gửi.
+  async function saveShot(shot, blob, kind) {
+    setSaving(true);
+    try {
+      if (shot.method === 'cash') await saveCash(shot.amount, blob);
+      else await saveTransfer(blob, kind);
+    } catch (err) {
+      console.error(err);
+      Swal.fire('Chưa ghi được tiền', err.message, 'error');
+    } finally {
+      setSaving(false);
+    }
   }
 
   // Lấy thẻ ẨN lúc mới vào trang
@@ -107,24 +99,23 @@ export default function QrGeneratorPage() {
   };
 
   // ─── Tiền mặt tạo phiếu thu riêng, không làm tăng số dư chuyển khoản ────
-  const handleCashPayment = async () => {
-    setIsGenerating(true);
-    setReceipt(null);
+  // Bấm "Nhận tiền mặt" → mở camera chụp tờ bill; chụp xong mới ghi tiền.
+  const handleCashPayment = () => {
     const numAmount = parseInt(amount.replace(/\D/g, ''), 10) || 0;
-    if (!Number.isSafeInteger(numAmount) || numAmount <= 0) { setIsGenerating(false); return; }
+    if (!Number.isSafeInteger(numAmount) || numAmount <= 0) return;
+    openCamera({ method: 'cash', amount: numAmount });
+  };
 
+  const saveCash = async (numAmount, blob) => {
+    setIsGenerating(true);
     try {
       const attemptKey = 'custom-cash-receipt';
       let previous = null;
       try { previous = JSON.parse(sessionStorage.getItem(attemptKey) || 'null'); } catch { /* stale cache */ }
       const receiptId = previous?.amount === numAmount ? previous.id : newLuckyRequestId();
       sessionStorage.setItem(attemptKey, JSON.stringify({ id: receiptId, amount: numAmount }));
-      const { data, error } = await supabase.rpc('record_custom_cash_receipt', {
-        p_id: receiptId, p_amount: numAmount,
-      });
-      if (error || !data?.success) throw error || new Error('Chưa lưu được phiếu thu');
+      await postQrPayment({ action: 'qr_cash', receipt_id: receiptId, amount: numAmount }, blob, 'bill');
       sessionStorage.removeItem(attemptKey);
-      setReceipt({ source: `cash:${receiptId}`, method: 'cash', amount: numAmount });
 
       Swal.fire({
         icon: 'success',
@@ -141,10 +132,6 @@ export default function QrGeneratorPage() {
       setPaymentStatus('idle');
       setTransactionCode('');
       setActiveQr(null);
-
-    } catch (err) {
-      console.error(err);
-      Swal.fire('Lỗi', err.message, 'error');
     } finally {
       setIsGenerating(false);
     }
@@ -154,7 +141,6 @@ export default function QrGeneratorPage() {
   const handleGenerateQR = async () => {
     if (paymentStatus === 'pending' || isGenerating) return;
     setIsGenerating(true);
-    setReceipt(null);
 
     // Luôn lấy thẻ Ẩn mới nhất
     const { account } = await getShadowAccount();
@@ -208,7 +194,7 @@ export default function QrGeneratorPage() {
         .update({ status: 'failed' })
         .eq('transaction_code', transactionCode)
         .eq('status', 'pending')
-        .select('id')
+        .select('transaction_code') // bảng thật không có cột id
         .maybeSingle();
       if (error) throw error;
       if (!cancelled) throw new Error('Mã QR đã đổi trạng thái. Vui lòng đối soát giao dịch.');
@@ -221,38 +207,21 @@ export default function QrGeneratorPage() {
     }
   };
 
-  const handleConfirmManual = async () => {
-    if (!transactionCode) return;
-    const { isConfirmed } = await Swal.fire({
-      title: 'Xác nhận thu tiền?',
-      text: 'Bạn chắc chắn đã nhận được tiền cho mã giao dịch này chứ?',
-      icon: 'question',
-      showCancelButton: true,
-      confirmButtonText: 'Đã nhận',
-      cancelButtonText: 'Chưa',
-      confirmButtonColor: '#16a34a',
+  // Bấm "Xác nhận đã nhận tiền" → mở camera ngay (màn hình CK của khách hoặc tờ bill).
+  const handleConfirmManual = () => {
+    if (!transactionCode || !activeQr || saving) return;
+    openCamera({ method: 'transfer', amount: activeQr.amount });
+  };
+
+  const saveTransfer = async (blob, kind) => {
+    const result = await postQrPayment({
+      action: 'qr_confirm', code: transactionCode, amount: activeQr.amount, account_id: activeQr.account.id, kind,
+    }, blob, kind);
+    setPaymentStatus('completed');
+    Swal.fire({
+      title: result.photoSaved ? 'Đã xác nhận và lưu ảnh' : 'Đã xác nhận (chưa lưu được ảnh)',
+      icon: result.photoSaved ? 'success' : 'warning', toast: true, position: 'top-end', showConfirmButton: false, timer: 3000,
     });
-    if (!isConfirmed) return;
-
-    try {
-      const numAmount = activeQr?.amount || 0;
-
-      const { data: confirmed, error: confirmError } = await supabase.rpc('confirm_custom_qr_payment', {
-        p_code: transactionCode,
-        p_expected_amount: numAmount,
-        p_account_id: activeQr?.account?.id || null,
-      });
-      if (confirmError) throw confirmError;
-      if (!confirmed?.success) throw new Error('Chưa đối chiếu được mã QR và số tiền.');
-
-      setPaymentStatus('completed');
-      setReceipt({ source: `qr:${transactionCode}`, method: 'transfer', amount: numAmount });
-      Swal.fire({ title: 'Thành công!', text: 'Đã xác nhận thanh toán thủ công.', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 3000 });
-
-    } catch (err) {
-      console.error(err);
-      Swal.fire('Lỗi', err.message, 'error');
-    }
   };
 
   return (
@@ -333,7 +302,7 @@ export default function QrGeneratorPage() {
               }}
             >
               <Banknote size={20} />
-              Nhận tiền mặt
+              Nhận tiền mặt (chụp bill)
             </button>
           </div>
 
@@ -387,9 +356,10 @@ export default function QrGeneratorPage() {
                       </button>
                       <button
                         onClick={handleConfirmManual}
+                        disabled={saving}
                         style={{ flex: 2, background: '#16a34a', color: 'white', border: 'none', padding: '12px', borderRadius: 12, fontWeight: 700, cursor: 'pointer', transition: 'background 0.2s' }}
                       >
-                        Xác nhận đã nhận tiền
+                        📷 Xác nhận đã nhận tiền
                       </button>
                     </div>
                   </>
@@ -404,36 +374,20 @@ export default function QrGeneratorPage() {
             </div>
           )}
 
-          {/* Chụp bill sau khi thu — không bắt buộc, thiếu thì Sổ thu chi hiện "Chưa có ảnh bill". */}
-          {receipt && (
-            <div style={{ marginTop: 16, background: '#f0fdf4', borderRadius: 16, padding: 16, border: '1px solid #bbf7d0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{ flex: 1, fontWeight: 800, color: '#166534' }}>
-                  📷 Chụp bill (không bắt buộc)
-                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#475569', marginTop: 2 }}>
-                    {receipt.amount.toLocaleString('vi-VN')}đ · {receipt.method === 'cash' ? 'Tiền mặt' : 'Chuyển khoản'}
-                  </div>
-                </div>
-                <button onClick={() => setReceipt(null)} title="Xong"
-                  style={{ background: 'white', border: '1px solid #bbf7d0', borderRadius: 10, padding: '8px 14px', fontWeight: 700, color: '#166534', cursor: 'pointer' }}>
-                  Xong
-                </button>
-              </div>
-              <PhotoRow label="Ảnh tờ bill" done={receipt.bill} busy={uploading === 'bill'}
-                onCamera={() => startCamera('bill')} onGallery={() => startGallery('bill')} />
-              {receipt.method === 'transfer' && <PhotoRow label="Ảnh màn hình CK trên điện thoại khách" done={receipt.ck} busy={uploading === 'ck'}
-                onCamera={() => startCamera('ck')} onGallery={() => startGallery('ck')} />}
-            </div>
-          )}
-          <input ref={galleryInput} type="file" accept="image/*" onChange={picked} hidden />
           <input ref={captureInput} type="file" accept="image/*" capture="environment" onChange={picked} hidden />
           {camera && <CameraCapture
-            title={camera === 'bill' ? 'Chụp tờ bill' : 'Chụp màn hình CK trên điện thoại khách'}
-            subtitle={receipt ? `${receipt.amount.toLocaleString('vi-VN')}đ` : ''}
-            closeText="Bỏ qua"
+            title={camera.method === 'cash' ? 'Chụp tờ bill để ghi tiền mặt' : 'Chụp để xác nhận đã nhận tiền'}
+            subtitle={`${camera.amount.toLocaleString('vi-VN')}đ · ${camera.method === 'cash' ? 'tiền mặt' : 'chuyển khoản'} · chưa chụp thì chưa ghi tiền`}
+            choices={camera.method === 'cash' ? undefined : TRANSFER_SHOTS}
+            closeText="Huỷ"
             onClose={() => setCamera(null)}
-            onCapture={blob => uploadPhoto(camera, blob)}
+            onCapture={(blob, kind) => saveShot(camera, blob, kind || 'bill')}
           />}
+          {saving && <div style={{ position: 'fixed', inset: 0, zIndex: 1900, background: 'rgba(15,23,42,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ background: 'white', borderRadius: 16, padding: '18px 22px', display: 'flex', alignItems: 'center', gap: 10, fontWeight: 700, color: '#0f172a' }}>
+              <RefreshCw className="animate-spin" size={20} /> Đang lưu ảnh và ghi tiền...
+            </div>
+          </div>}
 
         </div>
       </div>

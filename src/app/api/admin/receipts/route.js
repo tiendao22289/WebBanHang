@@ -9,8 +9,12 @@
  *   attach_bill      receipt_id | source, image — ảnh tờ bill chụp bổ sung (bill từ trang Mã QR)
  *   delete_paper     id — nhân viên chỉ xoá bill giấy mình nhập trong ngày; admin xoá được mọi bill giấy
  *
+ *   qr_confirm       code, amount, account_id, kind ('ck' | 'bill'), image — trang Mã QR: "Xác nhận đã nhận tiền"
+ *   qr_cash          receipt_id, amount, image — trang Mã QR: "Nhận tiền mặt"
+ *
  * source = 'qr:<mã>' / 'cash:<id phiếu>': bill giấy DB tự ghi khi thu ở trang
- * Mã QR (owner_finance.sql, capture_qr_page_receipt) — trang đó chưa biết id.
+ * Mã QR (owner_finance.sql, capture_qr_page_receipt). qr_confirm / qr_cash bắt
+ * buộc có ảnh (tờ bill hoặc màn hình ĐT khách): chưa chụp thì chưa ghi tiền.
  *
  * Chạy bằng service role (bảng sổ thu chi đã chặn anon). Không đụng orders
  * hay trang Thống kê.
@@ -190,6 +194,43 @@ export async function POST(request) {
       if (update.error) { await removeReceiptImages(db, [path]); throw update.error; }
       await removeReceiptImages(db, [row.image_path]);
       return NextResponse.json({ ok: true }, { headers });
+    }
+
+    if (action === 'qr_confirm' || action === 'qr_cash') {
+      const cash = action === 'qr_cash';
+      const image = form.get('image');
+      const problem = receiptImageProblem(image);
+      if (problem) return fail(problem === 'Thiếu ảnh.' ? 'Chụp tờ bill hoặc màn hình điện thoại khách trước khi xác nhận.' : problem);
+      const amount = Number(form.get('amount'));
+      if (!Number.isSafeInteger(amount) || amount <= 0 || amount > MAX_AMOUNT) return fail('Số tiền không hợp lệ.');
+      const code = String(form.get(cash ? 'receipt_id' : 'code') || '');
+      const accountId = String(form.get('account_id') || '');
+      if (cash ? !UUID.test(code) : (!/^[A-Z0-9]{8}$/.test(code) || !UUID.test(accountId))) return fail('Thiếu mã giao dịch.');
+      const kind = !cash && form.get('kind') !== 'bill' ? 'ck' : 'bill';
+      // Lưu ảnh trước: tiền chỉ được ghi khi ảnh đã nằm trong kho.
+      const path = await uploadReceiptImage(db, image, kind);
+      const { data, error } = cash
+        ? await db.rpc('record_custom_cash_receipt', { p_id: code, p_amount: amount })
+        : await db.rpc('confirm_custom_qr_payment', { p_code: code, p_expected_amount: amount, p_account_id: accountId });
+      if (error || !data?.success) {
+        await removeReceiptImages(db, [path]);
+        // P0001 = câu báo lỗi tiếng Việt do hàm SQL tự đặt (mã không khớp, đã huỷ...).
+        return fail(error?.code === 'P0001' ? error.message : 'Chưa ghi được tiền, thử lại.');
+      }
+      const column = kind === 'bill' ? 'image_path' : 'transfer_image_path';
+      const { data: row, error: rowError } = await db.from('finance_manual_receipts').select(`id, ${column}`)
+        .eq('source', `${cash ? 'cash' : 'qr'}:${code}`).maybeSingle();
+      if (rowError || !row) {
+        // Tiền đã ghi; chỉ thiếu dòng Sổ thu chi (trigger chưa cài / lỗi) → không giữ ảnh mồ côi.
+        console.error('[receipts] QR page receipt missing', rowError || code);
+        await removeReceiptImages(db, [path]);
+        return NextResponse.json({ ok: true, photoSaved: false, alreadyDone: !!data.already_completed }, { headers });
+      }
+      const update = await db.from('finance_manual_receipts')
+        .update({ [column]: path, created_by_name: `Trang Mã QR · ${session.user.full_name || 'nhân viên'}` }).eq('id', row.id);
+      if (update.error) { await removeReceiptImages(db, [path]); throw update.error; }
+      await removeReceiptImages(db, [row[column]]);
+      return NextResponse.json({ ok: true, photoSaved: true, alreadyDone: !!data.already_completed }, { headers });
     }
 
     if (action === 'delete_paper') {
