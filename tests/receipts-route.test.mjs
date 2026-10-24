@@ -283,3 +283,71 @@ test('cash on the QR page is recorded only with a photo of the bill', async () =
   assert.deepEqual([state.finance_manual_receipts[0].image_path, state.finance_manual_receipts[0].transfer_image_path], ['2026-10/bill-1.jpg', undefined], 'cash photo is always the bill');
   assert.equal((await post(staff.api, { action: 'qr_cash', receipt_id: 'not-a-uuid', amount: '120000', image: image() })).status, 400);
 });
+
+// Trang Bàn: như DB thật — đóng bàn trong 1 giao dịch, trigger ghi bill vào Sổ thu chi.
+const TABLE = '00000000-0000-4000-8000-0000000000f1';
+const ORDERS = ['00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000a2'];
+const tableDb = () => ({ ...base(), rpc: {
+  complete_table_payment_atomic: (args, state) => {
+    if (args.p_expected_amount === 999) return { data: { success: false, reason: 'amount_changed', total: 1200 }, error: null };
+    if (args.p_expected_amount === 998) return { data: null, error: { code: 'P0001', message: 'Nhóm bàn đã thay đổi' } };
+    for (const id of args.p_expected_order_ids) state.finance_revenue_ledger.push({ order_id: id, business_date: today, payment_method: args.p_payment_method, amount: 1 });
+    return { data: { success: true }, error: null };
+  },
+} });
+const payTable = (api, fields = {}) => post(api, { action: 'table_pay', table_id: TABLE, order_ids: ORDERS.join(','), amount: '300000', method: 'cash', image: image(), ...fields });
+
+test('a table closes only with a photo of the cash or the customer transfer screen, put on every bill of the group', async () => {
+  const state = tableDb();
+  const staff = load({ state });
+  let res = await payTable(staff.api, { image: undefined });
+  assert.deepEqual([res.status, res.body.error], [400, 'Chụp tiền khách đưa trước khi đóng bàn.']);
+  res = await payTable(staff.api, { method: 'transfer', account_id: ACC, image: undefined });
+  assert.equal(res.body.error, 'Chụp màn hình chuyển khoản của khách trước khi đóng bàn.');
+  assert.equal(state.rpcCalls, undefined, 'no photo, no reason → the table stays open');
+
+  res = await payTable(staff.api);
+  assert.deepEqual([res.status, res.body.photoSaved], [200, true]);
+  const [name, args] = plain(state.rpcCalls)[0];
+  assert.equal(name, 'complete_table_payment_atomic');
+  assert.deepEqual(args, { p_table_id: TABLE, p_expected_order_ids: ORDERS, p_expected_amount: 300000, p_payment_method: 'cash',
+    p_account_id: null, p_hide_stats: false, p_staff_id: STAFF, p_staff_name: 'Thu ngân', p_transaction_code: null }, 'staff comes from the login, not the browser');
+  assert.deepEqual(plain(state.finance_revenue_ledger).map(r => [r.cash_image_path, r.photo_by, r.transfer_image_path ?? null]),
+    [['2026-10/cash-1.jpg', 'Thu ngân', null], ['2026-10/cash-1.jpg', 'Thu ngân', null]]);
+});
+
+test('a transfer table keeps the customer screen as its transfer photo and passes the card and QR code', async () => {
+  const state = tableDb();
+  const staff = load({ state });
+  const res = await payTable(staff.api, { method: 'transfer', account_id: ACC, hide_stats: '1', transaction_code: 'HD123' });
+  assert.equal(res.status, 200);
+  const args = plain(state.rpcCalls)[0][1];
+  assert.deepEqual([args.p_payment_method, args.p_account_id, args.p_hide_stats, args.p_transaction_code], ['transfer', ACC, true, 'HD123']);
+  assert.deepEqual(plain(state.finance_revenue_ledger).map(r => [r.transfer_image_path, r.transfer_image_by, r.cash_image_path ?? null]),
+    [['2026-10/ck-1.jpg', 'Thu ngân', null], ['2026-10/ck-1.jpg', 'Thu ngân', null]]);
+});
+
+test('when the camera is broken the table closes only with a written reason, shown in the finance book', async () => {
+  const state = tableDb();
+  const staff = load({ state });
+  assert.equal((await payTable(staff.api, { image: undefined, skip_reason: ' a ' })).status, 400, 'a real reason is needed');
+  const res = await payTable(staff.api, { image: undefined, skip_reason: 'Máy lỗi camera' });
+  assert.deepEqual([res.status, res.body.photoSaved], [200, true]);
+  assert.equal(staff.uploads.length, 0);
+  assert.deepEqual(plain(state.finance_revenue_ledger).map(r => [r.photo_skip_reason, r.photo_by]), [['Máy lỗi camera', 'Thu ngân'], ['Máy lỗi camera', 'Thu ngân']]);
+});
+
+test('a bill that changed while paying keeps the table open and drops the photo', async () => {
+  const state = tableDb();
+  const staff = load({ state });
+  let res = await payTable(staff.api, { amount: '999' });
+  assert.deepEqual([res.status, res.body.reason, res.body.total], [409, 'amount_changed', 1200]);
+  res = await payTable(staff.api, { amount: '998' });
+  assert.deepEqual([res.status, res.body.error], [400, 'Nhóm bàn đã thay đổi']);
+  assert.deepEqual(staff.removed, ['2026-10/cash-1.jpg', '2026-10/cash-2.jpg']);
+  assert.equal(state.finance_revenue_ledger.length, 0);
+  for (const fields of [{ table_id: 'x' }, { order_ids: '' }, { order_ids: 'a,b' }, { amount: '0' }, { method: 'card' }, { method: 'transfer', account_id: 'x' }]) {
+    assert.equal((await payTable(staff.api, fields)).status, 400, JSON.stringify(fields));
+  }
+  assert.equal(staff.uploads.length, 2, 'bad requests upload nothing');
+});

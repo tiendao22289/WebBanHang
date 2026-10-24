@@ -89,10 +89,10 @@ export async function purgeOldReceiptImages(db) {
     await db.from('finance_manual_receipts').update({ image_path: null, transfer_image_path: null, images_purged_at: new Date().toISOString() })
       .in('id', paper.data.map(r => r.id));
   }
-  const bills = await db.from('finance_revenue_ledger').select('order_id, transfer_image_path')
-    .lt('paid_at', cutoff).not('transfer_image_path', 'is', null).limit(100);
+  const bills = await db.from('finance_revenue_ledger').select('order_id, transfer_image_path, cash_image_path')
+    .lt('paid_at', cutoff).or('transfer_image_path.not.is.null,cash_image_path.not.is.null').limit(100);
   if (!bills.error && bills.data?.length) {
-    await removeReceiptImages(db, bills.data.map(r => r.transfer_image_path));
-    await db.from('finance_revenue_ledger').update({ transfer_image_path: null }).in('order_id', bills.data.map(r => r.order_id));
+    await removeReceiptImages(db, bills.data.flatMap(r => [r.transfer_image_path, r.cash_image_path]));
+    await db.from('finance_revenue_ledger').update({ transfer_image_path: null, cash_image_path: null }).in('order_id', bills.data.map(r => r.order_id));
   }
 }

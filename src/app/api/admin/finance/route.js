@@ -441,7 +441,8 @@ export async function GET(request) {
 
       let bills = [];
       if (type !== 'paper') {
-        let q = db.from('finance_revenue_ledger').select('order_id, paid_at, business_date, table_number, customer_name, payment_method, account_id, amount, items, transfer_image_path, verified_at, verified_by')
+        // '*': cột ảnh tiền mặt / lý do không chụp có thể chưa cài (owner_finance.sql) — không làm hỏng tra cứu.
+        let q = db.from('finance_revenue_ledger').select('*')
           .gte('business_date', from).lt('business_date', addDays(to, 1)).order('paid_at', { ascending: false }).limit(LIMIT);
         if (table) q = q.eq('table_number', table);
         if (amount) q = q.eq('amount', amount);
@@ -471,11 +472,13 @@ export async function GET(request) {
           && (!missingImage || (!p.transfer_image_path && p.business_date >= keepFrom))
           && (check !== 'unchecked' || !p.verified_at) && (check !== 'checked' || !!p.verified_at));
       }
-      const urls = await signReceiptImages(db, [...bills.map(b => b.transfer_image_path), ...paper.flatMap(p => [p.image_path, p.transfer_image_path])]);
+      const urls = await signReceiptImages(db, [...bills.flatMap(b => [b.transfer_image_path, b.cash_image_path]), ...paper.flatMap(p => [p.image_path, p.transfer_image_path])]);
       const results = [
         ...bills.map(b => ({ kind: 'bill', id: b.order_id, at: b.paid_at, date: b.business_date, table: b.table_number, customer: b.customer_name,
           method: b.payment_method, accountId: b.account_id, amount: Number(b.amount), items: b.items || [],
-          transferImageUrl: urls[b.transfer_image_path] || null, imageExpired: !b.transfer_image_path && b.business_date < keepFrom,
+          transferImageUrl: urls[b.transfer_image_path] || null, cashImageUrl: urls[b.cash_image_path] || null,
+          imageExpired: !b.transfer_image_path && !b.cash_image_path && b.business_date < keepFrom,
+          skipReason: b.photo_skip_reason || null, photoBy: b.photo_by || null,
           verifiedAt: b.verified_at || null, verifiedBy: b.verified_by || null })),
         ...paper.map(p => ({ kind: 'paper', id: p.id, at: p.received_at, date: p.business_date, table: p.table_label, customer: null,
           method: p.payment_method, accountId: p.account_id, amount: Number(p.amount), note: p.note, by: p.created_by_name,
@@ -552,7 +555,7 @@ export async function GET(request) {
         readClose(db, date),
         readPaper(db, date, nextDay),
       ]);
-      const urls = await signReceiptImages(db, [...bills.map(b => b.transfer_image_path), ...paper.flatMap(r => [r.image_path, r.transfer_image_path])]);
+      const urls = await signReceiptImages(db, [...bills.flatMap(b => [b.transfer_image_path, b.cash_image_path]), ...paper.flatMap(r => [r.image_path, r.transfer_image_path])]);
       const day = { cash: 0, byAccount: {} };
       for (const bill of [...bills, ...paper]) {
         const amount = Number(bill.amount) || 0;
@@ -561,7 +564,7 @@ export async function GET(request) {
         day.byAccount[key] = (day.byAccount[key] || 0) + amount;
       }
       return NextResponse.json({ date, today, startDate: FINANCE_START_DATE,
-        bills: bills.map(({ transfer_image_path: path, ...b }) => ({ ...b, transfer_image_url: urls[path] || null })),
+        bills: bills.map(({ transfer_image_path: path, cash_image_path: cashPath, ...b }) => ({ ...b, transfer_image_url: urls[path] || null, cash_image_url: urls[cashPath] || null })),
         paperBills: paper.map(r => ({ id: r.id, receivedAt: r.received_at, amount: Number(r.amount), paymentMethod: r.payment_method,
           accountId: r.account_id, tableLabel: r.table_label, note: r.note, createdByName: r.created_by_name,
           imageUrl: urls[r.image_path] || null, transferImageUrl: urls[r.transfer_image_path] || null, imagesPurged: !!r.images_purged_at })),

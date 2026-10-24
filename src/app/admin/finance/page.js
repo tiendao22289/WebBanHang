@@ -339,6 +339,10 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
               <button className="fin-ck-add" onClick={() => startAttach({ order_id: bill.order_id })} disabled={!!attaching}>Chọn ảnh</button>
             </span>
           </div>}
+          {bill.payment_method !== 'transfer' && bill.cash_image_url && <div className="fin-ck">
+            <button className="fin-ck-view" onClick={() => setView(bill.cash_image_url)}>📷 Xem ảnh tiền mặt</button>
+          </div>}
+          {bill.photo_skip_reason && <p className="fin-warn">⚠ Đóng bàn không ảnh: {bill.photo_skip_reason}{bill.photo_by ? ` (${bill.photo_by})` : ''}</p>}
           {open === bill.order_id && <ul className="fin-items">{(bill.items || []).map((item, i) =>
             <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>}
         </div>)}
@@ -537,16 +541,16 @@ function SearchView({ accounts, preset }) {
         {day.items.map(r => {
           const isOpen = open === `${r.kind}-${r.id}`;
           const ckMissing = r.method === 'transfer' && !r.transferImageUrl && !r.imageExpired;
-          const photo = r.transferImageUrl || r.billImageUrl;
+          const photo = r.transferImageUrl || r.cashImageUrl || r.billImageUrl;
           return <div key={`${r.kind}-${r.id}`} className={`fin-bill${r.verifiedAt ? ' verified' : ''}`}>
             {photo
-              ? <button className="fin-bill-photo" onClick={() => setView(photo)} aria-label={r.transferImageUrl ? 'Xem ảnh CK' : 'Xem ảnh bill'}><img src={photo} alt="" draggable={false} /></button>
+              ? <button className="fin-bill-photo" onClick={() => setView(photo)} aria-label={r.transferImageUrl ? 'Xem ảnh CK' : r.cashImageUrl ? 'Xem ảnh tiền mặt' : 'Xem ảnh bill'}><img src={photo} alt="" draggable={false} /></button>
               : ckMissing
                 ? <button className="fin-bill-photo add" onClick={() => startCamera(r)} disabled={saving === r.id} aria-label="Chụp ảnh CK"><Camera size={18} /><small>Chụp</small></button>
                 : <span className="fin-bill-photo none" title={r.imageExpired ? 'Ảnh đã xoá sau 3 tháng' : ''}>{r.method === 'transfer' ? <CreditCard size={18} /> : <Banknote size={18} />}</span>}
             <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : `${r.kind}-${r.id}`)} aria-expanded={isOpen}>
               <b>{clock(r.at)} · {r.kind === 'paper' && !/^\d/.test(r.table || '') ? (r.table || 'Bill giấy') : `Bàn ${r.table || '?'}`}</b>
-              <small>{r.kind === 'paper' ? 'Bill giấy' : (r.customer || 'Khách')} · {r.method === 'transfer' ? cardName(r.accountId) : 'Tiền mặt'}</small>
+              <small>{r.kind === 'paper' ? 'Bill giấy' : (r.customer || 'Khách')} · {r.method === 'transfer' ? cardName(r.accountId) : 'Tiền mặt'}{r.skipReason ? ' · ⚠ không ảnh' : ''}</small>
             </button>
             <div className="fin-bill-end">
               <b>{money(r.amount)}</b>
@@ -555,6 +559,7 @@ function SearchView({ accounts, preset }) {
             </div>
             {isOpen && <div className="fin-bill-more">
               {r.by && <p>Người nhập: {r.by}</p>}
+              {r.skipReason && <p className="fin-warn">⚠ Đóng bàn không ảnh: {r.skipReason}{r.photoBy ? ` (${r.photoBy})` : ''}</p>}
               {r.verifiedAt && <p>Đối chiếu: {r.verifiedBy ? `${r.verifiedBy} · ` : ''}{stamp(r.verifiedAt)}</p>}
               {r.imageExpired && <p>Ảnh đã xoá (quá 3 tháng)</p>}
               {r.kind === 'paper' && r.transferImageUrl && r.billImageUrl && <button className="fin-hit-photo" onClick={() => setView(r.billImageUrl)}><img src={r.billImageUrl} alt="" draggable={false} /><span>Ảnh bill</span></button>}

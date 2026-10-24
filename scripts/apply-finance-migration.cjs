@@ -46,6 +46,7 @@ async function main() {
     to_regclass('public.finance_manual_receipts') IS NOT NULL AS paper,
     to_regclass('public.finance_settings') IS NOT NULL AS settings,
     EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'finance_revenue_ledger' AND column_name = 'verified_at') AS verify_cols,
+    (SELECT count(*)::int FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'finance_revenue_ledger' AND column_name IN ('cash_image_path', 'photo_skip_reason', 'photo_by')) = 3 AS table_photo_cols,
     EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'capture_finance_revenue' AND tgrelid = 'public.orders'::regclass AND tgenabled = 'O') AS trigger_on,
     EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'capture_qr_page_receipt' AND tgrelid = to_regclass('public.payment_transactions') AND tgenabled = 'O') AS qr_trigger_on,
     EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'capture_qr_page_receipt' AND tgrelid = to_regclass('public.custom_cash_receipts') AND tgenabled = 'O') AS cash_trigger_on,
@@ -53,7 +54,7 @@ async function main() {
     NOT has_table_privilege('anon', 'public.finance_revenue_ledger', 'SELECT') AS anon_blocked,
     (SELECT count(*)::int FROM public.finance_revenue_ledger) AS ledger_rows`);
   console.log(JSON.stringify(check));
-  if (!check.ledger || !check.entries || !check.day_closes || !check.categories || !check.paper || !check.settings || !check.verify_cols || !check.trigger_on || !check.qr_trigger_on || !check.cash_trigger_on || !check.qr_confirm_fixed || !check.anon_blocked) {
+  if (!check.ledger || !check.entries || !check.day_closes || !check.categories || !check.paper || !check.settings || !check.verify_cols || !check.table_photo_cols || !check.trigger_on || !check.qr_trigger_on || !check.cash_trigger_on || !check.qr_confirm_fixed || !check.anon_blocked) {
     throw new Error('Cài chưa đủ, xem kết quả kiểm tra ở trên.');
   }
   console.log('Đã cài sổ thu chi vào DB thật.');
