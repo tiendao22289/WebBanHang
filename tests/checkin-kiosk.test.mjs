@@ -59,14 +59,18 @@ test('new shop hours and shifts apply from their day on; days already worked kee
 test('forgotten clock-outs close at the end of the person\'s shift', () => {
   const R = rules.normalizeRules({}, [{ staff_id: 'p', valid_from: '2000-01-01', start_time: '14:00', end_time: '18:00' }], [SHOP_HOURS]);
   const s = { staff_id: 'a', date: '2026-10-24', clock_in: '2026-10-24T10:00:00Z', clock_out: null };
-  assert.equal(rules.forgottenClockOut(s, R, Date.parse('2026-10-24T17:59:00Z')), null, 'still within 2 hours after closing');
-  assert.equal(rules.forgottenClockOut(s, R, Date.parse('2026-10-24T18:00:00Z')).toISOString(), '2026-10-24T16:00:00.000Z');
+  assert.equal(rules.forgottenClockOut(s, R, Date.parse('2026-10-24T19:59:00Z')), null, 'still within 4 hours after closing (02:59)');
+  assert.equal(rules.forgottenClockOut(s, R, Date.parse('2026-10-24T20:00:00Z')).toISOString(), '2026-10-24T16:00:00.000Z');
   const late = { ...s, clock_in: '2026-10-24T16:30:00Z' };
-  assert.equal(rules.forgottenClockOut(late, R, Date.parse('2026-10-24T18:31:00Z')).toISOString(), '2026-10-24T16:30:00.000Z', 'clocked in after closing → 0 hours');
+  assert.equal(rules.forgottenClockOut(late, R, Date.parse('2026-10-24T20:31:00Z')).toISOString(), '2026-10-24T16:30:00.000Z', 'clocked in after closing → 0 hours');
+  // Lượt mở lúc 01:30 (dọn quán, ghi ngày hôm sau) theo ca hôm trước: tự đóng lúc 05:30, không treo tới đêm hôm sau.
+  const cleanup = { staff_id: 'a', date: '2026-10-25', clock_in: '2026-10-24T18:30:00Z', clock_out: null };
+  assert.equal(rules.forgottenClockOut(cleanup, R, Date.parse('2026-10-24T22:29:00Z')), null);
+  assert.equal(rules.forgottenClockOut(cleanup, R, Date.parse('2026-10-24T22:30:00Z')).toISOString(), '2026-10-24T18:30:00.000Z');
   // Ca riêng 14:00–18:00: có thể đang ở lại làm nên chờ tới sau giờ đóng quán mới đóng, nhưng ghi ra ca lúc 18:00.
   const part = { ...s, staff_id: 'p' };
   assert.equal(rules.forgottenClockOut(part, R, Date.parse('2026-10-24T14:00:00Z')), null);
-  assert.equal(rules.forgottenClockOut(part, R, Date.parse('2026-10-24T18:00:00Z')).toISOString(), '2026-10-24T11:00:00.000Z');
+  assert.equal(rules.forgottenClockOut(part, R, Date.parse('2026-10-24T20:00:00Z')).toISOString(), '2026-10-24T11:00:00.000Z');
   assert.equal(rules.forgottenClockOut({ ...s, clock_out: '2026-10-24T15:00:00Z' }, R, Date.now()), null);
 });
 

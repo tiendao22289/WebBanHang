@@ -5,7 +5,9 @@
  */
 
 export const NETWORK_WINDOW_MS = 15 * 60 * 1000;
-export const FORGOT_GRACE_MS = 2 * 3600 * 1000;
+// Ca còn mở quá giờ hết ca / giờ đóng quán chừng này thì coi là quên ra ca. Bằng khoảng "dọn quán sau nửa đêm"
+// (4 tiếng) để người ở lại dọn tới 1–2 giờ sáng vẫn quét ra ca bình thường.
+export const FORGOT_GRACE_MS = 4 * 3600 * 1000;
 export const MIN_TOGGLE_MS = 3 * 60 * 1000;
 export const AUTO_CLOSE_BY = 'Máy tự đóng (quên ra ca)';
 
@@ -201,13 +203,14 @@ export const flagTexts = f => [
 ].filter(Boolean);
 
 /**
- * Ca còn mở quá giờ hết ca (và giờ đóng quán) 2 tiếng → coi là quên ra ca, trả về giờ
- * ra ca máy tự ghi: giờ hết ca của người đó, hoặc giờ vào nếu vào sau giờ đó. Không thì null.
+ * Ca còn mở quá giờ hết ca (và giờ đóng quán) của ngày làm 4 tiếng → coi là quên ra ca, trả về giờ ra ca
+ * máy tự ghi: giờ hết ca của người đó, hoặc giờ vào nếu vào sau giờ đó. Không thì null. Lượt mở sau nửa
+ * đêm (dọn quán) tính theo ca hôm trước, không phải ca của ngày ghi.
  */
 export function forgottenClockOut(session, rules, now = Date.now()) {
   if (!session || session.clock_out || !session.clock_in || !session.date) return null;
-  const w = windowFor(session, rules), shop = hoursOn(rules, session.date);
-  const shopEnd = shiftWindow(session.date, shop.opening, shop.closing).end.getTime();
+  const w = windowFor(session, rules), shop = hoursOn(rules, w.date);
+  const shopEnd = shiftWindow(w.date, shop.opening, shop.closing).end.getTime();
   const closeAt = Math.max(w.end.getTime(), Date.parse(session.clock_in));
   return now >= Math.max(closeAt, shopEnd) + FORGOT_GRACE_MS ? new Date(closeAt) : null;
 }

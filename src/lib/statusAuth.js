@@ -3,7 +3,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { STATUS_COOKIE, verifySession } from './statusSession.mjs';
-import { hasLeft } from './staffDeparture.mjs';
+import { hasLeft, vnDay } from './staffDeparture.mjs';
+import { nowMs } from './trueTime.mjs';
 
 let secret;
 export function getStatusSecret() {
@@ -45,7 +46,8 @@ export async function getStaffSession(request) {
   if (error) return { code: 503 };
   if (!data) return { code: 401 };
   // Đã nghỉ việc (qua ngày làm cuối): phiên đăng nhập cũ trên điện thoại cũng hết hiệu lực.
-  if (await hasLeft(db, data.id)) return { code: 401 };
+  // Ngày làm cuối theo giờ internet (đồng hồ máy tính ở quán có thể sai).
+  if (await hasLeft(db, data.id, vnDay(nowMs()))) return { code: 401 };
   return { code: 200, user: data };
 }
 

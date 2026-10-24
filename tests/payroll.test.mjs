@@ -134,3 +134,11 @@ test('leaving 30 minutes or more early costs the early hours: day pay ÷ shift h
   const oct = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: [ses('o', '2026-10-27', '07:00', '13:00')], config: CONFIG, rules: RULES });
   assert.deepEqual([oct.earlyAmt, oct.net], [0, 5200000]);
 });
+
+test('the night of 31/10 → 1/11: a clean-up after midnight is paid in October, not lost between the two formulas', () => {
+  const night = [ses('o31', '2026-10-31', '07:00', '16:00'), { id: 'n1', staff_id: 'a', date: '2026-11-01', clock_in: '2026-10-31T17:30:00Z', clock_out: '2026-10-31T18:30:00Z' }];
+  const oct = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: night, config: CONFIG, rules: RULES, reviews: [{ attendance_id: 'n1', status: 'approved', minutes: 60 }] });
+  const nov = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: night, config: CONFIG, rules: RULES, reviews: [{ attendance_id: 'n1', status: 'approved', minutes: 60 }] });
+  assert.deepEqual([oct.workDays, oct.totalWorkH, oct.otHours], [1, 10, 2], 'October: one day of 10 hours (9 + the approved clean-up hour), 2 hours over 8');
+  assert.deepEqual([nov.workUnits, nov.totalWorkH], [0, 0], 'not a November day');
+});

@@ -204,6 +204,9 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
   add(T(25, '23:50'), () => ownerPost(T(25, '23:50'), { action: 'close_month', year: 2026, month: 11, staff_id: EM.id }));
   add(T(25, '23:55'), () => ownerPost(T(25, '23:55'), { action: 'mark_paid', year: 2026, month: 11, staff_id: EM.id }));
 
+  // Máy quầy mở cả đêm: hỏi mã liên tục nên cứ 5 phút máy chủ dọn ca quên ra ca (ở đây: 04:00 mỗi sáng).
+  for (const d of days(1, 30)) add(T(d, '04:00+1'), () => qr(T(d, '04:00+1')));
+
   // ── Chạy cả tháng theo thứ tự giờ.
   events.sort((a, b) => a.time - b.time);
   for (const e of events) await e.fn();

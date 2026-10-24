@@ -28,12 +28,6 @@ const round1 = n => Math.round(n * 10) / 10;
 export const monthKey = (year, month) => `${year}-${String(month).padStart(2, '0')}`;
 export const usesDayPay = (year, month) => monthKey(year, month) >= DAY_PAY_FROM;
 
-function byDate(sessions) {
-  const days = new Map();
-  for (const s of sessions) days.set(s.date, [...(days.get(s.date) || []), s]);
-  return [...days.values()];
-}
-
 /**
  * sessions: ca của người đó trong tháng; config: dòng payroll_config; requests: đơn của
  * người đó; violations: tiền phạt trong tháng; bonuses: thưởng chuyên cần đã duyệt;
@@ -87,8 +81,9 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
       bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, pendingH: round1(pendingMs / HOUR), net: basePay - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt };
   }
 
-  // Cách cũ (giữ nguyên số của các tháng trước): tính từng ngày ghi, làm tròn 0,1 giờ.
-  const days = byDate(sessions.filter(s => String(s.date).slice(0, 7) === key));
+  // Cách cũ (giữ nguyên số của các tháng trước): tính từng ngày làm, làm tròn 0,1 giờ. Theo ngày làm như tháng
+  // ngày công để lượt dọn quán sau nửa đêm (vd. đêm 31/10 → 1/11) vẫn thuộc tháng của ca, không rơi mất.
+  const days = [...groupByWorkDay(sessions, rules).entries()].filter(([day]) => day.slice(0, 7) === key).map(([, list]) => list);
   const workDays = days.filter(d => d.some(s => s.clock_out)).length;
   for (const day of days) {
     const byShift = rules && String(day[0].date) >= rules.hours_from;
