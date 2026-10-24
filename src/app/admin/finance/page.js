@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, PiggyBank, RefreshCw, Trash2, X } from 'lucide-react';
+import { Banknote, Camera, ChevronLeft, ChevronRight, CreditCard, PiggyBank, RefreshCw, Trash2, X } from 'lucide-react';
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import { useBackClose } from '@/lib/useBackClose';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
@@ -339,6 +339,10 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
               <button className="fin-ck-add" onClick={() => startAttach({ order_id: bill.order_id })} disabled={!!attaching}>Chọn ảnh</button>
             </span>
           </div>}
+          {bill.payment_method !== 'transfer' && bill.cash_image_url && <div className="fin-ck">
+            <button className="fin-ck-view" onClick={() => setView(bill.cash_image_url)}>📷 Xem ảnh tiền mặt</button>
+          </div>}
+          {bill.photo_skip_reason && <p className="fin-warn">⚠ Đóng bàn không ảnh: {bill.photo_skip_reason}{bill.photo_by ? ` (${bill.photo_by})` : ''}</p>}
           {open === bill.order_id && <ul className="fin-items">{(bill.items || []).map((item, i) =>
             <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>}
         </div>)}
@@ -434,6 +438,8 @@ function SearchView({ accounts, preset }) {
   const [saving, setSaving] = useState(null);
   useBackClose(!!view, () => setView(null));
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Chuyển khoản';
+  // Tên thẻ ngắn cho dòng bill gọn: "MB Bank ·6781".
+  const cardName = id => { const a = accounts.find(x => x.id === id); return a ? cardLabel(a) : 'Chuyển khoản'; };
   const set = patch => setFilters(f => ({ ...f, ...patch }));
 
   async function search(event, patch = {}) {
@@ -490,6 +496,12 @@ function SearchView({ accounts, preset }) {
 
   const { table, amount, from, to, type, account, photo, check } = filters;
   const total = (result?.results || []).reduce((s, r) => s + r.amount, 0);
+  // Bill theo ngày, giữ thứ tự mới → cũ của máy chủ.
+  const days = [...(result?.results || []).reduce((map, r) => {
+    const day = map.get(r.date) || map.set(r.date, { date: r.date, items: [], total: 0 }).get(r.date);
+    day.items.push(r); day.total += r.amount;
+    return map;
+  }, new Map()).values()];
   const alerts = result?.alerts;
   const normTable = table.trim().replace(/^b(àn)?\s*/i, '').toLowerCase();
   return <section className="fin-section">
@@ -522,34 +534,46 @@ function SearchView({ accounts, preset }) {
     {result && <p className="fin-search-sum">{result.results.length} bill · {money(total)}{result.truncated ? ' · chỉ hiện 200 bill mới nhất, thu hẹp ngày để xem thêm' : ''}</p>}
     {result && !result.results.length && <p className="fin-empty">Không có bill nào khớp.</p>}
 
+    {/* Gọn: gom theo ngày, mỗi bill 1 dòng (ảnh nhỏ | giờ · bàn | tiền + đối chiếu); bấm vào để xem thêm. */}
     <div className="fin-search-list">
-      {(result?.results || []).map(r => <div key={`${r.kind}-${r.id}`} className={`fin-hit${r.verifiedAt ? ' verified' : ''}`}>
-        <button className="fin-hit-head" onClick={() => setOpen(open === r.id ? null : r.id)}>
-          <span><b>{shortDate(r.date)} · {clock(r.at)} · {r.kind === 'paper' && !/^\d/.test(r.table || '') ? (r.table || 'Bill giấy') : `Bàn ${r.table || '?'}`}</b>
-            <small>{r.kind === 'paper' ? 'Bill giấy' : (r.customer || 'Khách')} · {r.method === 'transfer' ? accountName(r.accountId) : 'Tiền mặt'}{r.by ? ` · ${r.by}` : ''}</small></span>
-          <b className="fin-hit-amount">{money(r.amount)}</b>
-        </button>
-        <div className="fin-hit-photos">
-          {r.method === 'transfer' && (r.transferImageUrl
-            ? <button className="fin-hit-photo" onClick={() => setView(r.transferImageUrl)}><img src={r.transferImageUrl} alt="" draggable={false} /><span>Ảnh CK</span></button>
-            : r.imageExpired ? <span className="fin-hit-none">Ảnh CK đã xoá (quá 3 tháng)</span>
-            : <span className="fin-hit-add">
-                <button className="fin-ck-add primary" onClick={() => startCamera(r)} disabled={saving === r.id}>📷 Chụp ảnh CK</button>
-                <button className="fin-ck-add" onClick={() => startGallery(r)} disabled={saving === r.id}>Chọn ảnh</button>
-              </span>)}
-          {r.kind === 'paper' && (r.billImageUrl
-            ? <button className="fin-hit-photo" onClick={() => setView(r.billImageUrl)}><img src={r.billImageUrl} alt="" draggable={false} /><span>Ảnh bill</span></button>
-            : <span className="fin-hit-none">{r.imageExpired ? 'Ảnh bill đã xoá (quá 3 tháng)' : 'Không có ảnh bill'}</span>)}
-        </div>
-        {r.method === 'transfer' && <div className="fin-verify-row">
-          <button className={`fin-verify${r.verifiedAt ? ' on' : ''}`} onClick={() => toggleVerify(r)} disabled={saving === r.id} aria-pressed={!!r.verifiedAt}>
-            {r.verifiedAt ? '✓ Đã đối chiếu' : 'Đánh dấu đã đối chiếu'}</button>
-          {r.verifiedAt && <small>{r.verifiedBy ? `${r.verifiedBy} · ` : ''}{stamp(r.verifiedAt)}</small>}
-        </div>}
-        {open === r.id && (r.kind === 'bill'
-          ? <ul className="fin-items">{(r.items || []).map((item, i) => <li key={i}><span>{item.quantity}× {item.name || 'Món'}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>
-          : r.note && <p className="fin-note-text">{r.note}</p>)}
-      </div>)}
+      {days.map(day => <section key={day.date} className="fin-bill-day">
+        <h4><span>{shortDate(day.date)}</span><span>{day.items.length} bill · {money(day.total)}</span></h4>
+        {day.items.map(r => {
+          const isOpen = open === `${r.kind}-${r.id}`;
+          const ckMissing = r.method === 'transfer' && !r.transferImageUrl && !r.imageExpired;
+          const photo = r.transferImageUrl || r.cashImageUrl || r.billImageUrl;
+          return <div key={`${r.kind}-${r.id}`} className={`fin-bill${r.verifiedAt ? ' verified' : ''}`}>
+            {photo
+              ? <button className="fin-bill-photo" onClick={() => setView(photo)} aria-label={r.transferImageUrl ? 'Xem ảnh CK' : r.cashImageUrl ? 'Xem ảnh tiền mặt' : 'Xem ảnh bill'}><img src={photo} alt="" draggable={false} /></button>
+              : ckMissing
+                ? <button className="fin-bill-photo add" onClick={() => startCamera(r)} disabled={saving === r.id} aria-label="Chụp ảnh CK"><Camera size={18} /><small>Chụp</small></button>
+                : <span className="fin-bill-photo none" title={r.imageExpired ? 'Ảnh đã xoá sau 3 tháng' : ''}>{r.method === 'transfer' ? <CreditCard size={18} /> : <Banknote size={18} />}</span>}
+            <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : `${r.kind}-${r.id}`)} aria-expanded={isOpen}>
+              <b>{clock(r.at)} · {r.kind === 'paper' && !/^\d/.test(r.table || '') ? (r.table || 'Bill giấy') : `Bàn ${r.table || '?'}`}</b>
+              <small>{r.kind === 'paper' ? 'Bill giấy' : (r.customer || 'Khách')} · {r.method === 'transfer' ? cardName(r.accountId) : 'Tiền mặt'}{r.skipReason ? ' · ⚠ không ảnh' : ''}</small>
+            </button>
+            <div className="fin-bill-end">
+              <b>{money(r.amount)}</b>
+              {r.method === 'transfer' && <button className={`fin-bill-check${r.verifiedAt ? ' on' : ''}`} onClick={() => toggleVerify(r)} disabled={saving === r.id} aria-pressed={!!r.verifiedAt}>
+                {r.verifiedAt ? '✓ Đã đối chiếu' : 'Đối chiếu'}</button>}
+            </div>
+            {isOpen && <div className="fin-bill-more">
+              {r.by && <p>Người nhập: {r.by}</p>}
+              {r.skipReason && <p className="fin-warn">⚠ Đóng bàn không ảnh: {r.skipReason}{r.photoBy ? ` (${r.photoBy})` : ''}</p>}
+              {r.verifiedAt && <p>Đối chiếu: {r.verifiedBy ? `${r.verifiedBy} · ` : ''}{stamp(r.verifiedAt)}</p>}
+              {r.imageExpired && <p>Ảnh đã xoá (quá 3 tháng)</p>}
+              {r.kind === 'paper' && r.transferImageUrl && r.billImageUrl && <button className="fin-hit-photo" onClick={() => setView(r.billImageUrl)}><img src={r.billImageUrl} alt="" draggable={false} /><span>Ảnh bill</span></button>}
+              {r.method === 'transfer' && !r.imageExpired && <span className="fin-hit-add">
+                <button className="fin-ck-add primary" onClick={() => startCamera(r)} disabled={saving === r.id}>📷 {r.transferImageUrl ? 'Chụp lại ảnh CK' : 'Chụp ảnh CK'}</button>
+                <button className="fin-ck-add" onClick={() => startGallery(r)} disabled={saving === r.id}>Chọn ảnh có sẵn</button>
+              </span>}
+              {r.kind === 'bill'
+                ? <ul className="fin-items">{(r.items || []).map((item, i) => <li key={i}><span>{item.quantity}× {item.name || 'Món'}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>
+                : r.note && <p className="fin-note-text">{r.note}</p>}
+            </div>}
+          </div>;
+        })}
+      </section>)}
     </div>
 
     <input ref={galleryInput} type="file" accept="image/*" onChange={picked} hidden />

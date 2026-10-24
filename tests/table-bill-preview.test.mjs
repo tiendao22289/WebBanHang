@@ -5,7 +5,8 @@ import vm from 'node:vm';
 
 const page = readFileSync(new URL('../src/app/admin/tables/page.js', import.meta.url), 'utf8');
 const previewSource = page.slice(page.indexOf('  const [billPreviewTableId,'), page.indexOf('  const [quickAddOpen,'));
-const completeSource = page.slice(page.indexOf('  async function completeTable('), page.indexOf('  // Lấy hoặc sinh mã Bill Code'));
+const completeSource = page.slice(page.indexOf('  async function completeTable('), page.indexOf('  // Bước 2: đóng bàn trên máy chủ'));
+const settleSource = page.slice(page.indexOf('  async function settleTable('), page.indexOf('  // Lấy hoặc sinh mã Bill Code'));
 
 test('preview belongs to its table and cannot appear on the next table', () => {
   let previewId = null;
@@ -27,26 +28,42 @@ test('preview belongs to its table and cannot appear on the next table', () => {
 });
 
 for (const method of ['cash', 'transfer']) {
-  test(`${method} settlement closes preview only after successful payment`, async () => {
-    for (const success of [true, false]) {
+  test(`${method} settlement closes preview only after the photo is taken and the payment succeeds`, async () => {
+    for (const [status, body, success] of [[200, { ok: true, photoSaved: true }, true], [409, { reason: 'amount_changed', total: 120000 }, false], [500, { error: 'x' }, false]]) {
       let previewOpen = true;
       let selectedTable = { id: 'table-1' };
-      const lastSettledOrderIdsRef = { current: [] };
-      const run = vm.runInNewContext(`(${completeSource.trim()})`, {
-        completingTablesRef: { current: new Set() }, setPayingHostId: () => {}, lastSettledOrderIdsRef,
-        getFreshPaymentSnapshot: async () => ({ bills: [{ id: 'bill-1' }], total: 100000,
-          unpricedItems: [], groupTableIds: ['table-1'] }),
-        currentStaff: null, transactionCode: null,
-        supabase: { rpc: async () => ({ data: { success }, error: null }) },
+      let proof = null;
+      let sent = null;
+      let done = 0;
+      const context = {
+        completingTablesRef: { current: new Set() }, setPayingHostId: () => {},
+        getFreshPaymentSnapshot: async () => ({ bills: [{ id: 'bill-1' }], total: 100000, unpricedItems: [], groupTableIds: ['table-1'] }),
+        transactionCode: 'HD1', setPayProof: value => { proof = value; }, setConfirmPayment: () => {},
+        fetchWithTimeout: async (url, options) => { sent = options.body; return new Response(JSON.stringify(body), { status }); },
+        FormData, Response, Event: class {}, window: { dispatchEvent: () => {} }, console: { error() {} },
         setShowBillPreview: value => { previewOpen = value; },
         setSelectedTable: value => { selectedTable = value; },
-        fetchTables: async () => {}, Swal: { fire: () => {} },
-      });
-      assert.equal(await run({ id: 'table-1' }, method, false, 100000), success);
+        fetchTables: async () => {}, Swal: { fire: () => {} }, formatPrice: String, promptFixUnpricedItems: () => false,
+      };
+      const complete = vm.runInNewContext(`(${completeSource.trim()})`, context);
+      const settle = vm.runInNewContext(`(${settleSource.trim()})`, context);
+
+      // Bước 1: kiểm tra bill rồi mở camera — chưa đóng gì.
+      assert.equal(await complete({ id: 'table-1' }, method, false, 100000, method === 'transfer' ? 'acc-1' : null, { onDone: () => { done += 1; } }), true);
+      assert.equal(previewOpen, true);
+      assert.equal(sent, null, 'nothing is sent before the photo');
+      assert.equal(proof.paymentMethod, method);
+
+      // Bước 2: chụp xong → máy chủ đóng bàn cùng ảnh.
+      const opened = proof;
+      await settle(opened, { blob: new Blob(['jpg'], { type: 'image/jpeg' }) });
+      assert.deepEqual([sent.get('action'), sent.get('order_ids'), sent.get('amount'), sent.get('method')], ['table_pay', 'bill-1', '100000', method]);
+      assert.equal(sent.get('image').size, 3);
+      if (method === 'transfer') assert.deepEqual([sent.get('account_id'), sent.get('transaction_code')], ['acc-1', 'HD1']);
       assert.equal(previewOpen, !success);
       assert.equal(selectedTable === null, success);
-      // Mã bill vừa thu (để gắn ảnh CK) chỉ được ghi khi thanh toán thành công.
-      assert.deepEqual([...lastSettledOrderIdsRef.current], success ? ['bill-1'] : []);
+      assert.equal(done, success ? 1 : 0);
+      assert.equal(proof, null, 'camera closes either way');
     }
   });
 }

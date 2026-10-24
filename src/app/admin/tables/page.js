@@ -17,8 +17,9 @@ import { getMenuCached } from '@/lib/menuCache';
 import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders';
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
-import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
-import { saveTransferProof } from '@/lib/transferProof';
+import PaymentProof from '@/components/PaymentProof';
+import { fetchWithTimeout } from '@/lib/compressImage';
+import { cashChange, cashChoices } from '@/lib/cashChange.mjs';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
 import { flushSync } from 'react-dom';
@@ -371,10 +372,12 @@ export default function TablesPage() {
   const isFirstLoad = useRef(true);
   // Nhóm bàn đang chạy completeTable() — chặn bấm 2 lần / realtime đua với nút bấm
   const completingTablesRef = useRef(new Set());
-  // Mã các bill vừa thanh toán xong — để gắn ảnh chuyển khoản của khách vào Sổ thu chi.
-  const lastSettledOrderIdsRef = useRef([]);
-  // Sau khi bấm "Đã nhận tiền": mở camera chụp màn hình ĐT khách (bỏ qua được).
-  const [transferProof, setTransferProof] = useState(null);
+  // Đóng bàn bắt buộc có ảnh: kiểm tra bill xong thì mở camera, chụp xong mới đóng (settleTable).
+  // { table, paymentMethod, shouldHideStats, accountId, code, snapshot, given, onDone, saving }
+  const [payProof, setPayProof] = useState(null);
+  // Tiền mặt: số tiền khách đưa ở màn Thanh toán (để báo tiền thối).
+  const [cashGiven, setCashGiven] = useState('');
+  useEffect(() => { setCashGiven(''); }, [confirmPayment?.table?.id]);
   const [payingHostId, setPayingHostId] = useState(null); // để làm mờ & khoá nút khi đang xử lý
   const [isMobile, setIsMobile] = useState(true);
   const [printToast, setPrintToast] = useState(''); // '' | 'sending' | 'ok' | 'err'
@@ -1222,12 +1225,11 @@ export default function TablesPage() {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // completeTable — đóng bill cho một nhóm bàn.
-  //
-  // Client khoá nút đang xử lý; RPC khoá nhóm bàn và chốt bill, sổ chuyển
-  // khoản, trạng thái QR cùng lúc. Lỗi giữa chừng rollback toàn bộ.
+  // completeTable — bước 1 khi đóng bill cho một nhóm bàn: đọc lại bill, chặn món chưa
+  // giá / bill đổi số tiền, rồi mở camera (PaymentProof). Ảnh chụp xong (hoặc lý do không
+  // chụp được) mới gửi lên máy chủ đóng bàn — settleTable. extra: { given, onDone }.
   // ═══════════════════════════════════════════════════════════════════════════
-  async function completeTable(tableObj, paymentMethod = 'cash', shouldHideStats = false, expectedAmount = null, accountId = null) {
+  async function completeTable(tableObj, paymentMethod = 'cash', shouldHideStats = false, expectedAmount = null, accountId = null, extra = {}) {
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
     const hostId = table.merged_with || table.id;
 
@@ -1260,34 +1262,8 @@ export default function TablesPage() {
         }
       }
 
-      // The database locks the live group and verifies these IDs/amount before
-      // changing any order, bank total, or table. A network/SQL failure rolls
-      // back the whole operation instead of leaving a partly paid bill.
-      const { data: settled, error: settleError } = await supabase.rpc('complete_table_payment_atomic', {
-        p_table_id: table.id,
-        p_expected_order_ids: snapshot.bills.map(o => o.id),
-        p_expected_amount: snapshot.total,
-        p_payment_method: paymentMethod,
-        p_account_id: paymentMethod === 'transfer' ? accountId : null,
-        p_hide_stats: shouldHideStats,
-        p_staff_id: currentStaff?.id || null,
-        p_staff_name: currentStaff?.full_name || null,
-        p_transaction_code: paymentMethod === 'transfer' ? transactionCode : null,
-      });
-      if (settleError) throw settleError;
-      if (!settled?.success) {
-        if (paymentMethod === 'cash' && settled?.reason === 'amount_changed') {
-          setConfirmPayment({ table, totalAmount: Number(settled.total), transactionCode: null });
-        }
-        await fetchTables(snapshot.groupTableIds);
-        Swal.fire('Bill đã thay đổi', 'Có món hoặc trạng thái bill thay đổi lúc thanh toán. Vui lòng kiểm tra lại toàn bộ món và số tiền trước khi chốt.', 'warning');
-        return false;
-      }
-
-      setShowBillPreview(false);
-      setSelectedTable(null);
-      fetchTables(snapshot.groupTableIds);
-      lastSettledOrderIdsRef.current = snapshot.bills.map(o => o.id);
+      setPayProof({ table, paymentMethod, shouldHideStats, accountId, code: paymentMethod === 'transfer' ? transactionCode : null,
+        snapshot, given: extra.given, onDone: extra.onDone });
       return true;
     } catch (error) {
       console.error('[completeTable]', error);
@@ -1296,6 +1272,57 @@ export default function TablesPage() {
     } finally {
       completingTablesRef.current.delete(hostId);
       setPayingHostId(null);
+    }
+  }
+
+  // Bước 2: đóng bàn trên máy chủ cùng ảnh (/api/admin/receipts table_pay) — máy chủ lưu ảnh,
+  // gọi complete_table_payment_atomic (khoá nhóm bàn, kiểm tra lại bill + số tiền, lỗi thì
+  // rollback hết) rồi gắn ảnh vào Sổ thu chi. Không có ảnh thì phải có lý do.
+  async function settleTable(proof, { blob, skipReason }) {
+    const { table, paymentMethod, snapshot } = proof;
+    const hostId = table.merged_with || table.id;
+    if (completingTablesRef.current.has(hostId)) return;
+    completingTablesRef.current.add(hostId);
+    setPayingHostId(hostId);
+    setPayProof({ ...proof, saving: true });
+    try {
+      const form = new FormData();
+      form.set('action', 'table_pay');
+      form.set('table_id', table.id);
+      form.set('order_ids', snapshot.bills.map(o => o.id).join(','));
+      form.set('amount', String(snapshot.total));
+      form.set('method', paymentMethod);
+      if (paymentMethod === 'transfer') {
+        form.set('account_id', proof.accountId || '');
+        form.set('hide_stats', proof.shouldHideStats ? '1' : '0');
+        if (proof.code) form.set('transaction_code', proof.code);
+      }
+      if (blob) form.set('image', blob, paymentMethod === 'cash' ? 'cash.jpg' : 'ck.jpg');
+      else form.set('skip_reason', skipReason);
+      const response = await fetchWithTimeout('/api/admin/receipts', { method: 'POST', body: form, cache: 'no-store' });
+      const result = await response.json().catch(() => ({}));
+      if (response.status === 401) window.dispatchEvent(new Event('staff-session-expired'));
+      if (response.status === 409) {
+        if (paymentMethod === 'cash' && result.reason === 'amount_changed') {
+          setConfirmPayment({ table, totalAmount: Number(result.total), transactionCode: null });
+        }
+        await fetchTables(snapshot.groupTableIds);
+        Swal.fire('Bill đã thay đổi', 'Có món hoặc trạng thái bill thay đổi lúc thanh toán. Vui lòng kiểm tra lại toàn bộ món và số tiền trước khi chốt.', 'warning');
+        return;
+      }
+      if (!response.ok) throw new Error(result.error || 'Chưa đóng được bàn. Kiểm tra mạng rồi thử lại.');
+      setShowBillPreview(false);
+      setSelectedTable(null);
+      fetchTables(snapshot.groupTableIds);
+      proof.onDone?.();
+      if (blob && !result.photoSaved) Swal.fire('Đã đóng bàn', 'Bàn đã thanh toán xong nhưng chưa lưu được ảnh. Thêm ảnh ở Sổ thu chi hoặc trang Bill giấy.', 'warning');
+    } catch (error) {
+      console.error('[settleTable]', error);
+      Swal.fire('Chưa thể thanh toán', error?.message || 'Không kiểm tra được đầy đủ bill. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
+    } finally {
+      completingTablesRef.current.delete(hostId);
+      setPayingHostId(null);
+      setPayProof(null);
     }
   }
 
@@ -4049,15 +4076,12 @@ export default function TablesPage() {
 
           const doCashPayment = async () => {
             if (payingHostId) return;
-            const ok = await completeTable(table, 'cash', false, total);
-            if (!ok) return;
-            closeModal();
+            await completeTable(table, 'cash', false, total, null, { onDone: closeModal });
           };
 
           const doTransferPayment = async () => {
             if (payingHostId) return;
-            const ok = await completeTable(table, 'transfer', qrAccount ? qrAccount.shouldHideStats : false, total, qrAccount?.id || null);
-            if (ok) closeModal();
+            await completeTable(table, 'transfer', qrAccount ? qrAccount.shouldHideStats : false, total, qrAccount?.id || null, { onDone: closeModal });
           };
 
           const doCancelOrder = async () => {
@@ -6499,45 +6523,61 @@ export default function TablesPage() {
               {/* Buttons */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
-                {/* Tiền mặt Button */}
-                {/* Thanh toán tiền mặt chỉ chốt bill; không ghi vào tổng chuyển khoản ngân hàng. */}
-                {/* Khoá nút khi đang xử lý — chặn bấm 2 lần làm cộng tiền 2 lượt vào thẻ */}
-                <div
-                  onClick={async () => {
-                    if (payingHostId) return;
-                    const ok = await completeTable(confirmPayment.table, 'cash', false, confirmPayment.totalAmount);
-                    if (!ok) return;
-                    setConfirmPayment(null);
-                    setSelectedTable(null);
-                    setDesktopView('tables');
-                    Swal.fire({
-                      icon: 'success',
-                      title: '✅ Thanh toán tiền mặt!',
-                      html: `<span style="font-size:1rem">Bàn <b>B${confirmPayment.table.table_number}</b> — <b style="color:#fff;font-size:1.1rem">${confirmPayment.totalAmount.toLocaleString('vi-VN')}đ</b></span>`,
-                      timer: 3000, timerProgressBar: true, showConfirmButton: false,
-                      position: 'top-end', toast: true, background: '#16a34a', color: '#fff', iconColor: '#fff',
-                    });
-                  }}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '16px', background: '#f0fdf4', border: '1.5px solid #bbf7d0',
-                    borderRadius: 16, transition: 'all 0.15s',
-                    cursor: payingHostId ? 'not-allowed' : 'pointer',
-                    opacity: payingHostId ? 0.5 : 1,
-                    pointerEvents: payingHostId ? 'none' : 'auto',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                    <div style={{ fontSize: '1.8rem' }}>💵</div>
-                    <div>
-                      <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#16a34a' }}>Tiền mặt</div>
-                      <div style={{ fontSize: '0.8rem', color: '#15803d', marginTop: 2, fontWeight: 500 }}>Nhận tiền mặt — đóng bàn ngay</div>
+                {/* Tiền mặt: nhập tiền khách đưa → báo tiền thối → Xác nhận → chụp tiền (bắt buộc) → đóng bàn. */}
+                {/* Khoá nút khi đang xử lý — chặn bấm 2 lần */}
+                {(() => {
+                  const total = confirmPayment.totalAmount;
+                  const given = Number(cashGiven) || 0;
+                  const result = cashChange(total, given);
+                  const ready = !!result?.change || result?.change === 0;
+                  const confirmCash = () => {
+                    if (payingHostId || !ready) return;
+                    const table = confirmPayment.table;
+                    completeTable(table, 'cash', false, total, null, { given, onDone: () => {
+                      setConfirmPayment(null);
+                      setSelectedTable(null);
+                      setDesktopView('tables');
+                      Swal.fire({
+                        icon: 'success',
+                        title: '✅ Thanh toán tiền mặt!',
+                        html: `<span style="font-size:1rem">Bàn <b>B${table.table_number}</b> — <b style="color:#fff;font-size:1.1rem">${total.toLocaleString('vi-VN')}đ</b>${given > total ? ` · thối ${(given - total).toLocaleString('vi-VN')}đ` : ''}</span>`,
+                        timer: 3000, timerProgressBar: true, showConfirmButton: false,
+                        position: 'top-end', toast: true, background: '#16a34a', color: '#fff', iconColor: '#fff',
+                      });
+                    } });
+                  };
+                  return <div style={{ padding: 14, background: '#f0fdf4', border: '1.5px solid #bbf7d0', borderRadius: 16, opacity: payingHostId ? 0.6 : 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{ fontSize: '1.6rem' }}>💵</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#16a34a' }}>Tiền mặt</div>
+                        <div style={{ fontSize: '0.8rem', color: '#15803d', marginTop: 2, fontWeight: 500 }}>Nhập tiền khách đưa, chụp tiền rồi đóng bàn</div>
+                      </div>
                     </div>
-                  </div>
-                  <div style={{ background: '#16a34a', color: 'white', padding: '6px 14px', borderRadius: 8, fontSize: '0.9rem', fontWeight: 700 }}>
-                    Xác nhận
-                  </div>
-                </div>
+                    <input
+                      inputMode="numeric"
+                      aria-label="Khách đưa"
+                      placeholder="Khách đưa bao nhiêu?"
+                      value={cashGiven ? Number(cashGiven).toLocaleString('vi-VN') : ''}
+                      onChange={e => setCashGiven(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                      style={{ width: '100%', boxSizing: 'border-box', marginTop: 10, padding: '11px 12px', borderRadius: 12, border: '1.5px solid #86efac', fontSize: '1.15rem', fontWeight: 700, color: '#0f172a', background: 'white', outline: 'none' }}
+                    />
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                      {cashChoices(total).map(v => <button key={v} type="button" onClick={() => setCashGiven(String(v))}
+                        style={{ padding: '7px 10px', borderRadius: 999, border: `1px solid ${given === v ? '#16a34a' : '#bbf7d0'}`, background: given === v ? '#16a34a' : 'white', color: given === v ? 'white' : '#15803d', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}>
+                        {v === total ? 'Đưa đủ' : v.toLocaleString('vi-VN')}
+                      </button>)}
+                    </div>
+                    {result && <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 12, background: result.short ? '#fef2f2' : 'white', border: `1px solid ${result.short ? '#fecaca' : '#bbf7d0'}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 700, color: result.short ? '#b91c1c' : '#334155' }}>{result.short ? 'Còn thiếu' : 'Thối lại'}</span>
+                      <span style={{ fontSize: '1.35rem', fontWeight: 900, color: result.short ? '#b91c1c' : '#16a34a' }}>{(result.short || result.change).toLocaleString('vi-VN')}đ</span>
+                    </div>}
+                    <button type="button" onClick={confirmCash} disabled={!ready || !!payingHostId}
+                      style={{ width: '100%', marginTop: 10, padding: '13px', borderRadius: 12, border: 'none', background: ready && !payingHostId ? '#16a34a' : '#86efac', color: 'white', fontWeight: 800, fontSize: '1rem', cursor: ready && !payingHostId ? 'pointer' : 'not-allowed' }}>
+                      {payingHostId ? '⏳ Đang xử lý...' : '📷 Xác nhận & chụp tiền'}
+                    </button>
+                  </div>;
+                })()}
 
                 {/* Chuyển khoản Button */}
                 <div
@@ -6626,32 +6666,29 @@ export default function TablesPage() {
                 </button>
                 <button
                   disabled={!qrAccount || !!payingHostId}
-                  onClick={async () => {
+                  onClick={() => {
                     if (!qrAccount || payingHostId) return;
-                    const ok = await completeTable(paymentModal.table, 'transfer', qrAccount.shouldHideStats, paymentModal.total, qrAccount.id);
-                    if (!ok) return;
-                    setPaymentModal(null);
-                    setConfirmPayment(null);
-                    setTransactionCode(null);
-                    setPaymentCountdown(0);
-                    setQrLoading(false);
-                    setSelectedTable(null);
-                    setDesktopView('tables');
-                    Swal.fire({
-                      icon: 'success',
-                      title: '✅ Chuyển khoản thành công!',
-                      html: `<span style="font-size:1rem">Bàn <b>B${paymentModal.table.table_number}</b> — <b style="color:#fff;font-size:1.1rem">${paymentModal.total.toLocaleString('vi-VN')}đ</b></span>`,
-                      timer: 3000, timerProgressBar: true, showConfirmButton: false,
-                      position: 'top-end', toast: true, background: '#1d4ed8', color: '#fff', iconColor: '#fff',
-                    });
-                    // Bill đã thanh toán xong ở trên; giờ mới mở camera chụp màn hình ĐT
-                    // khách (không chặn, không ảnh hưởng việc thanh toán).
-                    if (cameraSupported() && lastSettledOrderIdsRef.current.length) {
-                      setTransferProof({ orderIds: lastSettledOrderIdsRef.current, tableNumber: paymentModal.table.table_number, total: paymentModal.total });
-                    }
+                    const { table, total } = paymentModal;
+                    // Kiểm tra bill rồi mở camera; chụp màn hình CK của khách xong mới đóng bàn.
+                    completeTable(table, 'transfer', qrAccount.shouldHideStats, total, qrAccount.id, { onDone: () => {
+                      setPaymentModal(null);
+                      setConfirmPayment(null);
+                      setTransactionCode(null);
+                      setPaymentCountdown(0);
+                      setQrLoading(false);
+                      setSelectedTable(null);
+                      setDesktopView('tables');
+                      Swal.fire({
+                        icon: 'success',
+                        title: '✅ Chuyển khoản thành công!',
+                        html: `<span style="font-size:1rem">Bàn <b>B${table.table_number}</b> — <b style="color:#fff;font-size:1.1rem">${total.toLocaleString('vi-VN')}đ</b></span>`,
+                        timer: 3000, timerProgressBar: true, showConfirmButton: false,
+                        position: 'top-end', toast: true, background: '#1d4ed8', color: '#fff', iconColor: '#fff',
+                      });
+                    } });
                   }}
                   style={{ flex: 2, padding: '12px', border: 'none', borderRadius: 12, background: (qrAccount && !payingHostId) ? '#2563eb' : '#93c5fd', color: 'white', fontWeight: 800, cursor: (qrAccount && !payingHostId) ? 'pointer' : 'not-allowed', fontSize: '0.95rem' }}>
-                  {payingHostId ? '⏳ Đang xử lý...' : '✅ Đã nhận tiền'}
+                  {payingHostId ? '⏳ Đang xử lý...' : '📷 Đã nhận tiền'}
                 </button>
               </div>
             </div>
@@ -7201,22 +7238,23 @@ export default function TablesPage() {
           </div>
         )
       }
-      {/* Chụp màn hình chuyển khoản trên ĐT khách ngay sau "Đã nhận tiền" → Sổ thu chi. */}
-      {transferProof && <CameraCapture
-        title={`Chụp màn hình CK trên điện thoại khách`}
-        subtitle={`Bàn B${transferProof.tableNumber} · ${Number(transferProof.total).toLocaleString('vi-VN')}đ · đã thanh toán xong`}
-        closeText="Bỏ qua"
-        onClose={() => setTransferProof(null)}
-        onCapture={async blob => {
-          const proof = transferProof;
-          try {
-            await saveTransferProof(proof.orderIds, blob);
-            Swal.fire({ icon: 'success', title: '📷 Đã lưu ảnh chuyển khoản', toast: true, position: 'top-end', timer: 2500, showConfirmButton: false });
-          } catch (error) {
-            Swal.fire('Bill đã thanh toán xong', `Chưa lưu được ảnh chuyển khoản (${error.message}). Thêm lại ở trang Bill giấy.`, 'warning');
-          }
-        }}
-      />}
+      {/* Đóng bàn bắt buộc có ảnh: màn hình CK trên ĐT khách / tiền mặt khách đưa → Sổ thu chi. */}
+      {payProof && (() => {
+        const { paymentMethod, snapshot, given, table } = payProof;
+        const money = n => `${Number(n).toLocaleString('vi-VN')}đ`;
+        const cash = paymentMethod === 'cash';
+        const subtitle = `Bàn B${table.table_number} · ${money(snapshot.total)}`
+          + (cash && given ? ` · khách đưa ${money(given)} · thối ${money(Math.max(0, given - snapshot.total))}` : '')
+          + ' · chụp xong mới đóng bàn';
+        return <PaymentProof
+          title={cash ? 'Chụp tiền khách đưa' : 'Chụp màn hình CK trên điện thoại khách'}
+          subtitle={subtitle}
+          saving={!!payProof.saving}
+          onPhoto={blob => settleTable(payProof, { blob })}
+          onSkip={reason => settleTable(payProof, { skipReason: reason })}
+          onBack={() => setPayProof(null)}
+        />;
+      })()}
     </div >
   );
 }

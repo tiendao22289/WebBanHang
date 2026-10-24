@@ -11,6 +11,9 @@
  *
  *   qr_confirm       code, amount, account_id, kind ('ck' | 'bill'), image — trang Mã QR: "Xác nhận đã nhận tiền"
  *   qr_cash          receipt_id, amount, image — trang Mã QR: "Nhận tiền mặt"
+ *   table_pay        table_id, order_ids, amount, method, account_id?, hide_stats, transaction_code?,
+ *                    image | skip_reason — trang Bàn: đóng bàn (complete_table_payment_atomic) chỉ khi có
+ *                    ảnh màn hình CK / tiền mặt khách đưa, hoặc lý do không chụp được (máy lỗi...)
  *
  * source = 'qr:<mã>' / 'cash:<id phiếu>': bill giấy DB tự ghi khi thu ở trang
  * Mã QR (owner_finance.sql, capture_qr_page_receipt). qr_confirm / qr_cash bắt
@@ -231,6 +234,52 @@ export async function POST(request) {
       if (update.error) { await removeReceiptImages(db, [path]); throw update.error; }
       await removeReceiptImages(db, [row[column]]);
       return NextResponse.json({ ok: true, photoSaved: true, alreadyDone: !!data.already_completed }, { headers });
+    }
+
+    if (action === 'table_pay') {
+      const method = form.get('method');
+      if (!['cash', 'transfer'].includes(method)) return fail('Chọn tiền mặt hay chuyển khoản.');
+      const tableId = String(form.get('table_id') || '');
+      const orderIds = String(form.get('order_ids') || '').split(',').map(s => s.trim()).filter(Boolean);
+      if (!UUID.test(tableId) || !orderIds.length || orderIds.length > 50 || !orderIds.every(id => UUID.test(id))) return fail('Bàn hoặc bill không hợp lệ.');
+      const amount = Number(form.get('amount'));
+      if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_AMOUNT) return fail('Số tiền không hợp lệ.');
+      const accountId = method === 'transfer' ? String(form.get('account_id') || '') : null;
+      if (method === 'transfer' && !UUID.test(accountId)) return fail('Thiếu thẻ nhận tiền.');
+      const image = form.get('image');
+      const hasImage = !!image && typeof image !== 'string' && image.size > 0;
+      const skipReason = String(form.get('skip_reason') || '').trim().slice(0, 200);
+      if (hasImage) {
+        const problem = receiptImageProblem(image);
+        if (problem) return fail(problem);
+      } else if (skipReason.length < 3) {
+        return fail(method === 'cash' ? 'Chụp tiền khách đưa trước khi đóng bàn.' : 'Chụp màn hình chuyển khoản của khách trước khi đóng bàn.');
+      }
+      // Lưu ảnh trước: bàn chỉ được đóng khi ảnh đã nằm trong kho.
+      const path = hasImage ? await uploadReceiptImage(db, image, method === 'cash' ? 'cash' : 'ck') : null;
+      const { data, error } = await db.rpc('complete_table_payment_atomic', {
+        p_table_id: tableId, p_expected_order_ids: orderIds, p_expected_amount: amount, p_payment_method: method,
+        p_account_id: accountId, p_hide_stats: form.get('hide_stats') === '1',
+        p_staff_id: session.user.id, p_staff_name: session.user.full_name || null,
+        p_transaction_code: method === 'transfer' ? String(form.get('transaction_code') || '') || null : null,
+      });
+      if (error || !data?.success) {
+        await removeReceiptImages(db, [path]);
+        // Bill đổi món / số tiền lúc thanh toán → trang Bàn đọc lại và cho kiểm tra lại.
+        if (!error) return NextResponse.json({ error: 'Bill đã thay đổi.', reason: data?.reason || null, total: data?.total ?? null }, { status: 409, headers });
+        return fail(error.code === 'P0001' ? error.message : 'Chưa đóng được bàn, thử lại.');
+      }
+      const by = session.user.full_name || null;
+      const patch = !hasImage ? { photo_skip_reason: skipReason, photo_by: by }
+        : method === 'cash' ? { cash_image_path: path, photo_by: by } : { transfer_image_path: path, transfer_image_by: by, photo_by: by };
+      // Sổ thu chi đã ghi bill (trigger capture_finance_revenue, cùng giao dịch đóng bàn).
+      const update = await db.from('finance_revenue_ledger').update(patch).in('order_id', orderIds).select('order_id');
+      const photoSaved = !update.error && (update.data || []).length > 0;
+      if (!photoSaved) {
+        console.error('[receipts] table photo', update.error || 'no ledger rows');
+        await removeReceiptImages(db, [path]);
+      }
+      return NextResponse.json({ ok: true, photoSaved }, { headers });
     }
 
     if (action === 'delete_paper') {

@@ -95,6 +95,12 @@ CREATE INDEX IF NOT EXISTS finance_manual_receipts_date ON public.finance_manual
 ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS transfer_image_path text;
 ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS transfer_image_by text;
 
+-- Đóng bàn bắt buộc có ảnh (trang Bàn, /api/admin/receipts table_pay): tiền mặt khách
+-- đưa → cash_image_path; không chụp được (máy lỗi...) → lý do + người ghi.
+ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS cash_image_path text;
+ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS photo_skip_reason text;
+ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS photo_by text;
+
 -- Chủ quán đánh dấu "đã đối chiếu" bill chuyển khoản với app ngân hàng.
 ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS verified_at timestamptz;
 ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS verified_by text;
