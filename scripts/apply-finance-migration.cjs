@@ -92,6 +92,17 @@ async function main() {
   console.log(JSON.stringify(payroll));
   if (!payroll.closes || !payroll.leave_days || !payroll.departures || !payroll.anon_blocked) throw new Error('Chưa cài đủ bảng chốt lương / nghỉ việc.');
 
+  // Thưởng chuyên cần + phạt có ngày / người ghi / gợi ý từ chấm công (payroll_bonus_fines.sql).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_bonus_fines.sql'), 'utf8'));
+  const [bonusFines] = await query(`SELECT
+    (SELECT count(*)::int FROM unnest(ARRAY['payroll_settings', 'payroll_bonuses', 'payroll_fine_rules', 'payroll_violation_meta', 'payroll_fine_reviews']) t
+      WHERE to_regclass('public.' || t) IS NOT NULL) AS tables,
+    (SELECT count(*)::int FROM public.payroll_settings) AS settings,
+    (SELECT count(*)::int FROM public.payroll_fine_rules WHERE kind IS NOT NULL) AS auto_rules,
+    NOT has_table_privilege('anon', 'public.payroll_bonuses', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(bonusFines));
+  if (bonusFines.tables !== 5 || bonusFines.settings !== 1 || bonusFines.auto_rules !== 2 || !bonusFines.anon_blocked) throw new Error('Chưa cài đủ bảng thưởng / phạt.');
+
   // Băm mã PIN còn lưu chữ thường (web đang chạy ở 127.0.0.1:3000 làm việc này).
   const crypto = require('node:crypto');
   const serverKey = crypto.createHmac('sha256', key).update('staff-maintenance').digest('hex');
