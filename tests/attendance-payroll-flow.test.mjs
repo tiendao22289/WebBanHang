@@ -44,6 +44,7 @@ function context(state, user, now) {
     onKioskNetwork: (ip, k) => rules.onKioskNetwork(ip, k, now),
     rememberIp: (list, ip) => rules.rememberIp(list, ip, now),
     closeForgottenSessions: (db, r, id) => rules.closeForgottenSessions(db, r, id, now),
+    nowMs: () => now, refreshClock: async () => {}, clockStatus: () => ({ offsetMs: 0, synced: true, checkedAt: null, source: 'test' }),
     console: { error() {} }, process: { env: { SUPABASE_SERVICE_ROLE_KEY: SECRET } },
     getStaffSession: async () => (user ? { code: 200, user } : { code: 401 }),
     staffDatabase: () => fakeDb(state), statusDatabase: () => fakeDb(state),

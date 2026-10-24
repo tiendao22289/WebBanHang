@@ -124,6 +124,7 @@ function load(state, user) {
     NextResponse, ...token, ...rules, URL, Number, Math, String, JSON, Date, Promise, STATUS_COOKIE: 'local_admin_session',
     console: { error() {} }, process: { env: { SUPABASE_SERVICE_ROLE_KEY: SECRET } },
     getStaffSession: async () => (user ? { code: 200, user } : { code: 401 }),
+    nowMs: () => Date.now(), refreshClock: async () => {}, clockStatus: () => ({ offsetMs: 0, synced: true, checkedAt: null, source: 'test' }),
     statusDatabase: () => fakeDb(state), staffDatabase: () => fakeDb(state),
   });
 }
