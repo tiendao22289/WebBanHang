@@ -73,6 +73,13 @@ export default function KioskPage() {
     <Screen>
       <div style={{ fontSize: 'clamp(2.2rem, 9vw, 4rem)', fontWeight: 800, letterSpacing: 2, fontVariantNumeric: 'tabular-nums' }}>{clock}</div>
       <div style={{ color: '#94a3b8', marginBottom: 18 }}>{day} · {name || 'Máy quầy'}</div>
+      {/* Giờ chấm công lấy theo đồng hồ máy chủ: lệch thì giờ vào / ra, trễ / sớm đều sai theo. */}
+      {Math.abs(offset) > 2 * 60000 && (
+        <div style={{ background: '#7c2d12', color: '#fed7aa', borderRadius: 10, padding: '8px 12px', margin: '-8px 0 14px', fontSize: '0.88rem', textAlign: 'center', maxWidth: 440, lineHeight: 1.5 }}>
+          ⚠ Giờ máy chủ quán đang {offset < 0 ? 'chậm' : 'nhanh'} {Math.round(Math.abs(offset) / 60000)} phút so với điện thoại này.
+          Chỉnh giờ máy tính chạy web ở quán (bật &quot;Đặt giờ tự động&quot;) để giờ chấm công đúng.
+        </div>
+      )}
 
       <div style={{ position: 'relative', background: 'white', borderRadius: 24, padding: 18, width: 'min(78vw, 60vh, 420px)', aspectRatio: '1 / 1', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {offline || !token
