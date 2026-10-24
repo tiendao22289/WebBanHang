@@ -85,7 +85,9 @@ test('staff clock in only with a fresh QR from a kiosk, and each QR works once',
   const again = await scan(staff, token.kioskQrToken(SECRET, KIOSK));
   assert.equal(again.status, 409, 'scanning twice in a row does not clock out at once');
   assert.match(again.body.error, /vừa vào ca/);
-  state.attendance_sessions[0].clock_in = ago(4 * 3600000);
+  // Qua mốc chống quét trùng (3 phút) là ra ca được. Không lùi 4 tiếng: từ 3h đến 7h sáng ca
+  // vào lúc 23h hôm trước đã quá hạn "quên ra ca" (FORGOT_GRACE_MS) nên máy tự đóng, test hỏng theo giờ.
+  state.attendance_sessions[0].clock_in = ago(rules.MIN_TOGGLE_MS + 60000);
   const out = await scan(staff, token.kioskQrToken(SECRET, KIOSK));
   assert.deepEqual([out.status, out.body.clocked], [200, 'out']);
 

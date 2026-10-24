@@ -354,8 +354,8 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
             <b>{money(b.amount)}</b>
             <button className="fin-icon danger" onClick={() => removePaper(b)} aria-label="Xoá bill giấy"><Trash2 size={16} /></button>
           </div>
-          {/* Bill từ trang Mã QR: ảnh tờ bill không bắt buộc, chụp bổ sung được. */}
-          {!b.imageUrl && !b.imagesPurged && <div className="fin-ck">
+          {/* Bill không có ảnh nào (vd. từ trang Mã QR trước khi bắt buộc chụp): chụp bổ sung được. */}
+          {!b.imageUrl && !b.transferImageUrl && !b.imagesPurged && <div className="fin-ck">
             <span className="fin-ck-none">Chưa có ảnh bill</span>
             <span className="fin-ck-buttons">
               <button className="fin-ck-add primary" onClick={() => startCamera({ action: 'attach_bill', receipt_id: b.id })} disabled={!!attaching}>📷 Chụp</button>

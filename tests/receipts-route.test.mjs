@@ -8,7 +8,7 @@ const source = readFileSync(new URL('../src/app/api/admin/receipts/route.js', im
   .replace(/^import [\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
 
 function fakeDb(state) {
-  return { from(table) {
+  return { rpc: async (name, args) => { (state.rpcCalls ||= []).push([name, args]); return state.rpc[name](args, state); }, from(table) {
     let op = 'read', values, conditions = [], single = false, maybe = false;
     const q = {
       select() { return q; },
@@ -207,4 +207,79 @@ test('paper bills from the QR page show on the paper bill page with who took the
     received_at: new Date().toISOString(), payment_method: 'transfer', account_id: ACC, amount: 350000, image_path: null, created_by_name: 'Trang Mã QR' });
   const list = await get(load({ state }).api);
   assert.deepEqual(list.body.paperBills.map(b => [b.amount, b.createdByName, b.imageUrl, b.mine]), [[350000, 'Trang Mã QR', null, false]]);
+});
+
+// Như DB thật: hàm SQL đổi trạng thái → trigger capture_qr_page_receipt ghi 1 bill giấy.
+const qrDb = (overrides = {}) => ({ ...base(), rpc: {
+  confirm_custom_qr_payment: ({ p_code, p_expected_amount, p_account_id }, state) => {
+    if (p_code === 'QRWRONG1') return { data: null, error: { code: 'P0001', message: 'Mã QR, số tiền hoặc tài khoản không khớp' } };
+    if (p_code === 'QRCRASH1') return { data: null, error: { code: '42703', message: 'record "tx" has no field "id"' } };
+    const already = state.finance_manual_receipts.some(r => r.source === `qr:${p_code}`);
+    if (!already && p_code !== 'QRNOROW1') state.finance_manual_receipts.push({ id: `00000000-0000-0000-0000-00000000060${state.finance_manual_receipts.length}`,
+      source: `qr:${p_code}`, business_date: today, payment_method: 'transfer', account_id: p_account_id, amount: p_expected_amount, created_by_name: 'Trang Mã QR' });
+    return { data: { success: true, already_completed: already }, error: null };
+  },
+  record_custom_cash_receipt: ({ p_id, p_amount }, state) => {
+    if (!state.finance_manual_receipts.some(r => r.source === `cash:${p_id}`)) state.finance_manual_receipts.push({ id: '00000000-0000-0000-0000-000000000700',
+      source: `cash:${p_id}`, business_date: today, payment_method: 'cash', amount: p_amount, created_by_name: 'Trang Mã QR' });
+    return { data: { success: true, receipt_id: p_id, amount: p_amount }, error: null };
+  },
+  ...overrides } });
+const confirmQr = (api, fields = {}) => post(api, { action: 'qr_confirm', code: 'QRAB1234', amount: '350000', account_id: ACC, kind: 'ck', image: image(), ...fields });
+
+test('the QR page only confirms a transfer together with a photo of the customer screen or the bill', async () => {
+  const state = qrDb();
+  const staff = load({ state });
+  let res = await confirmQr(staff.api, { image: undefined });
+  assert.deepEqual([res.status, res.body.error], [400, 'Chụp tờ bill hoặc màn hình điện thoại khách trước khi xác nhận.']);
+  assert.equal(state.rpcCalls, undefined, 'no photo → money not confirmed');
+
+  res = await confirmQr(staff.api);
+  assert.deepEqual([res.status, res.body.photoSaved, res.body.alreadyDone], [200, true, false]);
+  assert.deepEqual(plain(state.rpcCalls), [['confirm_custom_qr_payment', { p_code: 'QRAB1234', p_expected_amount: 350000, p_account_id: ACC }]]);
+  const row = state.finance_manual_receipts[0];
+  assert.deepEqual([row.transfer_image_path, row.image_path, row.created_by_name], ['2026-10/ck-1.jpg', undefined, 'Trang Mã QR · Thu ngân']);
+
+  // Bấm lại (mạng chập chờn) bằng ảnh tờ bill: không ghi tiền lần 2, ảnh được thêm vào cùng bill.
+  res = await confirmQr(staff.api, { kind: 'bill' });
+  assert.deepEqual([res.status, res.body.alreadyDone], [200, true]);
+  assert.equal(state.finance_manual_receipts.length, 1);
+  assert.equal(row.image_path, '2026-10/bill-2.jpg');
+  // Chụp lại màn hình khách: ảnh cũ bị thay và xoá.
+  await confirmQr(staff.api);
+  assert.equal(row.transfer_image_path, '2026-10/ck-3.jpg');
+  assert.deepEqual(staff.removed, ['2026-10/ck-1.jpg']);
+});
+
+test('a refused QR confirmation keeps no photo and shows the database reason', async () => {
+  const state = qrDb();
+  const staff = load({ state });
+  let res = await confirmQr(staff.api, { code: 'QRWRONG1' });
+  assert.deepEqual([res.status, res.body.error], [400, 'Mã QR, số tiền hoặc tài khoản không khớp']);
+  res = await confirmQr(staff.api, { code: 'QRCRASH1' });
+  assert.deepEqual([res.status, res.body.error], [400, 'Chưa ghi được tiền, thử lại.'], 'technical errors stay hidden');
+  assert.deepEqual(staff.removed, ['2026-10/ck-1.jpg', '2026-10/ck-2.jpg'], 'uploaded photos are removed');
+  for (const fields of [{ code: 'abc' }, { code: 'QRAB12345' }, { account_id: 'x' }, { amount: '0' }, { amount: '12.5' }]) {
+    assert.equal((await confirmQr(staff.api, fields)).status, 400, JSON.stringify(fields));
+  }
+  assert.equal(staff.uploads.length, 2, 'bad requests upload nothing');
+  assert.equal(state.finance_manual_receipts.length, 0);
+
+  // Trigger chưa cài: tiền vẫn xác nhận, ảnh không để mồ côi.
+  res = await confirmQr(staff.api, { code: 'QRNOROW1' });
+  assert.deepEqual([res.status, res.body.photoSaved], [200, false]);
+  assert.equal(staff.removed.at(-1), '2026-10/ck-3.jpg');
+});
+
+test('cash on the QR page is recorded only with a photo of the bill', async () => {
+  const state = qrDb();
+  const staff = load({ state });
+  const id = '00000000-0000-4000-8000-0000000000c1';
+  assert.equal((await post(staff.api, { action: 'qr_cash', receipt_id: id, amount: '120000' })).status, 400);
+  assert.equal(state.rpcCalls, undefined);
+  const res = await post(staff.api, { action: 'qr_cash', receipt_id: id, amount: '120000', kind: 'ck', image: image() });
+  assert.deepEqual([res.status, res.body.photoSaved], [200, true]);
+  assert.deepEqual(plain(state.rpcCalls), [['record_custom_cash_receipt', { p_id: id, p_amount: 120000 }]]);
+  assert.deepEqual([state.finance_manual_receipts[0].image_path, state.finance_manual_receipts[0].transfer_image_path], ['2026-10/bill-1.jpg', undefined], 'cash photo is always the bill');
+  assert.equal((await post(staff.api, { action: 'qr_cash', receipt_id: 'not-a-uuid', amount: '120000', image: image() })).status, 400);
 });
