@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { getShadowAccount, buildQrUrl } from '@/lib/bankAccount';
 import { newLuckyRequestId } from '@/lib/luckyRewardFlow';
+import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
+import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
 import { QrCode, RefreshCw, CheckCircle2, Banknote, X } from 'lucide-react';
 import Swal from 'sweetalert2';
 
@@ -16,7 +18,33 @@ import Swal from 'sweetalert2';
 //   - Chỉ chuyển khoản mới vào bank_daily_totals của thẻ Ẩn.
 //   - Không có bill nào (order) được tạo / cập nhật qua cổng này.
 //     → Không ảnh hưởng gì đến sổ sách thống kê / báo cáo S2a-HKD.
+//   - Sổ thu chi vẫn tính đủ: DB tự ghi mỗi lần thu thành 1 bill giấy
+//     (owner_finance.sql, capture_qr_page_receipt); ảnh bill chụp sau, không bắt buộc.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Ảnh tờ bill / màn hình CK cho bill giấy DB vừa ghi (tìm theo source).
+async function savePhoto(source, kind, blob) {
+  const form = new FormData();
+  form.set('action', kind === 'bill' ? 'attach_bill' : 'attach_transfer');
+  form.set('source', source);
+  form.set('image', blob, `${kind}.jpg`);
+  const response = await fetchWithTimeout('/api/admin/receipts', { method: 'POST', body: form, cache: 'no-store' });
+  const result = await response.json().catch(() => ({}));
+  if (response.status === 401) window.dispatchEvent(new Event('staff-session-expired'));
+  if (!response.ok) throw new Error(result.error || 'Không lưu được ảnh.');
+}
+
+function PhotoRow({ label, done, busy, onCamera, onGallery }) {
+  const button = { flex: 1, padding: '10px 8px', borderRadius: 10, fontWeight: 700, cursor: busy ? 'wait' : 'pointer', fontSize: '0.9rem' };
+  return <div style={{ marginTop: 12 }}>
+    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: done ? '#16a34a' : '#334155', marginBottom: 6 }}>{done ? `✓ ${label}: đã lưu` : label}</div>
+    {busy ? <div style={{ color: '#64748b', fontSize: '0.9rem' }}>Đang gửi ảnh...</div>
+      : <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={onCamera} style={{ ...button, background: '#2563eb', color: 'white', border: 'none' }}>📷 {done ? 'Chụp lại' : 'Chụp'}</button>
+        <button onClick={onGallery} style={{ ...button, background: 'white', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>Chọn ảnh có sẵn</button>
+      </div>}
+  </div>;
+}
 
 export default function QrGeneratorPage() {
   const [amount, setAmount] = useState('');
@@ -25,8 +53,42 @@ export default function QrGeneratorPage() {
   const [activeQr, setActiveQr] = useState(null);
   const [paymentStatus, setPaymentStatus] = useState('idle'); // idle | pending | completed
   const [isGenerating, setIsGenerating] = useState(false);
+  // Lần thu vừa xong → cho chụp bill: { source, method, amount, bill, ck }
+  const [receipt, setReceipt] = useState(null);
+  const [camera, setCamera] = useState(null); // 'bill' | 'ck'
+  const [uploading, setUploading] = useState(null);
+  const galleryInput = useRef(null);
+  const captureInput = useRef(null);
+  const pendingKind = useRef(null);
 
   const router = useRouter();
+
+  async function uploadPhoto(kind, blob) {
+    const target = receipt;
+    if (!target) return;
+    setUploading(kind);
+    try {
+      await savePhoto(target.source, kind, blob);
+      setReceipt(r => r?.source === target.source ? { ...r, [kind]: true } : r);
+    } catch (err) {
+      Swal.fire('Chưa lưu được ảnh', err.message, 'error');
+    } finally {
+      setUploading(null);
+    }
+  }
+  function startCamera(kind) {
+    if (cameraSupported()) setCamera(kind);
+    else { pendingKind.current = kind; captureInput.current.click(); }
+  }
+  function startGallery(kind) { pendingKind.current = kind; galleryInput.current.click(); }
+  async function picked(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    const kind = pendingKind.current;
+    pendingKind.current = null;
+    if (!file || !kind) return;
+    try { await uploadPhoto(kind, await compressImage(file)); } catch (err) { Swal.fire('Lỗi ảnh', err.message, 'error'); }
+  }
 
   // Lấy thẻ ẨN lúc mới vào trang
   useEffect(() => {
@@ -47,6 +109,7 @@ export default function QrGeneratorPage() {
   // ─── Tiền mặt tạo phiếu thu riêng, không làm tăng số dư chuyển khoản ────
   const handleCashPayment = async () => {
     setIsGenerating(true);
+    setReceipt(null);
     const numAmount = parseInt(amount.replace(/\D/g, ''), 10) || 0;
     if (!Number.isSafeInteger(numAmount) || numAmount <= 0) { setIsGenerating(false); return; }
 
@@ -61,6 +124,7 @@ export default function QrGeneratorPage() {
       });
       if (error || !data?.success) throw error || new Error('Chưa lưu được phiếu thu');
       sessionStorage.removeItem(attemptKey);
+      setReceipt({ source: `cash:${receiptId}`, method: 'cash', amount: numAmount });
 
       Swal.fire({
         icon: 'success',
@@ -90,6 +154,7 @@ export default function QrGeneratorPage() {
   const handleGenerateQR = async () => {
     if (paymentStatus === 'pending' || isGenerating) return;
     setIsGenerating(true);
+    setReceipt(null);
 
     // Luôn lấy thẻ Ẩn mới nhất
     const { account } = await getShadowAccount();
@@ -172,7 +237,7 @@ export default function QrGeneratorPage() {
     try {
       const numAmount = activeQr?.amount || 0;
 
-      const { data: confirmed, error: confirmError } = await supabase.rpc('confirm_shadow_qr_atomic', {
+      const { data: confirmed, error: confirmError } = await supabase.rpc('confirm_custom_qr_payment', {
         p_code: transactionCode,
         p_expected_amount: numAmount,
         p_account_id: activeQr?.account?.id || null,
@@ -181,6 +246,7 @@ export default function QrGeneratorPage() {
       if (!confirmed?.success) throw new Error('Chưa đối chiếu được mã QR và số tiền.');
 
       setPaymentStatus('completed');
+      setReceipt({ source: `qr:${transactionCode}`, method: 'transfer', amount: numAmount });
       Swal.fire({ title: 'Thành công!', text: 'Đã xác nhận thanh toán thủ công.', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 3000 });
 
     } catch (err) {
@@ -337,6 +403,37 @@ export default function QrGeneratorPage() {
 
             </div>
           )}
+
+          {/* Chụp bill sau khi thu — không bắt buộc, thiếu thì Sổ thu chi hiện "Chưa có ảnh bill". */}
+          {receipt && (
+            <div style={{ marginTop: 16, background: '#f0fdf4', borderRadius: 16, padding: 16, border: '1px solid #bbf7d0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ flex: 1, fontWeight: 800, color: '#166534' }}>
+                  📷 Chụp bill (không bắt buộc)
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#475569', marginTop: 2 }}>
+                    {receipt.amount.toLocaleString('vi-VN')}đ · {receipt.method === 'cash' ? 'Tiền mặt' : 'Chuyển khoản'}
+                  </div>
+                </div>
+                <button onClick={() => setReceipt(null)} title="Xong"
+                  style={{ background: 'white', border: '1px solid #bbf7d0', borderRadius: 10, padding: '8px 14px', fontWeight: 700, color: '#166534', cursor: 'pointer' }}>
+                  Xong
+                </button>
+              </div>
+              <PhotoRow label="Ảnh tờ bill" done={receipt.bill} busy={uploading === 'bill'}
+                onCamera={() => startCamera('bill')} onGallery={() => startGallery('bill')} />
+              {receipt.method === 'transfer' && <PhotoRow label="Ảnh màn hình CK trên điện thoại khách" done={receipt.ck} busy={uploading === 'ck'}
+                onCamera={() => startCamera('ck')} onGallery={() => startGallery('ck')} />}
+            </div>
+          )}
+          <input ref={galleryInput} type="file" accept="image/*" onChange={picked} hidden />
+          <input ref={captureInput} type="file" accept="image/*" capture="environment" onChange={picked} hidden />
+          {camera && <CameraCapture
+            title={camera === 'bill' ? 'Chụp tờ bill' : 'Chụp màn hình CK trên điện thoại khách'}
+            subtitle={receipt ? `${receipt.amount.toLocaleString('vi-VN')}đ` : ''}
+            closeText="Bỏ qua"
+            onClose={() => setCamera(null)}
+            onCapture={blob => uploadPhoto(camera, blob)}
+          />}
 
         </div>
       </div>

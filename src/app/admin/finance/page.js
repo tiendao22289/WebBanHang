@@ -269,6 +269,7 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
   useBackClose(!!view, () => setView(null));
 
   // Ảnh CK: chụp màn hình ĐT khách trong web (không lưu vào máy) hoặc chọn ảnh có sẵn.
+  // target.action 'attach_bill': ảnh tờ bill cho bill giấy chưa có ảnh.
   const [cameraFor, setCameraFor] = useState(null);
   const pendingGallery = useRef(null);
   const attachCapture = useRef(null);
@@ -353,6 +354,14 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
             <b>{money(b.amount)}</b>
             <button className="fin-icon danger" onClick={() => removePaper(b)} aria-label="Xoá bill giấy"><Trash2 size={16} /></button>
           </div>
+          {/* Bill từ trang Mã QR: ảnh tờ bill không bắt buộc, chụp bổ sung được. */}
+          {!b.imageUrl && !b.imagesPurged && <div className="fin-ck">
+            <span className="fin-ck-none">Chưa có ảnh bill</span>
+            <span className="fin-ck-buttons">
+              <button className="fin-ck-add primary" onClick={() => startCamera({ action: 'attach_bill', receipt_id: b.id })} disabled={!!attaching}>📷 Chụp</button>
+              <button className="fin-ck-add" onClick={() => startAttach({ action: 'attach_bill', receipt_id: b.id })} disabled={!!attaching}>Chọn ảnh</button>
+            </span>
+          </div>}
           {b.paymentMethod === 'transfer' && <div className="fin-ck">
             {b.transferImageUrl ? <button className="fin-ck-view" onClick={() => setView(b.transferImageUrl)}>📷 Xem ảnh chuyển khoản</button>
               : <span className="fin-ck-none">Chưa có ảnh chuyển khoản</span>}

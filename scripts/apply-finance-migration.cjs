@@ -33,6 +33,8 @@ async function main() {
   if (marker.dev) throw new Error('Đây là DB DEV, dừng lại.');
   if (!marker.orders) throw new Error('Không thấy bảng orders, sai DB.');
 
+  // Trang Mã QR: nút "Xác nhận đã nhận tiền" (bản đúng với bảng thật, thay confirm_shadow_qr_atomic).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'confirm_custom_qr_payment.sql'), 'utf8'));
   const sql = fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'owner_finance.sql'), 'utf8');
   await query(sql);
 
@@ -45,10 +47,13 @@ async function main() {
     to_regclass('public.finance_settings') IS NOT NULL AS settings,
     EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'finance_revenue_ledger' AND column_name = 'verified_at') AS verify_cols,
     EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'capture_finance_revenue' AND tgrelid = 'public.orders'::regclass AND tgenabled = 'O') AS trigger_on,
+    EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'capture_qr_page_receipt' AND tgrelid = to_regclass('public.payment_transactions') AND tgenabled = 'O') AS qr_trigger_on,
+    EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'capture_qr_page_receipt' AND tgrelid = to_regclass('public.custom_cash_receipts') AND tgenabled = 'O') AS cash_trigger_on,
+    to_regprocedure('public.confirm_custom_qr_payment(text,numeric,uuid)') IS NOT NULL AS qr_confirm_fixed,
     NOT has_table_privilege('anon', 'public.finance_revenue_ledger', 'SELECT') AS anon_blocked,
     (SELECT count(*)::int FROM public.finance_revenue_ledger) AS ledger_rows`);
   console.log(JSON.stringify(check));
-  if (!check.ledger || !check.entries || !check.day_closes || !check.categories || !check.paper || !check.settings || !check.verify_cols || !check.trigger_on || !check.anon_blocked) {
+  if (!check.ledger || !check.entries || !check.day_closes || !check.categories || !check.paper || !check.settings || !check.verify_cols || !check.trigger_on || !check.qr_trigger_on || !check.cash_trigger_on || !check.qr_confirm_fixed || !check.anon_blocked) {
     throw new Error('Cài chưa đủ, xem kết quả kiểm tra ở trên.');
   }
   console.log('Đã cài sổ thu chi vào DB thật.');
