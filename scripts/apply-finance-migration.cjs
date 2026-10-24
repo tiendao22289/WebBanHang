@@ -71,6 +71,27 @@ async function main() {
   console.log(JSON.stringify(commitFn));
   if (!commitFn.installed || !commitFn.anon_blocked) throw new Error('Chưa cài được staff_notes_commit.');
 
+  // Chấm công chống gian lận (checkin_security.sql) — cài TRƯỚC khi web dùng máy quầy.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_security.sql'), 'utf8'));
+  const [checkin] = await query(`SELECT
+    (SELECT count(*)::int FROM unnest(ARRAY['checkin_kiosks', 'checkin_nonces', 'checkin_scans', 'staff_checkin_devices', 'checkin_settings', 'checkin_hours', 'attendance_fix_requests', 'staff_shifts', 'attendance_extra_reviews', 'attendance_changes']) t
+      WHERE to_regclass('public.' || t) IS NOT NULL) AS tables,
+    (SELECT count(*)::int FROM public.checkin_settings) AS settings,
+    (SELECT hours_from::text FROM public.checkin_settings WHERE id = 1) AS hours_from,
+    NOT has_table_privilege('anon', 'public.checkin_scans', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(checkin));
+  if (checkin.tables !== 10 || checkin.settings !== 1 || !checkin.anon_blocked) throw new Error('Chưa cài đủ bảng chấm công.');
+
+  // Chốt lương tháng + ngày nghỉ của đơn báo nghỉ (payroll_closes.sql) — cài TRƯỚC khi web dùng.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_closes.sql'), 'utf8'));
+  const [payroll] = await query(`SELECT
+    to_regclass('public.payroll_closes') IS NOT NULL AS closes,
+    to_regclass('public.payroll_leave_days') IS NOT NULL AS leave_days,
+    to_regclass('public.staff_departures') IS NOT NULL AS departures,
+    NOT has_table_privilege('anon', 'public.payroll_closes', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(payroll));
+  if (!payroll.closes || !payroll.leave_days || !payroll.departures || !payroll.anon_blocked) throw new Error('Chưa cài đủ bảng chốt lương / nghỉ việc.');
+
   // Băm mã PIN còn lưu chữ thường (web đang chạy ở 127.0.0.1:3000 làm việc này).
   const crypto = require('node:crypto');
   const serverKey = crypto.createHmac('sha256', key).update('staff-maintenance').digest('hex');
