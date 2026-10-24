@@ -143,15 +143,16 @@ export default function ReceiptsPage() {
   }
 
   // Ảnh CK cho 1 bill: chụp màn hình ĐT khách ngay trong web (không lưu vào
-  // máy) hoặc chọn ảnh có sẵn (khách gửi qua Zalo).
+  // máy) hoặc chọn ảnh có sẵn (khách gửi qua Zalo). target.bill: ảnh tờ bill
+  // chụp bổ sung cho bill giấy chưa có ảnh (bill từ trang Mã QR).
   const [cameraFor, setCameraFor] = useState(null);
   async function uploadProof(target, blob) {
     setAttaching(target);
     try {
       const form = new FormData();
-      form.set('action', 'attach_transfer');
+      form.set('action', target.bill ? 'attach_bill' : 'attach_transfer');
       form.set(target.orderId ? 'order_id' : 'receipt_id', target.orderId || target.id);
-      form.set('image', blob, 'ck.jpg');
+      form.set('image', blob, target.bill ? 'bill.jpg' : 'ck.jpg');
       await send(form); await load();
     } catch (err) { alert(err.message); } finally { setAttaching(null); }
   }
@@ -218,12 +219,20 @@ export default function ReceiptsPage() {
     <section className="fin-panel">
       <h2>Bill giấy hôm nay ({data?.paperBills?.length || 0})</h2>
       {data && !data.paperBills.length && <p className="fin-empty">Chưa có bill giấy.</p>}
-      {(data?.paperBills || []).map(b => <div key={b.id} className="rc-item">
-        {b.imageUrl ? <button className="rc-thumb" onClick={() => setView(b.imageUrl)} aria-label="Xem ảnh bill"><img src={b.imageUrl} alt="" /></button> : <span className="rc-thumb empty" />}
-        <span className="rc-item-main">{clock(b.receivedAt)}{b.tableLabel ? ` · ${b.tableLabel}` : ''}
-          <small>{b.paymentMethod === 'transfer' ? accountName(b.accountId) : 'Tiền mặt'}{b.createdByName ? ` · ${b.createdByName}` : ''}</small></span>
-        <b>{money(b.amount)}</b>
-        {(b.mine || data.me?.role === 'admin') && <button className="fin-icon danger" onClick={() => remove(b)} aria-label="Xoá"><Trash2 size={16} /></button>}
+      {(data?.paperBills || []).map(b => <div key={b.id} className="rc-ck-block">
+        <div className="rc-item">
+          {b.imageUrl ? <button className="rc-thumb" onClick={() => setView(b.imageUrl)} aria-label="Xem ảnh bill"><img src={b.imageUrl} alt="" /></button> : <span className="rc-thumb empty" />}
+          <span className="rc-item-main">{clock(b.receivedAt)}{b.tableLabel ? ` · ${b.tableLabel}` : ''}
+            <small>{b.paymentMethod === 'transfer' ? accountName(b.accountId) : 'Tiền mặt'}{b.createdByName ? ` · ${b.createdByName}` : ''}{b.imageUrl ? '' : ' · chưa có ảnh bill'}</small></span>
+          <b>{money(b.amount)}</b>
+          {(b.mine || data.me?.role === 'admin') && <button className="fin-icon danger" onClick={() => remove(b)} aria-label="Xoá"><Trash2 size={16} /></button>}
+        </div>
+        {!b.imageUrl && <div className="rc-ck-actions">
+          {attaching?.key === `bill-${b.id}` ? <span className="rc-ck-busy">Đang gửi ảnh...</span> : <>
+            <button className="rc-attach" onClick={() => startCamera({ key: `bill-${b.id}`, id: b.id, bill: true })}>📷 Chụp tờ bill</button>
+            <button className="rc-attach done" onClick={() => startGallery({ key: `bill-${b.id}`, id: b.id, bill: true })}>Chọn ảnh có sẵn</button>
+          </>}
+        </div>}
       </div>)}
     </section>
 

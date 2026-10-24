@@ -168,3 +168,43 @@ test('right after "Đã nhận tiền" one customer-phone photo is attached to e
   assert.equal((await post(staff.api, { action: 'attach_transfer', order_ids: '00000000-0000-0000-0000-000000000999', image: image() })).status, 404);
   assert.equal(staff.uploads.length, 1, 'nothing uploaded for refused requests');
 });
+
+test('the QR page adds a bill photo and a transfer screenshot to the paper bill the database wrote', async () => {
+  const state = base();
+  const CASH = 'cash:00000000-0000-4000-8000-0000000000c1';
+  state.finance_manual_receipts.push(
+    { id: '00000000-0000-0000-0000-000000000401', source: 'qr:QRAB1234', business_date: today, payment_method: 'transfer', amount: 350000, image_path: null, created_by_name: 'Trang Mã QR' },
+    { id: '00000000-0000-0000-0000-000000000402', source: CASH, business_date: today, payment_method: 'cash', amount: 120000, image_path: null },
+    { id: '00000000-0000-0000-0000-000000000403', source: 'qr:OLDDAY01', business_date: '2000-01-01', payment_method: 'transfer', amount: 1, image_path: null });
+  const staff = load({ state });
+  let res = await post(staff.api, { action: 'attach_bill', source: 'qr:QRAB1234', image: image() });
+  assert.equal(res.status, 200);
+  res = await post(staff.api, { action: 'attach_transfer', source: 'qr:QRAB1234', image: image() });
+  assert.equal(res.status, 200);
+  assert.deepEqual([state.finance_manual_receipts[0].image_path, state.finance_manual_receipts[0].transfer_image_path],
+    ['2026-10/bill-1.jpg', '2026-10/ck-2.jpg']);
+  assert.equal((await post(staff.api, { action: 'attach_bill', source: CASH, image: image() })).status, 200);
+  assert.equal(state.finance_manual_receipts[1].image_path, '2026-10/bill-3.jpg');
+  assert.equal((await post(staff.api, { action: 'attach_transfer', source: CASH, image: image() })).status, 404, 'cash takes no screenshot');
+
+  // Chụp lại: ảnh cũ bị thay và xoá.
+  assert.equal((await post(staff.api, { action: 'attach_bill', receipt_id: '00000000-0000-0000-0000-000000000401', image: image() })).status, 200);
+  assert.equal(state.finance_manual_receipts[0].image_path, '2026-10/bill-4.jpg');
+  assert.deepEqual(staff.removed, ['2026-10/bill-1.jpg']);
+
+  assert.equal((await post(staff.api, { action: 'attach_bill', source: 'qr:OLDDAY01', image: image() })).status, 403, 'staff: today only');
+  assert.equal((await post(load({ state, role: 'admin' }).api, { action: 'attach_bill', source: 'qr:OLDDAY01', image: image() })).status, 200);
+  assert.equal((await post(staff.api, { action: 'attach_bill', source: 'qr:NOTFOUND', image: image() })).status, 404);
+  for (const source of ['qr:../x', 'qr:', 'order:1', 'cash:abc'])
+    assert.equal((await post(staff.api, { action: 'attach_bill', source, image: image() })).status, 400, source);
+  assert.equal((await post(staff.api, { action: 'attach_bill', source: 'qr:QRAB1234' })).status, 400, 'needs an image');
+  assert.equal(staff.uploads.length, 4, 'nothing uploaded for refused requests');
+});
+
+test('paper bills from the QR page show on the paper bill page with who took them and no photo yet', async () => {
+  const state = base();
+  state.finance_manual_receipts.push({ id: '00000000-0000-0000-0000-000000000501', source: 'qr:QRAB1234', business_date: today,
+    received_at: new Date().toISOString(), payment_method: 'transfer', account_id: ACC, amount: 350000, image_path: null, created_by_name: 'Trang Mã QR' });
+  const list = await get(load({ state }).api);
+  assert.deepEqual(list.body.paperBills.map(b => [b.amount, b.createdByName, b.imageUrl, b.mine]), [[350000, 'Trang Mã QR', null, false]]);
+});

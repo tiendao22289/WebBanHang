@@ -5,8 +5,12 @@
  *        danh sách thẻ nhận tiền. Không trả lãi lỗ / tổng tháng.
  * POST (multipart, field action):
  *   create_paper     amount, method, account_id?, table_label?, note?, image (bắt buộc), transfer_image?
- *   attach_transfer  order_id | receipt_id, image
+ *   attach_transfer  order_id | receipt_id | source, image
+ *   attach_bill      receipt_id | source, image — ảnh tờ bill chụp bổ sung (bill từ trang Mã QR)
  *   delete_paper     id — nhân viên chỉ xoá bill giấy mình nhập trong ngày; admin xoá được mọi bill giấy
+ *
+ * source = 'qr:<mã>' / 'cash:<id phiếu>': bill giấy DB tự ghi khi thu ở trang
+ * Mã QR (owner_finance.sql, capture_qr_page_receipt) — trang đó chưa biết id.
  *
  * Chạy bằng service role (bảng sổ thu chi đã chặn anon). Không đụng orders
  * hay trang Thống kê.
@@ -20,6 +24,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 const headers = { 'Cache-Control': 'private, no-store', Vary: 'Cookie' };
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
+const SOURCE = /^(qr:[A-Z0-9]{8}|cash:[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})$/i;
 const MAX_AMOUNT = 1_000_000_000;
 const missingTable = error => ['PGRST205', '42P01', '42703'].includes(error?.code);
 const fail = (error, status = 400) => NextResponse.json({ error }, { status, headers });
@@ -29,6 +34,10 @@ async function requireStaff(request) {
   if (session.code !== 200) return { code: session.code };
   return session;
 }
+
+// Bill giấy theo id, hoặc theo source khi gửi từ trang Mã QR.
+const paperKey = form => form.get('source') ? { key: 'source', id: form.get('source') } : { key: 'id', id: form.get('receipt_id') };
+const validKey = (key, id) => !!id && (key === 'source' ? SOURCE : UUID).test(id);
 
 function denied(code) {
   return fail(code === 503 ? 'Không kiểm tra được đăng nhập.' : 'Cần đăng nhập nhân viên.', code);
@@ -150,11 +159,9 @@ export async function POST(request) {
         return NextResponse.json({ ok: true, bills: targets.length }, { headers });
       }
       const orderId = form.get('order_id');
-      const receiptId = form.get('receipt_id');
       const table = orderId ? 'finance_revenue_ledger' : 'finance_manual_receipts';
-      const key = orderId ? 'order_id' : 'id';
-      const id = orderId || receiptId;
-      if (!id || !UUID.test(id)) return fail('Thiếu bill cần thêm ảnh.');
+      const { key, id } = orderId ? { key: 'order_id', id: orderId } : paperKey(form);
+      if (!validKey(key, id)) return fail('Thiếu bill cần thêm ảnh.');
       const { data: row, error } = await db.from(table).select(`${key}, transfer_image_path, payment_method, business_date`).eq(key, id).maybeSingle();
       if (error) throw error;
       if (!row || row.payment_method !== 'transfer') return fail('Không tìm thấy bill chuyển khoản này.', 404);
@@ -165,6 +172,23 @@ export async function POST(request) {
       const update = await db.from(table).update(patch).eq(key, id);
       if (update.error) { await removeReceiptImages(db, [path]); throw update.error; }
       await removeReceiptImages(db, [row.transfer_image_path]);
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    if (action === 'attach_bill') {
+      const image = form.get('image');
+      const problem = receiptImageProblem(image);
+      if (problem) return fail(problem);
+      const { key, id } = paperKey(form);
+      if (!validKey(key, id)) return fail('Thiếu bill cần thêm ảnh.');
+      const { data: row, error } = await db.from('finance_manual_receipts').select('id, image_path, business_date').eq(key, id).maybeSingle();
+      if (error) throw error;
+      if (!row) return fail('Không tìm thấy bill giấy này.', 404);
+      if (!isAdmin && row.business_date !== today) return fail('Chỉ thêm ảnh cho bill hôm nay.', 403);
+      const path = await uploadReceiptImage(db, image, 'bill');
+      const update = await db.from('finance_manual_receipts').update({ image_path: path }).eq('id', row.id);
+      if (update.error) { await removeReceiptImages(db, [path]); throw update.error; }
+      await removeReceiptImages(db, [row.image_path]);
       return NextResponse.json({ ok: true }, { headers });
     }
 

@@ -101,6 +101,11 @@ ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS verified_by t
 ALTER TABLE public.finance_manual_receipts ADD COLUMN IF NOT EXISTS verified_at timestamptz;
 ALTER TABLE public.finance_manual_receipts ADD COLUMN IF NOT EXISTS verified_by text;
 
+-- Bill giấy tự ghi từ trang Mã QR: 'qr:<mã giao dịch>' / 'cash:<id phiếu thu>'
+-- (xem capture_qr_page_receipt). Bill nhập tay để trống.
+ALTER TABLE public.finance_manual_receipts ADD COLUMN IF NOT EXISTS source text;
+CREATE UNIQUE INDEX IF NOT EXISTS finance_manual_receipts_source ON public.finance_manual_receipts(source);
+
 -- Cài đặt sổ thu chi (vd. 'zalo_report': Zalo nhận báo cáo hằng ngày).
 CREATE TABLE IF NOT EXISTS public.finance_settings (
   key text PRIMARY KEY,
@@ -179,6 +184,52 @@ BEGIN
       WHERE tgname = 'capture_finance_revenue' AND tgrelid = 'public.orders'::regclass) THEN
     CREATE TRIGGER capture_finance_revenue AFTER UPDATE OF status ON public.orders
       FOR EACH ROW EXECUTE FUNCTION public.capture_finance_revenue();
+  END IF;
+END $$;
+
+-- Tiền thu ở trang Mã QR (/admin/qr) không có bill trên hệ thống → tự ghi
+-- thành bill giấy (chưa có ảnh, chụp bổ sung sau) để Sổ thu chi, /thongke và
+-- tin Zalo tính đủ. Ghi cùng giao dịch với việc xác nhận nên không sót, source
+-- duy nhất nên bấm lại không ghi trùng. Trang Thống kê / S2a-HKD không đọc
+-- bảng này nên không đổi.
+CREATE OR REPLACE FUNCTION public.capture_qr_page_receipt()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE at timestamptz := now();
+BEGIN
+  IF TG_TABLE_NAME = 'payment_transactions' THEN
+    IF NEW.order_ids = 'shadow_qr' AND NEW.status = 'completed' AND OLD.status IS DISTINCT FROM 'completed' THEN
+      INSERT INTO public.finance_manual_receipts(source, business_date, received_at, amount, payment_method,
+          account_id, note, created_by_name)
+        VALUES ('qr:' || NEW.transaction_code, (at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date, at, NEW.total_amount,
+          -- account_id của bảng thật là text
+          'transfer', NULLIF(NEW.account_id::text, '')::uuid, 'Mã QR ' || NEW.transaction_code, 'Trang Mã QR')
+        ON CONFLICT (source) DO NOTHING;
+    END IF;
+  ELSE -- custom_cash_receipts: nút "Nhận tiền mặt"
+    at := COALESCE(NEW.created_at, at);
+    INSERT INTO public.finance_manual_receipts(source, business_date, received_at, amount, payment_method, created_by_name)
+      VALUES ('cash:' || NEW.id, (at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date, at, NEW.amount, 'cash', 'Trang Mã QR')
+      ON CONFLICT (source) DO NOTHING;
+  END IF;
+  RETURN NEW;
+EXCEPTION WHEN OTHERS THEN
+  -- Sổ thu chi là phụ: lỗi ở đây không bao giờ được chặn việc thu tiền.
+  RAISE WARNING 'QR page receipt capture failed (SQLSTATE %)', SQLSTATE;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION public.capture_qr_page_receipt() FROM PUBLIC, anon, authenticated;
+
+DO $$
+BEGIN
+  IF to_regclass('public.payment_transactions') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_trigger
+      WHERE tgname = 'capture_qr_page_receipt' AND tgrelid = to_regclass('public.payment_transactions')) THEN
+    CREATE TRIGGER capture_qr_page_receipt AFTER UPDATE OF status ON public.payment_transactions
+      FOR EACH ROW EXECUTE FUNCTION public.capture_qr_page_receipt();
+  END IF;
+  IF to_regclass('public.custom_cash_receipts') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_trigger
+      WHERE tgname = 'capture_qr_page_receipt' AND tgrelid = to_regclass('public.custom_cash_receipts')) THEN
+    CREATE TRIGGER capture_qr_page_receipt AFTER INSERT ON public.custom_cash_receipts
+      FOR EACH ROW EXECUTE FUNCTION public.capture_qr_page_receipt();
   END IF;
 END $$;
 
