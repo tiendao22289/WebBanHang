@@ -330,7 +330,8 @@ test('staff see only their own salary for this month, or the closed numbers once
   assert.equal(me.salary.locked, false);
   assert.deepEqual([me.salary.base, me.salary.advAmt, me.salary.vioAmt, me.salary.year, me.salary.month], [5200000, 100000, 20000, year, month]);
   assert.equal(me.salary.net, me.salary.basePay + me.salary.otAmt - 100000 - 20000 - me.salary.absAmt);
-  assert.deepEqual(me.violations, [{ amount: 20000, reason: 'đi trễ' }], 'only their own fines');
+  assert.deepEqual(me.violations, [{ amount: 20000, reason: 'đi trễ', date: null }], 'only their own fines');
+  assert.equal(me.bonus, null, 'no attendance bonus line while the owner does not use it');
 
   state.payroll_closes.push({ year, month, staff_id: STAFF.id, snapshot: { name: 'Phát', net: 123456, rule: 'days' }, closed_at: '2026-11-30T12:00:00Z' });
   const closed = plain(await load(state, STAFF).GET({ url: 'http://x/api/admin/workforce?me=1' })).body.salary;
@@ -401,4 +402,111 @@ test('admin attendance edits are logged and compared by time, not text', async (
   assert.equal(r.body.changed, 1);
   assert.equal(state.attendance_sessions[0].clock_out, '2026-10-23T09:30:00.000Z');
   assert.deepEqual(plain(state.attendance_changes.map(l => [l.field_name, l.changed_by])), [['clock_out', 'Chủ quán']]);
+});
+
+const RULE = '00000000-0000-4000-8000-0000000000f1', RULE_LATE = '00000000-0000-4000-8000-0000000000f2';
+const HOURS = { checkin_settings: [{ id: 1, enforce: false, hours_from: '2026-10-25' }], checkin_hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }] };
+
+test('the owner records a fine with a date and a mistake from the list; staff see the date', async () => {
+  const state = shop({ payroll_violations: [], payroll_violation_meta: [], payroll_fine_rules: [{ id: RULE, name: 'Làm vỡ ly, chén, dĩa', amount: 30000, kind: null, active: true }] });
+  const owner = load(state, ADMIN);
+  assert.equal((await post(owner, { action: 'add_violation', staff_id: STAFF.id, date: '2026-11-05', rule_id: RULE, amount: '30.000' })).status, 200);
+  const [v] = state.payroll_violations;
+  assert.deepEqual([v.reason, v.amount, v.month, v.year], ['Làm vỡ ly, chén, dĩa', 30000, 11, 2026], 'the date picks the payroll month, the mistake is the reason');
+  const meta = state.payroll_violation_meta[0];
+  assert.deepEqual([meta.violation_id, meta.fine_date, meta.recorded_by, meta.rule_id], [v.id, '2026-11-05', 'Chủ quán', RULE]);
+  assert.equal((await post(owner, { action: 'add_violation', staff_id: STAFF.id, date: '2026-11-05', amount: '10.000' })).status, 400, 'no mistake and no reason');
+  assert.equal((await post(load(state, STAFF), { action: 'add_violation', staff_id: STAFF.id, date: '2026-11-05', reason: 'x', amount: '1' })).status, 403);
+  assert.equal((await post(owner, { action: 'delete_violation', id: v.id })).status, 200);
+  assert.deepEqual([state.payroll_violations.length, state.payroll_violation_meta.length], [0, 0], 'deleting removes the date too');
+
+  const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
+  await post(owner, { action: 'add_violation', staff_id: STAFF.id, date: today, reason: 'không mặc đồng phục', amount: '20.000' });
+  const me = plain(await load(state, STAFF).GET({ url: 'http://x/api/admin/workforce?me=1' })).body;
+  assert.deepEqual(me.violations, [{ amount: 20000, reason: 'không mặc đồng phục', date: today }]);
+});
+
+test('fine suggestions: the owner fines with an amount or skips, once; deleting the fine brings it back', async () => {
+  const sid = '00000000-0000-4000-8000-000000000101', night = '00000000-0000-4000-8000-000000000102';
+  const state = shop({
+    ...HOURS,
+    attendance_sessions: [
+      { id: sid, staff_id: STAFF.id, date: '2026-11-10', clock_in: '2026-11-10T07:40:00.000Z', clock_out: '2026-11-10T16:00:00.000Z' },
+      // Ca 30/11, rồi quay lại dọn quán sau nửa đêm và quên ra ca (ghi ngày 1/12).
+      { id: '00000000-0000-4000-8000-000000000103', staff_id: STAFF.id, date: '2026-11-30', clock_in: '2026-11-30T07:00:00.000Z', clock_out: '2026-11-30T16:00:00.000Z' },
+      { id: night, staff_id: STAFF.id, date: '2026-12-01', clock_in: '2026-11-30T17:20:00.000Z', clock_out: '2026-11-30T17:20:00.000Z' },
+    ],
+    attendance_changes: [{ attendance_id: night, staff_id: STAFF.id, field_name: 'clock_out', changed_by: rules.AUTO_CLOSE_BY, changed_at: '2026-11-30T19:30:00.000Z' }],
+    payroll_violations: [], payroll_violation_meta: [], payroll_fine_reviews: [], payroll_requests: [], attendance_fix_requests: [],
+    payroll_fine_rules: [{ id: RULE_LATE, name: 'Đi trễ quá 30 phút', amount: 50000, kind: 'late', active: true }, { id: RULE, name: 'Quên bấm ra ca', amount: 0, kind: 'forgot', active: true }],
+  });
+  const owner = load(state, ADMIN, { now: Date.parse('2026-12-01T03:00:00Z') });
+  const month = plain(await owner.GET({ url: 'http://x/api/admin/workforce?payroll=1&year=2026&month=11' })).body;
+  const R = rules.normalizeRules(state.checkin_settings[0], [], state.checkin_hours);
+  const hints = payroll.fineSuggestions({ staffId: STAFF.id, tallies: payroll.monthTallies({ sessions: state.attendance_sessions, rules: R, key: '2026-11', autoClosed: month.autoClosed }), reviews: month.fineReviews });
+  assert.deepEqual(hints.map(h => [h.kind, h.day, h.minutes ?? null]), [['late', '2026-11-10', 40], ['forgot', '2026-11-30', null]]);
+  const stats = plain(await owner.GET({ url: 'http://x/api/admin/workforce?stats=1&year=2026&month=11' })).body;
+  assert.equal(stats.pending.fines, 2);
+
+  assert.equal((await post(owner, { action: 'decide_fine', attendance_id: sid, kind: 'late', status: 'fined' })).status, 400, 'the owner types the amount');
+  assert.equal((await post(owner, { action: 'decide_fine', attendance_id: sid, kind: 'late', status: 'fined', amount: '50.000', reason: 'Đi trễ quá 30 phút (10/11, trễ 40 phút)' })).status, 200);
+  assert.equal((await post(owner, { action: 'decide_fine', attendance_id: sid, kind: 'late', status: 'fined', amount: '50.000' })).status, 409, 'a second tap does not fine twice');
+  assert.deepEqual(state.payroll_violations.map(v => [v.amount, v.month, v.year, v.reason]), [[50000, 11, 2026, 'Đi trễ quá 30 phút (10/11, trễ 40 phút)']]);
+  const [v] = state.payroll_violations;
+  assert.deepEqual([state.payroll_fine_reviews[0].status, state.payroll_fine_reviews[0].violation_id, state.payroll_violation_meta[0].kind, state.payroll_violation_meta[0].fine_date], ['fined', v.id, 'late', '2026-11-10']);
+  // Ca dọn quán sau nửa đêm ngày 1/12 thuộc ca 30/11 → phạt vào lương tháng 11.
+  assert.equal((await post(owner, { action: 'decide_fine', attendance_id: night, kind: 'forgot', status: 'fined', amount: '20.000' })).status, 200);
+  assert.deepEqual([state.payroll_violations[1].month, state.payroll_violations[1].reason, state.payroll_violation_meta[1].fine_date], [11, 'Quên bấm ra ca (30/11)', '2026-11-30']);
+
+  await post(owner, { action: 'delete_violation', id: v.id });
+  assert.deepEqual([state.payroll_violations.length, state.payroll_fine_reviews.length, state.payroll_violation_meta.length], [1, 1, 1], 'the late suggestion comes back');
+  assert.equal((await post(owner, { action: 'decide_fine', attendance_id: sid, kind: 'late', status: 'skipped' })).status, 200);
+  assert.deepEqual([state.payroll_violations.length, state.payroll_fine_reviews.find(r => r.attendance_id === sid).status], [1, 'skipped']);
+  assert.equal((await post(owner, { action: 'reopen_fine', attendance_id: sid, kind: 'late' })).status, 200);
+  assert.equal(state.payroll_fine_reviews.some(r => r.attendance_id === sid), false);
+  assert.equal((await post(load(state, STAFF), { action: 'decide_fine', attendance_id: sid, kind: 'late', status: 'skipped' })).status, 403);
+});
+
+test('attendance bonus: the owner sets the amount, approves once the month is over, and it goes into the closed pay', async () => {
+  const state = shop({
+    ...HOURS,
+    payroll_config: [{ staff_id: STAFF.id, base_salary: 5200000, overtime_rate: 30000 }],
+    attendance_sessions: [{ id: 's1', staff_id: STAFF.id, date: '2026-11-02', clock_in: '2026-11-02T07:00:00.000Z', clock_out: '2026-11-02T16:00:00.000Z' }],
+    payroll_settings: [], payroll_bonuses: [], payroll_closes: [], payroll_requests: [], payroll_violations: [], attendance_fix_requests: [],
+  });
+  const during = load(state, ADMIN, { now: Date.parse('2026-11-20T03:00:00Z') });
+  assert.equal((await post(during, { action: 'save_bonus_settings', bonus_amount: '300.000', bonus_min_days: '1' })).status, 200);
+  assert.deepEqual([state.payroll_settings[0].bonus_amount, state.payroll_settings[0].bonus_min_days], [300000, 1]);
+  assert.equal((await post(during, { action: 'save_bonus_settings', bonus_amount: '300.000', bonus_min_days: '40' })).status, 400);
+  assert.equal((await post(during, { action: 'decide_bonus', staff_id: STAFF.id, year: 2026, month: 11, amount: '300.000' })).status, 400, 'not before the month is over');
+
+  const after = load(state, ADMIN, { now: Date.parse('2026-12-01T02:00:00Z') });
+  const before = plain(await after.GET({ url: 'http://x/api/admin/workforce?stats=1&year=2026&month=11' })).body;
+  assert.deepEqual([before.pending.bonuses, before.people.find(p => p.staff_id === STAFF.id).bonus.eligible], [1, true]);
+  assert.equal((await post(after, { action: 'decide_bonus', staff_id: STAFF.id, year: 2026, month: 11, amount: '' })).status, 400, 'the owner types the amount');
+  assert.equal((await post(after, { action: 'decide_bonus', staff_id: STAFF.id, year: 2026, month: 11, amount: '250.000' })).status, 200);
+  assert.equal((await post(after, { action: 'decide_bonus', staff_id: STAFF.id, year: 2026, month: 11, amount: '350.000' })).status, 200, 'a new amount replaces the old one');
+  assert.deepEqual(state.payroll_bonuses.map(b => [b.amount, b.decided_by]), [[350000, 'Chủ quán']]);
+  const m = plain(await after.GET({ url: 'http://x/api/admin/workforce?payroll=1&year=2026&month=11' })).body;
+  assert.deepEqual([m.bonuses.length, m.bonusSettings.bonus_amount, m.monthOver], [1, 300000, true]);
+  const stats = plain(await after.GET({ url: 'http://x/api/admin/workforce?stats=1&year=2026&month=11' })).body;
+  assert.deepEqual([stats.pending.bonuses, stats.totals.bonuses, stats.totals.gross], [0, 350000, 200000 + 350000]);
+
+  assert.equal((await post(after, { action: 'close_month', year: 2026, month: 11 })).status, 200);
+  const snap = state.payroll_closes.find(c => c.staff_id === STAFF.id).snapshot;
+  assert.deepEqual([snap.bonusAmt, snap.net], [350000, 200000 + 350000]);
+  assert.equal((await post(after, { action: 'remove_bonus', staff_id: STAFF.id, year: 2026, month: 11 })).status, 200);
+  assert.equal(state.payroll_bonuses.length, 0);
+  assert.equal((await post(load(state, STAFF, { now: Date.parse('2026-12-01T02:00:00Z') }), { action: 'decide_bonus', staff_id: STAFF.id, year: 2026, month: 11, amount: '1' })).status, 403);
+});
+
+test('the owner keeps the list of mistakes with suggested amounts and can hide one', async () => {
+  const state = shop({ payroll_fine_rules: [{ id: RULE_LATE, name: 'Đi trễ quá 30 phút', amount: 0, kind: 'late', active: true, sort: 1 }] });
+  const owner = load(state, ADMIN);
+  assert.equal((await post(owner, { action: 'save_fine_rule', id: RULE_LATE, name: 'Đi trễ quá 30 phút', amount: '50.000' })).status, 200);
+  assert.equal((await post(owner, { action: 'save_fine_rule', name: 'Quên đeo tạp dề', amount: '' })).status, 200);
+  assert.equal((await post(owner, { action: 'save_fine_rule', id: RULE_LATE, name: 'Đi trễ quá 30 phút', amount: '50.000', active: false })).status, 200);
+  assert.deepEqual(state.payroll_fine_rules.map(r => [r.name, r.amount, r.kind ?? null, r.active]), [['Đi trễ quá 30 phút', 50000, 'late', false], ['Quên đeo tạp dề', 0, null, true]]);
+  assert.equal((await post(owner, { action: 'save_fine_rule', name: '', amount: '1' })).status, 400);
+  assert.equal((await post(load(state, STAFF), { action: 'save_fine_rule', name: 'x' })).status, 403);
 });

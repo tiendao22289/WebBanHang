@@ -3,8 +3,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
-import { dayFlags, durationText, flagTexts, groupByWorkDay, hoursOn, sessionHours, shiftOf, workDayOf } from '@/lib/attendanceRules.mjs';
-import { STANDARD_DAYS, computeSalary, usesDayPay } from '@/lib/payroll.mjs';
+import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, workDayOf } from '@/lib/attendanceRules.mjs';
+import { LATE_FINE_MINUTES, STANDARD_DAYS, bonusCheck, computeSalary, fineSuggestions, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users, RefreshCw } from 'lucide-react';
 import './payroll.css';
@@ -17,6 +17,158 @@ const ddmm = d => d.slice(8, 10) + '/' + d.slice(5, 7);
 // " (02/11 – 03/11)" cho đơn báo nghỉ có ngày nghỉ.
 const leaveText = l => (l ? ` (${ddmm(l.from_date)}${l.to_date !== l.from_date ? ` – ${ddmm(l.to_date)}` : ''})` : '');
 const fmtNum = n => String(n).replace('.', ',');
+// Ô nhập tiền: chỉ giữ số, chấm hàng nghìn (50.000).
+const typedMoney = v => { const raw = String(v ?? '').replace(/\./g, '').replace(/\D/g, ''); return raw ? Number(raw).toLocaleString('vi-VN') : ''; };
+const shownMoney = n => (Number(n) > 0 ? Number(n).toLocaleString('vi-VN') : '');
+const smallBtn = { fontSize: '0.75rem', padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, whiteSpace: 'nowrap' };
+const moneyBox = { width: 110, padding: '4px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem' };
+
+// Thưởng chuyên cần (Bảng lương): điều kiện + mức gợi ý (sửa được); người đủ điều kiện — chủ tự điền tiền rồi
+// duyệt, chỉ khi đã hết tháng; người đã duyệt (bỏ được); người chưa đủ kèm lý do (vẫn thưởng được).
+function BonusBox({ year, month, people, settings, monthOver, onAction }) {
+  const [amounts, setAmounts] = useState({});
+  const [edit, setEdit] = useState(null);
+  const [extra, setExtra] = useState({});
+  const s = settings || { bonus_amount: 0, bonus_min_days: 22 };
+  const suggested = shownMoney(s.bonus_amount);
+  const approved = people.filter(p => p.approved);
+  const eligible = people.filter(p => !p.approved && p.check.eligible);
+  const others = people.filter(p => !p.approved && !p.check.eligible);
+  const unused = !s.bonus_amount && !approved.length;
+  const amountOf = p => amounts[p.s.id] ?? suggested;
+  const approve = p => (amountOf(p) ? onAction('decide_bonus', { staff_id: p.s.id, year, month, amount: amountOf(p) }) : alert('Nhập số tiền thưởng.'));
+  const amountInput = p => <input style={moneyBox} inputMode="numeric" placeholder="Số tiền" value={amountOf(p)} onChange={e => setAmounts(a => ({ ...a, [p.s.id]: typedMoney(e.target.value) }))} />;
+  return (
+    <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155', lineHeight: 1.7 }}>
+      <div style={{ fontWeight: 800 }}>⭐ Thưởng chuyên cần tháng {month}/{year}</div>
+      {edit ? (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0' }}>
+          <label>Mức thưởng gợi ý <input style={moneyBox} inputMode="numeric" value={edit.bonus_amount} onChange={e => setEdit(x => ({ ...x, bonus_amount: typedMoney(e.target.value) }))} /></label>
+          <label>Ít nhất <input style={{ ...moneyBox, width: 56 }} inputMode="decimal" value={edit.bonus_min_days} onChange={e => setEdit(x => ({ ...x, bonus_min_days: e.target.value }))} /> ngày công</label>
+          <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }} onClick={async () => { if (await onAction('save_bonus_settings', { bonus_amount: edit.bonus_amount || '0', bonus_min_days: edit.bonus_min_days })) setEdit(null); }}>Lưu</button>
+          <button style={smallBtn} onClick={() => setEdit(null)}>Huỷ</button>
+        </div>
+      ) : (
+        <div>
+          Điều kiện: cả tháng <strong>không đi trễ</strong>, <strong>không quên ra ca</strong>, đủ <strong>{fmtNum(s.bonus_min_days)} ngày công</strong>.
+          {' '}{s.bonus_amount ? <>Mức gợi ý <strong>{formatMoney(s.bonus_amount)}</strong>, sửa được từng người.</> : 'Chưa đặt mức thưởng gợi ý.'}
+          {' '}<button style={smallBtn} onClick={() => setEdit({ bonus_amount: suggested, bonus_min_days: fmtNum(s.bonus_min_days) })}>{unused ? 'Đặt mức thưởng' : 'Sửa'}</button>
+        </div>
+      )}
+      {!unused && (
+        <>
+          {!monthOver && (eligible.length
+            ? <div>⏳ Hết tháng mới duyệt được. Đang giữ được: <strong>{eligible.map(p => p.s.full_name).join(', ')}</strong>.</div>
+            : <div style={{ color: '#64748b' }}>⏳ Hết tháng mới duyệt được. Chưa ai giữ được điều kiện tới hôm nay.</div>)}
+          {monthOver && eligible.map(p => (
+            <div key={p.s.id} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 4 }}>
+              <span style={{ minWidth: 120, fontWeight: 700 }}>✅ {p.s.full_name}</span>
+              <span style={{ color: '#64748b' }}>{fmtNum(p.c.workUnits)} ngày công</span>
+              {amountInput(p)}
+              <button style={{ ...smallBtn, background: '#16a34a', borderColor: '#16a34a', color: 'white' }} onClick={() => approve(p)}>Duyệt thưởng</button>
+            </div>
+          ))}
+          {approved.map(p => (
+            <div key={p.s.id} style={{ marginTop: 4 }}>
+              🎁 <strong>{p.s.full_name}</strong>: +{formatMoney(p.approved.amount)}{p.approved.decided_by ? ` (${p.approved.decided_by} duyệt)` : ''}
+              {' '}<button style={smallBtn} onClick={() => onAction('remove_bonus', { staff_id: p.s.id, year, month }, `Bỏ thưởng chuyên cần của ${p.s.full_name}?`)}>Bỏ</button>
+            </div>
+          ))}
+          {others.length > 0 && (
+            <div style={{ marginTop: 4, color: '#64748b' }}>
+              Chưa đủ điều kiện: {others.map((p, i) => (
+                <React.Fragment key={p.s.id}>
+                  {i > 0 && ' · '}{p.s.full_name} ({p.check.reasons.join(', ')})
+                  {monthOver && (extra[p.s.id]
+                    ? <> {amountInput(p)} <button style={smallBtn} onClick={() => approve(p)}>Thưởng</button></>
+                    : <> <button style={{ ...smallBtn, padding: '1px 6px', fontWeight: 600 }} onClick={() => setExtra(x => ({ ...x, [p.s.id]: true }))}>vẫn thưởng</button></>)}
+                </React.Fragment>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// Gợi ý phạt từ chấm công trong tháng (trễ quá 30 phút, quên ra ca): chủ điền tiền rồi Phạt, hoặc Bỏ qua.
+function FineHints({ hints, nameOf, rules, reviews, onAction }) {
+  const [amounts, setAmounts] = useState({});
+  const ruleOf = kind => rules.find(r => r.kind === kind);
+  const keyOf = h => `${h.attendance_id}:${h.kind}`;
+  // Giờ ra là giờ đang ghi: máy tự ghi khi quên ra ca, hoặc giờ đã được duyệt sửa.
+  const what = h => (h.kind === 'late' ? `trễ ${durationText(h.minutes)}` : `quên bấm ra ca${h.clock_out ? ` (giờ ra đang ghi ${hhmm(h.clock_out)})` : ''}`);
+  const skipped = reviews.filter(r => r.status === 'skipped');
+  return (
+    <div className="payroll-form" style={{ background: '#fff7ed', border: '1px solid #fed7aa' }}>
+      <h3>🔔 Máy gợi ý phạt ({hints.length})</h3>
+      <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '0 0 8px' }}>Từ chấm công: đi trễ quá {LATE_FINE_MINUTES} phút, quên bấm ra ca. Máy không tự trừ tiền — bạn điền số tiền rồi bấm Phạt, hoặc Bỏ qua.</p>
+      {hints.length === 0 && <div style={{ fontSize: '0.82rem', color: '#64748b' }}>Không có gợi ý nào chưa xử lý.</div>}
+      {hints.map(h => {
+        const rule = ruleOf(h.kind), amount = amounts[keyOf(h)] ?? shownMoney(rule?.amount);
+        const reason = `${rule?.name || (h.kind === 'late' ? 'Đi trễ' : 'Quên bấm ra ca')} (${ddmm(h.day)}${h.kind === 'late' ? `, trễ ${durationText(h.minutes)}` : ''})`;
+        return (
+          <div key={keyOf(h)} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: '6px 0', borderTop: '1px solid #fde7d3', fontSize: '0.84rem' }}>
+            <span style={{ fontWeight: 700, minWidth: 100 }}>{nameOf(h.staff_id)}</span>
+            <span style={{ color: '#64748b', minWidth: 42 }}>{ddmm(h.day)}</span>
+            <span style={{ flex: 1, minWidth: 150 }}>{what(h)}</span>
+            <input style={moneyBox} inputMode="numeric" placeholder="Số tiền" value={amount} onChange={e => setAmounts(a => ({ ...a, [keyOf(h)]: typedMoney(e.target.value) }))} />
+            <button style={{ ...smallBtn, background: '#dc2626', borderColor: '#dc2626', color: 'white' }}
+              onClick={() => (amount ? onAction('decide_fine', { attendance_id: h.attendance_id, kind: h.kind, status: 'fined', amount, reason }) : alert('Nhập số tiền phạt.'))}>Phạt</button>
+            <button style={smallBtn} onClick={() => onAction('decide_fine', { attendance_id: h.attendance_id, kind: h.kind, status: 'skipped' })}>Bỏ qua</button>
+          </div>
+        );
+      })}
+      {skipped.length > 0 && (
+        <details style={{ marginTop: 8, fontSize: '0.8rem', color: '#64748b' }}>
+          <summary style={{ cursor: 'pointer' }}>Đã bỏ qua ({skipped.length})</summary>
+          {skipped.map(r => (
+            <div key={`${r.attendance_id}:${r.kind}`} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0' }}>
+              <span>{nameOf(r.staff_id)} · {ddmm(r.work_day)} · {r.kind === 'late' ? 'đi trễ' : 'quên ra ca'}{r.decided_by ? ` (${r.decided_by} bỏ qua)` : ''}</span>
+              <button style={{ ...smallBtn, padding: '1px 8px', fontWeight: 600 }} onClick={() => onAction('reopen_fine', { attendance_id: r.attendance_id, kind: r.kind })}>Xem lại</button>
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
+  );
+}
+
+// Danh sách lỗi có sẵn: tên + tiền phạt gợi ý (trống = điền mỗi lần), ẩn / hiện. 🤖 = lỗi máy tự gợi ý từ chấm công.
+function FineRules({ rules, onAction }) {
+  const [edits, setEdits] = useState({});
+  const [draft, setDraft] = useState({ name: '', amount: '' });
+  const valueOf = r => edits[r.id] || { name: r.name, amount: shownMoney(r.amount) };
+  const change = (r, patch) => setEdits(e => ({ ...e, [r.id]: { ...valueOf(r), ...patch } }));
+  const save = async (r, active = r.active) => {
+    const v = valueOf(r);
+    if (await onAction('save_fine_rule', { id: r.id, name: v.name, amount: v.amount, active })) setEdits(e => { const next = { ...e }; delete next[r.id]; return next; });
+  };
+  return (
+    <details className="payroll-form">
+      <summary style={{ fontWeight: 800, cursor: 'pointer' }}>📋 Danh sách lỗi có sẵn ({rules.filter(r => r.active).length})</summary>
+      <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '6px 0' }}>Đặt sẵn tiền phạt cho từng lỗi để ghi phạt nhanh (để trống thì điền mỗi lần). 🤖 là lỗi máy tự gợi ý từ chấm công — ẩn đi thì máy thôi gợi ý lỗi đó.</p>
+      {rules.map(r => {
+        const v = valueOf(r);
+        return (
+          <div key={r.id} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: '4px 0', opacity: r.active ? 1 : 0.55 }}>
+            <input value={v.name} onChange={e => change(r, { name: e.target.value })} style={{ flex: 1, minWidth: 160, padding: '5px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} />
+            <input value={v.amount} placeholder="Tiền phạt" inputMode="numeric" onChange={e => change(r, { amount: typedMoney(e.target.value) })} style={moneyBox} />
+            {r.kind && <span title="Máy tự gợi ý từ chấm công">🤖</span>}
+            {edits[r.id] && <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }} onClick={() => save(r)}>Lưu</button>}
+            <button style={smallBtn} onClick={() => save(r, !r.active)}>{r.active ? 'Ẩn' : 'Hiện'}</button>
+          </div>
+        );
+      })}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', paddingTop: 8, borderTop: '1px solid #f1f5f9', marginTop: 6 }}>
+        <input value={draft.name} placeholder="Thêm lỗi mới…" onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} style={{ flex: 1, minWidth: 160, padding: '5px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} />
+        <input value={draft.amount} placeholder="Tiền phạt" inputMode="numeric" onChange={e => setDraft(d => ({ ...d, amount: typedMoney(e.target.value) }))} style={moneyBox} />
+        <button style={smallBtn} onClick={async () => { if (draft.name.trim() && await onAction('save_fine_rule', { name: draft.name, amount: draft.amount })) setDraft({ name: '', amount: '' }); }}>Thêm</button>
+      </div>
+    </details>
+  );
+}
 
 // Ở từng dòng bảng lương: kết toán người nghỉ việc trong tháng, đánh dấu đã trả lương khi đã chốt.
 function PayActions({ s, c, left, onClose, onPaid, compact }) {
@@ -86,6 +238,7 @@ export default function PayrollPage() {
   const [myLeaveDays, setMyLeaveDays] = useState([]); // ngày nghỉ của các đơn báo nghỉ
   const [mySalary,   setMySalary]   = useState(null); // lương tạm tính tháng này (máy chủ tính)
   const [myFines,    setMyFines]    = useState([]);   // tiền phạt tháng này kèm lý do
+  const [myBonus,    setMyBonus]    = useState(null); // thưởng chuyên cần: đã trễ / quên ra ca chưa (khi chủ có dùng)
   const [sending,    setSending]    = useState('');   // đang gửi đơn nào (chặn bấm 2 lần)
   const [notice,     setNotice]     = useState(null); // { text, ok } — báo ngay trên trang thay cho hộp thoại
   const noticeTimer = React.useRef(null);
@@ -138,6 +291,7 @@ export default function PayrollPage() {
     setMyLeaveDays(meRes.leave_days || []);
     setMySalary(meRes.salary || null);
     setMyFines(meRes.violations || []);
+    setMyBonus(meRes.bonus || null);
     setMyAllSessions(monthRes.data || []);
     setEmpReqs(reqRes.data || []);
   };
@@ -187,13 +341,15 @@ export default function PayrollPage() {
       }
     } catch { /* tab Cài chấm công hiện "đang tải" và thử lại khi đồng bộ */ }
   }, []);
-  // Số lương đã chốt của tháng đang xem + ngày nghỉ của các đơn báo nghỉ.
-  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [] });
+  // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
+  // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], monthOver: false });
   const fetchPayrollMonth = useCallback(async () => {
     try {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
-      if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [] });
+      if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], monthOver: !!j.monthOver });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   const checkinAction = async (action, body, confirmText) => {
@@ -230,7 +386,7 @@ export default function PayrollPage() {
   };
 
   // Violation form
-  const [vForm, setVForm] = useState({ staff_id: '', amount: '', reason: '' });
+  const [vForm, setVForm] = useState({ staff_id: '', date: '', rule_id: '', amount: '', reason: '' });
   // Config edit state
   const [configEdits, setConfigEdits] = useState({});
   // Account management
@@ -307,8 +463,13 @@ export default function PayrollPage() {
     config: configs[staffId] || null,
     requests: requests.filter(r => r.staff_id === staffId),
     violations: violations.filter(v => v.staff_id === staffId),
+    bonuses: payrollMonth.bonuses.filter(b => b.staff_id === staffId),
     rules, reviews: checkin?.reviews || [],
   });
+  // Trễ / quên ra ca trong tháng (theo ngày làm) → xét thưởng chuyên cần và gợi ý phạt.
+  const talliesOf = staffId => monthTallies({ sessions: attendance.filter(a => a.staff_id === staffId), rules, key: `${selYear}-${fmt(selMonth)}`, autoClosed: payrollMonth.autoClosed });
+  const bonusOf = staffId => bonusCheck({ year: selYear, month: selMonth, salary: calcSalary(staffId), tallies: talliesOf(staffId), departure: departureOf(staffId), settings: payrollMonth.bonusSettings });
+  const approvedBonusOf = staffId => payrollMonth.bonuses.find(b => b.staff_id === staffId) || null;
   // Tháng đã chốt: hiện số đã chốt, kèm số tính lại bây giờ để thấy có gì thay đổi sau khi chốt.
   const closeOf = id => payrollMonth.closes.find(c => c.staff_id === id);
   const salaryOf = id => {
@@ -329,11 +490,11 @@ export default function PayrollPage() {
   const exportPayroll = async rows => {
     const XLSX = await import('xlsx');
     const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
-      'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Thực lĩnh', 'Trạng thái', 'Nghỉ việc'];
+      'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Thực lĩnh', 'Trạng thái', 'Nghỉ việc'];
     const data = rows.map(({ s, c }) => {
       const d = departureOf(s.id);
       return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.workUnits : c.workDays, c.basePay, c.totalWorkH, c.otHours, c.otAmt,
-        c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.net, c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
+        c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.net, c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
         d ? `Làm đến ${d.last_day.split('-').reverse().join('/')}` : ''];
     });
     const sheet = XLSX.utils.aoa_to_sheet([[`Bảng lương tháng ${selMonth}/${selYear}`], [], head, ...data]);
@@ -349,10 +510,14 @@ export default function PayrollPage() {
     const pendingH = Math.round(rows.filter(r => !r.c.locked).reduce((a, r) => a + (r.c.pendingH || 0), 0) * 10) / 10;
     const waiting = requests.filter(r => r.status === 'pending' && r.month === selMonth && r.year === selYear).length
       + (checkin?.fixes || []).filter(f => f.status === 'pending' && attendance.some(a => a.id === f.attendance_id)).length;
+    const bonusWaiting = payrollMonth.monthOver && payrollMonth.bonusSettings?.bonus_amount > 0
+      ? rows.filter(r => !r.c.locked && (configs[r.s.id]?.base_salary || 0) > 0 && !approvedBonusOf(r.s.id) && bonusOf(r.s.id).eligible).length : 0;
     const notes = reopen ? [] : [
       vnToday() <= lastDay && `• Tháng ${label} chưa hết: những ngày còn lại sẽ không có trong số chốt.`,
       pendingH > 0 && `• Còn ${fmtNum(pendingH)} giờ ngoài ca chưa duyệt (chưa được tính lương).`,
       waiting > 0 && `• Còn ${waiting} đơn chờ duyệt.`,
+      bonusWaiting > 0 && `• Còn ${bonusWaiting} người đủ điều kiện thưởng chuyên cần chưa duyệt.`,
+      fineHints.length > 0 && `• Còn ${fineHints.length} gợi ý phạt từ chấm công chưa xử lý.`,
     ].filter(Boolean);
     const ask = reopen
       ? `Mở chốt lương tháng ${label}? Bảng sẽ tính lại theo số mới nhất cho tới khi bạn chốt lại.`
@@ -369,12 +534,20 @@ export default function PayrollPage() {
     fetchAll();
   };
 
-  // --- Add violation ---
+  // --- Ghi phạt: lỗi có sẵn (điền sẵn tiền) hoặc lý do tự ghi; ngày phạt quyết định tính vào lương tháng nào ---
+  const fineDateDefault = () => {
+    const today = vnToday(), key = `${selYear}-${fmt(selMonth)}`;
+    if (today.slice(0, 7) === key) return today;
+    return today > key ? `${key}-${fmt(new Date(Date.UTC(selYear, selMonth, 0)).getUTCDate())}` : `${key}-01`;
+  };
   const handleAddViolation = async () => {
-    if (!vForm.staff_id || !vForm.amount || !vForm.reason) return alert('Vui lòng điền đầy đủ!');
-    try { await workforce('add_violation', { staff_id: vForm.staff_id, amount: vForm.amount, reason: vForm.reason, month: selMonth, year: selYear }); }
+    const rule = payrollMonth.fineRules.find(r => r.id === vForm.rule_id);
+    const note = vForm.reason.trim();
+    const reason = rule ? (note ? `${rule.name} — ${note}` : rule.name) : note;
+    if (!vForm.staff_id || !vForm.amount || !reason) return alert('Chọn nhân viên, lỗi (hoặc ghi lý do) và số tiền.');
+    try { await workforce('add_violation', { staff_id: vForm.staff_id, date: vForm.date || fineDateDefault(), rule_id: rule?.id || null, reason, amount: vForm.amount }); }
     catch (err) { return alert(err.message); }
-    setVForm({ staff_id: '', amount: '', reason: '' });
+    setVForm({ staff_id: '', date: '', rule_id: '', amount: '', reason: '' });
     fetchAll();
   };
 
@@ -389,8 +562,8 @@ export default function PayrollPage() {
   };
 
   // --- Delete violation ---
-  const handleDeleteViolation = async (id) => {
-    if (!confirm('Xoá khoản phạt này?')) return;
+  const handleDeleteViolation = async (id, fromHint = false) => {
+    if (!confirm(fromHint ? 'Xoá khoản phạt này? Gợi ý phạt sẽ hiện lại để bạn xử lý lại.' : 'Xoá khoản phạt này?')) return;
     try { await workforce('delete_violation', { id }); } catch (err) { alert(err.message); }
     fetchAll();
   };
@@ -426,6 +599,16 @@ export default function PayrollPage() {
   // Nghỉ việc: qua ngày làm cuối thì không đăng nhập / chấm công được, lương tháng cuối tính tới ngày đó.
   const [departForm, setDepartForm] = useState(null); // { staff_id, name, last_day, reason }
   const departureOf = id => (checkin?.departures || []).find(d => d.staff_id === id) || null;
+  // Gợi ý phạt chưa xử lý của cả quán trong tháng (người nghỉ việc trước tháng này không tính).
+  const fineHints = staffList.filter(s => activeInMonth(departureOf(s.id), `${selYear}-${fmt(selMonth)}`))
+    .flatMap(s => fineSuggestions({ staffId: s.id, tallies: talliesOf(s.id), reviews: payrollMonth.fineReviews }));
+  // Thưởng / phạt: gửi lên máy chủ rồi tải lại (khoản phạt đọc lại cả bảng lương).
+  const payrollAction = async (action, body, confirmText) => {
+    if (confirmText && !confirm(confirmText)) return false;
+    try { await workforce(action, body); } catch (err) { alert(err.message); return false; }
+    if (['decide_fine', 'add_violation', 'delete_violation'].includes(action)) fetchAll(); else fetchPayrollMonth();
+    return true;
+  };
   const handleDepart = async () => {
     if (!departForm?.last_day) return alert('Chọn ngày làm việc cuối cùng.');
     if (!confirm(`Cho ${departForm.name} nghỉ việc, làm đến hết ngày ${departForm.last_day.split('-').reverse().join('/')}?`)) return;
@@ -711,16 +894,29 @@ export default function PayrollPage() {
                   : <>{row('Lương cơ bản', formatMoney(c.base))}{row('Ngày công', `${c.workDays} ngày`)}</>}
                 {row('Giờ làm', `${fmtNum(c.totalWorkH)} giờ`)}
                 {row('Tăng ca', `${fmtNum(c.otHours)} giờ → +${formatMoney(c.otAmt)}`, '#15803d')}
+                {c.bonusAmt > 0 && row('⭐ Thưởng chuyên cần', `+${formatMoney(c.bonusAmt)}`, '#15803d')}
                 {c.pendingH > 0 && row('Ngoài ca chờ chủ duyệt', `${fmtNum(c.pendingH)} giờ (chưa tính)`, '#b45309')}
                 {c.advAmt > 0 && row('Ứng lương', `−${formatMoney(c.advAmt)}`, '#dc2626')}
                 {c.absDays > 0 && (c.rule === 'days'
                   ? row('Nghỉ có đơn', `${fmtNum(c.absDays)} ngày (không trừ thêm)`, '#64748b')
                   : row('Nghỉ có đơn', `−${formatMoney(c.absAmt)} (${fmtNum(c.absDays)} ngày)`, '#dc2626'))}
-                {c.vioAmt > 0 && row(`Phạt${myFines.length ? ` (${myFines.map(v => v.reason).filter(Boolean).join(', ')})` : ''}`, `−${formatMoney(c.vioAmt)}`, '#dc2626')}
+                {c.vioAmt > 0 && row('Phạt', `−${formatMoney(c.vioAmt)}`, '#dc2626')}
+                {c.vioAmt > 0 && myFines.length > 0 && (
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', padding: '2px 0 6px', borderBottom: '1px solid #f1f5f9' }}>
+                    {myFines.map((v, i) => <div key={i}>• {v.date ? `${ddmm(v.date)} · ` : ''}{v.reason} — {formatMoney(v.amount)}</div>)}
+                  </div>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, paddingTop: 10 }}>
                   <span style={{ fontWeight: 800 }}>{c.locked ? 'Thực lĩnh' : 'Thực lĩnh tạm tính'}</span>
                   <span style={{ fontWeight: 800, fontSize: '1.2rem', color: c.net >= 0 ? '#15803d' : '#dc2626' }}>{formatMoney(c.net)}</span>
                 </div>
+                {myBonus && !c.locked && !myBonus.approved && (
+                  <div style={{ fontSize: '0.8rem', marginTop: 8, padding: '8px 10px', borderRadius: 8, background: myBonus.late || myBonus.forgot ? '#f8fafc' : '#fffbeb', color: '#475569', lineHeight: 1.5 }}>
+                    {myBonus.late || myBonus.forgot
+                      ? `⭐ Chuyên cần: tháng này đã ${[myBonus.late && `trễ ${myBonus.late} lần`, myBonus.forgot && `quên ra ca ${myBonus.forgot} lần`].filter(Boolean).join(', ')} nên không được xét thưởng chuyên cần.`
+                      : `⭐ Chuyên cần: chưa trễ, chưa quên ra ca. Giữ tới cuối tháng và đủ ${fmtNum(myBonus.minDays)} ngày công (đang ${fmtNum(myBonus.units)}) để được chủ quán xét thưởng.`}
+                  </div>
+                )}
                 <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: 6, lineHeight: 1.5 }}>
                   {c.rule === 'days'
                     ? `Lương = lương cơ bản ÷ ${c.standardDays} × số ngày đi làm (ngày làm dưới nửa ca tính nửa ngày). Tăng ca là giờ ngoài ca chủ quán đã đồng ý.`
@@ -857,7 +1053,7 @@ export default function PayrollPage() {
         {[
           { key: 'salary', label: '📊 Bảng Lương' },
           { key: 'requests', label: '📋 Yêu cầu', badge: pendingCount + (checkin?.fixes || []).filter(f => f.status === 'pending').length + (checkin?.extras || []).length },
-          { key: 'violations', label: '⚠️ Vi phạm' },
+          { key: 'violations', label: '⚠️ Vi phạm', badge: fineHints.length },
           { key: 'attendance', label: '⏰ Chấm công' },
           { key: 'qr', label: '📱 Cài chấm công' },
           { key: 'accounts', label: '👤 Tài khoản' },
@@ -952,6 +1148,11 @@ export default function PayrollPage() {
                   )}
                 </div>
 
+                {isAdmin && dayPay && (
+                  <BonusBox year={selYear} month={selMonth} settings={payrollMonth.bonusSettings} monthOver={payrollMonth.monthOver} onAction={payrollAction}
+                    people={activeStaff.filter(s => (configs[s.id]?.base_salary || 0) > 0).map(s => ({ s, c: calcSalary(s.id), check: bonusOf(s.id), approved: approvedBonusOf(s.id) }))} />
+                )}
+
                 {/* Mobile cards */}
                 <div className="mobile-cards">
                   {filtered.length === 0 && <div className="empty-state">Chưa có nhân viên</div>}
@@ -989,6 +1190,12 @@ export default function PayrollPage() {
                             <span className="salary-card-label">Tăng ca</span>
                             <span className="salary-card-value green">+{formatMoney(c.otAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({fmtNum(c.otHours)} giờ)</small></span>
                           </div>
+                          {c.bonusAmt > 0 && (
+                            <div className="salary-card-row">
+                              <span className="salary-card-label">Thưởng chuyên cần</span>
+                              <span className="salary-card-value green">+{formatMoney(c.bonusAmt)}</span>
+                            </div>
+                          )}
                           <div className="salary-card-row">
                             <span className="salary-card-label">Ứng lương</span>
                             <span className="salary-card-value red">-{formatMoney(c.advAmt)}</span>
@@ -1078,7 +1285,7 @@ export default function PayrollPage() {
                   <table className="payroll-table">
                     <thead><tr>
                       <th>Nhân viên</th><th>Lương CB</th><th>Ngày công</th><th>Giờ làm</th>
-                      <th>Tăng ca</th><th>Ứng lương</th><th>Nghỉ</th><th>Vi phạm</th>
+                      <th>Tăng ca</th><th>Thưởng</th><th>Ứng lương</th><th>Nghỉ</th><th>Vi phạm</th>
                       <th style={{color:'#16a34a'}}>Thực lĩnh</th>
                       {isAdmin && <th></th>}
                     </tr></thead>
@@ -1093,6 +1300,7 @@ export default function PayrollPage() {
                             <td>{daysText(c)}{c.rule === 'days' && <div style={{fontSize:'0.72rem',color:'#94a3b8'}}>= {formatMoney(c.basePay)}</div>}</td>
                             <td>{fmtNum(c.totalWorkH)} giờ{c.pendingH > 0 && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>+{fmtNum(c.pendingH)} giờ ngoài ca chờ duyệt</div>}</td>
                             <td><span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.otHours)} giờ</div></td>
+                            <td>{c.bonusAmt > 0 ? <span style={{color:'#16a34a'}}>+{formatMoney(c.bonusAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}</td>
                             <td><span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span></td>
                             <td>{c.rule === 'days'
                               ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không trừ)` : '—'}</span>
@@ -1112,7 +1320,7 @@ export default function PayrollPage() {
                             const staffAtts = attendance.filter(a => a.staff_id === s.id);
                             const toLocalDT = ts => ts ? new Date(new Date(ts) - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
                             return (
-                              <tr><td colSpan="10" style={{ padding: 0, background: '#f8fafc', borderBottom: '2px solid #3b82f6' }}>
+                              <tr><td colSpan="11" style={{ padding: 0, background: '#f8fafc', borderBottom: '2px solid #3b82f6' }}>
                                 <div style={{ padding: '12px 16px' }}>
                                   <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b', marginBottom: 8 }}>Chấm công tháng {selMonth}/{selYear} — {s.full_name}</div>
                                   {staffAtts.length === 0 && <div style={{ color: '#94a3b8', fontSize: '0.82rem' }}>Chưa có bản ghi chấm công</div>}
@@ -1269,48 +1477,86 @@ export default function PayrollPage() {
           )}
 
           {/* === VI PHẠM === */}
-          {activeTab === 'violations' && (
-            <div>
-              <div className="payroll-form">
-                <h3>➕ Thêm vi phạm / khoản trừ</h3>
-                <div className="form-grid">
-                  <div className="form-group">
-                    <label>Nhân viên</label>
-                    <select value={vForm.staff_id} onChange={e => setVForm(p => ({ ...p, staff_id: e.target.value }))}>
-                      <option value="">-- Chọn NV --</option>
-                      {staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label>Số tiền phạt (đ)</label>
-                    <input type="text" inputMode="numeric" placeholder="50.000" value={vForm.amount}
-                      onChange={e => { const raw = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setVForm(p => ({ ...p, amount: raw ? Number(raw).toLocaleString('vi-VN') : '' })); }} />
-                  </div>
-                  <div className="form-group">
-                    <label>Lý do</label>
-                    <input type="text" placeholder="Đi trễ, trang phục..." value={vForm.reason} onChange={e => setVForm(p => ({ ...p, reason: e.target.value }))} />
-                  </div>
+          {activeTab === 'violations' && (() => {
+            const nameOf = id => staffList.find(s => s.id === id)?.full_name || 'Không rõ';
+            const metaOf = id => payrollMonth.violationMeta.find(m => m.violation_id === id) || null;
+            const activeRules = payrollMonth.fineRules.filter(r => r.active);
+            const fineDate = vForm.date || fineDateDefault();
+            const otherMonth = fineDate.slice(0, 7) !== `${selYear}-${fmt(selMonth)}`;
+            // Mới nhất lên đầu; khoản cũ chưa có ngày nằm cuối.
+            const list = violations.map(v => ({ v, m: metaOf(v.id) })).sort((a, b) => String(b.m?.fine_date || '').localeCompare(String(a.m?.fine_date || '')));
+            const total = violations.reduce((a, v) => a + Number(v.amount || 0), 0);
+            return (
+              <div>
+                <div className="filter-bar">
+                  <select value={selMonth} onChange={e => setSelMonth(Number(e.target.value))}>
+                    {months.map(m => <option key={m} value={m}>Tháng {m}</option>)}
+                  </select>
+                  <select value={selYear} onChange={e => setSelYear(Number(e.target.value))}>
+                    {years.map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
                 </div>
-                <button className="btn-primary" onClick={handleAddViolation}>Thêm khoản phạt</button>
-              </div>
 
-              {violations.length === 0 ? <div className="empty-state">Không có vi phạm nào trong tháng {selMonth}/{selYear}</div> : (
-                <table className="payroll-table">
-                  <thead><tr><th>Nhân viên</th><th>Số tiền</th><th>Lý do</th><th></th></tr></thead>
-                  <tbody>
-                    {violations.map(v => (
-                      <tr key={v.id}>
-                        <td>{v.staff?.full_name}</td>
-                        <td style={{ color: '#dc2626', fontWeight: 700 }}>{formatMoney(v.amount)}</td>
-                        <td>{v.reason}</td>
-                        <td><button className="btn-danger" style={{ fontSize: '0.75rem', padding: '4px 10px' }} onClick={() => handleDeleteViolation(v.id)}>Xoá</button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
+                <FineHints hints={fineHints} nameOf={nameOf} rules={payrollMonth.fineRules} reviews={payrollMonth.fineReviews} onAction={payrollAction} />
+
+                <div className="payroll-form">
+                  <h3>➕ Ghi phạt</h3>
+                  <div className="form-grid">
+                    <div className="form-group">
+                      <label>Nhân viên</label>
+                      <select value={vForm.staff_id} onChange={e => setVForm(p => ({ ...p, staff_id: e.target.value }))}>
+                        <option value="">-- Chọn NV --</option>
+                        {staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Ngày</label>
+                      <input type="date" value={fineDate} onChange={e => setVForm(p => ({ ...p, date: e.target.value }))} />
+                    </div>
+                    <div className="form-group">
+                      <label>Lỗi</label>
+                      <select value={vForm.rule_id} onChange={e => { const r = activeRules.find(x => x.id === e.target.value); setVForm(p => ({ ...p, rule_id: e.target.value, amount: r?.amount ? shownMoney(r.amount) : p.amount })); }}>
+                        <option value="">Lỗi khác (tự ghi lý do)</option>
+                        {activeRules.map(r => <option key={r.id} value={r.id}>{r.name}{r.amount ? ` — ${formatMoney(r.amount)}` : ''}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Số tiền phạt (đ)</label>
+                      <input type="text" inputMode="numeric" placeholder="50.000" value={vForm.amount} onChange={e => setVForm(p => ({ ...p, amount: typedMoney(e.target.value) }))} />
+                    </div>
+                    <div className="form-group">
+                      <label>{vForm.rule_id ? 'Ghi chú thêm (không bắt buộc)' : 'Lý do'}</label>
+                      <input type="text" placeholder={vForm.rule_id ? 'vd: bàn 12, 2 cái ly' : 'Đi trễ, trang phục...'} value={vForm.reason} onChange={e => setVForm(p => ({ ...p, reason: e.target.value }))} />
+                    </div>
+                  </div>
+                  {otherMonth && <div style={{ fontSize: '0.78rem', color: '#b45309', marginBottom: 8 }}>Khoản này tính vào lương tháng {Number(fineDate.slice(5, 7))}/{fineDate.slice(0, 4)} (theo ngày phạt).</div>}
+                  <button className="btn-primary" onClick={handleAddViolation}>Ghi phạt</button>
+                </div>
+
+                {list.length === 0 ? <div className="empty-state">Không có khoản phạt nào trong tháng {selMonth}/{selYear}</div> : (
+                  <>
+                    <div style={{ fontSize: '0.82rem', color: '#475569', margin: '0 0 6px' }}>Tháng {selMonth}/{selYear}: {list.length} khoản phạt, tổng <strong style={{ color: '#dc2626' }}>{formatMoney(total)}</strong></div>
+                    <table className="payroll-table">
+                      <thead><tr><th>Ngày</th><th>Nhân viên</th><th>Lý do</th><th>Số tiền</th><th></th></tr></thead>
+                      <tbody>
+                        {list.map(({ v, m }) => (
+                          <tr key={v.id}>
+                            <td style={{ whiteSpace: 'nowrap' }}>{m?.fine_date ? ddmm(m.fine_date) : '—'}</td>
+                            <td>{v.staff?.full_name || nameOf(v.staff_id)}</td>
+                            <td>{m?.kind ? '🤖 ' : ''}{v.reason}{m?.recorded_by && <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>ghi bởi {m.recorded_by}</div>}</td>
+                            <td style={{ color: '#dc2626', fontWeight: 700, whiteSpace: 'nowrap' }}>{formatMoney(v.amount)}</td>
+                            <td><button className="btn-danger" style={{ fontSize: '0.75rem', padding: '4px 10px' }} onClick={() => handleDeleteViolation(v.id, !!m?.kind)}>Xoá</button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
+                )}
+
+                <FineRules rules={payrollMonth.fineRules} onAction={payrollAction} />
+              </div>
+            );
+          })()}
 
           {/* === CHẤM CÔNG === */}
           {activeTab === 'attendance' && (() => {

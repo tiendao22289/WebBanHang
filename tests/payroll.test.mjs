@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dayFlags, groupByWorkDay, normalizeRules } from '../src/lib/attendanceRules.mjs';
-import { computeSalary, usesDayPay } from '../src/lib/payroll.mjs';
+import { LATE_FINE_MINUTES, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, monthTallies, usesDayPay } from '../src/lib/payroll.mjs';
 
 // Quán 14:00–23:00 giờ VN = 07:00Z–16:00Z, cho lệch 10 phút, tính giờ theo ca từ 25/10/2026.
 const RULES = normalizeRules({ hours_from: '2026-10-25' }, [], [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }]);
@@ -75,4 +75,45 @@ test('a clean-up visit after midnight belongs to the shift before: no extra half
   const nov = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: last, config: CONFIG, rules: RULES });
   const dec = computeSalary({ year: 2026, month: 12, staffId: 'a', sessions: last, config: CONFIG, rules: RULES });
   assert.deepEqual([nov.workUnits, nov.pendingH, dec.workUnits, dec.pendingH, dec.totalWorkH], [1, 0.5, 0, 0, 0]);
+});
+
+test('an approved attendance bonus is added to the pay of its own month only', () => {
+  const sessions = [ses('n2', '2026-11-02', '07:00', '16:00')];
+  const bonuses = [{ staff_id: 'a', year: 2026, month: 11, amount: 300000 }, { staff_id: 'a', year: 2026, month: 12, amount: 999 }];
+  const nov = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions, config: CONFIG, rules: RULES, bonuses });
+  assert.deepEqual([nov.bonusAmt, nov.net], [300000, 200000 + 300000]);
+  const oct = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: [], config: CONFIG, rules: RULES, bonuses: [{ year: 2026, month: 10, amount: 100000 }] });
+  assert.deepEqual([oct.bonusAmt, oct.net], [100000, 5200000 + 100000], 'the old formula adds it too');
+  assert.equal(computeSalary({ year: 2026, month: 11, staffId: 'a', sessions, config: CONFIG, rules: RULES }).bonusAmt, 0);
+});
+
+test('attendance bonus: no late day, no forgotten clock-out and enough work days; fines are suggested, never applied', () => {
+  // 23 ngày đủ ca (2–24/11), ngày 25 trễ 35 phút, ngày 26 trễ đúng 30 phút, ngày 27 quên ra ca (máy tự đóng).
+  const days = Array.from({ length: 23 }, (_, i) => ses(`d${i}`, `2026-11-${String(i + 2).padStart(2, '0')}`, '07:00', '16:00'));
+  const late35 = ses('late35', '2026-11-25', '07:35', '16:00'), late30 = ses('late30', '2026-11-26', '07:30', '16:00'), forgot = ses('forgot', '2026-11-27', '07:00', '16:00');
+  const key = '2026-11';
+  const clean = monthTallies({ sessions: days, rules: RULES, key });
+  const salary = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: days, config: CONFIG, rules: RULES });
+  assert.deepEqual(bonusCheck({ year: 2026, month: 11, salary, tallies: clean, settings: { bonus_min_days: 22 } }), { eligible: true, reasons: [], minDays: 22 });
+  assert.deepEqual(bonusCheck({ year: 2026, month: 11, salary, tallies: clean, settings: { bonus_min_days: 24 } }).reasons, ['23/24 ngày công']);
+  assert.deepEqual(bonusCheck({ year: 2026, month: 11, salary, tallies: clean, departure: { last_day: '2026-11-28' } }).reasons, ['nghỉ việc']);
+  assert.deepEqual(bonusCheck({ year: 2026, month: 11, salary: { ...salary, base: 0 }, tallies: clean }).reasons, ['chưa có lương cơ bản']);
+  assert.equal(bonusCheck({ year: 2026, month: 10, salary, tallies: clean }).eligible, false, 'not before November');
+
+  const all = [...days, late35, late30, forgot];
+  const t = monthTallies({ sessions: all, rules: RULES, key, autoClosed: ['forgot'] });
+  assert.deepEqual([t.late.count, t.late.minutes, t.forgot], [2, 65, 1]);
+  const full = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: all, config: CONFIG, rules: RULES });
+  assert.deepEqual(bonusCheck({ year: 2026, month: 11, salary: full, tallies: t }).reasons, ['trễ 2 lần', 'quên ra ca 1 lần']);
+
+  // Gợi ý phạt: trễ QUÁ 30 phút (35 có, 30 không) và lần quên ra ca; đã xử lý hay loại đã ẩn thì không gợi ý nữa.
+  assert.equal(LATE_FINE_MINUTES, 30);
+  const hints = fineSuggestions({ staffId: 'a', tallies: t });
+  assert.deepEqual(hints.map(h => [h.kind, h.attendance_id, h.day, h.minutes]), [['late', 'late35', '2026-11-25', 35], ['forgot', 'forgot', '2026-11-27', undefined]]);
+  assert.deepEqual(fineSuggestions({ staffId: 'a', tallies: t, reviews: [{ attendance_id: 'late35', kind: 'late' }] }).map(h => h.kind), ['forgot']);
+  assert.deepEqual(fineSuggestions({ staffId: 'a', tallies: t, kinds: ['late'] }).map(h => h.kind), ['late']);
+  assert.deepEqual(activeFineKinds([{ kind: 'late', active: true }, { kind: 'forgot', active: false }, { kind: null, active: true }]), ['late']);
+  assert.deepEqual(activeFineKinds([]), ['late', 'forgot']);
+  // Không có khoản nào tự trừ: lương không đổi khi chỉ có gợi ý.
+  assert.equal(full.vioAmt, 0);
 });

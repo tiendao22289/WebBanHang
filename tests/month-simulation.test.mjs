@@ -8,6 +8,8 @@
 //   Em   — vào làm từ 10/11, ứng quá tay, nghỉ việc 25/11, kết toán ngay hôm đó.
 //   Phát — đổi ca riêng từ 15/11, nghỉ không báo 2 ngày, nghỉ có đơn 2 ngày, quét khác wifi / máy lạ.
 // Giữa tháng (20/11) quán đổi giờ đóng cửa 23:00 → 23:30.
+// Sáng 1/12 chủ xử lý gợi ý phạt (trễ quá 30 phút, quên ra ca), duyệt thưởng chuyên cần
+// (mức gợi ý 300.000đ, ít nhất 22 ngày công; sửa tiền từng người) rồi chốt lương.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -70,6 +72,10 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
     payroll_config: STAFF.map(p => ({ staff_id: p.id, base_salary: 5200000, overtime_rate: 30000 })),
     checkin_settings: [{ id: 1, enforce: false, hours_from: '2026-10-25' }],
     checkin_hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }],
+    payroll_fine_rules: [
+      { id: uid(901), name: 'Đi trễ quá 30 phút', amount: 50000, kind: 'late', active: true, sort: 1 },
+      { id: uid(902), name: 'Quên bấm ra ca', amount: 30000, kind: 'forgot', active: true, sort: 2 },
+    ],
     __clock: () => env.now,
   };
   const api = compile('../src/app/api/admin/workforce/route.js', state);
@@ -153,6 +159,9 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
   add(T(2, '14:00'), () => ownerPost(T(2, '14:00'), { action: 'clock' }));
   add(T(2, '23:00'), () => ownerPost(T(2, '23:00'), { action: 'clock' }));
 
+  // Thưởng chuyên cần: chủ đặt mức gợi ý 300.000đ, ít nhất 22 ngày công.
+  add(T(1, '09:05'), () => ownerPost(T(1, '09:05'), { action: 'save_bonus_settings', bonus_amount: '300.000', bonus_min_days: '22' }));
+
   // Giờ đóng cửa đổi thành 23:30 từ 20/11.
   add(T(20, '10:00'), () => ownerPost(T(20, '10:00'), { action: 'save_checkin_settings', closing_time: '23:30' }));
 
@@ -206,6 +215,7 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
   assert.deepEqual(me.sessions.map(s => s.clock_in), [iso(T(28, '18:00')), iso(T(28, '00:40+1'))], '"hôm nay" lúc 00:45 vẫn là ca 28/11');
   assert.equal(rules.dayFlags(reentry.sessions, me.rules).late, 0);
   assert.equal(rules.shiftOf(me.rules, DUNG.id, rules.workDayOf(reentry.sessions[1], me.rules)).start, '18:00');
+  assert.deepEqual([me.bonus.late, me.bonus.forgot, me.bonus.minDays, me.bonus.approved], [0, 0, 22, null], 'Dũng thấy mình đang giữ được chuyên cần');
 
   // Báo cáo Zalo mỗi ngày: lượt dọn quán sau nửa đêm nằm ở ngày của ca.
   const names = Object.fromEntries(STAFF.map(p => [p.id, p.full_name]));
@@ -219,23 +229,48 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
   assert.equal(line(report('2026-11-30'), 'Chi'), '• Chi: 14:00–23:30, 00:20–00:50 (9,5 giờ) ⚠ ở lại 30 phút');
   assert.equal(line(report('2026-12-01'), 'Chi'), undefined);
 
-  // ── Chốt lương sáng 1/12, rồi xem lại.
-  const stats = await ownerGet(Date.UTC(2026, 11, 1, 2, 0), 'stats=1&year=2026&month=11');
-  const closed = await ownerPost(T(30, '09:00') + 86400000, { action: 'close_month', year: 2026, month: 11 });
+  // ── Sáng 1/12: chủ xem gợi ý phạt và thưởng chuyên cần (như trang Lương tính), tự điền tiền, rồi chốt.
+  const DEC1 = Date.UTC(2026, 11, 1, 2, 0);
+  const waiting = await ownerGet(DEC1, 'stats=1&year=2026&month=11');
+  const ws = name => waiting.people.find(p => p.name === name);
+  assert.deepEqual(STAFF.map(p => [p.full_name, ws(p.full_name).bonus.eligible]), [['An', true], ['Binh', false], ['Chi', false], ['Dung', true], ['Em', false], ['Phat', false]]);
+  assert.deepEqual([ws('Binh').bonus.reasons, ws('Chi').bonus.reasons, ws('Em').bonus.reasons, ws('Phat').bonus.reasons],
+    [['trễ 7 lần'], ['quên ra ca 3 lần'], ['nghỉ việc', '14/22 ngày công'], ['20/22 ngày công']]);
+  assert.deepEqual([waiting.pending.fines, waiting.pending.bonuses], [5, 2]);
+  const month = await ownerGet(DEC1, 'payroll=1&year=2026&month=11');
+  const R = rules.normalizeRules(state.checkin_settings[0], state.staff_shifts, state.checkin_hours);
+  const inMonth = state.attendance_sessions.filter(s => rules.workDayOf(s, R).slice(0, 7) === '2026-11');
+  const hints = STAFF.flatMap(p => payroll.fineSuggestions({ staffId: p.id, reviews: month.fineReviews,
+    tallies: payroll.monthTallies({ sessions: inMonth.filter(s => s.staff_id === p.id), rules: R, key: '2026-11', autoClosed: month.autoClosed }) }));
+  // Bình trễ quá 30 phút 2 lần (24/11 trễ đúng 30 phút thì không), Chi quên ra ca 3 lần.
+  assert.deepEqual(hints.map(h => [names[h.staff_id], h.kind, h.day]),
+    [['Binh', 'late', '2026-11-10'], ['Binh', 'late', '2026-11-17'], ['Chi', 'forgot', '2026-11-09'], ['Chi', 'forgot', '2026-11-13'], ['Chi', 'forgot', '2026-11-25']]);
+  // Phạt trễ 50.000đ, quên ra ca 30.000đ; bỏ qua ngày 9 của Chi (đã xin sửa giờ và được duyệt).
+  for (const h of hints) {
+    const decision = h.kind === 'late' ? { status: 'fined', amount: '50.000' } : h.day === '2026-11-09' ? { status: 'skipped' } : { status: 'fined', amount: '30.000' };
+    assert.equal((await ownerPost(DEC1 + 60000, { action: 'decide_fine', attendance_id: h.attendance_id, kind: h.kind, ...decision })).status, 200);
+  }
+  // Thưởng: An theo mức gợi ý, Dũng chủ sửa còn 250.000đ.
+  assert.equal((await ownerPost(DEC1 + 120000, { action: 'decide_bonus', staff_id: AN.id, year: 2026, month: 11, amount: '300.000' })).status, 200);
+  assert.equal((await ownerPost(DEC1 + 120000, { action: 'decide_bonus', staff_id: DUNG.id, year: 2026, month: 11, amount: '250.000' })).status, 200);
+  const stats = await ownerGet(DEC1 + 180000, 'stats=1&year=2026&month=11');
+  assert.deepEqual([stats.pending.fines, stats.pending.bonuses], [0, 0]);
+  const closed = await ownerPost(DEC1 + 240000, { action: 'close_month', year: 2026, month: 11 });
   assert.equal(closed.status, 200);
   const slip = p => state.payroll_closes.find(c => c.staff_id === p.id && c.month === 11)?.snapshot;
-  const show = s => s && { units: s.workUnits, basePay: s.basePay, otHours: s.otHours, otAmt: s.otAmt, pendingH: s.pendingH, advAmt: s.advAmt, vioAmt: s.vioAmt, absDays: s.absDays, net: s.net };
+  const show = s => s && { units: s.workUnits, basePay: s.basePay, otHours: s.otHours, otAmt: s.otAmt, pendingH: s.pendingH, bonusAmt: s.bonusAmt, advAmt: s.advAmt, vioAmt: s.vioAmt, absDays: s.absDays, net: s.net };
+  assert.deepEqual(state.payroll_violations.filter(v => v.staff_id === CHI.id).map(v => v.reason), ['Quên bấm ra ca (13/11)', 'Quên bấm ra ca (25/11)']);
 
   // Không có lần quét nào bị lỗi ngoài lần Bình lỡ quét 2 lần liền.
   assert.deepEqual(results.filter(r => r.status !== 200).map(r => [r.who, r.at, r.status]), [['Binh', iso(T(11, '14:01')), 409]]);
 
   // Số tính tay (lương cơ bản 5.200.000đ = 200.000đ/ngày công, tăng ca 30.000đ/giờ = 500đ/phút).
-  assert.deepEqual(show(slip(AN)), { units: 26, basePay: 5200000, otHours: 0, otAmt: 0, pendingH: 0, advAmt: 0, vioAmt: 0, absDays: 0, net: 5200000 }, 'An');
-  assert.deepEqual(show(slip(BINH)), { units: 25, basePay: 5000000, otHours: 0, otAmt: 0, pendingH: 0, advAmt: 1000000, vioAmt: 100000, absDays: 0, net: 3900000 }, 'Bình');
-  assert.deepEqual(show(slip(CHI)), { units: 26, basePay: 5200000, otHours: 2.1, otAmt: 62500, pendingH: 1.3, advAmt: 0, vioAmt: 0, absDays: 0, net: 5262500 }, 'Chi: 45 + 40 + 40 phút cho tính, 50 + 30 phút chưa duyệt');
-  assert.deepEqual(show(slip(DUNG)), { units: 23.5, basePay: 4700000, otHours: 1.1, otAmt: 32500, pendingH: 0, advAmt: 0, vioAmt: 0, absDays: 0, net: 4732500 }, 'Dũng: 24 ngày, 1 nửa ngày, ra vào lại sau nửa đêm không thành ngày công mới');
-  assert.deepEqual(show(slip(EM)), { units: 14, basePay: 2800000, otHours: 0, otAmt: 0, pendingH: 0, advAmt: 3000000, vioAmt: 0, absDays: 0, net: -200000 }, 'Em: kết toán 25/11, còn nợ quán 200.000đ');
-  assert.deepEqual(show(slip(PHAT)), { units: 20, basePay: 4000000, otHours: 0, otAmt: 0, pendingH: 0, advAmt: 500000, vioAmt: 50000, absDays: 2, net: 3450000 }, 'Phát: đổi ca 15/11 không tính lại ngày cũ');
+  assert.deepEqual(show(slip(AN)), { units: 26, basePay: 5200000, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 300000, advAmt: 0, vioAmt: 0, absDays: 0, net: 5500000 }, 'An: thưởng chuyên cần 300.000đ');
+  assert.deepEqual(show(slip(BINH)), { units: 25, basePay: 5000000, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 0, advAmt: 1000000, vioAmt: 200000, absDays: 0, net: 3800000 }, 'Bình: phạt tay 100.000đ + 2 lần trễ quá 30 phút');
+  assert.deepEqual(show(slip(CHI)), { units: 26, basePay: 5200000, otHours: 2.1, otAmt: 62500, pendingH: 1.3, bonusAmt: 0, advAmt: 0, vioAmt: 60000, absDays: 0, net: 5202500 }, 'Chi: 45 + 40 + 40 phút cho tính, 50 + 30 phút chưa duyệt, 2 lần quên ra ca bị phạt');
+  assert.deepEqual(show(slip(DUNG)), { units: 23.5, basePay: 4700000, otHours: 1.1, otAmt: 32500, pendingH: 0, bonusAmt: 250000, advAmt: 0, vioAmt: 0, absDays: 0, net: 4982500 }, 'Dũng: 24 ngày, 1 nửa ngày, ra vào lại sau nửa đêm không thành ngày công mới; thưởng 250.000đ');
+  assert.deepEqual(show(slip(EM)), { units: 14, basePay: 2800000, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 0, advAmt: 3000000, vioAmt: 0, absDays: 0, net: -200000 }, 'Em: kết toán 25/11, còn nợ quán 200.000đ');
+  assert.deepEqual(show(slip(PHAT)), { units: 20, basePay: 4000000, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 0, advAmt: 500000, vioAmt: 50000, absDays: 2, net: 3450000 }, 'Phát: đổi ca 15/11 không tính lại ngày cũ');
   assert.ok(state.payroll_closes.find(c => c.staff_id === EM.id).paid_at, 'Em đã được trả khi nghỉ');
   assert.equal(state.payroll_closes.find(c => c.staff_id === EM.id).closed_at, iso(T(25, '23:50')), 'chốt cả tháng giữ nguyên số đã kết toán của Em');
 
@@ -245,7 +280,8 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
   assert.equal(st('Chi').forgot, 3);
   assert.deepEqual([st('Dung').late.count, st('Dung').leftEarly.count], [0, 1], 'ca đêm: không báo trễ sai, về sớm đúng 1 lần (nửa ngày)');
   assert.deepEqual([st('Phat').warnings, st('An').late.count, st('An').stayed.count, st('An').early.count], [6, 0, 0, 0], 'Phát: 3 ngày khác wifi / máy lạ = 6 lần quét bị cảnh báo (vào + ra)');
-  assert.equal(stats.totals.gross, 5200000 + 5000000 + 5262500 + 4732500 + 2800000 + 4000000);
+  assert.equal(stats.totals.gross, 5200000 + 5000000 + 5262500 + 4732500 + 2800000 + 4000000 + 300000 + 250000);
+  assert.deepEqual([stats.totals.bonuses, stats.totals.fines], [550000, 100000 + 100000 + 60000 + 50000]);
   assert.equal(await departure.hasLeft(fakeDb(state), EM.id, '2026-11-26'), true, 'Em không đăng nhập được nữa từ 26/11');
 
   // Tháng 12: lượt ghi ngày 1/12 của ca 30/11 không thành ngày công tháng 12.

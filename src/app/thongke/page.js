@@ -231,7 +231,7 @@ function StaffReport({ date, monthRevenue }) {
     return () => { cancelled = true; };
   }, [year, month]);
   if (failed || !data || data.year !== year || data.month !== month) return null;
-  const t = data.totals, pending = data.pending.fixes + data.pending.extras + data.pending.requests;
+  const t = data.totals, pending = data.pending.fixes + data.pending.extras + data.pending.requests + (data.pending.fines || 0) + (data.pending.bonuses || 0);
   const ratio = monthRevenue > 0 ? Math.round(t.gross / monthRevenue * 100) : null;
   const people = [...data.people].sort((a, b) => b.salary.net - a.salary.net);
   const watch = people.flatMap(p => [
@@ -243,9 +243,9 @@ function StaffReport({ date, monthRevenue }) {
   ].filter(Boolean));
   return <Card icon={Users} title={`Nhân sự & lương tháng ${month}/${year}`} aside={t.staff && t.closed === t.staff ? 'đã chốt' : 'tạm tính'}>
     <div className="tk-staff-kpis">
-      <div><span>Quỹ lương (lương + tăng ca)</span><b>{money(t.gross)}</b></div>
+      <div><span>Quỹ lương (lương + tăng ca + thưởng)</span><b>{money(t.gross)}</b></div>
       <div><span>So với doanh thu tháng</span><b>{ratio === null ? '—' : `${ratio}%`}</b></div>
-      <div><span>Đã ứng</span><b>{money(t.advances)}</b>{t.fines > 0 && <small>phạt {money(t.fines)}</small>}</div>
+      <div><span>Đã ứng</span><b>{money(t.advances)}</b>{(t.fines > 0 || t.bonuses > 0) && <small>{[t.bonuses > 0 && `thưởng ${money(t.bonuses)}`, t.fines > 0 && `phạt ${money(t.fines)}`].filter(Boolean).join(' · ')}</small>}</div>
       <div><span>Chờ bạn duyệt</span><b className={pending ? 'warn' : ''}>{pending}</b></div>
     </div>
     {watch.length > 0 && <ul className="tk-warns" style={{ marginBottom: 10 }}>{watch.map(w => <li key={w}>{w}</li>)}</ul>}
@@ -259,6 +259,7 @@ function StaffReport({ date, monthRevenue }) {
         p.forgot ? <span className="warn">quên ra ca {p.forgot}</span> : null,
         c.otHours ? `tăng ca ${num(c.otHours)} giờ` : null,
         c.pendingH ? `${num(c.pendingH)} giờ ngoài ca chờ duyệt` : null,
+        c.bonusAmt ? `thưởng ${money(c.bonusAmt)}` : null,
         c.advAmt ? `ứng ${money(c.advAmt)}` : null,
         c.vioAmt ? `phạt ${money(c.vioAmt)}` : null,
       ].filter(Boolean);
@@ -270,7 +271,7 @@ function StaffReport({ date, monthRevenue }) {
         <div className="tk-person-meta">{meta.map((m, i) => <Fragment key={i}>{i > 0 && ' · '}{m}</Fragment>)}</div>
       </li>;
     })}</ul> : <p className="tk-empty">Chưa có giờ công hay lương tháng này.</p>}
-    <p className="tk-caption">Số lương là thực lĩnh {t.staff && t.closed === t.staff ? 'đã chốt' : 'tạm tính tới hôm nay'} (đã trừ ứng, phạt). Quỹ lương so với doanh thu tháng tới ngày đang xem.</p>
+    <p className="tk-caption">Số lương là thực lĩnh {t.staff && t.closed === t.staff ? 'đã chốt' : 'tạm tính tới hôm nay'} (đã cộng thưởng, trừ ứng, phạt). Quỹ lương so với doanh thu tháng tới ngày đang xem.</p>
     <a className="tk-link" href="/admin/payroll">Mở bảng lương →</a>
   </Card>;
 }
