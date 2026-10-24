@@ -58,3 +58,27 @@ test('comparison with yesterday and the same weekday last week, busiest hour and
   assert.match(text, /Đông nhất 19h–20h: 2 bill, 500\.000đ/);
   assert.match(text, /Bán chạy: Bia 5, Ốc hương 3, Tôm 1/);
 });
+
+test('staff block shows forgotten clock-outs, check-in warnings and hour fix requests', () => {
+  const text = staffBlock({ staffNames: { a: 'Phát', b: 'Lan' },
+    sessions: [{ staff_id: 'a', clock_in: '2026-10-23T09:00:00Z', clock_out: '2026-10-23T16:00:00Z', auto_closed: true }],
+    alerts: [{ staff_id: 'b', action: 'in', warnings: ['other_network'] }, { staff_id: 'b', action: 'blocked', warnings: ['other_network'] }],
+    fixes: [{ staff_id: 'a', reason: 'về lúc 23:45' }] });
+  assert.match(text, /• Phát: 16:00–23:00 \(7 giờ\) ⚠ quên ra ca, máy tự tính giờ ra/);
+  assert.match(text, /⚠ Cảnh báo chấm công:\n• Lan: không dùng wifi quán ×2; bị chặn không cho chấm/);
+  assert.match(text, /Chờ bạn duyệt \(1\):\n• Phát xin sửa giờ chấm công — về lúc 23:45/);
+});
+
+test('staff block shows late / early by each shift and outside time waiting for the owner', () => {
+  const text = staffBlock({ staffNames: { a: 'Phát', b: 'Lan' },
+    settings: { hours_from: '2026-10-25' }, hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }],
+    shifts: [{ staff_id: 'b', valid_from: '2000-01-01', start_time: '17:00', end_time: '23:00' }],
+    sessions: [
+      { id: 's1', staff_id: 'a', date: '2026-10-25', clock_in: '2026-10-25T07:25:00Z', clock_out: '2026-10-25T16:45:00Z' },
+      { id: 's2', staff_id: 'b', date: '2026-10-25', clock_in: '2026-10-25T09:30:00Z', clock_out: '2026-10-25T16:00:00Z' },
+    ],
+    reviews: [{ attendance_id: 's2', status: 'rejected', minutes: 0 }] });
+  assert.match(text, /• Phát: 14:25–23:45 \(8,6 giờ\) ⚠ trễ 25 phút, ở lại 45 phút/);
+  assert.match(text, /• Lan: 16:30–23:00 \(6 giờ\) ⚠ vào sớm 30 phút/);
+  assert.match(text, /Chờ bạn duyệt \(1\):\n• Phát có 45 phút ngoài ca chưa tính lương/);
+});

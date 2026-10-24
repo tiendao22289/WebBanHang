@@ -97,11 +97,10 @@ export default function StaffNotesPage() {
   // Employee self-service — Bảng Công
   // Staff (non-admin) always land on 'cong'; admin defaults to 'notes'
   const [activeNotesTab, setActiveNotesTab] = useState('cong');
-  const [todayAttendance, setTodayAttendance] = useState(null); // today's log
   const [empRequests, setEmpRequests] = useState([]); // this month's requests
   const [empSalaryRec, setEmpSalaryRec] = useState(null);
   const [advanceForm, setAdvanceForm] = useState({ amount: '', reason: '' });
-  const [absentForm, setAbsentForm] = useState({ days: '1', reason: '' });
+  const [absentForm, setAbsentForm] = useState({ from: '', to: '', reason: '' });
   const [showHistory, setShowHistory] = useState(false);
   const [showAdvForm, setShowAdvForm] = useState(false);
   const [showAbsForm, setShowAbsForm] = useState(false);
@@ -131,42 +130,40 @@ export default function StaffNotesPage() {
   }, []);
 
   const fetchEmpData = async (staffId) => {
-    const today = new Date().toISOString().split('T')[0];
-    const m = now.getMonth() + 1; const y = now.getFullYear();
-    const [attRes, reqRes] = await Promise.all([
-      supabase.from('attendance_logs').select('*').eq('staff_id', staffId).eq('date', today).maybeSingle(),
-      supabase.from('payroll_requests').select('*').eq('staff_id', staffId).eq('month', m).eq('year', y).order('created_at', { ascending: false }),
-    ]);
-    setTodayAttendance(attRes.data);
+    // Đơn 60 ngày gần đây (đơn báo nghỉ thuộc tháng của ngày nghỉ, có thể là tháng sau).
+    const reqRes = await supabase.from('payroll_requests').select('*').eq('staff_id', staffId).gte('created_at', new Date(Date.now() - 60 * 86400000).toISOString()).order('created_at', { ascending: false });
     setEmpRequests(reqRes.data || []);
   };
 
-  // Ghi qua máy chủ (giờ theo máy chủ, người ghi theo phiên đăng nhập).
-  const handleClockIn = async () => {
-    try { await workforce('legacy_clock_in'); } catch (err) { alert(err.message); }
-    fetchEmpData(currentUser.id);
+  // Đang gửi đơn nào: không cho bấm lần 2 (trước đây bấm đúp là ra 2 đơn).
+  const [sendingReq, setSendingReq] = useState('');
+  const sendingRef = useRef('');
+  const startSending = key => {
+    if (sendingRef.current) return false;
+    sendingRef.current = key; setSendingReq(key);
+    return true;
   };
-
-  const handleClockOut = async () => {
-    if (!todayAttendance) return;
-    try { await workforce('legacy_clock_out'); } catch (err) { alert(err.message); }
-    fetchEmpData(currentUser.id);
-  };
+  const stopSending = () => { sendingRef.current = ''; setSendingReq(''); };
 
   const handleSubmitAdvance = async () => {
     if (!advanceForm.amount || !advanceForm.reason) return alert('Vui lòng điền đầy đủ!');
+    if (!startSending('adv')) return;
     try { await workforce('request', { type: 'advance', amount: advanceForm.amount, reason: advanceForm.reason }); }
-    catch (err) { return alert(err.message); }
+    catch (err) { stopSending(); return alert(err.message); }
+    stopSending();
     setAdvanceForm({ amount: '', reason: '' }); setShowAdvForm(false);
     fetchEmpData(currentUser.id);
     alert('Đã gửi yêu cầu ứng lương!');
   };
 
   const handleSubmitAbsent = async () => {
+    if (!absentForm.from) return alert('Chọn ngày nghỉ!');
     if (!absentForm.reason) return alert('Vui lòng điền lý do!');
-    try { await workforce('request', { type: 'absent', days: absentForm.days, reason: absentForm.reason }); }
-    catch (err) { return alert(err.message); }
-    setAbsentForm({ days: '1', reason: '' }); setShowAbsForm(false);
+    if (!startSending('abs')) return;
+    try { await workforce('request', { type: 'absent', from_date: absentForm.from, to_date: absentForm.to || absentForm.from, reason: absentForm.reason }); }
+    catch (err) { stopSending(); return alert(err.message); }
+    stopSending();
+    setAbsentForm({ from: '', to: '', reason: '' }); setShowAbsForm(false);
     fetchEmpData(currentUser.id);
     alert('Đã gửi báo nghỉ!');
   };
@@ -1307,21 +1304,12 @@ export default function StaffNotesPage() {
         <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
           {/* Chấm công */}
           <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
-            <div style={{ fontWeight: 800, fontSize: '1rem', marginBottom: 12 }}>⏰ Chấm công hôm nay</div>
-            {!todayAttendance ? (
-              <button onClick={handleClockIn} style={{ width: '100%', padding: '14px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer' }}>🟢 Bắt đầu ca làm</button>
-            ) : !todayAttendance.clock_out ? (
-              <div>
-                <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 10 }}>✅ Đã vào lúc <strong>{new Date(todayAttendance.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</strong></div>
-                <button onClick={handleClockOut} style={{ width: '100%', padding: '14px', background: '#dc2626', color: 'white', border: 'none', borderRadius: 10, fontWeight: 800, fontSize: '0.95rem', cursor: 'pointer' }}>🔴 Kết thúc ca</button>
-              </div>
-            ) : (
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '0.85rem', color: '#6b7280' }}>Vào: <strong>{new Date(todayAttendance.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</strong> → Ra: <strong>{new Date(todayAttendance.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</strong></div>
-                <div style={{ marginTop: 6, fontWeight: 700 }}>⏱ <span style={{ color: '#15803d' }}>{todayAttendance.work_hours}h</span>{todayAttendance.overtime_hours > 0 && <span style={{ color: '#f59e0b' }}> • Tăng ca: {todayAttendance.overtime_hours}h</span>}</div>
-                <div style={{ marginTop: 4, color: '#16a34a', fontWeight: 700 }}>✅ Đã hoàn thành ca hôm nay</div>
-              </div>
-            )}
+            <div style={{ fontWeight: 800, fontSize: '1rem', marginBottom: 8 }}>⏰ Chấm công</div>
+            {/* Nút chấm công cũ ở đây không cần quét mã nên đã bỏ: chấm bằng mã QR trên máy quầy. */}
+            <div style={{ fontSize: '0.88rem', color: '#475569', lineHeight: 1.6 }}>
+              Vào <strong>wifi quán</strong>, mở <strong>camera điện thoại</strong> quét mã QR trên máy quầy để vào / ra ca.
+              Xem giờ công và xin sửa giờ ở trang <a href="/admin/payroll" style={{ color: '#2563eb', fontWeight: 700 }}>Lương</a>.
+            </div>
           </div>
           {/* Ứng lương */}
           <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
@@ -1333,7 +1321,7 @@ export default function StaffNotesPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <input type="text" inputMode="numeric" placeholder="Số tiền ứng (đ)" value={advanceForm.amount} onChange={e => { const r = e.target.value.replace(/\./g,'').replace(/\D/g,''); setAdvanceForm(p => ({ ...p, amount: r ? Number(r).toLocaleString('vi-VN') : '' })); }} style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
                 <textarea placeholder="Lý do cần ứng..." value={advanceForm.reason} onChange={e => setAdvanceForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} />
-                <button onClick={handleSubmitAdvance} style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer' }}>Gửi yêu cầu</button>
+                <button onClick={handleSubmitAdvance} disabled={!!sendingReq} style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer', opacity: sendingReq === 'adv' ? 0.6 : 1 }}>{sendingReq === 'adv' ? 'Đang gửi…' : 'Gửi yêu cầu'}</button>
               </div>
             )}
           </div>
@@ -1345,16 +1333,21 @@ export default function StaffNotesPage() {
             </div>
             {showAbsForm && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <input type="number" min="0.5" max="30" step="0.5" placeholder="Số ngày nghỉ" value={absentForm.days} onChange={e => setAbsentForm(p => ({ ...p, days: e.target.value }))} style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <label style={{ flex: 1, minWidth: 130, display: 'flex', flexDirection: 'column', gap: 3, fontSize: '0.8rem', color: '#475569' }}>Nghỉ từ ngày
+                    <input type="date" value={absentForm.from} onChange={e => setAbsentForm(p => ({ ...p, from: e.target.value, to: p.to && p.to >= e.target.value ? p.to : e.target.value }))} style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} /></label>
+                  <label style={{ flex: 1, minWidth: 130, display: 'flex', flexDirection: 'column', gap: 3, fontSize: '0.8rem', color: '#475569' }}>Đến ngày
+                    <input type="date" value={absentForm.to} min={absentForm.from || undefined} onChange={e => setAbsentForm(p => ({ ...p, to: e.target.value }))} style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} /></label>
+                </div>
                 <textarea placeholder="Lý do nghỉ..." value={absentForm.reason} onChange={e => setAbsentForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} />
-                <button onClick={handleSubmitAbsent} style={{ background: '#f59e0b', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer' }}>Gửi báo nghỉ</button>
+                <button onClick={handleSubmitAbsent} disabled={!!sendingReq} style={{ background: '#f59e0b', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer', opacity: sendingReq === 'abs' ? 0.6 : 1 }}>{sendingReq === 'abs' ? 'Đang gửi…' : 'Gửi báo nghỉ'}</button>
               </div>
             )}
           </div>
           {/* Lịch sử yêu cầu */}
           {empRequests.length > 0 && (
             <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
-              <div style={{ fontWeight: 800, marginBottom: 10 }}>📄 Yêu cầu tháng {now.getMonth() + 1}</div>
+              <div style={{ fontWeight: 800, marginBottom: 10 }}>📄 Yêu cầu gần đây</div>
               {empRequests.map(r => (
                 <div key={r.id} style={{ padding: '10px 0', borderBottom: '1px solid #f3f4f6', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>

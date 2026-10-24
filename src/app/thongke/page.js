@@ -2,9 +2,10 @@
 
 /**
  * /thongke — đọc báo cáo doanh thu hằng ngày trên điện thoại (chỉ admin).
- * Cùng số liệu tin Zalo (GET /api/admin/finance?report=), xem lại được ngày cũ.
+ * Cùng số liệu tin Zalo (GET /api/admin/finance?report=), xem lại được ngày cũ; thêm
+ * thẻ nhân sự & lương của tháng (GET /api/admin/workforce?stats=).
  */
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle, Banknote, BarChart3, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight,
   Clock, CreditCard, LogOut, NotebookPen, RefreshCw, ShieldAlert, Users, UtensilsCrossed, Wallet,
@@ -212,6 +213,68 @@ function Section({ section }) {
   </section>;
 }
 
+const minutesText = m => (m >= 60 ? `${Math.floor(m / 60)} giờ${m % 60 ? ` ${m % 60} phút` : ''}` : `${m} phút`);
+const num = n => String(n ?? 0).replace('.', ',');
+
+// Nhân sự & lương của tháng đang xem: quỹ lương, so với doanh thu, ai hay trễ / quên ra ca, việc chờ duyệt.
+function StaffReport({ date, monthRevenue }) {
+  const year = Number(date.slice(0, 4)), month = Number(date.slice(5, 7));
+  const [data, setData] = useState(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setFailed(false);
+    fetch(`/api/admin/workforce?stats=1&year=${year}&month=${month}`, { cache: 'no-store' })
+      .then(res => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then(result => { if (!cancelled) setData(result); })
+      .catch(() => { if (!cancelled) { setData(null); setFailed(true); } });
+    return () => { cancelled = true; };
+  }, [year, month]);
+  if (failed || !data || data.year !== year || data.month !== month) return null;
+  const t = data.totals, pending = data.pending.fixes + data.pending.extras + data.pending.requests;
+  const ratio = monthRevenue > 0 ? Math.round(t.gross / monthRevenue * 100) : null;
+  const people = [...data.people].sort((a, b) => b.salary.net - a.salary.net);
+  const watch = people.flatMap(p => [
+    p.late.count >= 3 && `${p.name} đi trễ ${p.late.count} lần (tổng ${minutesText(p.late.minutes)})`,
+    p.forgot >= 2 && `${p.name} quên ra ca ${p.forgot} lần`,
+    p.leftEarly.count >= 3 && `${p.name} về sớm ${p.leftEarly.count} lần`,
+    p.warnings > 0 && `${p.name} có ${p.warnings} lần quét bị cảnh báo (khác wifi / máy lạ)`,
+    p.blocked > 0 && `${p.name} bị chặn ${p.blocked} lần khi quét`,
+  ].filter(Boolean));
+  return <Card icon={Users} title={`Nhân sự & lương tháng ${month}/${year}`} aside={t.staff && t.closed === t.staff ? 'đã chốt' : 'tạm tính'}>
+    <div className="tk-staff-kpis">
+      <div><span>Quỹ lương (lương + tăng ca)</span><b>{money(t.gross)}</b></div>
+      <div><span>So với doanh thu tháng</span><b>{ratio === null ? '—' : `${ratio}%`}</b></div>
+      <div><span>Đã ứng</span><b>{money(t.advances)}</b>{t.fines > 0 && <small>phạt {money(t.fines)}</small>}</div>
+      <div><span>Chờ bạn duyệt</span><b className={pending ? 'warn' : ''}>{pending}</b></div>
+    </div>
+    {watch.length > 0 && <ul className="tk-warns" style={{ marginBottom: 10 }}>{watch.map(w => <li key={w}>{w}</li>)}</ul>}
+    {people.length ? <ul className="tk-people">{people.map(p => {
+      const c = p.salary;
+      const meta = [
+        c.rule === 'days' ? `${num(c.workUnits)}/${c.standardDays} ngày công` : `${c.workDays} ngày`,
+        `${num(c.totalWorkH)} giờ`,
+        p.late.count ? <span className="warn">trễ {p.late.count} lần ({minutesText(p.late.minutes)})</span> : null,
+        p.leftEarly.count ? `về sớm ${p.leftEarly.count} lần` : null,
+        p.forgot ? <span className="warn">quên ra ca {p.forgot}</span> : null,
+        c.otHours ? `tăng ca ${num(c.otHours)} giờ` : null,
+        c.pendingH ? `${num(c.pendingH)} giờ ngoài ca chờ duyệt` : null,
+        c.advAmt ? `ứng ${money(c.advAmt)}` : null,
+        c.vioAmt ? `phạt ${money(c.vioAmt)}` : null,
+      ].filter(Boolean);
+      return <li key={p.staff_id}>
+        <div className="tk-person-line">
+          <span>{p.name}{p.departure && <span className="tk-tag">nghỉ việc</span>}{c.paid_at ? <span className="tk-tag ok">đã trả</span> : c.locked ? <span className="tk-tag">đã chốt</span> : null}</span>
+          <b>{money(c.net)}</b>
+        </div>
+        <div className="tk-person-meta">{meta.map((m, i) => <Fragment key={i}>{i > 0 && ' · '}{m}</Fragment>)}</div>
+      </li>;
+    })}</ul> : <p className="tk-empty">Chưa có giờ công hay lương tháng này.</p>}
+    <p className="tk-caption">Số lương là thực lĩnh {t.staff && t.closed === t.staff ? 'đã chốt' : 'tạm tính tới hôm nay'} (đã trừ ứng, phạt). Quỹ lương so với doanh thu tháng tới ngày đang xem.</p>
+    <a className="tk-link" href="/admin/payroll">Mở bảng lương →</a>
+  </Card>;
+}
+
 function Skeleton() {
   return <div className="tk-skeleton" aria-label="Đang tải">
     <div className="sk sk-hero" />
@@ -308,6 +371,7 @@ export default function ThongKePage() {
         <Costs summary={report.summary} />
         <Hours compare={report.compare} />
         <TopItems compare={report.compare} />
+        <StaffReport date={date} monthRevenue={report.summary.month.revenue} />
         {report.sections.map(s => <Section key={`${date}-${s.key}`} section={s} />)}
         <footer className="tk-foot">
           {loadedAt && <span>Cập nhật {loadedAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>}

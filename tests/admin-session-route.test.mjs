@@ -13,7 +13,7 @@ const source = readFileSync(new URL('../src/app/api/admin/session/route.js', imp
 
 // Exercise the route with real NextResponse cookies and an isolated staff lookup.
 // staff có PIN cũ lưu chữ thường 'test-pin'; mọi lệnh update được ghi lại.
-function route(getStaffSession, role = 'admin', staff = { id, role, pin: 'test-pin', phone: 'test-phone' }, updates = []) {
+function route(getStaffSession, role = 'admin', staff = { id, role, pin: 'test-pin', phone: 'test-phone' }, updates = [], hasLeft = async () => false) {
   const database = { from: () => ({
     select: () => ({ eq: (k, v) => ({ limit: async () => ({ data: v === staff.phone ? [{ ...staff }] : [], error: null }) }) }),
     update: values => ({ eq: () => { updates.push(values); Object.assign(staff, values); return Promise.resolve({ error: null }); } }),
@@ -21,8 +21,8 @@ function route(getStaffSession, role = 'admin', staff = { id, role, pin: 'test-p
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-test-key'.repeat(2);
   return compileFunction(`${source}\nreturn { GET, POST, DELETE };`, [
     'NextResponse', 'getStatusSecret', 'getStaffSession', 'statusDatabase',
-    'STATUS_COOKIE', 'SESSION_SECONDS', 'signSession', 'hashPin', 'isHashedPin', 'pinMatches',
-  ])(NextResponse, () => secret, getStaffSession, () => database, STATUS_COOKIE, SESSION_SECONDS, signSession, hashPin, isHashedPin, pinMatches);
+    'STATUS_COOKIE', 'SESSION_SECONDS', 'signSession', 'hashPin', 'isHashedPin', 'pinMatches', 'hasLeft',
+  ])(NextResponse, () => secret, getStaffSession, () => database, STATUS_COOKIE, SESSION_SECONDS, signSession, hashPin, isHashedPin, pinMatches, hasLeft);
 }
 
 function request(method = 'GET', secure = false, pin = 'test-pin') {
@@ -88,4 +88,12 @@ test('PINs are checked against the stored hash and old plain PINs are hashed on 
   assert.ok(updates[0].last_login, 'last login stamped by the server');
   assert.equal((await api.POST(request('POST'))).status, 200, 'the hashed PIN still logs in');
   assert.equal((await api.POST(request('POST', false, 'wrong'))).status, 401);
+});
+
+test('someone who has left cannot log in any more', async () => {
+  const api = route(async () => ({ code: 401 }), 'staff', undefined, [], async () => true);
+  const response = await api.POST(request('POST'));
+  assert.equal(response.status, 403);
+  assert.match((await response.json()).error, /nghỉ việc/);
+  assert.equal(response.headers.get('set-cookie'), null, 'no session cookie');
 });

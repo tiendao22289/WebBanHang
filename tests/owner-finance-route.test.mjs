@@ -20,6 +20,7 @@ function fakeDb(state, { failTable } = {}) {
       eq(k, v) { conditions.push(r => r[k] === v); return q; },
       gte(k, v) { conditions.push(r => r[k] >= v); return q; },
       lt(k, v) { conditions.push(r => r[k] < v); return q; },
+      lte(k, v) { conditions.push(r => r[k] <= v); return q; },
       gt(k, v) { conditions.push(r => r[k] > v); return q; },
       in(k, vs) { conditions.push(r => vs.includes(r[k])); return q; },
       like(k, pattern) { const needle = pattern.replace(/%/g, ''); conditions.push(r => String(r[k] ?? '').includes(needle)); return q; },
@@ -72,7 +73,7 @@ function fakeDb(state, { failTable } = {}) {
 function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFails = false, env = {} }) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...finance, ...zaloLink, notesReportMessages, packMessages, compareBlock, compareData, lossBlock, staffBlock, createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
+    NextResponse, ...finance, ...zaloLink, notesReportMessages, packMessages, compareBlock, compareData, lossBlock, staffBlock, AUTO_CLOSE_BY: 'Máy tự đóng (quên ra ca)', createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
     sendOaText: async (_db, id, text) => { sent.push({ id, text }); return zaloFails ? { ok: false, detail: { error: -230 } } : { ok: true }; },
     URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
