@@ -92,7 +92,7 @@ export default function KioskPage() {
       </div>
 
       <div style={{ marginTop: 22, fontSize: 'clamp(1rem, 4vw, 1.3rem)', lineHeight: 1.7, textAlign: 'center' }}>
-        📶 Vào <strong>wifi quán</strong> → 📷 mở <strong>camera điện thoại</strong> → quét mã
+        📶 Vào <strong>wifi quán</strong> → mở app, bấm nút <strong>📷 quét mã</strong> (hoặc dùng camera điện thoại)
       </div>
       <div style={{ color: '#64748b', fontSize: '0.85rem', marginTop: 6, textAlign: 'center' }}>Mã đổi liên tục, mỗi mã chỉ dùng được 1 lần.</div>
     </Screen>
@@ -152,7 +152,7 @@ function Setup({ onDone }) {
         </button>
         {/* Nhân viên lỡ mở trang này trên điện thoại của mình. */}
         <div style={{ fontSize: '0.8rem', color: '#64748b', borderTop: '1px solid #e5e7eb', paddingTop: 12, lineHeight: 1.5 }}>
-          Bạn là nhân viên? Không cần mở trang này: vào wifi quán rồi dùng <strong>camera điện thoại</strong> quét mã QR trên máy quầy.
+          Bạn là nhân viên? Không cần mở trang này: vào wifi quán, mở app bấm nút <strong>📷 quét mã</strong> (hoặc dùng camera điện thoại) quét mã QR trên máy quầy.
         </div>
       </form>
     </Screen>
