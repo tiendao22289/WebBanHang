@@ -5,13 +5,15 @@
  */
 import { dayFlags, durationText, shiftOf, workDayOf } from './attendanceRules.mjs';
 
-// Mã QR trên máy quầy có dạng "<giờ tạo>.<máy quầy>.<số riêng>.<chữ ký>", hết hạn sau 2 phút.
-const MAX_AGE_MS = 2 * 60 * 1000;
+// Mã QR trên máy quầy có dạng "<giờ tạo>.<máy quầy>.<số riêng>.<chữ ký>", hết hạn sau 2 phút — máy chủ
+// kiểm bằng đồng hồ của chính nó. Điện thoại chỉ loại mã rõ ràng là cũ (ảnh chụp mã từ hôm trước), vì
+// đồng hồ máy chủ ở quán và điện thoại có thể lệch nhau vài phút (đã gặp máy chủ chậm 9 phút).
+const STALE_MS = 60 * 60 * 1000;
 export function tokenFresh(token, now = Date.now()) {
   const parts = String(token || '').split('.');
   if (parts.length !== 4) return false;
   const issued = parseInt(parts[0], 36) * 1000;
-  return Number.isFinite(issued) && now - issued < MAX_AGE_MS + 60000;
+  return Number.isFinite(issued) && now - issued < STALE_MS;
 }
 
 /**

@@ -18,7 +18,10 @@ test('the in-app scanner only takes the kiosk check-in link and a fresh code', (
   assert.equal(qrClockToken('WIFI:S:quan;T:WPA;P:123;;'), null, 'not a link');
   assert.equal(qrClockToken(`javascript:alert(1)//checkin?t=${token}`), null);
   assert.equal(tokenFresh(token), true);
-  assert.equal(tokenFresh(kioskQrToken(SECRET, KIOSK, Date.now() - 5 * 60000)), false, 'older than 2 minutes (+1 minute of clock drift)');
+  // Máy chủ ở quán chậm 9 phút rưỡi: mã vừa tạo vẫn phải quét được (máy chủ tự kiểm hạn 2 phút bằng đồng hồ của nó).
+  assert.equal(tokenFresh(kioskQrToken(SECRET, KIOSK, Date.now() - 9.5 * 60000)), true, 'a slow shop server clock');
+  assert.equal(tokenFresh(kioskQrToken(SECRET, KIOSK, Date.now() + 5 * 60000)), true, 'a slow phone clock');
+  assert.equal(tokenFresh(kioskQrToken(SECRET, KIOSK, Date.now() - 2 * 3600000)), false, 'a photo of yesterday\'s code');
   assert.equal(tokenFresh('abc'), false);
 });
 
