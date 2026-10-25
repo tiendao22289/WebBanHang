@@ -109,6 +109,16 @@ async function main() {
   console.log(JSON.stringify(bonusFines));
   if (bonusFines.tables !== 5 || bonusFines.settings !== 1 || bonusFines.auto_rules !== 2 || !bonusFines.anon_blocked) throw new Error('Chưa cài đủ bảng thưởng / phạt.');
 
+  // So khuôn mặt ở máy quầy (checkin_face.sql): chỉ dấu mặt mẫu, không ảnh — cài TRƯỚC khi dùng app máy quầy.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_face.sql'), 'utf8'));
+  const [face] = await query(`SELECT
+    (SELECT count(*)::int FROM unnest(ARRAY['staff_face_templates', 'checkin_face_checks', 'attendance_face_reviews', 'checkin_face_settings', 'checkin_kiosk_apps']) t
+      WHERE to_regclass('public.' || t) IS NOT NULL) AS tables,
+    (SELECT count(*)::int FROM public.checkin_face_settings) AS settings,
+    NOT has_table_privilege('anon', 'public.staff_face_templates', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(face));
+  if (face.tables !== 5 || face.settings !== 1 || !face.anon_blocked) throw new Error('Chưa cài đủ bảng so khuôn mặt.');
+
   // Băm mã PIN còn lưu chữ thường (web đang chạy ở 127.0.0.1:3000 làm việc này).
   const crypto = require('node:crypto');
   const serverKey = crypto.createHmac('sha256', key).update('staff-maintenance').digest('hex');

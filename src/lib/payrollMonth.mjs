@@ -2,6 +2,7 @@
 // Thống kê (api/admin/workforce) và Sổ thu chi (lương mỗi ngày theo chấm công). Chỉ phía server.
 import { readCheckinSettings } from './attendanceRules.mjs';
 import { BONUS_MIN_DAYS, activeFineKinds } from './payroll.mjs';
+import { faceHolds, markFaceHolds } from './faceCheck.mjs';
 
 export const monthRange = (year, month) => {
   const pad = n => String(n).padStart(2, '0');
@@ -56,7 +57,9 @@ export async function loadPayrollMonth(db, year, month) {
   ]);
   for (const r of [staff, configs, requests, violations, closes, departures, bonuses, fineReviews, fineRules]) if (r.error) throw r.error;
   const reviews = await reviewsFor(db, sessions.map(x => x.id));
-  return { start, end, staff: staff.data || [], configs: configs.data || [], sessions, requests: requests.data || [],
+  // Ca chờ chủ duyệt mặt (face_hold) chưa tính lương.
+  const held = await faceHolds(db, sessions.map(x => x.id));
+  return { start, end, staff: staff.data || [], configs: configs.data || [], sessions: markFaceHolds(sessions, held), requests: requests.data || [],
     violations: violations.data || [], reviews, closes: closes.data || [], departures: departures.data || [], rules,
     bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data) };
 }

@@ -2,8 +2,10 @@
 // Đọc to câu báo bằng giọng tiếng Việt của máy (Web Speech API, có sẵn trên iPhone / Android).
 // Trình duyệt chỉ cho đọc sau khi người dùng đã chạm vào trang: gọi unlockSpeech() (hoặc speak) ngay
 // trong lúc bấm nút — nút mở camera quét mã, nút "Bật tiếng đọc" ở máy quầy — để mở khoá các lần đọc sau.
+// Trong app máy quầy (iPhone) thì app tự đọc, không cần chạm.
+import { kioskApp, toKioskApp } from './kioskApp';
 
-export const speechSupported = () => typeof window !== 'undefined' && 'speechSynthesis' in window;
+export const speechSupported = () => !!kioskApp() || (typeof window !== 'undefined' && 'speechSynthesis' in window);
 
 function utter(text, volume = 1) {
   const u = new SpeechSynthesisUtterance(text);
@@ -16,12 +18,14 @@ function utter(text, volume = 1) {
 
 /** Gọi trong lúc người dùng bấm: đọc một câu rỗng, không tiếng, để mở khoá đọc về sau. */
 export function unlockSpeech() {
-  if (!speechSupported()) return;
+  if (kioskApp() || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
   try { window.speechSynthesis.speak(utter('', 0)); } catch { /* máy không cho đọc */ }
 }
 
 export function speak(text) {
-  if (!speechSupported() || !text) return;
+  if (!text) return;
+  if (kioskApp()) { toKioskApp({ type: 'speak', text }); return; }
+  if (!speechSupported()) return;
   try {
     const synth = window.speechSynthesis;
     if (synth.paused) synth.resume();

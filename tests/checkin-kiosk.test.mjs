@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as token from '../src/lib/checkinToken.mjs';
 import * as rules from '../src/lib/attendanceRules.mjs';
+import * as clockApply from '../src/lib/clockApply.mjs';
+import * as faceCheck from '../src/lib/faceCheck.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
 
 const SECRET = 'service-role-test-key'.repeat(2);
@@ -125,7 +127,7 @@ function load(state, user) {
     return res;
   } };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...token, ...rules, URL, Number, Math, String, JSON, Date, Promise, STATUS_COOKIE: 'local_admin_session',
+    NextResponse, ...token, ...rules, ...clockApply, ...faceCheck, URL, Number, Math, String, JSON, Date, Promise, STATUS_COOKIE: 'local_admin_session',
     console: { error() {} }, process: { env: { SUPABASE_SERVICE_ROLE_KEY: SECRET } },
     getStaffSession: async () => (user ? { code: 200, user } : { code: 401 }),
     nowMs: () => Date.now(), refreshClock: async () => {}, clockStatus: () => ({ offsetMs: 0, synced: true, checkedAt: null, source: 'test' }),

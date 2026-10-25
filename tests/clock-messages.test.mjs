@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { kioskQrToken } from '../src/lib/checkinToken.mjs';
 import { normalizeRules } from '../src/lib/attendanceRules.mjs';
-import { clockSummary, punctuality, qrClockToken, spokenClock, spokenClockError, spokenKiosk, spokenTime, tokenFresh } from '../src/lib/clockMessages.mjs';
+import { clockSummary, faceWaitText, punctuality, qrClockToken, spokenClock, spokenClockError, spokenFace, spokenKiosk, spokenTime, tokenFresh } from '../src/lib/clockMessages.mjs';
 
 const SECRET = 'service-role-test-key'.repeat(2);
 const KIOSK = '00000000-0000-4000-8000-00000000eeee';
@@ -58,4 +58,14 @@ test('the scan result is read aloud in plain Vietnamese: success or not, with th
   assert.equal(spokenKiosk({ ok: true, name: 'Phát', action: 'out', at: '2026-10-25T15:40:00Z' }), 'Phát, quét mã thành công. Ra ca lúc 22 giờ 40.');
   assert.equal(spokenKiosk({ ok: false, name: 'Phát', reason: 'other_network' }), 'Phát, quét mã chưa thành công. Điện thoại chưa vào wifi quán.');
   assert.equal(spokenKiosk({ ok: false, name: 'Phát', reason: null }), 'Phát, quét mã chưa thành công. Xem lại trên điện thoại.');
+});
+
+test('face check results are read aloud at the kiosk and shown on the phone', () => {
+  assert.equal(spokenFace({ result: 'ok', name: 'Phát', clocked: 'in', at: '2026-10-25T07:05:00Z' }), 'Phát, đúng mặt. Vào ca lúc 14 giờ 05.');
+  assert.equal(spokenFace({ result: 'wrong', name: 'Phát' }), 'Phát, sai mặt. Lượt này không tính. Quét lại mã.');
+  assert.equal(spokenFace({ result: 'review', name: 'Phát' }), 'Phát, sai mặt ba lần. Đã ghi giờ, chờ chủ quán duyệt.');
+  assert.equal(spokenFace({ result: 'expired', name: 'Phát', reason: 'no_blink' }), 'Phát, chưa so được mặt. Chưa thấy chớp mắt. Quét lại mã.');
+  assert.equal(faceWaitText({ status: 'ok' }), null);
+  assert.match(faceWaitText({ status: 'wrong', tries_left: 2 }), /Sai mặt — lượt này không tính[\s\S]*Sai thêm 2 lần/);
+  assert.match(faceWaitText({ status: 'expired', reason: 'timeout' }), /chưa so được mặt \(hết 1 phút chờ so mặt\)/);
 });

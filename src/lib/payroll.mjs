@@ -11,6 +11,7 @@
  * Tháng trước đó giữ cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày,
  *   trừ ngày nghỉ có đơn × lương cơ bản ÷ 26.
  * Thưởng chuyên cần chủ đã duyệt cộng vào thực lĩnh; phạt trừ ra.
+ * Ca có face_hold (ghi sau 3 lần sai mặt ở máy quầy, chờ chủ duyệt) chưa tính.
  *
  * byDay { ngày làm: tiền } — lương của riêng từng ngày (ngày công + tăng ca − trừ về sớm) cho Sổ thu chi;
  * tháng tính cách cũ cũng ghi theo ngày làm: lương cơ bản ÷ 26 + tăng ca hôm đó.
@@ -37,6 +38,7 @@ export const usesDayPay = (year, month) => monthKey(year, month) >= DAY_PAY_FROM
  * rules / reviews: giờ làm và các lần chủ duyệt giờ ngoài ca.
  */
 export function computeSalary({ year, month, staffId, sessions = [], config = null, requests = [], violations = [], bonuses = [], rules = null, reviews = [] }) {
+  sessions = sessions.filter(s => !s.face_hold);
   const base = Number(config?.base_salary) || 0;
   const otRate = config?.overtime_rate === null || config?.overtime_rate === undefined ? DEFAULT_OT_RATE : Number(config.overtime_rate) || 0;
   const reviewOf = new Map(reviews.map(r => [r.attendance_id, r]));
@@ -140,6 +142,7 @@ export function payrollCost({ year, month, staff = [], configs = [], sessions = 
  * từng ca máy tự đóng — dùng cho gợi ý phạt.
  */
 export function monthTallies({ sessions = [], rules = null, key, autoClosed = [] }) {
+  sessions = sessions.filter(s => !s.face_hold);
   const tally = { late: [0, 0], early: [0, 0], leftEarly: [0, 0], stayed: [0, 0] };
   const lateDays = [];
   for (const [day, list] of groupByWorkDay(sessions, rules)) {

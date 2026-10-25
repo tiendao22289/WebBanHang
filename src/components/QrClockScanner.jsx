@@ -1,19 +1,21 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { workforce } from '@/lib/staffApi';
-import { STAFF_WARNING_TEXT, clockSummary, clockTime, punctuality, qrClockToken, spokenClock, spokenClockError, tokenFresh } from '@/lib/clockMessages.mjs';
+import { STAFF_WARNING_TEXT, clockSummary, clockTime, faceWaitText, punctuality, qrClockToken, spokenClock, spokenClockError, tokenFresh } from '@/lib/clockMessages.mjs';
 import { speak, unlockSpeech } from '@/lib/speak';
+import { waitFaceCheck } from '@/lib/faceWait';
 
 // Quét mã chấm công ngay trong app nhân viên: mở camera sau, đọc mã QR trên máy quầy rồi vào / ra
 // ca luôn — cùng đăng nhập, cùng điện thoại đã đăng ký (không phải mở trình duyệt khác như khi
 // quét bằng app Camera). Đọc mã bằng BarcodeDetector nếu máy có (Android), không thì bằng jsQR.
 // Quét xong đọc to "quét mã thành công / chưa thành công" — nút mở màn quét phải gọi unlockSpeech()
 // lúc bấm, vì điện thoại chỉ cho trang đọc sau khi người dùng chạm.
+// Máy quầy là app so mặt: quét xong chưa ghi giờ, chờ máy quầy so mặt rồi mới báo (máy quầy tự đọc kết quả).
 let openCount = 0, bodyOverflow = '';
 
 export default function QrClockScanner({ onClose }) {
   const videoRef = useRef(null);
-  const [phase, setPhase] = useState('starting'); // starting | scanning | sending | done | error
+  const [phase, setPhase] = useState('starting'); // starting | scanning | sending | face | done | error
   const [message, setMessage] = useState('');
   const [detail, setDetail] = useState('');
   const [warn, setWarn] = useState('');
@@ -27,25 +29,39 @@ export default function QrClockScanner({ onClose }) {
   }, []);
 
   useEffect(() => {
-    let stream = null, timer = null, stopped = false;
+    let stream = null, timer = null, stopped = false, gone = false;
     const stop = () => { stopped = true; clearTimeout(timer); stream?.getTracks().forEach(t => t.stop()); };
     // Trạng thái hiện tại (đang trong ca chưa) + giờ làm để báo đúng giờ / trễ sau khi quét.
     const status = fetch('/api/admin/workforce?me=1', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).catch(() => null);
     status.then(me => { if (!stopped && me) setOpen(me.open || null); });
+
+    const finish = (result, me, held = false) => {
+      setMessage(clockSummary(result));
+      setDetail([punctuality(result.clocked, result.session, result.sessions || [], me?.rules || null, result.session?.staff_id),
+        held && '⏳ Sai mặt 3 lần: giờ đã ghi nhưng chờ chủ quán duyệt mới tính lương.'].filter(Boolean).join('\n'));
+      setWarn((result.warnings || []).map(w => STAFF_WARNING_TEXT[w]).filter(Boolean).join(' '));
+      setPhase('done');
+      navigator.vibrate?.(80);
+      // Trang Lương đang mở thì tải lại giờ công hôm nay.
+      window.dispatchEvent(new Event('staff-clocked'));
+    };
 
     const send = async token => {
       setPhase('sending');
       setWarn('');
       try {
         const [result, me] = await Promise.all([workforce('clock', { token }), status]);
-        setMessage(clockSummary(result));
-        setDetail(punctuality(result.clocked, result.session, result.sessions || [], me?.rules || null, result.session?.staff_id));
-        setWarn((result.warnings || []).map(w => STAFF_WARNING_TEXT[w]).filter(Boolean).join(' '));
-        setPhase('done');
+        if (result.face) {
+          // Chờ máy quầy so mặt (máy quầy đọc to kết quả, điện thoại chỉ hiện chữ).
+          setPhase('face');
+          const r = await waitFaceCheck(result.face.id, { isStopped: () => gone });
+          if (gone) return;
+          if ((r.status === 'ok' || r.status === 'review') && r.result) finish(r.result, me, r.status === 'review');
+          else { setMessage(faceWaitText(r)); setPhase('error'); }
+          return;
+        }
+        finish(result, me);
         speak(spokenClock(result));
-        navigator.vibrate?.(80);
-        // Trang Lương đang mở thì tải lại giờ công hôm nay.
-        window.dispatchEvent(new Event('staff-clocked'));
       } catch (err) {
         setMessage(err.message);
         setPhase('error');
@@ -113,7 +129,7 @@ export default function QrClockScanner({ onClose }) {
       };
       tick();
     })();
-    return stop;
+    return () => { gone = true; stop(); };
   }, [attempt]);
 
   const live = phase === 'starting' || phase === 'scanning' || phase === 'sending';
@@ -143,9 +159,12 @@ export default function QrClockScanner({ onClose }) {
 
       {!live && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center', gap: 12 }}>
-          <div style={{ fontSize: '3rem' }}>{phase === 'done' ? '✅' : '⚠️'}</div>
-          <div style={{ whiteSpace: 'pre-line', fontSize: '1.1rem', fontWeight: 700, lineHeight: 1.5 }}>{message}</div>
-          {detail && <div style={{ fontSize: '0.95rem', color: '#e2e8f0' }}>{detail}</div>}
+          <div style={{ fontSize: '3rem' }}>{phase === 'done' ? '✅' : phase === 'face' ? '👀' : '⚠️'}</div>
+          <div style={{ whiteSpace: 'pre-line', fontSize: '1.1rem', fontWeight: 700, lineHeight: 1.5 }}>
+            {phase === 'face' ? 'Nhìn vào camera máy quầy và chớp mắt' : message}
+          </div>
+          {phase === 'face' && <div style={{ fontSize: '0.95rem', color: '#cbd5e1' }}>Máy quầy đang so mặt… đúng mặt mới ghi giờ.</div>}
+          {detail && <div style={{ whiteSpace: 'pre-line', fontSize: '0.95rem', color: '#e2e8f0' }}>{detail}</div>}
           {warn && <div style={{ fontSize: '0.88rem', color: '#fde68a' }}>{warn}</div>}
           <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
             {phase === 'error' && <button onClick={() => { unlockSpeech(); setAttempt(a => a + 1); }} style={{ ...button, background: '#16a34a', color: 'white' }}>Quét lại</button>}
