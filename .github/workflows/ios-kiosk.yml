@@ -1,0 +1,105 @@
+name: iOS kiosk app (Chấm công)
+# Builds the counter-phone app as an unsigned, fakesigned IPA for TrollStore (no Apple account).
+# Artifact "ChamCong-ipa". The face model is converted from OpenCV Zoo SFace when it is missing
+# (or on a manual run with convert_model) and uploaded as artifact "SFace-mlmodel" to commit.
+on:
+  push:
+    branches: [ios-kiosk-app, developer]
+    paths: ['ios/**', '.github/workflows/ios-kiosk.yml']
+  workflow_dispatch:
+    inputs:
+      convert_model:
+        description: 'Convert the SFace model again (ONNX → Core ML)'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: ios-kiosk-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    if: github.repository == 'tiendao22289/WebBanHang'
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      SFACE_URL: https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+      SFACE_SHA256: 0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79
+      APP: ios/build/Build/Products/Release-iphoneos/ChamCong.app
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Is the face model there?
+        id: model
+        run: |
+          if [ "${{ inputs.convert_model }}" = "true" ] || [ ! -f ios/ChamCong/Resources/SFace.mlmodel ]; then
+            echo "convert=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "convert=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Convert SFace (ONNX → Core ML) and compare with onnxruntime
+        if: steps.model.outputs.convert == 'true'
+        run: |
+          python3 -m venv /tmp/venv
+          . /tmp/venv/bin/activate
+          pip install -q numpy onnx onnxruntime onnx2torch torch coremltools pillow
+          curl -sSfL -o /tmp/sface.onnx "$SFACE_URL"
+          echo "$SFACE_SHA256  /tmp/sface.onnx" | shasum -a 256 -c
+          python ios/tools/convert_sface.py /tmp/sface.onnx ios/ChamCong/Resources/SFace.mlmodel ios/FaceKit/Tests/FaceKitTests/Fixtures
+
+      - name: Upload converted model
+        if: steps.model.outputs.convert == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SFace-mlmodel
+          path: ios/ChamCong/Resources/SFace.mlmodel
+          if-no-files-found: error
+
+      - name: FaceKit tests (alignment, Core ML vs ONNX, blink)
+        working-directory: ios/FaceKit
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee /tmp/facekit-tests.log
+          echo '--- numbers ---'
+          grep -E "core ml vs onnx|vision−yunet|nose |vs .*: [0-9.-]+$|same person min" /tmp/facekit-tests.log || true
+
+      - name: Install XcodeGen and ldid
+        run: brew install xcodegen ldid
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build (Release, iPhone, unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/ChamCong.xcodeproj -scheme ChamCong -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath ios/build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee /tmp/xcodebuild.log | grep -E "error:|warning: .*Swift|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" /tmp/xcodebuild.log
+
+      - name: Fakesign, check and package the IPA
+        run: |
+          ldid -S "$APP/ChamCong"
+          min=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist")
+          echo "MinimumOSVersion $min"; test "$min" = "15.0"
+          lipo -info "$APP/ChamCong"; lipo -info "$APP/ChamCong" | grep -q arm64
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" | grep -qx online.ocbaokhang.chamcong
+          /usr/libexec/PlistBuddy -c 'Print :KioskURL' "$APP/Info.plist"
+          test -d "$APP/SFace.mlmodelc"
+          ls "$APP"
+          rm -rf /tmp/ipa && mkdir -p /tmp/ipa/Payload && cp -R "$APP" /tmp/ipa/Payload/
+          (cd /tmp/ipa && zip -qry ChamCong.ipa Payload)
+          mv /tmp/ipa/ChamCong.ipa ios/build/ChamCong.ipa
+          ls -la ios/build/ChamCong.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChamCong-ipa
+          path: ios/build/ChamCong.ipa
+          if-no-files-found: error
