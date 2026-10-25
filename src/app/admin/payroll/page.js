@@ -1958,7 +1958,7 @@ export default function PayrollPage() {
                           </label>
                         </div>
                         <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 6, lineHeight: 1.6 }}>
-                          Lấy mặt mẫu: trên máy quầy (app) <strong>giữ tay lên đồng hồ 2 giây</strong> → đăng nhập chủ quán → chọn tên → người đó nhìn camera, chớp mắt. Ai chưa có mặt mẫu thì quét mã chấm như cũ.
+                          Lấy mặt mẫu: trên máy quầy (app) <strong>chạm nhanh 5 lần vào đồng hồ</strong> → đăng nhập chủ quán → chọn tên → người đó nhìn camera, chớp mắt. Ai chưa có mặt mẫu thì quét mã chấm như cũ.
                         </div>
                         {people.map(p => (
                           <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', fontSize: '0.85rem' }}>
