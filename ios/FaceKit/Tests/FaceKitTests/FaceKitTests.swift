@@ -65,12 +65,18 @@ final class FaceKitTests: XCTestCase {
             let tensor = FaceAligner.tensor(from: rgba, points: ref.landmarks.map { CGPoint(x: $0[0], y: $0[1]) })!
             let plane = FaceTemplate.size * FaceTemplate.size
             for c in 0..<3 {
-                let mean = tensor[(c * plane)..<((c + 1) * plane)].reduce(0) { $0 + Double($1) } / Double(plane)
+                var sum = 0.0
+                for i in (c * plane)..<((c + 1) * plane) { sum += Double(tensor[i]) }
+                let mean: Double = sum / Double(plane)
                 // JPEG decoders differ by a level or two per pixel.
                 XCTAssertEqual(mean, ref.blob_mean[c], accuracy: 1.5, "\(name) channel \(c)")
             }
-            let sample = stride(from: 0, to: tensor.count, by: ref.blob_stride).prefix(ref.blob_sample.count).map { Double(tensor[$0]) }
-            let diff = zip(sample, ref.blob_sample).map { abs($0 - $1) }.reduce(0, +) / Double(sample.count)
+            var total = 0.0
+            for (i, expected) in ref.blob_sample.enumerated() {
+                let got: Double = Double(tensor[i * ref.blob_stride])
+                total += abs(got - expected)
+            }
+            let diff: Double = total / Double(ref.blob_sample.count)
             XCTAssertLessThan(diff, 4, name)
         }
     }
@@ -95,16 +101,24 @@ final class FaceKitTests: XCTestCase {
             guard let (face, e) = try pipeline.embed(img) else { XCTFail("no face in \(name)"); continue }
             emb[name] = e
             let ref = Self.references[name]!
-            let yunet = ref.landmarks.map { CGPoint(x: $0[0], y: $0[1]) }
-            let eyeGap = hypot(yunet[1].x - yunet[0].x, yunet[1].y - yunet[0].y)
-            let offsets = zip(face.points, yunet).map { String(format: "(%+.2f,%+.2f)", ($0.x - $1.x) / eyeGap, ($0.y - $1.y) / eyeGap) }
-            print("\(name): vision−yunet / eye gap \(offsets.joined(separator: " ")) cos(vision, yunet ref) \(String(format: "%.3f", FaceMath.cosine(e, ref.embedding)))")
+            let yunet: [CGPoint] = ref.landmarks.map { CGPoint(x: $0[0], y: $0[1]) }
+            let dx: Double = Double(yunet[1].x - yunet[0].x), dy: Double = Double(yunet[1].y - yunet[0].y)
+            let eyeGap: Double = (dx * dx + dy * dy).squareRoot()
+            var offsets: [String] = []
+            for i in 0..<5 {
+                let ox: Double = Double(face.points[i].x - yunet[i].x) / eyeGap
+                let oy: Double = Double(face.points[i].y - yunet[i].y) / eyeGap
+                offsets.append(String(format: "(%+.2f,%+.2f)", ox, oy))
+            }
+            let visionCos: Double = FaceMath.cosine(e, ref.embedding)
+            print("\(name): vision−yunet / eye gap \(offsets.joined(separator: " ")) cos(vision, yunet ref) \(String(format: "%.3f", visionCos))")
             for (label, nose) in noseCandidates(img) {
-                let p = [face.points[0], face.points[1], nose, face.points[3], face.points[4]]
-                if let alt = try pipeline.embed(img, points: p) {
-                    print(String(format: "   nose %@: offset (%+.2f,%+.2f) cos(alt, yunet ref) %.3f", label,
-                                 (nose.x - yunet[2].x) / eyeGap, (nose.y - yunet[2].y) / eyeGap, FaceMath.cosine(alt, ref.embedding)))
-                }
+                let p: [CGPoint] = [face.points[0], face.points[1], nose, face.points[3], face.points[4]]
+                guard let alt = try pipeline.embed(img, points: p) else { continue }
+                let ox: Double = Double(nose.x - yunet[2].x) / eyeGap
+                let oy: Double = Double(nose.y - yunet[2].y) / eyeGap
+                let c: Double = FaceMath.cosine(alt, ref.embedding)
+                print(String(format: "   nose %@: offset (%+.2f,%+.2f) cos(alt, yunet ref) %.3f", label, ox, oy, c))
             }
         }
         var same: [Double] = [], different: [Double] = []
@@ -135,7 +149,10 @@ final class FaceKitTests: XCTestCase {
         let nose = pts(lm.nose), crest = pts(lm.noseCrest)
         var out: [(String, CGPoint)] = []
         if !nose.isEmpty {
-            out.append(("nose centroid", CGPoint(x: nose.map(\.x).reduce(0, +) / CGFloat(nose.count), y: nose.map(\.y).reduce(0, +) / CGFloat(nose.count))))
+            var sx: CGFloat = 0, sy: CGFloat = 0
+            for p in nose { sx += p.x; sy += p.y }
+            let n = CGFloat(nose.count)
+            out.append(("nose centroid", CGPoint(x: sx / n, y: sy / n)))
             if let low = nose.max(by: { $0.y < $1.y }) { out.append(("nose lowest", low)) }
         }
         if let last = crest.last { out.append(("crest last", last)) }

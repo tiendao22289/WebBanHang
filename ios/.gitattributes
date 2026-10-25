@@ -1,0 +1,6 @@
+*.mlmodel binary
+*.jpg binary
+*.png binary
+*.swift text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
