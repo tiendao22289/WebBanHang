@@ -20,7 +20,8 @@ concurrency:
 jobs:
   build:
     if: github.repository == 'tiendao22289/WebBanHang'
-    runs-on: macos-14
+    # Xcode 16 (XcodeGen from Homebrew writes the Xcode 16 project format).
+    runs-on: macos-15
     timeout-minutes: 45
     env:
       SFACE_URL: https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
@@ -73,7 +74,10 @@ jobs:
           grep -E "core ml vs onnx|vision−yunet|nose |vs .*: [0-9.-]+$|same person min" /tmp/facekit-tests.log || true
 
       - name: Install XcodeGen and ldid
-        run: brew install xcodegen ldid
+        run: |
+          brew install xcodegen ldid
+          xcodebuild -version
+          xcodegen --version
 
       - name: Generate Xcode project
         working-directory: ios
