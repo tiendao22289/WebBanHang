@@ -9,8 +9,10 @@
  */
 export const FACE_MODEL = 'sface-2021dec';
 export const FACE_DIM = 128;
-// Độ khắt khe: ngưỡng độ giống để coi là cùng người (SFace trên bộ ảnh chuẩn dùng 0,363).
-export const FACE_LEVELS = { loose: 0.34, normal: 0.4, strict: 0.48 };
+// Độ khắt khe: ngưỡng độ giống để coi là cùng người. Đo trên 3000 cặp ảnh LFW với cách lấy dấu mặt của app:
+// 0,40 nhận 97,6% đúng người, 0,03% người lạ; 0,45 nhận 95,3% đúng người, 0 người lạ. Máy chủ lấy độ giống cao
+// nhất của tới 2 × 3 cặp ảnh nên người lạ có nhiều lượt thử hơn — mặc định 0,45.
+export const FACE_LEVELS = { loose: 0.4, normal: 0.45, strict: 0.5 };
 export const FACE_LEVEL_TEXT = { loose: 'Dễ', normal: 'Vừa', strict: 'Chặt' };
 export const FACE_WAIT_MS = 60000;
 export const FACE_TRIES = 3;
