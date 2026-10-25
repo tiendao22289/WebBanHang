@@ -3,7 +3,7 @@
 // Mã đổi mỗi 30 giây và ngay khi có người vừa chấm; ai quét xong thì hiện tên vài giây và đọc to
 // "quét mã thành công" (hoặc "chưa thành công" khi bị chặn vì khác wifi / máy lạ).
 // Mở trong app iPhone "Chấm công" (thư mục ios/): quét xong thì máy quầy so mặt người đứng trước máy
-// (chớp mắt, đúng mặt mới ghi giờ); chủ quán giữ tay lên đồng hồ 2 giây để lấy mặt mẫu.
+// (chớp mắt, đúng mặt mới ghi giờ); chủ quán chạm nhanh 5 lần vào đồng hồ (hoặc giữ tay 2 giây) để lấy mặt mẫu.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { KIOSK_FAIL_TEXT, spokenFace, spokenKiosk } from '@/lib/clockMessages.mjs';
@@ -59,6 +59,7 @@ export default function KioskPage() {
   const busyUntil = useRef(0);
   const busySent = useRef(null);
   const pressTimer = useRef(null);
+  const clockTaps = useRef([]);
   const pollRef = useRef(null);
 
   const show = useCallback(n => {
@@ -185,7 +186,14 @@ export default function KioskPage() {
   const left = Math.max(0, Math.min(1, (refreshAt - now) / 30000));
   const view = showScan ? noticeView(notice) : null;
   const turnOnVoice = () => { speak('Đã bật tiếng đọc'); setVoice(true); };
-  // Chủ quán giữ tay lên đồng hồ 2 giây (chỉ trong app) → lấy mặt mẫu.
+  // Chủ quán chạm nhanh 5 lần vào đồng hồ trong 3 giây, hoặc giữ tay 2 giây (chỉ trong app) → lấy mặt mẫu.
+  // iPhone hay huỷ lần giữ tay (tưởng là chọn chữ) nên chạm 5 lần là cách chắc chắn.
+  const tapClock = () => {
+    if (!app.current?.face) return;
+    const at = Date.now();
+    clockTaps.current = [...clockTaps.current.filter(x => at - x < 3000), at];
+    if (clockTaps.current.length >= 5) { clockTaps.current = []; setMode('enroll'); }
+  };
   const pressStart = () => {
     if (!app.current?.face) return;
     clearTimeout(pressTimer.current);
@@ -194,9 +202,9 @@ export default function KioskPage() {
   const pressEnd = () => clearTimeout(pressTimer.current);
 
   return (
-    <Screen>
-      <div onPointerDown={pressStart} onPointerUp={pressEnd} onPointerLeave={pressEnd} onPointerCancel={pressEnd}
-        style={{ fontSize: 'clamp(2.2rem, 9vw, 4rem)', fontWeight: 800, letterSpacing: 2, fontVariantNumeric: 'tabular-nums', userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}>{clock}</div>
+    <Screen still>
+      <div onClick={tapClock} onPointerDown={pressStart} onPointerUp={pressEnd} onPointerLeave={pressEnd} onPointerCancel={pressEnd}
+        style={{ fontSize: 'clamp(2.2rem, 9vw, 4rem)', fontWeight: 800, letterSpacing: 2, fontVariantNumeric: 'tabular-nums', touchAction: 'manipulation', cursor: 'default' }}>{clock}</div>
       <div style={{ color: '#94a3b8', marginBottom: 18 }}>{day} · {name || 'Máy quầy'}</div>
       {/* Chấm công đã theo giờ internet; máy tính chạy web lệch giờ thì nhắc chủ chỉnh (bill, báo cáo vẫn theo giờ máy). */}
       {computerClock !== null && Math.abs(computerClock) > 2 * 60000 && (
@@ -248,9 +256,13 @@ export default function KioskPage() {
   );
 }
 
-function Screen({ children }) {
+// still: màn mã QR không cho chọn chữ / hiện menu khi giữ tay (máy quầy không có gì để chọn; còn ô nhập
+// ở màn đăng nhập thì vẫn phải gõ được nên không đặt ở đó).
+function Screen({ children, still = false }) {
+  const noSelect = still ? { userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' } : {};
   return (
-    <div style={{ minHeight: '100dvh', background: '#0f172a', color: 'white', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px 16px', boxSizing: 'border-box', fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif' }}>
+    <div onContextMenu={still ? e => e.preventDefault() : undefined}
+      style={{ minHeight: '100dvh', background: '#0f172a', color: 'white', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px 16px', boxSizing: 'border-box', fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif', ...noSelect }}>
       {children}
     </div>
   );
