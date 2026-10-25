@@ -132,10 +132,24 @@ function Costs({ summary }) {
   </Card>;
 }
 
+// Cần chú ý: kết quả máy tự kiểm tra ngày đó (5 giờ sáng hôm sau) + các cảnh báo khác của sổ.
+const checkTime = iso => {
+  const d = new Date(Date.parse(iso) + 7 * 3600000).toISOString();
+  return `${d.slice(11, 16)} ${d.slice(8, 10)}/${d.slice(5, 7)}`;
+};
 function Warnings({ summary }) {
-  if (!summary.warnings.length) return <section className="tk-ok"><CheckCircle2 size={20} /> Không có gì bất thường</section>;
-  return <Card icon={AlertTriangle} title="Cần chú ý" aside={summary.warnings.length} tone="warn">
-    <ul className="tk-warns">{summary.warnings.map(w => <li key={w}>{w}</li>)}</ul>
+  const check = summary.check;
+  const problems = (check?.issues || []).filter(i => i.level !== 'info');
+  const extra = (check?.issues || []).filter(i => i.level === 'info').map(i => `${i.title}: ${i.count}`).join(' · ');
+  const by = check ? `Máy tự kiểm tra lúc ${checkTime(check.checkedAt)}${extra ? ` · ${extra}` : ''}` : null;
+  if (!problems.length && !summary.warnings.length) return <section className="tk-ok"><CheckCircle2 size={20} />
+    <span>Không có gì bất thường{by && <small className="tk-ok-sub">{by}</small>}</span></section>;
+  return <Card icon={AlertTriangle} title="Cần chú ý" aside={problems.length + summary.warnings.length} tone="warn">
+    <ul className="tk-warns">
+      {problems.map(i => <li key={i.key}>{i.title}: <b>{i.count}{i.key === 'removed' ? ' món' : ''}</b>{i.amount ? ` (${money(i.amount)})` : ''}</li>)}
+      {summary.warnings.map(w => <li key={w}>{w}</li>)}
+    </ul>
+    {by && <p className="tk-caption">{by}. Xem từng bill ở Sổ thu chi → Hôm nay.</p>}
   </Card>;
 }
 
@@ -501,7 +515,9 @@ function DayKpis({ summary }) {
     <div className="tk-kpi"><span className="tk-kpi-label">Chi trong ngày</span><b>{money(summary.cost)}</b></div>
     <div className={`tk-kpi ${loss ? 'neg' : 'pos'}`}><span className="tk-kpi-label">{loss ? 'Lỗ ngày' : 'Lãi ngày'}</span><b>{loss ? '-' : '+'}{money(Math.abs(summary.profit))}</b></div>
     <div className="tk-kpi"><span className="tk-kpi-label">Số bill</span><b>{bills}</b></div>
-    <div className="tk-kpi"><span className="tk-kpi-label">Chốt sổ</span><b className={summary.closed ? 'tk-good-text' : 'tk-warn-text'}>{summary.closed ? 'Đã chốt' : 'Chưa chốt'}</b></div>
+    <div className="tk-kpi"><span className="tk-kpi-label">Máy kiểm tra</span>{summary.check
+      ? <b className={summary.check.ok ? 'tk-good-text' : 'tk-warn-text'}>{summary.check.ok ? '✓ Ổn' : `${summary.check.problems} việc`}</b>
+      : <b className={summary.closed ? 'tk-good-text' : 'tk-muted-text'}>{summary.closed ? 'Đã chốt' : '5h sáng mai'}</b>}</div>
   </section>;
 }
 
@@ -513,7 +529,7 @@ function PeriodKpis({ data }) {
       {data.prev && <Delta now={t.cost} before={data.prev.cost} label="kỳ trước" />}</div>
     <div className={`tk-kpi ${loss ? 'neg' : 'pos'}`}><span className="tk-kpi-label">{loss ? 'Lỗ cả kỳ' : 'Lãi cả kỳ'}</span><b>{loss ? '-' : '+'}{money(Math.abs(t.profit))}</b></div>
     <div className="tk-kpi"><span className="tk-kpi-label">Lãi trung bình / ngày</span><b>{t.days ? money(t.profit / t.days) : '—'}</b></div>
-    <div className="tk-kpi"><span className="tk-kpi-label">Ngày đã chốt sổ</span><b className={t.closedDays < t.days - 1 ? 'tk-warn-text' : ''}>{t.closedDays}/{t.days}</b></div>
+    <div className="tk-kpi"><span className="tk-kpi-label">Ngày máy đã kiểm tra</span><b className={t.closedDays < t.days - 1 ? 'tk-warn-text' : ''}>{t.closedDays}/{t.days}</b></div>
   </section>;
 }
 

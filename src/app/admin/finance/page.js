@@ -316,12 +316,12 @@ function CloseForm({ detail, accounts, openTick = 0, onSaved }) {
     value={value === '' ? '' : Number(digits(value)).toLocaleString('vi-VN')} onChange={e => onChange(digits(e.target.value))} />;
 
   const diffs = detail.closeDiff;
-  const status = !saved ? 'Chưa chốt · bấm để đếm tiền két và nhập số thật'
+  const status = !saved ? 'Không bắt buộc · muốn so tiền mặt / tiền thẻ thì bấm để nhập số thật'
     : [`Đã chốt ${clock(saved.closed_at)}`, diffs?.cashDiff != null ? `tiền mặt ${diffText(diffs.cashDiff).toLowerCase()}` : null,
       ...Object.entries(diffs?.bankDiffs || {}).filter(([, d]) => d !== 0).map(([id, d]) => `${name(id).split(' · ')[0]} ${diffText(d).toLowerCase()}`)].filter(Boolean).join(' · ');
   return <form className={`fin-close${saved ? '' : ' todo'}`} onSubmit={save}>
     <button type="button" className="fin-close-head" onClick={() => setOpen(o => !o)} aria-expanded={open}>
-      <b>Chốt sổ cuối ngày</b><small>{status}</small><ChevronDown size={16} style={{ transform: open ? 'rotate(180deg)' : 'none' }} />
+      <b>Đếm két (không bắt buộc)</b><small>{status}</small><ChevronDown size={16} style={{ transform: open ? 'rotate(180deg)' : 'none' }} />
     </button>
     {open && <>
     <p className="fin-hint">Đếm tiền mặt trong két và xem số tiền thật trên app ngân hàng, nhập vào để so với sổ.{saved && ` Đã chốt lúc ${clock(saved.closed_at)}${saved.closed_by_name ? ` bởi ${saved.closed_by_name}` : ''}.`}</p>
@@ -358,8 +358,8 @@ async function sendReceipt(fields, image) {
 }
 
 // Việc trong một ngày, đúng thứ tự làm: bill tự vào sổ → đi chợ ghi Sổ tay → chi trong ngày → kiểm tra
-// bill chuyển khoản → chốt sổ. Mục xong có dấu ✓, mục cần làm có nút làm luôn.
-function DayTasks({ date, detail, spend, onSearch, onOpenNotes, onOpenClose }) {
+// bill chuyển khoản → máy tự kiểm tra cuối ngày (5 giờ sáng hôm sau, không cần chủ chốt sổ). Mục xong có dấu ✓, mục cần làm có nút làm luôn.
+function DayTasks({ date, detail, spend, checking, onSearch, onOpenNotes, onOpenCheck, onCheck }) {
   const transfer = detail.bills.filter(b => b.payment_method === 'transfer');
   const paperTransfer = (detail.paperBills || []).filter(b => b.paymentMethod === 'transfer');
   const noPhoto = transfer.filter(b => !b.transfer_image_url).length + paperTransfer.filter(b => !b.transferImageUrl && !b.imagesPurged).length;
@@ -367,12 +367,15 @@ function DayTasks({ date, detail, spend, onSearch, onOpenNotes, onOpenClose }) {
   const badNotes = detail.notes.filter(n => (n.mismatch && n.mismatch !== 0) || n.lineWarnings?.length || n.suspicious?.length).length;
   const paperCount = (detail.paperBills || []).length;
   const revenue = [...detail.bills, ...(detail.paperBills || [])].reduce((s, b) => s + Number(b.amount || 0), 0);
-  const diffs = detail.closeDiff;
-  const closeText = detail.close
-    ? [`Đã chốt ${clock(detail.close.closed_at)}`, diffs?.cashDiff != null ? `tiền mặt ${diffText(diffs.cashDiff).toLowerCase()}` : null,
-      ...Object.values(diffs?.bankDiffs || {}).filter(d => d !== 0).map(d => `thẻ ${diffText(d).toLowerCase()}`)].filter(Boolean).join(' · ')
-    : 'Đếm tiền mặt trong két, xem số tiền thật trên app ngân hàng';
-  const closeBad = detail.close && ((diffs?.cashDiff ?? 0) !== 0 || Object.values(diffs?.bankDiffs || {}).some(d => d !== 0));
+  const check = detail.check;
+  const runLabel = checking ? 'Đang kiểm tra…' : check ? 'Kiểm tra lại' : 'Kiểm tra ngay';
+  const checkStep = check
+    ? { state: check.ok ? 'done' : 'warn', title: 'Máy tự kiểm tra cuối ngày',
+        sub: `${check.ok ? 'Không có gì bất thường' : `${check.problems} việc cần xem`} · kiểm tra lúc ${stamp(check.checkedAt)}`,
+        actions: [!check.ok && ['Xem', onOpenCheck], [runLabel, onCheck]].filter(Boolean) }
+    : { state: date >= detail.today ? 'idle' : 'todo', title: 'Máy tự kiểm tra cuối ngày',
+        sub: date >= detail.today ? '5 giờ sáng mai máy tự kiểm tra ngày này, bạn không cần chốt sổ' : 'Chưa kiểm tra',
+        actions: [[runLabel, onCheck]] };
   const steps = [
     { state: 'done', title: 'Bill tự vào sổ khi đóng bàn', sub: `${detail.bills.length} bill${paperCount ? ` + ${paperCount} bill giấy` : ''} · ${money(revenue)}` },
     { state: badNotes ? 'warn' : detail.notes.length ? 'done' : 'idle', title: 'Đi chợ / nhập hàng ghi ở Sổ tay',
@@ -384,8 +387,7 @@ function DayTasks({ date, detail, spend, onSearch, onOpenNotes, onOpenClose }) {
       sub: !transfer.length && !paperTransfer.length ? 'Không có bill chuyển khoản'
         : [noPhoto && `📷 ${noPhoto} chưa có ảnh`, unchecked && `☐ ${unchecked} chưa đối chiếu`].filter(Boolean).join(' · ') || 'Đủ ảnh, đã đối chiếu',
       actions: [noPhoto > 0 && ['Chụp ảnh', () => onSearch({ from: date, to: date, photo: 'missing' })], unchecked > 0 && ['Đối chiếu', () => onSearch({ from: date, to: date, check: 'unchecked' })]].filter(Boolean) },
-    { state: !detail.close ? 'todo' : closeBad ? 'warn' : 'done', title: 'Chốt sổ cuối ngày', sub: closeText,
-      actions: [[detail.close ? 'Xem / sửa' : 'Chốt sổ', onOpenClose]] },
+    checkStep,
   ];
   return <section className="fin-tasks" aria-label="Việc trong ngày">
     <h2>Việc trong ngày</h2>
@@ -393,9 +395,32 @@ function DayTasks({ date, detail, spend, onSearch, onOpenNotes, onOpenClose }) {
       {steps.map((s, i) => <li key={s.title} className={s.state}>
         <span className="fin-task-mark" aria-hidden="true">{s.state === 'done' ? '✓' : s.state === 'warn' ? '!' : i + 1}</span>
         <span className="fin-task-text"><b>{s.title}</b><small>{s.sub}</small></span>
-        {s.actions?.length > 0 && <span className="fin-task-actions">{s.actions.map(([text, run]) => <button key={text} type="button" onClick={run}>{text}</button>)}</span>}
+        {s.actions?.length > 0 && <span className="fin-task-actions">{s.actions.map(([text, run]) => <button key={text} type="button" onClick={run} disabled={checking && run === onCheck}>{text}</button>)}</span>}
       </li>)}
     </ol>
+  </section>;
+}
+
+// Kết quả máy tự kiểm tra một ngày: từng loại việc (bấm để xem từng bill / phiếu).
+function DayCheckPanel({ check, date, onSearch }) {
+  if (!check || !check.issues.length) return null;
+  const when = iso => (iso ? clock(iso) : '--:--');
+  return <section className="fin-panel fin-check" id="fin-check">
+    <h2 className="fin-panel-head"><span>Kết quả máy tự kiểm tra</span><b className={check.problems ? 'bad' : 'ok'}>{check.problems ? `${check.problems} việc` : '✓ Ổn'}</b></h2>
+    <p className="fin-hint">Kiểm tra lúc {stamp(check.checkedAt)}. Bấm từng mục để xem chi tiết; xử lý xong bấm "Kiểm tra lại" ở Việc trong ngày.</p>
+    {check.issues.map(i => <Fold key={i.key} title={`${i.level === 'info' ? 'ℹ' : '⚠'} ${i.title}`} sub={`${i.count}${i.key === 'removed' ? ' món' : ''}${i.amount ? ` · ${money(i.amount)}` : ''}`}>
+      {i.rows.map((r, k) => <div key={k} className="fin-row">
+        <span>{i.key === 'notes' ? `${when(r.at)} · ${r.who || 'Nhân viên'}` : i.key === 'removed' ? `${r.name} ×${r.qty}` : `${when(r.at)} · ${r.table === null || r.table === undefined ? 'Bàn ?' : /^\d/.test(String(r.table)) ? `Bàn ${r.table}` : r.table}`}
+          <small>{i.key === 'notes' ? r.problems.join(' · ')
+            : i.key === 'no_photo' ? `${r.method === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt'} · lý do: ${r.reason}${r.by ? ` (${r.by})` : ''}`
+            : i.key === 'cancelled' ? [r.by && `huỷ bởi ${r.by}`, r.printed ? `${r.printed} món đã in bếp` : null].filter(Boolean).join(' · ')
+            : i.key === 'removed' ? `Bàn ${r.table ?? '?'} · thu ${when(r.at)}`
+            : r.method ? (r.method === 'transfer' ? 'Chuyển khoản' : 'Tiền mặt') : ''}</small></span>
+        <b>{money(r.amount)}</b>
+      </div>)}
+      {i.key === 'ck_no_photo' && <button type="button" className="fin-secondary" onClick={() => onSearch({ from: date, to: date, photo: 'missing' })}>📷 Chụp ảnh các bill này</button>}
+      {i.key === 'unrecorded' && <p className="fin-warn">Bill đã thu ở bàn nhưng sổ chưa ghi. Báo lại để kiểm tra, doanh thu ngày này đang thiếu số này.</p>}
+    </Fold>)}
   </section>;
 }
 
@@ -409,7 +434,7 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
   const [view, setView] = useState(null);
   const [attaching, setAttaching] = useState(null);
   const [notesTick, setNotesTick] = useState(0);
-  const [closeTick, setCloseTick] = useState(0);
+  const [checking, setChecking] = useState(false);
   const attachInput = useRef(null);
   // Back (Android) / vuốt lùi (iPhone): đóng ảnh đang xem.
   useBackClose(!!view, () => setView(null));
@@ -445,6 +470,12 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
   }
   useEffect(() => { setDetail(null); setOpen(null); load(); }, [date]);
   async function changed() { await load(); onChanged(); }
+  // Máy kiểm tra ngay ngày đang xem (bình thường 5 giờ sáng hôm sau máy tự làm).
+  async function runCheck() {
+    setChecking(true);
+    try { await post({ action: 'check_day', date }); await changed(); setTimeout(() => document.getElementById('fin-check')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80); }
+    catch (err) { alert(err.message); } finally { setChecking(false); }
+  }
 
   const cardName = id => { const a = accounts.find(x => x.id === id); return a ? cardLabel(a) : 'Chuyển khoản'; };
   const startDate = data?.startDate || detail?.startDate || '2026-10-23';
@@ -465,8 +496,8 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
       <button className="fin-icon" onClick={() => onDate(shiftDay(date, 1))} disabled={date >= today} aria-label="Ngày sau"><ChevronRight size={20} /></button>
     </div>
     {date !== today && <button className="fin-link fin-back-today" onClick={() => onDate(today)}>← Về hôm nay</button>}
-    {date === today && yesterdayDay && !yesterdayDay.close && yesterday >= startDate && <button className="fin-remind" onClick={() => onDate(yesterday)}>
-      ⚠ Hôm qua ({shortDay(yesterday)}) chưa chốt sổ — bấm để mở và chốt<ChevronRight size={16} /></button>}
+    {date === today && yesterdayDay?.check?.problems > 0 && <button className="fin-remind" onClick={() => onDate(yesterday)}>
+      ⚠ Máy kiểm tra hôm qua ({shortDay(yesterday)}) thấy {yesterdayDay.check.problems} việc cần xem — bấm để xem<ChevronRight size={16} /></button>}
 
     {error && <p className="fin-error">{error}</p>}
     {!detail && !error && <p className="fin-empty">Đang tải...</p>}
@@ -485,12 +516,14 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
     </div>}
 
     {detail && <>
-      <DayTasks date={date} detail={detail} spend={spend} onSearch={onSearch}
-        onOpenNotes={() => { setNotesTick(t => t + 1); scrollTo('fin-notes'); }} onOpenClose={() => { setCloseTick(t => t + 1); scrollTo('fin-close'); }} />
+      <DayTasks date={date} detail={detail} spend={spend} checking={checking} onSearch={onSearch} onCheck={runCheck}
+        onOpenNotes={() => { setNotesTick(t => t + 1); scrollTo('fin-notes'); }} onOpenCheck={() => scrollTo('fin-check')} />
+
+      <DayCheckPanel check={detail.check} date={date} onSearch={onSearch} />
 
       <DailySpend date={date} entries={detail.entries || []} history={data?.entries || []} categories={categories} onSaved={changed} />
 
-      <div id="fin-close"><CloseForm detail={detail} accounts={accounts} openTick={closeTick} onSaved={changed} /></div>
+      <div id="fin-close"><CloseForm detail={detail} accounts={accounts} onSaved={changed} /></div>
 
       <Fold title="Bill đã thu" sub={`${detail.bills.length} bill · ${money(detail.bills.reduce((s, b) => s + Number(b.amount || 0), 0))}`}>
         {detail.bills.length === 0 && <p className="fin-empty">Chưa có bill.</p>}
@@ -1092,7 +1125,7 @@ export default function FinancePage() {
   const yesterdayDay = data?.days?.find(d => d.date === shiftDay(today, -1));
   const todayTasks = data && month === today.slice(0, 7)
     ? (byDayCk[today]?.missingPhoto || 0) + (byDayCk[today]?.unchecked || 0) + (todayDay?.mismatchNotes || 0) + (todayDay?.suspiciousNotes || 0)
-      + (yesterdayDay && !yesterdayDay.close ? 1 : 0)
+      + (yesterdayDay?.check?.problems || 0)
     : 0;
 
   const dayTags = d => <>
@@ -1103,7 +1136,9 @@ export default function FinancePage() {
           {Object.entries(d.close.bankDiffs).filter(([, diff]) => diff !== 0).map(([id, diff]) =>
             <span key={id} className="fin-tag bad">{shortAccount(id)}: {diffText(diff)}</span>)}
         </>
-      : d.date < today && <span className="fin-tag muted">Chưa chốt sổ</span>}
+      : d.check
+        ? <span className={`fin-tag ${d.check.ok ? 'ok' : 'bad'}`}>{d.check.ok ? '✓ Máy đã kiểm tra' : `⚠ Máy thấy ${d.check.problems} việc`}</span>
+        : d.date < today && <span className="fin-tag muted">Chưa kiểm tra</span>}
     {byDayCk[d.date]?.missingPhoto > 0 && <span className="fin-tag bad">📷 {byDayCk[d.date].missingPhoto} CK chưa ảnh</span>}
     {d.mismatchNotes > 0 && <span className="fin-tag bad">⚠ {d.mismatchNotes} phiếu Sổ tay lệch tiền</span>}
     {d.suspiciousNotes > 0 && <span className="fin-tag bad">⚠ {d.suspiciousNotes} phiếu Sổ tay giá đáng ngờ</span>}

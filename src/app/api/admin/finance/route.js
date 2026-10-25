@@ -11,6 +11,8 @@
  * POST {action:'close'}       → chốt sổ ngày (tiền mặt đếm được, tiền thật từng tài khoản).
  * POST {action:'copy_fixed'}  → chép chi cố định của tháng trước sang tháng đang xem.
  * POST {action:'verify'}      → đánh dấu bill chuyển khoản đã / chưa đối chiếu.
+ * POST {action:'check_day', date} → máy kiểm tra ngay một ngày (bill thiếu, CK chưa ảnh, đóng bàn không ảnh,
+ *                                huỷ / bớt món, Sổ tay lệch) và lưu kết quả. Mỗi sáng việc này tự chạy cho hôm qua.
  * POST {action:'zalo_link_code'|'zalo_unlink'|'zalo_test'|'zalo_set_enabled'} → báo cáo Zalo hằng ngày.
  * POST {action:'daily_report'} + header x-finance-report-key → gửi báo cáo
  *      (workflow "Finance Daily Report" gọi lúc 8 giờ sáng, không cần đăng nhập).
@@ -24,6 +26,7 @@ import { sendOaText } from '@/lib/zaloOa';
 import { notesDayData, notesRangeData, notesReportMessages, packMessages } from '@/lib/notesReport.mjs';
 import { compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData } from '@/lib/dailyInsights.mjs';
 import { AUTO_CLOSE_BY } from '@/lib/attendanceRules.mjs';
+import { AUTO_CHECK_BY, AUTO_CHECK_HOUR, dayCheck } from '@/lib/dayCheck.mjs';
 import { LINK_CODE_MINUTES, REPORT_SECTIONS, readReportSettings, reportPlan, reportSections, reportStatus, saveReportSettings, validSendAt } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
@@ -226,10 +229,60 @@ async function loadMonth(db, month, today) {
   } catch (error) { console.error('[admin/finance] wages', error); }
   return {
     entries, categories,
-    summary: summarizeMonth({ month, revenue, paperBills, notes, entries, closes: closesResult.data || [], categories, wages, today }),
+    summary: summarizeMonth({ month, revenue, paperBills, notes, entries, closes: closesResult.data || [], checks: await readChecks(db, start, next), categories, wages, today }),
     accounts: (accountsResult.data || []).map(a => ({ id: a.id, name: [a.bank_name, a.account_name].filter(Boolean).join(' · ') || 'Tài khoản', last4: String(a.account_number || '').slice(-4) })),
     staff: (staffResult.data || []).map(s => s.full_name).filter(Boolean),
   };
+}
+
+// Kết quả máy tự kiểm tra các ngày from..to (chỉ phần tóm tắt). Chưa cài bảng → [].
+const readChecks = (db, from, next) => db.from('finance_day_checks').select('business_date, problems, checked_by, checked_at')
+  .gte('business_date', from).lt('business_date', next)
+  .then(r => { if (r.error) { if (missingTable(r.error)) return []; throw r.error; } return r.data || []; });
+const readCheck = (db, date) => db.from('finance_day_checks').select('*').eq('business_date', date).maybeSingle()
+  .then(r => { if (r.error) { if (missingTable(r.error)) return null; throw r.error; } return r.data?.result || null; });
+
+/**
+ * Máy kiểm tra một ngày và lưu kết quả: tự bổ sung bill bị sót trước, rồi xem bill đã thu (orders) mà sổ chưa
+ * có, bill CK chưa ảnh, đóng bàn không ảnh, bill huỷ / món bị bớt sau khi in bếp, phiếu Sổ tay lệch.
+ */
+async function runDayCheck(db, date, today, by = AUTO_CHECK_BY) {
+  const range = { start: new Date(vnDayStartIso(date)), end: new Date(vnDayStartIso(addDays(date, 1))) };
+  let repair = { recovered: [], unrecovered: [] };
+  try { repair = await repairMissingBills(db); } catch (error) { console.error('[admin/finance] check repair', error); }
+  const onDay = b => vnDate(b.paidAt) === date;
+  const [ledger, paper, paidOrders, loss, notes] = await Promise.all([
+    readAll(() => db.from('finance_revenue_ledger').select('*').eq('business_date', date).order('order_id')),
+    readPaper(db, date, addDays(date, 1)),
+    readAll(() => db.from('orders').select('id, table_id, paid_at, total_amount, payment_method, customer_phone').eq('status', 'paid')
+      .gte('paid_at', range.start.toISOString()).lt('paid_at', range.end.toISOString()).order('id')),
+    lossInputs(db, { from: date, to: date, range }).then(lossData).catch(error => { console.error('[admin/finance] check loss', error); return null; }),
+    notesBetween(db, range.start.toISOString(), range.end.toISOString()).then(rows => rows.map(noteView)),
+  ]);
+  // Bill đã thu mà sổ chưa có (trigger ghi sổ lỗi, lịch sử bàn đã hết hạn nên không tự bổ sung được).
+  const inBook = new Set(ledger.map(r => r.order_id));
+  const tables = new Map(((await db.from('tables').select('id, table_number')).data || []).map(t => [t.id, t.table_number]));
+  const unrecorded = [
+    ...repair.unrecovered.filter(onDay),
+    ...paidOrders.filter(o => !inBook.has(o.id) && o.customer_phone !== 'BAO_BEP' && !repair.unrecovered.some(u => u.orderId === o.id))
+      .map(o => ({ orderId: o.id, tableNumber: tables.get(o.table_id) ?? null, paidAt: o.paid_at, amount: Number(o.total_amount) || 0, paymentMethod: o.payment_method })),
+  ];
+  const result = dayCheck({ date, ledger, paper, unrecorded, recovered: repair.recovered.filter(onDay), loss, notes,
+    keepPhotosFrom: photoKeepFrom(today), checkedAt: new Date().toISOString(), by });
+  const { error } = await db.from('finance_day_checks').upsert({ business_date: date, result, problems: result.problems, checked_by: by, checked_at: result.checkedAt }, { onConflict: 'business_date' });
+  if (error && !missingTable(error)) throw error;
+  return result;
+}
+
+// Mỗi sáng: kiểm tra ngày hôm qua nếu chưa có kết quả sau khi ngày đó đã xong (chủ bấm "Kiểm tra ngay" giữa ngày
+// thì sáng hôm sau máy vẫn kiểm tra lại cho đủ cả ngày).
+async function ensureDayCheck(db, date, today) {
+  if (date < FINANCE_START_DATE) return null;
+  const done = await db.from('finance_day_checks').select('checked_at').eq('business_date', date).maybeSingle();
+  if (done.error) { if (missingTable(done.error)) return null; throw done.error; }
+  const dayOver = new Date(Date.parse(vnDayStartIso(addDays(date, 1))) + AUTO_CHECK_HOUR * 3600000).getTime();
+  if (done.data && Date.parse(done.data.checked_at) >= dayOver) return null;
+  return runDayCheck(db, date, today);
 }
 
 // Workflow báo cáo trên máy chủ ký bằng khoá service role (không cần thêm bí mật mới).
@@ -395,7 +448,8 @@ async function buildDailyReport(db, { date, today, title, sections, forZalo = tr
   const upTo = summary.days.filter(d => d.date <= date);
   const monthTotals = { revenue: upTo.reduce((s, d) => s + d.revenue, 0), profit: upTo.reduce((s, d) => s + d.profit, 0) };
   const alerts = await transferAlerts(db, monthBounds(date.slice(0, 7)).start, date, today).catch(() => ({}));
-  const text = dailyReportText({ day, monthTotals, accounts, alerts, title, forZalo });
+  const check = await readCheck(db, date).catch(error => { console.error('[admin/finance] read check', error); return null; });
+  const text = dailyReportText({ day, monthTotals, accounts, alerts, check, today, title, forZalo });
   // Các tin sau: thất thoát / nhân viên / so sánh, rồi Sổ tay của ngày (lỗi ở đây không chặn tin tổng kết).
   const range = { start: new Date(vnDayStartIso(date)), end: new Date(vnDayStartIso(addDays(date, 1))) };
   let insights = [];
@@ -415,7 +469,7 @@ async function buildDailyReport(db, { date, today, title, sections, forZalo = tr
   } catch (error) { console.error('[admin/finance] notes report', error); }
   return { ok: true, text, details: [...insightMessages, ...notesMessages],
     // Dữ liệu cho trang /thongke vẽ thẻ số, biểu đồ.
-    view: { day, monthTotals, accounts, warnings: dailyWarnings({ day, accounts, alerts }), insights, notes: notesMessages, notesData } };
+    view: { day, monthTotals, accounts, warnings: dailyWarnings({ day, accounts, alerts, today }), insights, notes: notesMessages, notesData, check } };
 }
 
 const REPORT_PAGE = 'https://ocbaokhang.online/thongke';
@@ -430,6 +484,8 @@ async function sendDailyReport(db, { date, today, scheduled }) {
   if (!settings.ownerIds.length) return { ok: false, error: 'Chưa liên kết Zalo nhận báo cáo.' };
   if (scheduled && settings.enabled === false) return { ok: true, skipped: 'đã tắt gửi Zalo' };
   if (scheduled && settings.lastSentDate === date) return { ok: true, skipped: true };
+  // Báo cáo kèm kết quả máy tự kiểm tra của ngày đó (kiểm tra trước nếu chưa có).
+  await ensureDayCheck(db, date, today).catch(error => console.error('[admin/finance] report check', error));
   const report = await buildDailyReport(db, { date, today, title: scheduled ? 'Báo cáo' : 'Gửi thử', sections: reportSections(settings) });
   if (!report.ok) return report;
   const text = `${report.text}\n\nXem trên web: ${REPORT_PAGE}?date=${date}`;
@@ -594,7 +650,7 @@ export async function GET(request) {
         for (const d of list) {
           for (const k of ['revenue', 'bills', 'paperBills', 'cash', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit']) t[k] += Number(d[k]) || 0;
           for (const [id, v] of Object.entries(d.byAccount || {})) t.byAccount[id] = (t.byAccount[id] || 0) + v;
-          if (d.close) t.closedDays += 1;
+          if (d.close || d.check) t.closedDays += 1;
         }
         t.cost = t.purchases + t.drinks + t.salary + t.fixedShare + t.customTotal;
         return t;
@@ -621,7 +677,7 @@ export async function GET(request) {
         period, date, today, startDate: FINANCE_START_DATE, ...p,
         days: datesFrom(p.from, p.to).map(d => {
           const x = allDays.get(d);
-          return x ? { date: d, revenue: x.revenue, cost: x.purchases + x.drinks + x.salary + x.fixedShare + x.customTotal, profit: x.profit, bills: x.bills + x.paperBills, closed: !!x.close } : { date: d, revenue: null };
+          return x ? { date: d, revenue: x.revenue, cost: x.purchases + x.drinks + x.salary + x.fixedShare + x.customTotal, profit: x.profit, bills: x.bills + x.paperBills, closed: !!(x.close || x.check) } : { date: d, revenue: null };
         }),
         totals: { revenue: t.revenue, bills: t.bills, paperBills: t.paperBills, cash: t.cash, cost: t.cost, profit: t.profit, days: current.length, closedDays: t.closedDays,
           transfers: Object.entries(t.byAccount).map(([id, amount]) => ({ name: accountName(id), amount })),
@@ -641,7 +697,7 @@ export async function GET(request) {
       const sections = Object.fromEntries(REPORT_SECTIONS.map(k => [k, true]));
       const report = await buildDailyReport(db, { date: reportDate, today, title: 'Báo cáo', sections, forZalo: false });
       if (!report.ok) return NextResponse.json({ date: reportDate, today, startDate: FINANCE_START_DATE, error: report.error }, { headers });
-      const { day, monthTotals, accounts, warnings, insights, notes, notesData } = report.view;
+      const { day, monthTotals, accounts, warnings, insights, notes, notesData, check } = report.view;
       const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
       // Doanh thu 7 ngày tới ngày đang xem (ngày trước khi sổ bắt đầu = null).
       const trendFrom = addDays(reportDate, -6);
@@ -665,7 +721,7 @@ export async function GET(request) {
           costs: [['Đi chợ', day.purchases], ['Chi trong ngày', day.drinks], ['Lương', day.salary], ['Chi cố định', day.fixedShare], ['Khác', day.customTotal]]
             .filter(([, amount]) => amount > 0).map(([label, amount]) => ({ label, amount })),
           cost: day.purchases + day.drinks + day.salary + day.fixedShare + day.customTotal,
-          profit: day.profit, month: monthTotals, closed: !!day.close, warnings,
+          profit: day.profit, month: monthTotals, closed: !!day.close, warnings, check,
         },
         compare: insights.find(b => b.key === 'compare')?.data || null,
         trend,
@@ -680,7 +736,7 @@ export async function GET(request) {
     if (date) {
       if (!DATE.test(date)) return NextResponse.json({ error: 'Ngày không hợp lệ.' }, { status: 400, headers });
       const nextDay = new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
-      const [bills, notes, entries, close, paper] = await Promise.all([
+      const [bills, notes, entries, close, paper, check] = await Promise.all([
         readAll(() => db.from('finance_revenue_ledger')
           .select('*')
           .eq('business_date', date).order('paid_at', { ascending: true })),
@@ -688,6 +744,7 @@ export async function GET(request) {
         db.from('finance_entries').select('*').eq('entry_date', date).order('created_at').then(r => { if (r.error) throw r.error; return r.data || []; }),
         readClose(db, date),
         readPaper(db, date, nextDay),
+        readCheck(db, date),
       ]);
       const urls = await signReceiptImages(db, [...bills.flatMap(b => [b.transfer_image_path, b.cash_image_path]), ...paper.flatMap(r => [r.image_path, r.transfer_image_path])]);
       const day = { cash: 0, byAccount: {} };
@@ -703,7 +760,7 @@ export async function GET(request) {
           accountId: r.account_id, tableLabel: r.table_label, note: r.note, createdByName: r.created_by_name,
           imageUrl: urls[r.image_path] || null, transferImageUrl: urls[r.transfer_image_path] || null, imagesPurged: !!r.images_purged_at, verified: !!r.verified_at })),
         notes: notes.map(noteView).filter(n => n.cost > 0), entries,
-        close, closeDiff: closeDifferences(day, close), dayCash: day.cash, dayByAccount: day.byAccount }, { headers });
+        close, closeDiff: closeDifferences(day, close), dayCash: day.cash, dayByAccount: day.byAccount, check }, { headers });
     }
 
     const month = params.get('month') || today.slice(0, 7);
@@ -752,6 +809,10 @@ export async function POST(request) {
       // Workflow gọi mỗi 30 phút; chỉ gửi khi tới giờ chủ quán chọn (mỗi ngày 1 lần).
       const db = statusDatabase();
       const today = vnDate(Date.now());
+      // Sau 5 giờ sáng: máy tự kiểm tra ngày hôm qua (một lần), không cần chủ chốt sổ.
+      if (new Date(Date.now() + 7 * 3600000).getUTCHours() >= AUTO_CHECK_HOUR) {
+        await ensureDayCheck(db, addDays(today, -1), today).catch(error => console.error('[admin/finance] nightly check', error));
+      }
       const plan = reportPlan((await readReportSettings(db))?.sendAt);
       if (!DATE.test(body.date || '') && !plan.due) return NextResponse.json({ ok: true, skipped: `chưa tới giờ gửi ${plan.sendAt}` }, { headers });
       const date = DATE.test(body.date || '') ? body.date : plan.date;
@@ -779,6 +840,14 @@ export async function POST(request) {
       const group = { id: existing?.id || randomUUID(), name, keywords: keywords.length ? keywords : [name] };
       await saveItemGroups(db, existing ? groups.map(g => g.id === group.id ? group : g) : [...groups, group]);
       return NextResponse.json({ ok: true, group }, { headers });
+    }
+
+    if (body.action === 'check_day') {
+      // Chủ bấm "Kiểm tra ngay" (vd. giữa ngày, hoặc sau khi đã bổ sung ảnh): máy kiểm tra lại ngày đó.
+      const today = vnDate(Date.now());
+      if (!DATE.test(body.date || '') || body.date > today || body.date < FINANCE_START_DATE) return NextResponse.json({ error: 'Ngày không hợp lệ.' }, { status: 400, headers });
+      const check = await runDayCheck(db, body.date, today, session.user.full_name ? `${AUTO_CHECK_BY} (${session.user.full_name} bấm)` : AUTO_CHECK_BY);
+      return NextResponse.json({ ok: true, check }, { headers });
     }
 
     if (body.action === 'verify') {

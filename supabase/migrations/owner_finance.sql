@@ -239,4 +239,17 @@ BEGIN
   END IF;
 END $$;
 
+-- Kết quả máy tự kiểm tra từng ngày (bill thiếu, CK chưa ảnh, đóng bàn không ảnh, huỷ / bớt món,
+-- phiếu Sổ tay lệch) — chạy mỗi sáng cho ngày hôm qua, thay cho việc chủ quán tự chốt sổ.
+CREATE TABLE IF NOT EXISTS public.finance_day_checks (
+  business_date date PRIMARY KEY,
+  result jsonb NOT NULL DEFAULT '{}'::jsonb,
+  problems integer NOT NULL DEFAULT 0,
+  checked_by text,
+  checked_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.finance_day_checks ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.finance_day_checks FROM anon, authenticated;
+GRANT ALL ON public.finance_day_checks TO service_role;
+
 COMMIT;

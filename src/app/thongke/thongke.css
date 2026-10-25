@@ -256,3 +256,8 @@ button.tk-tile { cursor: pointer; }
 .tk-edits { list-style: none; margin: 0; padding: 0; font-size: 12px; color: var(--tk-muted); display: flex; flex-direction: column; gap: 2px; }
 .tk-table > li.tk-more { justify-content: center; }
 .tk-more button { border: 0; background: var(--tk-soft); border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 700; color: var(--tk-c2); cursor: pointer; }
+
+/* Không có gì bất thường + giờ máy tự kiểm tra */
+.tk-ok > span { display: flex; flex-direction: column; gap: 2px; }
+.tk-ok-sub { font-size: 12px; font-weight: 500; color: var(--tk-muted); }
+.tk-muted-text { color: var(--tk-muted); }
