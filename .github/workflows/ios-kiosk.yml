@@ -40,12 +40,18 @@ jobs:
             echo "convert=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Python for the model conversion
+        if: steps.model.outputs.convert == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Convert SFace (ONNX → Core ML) and compare with onnxruntime
         if: steps.model.outputs.convert == 'true'
         run: |
           python3 -m venv /tmp/venv
           . /tmp/venv/bin/activate
-          pip install -q numpy onnx onnxruntime onnx2torch torch coremltools pillow
+          pip install -q numpy onnx onnxruntime onnx2torch 'torch==2.7.1' 'coremltools==9.0' pillow
           curl -sSfL -o /tmp/sface.onnx "$SFACE_URL"
           echo "$SFACE_SHA256  /tmp/sface.onnx" | shasum -a 256 -c
           python ios/tools/convert_sface.py /tmp/sface.onnx ios/ChamCong/Resources/SFace.mlmodel ios/FaceKit/Tests/FaceKitTests/Fixtures

@@ -9,9 +9,7 @@ crop gives the same embedding as OpenCV's own FaceRecognizerSF.alignCrop + featu
 writes <fixtures dir>/reference.json and prints the cosine between every pair of photos.
 """
 import json, os, sys
-import cv2
 import numpy as np
-import onnxruntime as ort
 
 TEMPLATE = np.array([[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366], [41.5493, 92.3655], [70.7299, 92.2041]])
 STRIDE, SAMPLES = 997, 37
@@ -55,6 +53,8 @@ def unit(v):
 
 
 def main(sface, yunet, folder):
+    import cv2  # only here: convert_sface.py imports the maths above without OpenCV
+    import onnxruntime as ort
     det = cv2.FaceDetectorYN.create(yunet, '', (320, 320), 0.8, 0.3, 5000)
     rec = cv2.FaceRecognizerSF.create(sface, '')
     quiet = ort.SessionOptions()
