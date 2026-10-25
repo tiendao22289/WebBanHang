@@ -285,3 +285,22 @@
 .fin-bill-more { grid-column: 1 / -1; display: grid; gap: 6px; padding-top: 6px; border-top: 1px dashed #e5e7eb; }
 .fin-bill-more p { margin: 0; font-size: 12px; color: #4b5563; }
 .fin-bill-more .fin-items { margin: 0; }
+
+/* Tra cứu — bộ lọc gọn: chọn nhanh ngày, 1 hàng tìm, "Lọc thêm" thu gọn. */
+.fin-search { gap: 8px; }
+.fin-seg { display: flex; gap: 2px; background: #f1f5f9; border-radius: 10px; padding: 3px; }
+.fin-seg button { flex: 1 1 auto; min-height: 36px; border: 0; border-radius: 8px; background: transparent; color: #475569; font-size: 12.5px; font-weight: 600; padding: 0 4px; white-space: nowrap; }
+.fin-seg button.active { background: white; color: #1d4ed8; box-shadow: 0 1px 3px rgba(15, 23, 42, .14); }
+.fin-search-dates { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 6px; }
+.fin-search-dates span { color: #94a3b8; font-size: 14px; }
+.fin-search-dates input, .fin-search-row input { width: 100%; height: 42px; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 16px; color: #111827; background: white; min-width: 0; -webkit-appearance: none; appearance: none; }
+.fin-search-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) auto; gap: 6px; }
+.fin-search-go { height: 42px; padding: 0 14px; border: 0; border-radius: 8px; background: #2563eb; color: white; font-size: 15px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; }
+.fin-search-go:disabled { opacity: .7; }
+.fin-search .fin-search-types { display: flex; gap: 5px; }
+.fin-search .fin-search-types button { flex: 1 1 auto; min-height: 36px; padding: 0 6px; white-space: nowrap; }
+.fin-more { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; border: 1px dashed #cbd5e1; border-radius: 8px; background: white; color: #475569; font-size: 13px; font-weight: 600; padding: 0 10px; }
+.fin-more.on { border-style: solid; border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
+.fin-more svg { flex-shrink: 0; }
+.fin-more span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fin-search .fin-search-tables button { min-height: 34px; font-size: 13px; padding: 0 11px; }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Banknote, Camera, ChevronLeft, ChevronRight, CreditCard, PiggyBank, RefreshCw, Trash2, X } from 'lucide-react';
+import { Banknote, Camera, ChevronDown, ChevronLeft, ChevronRight, CreditCard, PiggyBank, RefreshCw, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import { useBackClose } from '@/lib/useBackClose';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
@@ -413,6 +413,15 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
 // Tra cứu bill trong khoảng ngày để đối chiếu ảnh chuyển khoản / ảnh bill giấy.
 const shortDate = date => `${dayLabel(date)}`;
 const addDaysLocal = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+// Khoảng ngày chọn nhanh ở Tra cứu; 'custom' = tự chọn 2 ô ngày.
+const RANGES = [['today', 'Hôm nay'], ['yesterday', 'Hôm qua'], ['7d', '7 ngày'], ['month', 'Tháng này'], ['custom', 'Tự chọn']];
+function rangeDates(key, today) {
+  const monthStart = today.slice(0, 8) + '01';
+  if (key === 'today') return { from: today, to: today };
+  if (key === 'yesterday') { const d = addDaysLocal(today, -1); return { from: d, to: d }; }
+  if (key === 'month') return { from: monthStart < FIRST_MONTH + '-01' ? FIRST_MONTH + '-01' : monthStart, to: today };
+  return { from: addDaysLocal(today, -6), to: today };
+}
 const cardLabel = a => `${a.name.split(' · ')[0]}${a.last4 ? ` ·${a.last4}` : ''}`;
 const stamp = iso => { const d = new Date(Date.parse(iso) + 7 * 3600000).toISOString(); return `${clock(iso)} ${d.slice(8, 10)}/${d.slice(5, 7)}`; };
 
@@ -436,6 +445,8 @@ function SearchView({ accounts, preset }) {
   const [open, setOpen] = useState(null);
   const [view, setView] = useState(null);
   const [saving, setSaving] = useState(null);
+  const [more, setMore] = useState(false);
+  const [customRange, setCustomRange] = useState(false);
   useBackClose(!!view, () => setView(null));
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Chuyển khoản';
   // Tên thẻ ngắn cho dòng bill gọn: "MB Bank ·6781".
@@ -504,26 +515,49 @@ function SearchView({ accounts, preset }) {
   }, new Map()).values()];
   const alerts = result?.alerts;
   const normTable = table.trim().replace(/^b(àn)?\s*/i, '').toLowerCase();
+  const rangeKey = customRange ? 'custom'
+    : RANGES.slice(0, 4).map(([k]) => k).find(k => { const r = rangeDates(k, today); return r.from === from && r.to === to; }) || 'custom';
+  function pickRange(key) {
+    setCustomRange(key === 'custom');
+    if (key !== 'custom') search(null, rangeDates(key, today));
+  }
+  // Bộ lọc đang bật trong "Lọc thêm" (để không quên khi đã thu gọn).
+  const moreCount = (account ? 1 : 0) + (photo !== 'all' ? 1 : 0) + (check !== 'all' ? 1 : 0);
   return <section className="fin-section">
+    {/* Gọn: chọn nhanh khoảng ngày · 1 hàng tìm bàn / số tiền · loại bill · "Lọc thêm" (thẻ, ảnh, đối chiếu, bàn). */}
     <form className="fin-panel fin-search" onSubmit={search}>
-      <div className="fin-search-grid">
-        <label>Bàn<input value={table} onChange={e => set({ table: e.target.value })} placeholder="VD: 43" inputMode="text" enterKeyHint="search" /></label>
-        <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''} onChange={e => set({ amount: digits(e.target.value) })} placeholder="Tất cả" enterKeyHint="search" /></label>
-        <label>Từ ngày<input type="date" value={from} min={FIRST_MONTH + '-01'} max={to} onChange={e => e.target.value && set({ from: e.target.value })} /></label>
-        <label>Đến ngày<input type="date" value={to} min={from} max={today} onChange={e => e.target.value && set({ to: e.target.value })} /></label>
+      <div className="fin-seg" role="radiogroup" aria-label="Khoảng ngày">
+        {RANGES.map(([k, t]) => <button key={k} type="button" role="radio" aria-checked={rangeKey === k}
+          className={rangeKey === k ? 'active' : ''} onClick={() => pickRange(k)}>{t}</button>)}
+      </div>
+      {rangeKey === 'custom' && <div className="fin-search-dates">
+        <input type="date" aria-label="Từ ngày" value={from} min={FIRST_MONTH + '-01'} max={to} onChange={e => e.target.value && set({ from: e.target.value })} />
+        <span>→</span>
+        <input type="date" aria-label="Đến ngày" value={to} min={from} max={today} onChange={e => e.target.value && set({ to: e.target.value })} />
+      </div>}
+      <div className="fin-search-row">
+        <input value={table} onChange={e => set({ table: e.target.value })} placeholder="Số bàn" aria-label="Bàn" inputMode="text" enterKeyHint="search" />
+        <input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''} onChange={e => set({ amount: digits(e.target.value) })}
+          placeholder="Số tiền" aria-label="Số tiền" enterKeyHint="search" />
+        <button className="fin-search-go" disabled={busy}><Search size={17} />{busy ? '...' : 'Tìm'}</button>
       </div>
       <div className="fin-search-types" role="radiogroup" aria-label="Loại bill">
         {[['all', 'Tất cả'], ['transfer', 'Chuyển khoản'], ['cash', 'Tiền mặt'], ['paper', 'Bill giấy']].map(([k, t]) =>
           <button key={k} type="button" role="radio" aria-checked={type === k} className={type === k ? 'active' : ''} onClick={() => search(null, { type: k })}>{t}</button>)}
       </div>
-      {result?.tables?.length > 0 && <Chips label="Bàn" value={result.tables.find(t => t.name.toLowerCase() === normTable)?.name || (normTable ? null : '')}
-        options={[['', 'Tất cả bàn'], ...result.tables.map(t => [t.name, <>{/^\d/.test(t.name) ? `Bàn ${t.name}` : t.name}<small>{t.count}</small></>])]}
-        onPick={name => search(null, { table: name })} />}
-      {accounts.length > 0 && <Chips label="Thẻ" value={account} options={[['', 'Mọi thẻ'], ...accounts.map(a => [a.id, cardLabel(a)])]}
-        onPick={id => search(null, { account: id })} />}
-      <Chips label="Ảnh" value={photo} options={[['all', 'Tất cả'], ['has', 'Có ảnh'], ['missing', 'Chưa có ảnh CK']]} onPick={k => search(null, { photo: k })} />
-      <Chips label="Đối chiếu" value={check} options={[['all', 'Tất cả'], ['unchecked', 'Chưa đối chiếu'], ['checked', 'Đã đối chiếu']]} onPick={k => search(null, { check: k })} />
-      <button className="fin-primary" disabled={busy}>{busy ? 'Đang tìm...' : 'Tìm'}</button>
+      <button type="button" className={`fin-more${moreCount ? ' on' : ''}`} onClick={() => setMore(m => !m)} aria-expanded={more}>
+        <SlidersHorizontal size={15} /><span>Lọc thêm{moreCount ? ` · đang bật ${moreCount}` : ': thẻ, ảnh, đối chiếu, bàn'}</span>
+        <ChevronDown size={15} style={{ transform: more ? 'rotate(180deg)' : 'none' }} />
+      </button>
+      {more && <>
+        {accounts.length > 0 && <Chips label="Thẻ" value={account} options={[['', 'Mọi thẻ'], ...accounts.map(a => [a.id, cardLabel(a)])]}
+          onPick={id => search(null, { account: id })} />}
+        <Chips label="Ảnh" value={photo} options={[['all', 'Tất cả'], ['has', 'Có ảnh'], ['missing', 'Chưa có ảnh CK']]} onPick={k => search(null, { photo: k })} />
+        <Chips label="Đối chiếu" value={check} options={[['all', 'Tất cả'], ['unchecked', 'Chưa đối chiếu'], ['checked', 'Đã đối chiếu']]} onPick={k => search(null, { check: k })} />
+        {result?.tables?.length > 0 && <Chips label="Bàn có bill" value={result.tables.find(t => t.name.toLowerCase() === normTable)?.name || (normTable ? null : '')}
+          options={[['', 'Tất cả bàn'], ...result.tables.map(t => [t.name, <>{/^\d/.test(t.name) ? `Bàn ${t.name}` : t.name}<small>{t.count}</small></>])]}
+          onPick={name => search(null, { table: name })} />}
+      </>}
     </form>
 
     {error && <p className="fin-error">{error}</p>}
