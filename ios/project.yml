@@ -1,0 +1,57 @@
+# XcodeGen spec for the counter-phone app "Chấm công" (CI: .github/workflows/ios-kiosk.yml).
+name: ChamCong
+options:
+  bundleIdPrefix: online.ocbaokhang
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+packages:
+  FaceKit:
+    path: FaceKit
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+targets:
+  ChamCong:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: ChamCong/Sources
+      - path: ChamCong/Resources
+    dependencies:
+      - package: FaceKit
+    scheme: {}
+    info:
+      path: ChamCong/Info.plist
+      properties:
+        CFBundleDisplayName: Chấm công
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        KioskURL: https://ocbaokhang.online/chamcong
+        NSCameraUsageDescription: Máy quầy dùng camera để so mặt người chấm công với mặt mẫu, không lưu ảnh.
+        UIRequiresFullScreen: true
+        UIStatusBarHidden: true
+        UIViewControllerBasedStatusBarAppearance: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: online.ocbaokhang.chamcong
+        PRODUCT_NAME: ChamCong
+        MARKETING_VERSION: 1.0.0
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ARCHS: arm64
+        ENABLE_BITCODE: NO
+        SUPPORTS_MACCATALYST: NO
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        COREML_CODEGEN_LANGUAGE: None
