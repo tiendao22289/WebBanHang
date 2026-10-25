@@ -117,9 +117,11 @@ function datesBetween(from, toInclusive) {
  * revenue: dòng finance_revenue_ledger; notes: staff_notes; entries: finance_entries;
  * categories: finance_categories (để biết tab tự tạo nhập theo ngày hay theo tháng);
  * paperBills: finance_manual_receipts (bill giấy nhập tay, cộng vào doanh thu).
+ * wages: payrollCost() — lương mỗi ngày theo chấm công (byDay) + thưởng − phạt cả tháng (monthExtra).
+ *   Khoản lương nhập tay cũ (finance_entries kind 'salary') không tính nữa.
  * Chỉ tính các ngày từ FINANCE_START_DATE đến hết hôm nay (giờ VN).
  */
-export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [], entries = [], closes = [], categories = [], today, startDate = FINANCE_START_DATE }) {
+export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [], entries = [], closes = [], categories = [], wages = null, today, startDate = FINANCE_START_DATE }) {
   const { start, next, daysInMonth } = monthBounds(month);
   const lastOfMonth = new Date(Date.parse(`${next}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
   const from = start > startDate ? start : startDate;
@@ -141,7 +143,7 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
 
   const days = dates.map(date => ({
     date, revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {},
-    purchases: 0, purchaseNotes: 0, suspiciousNotes: 0, mismatchNotes: 0, drinks: 0, salary: 0, fixedShare: fixedPerDay,
+    purchases: 0, purchaseNotes: 0, suspiciousNotes: 0, mismatchNotes: 0, drinks: 0, salary: Number(wages?.byDay?.[date]) || 0, fixedShare: fixedPerDay,
     custom: { ...customDailyShare }, customTotal: 0, profit: 0, close: null,
   }));
   const byDate = new Map(days.map(d => [d.date, d]));
@@ -175,7 +177,6 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     const day = byDate.get(entry.entry_date);
     if (!day) continue;
     if (entry.kind === 'drink') day.drinks += Number(entry.amount) || 0;
-    if (entry.kind === 'salary') day.salary += Number(entry.amount) || 0;
     if (entry.kind === 'custom' && !monthlyTabs.has(entry.category)) {
       day.custom[entry.category] = (day.custom[entry.category] || 0) + (Number(entry.amount) || 0);
     }
@@ -193,7 +194,11 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     for (const [acc, amount] of Object.entries(day.byAccount)) totals.byAccount[acc] = (totals.byAccount[acc] || 0) + amount;
     for (const [id, amount] of Object.entries(day.custom)) totals.custom[id] = (totals.custom[id] || 0) + amount;
   }
-  return { month, from, to, daysInMonth, fixedMonthTotal, fixedEntries, customMonthTotals, days, totals };
+  // Thưởng − phạt lương tính theo tháng (trang Lương), không chia vào ngày nào.
+  totals.salaryExtra = Number(wages?.monthExtra) || 0;
+  totals.salary += totals.salaryExtra;
+  totals.profit -= totals.salaryExtra;
+  return { month, from, to, daysInMonth, fixedMonthTotal, fixedEntries, customMonthTotals, days, totals, wagesReady: !!wages };
 }
 
 const vnd = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;

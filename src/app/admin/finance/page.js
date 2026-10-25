@@ -62,8 +62,8 @@ function NewCategory({ scope, onDone, onCancel }) {
       onDone(category);
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
-  const title = scope === 'tab' ? 'Tên tab mới' : scope === 'salary' ? 'Tên loại lương mới' : 'Tên mục chi cố định mới';
-  const example = scope === 'tab' ? 'VD: Gas, Sửa chữa, Quảng cáo' : scope === 'salary' ? 'VD: Thưởng, Tạm ứng, Phụ cấp' : 'VD: Tiền rác, Thuế, Wifi';
+  const title = scope === 'tab' ? 'Tên tab mới' : 'Tên mục chi cố định mới';
+  const example = scope === 'tab' ? 'VD: Gas, Sửa chữa, Quảng cáo' : 'VD: Tiền rác, Thuế, Wifi';
   return <div className="fin-new">
     <label>{title}<input value={name} onChange={e => setName(e.target.value)} placeholder={example} maxLength={40} autoFocus
       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); create(); } }} /></label>
@@ -89,14 +89,13 @@ function AddEntryForm({ data, month, onSaved }) {
   const categories = [...loaded, ...created.filter(c => !loaded.some(x => x.id === c.id))];
   const active = scope => categories.filter(c => c.scope === scope && !c.archived);
   const tabs = active('tab');
-  const [kind, setKind] = useState('drink'); // 'drink' | 'salary' | 'fixed' | 'tab:<id>'
+  const [kind, setKind] = useState('drink'); // 'drink' | 'fixed' | 'tab:<id>' — lương tự tính theo chấm công
   const [date, setDate] = useState(vnToday());
   const [label, setLabel] = useState('');
   const [fixedCategory, setFixedCategory] = useState('rent');
-  const [salaryCategory, setSalaryCategory] = useState('');
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
-  const [adding, setAdding] = useState(null); // 'tab' | 'salary' | 'fixed'
+  const [adding, setAdding] = useState(null); // 'tab' | 'fixed'
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
@@ -118,7 +117,7 @@ function AddEntryForm({ data, month, onSaved }) {
     try {
       const { entry } = await post({
         action: 'add', kind: tab ? 'custom' : kind, entry_date: date, month, amount: Number(digits(amount)), note,
-        category: tab ? tab.id : kind === 'fixed' ? fixedCategory : kind === 'salary' ? (salaryCategory || undefined) : undefined,
+        category: tab ? tab.id : kind === 'fixed' ? fixedCategory : undefined,
         label: kind === 'drink' ? (label || 'Nước ngọt / bia') : label,
       });
       setAmount(''); setNote(''); if (kind !== 'drink') setLabel('');
@@ -133,12 +132,11 @@ function AddEntryForm({ data, month, onSaved }) {
   }
 
   const ownFixed = active('fixed');
-  const ownSalary = active('salary');
-  const selectedOwn = kind === 'fixed' ? ownFixed.find(c => c.id === fixedCategory) : kind === 'salary' ? ownSalary.find(c => c.id === salaryCategory) : null;
+  const selectedOwn = kind === 'fixed' ? ownFixed.find(c => c.id === fixedCategory) : null;
 
   return <form className="fin-form" onSubmit={save}>
     <div className="fin-tabs" role="tablist">
-      {['drink', 'salary', 'fixed'].map(k => <button key={k} type="button" role="tab" aria-selected={kind === k}
+      {['drink', 'fixed'].map(k => <button key={k} type="button" role="tab" aria-selected={kind === k}
         className={kind === k ? 'active' : ''} onClick={() => choose(k)}>{KIND_LABEL[k]}</button>)}
       {tabs.map(t => <button key={t.id} type="button" role="tab" aria-selected={kind === `tab:${t.id}`}
         className={kind === `tab:${t.id}` ? 'active' : ''} onClick={() => choose(`tab:${t.id}`)}>{t.name}</button>)}
@@ -154,15 +152,6 @@ function AddEntryForm({ data, month, onSaved }) {
         {ownFixed.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         <option value={NEW}>+ Thêm mục mới...</option>
       </select></label>}
-      {kind === 'salary' && <label className="fin-wide">Loại<select value={salaryCategory} onChange={e => e.target.value === NEW ? setAdding('salary') : setSalaryCategory(e.target.value)}>
-        <option value="">Lương</option>
-        {ownSalary.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        <option value={NEW}>+ Thêm loại lương...</option>
-      </select></label>}
-      {kind === 'salary' && <label className="fin-wide">Nhân viên
-        <input list="fin-staff" value={label} onChange={e => setLabel(e.target.value)} placeholder="Tên nhân viên" required />
-        <datalist id="fin-staff">{(data?.staff || []).map(name => <option key={name} value={name} />)}</datalist>
-      </label>}
       {(kind === 'drink' || tab) && <label className="fin-wide">Nội dung<input value={label} onChange={e => setLabel(e.target.value)} placeholder={tab ? tab.name : 'Nước ngọt / bia'} /></label>}
       {!monthly && <label>Ngày<input type="date" value={date} min={data?.startDate} max={vnToday()} onChange={e => setDate(e.target.value)} required /></label>}
       <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''}
@@ -170,20 +159,17 @@ function AddEntryForm({ data, month, onSaved }) {
       <label className="fin-wide">Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
     </div>
 
-    {(adding === 'fixed' || adding === 'salary') && <NewCategory scope={adding} onCancel={() => setAdding(null)}
-      onDone={category => {
-        const scope = adding;
-        setCreated(prev => [...prev, category]); setAdding(null); onSaved();
-        if (scope === 'fixed') setFixedCategory(category.id); else setSalaryCategory(category.id);
-      }} />}
+    {adding === 'fixed' && <NewCategory scope="fixed" onCancel={() => setAdding(null)}
+      onDone={category => { setCreated(prev => [...prev, category]); setAdding(null); onSaved(); setFixedCategory(category.id); }} />}
 
     {monthly && <p className="fin-hint">Ghi cho cả tháng {month.slice(5)}/{month.slice(0, 4)}, tự chia đều cho từng ngày.</p>}
+    <p className="fin-hint">Lương không nhập ở đây: Sổ thu chi tự tính theo chấm công ở trang Lương.</p>
     {error && <p className="fin-error">{error}</p>}
     {saved && <p className="fin-saved" role="status">{saved}</p>}
     <button className="fin-primary" disabled={busy}>{busy ? 'Đang lưu...' : `Thêm ${kindName.toLowerCase()}`}</button>
     {(tab || selectedOwn) && <button type="button" className="fin-link" onClick={() => tab
       ? archive(tab, () => choose('drink'))
-      : archive(selectedOwn, () => kind === 'fixed' ? setFixedCategory('rent') : setSalaryCategory(''))}>
+      : archive(selectedOwn, () => setFixedCategory('rent'))}>
       Ẩn {tab ? `tab "${tab.name}"` : `mục "${selectedOwn.name}"`}
     </button>}
   </form>;
@@ -337,6 +323,8 @@ function DayDetail({ date, summary, accounts, categories, onClose, onChanged }) 
   }
 
   const cardName = id => { const a = accounts.find(x => x.id === id); return a ? cardLabel(a) : 'Chuyển khoản'; };
+  // Lương nhập tay kiểu cũ không còn tính (lương lấy theo chấm công).
+  const typed = (detail?.entries || []).filter(e => e.kind !== 'salary');
   return <div className="fin-overlay" onClick={onClose}>
     <div className="fin-sheet" onClick={e => e.stopPropagation()} role="dialog" aria-label={`Chi tiết ${dayLabel(date)}`}>
       <header><h2>{dayLabel(date)}</h2><button className="fin-icon" onClick={onClose} aria-label="Đóng"><X size={20} /></button></header>
@@ -354,6 +342,7 @@ function DayDetail({ date, summary, accounts, categories, onClose, onChanged }) 
             <span>💵 Tiền mặt {money(summary.cash)}</span>
             {Object.entries(summary.byAccount || {}).map(([id, amount]) => <span key={id}>💳 {cardName(id)} {money(amount)}</span>)}
           </div>
+          {summary.salary > 0 && <div className="fin-daysum-money"><span>👷 Lương theo chấm công {money(summary.salary)} (đã trừ vào chi)</span></div>}
         </div>}
 
         <CloseForm detail={detail} accounts={accounts} onSaved={async () => { await load(); onChanged(); }} />
@@ -429,8 +418,8 @@ function DayDetail({ date, summary, accounts, categories, onClose, onChanged }) 
           </div>)}
         </Fold>
 
-        <Fold title="Khoản tự nhập" sub={detail.entries.length ? `${detail.entries.length} khoản · ${money(detail.entries.reduce((s, e) => s + Number(e.amount || 0), 0))}` : 'Chưa có (nhập ở tab Thêm chi)'} initial>
-          {detail.entries.map(entry => <div key={entry.id} className="fin-row static">
+        <Fold title="Khoản tự nhập" sub={typed.length ? `${typed.length} khoản · ${money(typed.reduce((s, e) => s + Number(e.amount || 0), 0))}` : 'Chưa có (nhập ở tab Thêm chi)'} initial>
+          {typed.map(entry => <div key={entry.id} className="fin-row static">
             <span>{entryTitle(entry, categories)}{entry.note && <small>{entry.note}</small>}</span>
             <span className="fin-row-end"><b>{money(entry.amount)}</b>
               <button className="fin-icon danger" onClick={() => remove(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
@@ -950,7 +939,8 @@ export default function FinancePage() {
   const costRows = t ? [
     { key: 'purchases', name: 'Nhập hàng (Sổ tay)', amount: t.purchases },
     { key: 'drinks', name: 'Nước ngọt / bia', amount: t.drinks },
-    { key: 'salary', name: 'Lương', amount: t.salary },
+    { key: 'salary', name: 'Lương (theo chấm công)', amount: t.salary,
+      sub: !data.wagesReady ? 'Chưa đọc được chấm công, thử tải lại' : t.salaryExtra ? `gồm thưởng − phạt cả tháng ${t.salaryExtra > 0 ? '+' : '-'}${money(Math.abs(t.salaryExtra))}` : '' },
     { key: 'fixed', name: 'Chi cố định (chia đều mỗi ngày)', amount: t.fixedShare, sub: data.fixedMonthTotal ? `cả tháng ${money(data.fixedMonthTotal)}, đã tính tới hôm nay` : '' },
     ...customTabs.map(tab => ({ key: tab.id, name: tab.name, amount: t.custom[tab.id] || 0,
       sub: tab.schedule === 'monthly' ? `cả tháng ${money(data.customMonthTotals?.[tab.id] || 0)}` : '', optional: true })),

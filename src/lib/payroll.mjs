@@ -11,6 +11,9 @@
  * Tháng trước đó giữ cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày,
  *   trừ ngày nghỉ có đơn × lương cơ bản ÷ 26.
  * Thưởng chuyên cần chủ đã duyệt cộng vào thực lĩnh; phạt trừ ra.
+ *
+ * byDay { ngày làm: tiền } — lương của riêng từng ngày (ngày công + tăng ca − trừ về sớm) cho Sổ thu chi;
+ * tháng tính cách cũ cũng ghi theo ngày làm: lương cơ bản ÷ 26 + tăng ca hôm đó.
  */
 import { dayFlags, groupByWorkDay, sessionHours, shiftOf, shiftWindow, workDayOf } from './attendanceRules.mjs';
 
@@ -44,6 +47,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
   const vioAmt = violations.reduce((a, v) => a + Number(v.amount || 0), 0);
   const bonusAmt = bonuses.filter(b => Number(b.year) === year && Number(b.month) === month).reduce((a, b) => a + Number(b.amount || 0), 0);
   let totalWorkH = 0, otHours = 0, pendingMs = 0, workUnits = 0;
+  const byDay = {};
 
   if (usesDayPay(year, month)) {
     // Theo ngày làm (ngày của ca): lượt vào lại sau nửa đêm để dọn quán thuộc ca hôm trước, không thành
@@ -63,12 +67,15 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
       // Về sớm từ 30 phút: ngày đó chỉ được lương ngày × phần ca có mặt tới lúc về (trừ đúng số giờ về sớm),
       // không hơn số tiền ngày công đã tính (ngày làm dưới nửa ca vẫn tối đa nửa ngày).
       const early = unit ? dayFlags(list, rules).leftEarly : 0;
+      let cutDay = 0;
       if (early >= EARLY_CUT_MINUTES) {
         const shiftMin = (w.end - w.start) / 60000;
         const cut = Math.round(Math.max(0, dayRate * unit - dayRate * Math.max(0, 1 - early / shiftMin)));
-        if (cut > 0) earlyList.push({ day, minutes: early, amount: cut });
+        if (cut > 0) { earlyList.push({ day, minutes: early, amount: cut }); cutDay = cut; }
       }
-      otMs += hs.reduce((a, h) => a + h.approvedMs, 0);
+      const dayOtMs = hs.reduce((a, h) => a + h.approvedMs, 0);
+      otMs += dayOtMs;
+      if (unit || dayOtMs) byDay[day] = Math.round(dayRate * unit - cutDay + dayOtMs / HOUR * otRate);
       pendingMs += hs.reduce((a, h) => a + h.pendingMs, 0);
       totalWorkH += hs.reduce((a, h) => a + h.countedMs, 0) / HOUR;
     }
@@ -78,28 +85,53 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
     // Tiền tăng ca theo đúng số phút đã duyệt (45 phút × 30.000đ/giờ = 22.500đ); số giờ chỉ làm tròn để hiện.
     const otAmt = Math.round(otMs / HOUR * otRate);
     return { rule: 'days', base, standardDays: STANDARD_DAYS, workDays, workUnits, basePay, earlyAmt, earlyList, totalWorkH: round1(totalWorkH), otHours, otAmt,
-      bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, pendingH: round1(pendingMs / HOUR), net: basePay - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt };
+      bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, pendingH: round1(pendingMs / HOUR), net: basePay - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt, byDay };
   }
 
   // Cách cũ (giữ nguyên số của các tháng trước): tính từng ngày làm, làm tròn 0,1 giờ. Theo ngày làm như tháng
   // ngày công để lượt dọn quán sau nửa đêm (vd. đêm 31/10 → 1/11) vẫn thuộc tháng của ca, không rơi mất.
-  const days = [...groupByWorkDay(sessions, rules).entries()].filter(([day]) => day.slice(0, 7) === key).map(([, list]) => list);
+  const dayEntries = [...groupByWorkDay(sessions, rules).entries()].filter(([day]) => day.slice(0, 7) === key);
+  const days = dayEntries.map(([, list]) => list);
   const workDays = days.filter(d => d.some(s => s.clock_out)).length;
-  for (const day of days) {
+  for (const [dayKey, day] of dayEntries) {
     const byShift = rules && String(day[0].date) >= rules.hours_from;
     const dayH = byShift
       ? round1(day.reduce((a, s) => a + sessionHours(s, rules, reviewOf.get(s.id)).countedMs, 0) / HOUR)
       : round1(day.filter(s => s.clock_out).reduce((a, s) => a + round1((new Date(s.clock_out) - new Date(s.clock_in)) / HOUR), 0));
     if (byShift) pendingMs += day.reduce((a, s) => a + sessionHours(s, rules, reviewOf.get(s.id)).pendingMs, 0);
     totalWorkH += dayH;
-    if (dayH > 8) otHours += round1(dayH - 8);
+    const dayOt = dayH > 8 ? round1(dayH - 8) : 0;
+    otHours += dayOt;
+    if (day.some(s => s.clock_out)) byDay[dayKey] = Math.round(base / STANDARD_DAYS + dayOt * otRate);
   }
   totalWorkH = round1(totalWorkH);
   otHours = round1(otHours);
   const otAmt = Math.round(otHours * otRate);
   const absAmt = Math.round(absDays * (base > 0 ? Math.round(base / STANDARD_DAYS) : 0));
   return { rule: 'hours', base, standardDays: STANDARD_DAYS, workDays, workUnits: workDays, basePay: base, earlyAmt: 0, earlyList: [], totalWorkH, otHours, otAmt,
-    bonusAmt, advAmt, absDays, absAmt, vioAmt, pendingH: round1(pendingMs / HOUR), net: base + otAmt + bonusAmt - advAmt - absAmt - vioAmt };
+    bonusAmt, advAmt, absDays, absAmt, vioAmt, pendingH: round1(pendingMs / HOUR), net: base + otAmt + bonusAmt - advAmt - absAmt - vioAmt, byDay };
+}
+
+/**
+ * Chi phí lương cả quán cho Sổ thu chi. byDay { ngày làm: tiền } = cộng lương từng ngày của mọi người
+ * theo chấm công (đúng công thức computeSalary). monthExtra = thưởng − phạt cả tháng (theo số đã chốt
+ * nếu tháng đã chốt). Ứng lương là trả trước, không phải chi phí, nên không tính.
+ */
+export function payrollCost({ year, month, staff = [], configs = [], sessions = [], requests = [], violations = [], bonuses = [], rules = null, reviews = [], closes = [] }) {
+  const byDay = {};
+  let monthExtra = 0;
+  for (const p of staff) {
+    const of = rows => rows.filter(r => r.staff_id === p.id);
+    const config = configs.find(c => c.staff_id === p.id) || null;
+    const mine = of(sessions), vios = of(violations), gifts = of(bonuses);
+    if (!config && !mine.length && !vios.length && !gifts.length) continue;
+    const live = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: of(requests), violations: vios, bonuses: gifts, rules, reviews });
+    for (const [day, amount] of Object.entries(live.byDay)) byDay[day] = (byDay[day] || 0) + amount;
+    const closed = closes.find(c => c.staff_id === p.id)?.snapshot;
+    const settled = closed ? { bonusAmt: 0, ...closed } : live;
+    monthExtra += (Number(settled.bonusAmt) || 0) - (Number(settled.vioAmt) || 0);
+  }
+  return { byDay, monthExtra };
 }
 
 /**

@@ -28,8 +28,9 @@ import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { hashPin, isHashedPin, validPin } from '@/lib/staffPin.mjs';
 import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, newDeviceId, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
+import { loadPayrollMonth, monthRange, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
 import { AUTO_CLOSE_BY, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { BONUS_MIN_DAYS, DEFAULT_OT_RATE, activeFineKinds, computeSalary, monthKey, monthTallies, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
+import { DEFAULT_OT_RATE, computeSalary, monthKey, monthTallies, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import { clockStatus, nowMs, refreshClock } from '@/lib/trueTime.mjs';
 
@@ -49,19 +50,8 @@ const money = v => { const n = Math.round(Number(String(v ?? '').replace(/\./g, 
 const text = (v, max = 300) => String(v ?? '').trim().slice(0, max);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ddmm = d => `${String(d).slice(8, 10)}/${String(d).slice(5, 7)}`;
-const monthRange = (year, month) => {
-  const pad = n => String(n).padStart(2, '0');
-  return { start: `${year}-${pad(month)}-01`, end: month === 12 ? `${year + 1}-01-01` : `${year}-${pad(month + 1)}-01` };
-};
 // Tháng đã hết chưa (giờ Việt Nam): thưởng chuyên cần chỉ duyệt khi đã hết tháng.
 const monthOver = (year, month) => vnToday() >= monthRange(year, month).end;
-
-// Mức thưởng chuyên cần gợi ý + số ngày công tối thiểu (chưa cài thì 0đ / 22 ngày).
-async function readPayrollSettings(db) {
-  const { data, error } = await db.from('payroll_settings').select('*').eq('id', 1).maybeSingle();
-  if (error) throw error;
-  return { bonus_amount: Number(data?.bonus_amount) || 0, bonus_min_days: data?.bonus_min_days === undefined || data?.bonus_min_days === null ? BONUS_MIN_DAYS : Number(data.bonus_min_days) };
-}
 
 // Workflow trên máy chủ ký bằng khoá service role (như báo cáo Sổ thu chi).
 function serverKeyOk(request) {
@@ -182,44 +172,10 @@ async function readAll(build) {
     if (!data || data.length < 1000) return rows;
   }
 }
-// Lần chủ duyệt giờ ngoài ca của đúng các ca đang tính (bảng này chỉ lớn dần, không đọc hết được).
-async function reviewsFor(db, sessionIds) {
-  const rows = [];
-  for (let i = 0; i < sessionIds.length; i += 200) {
-    const { data, error } = await db.from('attendance_extra_reviews').select('*').in('attendance_id', sessionIds.slice(i, i + 200));
-    if (error) throw error;
-    rows.push(...(data || []));
-  }
-  return rows;
-}
 // Ca máy tự đóng vì quên ra ca: ghi nhật ký vài giờ sau ngày làm (lọc tới 3 ngày sau tháng).
 const autoClosedInMonth = (db, start, end) => readAll(() => db.from('attendance_changes').select('attendance_id').eq('changed_by', AUTO_CLOSE_BY)
   .gte('changed_at', start).lt('changed_at', new Date(Date.parse(`${end}T00:00:00Z`) + 3 * 86400000).toISOString().slice(0, 10)).order('changed_at'));
 
-// Mọi thứ cần để tính lương cả quán một tháng (dùng cho chốt lương và trang Thống kê).
-async function loadPayrollMonth(db, year, month) {
-  const { start, end } = monthRange(year, month);
-  const [staff, configs, sessions, requests, violations, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules] = await Promise.all([
-    db.from('staff').select('id, full_name, role'),
-    db.from('payroll_config').select('*'),
-    // Cả ngày 1 tháng sau (ca đêm cuối tháng); đọc từng trang.
-    readAll(() => db.from('attendance_sessions').select('*').gte('date', start).lte('date', end).order('clock_in')),
-    db.from('payroll_requests').select('*').eq('month', month).eq('year', year),
-    db.from('payroll_violations').select('*').eq('month', month).eq('year', year),
-    db.from('payroll_closes').select('*').eq('year', year).eq('month', month),
-    db.from('staff_departures').select('*'),
-    readCheckinSettings(db),
-    db.from('payroll_bonuses').select('*').eq('year', year).eq('month', month),
-    readPayrollSettings(db),
-    db.from('payroll_fine_reviews').select('*').gte('work_day', start).lt('work_day', end),
-    db.from('payroll_fine_rules').select('kind, active'),
-  ]);
-  for (const r of [staff, configs, requests, violations, closes, departures, bonuses, fineReviews, fineRules]) if (r.error) throw r.error;
-  const reviews = await reviewsFor(db, sessions.map(x => x.id));
-  return { start, end, staff: staff.data || [], configs: configs.data || [], sessions, requests: requests.data || [],
-    violations: violations.data || [], reviews, closes: closes.data || [], departures: departures.data || [], rules,
-    bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data) };
-}
 
 // Trang Thống kê: nhân sự + lương cả quán một tháng, kèm số việc đang chờ chủ duyệt.
 async function staffStats(db, year, month) {
@@ -620,7 +576,8 @@ export async function POST(request) {
         const of = rows => rows.filter(x => x.staff_id === p.id);
         const config = of(m.configs)[0] || null, mine = of(m.sessions), reqs = of(m.requests), vios = of(m.violations);
         if (!config && !mine.length && !reqs.length && !vios.length) return null;
-        const salary = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, bonuses: of(m.bonuses), rules: m.rules, reviews: m.reviews });
+        // Tiền từng ngày chỉ để Sổ thu chi tính lương mỗi ngày — không lưu vào bảng đã chốt.
+        const { byDay, ...salary } = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, bonuses: of(m.bonuses), rules: m.rules, reviews: m.reviews });
         return { year, month, staff_id: p.id, snapshot: { name: p.full_name, ...salary }, closed_by: user.full_name || null, closed_at: closedAt };
       }).filter(Boolean);
       if (only) {

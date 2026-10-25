@@ -7,6 +7,7 @@ import * as pin from '../src/lib/staffPin.mjs';
 import * as token from '../src/lib/checkinToken.mjs';
 import * as rules from '../src/lib/attendanceRules.mjs';
 import * as payroll from '../src/lib/payroll.mjs';
+import * as payrollMonth from '../src/lib/payrollMonth.mjs';
 import * as departure from '../src/lib/staffDeparture.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
 
@@ -33,7 +34,7 @@ function load(state, user, { now, internetAhead = 0 } = {}) {
     static now() { return at; }
   }
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...pin, ...token, ...rules, ...payroll, ...departure, createHmac, randomUUID, timingSafeEqual, Buffer, URL, Number, Math, String, JSON, Promise,
+    NextResponse, ...pin, ...token, ...rules, ...payroll, ...payrollMonth, ...departure, createHmac, randomUUID, timingSafeEqual, Buffer, URL, Number, Math, String, JSON, Promise,
     Date: now ? FixedDate : Date,
     readKioskQrToken: (t, s, n) => token.readKioskQrToken(t, s, n ?? at),
     onKioskNetwork: (ip, k, n) => rules.onKioskNetwork(ip, k, n ?? at),

@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { monthBounds, noteCost, summarizeMonth, vnDate } from '../src/lib/ownerFinance.mjs';
 import * as finance from '../src/lib/ownerFinance.mjs';
 
-test('daily summary splits revenue, counts Sổ tay purchases with debt, entries and a fixed daily share', () => {
+test('daily summary splits revenue, counts Sổ tay purchases with debt, entries, wages from attendance and a fixed daily share', () => {
   const s = summarizeMonth({
     month: '2026-10', today: '2026-10-24', startDate: '2026-10-23',
     revenue: [
@@ -22,10 +22,12 @@ test('daily summary splits revenue, counts Sổ tay purchases with debt, entries
     ],
     entries: [
       { kind: 'drink', entry_date: '2026-10-23', amount: 80000 },
-      { kind: 'salary', entry_date: '2026-10-23', amount: 250000, label: 'Lan' },
-      { kind: 'salary', entry_date: '2026-10-24', amount: 250000, label: 'Lan' },
+      // Lương nhập tay kiểu cũ: không tính nữa (lương lấy từ chấm công).
+      { kind: 'salary', entry_date: '2026-10-23', amount: 999999, label: 'Lan' },
       { kind: 'fixed', entry_date: '2026-10-01', amount: 3100000, category: 'rent' },
     ],
+    // Lương theo chấm công: ngày 22 nằm trước ngày bắt đầu sổ nên không vào ngày nào; thưởng − phạt cả tháng 40.000đ.
+    wages: { byDay: { '2026-10-22': 1, '2026-10-23': 250000, '2026-10-24': 250000 }, monthExtra: 40000 },
   });
   assert.deepEqual(s.days.map(d => d.date), ['2026-10-23', '2026-10-24']);
   const [d23, d24] = s.days;
@@ -43,6 +45,10 @@ test('daily summary splits revenue, counts Sổ tay purchases with debt, entries
   assert.equal(s.totals.revenue, 600000);
   assert.equal(s.totals.fixedShare, 200000);
   assert.deepEqual(s.totals.byAccount, { A: 200000, B: 100000 });
+  assert.deepEqual([s.totals.salary, s.totals.salaryExtra], [540000, 40000], 'month salary = days + bonus/fines');
+  assert.equal(s.totals.profit, d23.profit + d24.profit - 40000);
+  assert.equal(summarizeMonth({ month: '2026-10', today: '2026-10-24', startDate: '2026-10-23', entries: [{ kind: 'salary', entry_date: '2026-10-23', amount: 5 }] }).days[0].salary, 0,
+    'no attendance data → no salary, typed salaries are ignored');
 });
 
 test('months before the start date or in the future have no days', () => {

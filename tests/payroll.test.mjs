@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dayFlags, groupByWorkDay, normalizeRules } from '../src/lib/attendanceRules.mjs';
-import { LATE_FINE_MINUTES, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, monthTallies, usesDayPay } from '../src/lib/payroll.mjs';
+import { LATE_FINE_MINUTES, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, monthTallies, payrollCost, usesDayPay } from '../src/lib/payroll.mjs';
 
 // Quán 14:00–23:00 giờ VN = 07:00Z–16:00Z, cho lệch 10 phút, tính giờ theo ca từ 25/10/2026.
 const RULES = normalizeRules({ hours_from: '2026-10-25' }, [], [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }]);
@@ -141,4 +141,45 @@ test('the night of 31/10 → 1/11: a clean-up after midnight is paid in October,
   const nov = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: night, config: CONFIG, rules: RULES, reviews: [{ attendance_id: 'n1', status: 'approved', minutes: 60 }] });
   assert.deepEqual([oct.workDays, oct.totalWorkH, oct.otHours], [1, 10, 2], 'October: one day of 10 hours (9 + the approved clean-up hour), 2 hours over 8');
   assert.deepEqual([nov.workUnits, nov.totalWorkH], [0, 0], 'not a November day');
+});
+
+// Sổ thu chi lấy lương mỗi ngày từ đúng công thức này.
+const NOV = [
+  ses('n2', '2026-11-02', '07:00', '16:00'),
+  ses('n3', '2026-11-03', '07:05', '11:00'),
+  ses('n4', '2026-11-04', '06:00', '16:30'),
+  ses('n7', '2026-11-07', '07:00', null),
+];
+const NOV_REVIEWS = [{ attendance_id: 'n4', status: 'approved', minutes: 90 }];
+
+test('each day of pay for the finance book adds up to the pay slip: day pay, overtime and early cuts', () => {
+  const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: NOV, config: CONFIG, rules: RULES, reviews: NOV_REVIEWS });
+  assert.deepEqual(c.byDay, {
+    '2026-11-02': 200000,                // 5.200.000 ÷ 26
+    '2026-11-03': 100000 - 11111,        // nửa ngày, về sớm còn 4/9 ngày
+    '2026-11-04': 200000 + 45000,        // + 1,5 giờ tăng ca × 30.000đ
+  }, 'a shift still open is not paid yet');
+  const sum = Object.values(c.byDay).reduce((a, x) => a + x, 0);
+  assert.equal(sum, c.basePay - c.earlyAmt + c.otAmt);
+});
+
+test('October days for the finance book: base ÷ 26 for each day worked plus that day overtime', () => {
+  const c = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: [ses('o26', '2026-10-26', '06:00', '16:30')], config: CONFIG, rules: RULES });
+  assert.deepEqual(c.byDay, { '2026-10-26': 200000 + 30000 });
+});
+
+test('the shop wage cost per day adds everyone; bonus minus fines go to the month; advances are not a cost', () => {
+  const staff = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const sessions = [...NOV, ses('b2', '2026-11-02', '07:00', '16:00')].map((x, i) => i >= NOV.length ? { ...x, staff_id: 'b' } : x);
+  const cost = payrollCost({ year: 2026, month: 11, staff, rules: RULES, reviews: NOV_REVIEWS, sessions,
+    configs: [{ staff_id: 'a', ...CONFIG }, { staff_id: 'b', base_salary: 2600000 }],
+    requests: [{ staff_id: 'a', status: 'approved', request_type: 'advance', amount: 300000, month: 11, year: 2026 }],
+    violations: [{ staff_id: 'a', amount: 50000 }, { staff_id: 'c', amount: 20000 }],
+    bonuses: [{ staff_id: 'b', year: 2026, month: 11, amount: 300000 }] });
+  assert.deepEqual(cost.byDay, { '2026-11-02': 200000 + 100000, '2026-11-03': 88889, '2026-11-04': 245000 });
+  assert.equal(cost.monthExtra, 300000 - 50000 - 20000, 'someone with only a fine still counts');
+
+  const closed = payrollCost({ year: 2026, month: 11, staff, rules: RULES, reviews: NOV_REVIEWS, sessions, configs: [{ staff_id: 'a', ...CONFIG }],
+    violations: [{ staff_id: 'a', amount: 50000 }], closes: [{ staff_id: 'a', snapshot: { vioAmt: 70000, bonusAmt: 10000 } }] });
+  assert.equal(closed.monthExtra, 10000 - 70000, 'a closed month uses the closed numbers');
 });
