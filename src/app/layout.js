@@ -34,24 +34,16 @@ export default function RootLayout({ children }) {
   return (
     <html lang="vi">
       <head>
-        <link rel="manifest" href="/manifest.json" />
+        {/* Manifest, tên app iPhone, màu thanh trạng thái: do metadata / viewport ở trên tạo cho từng trang
+            (trang /chamcong là app riêng) — không ghi cứng ở đây, kẻo đè lên khai báo của trang con. */}
         <link rel="apple-touch-icon" href="/icon-512.png" />
         <link rel="shortcut icon" href="/icon-192.png" type="image/png" />
-
-        {/* ── PWA Standalone (iOS + Android + Zalo WebView) ── */}
-        <meta name="mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-        <meta name="apple-mobile-web-app-title" content="Nhà Hàng" />
 
         {/* ── Viewport fullscreen, no zoom, safe-area ── */}
         <meta
           name="viewport"
           content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover"
         />
-
-        {/* ── Theme colors: trắng để Zalo/Chrome ẩn thanh URL ── */}
-        <meta name="theme-color" content="#ffffff" />
 
         {/* ── Tắt auto-detection số điện thoại (Zalo hay highlight) ── */}
         <meta name="format-detection" content="telephone=no, address=no, email=no" />

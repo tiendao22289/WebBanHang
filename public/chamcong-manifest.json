@@ -1,0 +1,28 @@
+{
+  "id": "/chamcong",
+  "name": "Chấm công - Ốc Bảo Khang",
+  "short_name": "Chấm công",
+  "description": "Máy quầy chấm công: hiện mã QR cho nhân viên quét",
+  "start_url": "/chamcong",
+  "scope": "/chamcong",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
