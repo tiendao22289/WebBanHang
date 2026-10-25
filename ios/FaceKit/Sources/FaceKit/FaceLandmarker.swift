@@ -35,7 +35,7 @@ public enum FaceLandmarker {
 
     static func useCPU(_ request: VNRequest) {
         if #available(iOS 17.0, macOS 14.0, *) {
-            guard let stages = try? request.supportedComputeStageDevices() else { return }
+            guard let stages = try? request.supportedComputeStageDevices else { return }
             for (stage, devices) in stages {
                 if let cpu = devices.first(where: { if case .cpu(_) = $0 { return true } else { return false } }) {
                     request.setComputeDevice(cpu, for: stage)
