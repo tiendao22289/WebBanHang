@@ -149,22 +149,22 @@ function AddEntryForm({ data, month, onSaved }) {
       onDone={category => { setCreated(prev => [...prev, category]); setAdding(null); onSaved(); choose(`tab:${category.id}`); }} />}
 
     <div className="fin-fields">
-      {kind === 'fixed' && <label>Mục<select value={fixedCategory} onChange={e => e.target.value === NEW ? setAdding('fixed') : setFixedCategory(e.target.value)}>
+      {kind === 'fixed' && <label className="fin-wide">Mục<select value={fixedCategory} onChange={e => e.target.value === NEW ? setAdding('fixed') : setFixedCategory(e.target.value)}>
         {(data?.fixedCategories || []).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
         {ownFixed.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         <option value={NEW}>+ Thêm mục mới...</option>
       </select></label>}
-      {kind === 'salary' && <label>Loại<select value={salaryCategory} onChange={e => e.target.value === NEW ? setAdding('salary') : setSalaryCategory(e.target.value)}>
+      {kind === 'salary' && <label className="fin-wide">Loại<select value={salaryCategory} onChange={e => e.target.value === NEW ? setAdding('salary') : setSalaryCategory(e.target.value)}>
         <option value="">Lương</option>
         {ownSalary.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         <option value={NEW}>+ Thêm loại lương...</option>
       </select></label>}
-      {!monthly && <label>Ngày<input type="date" value={date} min={data?.startDate} max={vnToday()} onChange={e => setDate(e.target.value)} required /></label>}
-      {kind === 'salary' && <label>Nhân viên
+      {kind === 'salary' && <label className="fin-wide">Nhân viên
         <input list="fin-staff" value={label} onChange={e => setLabel(e.target.value)} placeholder="Tên nhân viên" required />
         <datalist id="fin-staff">{(data?.staff || []).map(name => <option key={name} value={name} />)}</datalist>
       </label>}
-      {(kind === 'drink' || tab) && <label>Nội dung<input value={label} onChange={e => setLabel(e.target.value)} placeholder={tab ? tab.name : 'Nước ngọt / bia'} /></label>}
+      {(kind === 'drink' || tab) && <label className="fin-wide">Nội dung<input value={label} onChange={e => setLabel(e.target.value)} placeholder={tab ? tab.name : 'Nước ngọt / bia'} /></label>}
+      {!monthly && <label>Ngày<input type="date" value={date} min={data?.startDate} max={vnToday()} onChange={e => setDate(e.target.value)} required /></label>}
       <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''}
         onChange={e => setAmount(digits(e.target.value))} placeholder="0" enterKeyHint="done" required /></label>
       <label className="fin-wide">Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
@@ -192,6 +192,18 @@ function AddEntryForm({ data, month, onSaved }) {
 // Chênh lệch chốt sổ: dương = thừa, âm = thiếu so với sổ.
 const diffText = diff => diff === 0 ? 'Khớp ✓' : diff > 0 ? `Thừa ${money(diff)}` : `Thiếu ${money(-diff)}`;
 const diffClass = diff => diff === 0 ? 'ok' : 'bad';
+const dayCost = d => d.purchases + d.drinks + d.salary + d.fixedShare + d.customTotal;
+
+// Nhóm gập/mở: tiêu đề + số đếm / tổng tiền luôn hiện, bấm để xem chi tiết.
+function Fold({ title, sub, initial = false, children }) {
+  const [open, setOpen] = useState(initial);
+  return <section className="fin-fold">
+    <button type="button" className="fin-fold-head" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+      <b>{title}</b><span>{sub}</span><ChevronDown size={16} style={{ transform: open ? 'rotate(180deg)' : 'none' }} />
+    </button>
+    {open && <div className="fin-fold-body">{children}</div>}
+  </section>;
+}
 
 function CloseForm({ detail, accounts, onSaved }) {
   const saved = detail.close;
@@ -200,10 +212,11 @@ function CloseForm({ detail, accounts, onSaved }) {
   const [note, setNote] = useState(saved?.note || '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
   const canClose = detail.date >= detail.startDate && detail.date <= detail.today;
   // Tài khoản có tiền trong sổ hôm đó + tài khoản đang hiện trong cài đặt.
   const accountIds = [...new Set([...Object.keys(detail.dayByAccount || {}), ...accounts.map(a => a.id)])].filter(id => id !== 'unknown');
-  const name = id => accounts.find(a => a.id === id)?.name || 'Tài khoản khác';
+  const name = id => { const a = accounts.find(x => x.id === id); return a ? cardLabel(a) : 'Tài khoản khác'; };
 
   async function save(event) {
     event.preventDefault();
@@ -223,8 +236,15 @@ function CloseForm({ detail, accounts, onSaved }) {
   const amountInput = (value, onChange, label) => <input inputMode="numeric" enterKeyHint="done" aria-label={label} placeholder="Chưa nhập"
     value={value === '' ? '' : Number(digits(value)).toLocaleString('vi-VN')} onChange={e => onChange(digits(e.target.value))} />;
 
-  return <form className="fin-close" onSubmit={save}>
-    <h3>Chốt sổ cuối ngày</h3>
+  const diffs = detail.closeDiff;
+  const status = !saved ? 'Chưa chốt · bấm để đếm tiền két và nhập số thật'
+    : [`Đã chốt ${clock(saved.closed_at)}`, diffs?.cashDiff != null ? `tiền mặt ${diffText(diffs.cashDiff).toLowerCase()}` : null,
+      ...Object.entries(diffs?.bankDiffs || {}).filter(([, d]) => d !== 0).map(([id, d]) => `${name(id).split(' · ')[0]} ${diffText(d).toLowerCase()}`)].filter(Boolean).join(' · ');
+  return <form className={`fin-close${saved ? '' : ' todo'}`} onSubmit={save}>
+    <button type="button" className="fin-close-head" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+      <b>Chốt sổ cuối ngày</b><small>{status}</small><ChevronDown size={16} style={{ transform: open ? 'rotate(180deg)' : 'none' }} />
+    </button>
+    {open && <>
     <p className="fin-hint">Đếm tiền mặt trong két và xem số tiền thật trên app ngân hàng, nhập vào để so với sổ.{saved && ` Đã chốt lúc ${clock(saved.closed_at)}${saved.closed_by_name ? ` bởi ${saved.closed_by_name}` : ''}.`}</p>
     <div className="fin-close-row">
       <div><b>Tiền mặt</b><small>Sổ ghi {money(detail.dayCash)}</small></div>
@@ -243,6 +263,7 @@ function CloseForm({ detail, accounts, onSaved }) {
     <label className="fin-close-note">Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
     {error && <p className="fin-error">{error}</p>}
     <button className="fin-primary" disabled={busy}>{busy ? 'Đang lưu...' : saved ? 'Cập nhật chốt sổ' : 'Chốt sổ ngày'}</button>
+    </>}
   </form>;
 }
 
@@ -257,7 +278,7 @@ async function sendReceipt(fields, image) {
   return result;
 }
 
-function DayDetail({ date, accounts, categories, onClose, onChanged }) {
+function DayDetail({ date, summary, accounts, categories, onClose, onChanged }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(null);
@@ -315,89 +336,106 @@ function DayDetail({ date, accounts, categories, onClose, onChanged }) {
     } catch (err) { alert(err.message); }
   }
 
-  const accountName = id => accounts.find(a => a.id === id)?.name || 'Chuyển khoản';
+  const cardName = id => { const a = accounts.find(x => x.id === id); return a ? cardLabel(a) : 'Chuyển khoản'; };
   return <div className="fin-overlay" onClick={onClose}>
     <div className="fin-sheet" onClick={e => e.stopPropagation()} role="dialog" aria-label={`Chi tiết ${dayLabel(date)}`}>
       <header><h2>{dayLabel(date)}</h2><button className="fin-icon" onClick={onClose} aria-label="Đóng"><X size={20} /></button></header>
       {error && <p className="fin-error">{error}</p>}
       {!detail && !error && <p className="fin-empty">Đang tải...</p>}
       {detail && <>
-        <h3>Bill đã thu ({detail.bills.length})</h3>
-        {detail.bills.length === 0 && <p className="fin-empty">Chưa có bill.</p>}
-        {detail.bills.map(bill => <div key={bill.order_id} className="fin-row-block">
-          <button className="fin-row" onClick={() => setOpen(open === bill.order_id ? null : bill.order_id)}>
-            <span>{clock(bill.paid_at)} · Bàn {bill.table_number || '?'} · {bill.customer_name || 'Khách'}
-              <small>{bill.payment_method === 'transfer' ? accountName(bill.account_id) : 'Tiền mặt'}</small></span>
-            <b>{money(bill.amount)}</b>
-          </button>
-          {bill.payment_method === 'transfer' && <div className="fin-ck">
-            {bill.transfer_image_url
-              ? <button className="fin-ck-view" onClick={() => setView(bill.transfer_image_url)}>📷 Xem ảnh chuyển khoản</button>
-              : <span className="fin-ck-none">Chưa có ảnh chuyển khoản</span>}
-            <span className="fin-ck-buttons">
-              <button className="fin-ck-add primary" onClick={() => startCamera({ order_id: bill.order_id })} disabled={!!attaching}>📷 Chụp</button>
-              <button className="fin-ck-add" onClick={() => startAttach({ order_id: bill.order_id })} disabled={!!attaching}>Chọn ảnh</button>
-            </span>
-          </div>}
-          {bill.payment_method !== 'transfer' && bill.cash_image_url && <div className="fin-ck">
-            <button className="fin-ck-view" onClick={() => setView(bill.cash_image_url)}>📷 Xem ảnh tiền mặt</button>
-          </div>}
-          {bill.photo_skip_reason && <p className="fin-warn">⚠ Đóng bàn không ảnh: {bill.photo_skip_reason}{bill.photo_by ? ` (${bill.photo_by})` : ''}</p>}
-          {open === bill.order_id && <ul className="fin-items">{(bill.items || []).map((item, i) =>
-            <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>}
-        </div>)}
-
-        <h3>Bill giấy ({detail.paperBills?.length || 0})</h3>
-        {!detail.paperBills?.length && <p className="fin-empty">Không có bill giấy.</p>}
-        {(detail.paperBills || []).map(b => <div key={b.id} className="fin-row-block">
-          <div className="fin-paper">
-            {b.imageUrl ? <button className="fin-thumb" onClick={() => setView(b.imageUrl)} aria-label="Xem ảnh bill"><img src={b.imageUrl} alt="" /></button>
-              : <span className="fin-thumb empty" title={b.imagesPurged ? 'Ảnh đã xoá sau 3 tháng' : ''} />}
-            <span>{clock(b.receivedAt)}{b.tableLabel ? ` · ${b.tableLabel}` : ''}
-              <small>{b.paymentMethod === 'transfer' ? accountName(b.accountId) : 'Tiền mặt'}{b.createdByName ? ` · ${b.createdByName}` : ''}{b.note ? ` · ${b.note}` : ''}</small></span>
-            <b>{money(b.amount)}</b>
-            <button className="fin-icon danger" onClick={() => removePaper(b)} aria-label="Xoá bill giấy"><Trash2 size={16} /></button>
+        {/* Gọn: tổng ngày trên cùng → chốt sổ (thu gọn) → từng nhóm gập/mở, có số đếm và tổng tiền. */}
+        {summary && <div className="fin-daysum">
+          <div className="fin-daysum-nums">
+            <div><small>Thu</small><b>{money(summary.revenue)}</b></div>
+            <div><small>Chi</small><b>{money(dayCost(summary))}</b></div>
+            <div><small>{summary.profit < 0 ? 'Lỗ' : 'Lãi'}</small><b className={summary.profit < 0 ? 'loss' : 'gain'}>{money(Math.abs(summary.profit))}</b></div>
           </div>
-          {/* Bill không có ảnh nào (vd. từ trang Mã QR trước khi bắt buộc chụp): chụp bổ sung được. */}
-          {!b.imageUrl && !b.transferImageUrl && !b.imagesPurged && <div className="fin-ck">
-            <span className="fin-ck-none">Chưa có ảnh bill</span>
-            <span className="fin-ck-buttons">
-              <button className="fin-ck-add primary" onClick={() => startCamera({ action: 'attach_bill', receipt_id: b.id })} disabled={!!attaching}>📷 Chụp</button>
-              <button className="fin-ck-add" onClick={() => startAttach({ action: 'attach_bill', receipt_id: b.id })} disabled={!!attaching}>Chọn ảnh</button>
-            </span>
-          </div>}
-          {b.paymentMethod === 'transfer' && <div className="fin-ck">
-            {b.transferImageUrl ? <button className="fin-ck-view" onClick={() => setView(b.transferImageUrl)}>📷 Xem ảnh chuyển khoản</button>
-              : <span className="fin-ck-none">Chưa có ảnh chuyển khoản</span>}
-            <span className="fin-ck-buttons">
-              <button className="fin-ck-add primary" onClick={() => startCamera({ receipt_id: b.id })} disabled={!!attaching}>📷 Chụp</button>
-              <button className="fin-ck-add" onClick={() => startAttach({ receipt_id: b.id })} disabled={!!attaching}>Chọn ảnh</button>
-            </span>
-          </div>}
-        </div>)}
-
-        <h3>Đi chợ / nhập hàng (Sổ tay)</h3>
-        {detail.notes.length === 0 && <p className="fin-empty">Không có phiếu.</p>}
-        {detail.notes.map(note => <div key={note.id} className="fin-row-block">
-          <div className="fin-row static"><span>{clock(note.createdAt)} · {note.staffName || 'Nhân viên'}
-            {note.debtLeft > 0 ? <small>Còn nợ {money(note.debtLeft)}</small> : note.debt > 0 && <small>Đã trả hết nợ {money(note.debt)}</small>}</span><b>{money(note.cost)}</b></div>
-          {note.items?.length > 0 && <ul className="fin-items">{note.items.map((item, i) =>
-            <li key={i}><span>{item.qty ? `${item.qty} ` : ''}{item.name}{item.paymentStatus === 'debt' ? ' (nợ)' : ''}</span><span>{item.price}</span></li>)}</ul>}
-          {!note.items && note.text && <p className="fin-note-text">{note.text}</p>}
-          {note.mismatch !== 0 && note.mismatch !== undefined && <p className="fin-warn">⚠ Phiếu lệch tiền: tổng phiếu ghi {money(note.cost)} nhưng các dòng hàng cộng lại {money(note.cost - note.mismatch)} (lệch {money(Math.abs(note.mismatch))}). Thường do lỗi cũ của Sổ tay, ví dụ "2,5kg" bị tính thành 25kg. Mở phiếu trong Sổ tay, bấm Sửa rồi Lưu để tính lại.</p>}
-          {note.lineWarnings?.length > 0 && <p className="fin-warn">⚠ {note.lineWarnings.join(' · ')}</p>}
-          {note.suspicious?.length > 0 && <p className="fin-warn">⚠ Giá có thể gõ thiếu chữ "k" ({note.suspicious.join(', ')}). Sổ tay hiểu "250" là 250đ, "250k" mới là 250.000đ. Kiểm tra lại phiếu trong Sổ tay.</p>}
-        </div>)}
-
-        <h3>Khoản tự nhập</h3>
-        {detail.entries.length === 0 && <p className="fin-empty">Chưa có.</p>}
-        {detail.entries.map(entry => <div key={entry.id} className="fin-row static">
-          <span>{entryTitle(entry, categories)}{entry.note && <small>{entry.note}</small>}</span>
-          <span className="fin-row-end"><b>{money(entry.amount)}</b>
-            <button className="fin-icon danger" onClick={() => remove(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
-        </div>)}
+          <div className="fin-daysum-money">
+            <span>💵 Tiền mặt {money(summary.cash)}</span>
+            {Object.entries(summary.byAccount || {}).map(([id, amount]) => <span key={id}>💳 {cardName(id)} {money(amount)}</span>)}
+          </div>
+        </div>}
 
         <CloseForm detail={detail} accounts={accounts} onSaved={async () => { await load(); onChanged(); }} />
+
+        <Fold title="Bill đã thu" sub={`${detail.bills.length} bill · ${money(detail.bills.reduce((s, b) => s + Number(b.amount || 0), 0))}`} initial={detail.bills.length <= 6}>
+          {detail.bills.length === 0 && <p className="fin-empty">Chưa có bill.</p>}
+          {detail.bills.map(bill => {
+            const isOpen = open === bill.order_id;
+            const transfer = bill.payment_method === 'transfer';
+            const photo = bill.transfer_image_url || bill.cash_image_url;
+            return <div key={bill.order_id} className="fin-bill">
+              {photo
+                ? <button className="fin-bill-photo" onClick={() => setView(photo)} aria-label={transfer ? 'Xem ảnh CK' : 'Xem ảnh tiền mặt'}><img src={photo} alt="" draggable={false} /></button>
+                : transfer
+                  ? <button className="fin-bill-photo add" onClick={() => startCamera({ order_id: bill.order_id })} disabled={!!attaching} aria-label="Chụp ảnh CK"><Camera size={18} /><small>Chụp</small></button>
+                  : <span className="fin-bill-photo none"><Banknote size={18} /></span>}
+              <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : bill.order_id)} aria-expanded={isOpen}>
+                <b>{clock(bill.paid_at)} · Bàn {bill.table_number || '?'}</b>
+                <small>{bill.customer_name || 'Khách'} · {transfer ? cardName(bill.account_id) : 'Tiền mặt'}{bill.photo_skip_reason ? ' · ⚠ không ảnh' : ''}</small>
+              </button>
+              <div className="fin-bill-end"><b>{money(bill.amount)}</b></div>
+              {isOpen && <div className="fin-bill-more">
+                {bill.photo_skip_reason && <p className="fin-warn">⚠ Đóng bàn không ảnh: {bill.photo_skip_reason}{bill.photo_by ? ` (${bill.photo_by})` : ''}</p>}
+                {transfer && <span className="fin-hit-add">
+                  <button className="fin-ck-add primary" onClick={() => startCamera({ order_id: bill.order_id })} disabled={!!attaching}>📷 {bill.transfer_image_url ? 'Chụp lại ảnh CK' : 'Chụp ảnh CK'}</button>
+                  <button className="fin-ck-add" onClick={() => startAttach({ order_id: bill.order_id })} disabled={!!attaching}>Chọn ảnh có sẵn</button>
+                </span>}
+                <ul className="fin-items">{(bill.items || []).map((item, i) =>
+                  <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>
+              </div>}
+            </div>;
+          })}
+        </Fold>
+
+        {(detail.paperBills || []).length > 0 && <Fold title="Bill giấy" sub={`${detail.paperBills.length} bill · ${money(detail.paperBills.reduce((s, b) => s + b.amount, 0))}`} initial={detail.paperBills.length <= 6}>
+          {detail.paperBills.map(b => {
+            const isOpen = open === b.id;
+            const photo = b.imageUrl || b.transferImageUrl;
+            return <div key={b.id} className="fin-bill">
+              {photo
+                ? <button className="fin-bill-photo" onClick={() => setView(photo)} aria-label="Xem ảnh bill"><img src={photo} alt="" draggable={false} /></button>
+                : !b.imagesPurged
+                  ? <button className="fin-bill-photo add" onClick={() => startCamera({ action: 'attach_bill', receipt_id: b.id })} disabled={!!attaching} aria-label="Chụp ảnh bill"><Camera size={18} /><small>Chụp</small></button>
+                  : <span className="fin-bill-photo none" title="Ảnh đã xoá sau 3 tháng"><Banknote size={18} /></span>}
+              <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : b.id)} aria-expanded={isOpen}>
+                <b>{clock(b.receivedAt)} · {b.tableLabel || 'Bill giấy'}</b>
+                <small>{b.paymentMethod === 'transfer' ? cardName(b.accountId) : 'Tiền mặt'}{b.createdByName ? ` · ${b.createdByName}` : ''}</small>
+              </button>
+              <div className="fin-bill-end"><b>{money(b.amount)}</b></div>
+              {isOpen && <div className="fin-bill-more">
+                {b.note && <p>{b.note}</p>}
+                {b.imageUrl && b.transferImageUrl && <button className="fin-hit-photo" onClick={() => setView(b.transferImageUrl)}><img src={b.transferImageUrl} alt="" draggable={false} /><span>Ảnh CK</span></button>}
+                <span className="fin-hit-add">
+                  {!b.imagesPurged && <button className="fin-ck-add" onClick={() => startAttach({ action: 'attach_bill', receipt_id: b.id })} disabled={!!attaching}>Chọn ảnh bill</button>}
+                  {b.paymentMethod === 'transfer' && <button className="fin-ck-add primary" onClick={() => startCamera({ receipt_id: b.id })} disabled={!!attaching}>📷 {b.transferImageUrl ? 'Chụp lại ảnh CK' : 'Chụp ảnh CK'}</button>}
+                  <button className="fin-ck-add danger" onClick={() => removePaper(b)}><Trash2 size={14} /> Xoá bill giấy</button>
+                </span>
+              </div>}
+            </div>;
+          })}
+        </Fold>}
+
+        <Fold title="Đi chợ / nhập hàng (Sổ tay)" sub={detail.notes.length ? `${detail.notes.length} phiếu · ${money(detail.notes.reduce((s, n) => s + n.cost, 0))}` : 'Không có phiếu'} initial>
+          {detail.notes.map(note => <div key={note.id} className="fin-row-block">
+            <div className="fin-row static"><span>{clock(note.createdAt)} · {note.staffName || 'Nhân viên'}
+              {note.debtLeft > 0 ? <small>Còn nợ {money(note.debtLeft)}</small> : note.debt > 0 && <small>Đã trả hết nợ {money(note.debt)}</small>}</span><b>{money(note.cost)}</b></div>
+            {note.items?.length > 0 && <ul className="fin-items">{note.items.map((item, i) =>
+              <li key={i}><span>{item.qty ? `${item.qty} ` : ''}{item.name}{item.paymentStatus === 'debt' ? ' (nợ)' : ''}</span><span>{item.price}</span></li>)}</ul>}
+            {!note.items && note.text && <p className="fin-note-text">{note.text}</p>}
+            {note.mismatch !== 0 && note.mismatch !== undefined && <p className="fin-warn">⚠ Phiếu lệch tiền: tổng phiếu ghi {money(note.cost)} nhưng các dòng hàng cộng lại {money(note.cost - note.mismatch)} (lệch {money(Math.abs(note.mismatch))}). Thường do lỗi cũ của Sổ tay, ví dụ "2,5kg" bị tính thành 25kg. Mở phiếu trong Sổ tay, bấm Sửa rồi Lưu để tính lại.</p>}
+            {note.lineWarnings?.length > 0 && <p className="fin-warn">⚠ {note.lineWarnings.join(' · ')}</p>}
+            {note.suspicious?.length > 0 && <p className="fin-warn">⚠ Giá có thể gõ thiếu chữ "k" ({note.suspicious.join(', ')}). Sổ tay hiểu "250" là 250đ, "250k" mới là 250.000đ. Kiểm tra lại phiếu trong Sổ tay.</p>}
+          </div>)}
+        </Fold>
+
+        <Fold title="Khoản tự nhập" sub={detail.entries.length ? `${detail.entries.length} khoản · ${money(detail.entries.reduce((s, e) => s + Number(e.amount || 0), 0))}` : 'Chưa có (nhập ở tab Thêm chi)'} initial>
+          {detail.entries.map(entry => <div key={entry.id} className="fin-row static">
+            <span>{entryTitle(entry, categories)}{entry.note && <small>{entry.note}</small>}</span>
+            <span className="fin-row-end"><b>{money(entry.amount)}</b>
+              <button className="fin-icon danger" onClick={() => remove(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
+          </div>)}
+        </Fold>
       </>}
       <input ref={attachInput} type="file" accept="image/*" onChange={attach} hidden />
       <input ref={attachCapture} type="file" accept="image/*" capture="environment" onChange={attach} hidden />
@@ -448,7 +486,6 @@ function SearchView({ accounts, preset }) {
   const [more, setMore] = useState(false);
   const [customRange, setCustomRange] = useState(false);
   useBackClose(!!view, () => setView(null));
-  const accountName = id => accounts.find(a => a.id === id)?.name || 'Chuyển khoản';
   // Tên thẻ ngắn cho dòng bill gọn: "MB Bank ·6781".
   const cardName = id => { const a = accounts.find(x => x.id === id); return a ? cardLabel(a) : 'Chuyển khoản'; };
   const set = patch => setFilters(f => ({ ...f, ...patch }));
@@ -740,6 +777,7 @@ function ItemsView({ month, today }) {
   const [open, setOpen] = useState(null);
   const [editing, setEditing] = useState(null);
   const [list, setList] = useState('groups');
+  const [custom, setCustom] = useState(false);
   useEffect(() => { setRange({ from: monthFrom, to: monthTo }); }, [month]);
 
   async function load(r = range) {
@@ -755,9 +793,10 @@ function ItemsView({ month, today }) {
     try { await post({ action: 'delete_item_group', id: g.id }); setOpen(null); await load(); } catch (err) { alert(err.message); }
   }
 
-  const presets = [['month', 'Cả tháng', { from: monthFrom, to: monthTo }], ['today', 'Hôm nay', { from: today, to: today }],
-    ['7', '7 ngày', { from: addDaysLocal(today, -6), to: today }]];
-  const presetKey = presets.find(([, , r]) => r.from === range.from && r.to === range.to)?.[0] || '';
+  const yesterday = addDaysLocal(today, -1);
+  const presets = [['today', 'Hôm nay', { from: today, to: today }], ['yesterday', 'Hôm qua', { from: yesterday, to: yesterday }],
+    ['7', '7 ngày', { from: addDaysLocal(today, -6), to: today }], ['month', 'Cả tháng', { from: monthFrom, to: monthTo }], ['custom', 'Tự chọn', null]];
+  const presetKey = custom ? 'custom' : presets.find(([, , r]) => r && r.from === range.from && r.to === range.to)?.[0] || 'custom';
   const t = data?.totals;
   const soldBy = key => data.sold.find(s => s.key === key);
   const boughtBy = key => data.bought.find(b => b.key === key);
@@ -765,13 +804,15 @@ function ItemsView({ month, today }) {
 
   return <section className="fin-section">
     <div className="fin-panel fin-search">
-      <div className="fin-search-types" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-        {presets.map(([k, text, r]) => <button key={k} type="button" className={presetKey === k ? 'active' : ''} onClick={() => setRange(r)}>{text}</button>)}
+      <div className="fin-seg" role="radiogroup" aria-label="Khoảng ngày">
+        {presets.map(([k, text, r]) => <button key={k} type="button" role="radio" aria-checked={presetKey === k} className={presetKey === k ? 'active' : ''}
+          onClick={() => { setCustom(k === 'custom'); if (r) setRange(r); }}>{text}</button>)}
       </div>
-      <div className="fin-search-grid">
-        <label>Từ ngày<input type="date" value={range.from} min={FIRST_MONTH + '-01'} max={range.to} onChange={e => e.target.value && setRange(r => ({ ...r, from: e.target.value }))} /></label>
-        <label>Đến ngày<input type="date" value={range.to} min={range.from} max={today} onChange={e => e.target.value && setRange(r => ({ ...r, to: e.target.value }))} /></label>
-      </div>
+      {presetKey === 'custom' && <div className="fin-search-dates">
+        <input type="date" aria-label="Từ ngày" value={range.from} min={FIRST_MONTH + '-01'} max={range.to} onChange={e => e.target.value && setRange(r => ({ ...r, from: e.target.value }))} />
+        <span>→</span>
+        <input type="date" aria-label="Đến ngày" value={range.to} min={range.from} max={today} onChange={e => e.target.value && setRange(r => ({ ...r, to: e.target.value }))} />
+      </div>}
     </div>
 
     {error && <p className="fin-error">{error}</p>}
@@ -900,17 +941,17 @@ export default function FinancePage() {
   const t = data?.totals;
   const accounts = data?.accounts || [];
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ tài khoản';
+  const shortAccount = id => { const a = accounts.find(x => x.id === id); return a ? cardLabel(a) : 'Không rõ tài khoản'; };
   const days = [...(data?.days || [])].reverse();
   // Tab tự tạo: đang dùng, hoặc đã ẩn nhưng tháng này còn tiền (để tổng vẫn khớp).
   const customTabs = (data?.categories || []).filter(c => c.scope === 'tab' && (!c.archived || data?.totals?.custom?.[c.id]));
-  const dayCost = d => d.purchases + d.drinks + d.salary + d.fixedShare + d.customTotal;
   const totalCost = t ? t.purchases + t.drinks + t.salary + t.fixedShare + t.customTotal : 0;
   // Các khoản chi của tháng — dòng 0đ của tab tự tạo thì ẩn cho gọn.
   const costRows = t ? [
     { key: 'purchases', name: 'Nhập hàng (Sổ tay)', amount: t.purchases },
     { key: 'drinks', name: 'Nước ngọt / bia', amount: t.drinks },
     { key: 'salary', name: 'Lương', amount: t.salary },
-    { key: 'fixed', name: 'Chi cố định', amount: t.fixedShare, sub: data.fixedMonthTotal ? `cả tháng ${money(data.fixedMonthTotal)}` : '' },
+    { key: 'fixed', name: 'Chi cố định (chia đều mỗi ngày)', amount: t.fixedShare, sub: data.fixedMonthTotal ? `cả tháng ${money(data.fixedMonthTotal)}, đã tính tới hôm nay` : '' },
     ...customTabs.map(tab => ({ key: tab.id, name: tab.name, amount: t.custom[tab.id] || 0,
       sub: tab.schedule === 'monthly' ? `cả tháng ${money(data.customMonthTotals?.[tab.id] || 0)}` : '', optional: true })),
   ].filter(r => !r.optional || r.amount > 0) : [];
@@ -925,7 +966,7 @@ export default function FinancePage() {
           <span className="fin-tag ok">Đã chốt sổ</span>
           {d.close.cashDiff !== null && <span className={`fin-tag ${diffClass(d.close.cashDiff)}`}>Tiền mặt: {diffText(d.close.cashDiff)}</span>}
           {Object.entries(d.close.bankDiffs).filter(([, diff]) => diff !== 0).map(([id, diff]) =>
-            <span key={id} className="fin-tag bad">{accountName(id)}: {diffText(diff)}</span>)}
+            <span key={id} className="fin-tag bad">{shortAccount(id)}: {diffText(diff)}</span>)}
         </>
       : d.date < data.today && <span className="fin-tag muted">Chưa chốt sổ</span>}
     {d.mismatchNotes > 0 && <span className="fin-tag bad">⚠ {d.mismatchNotes} phiếu Sổ tay lệch tiền</span>}
@@ -982,21 +1023,24 @@ export default function FinancePage() {
         <p>{t.bills} bill{t.paperBills ? ` + ${t.paperBills} bill giấy (${money(t.paperRevenue)})` : ''} · Tiền mặt {money(t.cash)} · Chuyển khoản {money(t.transfer)}</p>
       </section>
 
-      {today && <button className="fin-today" onClick={() => setDay(today.date)}>
-        <span><b>Hôm nay</b><small>Thu {money(today.revenue)} · Chi {money(dayCost(today))}</small></span>
-        <span className={today.profit < 0 ? 'loss' : 'gain'}>{today.profit < 0 ? 'Lỗ' : 'Lãi'} {money(Math.abs(today.profit))}</span>
-        <ChevronRight size={18} />
+      {today && <button className="fin-day fin-day-today" onClick={() => setDay(today.date)}>
+        <div className="fin-day-head">
+          <span className="fin-day-date"><b>Hôm nay</b><small>{today.bills} bill{today.paperBills ? ` + ${today.paperBills} bill giấy` : ''} · bấm để xem bill, chốt sổ</small></span>
+          <ChevronRight size={18} />
+        </div>
+        <div className="fin-day-nums">
+          <span><small>Thu</small>{money(today.revenue)}</span>
+          <span><small>Chi</small>{money(dayCost(today))}</span>
+          <span className={today.profit < 0 ? 'loss' : 'gain'}><small>{today.profit < 0 ? 'Lỗ' : 'Lãi'}</small>{money(Math.abs(today.profit))}</span>
+        </div>
       </button>}
 
-      {(t.mismatchNotes > 0 || t.suspiciousNotes > 0) && <section className="fin-pending">
-        <b>Phiếu Sổ tay cần xem lại tháng {monthText}</b>
-        <button onClick={() => chooseView('days')}>⚠ {[t.mismatchNotes > 0 && `${t.mismatchNotes} phiếu lệch tiền`, t.suspiciousNotes > 0 && `${t.suspiciousNotes} phiếu giá / số lượng đáng ngờ`].filter(Boolean).join(' · ')} <ChevronRight size={16} /></button>
-      </section>}
-
-      {pendingCk && (pendingCk.missingPhoto > 0 || pendingCk.unchecked > 0) && <section className="fin-pending">
-        <b>Bill chuyển khoản tháng {monthText}</b>
-        {pendingCk.missingPhoto > 0 && <button onClick={() => openSearch({ ...monthRange, photo: 'missing' })}>📷 {pendingCk.missingPhoto} bill chưa có ảnh CK <ChevronRight size={16} /></button>}
-        {pendingCk.unchecked > 0 && <button onClick={() => openSearch({ ...monthRange, check: 'unchecked' })}>☐ {pendingCk.unchecked} bill chưa đối chiếu <ChevronRight size={16} /></button>}
+      {/* Mọi việc cần xem lại trong tháng, gom 1 chỗ; bấm là mở đúng danh sách. */}
+      {((t.mismatchNotes > 0 || t.suspiciousNotes > 0) || (pendingCk && (pendingCk.missingPhoto > 0 || pendingCk.unchecked > 0))) && <section className="fin-pending">
+        <b>Cần xem lại tháng {monthText}</b>
+        {pendingCk?.missingPhoto > 0 && <button onClick={() => openSearch({ ...monthRange, photo: 'missing' })}>📷 {pendingCk.missingPhoto} bill chuyển khoản chưa có ảnh <ChevronRight size={16} /></button>}
+        {pendingCk?.unchecked > 0 && <button onClick={() => openSearch({ ...monthRange, check: 'unchecked' })}>☐ {pendingCk.unchecked} bill chuyển khoản chưa đối chiếu <ChevronRight size={16} /></button>}
+        {(t.mismatchNotes > 0 || t.suspiciousNotes > 0) && <button onClick={() => chooseView('days')}>⚠ {[t.mismatchNotes > 0 && `${t.mismatchNotes} phiếu Sổ tay lệch tiền`, t.suspiciousNotes > 0 && `${t.suspiciousNotes} phiếu Sổ tay giá / số lượng đáng ngờ`].filter(Boolean).join(' · ')} <ChevronRight size={16} /></button>}
       </section>}
 
       <section className="fin-panel">
@@ -1021,9 +1065,14 @@ export default function FinancePage() {
       <div className="fin-days">
         {days.map(d => <button key={d.date} className="fin-day" onClick={() => setDay(d.date)}>
           <div className="fin-day-head">
-            <span className="fin-day-date"><b>{dayLabel(d.date)}</b><small>{d.bills} bill{d.paperBills ? ` + ${d.paperBills} giấy` : ''} · Thu {money(d.revenue)} · Chi {money(dayCost(d))}</small></span>
-            <span className={d.profit < 0 ? 'loss' : 'gain'}>{d.profit < 0 ? 'Lỗ' : 'Lãi'}<br />{money(Math.abs(d.profit))}</span>
+            <span className="fin-day-date"><b>{dayLabel(d.date)}</b><small>{d.bills} bill{d.paperBills ? ` + ${d.paperBills} bill giấy` : ''}</small></span>
             <ChevronRight size={16} />
+          </div>
+          {/* 3 cột thẳng hàng giữa các ngày để so nhanh. */}
+          <div className="fin-day-nums">
+            <span><small>Thu</small>{money(d.revenue)}</span>
+            <span><small>Chi</small>{money(dayCost(d))}</span>
+            <span className={d.profit < 0 ? 'loss' : 'gain'}><small>{d.profit < 0 ? 'Lỗ' : 'Lãi'}</small>{money(Math.abs(d.profit))}</span>
           </div>
           <div className="fin-day-tags">{dayTags(d)}</div>
         </button>)}
@@ -1058,6 +1107,6 @@ export default function FinancePage() {
       <p className="fin-hint fin-add-hint">Khoản chi theo ngày (nước ngọt, lương, tab theo ngày) xem và xoá trong mục <b>Từng ngày</b>.</p>
     </section>}
 
-    {day && <DayDetail date={day} accounts={accounts} categories={data?.categories || []} onClose={() => setDay(null)} onChanged={load} />}
+    {day && <DayDetail date={day} summary={data?.days?.find(d => d.date === day)} accounts={accounts} categories={data?.categories || []} onClose={() => setDay(null)} onChanged={load} />}
   </div>;
 }
