@@ -64,6 +64,30 @@ export function clockSummary(result) {
   return `🟢 Vào ca lúc ${clockTime(result.at)}\n⏱ Tổng tích luỹ hôm nay: ${hoursText(sumHours(sessions))}`;
 }
 
+// ── Câu đọc to sau khi quét (giọng tiếng Việt của máy): không biểu tượng, giờ Việt Nam đọc "14 giờ 05".
+export function spokenTime(ts) {
+  const t = new Date(Date.parse(ts) + 7 * 3600000);
+  return `${t.getUTCHours()} giờ ${String(t.getUTCMinutes()).padStart(2, '0')}`;
+}
+const plainText = s => String(s || '').replace(/[^\p{L}\p{N}\s.,:;!?()/%+-]/gu, '').replace(/\s+/g, ' ').trim();
+
+/** Điện thoại nhân viên: kết quả của action clock. */
+export const spokenClock = result => `Quét mã thành công. ${result.clocked === 'out' ? 'Ra' : 'Vào'} ca lúc ${spokenTime(result.at)}.`;
+/** Điện thoại nhân viên: máy chủ từ chối (câu lỗi của máy chủ, vd. chưa vào wifi quán). */
+export const spokenClockError = message => `Quét mã chưa thành công. ${plainText(message)}`;
+
+// Máy quầy: lượt quét bị chặn (đang bật chặn thật trong trang Lương) — lý do ngắn để hiện / đọc.
+export const KIOSK_FAIL_TEXT = {
+  other_network: 'Điện thoại chưa vào wifi quán',
+  shared_device: 'Điện thoại này đã đăng ký cho người khác',
+  unknown_device: 'Không phải điện thoại đã đăng ký',
+};
+/** Máy quầy: {ok, name, action, at} khi chấm được, {ok: false, name, reason} khi bị chặn. */
+export function spokenKiosk(n) {
+  if (!n.ok) return `${n.name}, quét mã chưa thành công. ${KIOSK_FAIL_TEXT[n.reason] || 'Xem lại trên điện thoại'}.`;
+  return `${n.name}, quét mã thành công. ${n.action === 'out' ? 'Ra' : 'Vào'} ca lúc ${spokenTime(n.at)}.`;
+}
+
 // Đúng giờ / trễ / sớm so với ca của người đó, báo ngay sau khi quét (chỉ từ ngày tính giờ theo ca).
 export function punctuality(clocked, session, sessions, rules, staffId) {
   if (!rules || !session || !(String(session.date) >= rules.hours_from)) return '';

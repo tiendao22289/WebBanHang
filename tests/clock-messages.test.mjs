@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { kioskQrToken } from '../src/lib/checkinToken.mjs';
 import { normalizeRules } from '../src/lib/attendanceRules.mjs';
-import { clockSummary, punctuality, qrClockToken, tokenFresh } from '../src/lib/clockMessages.mjs';
+import { clockSummary, punctuality, qrClockToken, spokenClock, spokenClockError, spokenKiosk, spokenTime, tokenFresh } from '../src/lib/clockMessages.mjs';
 
 const SECRET = 'service-role-test-key'.repeat(2);
 const KIOSK = '00000000-0000-4000-8000-00000000eeee';
@@ -45,4 +45,17 @@ test('leaving 30 minutes or more early tells the staff it is cut from pay (from 
   assert.equal(out('2026-11-04', '13:00'), '⏰ Về sớm 3 giờ so với giờ hết ca 23:00. Về sớm từ 30 phút bị trừ lương theo giờ về sớm.');
   assert.equal(out('2026-11-04', '15:40'), '⏰ Về sớm 20 phút so với giờ hết ca 23:00.');
   assert.equal(out('2026-10-27', '13:00'), '⏰ Về sớm 3 giờ so với giờ hết ca 23:00.');
+});
+
+test('the scan result is read aloud in plain Vietnamese: success or not, with the time', () => {
+  assert.equal(spokenTime('2026-10-25T07:05:00Z'), '14 giờ 05', 'Vietnam time, read as hours and minutes');
+  assert.equal(spokenTime('2026-10-25T17:30:00.000Z'), '0 giờ 30');
+  assert.equal(spokenClock({ clocked: 'in', at: '2026-10-25T07:05:00Z' }), 'Quét mã thành công. Vào ca lúc 14 giờ 05.');
+  assert.equal(spokenClock({ clocked: 'out', at: '2026-10-25T15:40:00Z' }), 'Quét mã thành công. Ra ca lúc 22 giờ 40.');
+  assert.equal(spokenClockError('⚠️ Điện thoại chưa vào wifi quán. Bật wifi quán (tắt 4G) rồi quét lại mã trên máy quầy.'),
+    'Quét mã chưa thành công. Điện thoại chưa vào wifi quán. Bật wifi quán (tắt 4G) rồi quét lại mã trên máy quầy.', 'no emoji read out');
+  assert.equal(spokenKiosk({ ok: true, name: 'Phát', action: 'in', at: '2026-10-25T07:05:00Z' }), 'Phát, quét mã thành công. Vào ca lúc 14 giờ 05.');
+  assert.equal(spokenKiosk({ ok: true, name: 'Phát', action: 'out', at: '2026-10-25T15:40:00Z' }), 'Phát, quét mã thành công. Ra ca lúc 22 giờ 40.');
+  assert.equal(spokenKiosk({ ok: false, name: 'Phát', reason: 'other_network' }), 'Phát, quét mã chưa thành công. Điện thoại chưa vào wifi quán.');
+  assert.equal(spokenKiosk({ ok: false, name: 'Phát', reason: null }), 'Phát, quét mã chưa thành công. Xem lại trên điện thoại.');
 });

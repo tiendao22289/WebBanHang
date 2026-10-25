@@ -169,6 +169,19 @@ test('the kiosk keeps a code for 30 seconds, swaps it once used and shows who cl
   assert.notEqual(next.body.token, first.body.token, 'new code right after someone used it');
   assert.deepEqual([next.body.lastScan.name, next.body.lastScan.action], ['Phát', 'in']);
 
+  assert.equal(next.body.lastFail, null, 'nothing blocked');
+
+  // Đang bật chặn thật: lượt quét bằng 4G bị chặn → máy quầy báo chưa thành công (chỉ trong 15 giây, chỉ máy quầy đó).
+  const ago = s => new Date(Date.now() - s * 1000).toISOString();
+  state.checkin_scans.push(
+    { id: 'b-old', kiosk_id: KIOSK, staff_id: STAFF.id, action: 'blocked', warnings: ['unknown_device'], created_at: ago(40) },
+    { id: 'b-other', kiosk_id: 'another-kiosk', staff_id: STAFF.id, action: 'blocked', warnings: ['other_network'], created_at: ago(2) },
+    { id: 'b-new', kiosk_id: KIOSK, staff_id: STAFF.id, action: 'blocked', warnings: ['other_network'], created_at: ago(3) });
+  const failed = plain(await api.GET(kioskReq(cookie, next.body.token)));
+  assert.deepEqual([failed.body.lastFail.id, failed.body.lastFail.name, failed.body.lastFail.reason], ['b-new', 'Phát', 'other_network']);
+  state.checkin_scans = state.checkin_scans.filter(x => x.id !== 'b-new');
+  assert.equal(plain(await api.GET(kioskReq(cookie, next.body.token))).body.lastFail, null, 'older than 15 seconds or another kiosk: not shown');
+
   const old = token.kioskQrToken(SECRET, KIOSK, Date.now() - 31000);
   assert.notEqual(plain(await api.GET(kioskReq(cookie, old))).body.token, old, 'new code after 30 seconds');
 

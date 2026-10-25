@@ -1,11 +1,14 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { workforce } from '@/lib/staffApi';
-import { STAFF_WARNING_TEXT, clockSummary, clockTime, punctuality, qrClockToken, tokenFresh } from '@/lib/clockMessages.mjs';
+import { STAFF_WARNING_TEXT, clockSummary, clockTime, punctuality, qrClockToken, spokenClock, spokenClockError, tokenFresh } from '@/lib/clockMessages.mjs';
+import { speak, unlockSpeech } from '@/lib/speak';
 
 // Quét mã chấm công ngay trong app nhân viên: mở camera sau, đọc mã QR trên máy quầy rồi vào / ra
 // ca luôn — cùng đăng nhập, cùng điện thoại đã đăng ký (không phải mở trình duyệt khác như khi
 // quét bằng app Camera). Đọc mã bằng BarcodeDetector nếu máy có (Android), không thì bằng jsQR.
+// Quét xong đọc to "quét mã thành công / chưa thành công" — nút mở màn quét phải gọi unlockSpeech()
+// lúc bấm, vì điện thoại chỉ cho trang đọc sau khi người dùng chạm.
 let openCount = 0, bodyOverflow = '';
 
 export default function QrClockScanner({ onClose }) {
@@ -39,12 +42,14 @@ export default function QrClockScanner({ onClose }) {
         setDetail(punctuality(result.clocked, result.session, result.sessions || [], me?.rules || null, result.session?.staff_id));
         setWarn((result.warnings || []).map(w => STAFF_WARNING_TEXT[w]).filter(Boolean).join(' '));
         setPhase('done');
+        speak(spokenClock(result));
         navigator.vibrate?.(80);
         // Trang Lương đang mở thì tải lại giờ công hôm nay.
         window.dispatchEvent(new Event('staff-clocked'));
       } catch (err) {
         setMessage(err.message);
         setPhase('error');
+        speak(spokenClockError(err.message));
       }
     };
 
@@ -143,7 +148,7 @@ export default function QrClockScanner({ onClose }) {
           {detail && <div style={{ fontSize: '0.95rem', color: '#e2e8f0' }}>{detail}</div>}
           {warn && <div style={{ fontSize: '0.88rem', color: '#fde68a' }}>{warn}</div>}
           <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
-            {phase === 'error' && <button onClick={() => setAttempt(a => a + 1)} style={{ ...button, background: '#16a34a', color: 'white' }}>Quét lại</button>}
+            {phase === 'error' && <button onClick={() => { unlockSpeech(); setAttempt(a => a + 1); }} style={{ ...button, background: '#16a34a', color: 'white' }}>Quét lại</button>}
             <button onClick={onClose} style={{ ...button, background: phase === 'done' ? '#16a34a' : '#334155', color: 'white' }}>{phase === 'done' ? 'Xong' : 'Đóng'}</button>
           </div>
         </div>

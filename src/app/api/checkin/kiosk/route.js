@@ -3,6 +3,7 @@
  *
  * GET  ?t=<mã đang hiện>  → mã QR để hiện. Giữ mã cũ nếu còn mới (dưới 30 giây)
  *                           và chưa ai dùng; không thì tạo mã mới và báo ai vừa chấm.
+ *                           lastFail: lượt quét bị chặn ở máy này trong 15 giây qua.
  *                           Mỗi lần hỏi, máy chủ ghi lại địa chỉ wifi của quán.
  * POST {action: 'activate', name} → admin biến máy đang mở thành máy quầy. Máy này
  *                           bị đăng xuất tài khoản admin, chỉ còn xem được mã QR.
@@ -23,6 +24,7 @@ const secure = request => request.headers?.get?.('x-forwarded-proto') === 'https
 
 // Máy quầy hỏi mỗi vài giây; đóng ca quên ra ca tối đa 5 phút một lần.
 let lastSweep = 0;
+const FAIL_SHOW_MS = 15000;
 
 export async function GET(request) {
   try {
@@ -60,11 +62,21 @@ export async function GET(request) {
         lastScan = { name: person?.full_name || 'Nhân viên', action: scans?.[0]?.action || null, at: scans?.[0]?.created_at || new Date(now).toISOString() };
       } else keep = shown.ageMs < CHECKIN_SHOW_MS;
     }
+    // Lượt quét mã của máy này vừa bị chặn (đang bật chặn thật: khác wifi / máy lạ) → máy quầy báo "chưa thành công".
+    let lastFail = null;
+    const { data: blocked, error: be } = await db.from('checkin_scans').select('id, staff_id, warnings, created_at')
+      .eq('kiosk_id', kiosk.id).eq('action', 'blocked').gte('created_at', new Date(now - FAIL_SHOW_MS).toISOString())
+      .order('created_at', { ascending: false }).limit(1);
+    if (be) throw be;
+    if (blocked?.[0]) {
+      const { data: person } = await db.from('staff').select('full_name').eq('id', blocked[0].staff_id).maybeSingle();
+      lastFail = { id: blocked[0].id, name: person?.full_name || 'Nhân viên', reason: (blocked[0].warnings || [])[0] || null, at: blocked[0].created_at };
+    }
     const token = keep ? new URL(request.url).searchParams.get('t') : kioskQrToken(secret(), kiosk.id, now);
     const age = keep ? shown.ageMs : 0;
     // computerClockMs: đồng hồ máy tính chạy web lệch bao nhiêu so với internet (máy quầy báo chủ chỉnh giờ máy).
     const clock = clockStatus();
-    return NextResponse.json({ token, name: kiosk.name, refreshInMs: Math.max(1000, CHECKIN_SHOW_MS - age), lastScan, serverTime: new Date(now).toISOString(),
+    return NextResponse.json({ token, name: kiosk.name, refreshInMs: Math.max(1000, CHECKIN_SHOW_MS - age), lastScan, lastFail, serverTime: new Date(now).toISOString(),
       computerClockMs: clock.synced ? -clock.offsetMs : null }, { headers });
   } catch (error) {
     console.error('[kiosk] GET', error);

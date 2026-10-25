@@ -3,7 +3,8 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { workforce } from '@/lib/staffApi';
 import { shiftOf } from '@/lib/attendanceRules.mjs';
-import { STAFF_WARNING_TEXT as WARNING_TEXT, clockSummary, clockTime as formatTime, hoursText, punctuality, sumHours, tokenFresh } from '@/lib/clockMessages.mjs';
+import { STAFF_WARNING_TEXT as WARNING_TEXT, clockSummary, clockTime as formatTime, hoursText, punctuality, spokenClock, spokenClockError, sumHours, tokenFresh } from '@/lib/clockMessages.mjs';
+import { speak, unlockSpeech } from '@/lib/speak';
 import { Suspense } from 'react';
 
 // Trình duyệt trong Zalo / Facebook giữ cookie riêng → máy chủ tưởng là điện thoại khác.
@@ -74,12 +75,14 @@ function CheckinContent() {
 
   const handleClockAction = async () => {
     if (!staff) return;
+    unlockSpeech(); // đang bấm nút: mở khoá đọc to kết quả
     setLoading(true);
     let result;
     try {
       result = await workforce('clock', { token });
     } catch (err) {
       setMsg(err.message);
+      speak(spokenClockError(err.message));
       if (/cần đăng nhập/i.test(err.message)) { setStaff(null); setPhase('login'); }
       setLoading(false);
       return;
@@ -91,6 +94,7 @@ function CheckinContent() {
     setWarn((result.warnings || []).map(w => WARNING_TEXT[w]).filter(Boolean).join(' '));
     setMsg(clockSummary(result));
     setPhase('done');
+    speak(spokenClock(result));
     setLoading(false);
   };
 

@@ -7,6 +7,7 @@ import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessi
 import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
+import { unlockSpeech } from '@/lib/speak';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users } from 'lucide-react';
 import './payroll.css';
 
@@ -848,7 +849,7 @@ export default function PayrollPage() {
                   {isWorking && !todaySessions.some(s => s.id === openSession.id) && (
                     <div style={{ fontSize: '0.8rem', color: '#15803d', marginBottom: 8 }}>🟢 Ca bắt đầu hôm qua lúc {fmtTime(openSession.clock_in)} vẫn đang mở.</div>
                   )}
-                  <button onClick={() => setScanOpen(true)}
+                  <button onClick={() => { unlockSpeech(); setScanOpen(true); }}
                     style={{ width: '100%', padding: '14px', marginBottom: 10, borderRadius: 12, border: 'none', background: isWorking ? '#dc2626' : '#16a34a', color: 'white', fontWeight: 800, fontSize: '1.02rem', cursor: 'pointer' }}>
                     📷 Quét mã chấm công — {isWorking ? 'ra ca' : 'vào ca'}
                   </button>
