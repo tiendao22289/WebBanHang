@@ -53,6 +53,7 @@ export default function KioskPage() {
   const setupRef = useRef(false); // đang chờ admin bật máy → thôi hỏi mã
   const app = useRef(null); // app iPhone (null = trình duyệt)
   const [inApp, setInApp] = useState(false);
+  const [faceApp, setFaceApp] = useState(false); // app có so mặt (bản 1.1 trở đi không còn)
   const modeRef = useRef('qr');
   const faceBusy = useRef(false);
   const faceSeen = useRef([]);
@@ -128,6 +129,7 @@ export default function KioskPage() {
   useEffect(() => {
     app.current = kioskApp();
     setInApp(!!app.current);
+    setFaceApp(!!app.current?.face);
     if (app.current) {
       // Chạm đánh thức màn hình: lấy mã mới ngay, giữ sáng thêm một lúc cho người đó quét.
       app.current.onWake = () => { busyUntil.current = Date.now() + WAKE_HOLD_MS; pollRef.current?.(); };
@@ -242,7 +244,7 @@ export default function KioskPage() {
 
       <div style={{ marginTop: 22, fontSize: 'clamp(1rem, 4vw, 1.3rem)', lineHeight: 1.7, textAlign: 'center' }}>
         📶 Vào <strong>wifi quán</strong> → mở app, bấm nút <strong>📷 quét mã</strong> (hoặc dùng camera điện thoại)
-        {inApp && <><br />👀 Quét xong <strong>nhìn vào camera máy này và chớp mắt</strong></>}
+        {faceApp && <><br />👀 Quét xong <strong>nhìn vào camera máy này và chớp mắt</strong></>}
       </div>
       <div style={{ color: '#64748b', fontSize: '0.85rem', marginTop: 6, textAlign: 'center' }}>Mã đổi liên tục, mỗi mã chỉ dùng được 1 lần.</div>
       {/* Điện thoại / máy tính bảng chỉ cho trang đọc to sau khi có người chạm vào trang một lần (mỗi lần mở lại app). App thì tự đọc. */}
