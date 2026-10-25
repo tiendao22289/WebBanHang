@@ -3,7 +3,9 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { workforce } from '@/lib/staffApi';
 import { shiftOf } from '@/lib/attendanceRules.mjs';
-import { STAFF_WARNING_TEXT as WARNING_TEXT, clockSummary, clockTime as formatTime, hoursText, punctuality, sumHours, tokenFresh } from '@/lib/clockMessages.mjs';
+import { STAFF_WARNING_TEXT as WARNING_TEXT, clockSummary, clockTime as formatTime, faceWaitText, hoursText, punctuality, spokenClock, spokenClockError, sumHours, tokenFresh } from '@/lib/clockMessages.mjs';
+import { speak, unlockSpeech } from '@/lib/speak';
+import { waitFaceCheck } from '@/lib/faceWait';
 import { Suspense } from 'react';
 
 // Trình duyệt trong Zalo / Facebook giữ cookie riêng → máy chủ tưởng là điện thoại khác.
@@ -74,23 +76,41 @@ function CheckinContent() {
 
   const handleClockAction = async () => {
     if (!staff) return;
+    unlockSpeech(); // đang bấm nút: mở khoá đọc to kết quả
     setLoading(true);
     let result;
     try {
       result = await workforce('clock', { token });
     } catch (err) {
       setMsg(err.message);
+      speak(spokenClockError(err.message));
       if (/cần đăng nhập/i.test(err.message)) { setStaff(null); setPhase('login'); }
       setLoading(false);
       return;
     }
+    // Máy quầy là app so mặt: chờ máy quầy so mặt (máy quầy đọc to kết quả), đúng mặt mới ghi giờ.
+    const viaFace = !!result.face;
+    let held = false;
+    if (viaFace) {
+      setPhase('face');
+      const r = await waitFaceCheck(result.face.id);
+      if (!((r.status === 'ok' || r.status === 'review') && r.result)) {
+        setMsg(faceWaitText(r));
+        setPhase('faceFail');
+        setLoading(false);
+        return;
+      }
+      result = r.result;
+      held = r.status === 'review';
+    }
     const allSessions = result.sessions || [];
     setTodaySessions(allSessions);
     setOpenSession(result.clocked === 'in' ? result.session : null);
-    setOnTime(punctuality(result.clocked, result.session, allSessions, rules, staff.id));
+    setOnTime(held ? '⏳ Sai mặt 3 lần: giờ đã ghi nhưng chờ chủ quán duyệt mới tính lương.' : punctuality(result.clocked, result.session, allSessions, rules, staff.id));
     setWarn((result.warnings || []).map(w => WARNING_TEXT[w]).filter(Boolean).join(' '));
     setMsg(clockSummary(result));
     setPhase('done');
+    if (!viaFace) speak(spokenClock(result));
     setLoading(false);
   };
 
@@ -201,6 +221,21 @@ function CheckinContent() {
         style={{ background: 'none', border: 'none', color: '#9ca3af', fontSize: '0.78rem', cursor: 'pointer' }}>
         Không phải bạn? Đăng nhập tài khoản khác
       </button>
+    </>
+  );
+
+  if (phase === 'face') return box(
+    <>
+      <div style={{ fontSize: 56, marginBottom: 10 }}>👀</div>
+      <div style={{ fontWeight: 800, fontSize: '1.05rem', marginBottom: 6 }}>Nhìn vào camera máy quầy và chớp mắt</div>
+      <div style={{ fontSize: '0.85rem', color: '#6b7280' }}>Máy quầy đang so mặt… đúng mặt mới ghi giờ.</div>
+    </>
+  );
+
+  if (phase === 'faceFail') return box(
+    <>
+      <div style={{ fontSize: 56, marginBottom: 10 }}>⚠️</div>
+      <div style={{ fontWeight: 700, color: '#b91c1c', whiteSpace: 'pre-line', lineHeight: 1.6 }}>{msg}</div>
     </>
   );
 

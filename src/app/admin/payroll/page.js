@@ -1,13 +1,15 @@
 'use client';
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
 import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, workDayOf } from '@/lib/attendanceRules.mjs';
 import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
+import { FACE_LEVEL_TEXT } from '@/lib/faceCheck.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
-import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users, RefreshCw } from 'lucide-react';
+import { unlockSpeech } from '@/lib/speak';
+import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users } from 'lucide-react';
 import './payroll.css';
 
 const now = new Date();
@@ -372,15 +374,31 @@ export default function PayrollPage() {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], monthOver: !!j.monthOver, reviews: j.reviews || [] });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
+  // So khuôn mặt ở máy quầy (app): cài đặt, ai có mặt mẫu, ca sai mặt 3 lần chờ duyệt.
+  const [faces, setFaces] = useState(null);
+  const fetchFaces = useCallback(async () => {
+    try {
+      const r = await fetch('/api/admin/workforce?faces=1', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) setFaces(j);
+    } catch { /* phần so mặt hiện "đang tải" */ }
+  }, []);
   const checkinAction = async (action, body, confirmText) => {
     if (confirmText && !confirm(confirmText)) return false;
     try { await workforce(action, body); } catch (err) { alert(err.message); return false; }
     fetchCheckin();
     if (action === 'decide_fix') fetchAll();
     return true;
+  };
+  const faceAction = async (action, body, confirmText) => {
+    if (confirmText && !confirm(confirmText)) return;
+    try { await workforce(action, body); } catch (err) { alert(err.message); return; }
+    fetchFaces();
+    // Duyệt ca sai mặt: ca được tính lương / bị bỏ → tải lại giờ công và lương.
+    if (action === 'decide_face') fetchAll();
   };
 
   // Giờ làm theo ca (từ ngày bật): chỉ tính lương trong ca, giờ ngoài ca chờ chủ duyệt.
@@ -391,7 +409,10 @@ export default function PayrollPage() {
   const hoursOf = s => sessionHours(s, rules, reviewMap[s.id]);
   // Các lượt thuộc ngày làm trong tháng đang xem: lượt dọn quán sau nửa đêm thuộc ca hôm trước
   // (ngày 1 tháng sau vẫn là ca cuối tháng này, ngày 1 tháng này có thể là ca cuối tháng trước).
-  const attendance = attendanceRows.filter(a => workDayOf(a, rules).slice(0, 7) === `${selYear}-${fmt(selMonth)}`);
+  // Ca ghi sau 3 lần sai mặt (face_hold) chưa tính lương tới khi chủ duyệt.
+  const faceHeld = new Set(payrollMonth.faceHolds || []);
+  const attendance = attendanceRows.filter(a => workDayOf(a, rules).slice(0, 7) === `${selYear}-${fmt(selMonth)}`)
+    .map(a => (faceHeld.has(a.id) ? { ...a, face_hold: true } : a));
   // Ngày ghi khác ngày làm thì ghi rõ ca của ngày nào.
   const dateLabel = a => { const d = workDayOf(a, rules); return d === a.date ? a.date : `${a.date} (ca ngày ${d.slice(8, 10)}/${d.slice(5, 7)})`; };
   const hoursText = ms => `${fmtNum(Math.round(ms / 360000) / 10)} giờ`;
@@ -407,6 +428,7 @@ export default function PayrollPage() {
     // Về sớm từ 30 phút (từ tháng 11): ghi số tiền bị trừ của ngày đó.
     const cut = last ? earlyCutOf(a.staff_id, wd) : null;
     if (cut) texts.push(`trừ lương ${formatMoney(cut.amount)} vì về sớm`);
+    if (a.face_hold) texts.push('sai mặt 3 lần — chờ duyệt, chưa tính lương');
     return (payrollMonth.autoClosed || []).includes(a.id) ? [...texts, 'quên ra ca (máy tự đóng)'] : texts;
   };
   const extraText = a => {
@@ -451,10 +473,13 @@ export default function PayrollPage() {
   };
 
   const [expandedSalaryStaff, setExpandedSalaryStaff] = useState(null);
+  // Phiếu lương trên điện thoại: gọn (tên · thực lĩnh · 1 dòng tóm tắt), bấm để xem chi tiết.
+  const [openSalaryCard, setOpenSalaryCard] = useState(null);
 
   const fetchAll = useCallback(async () => {
     fetchCheckin();
     fetchPayrollMonth();
+    fetchFaces();
     setLoading(true);
     const [staffRes, cfgRes, reqRes, vioRes, attRes] = await Promise.all([
       supabase.from('staff').select('id, full_name, phone, role, created_at, last_login').order('full_name'),
@@ -481,7 +506,22 @@ export default function PayrollPage() {
   }, [selMonth, selYear, fetchCheckin, fetchPayrollMonth]);
 
 
-  // Đổi tháng / năm sau khi đã đồng bộ thì tải lại ngay: trước đây vẫn dùng giờ công tháng cũ để tính.
+  // Mở trang là tự tải (không còn nút Đồng bộ). Quay lại trang (mở lại app) sau ≥ 1 phút thì tải lại cho mới.
+  const fetchAllRef = useRef(fetchAll);
+  fetchAllRef.current = fetchAll;
+  const syncedAtRef = useRef(null);
+  syncedAtRef.current = lastSyncedAt;
+  useEffect(() => {
+    if (currentUser?.role !== 'admin') return;
+    fetchAllRef.current();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && Date.now() - (syncedAtRef.current?.getTime() || 0) > 60000) fetchAllRef.current();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [currentUser?.role]);
+
+  // Đổi tháng / năm sau khi đã tải thì tải lại ngay: trước đây vẫn dùng giờ công tháng cũ để tính.
   useEffect(() => {
     if (hasSynced) fetchAll();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -831,7 +871,7 @@ export default function PayrollPage() {
                   {isWorking && !todaySessions.some(s => s.id === openSession.id) && (
                     <div style={{ fontSize: '0.8rem', color: '#15803d', marginBottom: 8 }}>🟢 Ca bắt đầu hôm qua lúc {fmtTime(openSession.clock_in)} vẫn đang mở.</div>
                   )}
-                  <button onClick={() => setScanOpen(true)}
+                  <button onClick={() => { unlockSpeech(); setScanOpen(true); }}
                     style={{ width: '100%', padding: '14px', marginBottom: 10, borderRadius: 12, border: 'none', background: isWorking ? '#dc2626' : '#16a34a', color: 'white', fontWeight: 800, fontSize: '1.02rem', cursor: 'pointer' }}>
                     📷 Quét mã chấm công — {isWorking ? 'ra ca' : 'vào ca'}
                   </button>
@@ -1059,73 +1099,39 @@ export default function PayrollPage() {
   // ── ADMIN VIEW ───────────────────────────────────────────────────────────────
   return (
     <div className="payroll-page">
+      {/* Gọn cho điện thoại: tên trang; người dùng + lúc cập nhật một dòng nhỏ. Dữ liệu tự tải. */}
       <div className="payroll-header">
-        <div className="payroll-title">💰 Tính Lương Nhân Viên</div>
-        {currentUser && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            {currentUser.role === 'admin' && (
-              <button
-                onClick={fetchAll}
-                disabled={loading}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: loading ? '#94a3b8' : '#3b82f6', color: 'white', border: 'none', borderRadius: 10, fontSize: '0.82rem', fontWeight: 700, cursor: loading ? 'wait' : 'pointer', boxShadow: '0 2px 6px rgba(59, 130, 246, 0.25)' }}
-              >
-                <RefreshCw size={15} />
-                {loading ? 'Đang đồng bộ...' : 'Đồng bộ'}
-              </button>
-            )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', background: currentUser.role === 'admin' ? '#fef3c7' : '#dbeafe', borderRadius: 20, fontSize: '0.78rem', fontWeight: 700, color: currentUser.role === 'admin' ? '#92400e' : '#1d4ed8', flexShrink: 0 }}>
-              <span>{currentUser.role === 'admin' ? '👑' : '👤'}</span>
-              <span>{currentUser.full_name}</span>
-              <span style={{ fontWeight: 400, opacity: 0.7 }}>· {currentUser.role === 'admin' ? 'Admin' : 'Nhân viên'}</span>
-              <button
-                onClick={logout}
-                title="Đăng xuất"
-                style={{ marginLeft: 4, background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1, padding: '2px 4px', borderRadius: 6, opacity: 0.6 }}
-              >🚪</button>
-            </div>
-          </div>
-        )}
+        <div className="payroll-title">💰 Lương nhân viên</div>
       </div>
-
-      {lastSyncedAt && (
-        <div style={{ fontSize: '0.82rem', color: '#64748b', margin: '-6px 0 10px', textAlign: 'right' }}>
-          Đã đồng bộ lúc {lastSyncedAt.toLocaleTimeString('vi-VN')}.
+      {currentUser && (
+        <div className="payroll-who">
+          <span>{currentUser.role === 'admin' ? '👑' : '👤'} {currentUser.full_name} · {currentUser.role === 'admin' ? 'Admin' : 'Nhân viên'}</span>
+          {loading ? <span>· đang cập nhật…</span> : lastSyncedAt && <span>· cập nhật {lastSyncedAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>}
+          <button onClick={logout} title="Đăng xuất">🚪 Thoát</button>
         </div>
       )}
 
-      {/* Tabs */}
+      {/* Mục: lưới (điện thoại 4 cột) — thấy đủ mọi mục, không còn mục bị khuất bên phải. */}
       <div className="payroll-tabs">
         {[
-          { key: 'salary', label: '📊 Bảng Lương' },
-          { key: 'requests', label: '📋 Yêu cầu', badge: pendingCount + (checkin?.fixes || []).filter(f => f.status === 'pending').length + (checkin?.extras || []).length },
-          { key: 'violations', label: '⚠️ Vi phạm', badge: fineHints.length },
-          { key: 'attendance', label: '⏰ Chấm công' },
-          { key: 'qr', label: '📱 Cài chấm công' },
-          { key: 'accounts', label: '👤 Tài khoản' },
-          { key: 'config', label: '⚙️ Cấu hình' },
+          { key: 'salary', icon: '📊', label: 'Bảng lương' },
+          { key: 'requests', icon: '📋', label: 'Yêu cầu', badge: pendingCount + (checkin?.fixes || []).filter(f => f.status === 'pending').length + (checkin?.extras || []).length + (faces?.reviews || []).length },
+          { key: 'violations', icon: '⚠️', label: 'Vi phạm', badge: fineHints.length },
+          { key: 'attendance', icon: '⏰', label: 'Chấm công' },
+          { key: 'qr', icon: '📱', label: 'Cài chấm công' },
+          { key: 'accounts', icon: '👤', label: 'Tài khoản' },
+          { key: 'config', icon: '⚙️', label: 'Cấu hình' },
         ].map(tab => (
-          <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)}>
-            {tab.label}
+          <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)} aria-pressed={activeTab === tab.key}>
+            <span className="tab-icon" aria-hidden="true">{tab.icon}</span>
+            <span className="tab-label">{tab.label}</span>
             {tab.badge > 0 && <span className="badge">{tab.badge}</span>}
           </button>
         ))}
       </div>
 
-      {loading ? <div className="empty-state">Đang tải...</div> : !hasSynced ? (
-        <div className="empty-state">
-          <p>Bấm Đồng bộ để tải dữ liệu tính lương từ Supabase.</p>
-          <p className="text-sm text-muted">Trang sẽ không tự tải dữ liệu admin cho tới khi bạn bấm đồng bộ.</p>
-          {currentUser?.role === 'admin' && (
-            <button
-              onClick={fetchAll}
-              disabled={loading}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 12, padding: '9px 16px', background: loading ? '#94a3b8' : '#3b82f6', color: 'white', border: 'none', borderRadius: 10, fontSize: '0.86rem', fontWeight: 700, cursor: loading ? 'wait' : 'pointer', boxShadow: '0 2px 6px rgba(59, 130, 246, 0.25)' }}
-            >
-              <RefreshCw size={15} />
-              {loading ? 'Đang đồng bộ...' : 'Đồng bộ ngay'}
-            </button>
-          )}
-        </div>
+      {!hasSynced ? (
+        <div className="empty-state">Đang tải dữ liệu lương…</div>
       ) : (
         <>
           {/* === BẢNG LƯƠNG === */}
@@ -1203,16 +1209,20 @@ export default function PayrollPage() {
                   {filtered.length === 0 && <div className="empty-state">Chưa có nhân viên</div>}
                   {filtered.map(s => {
                     const c = salaryOf(s.id);
+                    const cardOpen = openSalaryCard === s.id;
                     return (
                       <div key={s.id} className="salary-card">
-                        <div className="salary-card-header">
-                          <div>
+                        <button type="button" className="salary-card-header" onClick={() => setOpenSalaryCard(cardOpen ? null : s.id)} aria-expanded={cardOpen}>
+                          <div style={{ minWidth: 0 }}>
                             <div className="salary-card-name">{c.locked ? '🔒 ' : ''}{s.full_name}</div>
-                            <div className="salary-card-phone">{s.phone}</div>
+                            <div className="salary-card-sum">{[daysText(c), c.otHours ? `tăng ca ${fmtNum(c.otHours)} giờ` : null, c.advAmt ? `ứng ${formatMoney(c.advAmt)}` : null, c.vioAmt ? `phạt ${formatMoney(c.vioAmt)}` : null].filter(Boolean).join(' · ')}</div>
                           </div>
-                          <div className={`salary-card-net ${c.net < 0 ? 'negative' : ''}`}>{formatMoney(c.net)}</div>
-                        </div>
-                        <div className="salary-card-body">
+                          <div className="salary-card-end">
+                            <div className={`salary-card-net ${c.net < 0 ? 'negative' : ''}`}>{formatMoney(c.net)}</div>
+                            <small>{c.locked ? 'đã chốt' : running ? 'tạm tính' : 'thực lĩnh'} {cardOpen ? '▴' : '▾'}</small>
+                          </div>
+                        </button>
+                        {cardOpen && <div className="salary-card-body">
                           <div className="salary-card-row">
                             <span className="salary-card-label">Lương cơ bản</span>
                             <span className="salary-card-value">{formatMoney(c.base)}</span>
@@ -1271,9 +1281,9 @@ export default function PayrollPage() {
                               <span className="salary-card-value" style={{ color: '#b45309' }}>{formatMoney(c.liveNet)}</span>
                             </div>
                           )}
-                        </div>
+                        </div>}
                         {isAdmin && <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} />}
-                        {isAdmin && (
+                        {isAdmin && cardOpen && (
                           <button
                             onClick={() => setExpandedSalaryStaff(expandedSalaryStaff === s.id ? null : s.id)}
                             style={{ width: '100%', marginTop: 4, padding: '7px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f8fafc', border: '1px solid #e2e8f0', borderBottomLeftRadius: 12, borderBottomRightRadius: 12, fontSize: '0.8rem', fontWeight: 700, color: '#1d4ed8', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
@@ -1434,6 +1444,32 @@ export default function PayrollPage() {
           {/* === YÊU CẦU === */}
           {activeTab === 'requests' && (
             <div className="request-list">
+              {/* Ca ghi sau 3 lần sai mặt ở máy quầy: chưa tính lương, chờ chủ xác nhận đúng người hay không. */}
+              {(faces?.reviews || []).map(r => {
+                const t = ts => new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+                const s = r.session, out = r.clocked === 'out';
+                return (
+                  <div key={`${r.attendance_id}-${r.clocked}`} className="request-card pending">
+                    <div className="request-info">
+                      <div className="name">{staffList.find(x => x.id === r.staff_id)?.full_name || 'Không rõ'}</div>
+                      <div style={{ marginTop: 4 }}>
+                        <span style={{ display: 'inline-block', background: '#fee2e2', color: '#991b1b', borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>🙂 Sai mặt 3 lần</span>
+                        <span className="status-badge pending">⏳ Chờ duyệt</span>
+                      </div>
+                      <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
+                        <div>{out ? 'Ra ca' : 'Vào ca'} lúc {t(out ? s.clock_out || r.created_at : s.clock_in)} ngày {String(s.date).split('-').reverse().join('/')}: máy quầy so mặt không khớp 3 lần liền.</div>
+                        <div>Ca này <strong>chưa tính lương</strong> tới khi bạn duyệt.</div>
+                      </div>
+                    </div>
+                    <div className="request-actions">
+                      <button className="btn-success" onClick={() => faceAction('decide_face', { attendance_id: r.attendance_id, clocked: r.clocked, status: 'approved' })}>✓ Đúng người</button>
+                      <button className="btn-danger" onClick={() => faceAction('decide_face', { attendance_id: r.attendance_id, clocked: r.clocked, status: 'rejected' },
+                        out ? 'Không phải người này ra ca? Giờ ra ca bị bỏ: ca mở lại, máy tự đóng khi quên ra ca (hoặc bạn sửa giờ).' : 'Không phải người này vào ca? Ca này sẽ bị bỏ.')}>✗ Không phải</button>
+                    </div>
+                  </div>
+                );
+              })}
+
               {/* Giờ ngoài ca (vào sớm / ở lại) chưa tính lương, chờ chủ cho tính hoặc không. */}
               {(checkin?.extras || []).map(x => {
                 const t = ts => new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
@@ -1768,11 +1804,11 @@ export default function PayrollPage() {
 
           {/* === CÀI CHẤM CÔNG: giờ làm, máy quầy, chạy thử / chặn thật === */}
           {activeTab === 'qr' && (() => {
-            if (!checkin || !hoursEdit) return <div className="empty-state">Đang tải phần cài chấm công… (bấm Đồng bộ nếu lâu)</div>;
+            if (!checkin || !hoursEdit) return <div className="empty-state">Đang tải phần cài chấm công… (mở lại trang nếu lâu)</div>;
             const nameOf = id => staffList.find(s => s.id === id)?.full_name || 'Không rõ';
             const when = ts => ts ? new Date(ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '—';
             const serverNow = Date.parse(checkin.now) || Date.now();
-            const warnText = { other_network: 'không dùng wifi quán', unknown_device: 'máy lạ', shared_device: 'máy của người khác', admin_no_qr: 'admin chấm không quét mã' };
+            const warnText = { other_network: 'không dùng wifi quán', unknown_device: 'máy lạ', shared_device: 'máy của người khác', admin_no_qr: 'admin chấm không quét mã', no_face: 'chưa có mặt mẫu' };
             const card = { background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 16, marginBottom: 14 };
             const kiosks = checkin.kiosks.filter(k => !k.revoked_at);
             const scans = checkin.scans.filter(s => !onlyWarnings || s.warnings?.length || s.action === 'blocked');
@@ -1892,6 +1928,60 @@ export default function PayrollPage() {
                   })}
                 </div>
 
+                {/* So khuôn mặt ở máy quầy (app iPhone "Chấm công") */}
+                <div style={card}>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>🙂 So khuôn mặt ở máy quầy (app)</div>
+                  {!faces || faces.missing ? <div style={{ fontSize: '0.84rem', color: '#64748b' }}>{faces?.missing ? 'Máy chủ đang cập nhật phần so mặt, mở lại sau ít phút.' : 'Đang tải…'}</div> : (() => {
+                    const app = [...(faces.apps || [])].sort((a, b) => String(b.seen_at).localeCompare(String(a.seen_at)))[0];
+                    const appOn = app && serverNow - Date.parse(app.seen_at) < 5 * 60000;
+                    const count = st => (faces.checks || []).filter(c => c.status === st).length;
+                    const people = (faces.staff || []).filter(p => p.role !== 'admin' && !p.departed);
+                    return (
+                      <>
+                        <div style={{ fontSize: '0.8rem', color: '#64748b', lineHeight: 1.6, marginBottom: 8 }}>
+                          Quét mã xong nhân viên nhìn camera máy quầy và chớp mắt. Đúng mặt mới ghi giờ; sai thì lượt đó không tính; sai 3 lần liền thì vẫn ghi giờ nhưng chờ bạn duyệt ở mục Yêu cầu. Chỉ lưu dấu mặt (dãy số), không lưu ảnh.
+                        </div>
+                        <div style={{ fontSize: '0.84rem', marginBottom: 8 }}>
+                          {appOn ? `📱 App máy quầy đang chạy (bản ${app.version || '?'}).` : app ? `📱 App máy quầy chạy lần cuối ${when(app.seen_at)}.` : '📱 Chưa có máy quầy nào chạy app — chưa so mặt.'}
+                        </div>
+                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+                          <button className={faces.settings.enabled ? 'btn-danger' : 'btn-success'}
+                            onClick={() => faceAction('save_face_settings', { enabled: !faces.settings.enabled }, faces.settings.enabled ? 'Tắt so mặt? Nhân viên quét mã là chấm luôn như trước.' : '')}>
+                            {faces.settings.enabled ? 'Tắt so mặt' : 'Bật so mặt'}
+                          </button>
+                          <span style={{ fontSize: '0.84rem', fontWeight: 700 }}>{faces.settings.enabled ? '✅ Đang bật' : '⏸ Đang tắt'}</span>
+                          <label style={{ fontSize: '0.84rem', display: 'flex', gap: 6, alignItems: 'center' }}>
+                            Độ khắt khe
+                            <select value={faces.settings.level} onChange={e => faceAction('save_face_settings', { level: e.target.value })} style={timeInput}>
+                              {Object.entries(FACE_LEVEL_TEXT).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                            </select>
+                          </label>
+                        </div>
+                        <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 6, lineHeight: 1.6 }}>
+                          Lấy mặt mẫu: trên máy quầy (app) <strong>giữ tay lên đồng hồ 2 giây</strong> → đăng nhập chủ quán → chọn tên → người đó nhìn camera, chớp mắt. Ai chưa có mặt mẫu thì quét mã chấm như cũ.
+                        </div>
+                        {people.map(p => (
+                          <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', fontSize: '0.85rem' }}>
+                            <div style={{ flex: 1, minWidth: 160 }}>
+                              <strong>{p.full_name}</strong>
+                              <div style={{ fontSize: '0.75rem', color: p.face ? '#15803d' : '#b45309' }}>
+                                {p.face ? `✅ Có mặt mẫu · lấy ${when(p.face.created_at)}${p.face.enrolled_by ? ` · ${p.face.enrolled_by}` : ''}` : 'Chưa có mặt mẫu'}
+                              </div>
+                            </div>
+                            {p.face && <button style={{ fontSize: '0.78rem', padding: '4px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}
+                              onClick={() => faceAction('face_delete', { staff_id: p.id }, `Xoá mặt mẫu của ${p.full_name}? Người này sẽ chấm như cũ (không so mặt) tới khi lấy mặt mẫu lại.`)}>Xoá mặt mẫu</button>}
+                          </div>
+                        ))}
+                        {(faces.checks || []).length > 0 && (
+                          <div style={{ fontSize: '0.8rem', color: '#475569', marginTop: 8 }}>
+                            14 ngày qua: ✅ {count('ok')} đúng mặt · ❌ {count('wrong')} sai mặt · ⏳ {count('review')} chờ duyệt · ⚠ {count('expired')} chưa so được
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+
                 {/* Điện thoại đã đăng ký */}
                 <div style={card}>
                   <div style={{ fontWeight: 800, marginBottom: 6 }}>🔐 Điện thoại chấm công của nhân viên</div>
@@ -1938,9 +2028,10 @@ export default function PayrollPage() {
           {/* === TÀI KHOẢN === */}
           {activeTab === 'accounts' && (
             <div>
-              {/* Create form */}
-              <div className="payroll-form">
-                <h3>➕ Tạo tài khoản nhân viên mới</h3>
+              {/* Create form — thu gọn, bấm để mở */}
+              <details className="payroll-form">
+                <summary style={{ fontWeight: 800, cursor: 'pointer' }}>➕ Tạo tài khoản nhân viên mới</summary>
+                <div style={{ height: 10 }} />
                 {accMsg && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: accMsg.startsWith('✅') ? '#dcfce7' : '#fee2e2', color: accMsg.startsWith('✅') ? '#15803d' : '#dc2626', fontSize: '0.85rem', fontWeight: 600 }}>{accMsg}</div>}
                 <div className="form-grid">
                   <div className="form-group">
@@ -1964,7 +2055,7 @@ export default function PayrollPage() {
                   </div>
                 </div>
                 <button className="btn-primary" onClick={handleCreateAccount}>Tạo tài khoản</button>
-              </div>
+              </details>
 
               {/* Staff list */}
               <div className="config-list">
@@ -2036,7 +2127,7 @@ export default function PayrollPage() {
               <div className="payroll-form" style={{ marginBottom: 8 }}>
                 <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>💡 Thiết lập lương cơ bản (lương đủ {STANDARD_DAYS} ngày công), giá tăng ca mỗi giờ (để 0 nếu không trả tăng ca) và ngày phát lương cho từng nhân viên.</p>
               </div>
-              <div className="config-list">
+              <div className="config-list config-salary">
                 {staffList.map(s => {
                   const edit = configEdits[s.id] || { base_salary: 0, overtime_rate: 25000, pay_day: 5 };
                   return (
@@ -2054,7 +2145,7 @@ export default function PayrollPage() {
                           onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value } }))} />
                       </div>
                       <div className="form-group" style={{ margin: 0 }}>
-                        <label>Ngày phát lương</label>
+                        <label>Ngày phát</label>
                         <input type="number" min="1" max="31" value={edit.pay_day || 5}
                           onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, pay_day: e.target.value } }))} />
                       </div>

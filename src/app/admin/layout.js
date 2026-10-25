@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import QrClockScanner from '@/components/QrClockScanner';
+import { unlockSpeech } from '@/lib/speak';
 import './admin.css';
 
 const ALL_NAV = [
@@ -246,7 +247,7 @@ export default function AdminLayout({ children }) {
 
         <nav className="sidebar-nav">
           {user.role !== 'admin' && (
-            <button type="button" className="nav-item" onClick={() => setScanOpen(true)} title="Quét mã chấm công" aria-label="Quét mã chấm công"
+            <button type="button" className="nav-item" onClick={() => { unlockSpeech(); setScanOpen(true); }} title="Quét mã chấm công" aria-label="Quét mã chấm công"
               style={{ background: 'none', border: 'none', cursor: 'pointer', font: 'inherit' }}>
               <span style={{ display: 'inline-flex', padding: '5px 9px', borderRadius: 10, background: '#16a34a', color: 'white' }}><ScanQrCode size={20} /></span>
             </button>

@@ -16,6 +16,7 @@ export const WARNING_TEXT = {
   unknown_device: 'chấm bằng máy lạ',
   shared_device: 'máy này đã đăng ký cho người khác',
   admin_no_qr: 'admin chấm không quét mã',
+  no_face: 'chưa có mặt mẫu (không so mặt)',
 };
 
 /** Địa chỉ mạng của người gửi (qua Cloudflare Tunnel là địa chỉ thật). */

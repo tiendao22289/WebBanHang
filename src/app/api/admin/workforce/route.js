@@ -9,6 +9,8 @@
  * GET  ?payroll=1&year&month → số lương đã chốt của tháng, ngày nghỉ của đơn báo nghỉ, thưởng chuyên cần,
  *                              danh sách lỗi, gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt (admin)
  * GET  ?stats=1&year&month   → thống kê nhân sự + quỹ lương cả quán một tháng (admin, trang Thống kê)
+ * GET  ?face_check=<id>      → lượt quét đang chờ máy quầy so mặt của chính mình: chờ / đúng / sai / chờ duyệt
+ * GET  ?faces=1              → so khuôn mặt: cài đặt, ai đã có mặt mẫu, ca chờ duyệt mặt, lượt so gần đây (admin)
  * POST {action}:
  *   clock {token}            → vào / ra ca bằng mã QR trên máy quầy: mỗi mã dùng 1 lần,
  *                              phải cùng wifi với máy quầy, đúng điện thoại đã đăng ký
@@ -20,17 +22,23 @@
  *   decide_fine {attendance_id, kind, status, amount, reason} / reopen_fine → gợi ý phạt từ chấm công,
  *   save_fine_rule, save_bonus_settings, decide_bonus {staff_id, year, month, amount} / remove_bonus,
  *   save_config, save_checkin_settings, save_shift, revoke_kiosk, reset_device,
- *   create_account, set_pin, delete_account   (admin)
+ *   create_account, set_pin, delete_account,
+ *   face_enroll {staff_id, embeddings, force} (lấy mặt mẫu trên máy quầy), face_delete, save_face_settings,
+ *   decide_face {attendance_id, clocked, status}   (admin)
  *   hash_all_pins            → băm PIN còn lưu chữ thường (admin / workflow)
  */
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { hashPin, isHashedPin, validPin } from '@/lib/staffPin.mjs';
-import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, newDeviceId, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
+import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, KIOSK_COOKIE, newDeviceId, readKioskCookie, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
+import { loadPayrollMonth, monthRange, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
 import { AUTO_CLOSE_BY, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { BONUS_MIN_DAYS, DEFAULT_OT_RATE, activeFineKinds, computeSalary, monthKey, monthTallies, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
+import { DEFAULT_OT_RATE, computeSalary, monthKey, monthTallies, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
+import { applyClock, latestSession, sessionsOfDay } from '@/lib/clockApply.mjs';
+import { ENROLL_MAX, ENROLL_MIN, ENROLL_SELF_MIN, FACE_LEVELS, FACE_MODEL, FACE_STREAK_MS, FACE_TRIES, FACE_WAIT_MS, bestScore, enrollConsistency, faceHolds, faceNeeded,
+  faceThreshold, faceVector, faceVectors, markFaceHolds, missingTable, readFaceSettings, wrongStreak } from '@/lib/faceCheck.mjs';
 import { clockStatus, nowMs, refreshClock } from '@/lib/trueTime.mjs';
 
 export const runtime = 'nodejs';
@@ -49,19 +57,8 @@ const money = v => { const n = Math.round(Number(String(v ?? '').replace(/\./g, 
 const text = (v, max = 300) => String(v ?? '').trim().slice(0, max);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ddmm = d => `${String(d).slice(8, 10)}/${String(d).slice(5, 7)}`;
-const monthRange = (year, month) => {
-  const pad = n => String(n).padStart(2, '0');
-  return { start: `${year}-${pad(month)}-01`, end: month === 12 ? `${year + 1}-01-01` : `${year}-${pad(month + 1)}-01` };
-};
 // Tháng đã hết chưa (giờ Việt Nam): thưởng chuyên cần chỉ duyệt khi đã hết tháng.
 const monthOver = (year, month) => vnToday() >= monthRange(year, month).end;
-
-// Mức thưởng chuyên cần gợi ý + số ngày công tối thiểu (chưa cài thì 0đ / 22 ngày).
-async function readPayrollSettings(db) {
-  const { data, error } = await db.from('payroll_settings').select('*').eq('id', 1).maybeSingle();
-  if (error) throw error;
-  return { bonus_amount: Number(data?.bonus_amount) || 0, bonus_min_days: data?.bonus_min_days === undefined || data?.bonus_min_days === null ? BONUS_MIN_DAYS : Number(data.bonus_min_days) };
-}
 
 // Workflow trên máy chủ ký bằng khoá service role (như báo cáo Sổ thu chi).
 function serverKeyOk(request) {
@@ -110,13 +107,6 @@ function withDevice(response, request, device) {
   return response;
 }
 
-// Ca mới nhất của một người (kể cả ca hôm qua chưa ra, ví dụ làm qua 12h đêm).
-async function latestSession(db, staffId) {
-  const { data, error } = await db.from('attendance_sessions').select('*').eq('staff_id', staffId).order('clock_in', { ascending: false }).limit(1);
-  if (error) throw error;
-  return data?.[0] || null;
-}
-
 async function myStatus(db, staffId) {
   const settings = await readCheckinSettings(db);
   await closeForgottenSessions(db, settings, staffId, nowMs());
@@ -134,8 +124,13 @@ async function myStatus(db, staffId) {
   // Giờ làm để tự tính trễ / ngoài ca; không cho nhân viên biết đang chạy thử hay chặn thật.
   const rules = { hours_from: settings.hours_from, hours: settings.hours, shifts: settings.shifts[staffId] ? { [staffId]: settings.shifts[staffId] } : {} };
   const day = currentWorkDay(settings, staffId, nowMs());
-  return { open: last && !last.clock_out ? last : null, sessions: (today.data || []).filter(x => workDayOf(x, settings) === day), fixes: fixes.data || [], auto_closed: autoClosed, reviews: reviews.data || [],
-    leave_days: leaveDays.data || [], rules, ...await mySalary(db, staffId, settings, reviews.data || [], autoClosed) };
+  // Ca ghi sau 3 lần sai mặt (45 ngày gần đây): chưa tính lương, chờ chủ duyệt.
+  const { data: held, error: he } = await db.from('attendance_face_reviews').select('attendance_id').eq('staff_id', staffId).eq('status', 'pending').gte('created_at', new Date(nowMs() - 45 * 86400000).toISOString());
+  if (he && !missingTable(he)) throw he;
+  const holds = new Set((held || []).map(r => r.attendance_id));
+  const open = last && !last.clock_out ? markFaceHolds([last], holds)[0] : null;
+  return { open, sessions: markFaceHolds((today.data || []).filter(x => workDayOf(x, settings) === day), holds), fixes: fixes.data || [], auto_closed: autoClosed, reviews: reviews.data || [],
+    leave_days: leaveDays.data || [], face_holds: [...holds], rules, ...await mySalary(db, staffId, settings, reviews.data || [], autoClosed) };
 }
 
 // Lương tạm tính tháng này của chính người đó (cùng công thức với bảng lương của chủ);
@@ -155,14 +150,15 @@ async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
       readPayrollSettings(db),
     ]);
     for (const r of [sessions, config, requests, violations, closed, bonuses, meta]) if (r.error) throw r.error;
-    const live = computeSalary({ year, month, staffId, sessions: sessions.data || [], config: config.data, requests: requests.data || [],
+    const mine = markFaceHolds(sessions.data || [], await faceHolds(db, (sessions.data || []).map(x => x.id)));
+    const live = computeSalary({ year, month, staffId, sessions: mine, config: config.data, requests: requests.data || [],
       violations: violations.data || [], bonuses: bonuses.data || [], rules: settings, reviews });
     const salary = closed.data
       ? { bonusAmt: 0, ...closed.data.snapshot, year, month, locked: true, closed_at: closed.data.closed_at, paid_at: closed.data.paid_at || null }
       : { ...live, year, month, locked: false };
     delete salary.name;
     // Thưởng chuyên cần (khi chủ có dùng): tới hôm nay đã trễ / quên ra ca chưa. Không đưa mức thưởng gợi ý.
-    const t = monthTallies({ sessions: sessions.data || [], rules: settings, key: monthKey(year, month), autoClosed });
+    const t = monthTallies({ sessions: mine, rules: settings, key: monthKey(year, month), autoClosed });
     const bonus = payroll.bonus_amount > 0 && usesDayPay(year, month) ? { late: t.late.count, forgot: t.forgot, minDays: payroll.bonus_min_days, units: live.workUnits, approved: bonuses.data?.[0]?.amount || null } : null;
     const dateOf = new Map((meta.data || []).map(m => [m.violation_id, m.fine_date]));
     return { salary, bonus, violations: (violations.data || []).map(v => ({ amount: v.amount, reason: v.reason, date: dateOf.get(v.id) || null })) };
@@ -182,60 +178,28 @@ async function readAll(build) {
     if (!data || data.length < 1000) return rows;
   }
 }
-// Lần chủ duyệt giờ ngoài ca của đúng các ca đang tính (bảng này chỉ lớn dần, không đọc hết được).
-async function reviewsFor(db, sessionIds) {
-  const rows = [];
-  for (let i = 0; i < sessionIds.length; i += 200) {
-    const { data, error } = await db.from('attendance_extra_reviews').select('*').in('attendance_id', sessionIds.slice(i, i + 200));
-    if (error) throw error;
-    rows.push(...(data || []));
-  }
-  return rows;
-}
 // Ca máy tự đóng vì quên ra ca: ghi nhật ký vài giờ sau ngày làm (lọc tới 3 ngày sau tháng).
 const autoClosedInMonth = (db, start, end) => readAll(() => db.from('attendance_changes').select('attendance_id').eq('changed_by', AUTO_CLOSE_BY)
   .gte('changed_at', start).lt('changed_at', new Date(Date.parse(`${end}T00:00:00Z`) + 3 * 86400000).toISOString().slice(0, 10)).order('changed_at'));
 
-// Mọi thứ cần để tính lương cả quán một tháng (dùng cho chốt lương và trang Thống kê).
-async function loadPayrollMonth(db, year, month) {
-  const { start, end } = monthRange(year, month);
-  const [staff, configs, sessions, requests, violations, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules] = await Promise.all([
-    db.from('staff').select('id, full_name, role'),
-    db.from('payroll_config').select('*'),
-    // Cả ngày 1 tháng sau (ca đêm cuối tháng); đọc từng trang.
-    readAll(() => db.from('attendance_sessions').select('*').gte('date', start).lte('date', end).order('clock_in')),
-    db.from('payroll_requests').select('*').eq('month', month).eq('year', year),
-    db.from('payroll_violations').select('*').eq('month', month).eq('year', year),
-    db.from('payroll_closes').select('*').eq('year', year).eq('month', month),
-    db.from('staff_departures').select('*'),
-    readCheckinSettings(db),
-    db.from('payroll_bonuses').select('*').eq('year', year).eq('month', month),
-    readPayrollSettings(db),
-    db.from('payroll_fine_reviews').select('*').gte('work_day', start).lt('work_day', end),
-    db.from('payroll_fine_rules').select('kind, active'),
-  ]);
-  for (const r of [staff, configs, requests, violations, closes, departures, bonuses, fineReviews, fineRules]) if (r.error) throw r.error;
-  const reviews = await reviewsFor(db, sessions.map(x => x.id));
-  return { start, end, staff: staff.data || [], configs: configs.data || [], sessions, requests: requests.data || [],
-    violations: violations.data || [], reviews, closes: closes.data || [], departures: departures.data || [], rules,
-    bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data) };
-}
 
 // Trang Thống kê: nhân sự + lương cả quán một tháng, kèm số việc đang chờ chủ duyệt.
 async function staffStats(db, year, month) {
   const m = await loadPayrollMonth(db, year, month);
-  const [auto, scans, fixes, pendingReqs, extras] = await Promise.all([
+  const [auto, scans, fixes, pendingReqs, extras, faces] = await Promise.all([
     autoClosedInMonth(db, m.start, m.end),
     readAll(() => db.from('checkin_scans').select('staff_id, action, warnings').gte('created_at', new Date(`${m.start}T00:00:00+07:00`).toISOString()).lt('created_at', new Date(`${m.end}T00:00:00+07:00`).toISOString()).order('created_at')),
     db.from('attendance_fix_requests').select('id').eq('status', 'pending'),
     db.from('payroll_requests').select('id').eq('status', 'pending'),
     pendingExtras(db, m.rules),
+    db.from('attendance_face_reviews').select('attendance_id').eq('status', 'pending'),
   ]);
   for (const r of [fixes, pendingReqs]) if (r.error) throw r.error;
+  if (faces.error && !missingTable(faces.error)) throw faces.error;
   const stats = staffMonthStats({ year, month, ...m, autoClosed: auto.map(r => r.attendance_id), scans });
   // Người đủ điều kiện thưởng chuyên cần mà chủ chưa duyệt (chỉ khi đã hết tháng và chủ có dùng thưởng).
   const bonusWaiting = monthOver(year, month) && m.bonusSettings.bonus_amount > 0 ? stats.people.filter(p => p.bonus.eligible && !p.bonus.approved && !p.salary.locked).length : 0;
-  return { ...stats, pending: { fixes: (fixes.data || []).length, requests: (pendingReqs.data || []).length, extras: extras.length,
+  return { ...stats, pending: { fixes: (fixes.data || []).length, requests: (pendingReqs.data || []).length, extras: extras.length, faces: (faces.data || []).length,
     fines: stats.people.reduce((a, p) => a + p.fineSuggestions, 0), bonuses: bonusWaiting } };
 }
 
@@ -258,8 +222,10 @@ async function payrollMonth(db, year, month) {
   ]);
   for (const r of [closes, leaveDays, bonuses, fineRules, fineReviews, meta]) if (r.error) throw r.error;
   // reviews: lần duyệt giờ ngoài ca của các ca trong tháng (trang Lương tính bằng đúng dữ liệu máy chủ chốt).
+  const ids = sessionIds.map(x => x.id);
+  // faceHolds: ca chờ chủ duyệt mặt — trang Lương chưa tính lương các ca này.
   return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set(auto.map(r => r.attendance_id))],
-    reviews: await reviewsFor(db, sessionIds.map(x => x.id)),
+    reviews: await reviewsFor(db, ids), faceHolds: [...await faceHolds(db, ids)],
     bonuses: bonuses.data || [], bonusSettings, fineRules: fineRules.data || [], fineReviews: fineReviews.data || [], violationMeta: meta.data || [],
     monthOver: monthOver(year, month) };
 }
@@ -276,6 +242,73 @@ async function pendingExtras(db, rules) {
     // date = ngày của ca (lượt dọn quán sau nửa đêm hiện là ca hôm trước).
     .map(({ s, h }) => ({ attendance_id: s.id, staff_id: s.staff_id, date: workDayOf(s, rules), clock_in: s.clock_in, clock_out: s.clock_out,
       early_minutes: Math.round(h.earlyMs / 60000), stay_minutes: Math.round(h.stayMs / 60000) }));
+}
+
+// Lượt quét chờ máy quầy so mặt của một nhân viên (điện thoại hỏi vài giây một lần tới khi có kết quả).
+async function faceCheckStatus(db, staffId, id) {
+  if (!UUID.test(id || '')) return { status: 'missing' };
+  const { data: c, error } = await db.from('checkin_face_checks').select('*').eq('id', id).eq('staff_id', staffId).maybeSingle();
+  if (error) throw error;
+  if (!c) return { status: 'missing' };
+  let status = c.status, reason = c.reason || null;
+  // Máy quầy không so trong 1 phút (app tắt, mất mạng): lượt này hết giờ, quét lại.
+  if (status === 'waiting' && nowMs() - Date.parse(c.created_at) > FACE_WAIT_MS + 5000) {
+    const r = await db.from('checkin_face_checks').update({ status: 'expired', reason: 'timeout', decided_at: isoNow() }).eq('id', c.id).eq('status', 'waiting');
+    if (r.error) throw r.error;
+    status = 'expired'; reason = 'timeout';
+  }
+  // Máy quầy vừa báo đúng mặt nhưng chưa ghi xong giờ: điện thoại hỏi lại lần sau.
+  if ((status === 'ok' || status === 'review') && !c.attendance_id) return { status: 'waiting', clocked: c.clocked };
+  const out = { status, clocked: c.clocked, reason };
+  if (status === 'wrong') {
+    const { data: recent, error: e } = await db.from('checkin_face_checks').select('status, created_at').eq('staff_id', staffId)
+      .gte('created_at', new Date(nowMs() - FACE_STREAK_MS).toISOString()).order('created_at', { ascending: false }).limit(20);
+    if (e) throw e;
+    out.tries_left = Math.max(0, FACE_TRIES - wrongStreak(recent));
+  }
+  if ((status === 'ok' || status === 'review') && c.attendance_id) {
+    const { data: session, error: e } = await db.from('attendance_sessions').select('*').eq('id', c.attendance_id).maybeSingle();
+    if (e) throw e;
+    if (session) {
+      const settings = await readCheckinSettings(db);
+      out.result = { ok: true, clocked: c.clocked, at: c.clocked === 'out' ? session.clock_out : session.clock_in, session, sessions: await sessionsOfDay(db, staffId, session, settings),
+        warnings: c.scan?.warnings || [], face_hold: status === 'review' };
+    }
+  }
+  return out;
+}
+
+// So khuôn mặt (admin): cài đặt, ai đã có mặt mẫu (không đưa dấu mặt ra ngoài), ca chờ duyệt mặt, lượt so 14 ngày.
+async function faceOverview(db) {
+  const settings = await readFaceSettings(db);
+  // Bảng so mặt chưa tạo (web mới lên, chưa chạy migration): trang Lương báo đang cập nhật.
+  if (settings.missing) return { missing: true, settings, levels: FACE_LEVELS, staff: [], reviews: [], checks: [], apps: [], now: isoNow() };
+  const [staff, templates, departures, reviews, checks, apps] = await Promise.all([
+    db.from('staff').select('id, full_name, role').order('full_name'),
+    db.from('staff_face_templates').select('*'),
+    db.from('staff_departures').select('staff_id, last_day'),
+    db.from('attendance_face_reviews').select('*').eq('status', 'pending').order('created_at', { ascending: false }).limit(200),
+    db.from('checkin_face_checks').select('id, staff_id, kiosk_id, clocked, status, score, reason, attendance_id, created_at')
+      .gte('created_at', new Date(nowMs() - 14 * 86400000).toISOString()).order('created_at', { ascending: false }).limit(300),
+    db.from('checkin_kiosk_apps').select('*'),
+  ]);
+  for (const r of [staff, templates, departures, reviews, checks, apps]) if (r.error) throw r.error;
+  const ids = [...new Set((reviews.data || []).map(r => r.attendance_id))];
+  const { data: sessions, error } = ids.length ? await db.from('attendance_sessions').select('*').in('id', ids) : { data: [] };
+  if (error) throw error;
+  const today = vnToday();
+  const tplOf = new Map((templates.data || []).map(t => [t.staff_id, t]));
+  const lastDay = new Map((departures.data || []).map(d => [d.staff_id, d.last_day]));
+  return {
+    settings, levels: FACE_LEVELS,
+    staff: (staff.data || []).map(p => {
+      const t = tplOf.get(p.id);
+      return { id: p.id, full_name: p.full_name, role: p.role, departed: !!lastDay.get(p.id) && String(lastDay.get(p.id)) < today,
+        face: t ? { count: (t.embeddings || []).length, created_at: t.created_at, enrolled_by: t.enrolled_by } : null };
+    }),
+    reviews: (reviews.data || []).map(r => ({ ...r, session: (sessions || []).find(x => x.id === r.attendance_id) || null })).filter(r => r.session),
+    checks: checks.data || [], apps: apps.data || [], now: isoNow(),
+  };
 }
 
 async function checkinOverview(db) {
@@ -307,8 +340,10 @@ export async function GET(request) {
     if (s.error) return s.error;
     const params = new URL(request.url).searchParams;
     if (params.get('me')) return NextResponse.json(await myStatus(s.db, s.user.id), { headers });
-    if (!params.get('checkin') && !params.get('payroll') && !params.get('stats')) return fail('Thiếu yêu cầu.');
+    if (params.get('face_check')) return NextResponse.json(await faceCheckStatus(s.db, s.user.id, params.get('face_check')), { headers });
+    if (!params.get('checkin') && !params.get('payroll') && !params.get('stats') && !params.get('faces')) return fail('Thiếu yêu cầu.');
     if (!s.isAdmin) return fail('Chỉ admin xem phần này.', 403);
+    if (params.get('faces')) return NextResponse.json(await faceOverview(s.db), { headers });
     if (params.get('payroll') || params.get('stats')) {
       const year = Number(params.get('year')), month = Number(params.get('month'));
       if (!(month >= 1 && month <= 12) || !(year >= 2024 && year <= 2100)) return fail('Tháng không hợp lệ.');
@@ -394,17 +429,24 @@ export async function POST(request) {
           .then(({ error: e }) => { if (e) console.error('[workforce] device bind', e); });
       }
 
-      const at = isoNow();
-      const result = open
-        ? await db.from('attendance_sessions').update({ clock_out: at }).eq('id', open.id).select('*').single()
-        : await db.from('attendance_sessions').insert({ staff_id: user.id, date: today, clock_in: at }).select('*').single();
-      if (result.error) throw result.error;
-      await db.from('checkin_scans').insert({ ...scan, action: open ? 'out' : 'in', attendance_id: result.data?.id || null })
-        .then(({ error: e }) => { if (e) console.error('[workforce] scan log', e); });
+      // Máy quầy là app và người này có mặt mẫu: chưa ghi giờ, chờ máy quầy so mặt (đúng mặt mới ghi).
+      const face = qr && !isAdmin ? await faceNeeded(db, user.id, qr.kioskId, nowMs()) : null;
+      if (face === 'no_template') warnings.push('no_face');
+      if (face === 'face') {
+        // Quét lại khi lượt trước còn chờ: bỏ lượt trước, máy quầy so mặt cho lượt mới.
+        await db.from('checkin_face_checks').update({ status: 'cancelled', decided_at: isoNow() }).eq('staff_id', user.id).eq('status', 'waiting')
+          .then(({ error: e }) => { if (e) console.error('[workforce] face cancel', e); });
+        const { staff_id: _who, created_at: _at, ...scanInfo } = scan;
+        const { data: check, error: ce } = await db.from('checkin_face_checks').insert({ staff_id: user.id, kiosk_id: qr.kioskId, nonce: qr.nonce, scan: scanInfo,
+          clocked: open ? 'out' : 'in', status: 'waiting', created_at: isoNow() }).select('*').single();
+        if (ce) throw ce;
+        return withDevice(NextResponse.json({ ok: true, face: { id: check.id, clocked: check.clocked, wait_ms: FACE_WAIT_MS }, warnings }, { headers }), request, device);
+      }
+
+      const done = await applyClock(db, { staffId: user.id, at: isoNow(), scan });
       // Các lượt cùng ngày làm (vào lại sau nửa đêm để dọn quán thì tính chung ca hôm trước, không báo trễ nhầm).
-      const { data: fresh } = await db.from('attendance_sessions').select('*').eq('staff_id', user.id).gte('date', dayBefore(today)).lte('date', today).order('clock_in');
-      const day = workDayOf(result.data, settings);
-      return withDevice(NextResponse.json({ ok: true, clocked: open ? 'out' : 'in', at, session: result.data, sessions: (fresh || []).filter(x => workDayOf(x, settings) === day), warnings }, { headers }), request, device);
+      const sessions = await sessionsOfDay(db, user.id, done.session, settings);
+      return withDevice(NextResponse.json({ ok: true, clocked: done.clocked, at: done.at, session: done.session, sessions, warnings }, { headers }), request, device);
     }
 
     if (body.action === 'request_fix') {
@@ -620,7 +662,8 @@ export async function POST(request) {
         const of = rows => rows.filter(x => x.staff_id === p.id);
         const config = of(m.configs)[0] || null, mine = of(m.sessions), reqs = of(m.requests), vios = of(m.violations);
         if (!config && !mine.length && !reqs.length && !vios.length) return null;
-        const salary = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, bonuses: of(m.bonuses), rules: m.rules, reviews: m.reviews });
+        // Tiền từng ngày chỉ để Sổ thu chi tính lương mỗi ngày — không lưu vào bảng đã chốt.
+        const { byDay, ...salary } = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, bonuses: of(m.bonuses), rules: m.rules, reviews: m.reviews });
         return { year, month, staff_id: p.id, snapshot: { name: p.full_name, ...salary }, closed_by: user.full_name || null, closed_at: closedAt };
       }).filter(Boolean);
       if (only) {
@@ -652,8 +695,9 @@ export async function POST(request) {
       const { data: old } = await db.from('staff_departures').select('staff_id').eq('staff_id', body.staff_id).maybeSingle();
       const r = old ? await db.from('staff_departures').update(row).eq('staff_id', body.staff_id) : await db.from('staff_departures').insert(row);
       if (r.error) throw r.error;
-      // Điện thoại chấm công của người nghỉ được dùng lại cho người khác.
+      // Điện thoại chấm công của người nghỉ được dùng lại cho người khác; dấu mặt mẫu xoá luôn.
       await db.from('staff_checkin_devices').delete().eq('staff_id', body.staff_id).then(({ error: e }) => { if (e) console.error('[workforce] device', e); });
+      await db.from('staff_face_templates').delete().eq('staff_id', body.staff_id).then(({ error: e }) => { if (e) console.error('[workforce] face template', e); });
       return NextResponse.json({ ok: true }, { headers });
     }
 
@@ -672,6 +716,92 @@ export async function POST(request) {
       const r = old ? await db.from('attendance_extra_reviews').update(row).eq('attendance_id', att.id) : await db.from('attendance_extra_reviews').insert(row);
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true, minutes: row.minutes }, { headers });
+    }
+
+    if (body.action === 'face_enroll') {
+      // Lấy mặt mẫu trên máy quầy (app), chủ quán đang đăng nhập trên máy đó. Chỉ lưu dấu mặt, không lưu ảnh.
+      if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
+      const vectors = faceVectors(body.embeddings, ENROLL_MIN, ENROLL_MAX);
+      if (!vectors) return fail('Chưa lấy đủ mặt mẫu, làm lại.');
+      if (enrollConsistency(vectors) < ENROLL_SELF_MIN) return fail('Ảnh mặt chưa rõ (thiếu sáng hoặc quay đi). Nhìn thẳng vào camera rồi làm lại.', 422);
+      const [{ data: person, error }, { data: others, error: oe }, faceSettings] = await Promise.all([
+        db.from('staff').select('id, full_name').eq('id', body.staff_id).maybeSingle(),
+        db.from('staff_face_templates').select('*').neq('staff_id', body.staff_id),
+        readFaceSettings(db),
+      ]);
+      if (error) throw error;
+      if (oe) throw oe;
+      if (!person) return fail('Không tìm thấy nhân viên.', 404);
+      // Mặt này đã là mặt mẫu của người khác (lấy nhầm người, hoặc một người đăng ký hai tên): hỏi lại chủ.
+      if (body.force !== true) {
+        const twin = (others || []).map(t => ({ t, score: bestScore(vectors, (t.embeddings || []).map(faceVector).filter(Boolean)) }))
+          .filter(x => x.score >= faceThreshold(faceSettings)).sort((a, b) => b.score - a.score)[0];
+        if (twin) {
+          const { data: other } = await db.from('staff').select('full_name').eq('id', twin.t.staff_id).maybeSingle();
+          const who = other?.full_name || 'người khác';
+          return NextResponse.json({ error: `Mặt này giống mặt mẫu của ${who}. Kiểm tra đúng người rồi mới lưu.`, duplicate: who }, { status: 409, headers });
+        }
+      }
+      const kioskId = readKioskCookie(request.cookies?.get?.(KIOSK_COOKIE)?.value, secret(), nowMs());
+      const row = { staff_id: person.id, model: FACE_MODEL, embeddings: vectors.map(v => v.map(x => Math.round(x * 1e6) / 1e6)), kiosk_id: kioskId || null,
+        enrolled_by: user.full_name || null, created_at: isoNow() };
+      const del = await db.from('staff_face_templates').delete().eq('staff_id', person.id);
+      if (del.error) throw del.error;
+      const r = await db.from('staff_face_templates').insert(row);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true, name: person.full_name, count: vectors.length }, { headers });
+    }
+
+    if (body.action === 'face_delete') {
+      if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
+      const r = await db.from('staff_face_templates').delete().eq('staff_id', body.staff_id);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    if (body.action === 'save_face_settings') {
+      const row = { updated_at: isoNow() };
+      if ('enabled' in body) row.enabled = body.enabled === true;
+      if ('level' in body) {
+        if (!FACE_LEVELS[body.level]) return fail('Độ khắt khe không hợp lệ.');
+        row.level = body.level;
+      }
+      const { data: old, error } = await db.from('checkin_face_settings').select('id').eq('id', 1).maybeSingle();
+      if (error) throw error;
+      const r = old ? await db.from('checkin_face_settings').update(row).eq('id', 1) : await db.from('checkin_face_settings').insert({ id: 1, ...row });
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true, settings: await readFaceSettings(db) }, { headers });
+    }
+
+    if (body.action === 'decide_face') {
+      // Ca ghi sau 3 lần sai mặt: Đúng người → tính lương. Không phải → lượt vào ca: bỏ cả ca; lượt ra ca: bỏ giờ ra
+      // (ca mở lại, máy tự đóng khi quên ra ca hoặc chủ sửa giờ).
+      if (!UUID.test(body.attendance_id || '') || !['in', 'out'].includes(body.clocked) || !['approved', 'rejected'].includes(body.status)) return fail('Yêu cầu không hợp lệ.');
+      const { data: rev, error } = await db.from('attendance_face_reviews').select('*').eq('attendance_id', body.attendance_id).eq('clocked', body.clocked).maybeSingle();
+      if (error) throw error;
+      if (!rev) return fail('Không tìm thấy ca chờ duyệt.', 404);
+      if (rev.status !== 'pending') return fail('Ca này đã được duyệt rồi.', 409);
+      const by = user.full_name || 'Admin';
+      if (body.status === 'rejected') {
+        const { data: att, error: ae } = await db.from('attendance_sessions').select('*').eq('id', rev.attendance_id).maybeSingle();
+        if (ae) throw ae;
+        if (att && rev.clocked === 'in') {
+          const r = await db.from('attendance_sessions').delete().eq('id', att.id);
+          if (r.error) throw r.error;
+          await db.from('attendance_extra_reviews').delete().eq('attendance_id', att.id).then(({ error: e }) => { if (e) console.error('[workforce] face reject extra', e); });
+          await db.from('attendance_changes').insert({ attendance_id: att.id, staff_id: att.staff_id, field_name: 'deleted', old_value: `${att.clock_in || ''} → ${att.clock_out || ''}`, new_value: '',
+            changed_by: by, changed_at: isoNow(), note: 'So mặt sai 3 lần, chủ xác nhận không đúng người — bỏ ca này' }).then(({ error: e }) => { if (e) console.error('[workforce] face reject log', e); });
+          // Ca đã bỏ thì dòng chờ duyệt giờ ra của ca đó (nếu có) cũng xong.
+          await db.from('attendance_face_reviews').update({ status: 'rejected', decided_by: by, decided_at: isoNow() }).eq('attendance_id', att.id).eq('status', 'pending')
+            .then(({ error: e }) => { if (e) console.error('[workforce] face reject others', e); });
+        } else if (att) {
+          const changed = await editAttendance(att.id, { clock_out: null }, `${by} (so mặt sai 3 lần: không đúng người ra ca)`);
+          if (typeof changed !== 'number') return changed;
+        }
+      }
+      const r = await db.from('attendance_face_reviews').update({ status: body.status, decided_by: by, decided_at: isoNow() }).eq('attendance_id', rev.attendance_id).eq('clocked', rev.clocked).eq('status', 'pending');
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true }, { headers });
     }
 
     if (body.action === 'revoke_kiosk') {

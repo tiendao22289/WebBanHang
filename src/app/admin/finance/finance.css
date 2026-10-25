@@ -132,7 +132,7 @@
 .fin-add-hint { margin-top: 12px; text-align: center; }
 
 @media (max-width: 720px) {
-  .fin-fields { grid-template-columns: 1fr; }
+  .fin-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 480px) {
   .finance { padding: 12px 12px calc(88px + env(safe-area-inset-bottom)); }
@@ -285,3 +285,53 @@
 .fin-bill-more { grid-column: 1 / -1; display: grid; gap: 6px; padding-top: 6px; border-top: 1px dashed #e5e7eb; }
 .fin-bill-more p { margin: 0; font-size: 12px; color: #4b5563; }
 .fin-bill-more .fin-items { margin: 0; }
+
+/* Tra cứu — bộ lọc gọn: chọn nhanh ngày, 1 hàng tìm, "Lọc thêm" thu gọn. */
+.fin-search { gap: 8px; }
+.fin-seg { display: flex; gap: 2px; background: #f1f5f9; border-radius: 10px; padding: 3px; }
+.fin-seg button { flex: 1 1 auto; min-height: 36px; border: 0; border-radius: 8px; background: transparent; color: #475569; font-size: 12.5px; font-weight: 600; padding: 0 4px; white-space: nowrap; }
+.fin-seg button.active { background: white; color: #1d4ed8; box-shadow: 0 1px 3px rgba(15, 23, 42, .14); }
+.fin-search-dates { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 6px; }
+.fin-search-dates span { color: #94a3b8; font-size: 14px; }
+.fin-search-dates input, .fin-search-row input { width: 100%; height: 42px; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 16px; color: #111827; background: white; min-width: 0; -webkit-appearance: none; appearance: none; }
+.fin-search-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) auto; gap: 6px; }
+.fin-search-go { height: 42px; padding: 0 14px; border: 0; border-radius: 8px; background: #2563eb; color: white; font-size: 15px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; }
+.fin-search-go:disabled { opacity: .7; }
+.fin-search .fin-search-types { display: flex; gap: 5px; }
+.fin-search .fin-search-types button { flex: 1 1 auto; min-height: 36px; padding: 0 6px; white-space: nowrap; }
+.fin-more { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; border: 1px dashed #cbd5e1; border-radius: 8px; background: white; color: #475569; font-size: 13px; font-weight: 600; padding: 0 10px; }
+.fin-more.on { border-style: solid; border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
+.fin-more svg { flex-shrink: 0; }
+.fin-more span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fin-search .fin-search-tables button { min-height: 34px; font-size: 13px; padding: 0 11px; }
+
+/* Chi tiết ngày — gọn: tổng ngày, chốt sổ thu gọn, nhóm gập/mở. */
+.fin-daysum { border: 1px solid #e5e7eb; border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; background: #f8fafc; }
+.fin-daysum-nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.fin-daysum-nums div { display: flex; flex-direction: column; min-width: 0; }
+.fin-daysum-nums small { font-size: 12px; color: #6b7280; }
+.fin-daysum-nums b { font-size: 15px; color: #111827; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fin-daysum-nums b.gain { color: #15803d; }
+.fin-daysum-nums b.loss { color: #b91c1c; }
+.fin-daysum-money { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; font-size: 12px; color: #4b5563; }
+.fin-fold { border-top: 1px solid #f1f5f9; }
+.fin-fold-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; min-height: 46px; border: 0; background: none; padding: 6px 0; text-align: left; color: #111827; }
+.fin-fold-head b { font-size: 15px; }
+.fin-fold-head span { font-size: 12px; color: #6b7280; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fin-fold-body { display: grid; gap: 4px; padding-bottom: 10px; }
+.fin-close { margin: 0 0 6px; padding: 0 12px; }
+.fin-close.todo { border-color: #fcd34d; background: #fffbeb; }
+.fin-close-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 8px; align-items: center; width: 100%; min-height: 50px; border: 0; background: none; padding: 8px 0; text-align: left; color: #111827; }
+.fin-close-head b { font-size: 15px; }
+.fin-close-head small { grid-column: 1; font-size: 12px; color: #6b7280; }
+.fin-close.todo .fin-close-head small { color: #92400e; }
+.fin-close-head svg { grid-column: 2; grid-row: 1 / 3; }
+.fin-ck-add.danger { border-color: #fecaca; color: #b91c1c; display: inline-flex; align-items: center; gap: 4px; }
+
+/* Từng ngày: 3 cột Thu | Chi | Lãi thẳng hàng giữa các ngày. */
+.fin-day-nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 6px; }
+.fin-day-nums span { display: flex; flex-direction: column; min-width: 0; font-size: 14px; font-weight: 700; color: #111827; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fin-day-nums small { font-size: 11px; font-weight: 500; color: #6b7280; }
+.fin-day-nums .gain { color: #15803d; }
+.fin-day-nums .loss { color: #b91c1c; }
+.fin-day-today { margin-top: 12px; }

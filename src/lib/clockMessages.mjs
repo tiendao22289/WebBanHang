@@ -5,6 +5,7 @@
  */
 import { dayFlags, durationText, shiftOf, workDayOf } from './attendanceRules.mjs';
 import { DAY_PAY_FROM, EARLY_CUT_MINUTES } from './payroll.mjs';
+import { FACE_MISS_TEXT } from './faceCheck.mjs';
 
 // Mã QR trên máy quầy có dạng "<giờ tạo>.<máy quầy>.<số riêng>.<chữ ký>", hết hạn sau 2 phút — máy chủ
 // kiểm bằng đồng hồ của chính nó. Điện thoại chỉ loại mã rõ ràng là cũ (ảnh chụp mã từ hôm trước), vì
@@ -62,6 +63,50 @@ export function clockSummary(result) {
     return `🔴 Ra ca lúc ${clockTime(result.at)} · Ca này: ${hoursText(durH)}\n✅ Tổng hôm nay: ${hoursText(sumHours(sessions))}`;
   }
   return `🟢 Vào ca lúc ${clockTime(result.at)}\n⏱ Tổng tích luỹ hôm nay: ${hoursText(sumHours(sessions))}`;
+}
+
+// ── Câu đọc to sau khi quét (giọng tiếng Việt của máy): không biểu tượng, giờ Việt Nam đọc "14 giờ 05".
+export function spokenTime(ts) {
+  const t = new Date(Date.parse(ts) + 7 * 3600000);
+  return `${t.getUTCHours()} giờ ${String(t.getUTCMinutes()).padStart(2, '0')}`;
+}
+const plainText = s => String(s || '').replace(/[^\p{L}\p{N}\s.,:;!?()/%+-]/gu, '').replace(/\s+/g, ' ').trim();
+
+/** Điện thoại nhân viên: kết quả của action clock. */
+export const spokenClock = result => `Quét mã thành công. ${result.clocked === 'out' ? 'Ra' : 'Vào'} ca lúc ${spokenTime(result.at)}.`;
+/** Điện thoại nhân viên: máy chủ từ chối (câu lỗi của máy chủ, vd. chưa vào wifi quán). */
+export const spokenClockError = message => `Quét mã chưa thành công. ${plainText(message)}`;
+
+// Máy quầy: lượt quét bị chặn (đang bật chặn thật trong trang Lương) — lý do ngắn để hiện / đọc.
+export const KIOSK_FAIL_TEXT = {
+  other_network: 'Điện thoại chưa vào wifi quán',
+  shared_device: 'Điện thoại này đã đăng ký cho người khác',
+  unknown_device: 'Không phải điện thoại đã đăng ký',
+};
+/** Máy quầy: {ok, name, action, at} khi chấm được, {ok: false, name, reason} khi bị chặn. */
+export function spokenKiosk(n) {
+  if (!n.ok) return `${n.name}, quét mã chưa thành công. ${KIOSK_FAIL_TEXT[n.reason] || 'Xem lại trên điện thoại'}.`;
+  return `${n.name}, quét mã thành công. ${n.action === 'out' ? 'Ra' : 'Vào'} ca lúc ${spokenTime(n.at)}.`;
+}
+
+// ── So mặt ở máy quầy (app): kết quả một lượt quét — máy quầy đọc to, điện thoại hiện chữ.
+/** r = trả lời face_verify của máy chủ: {result: ok | wrong | review | expired, name, clocked, at, reason}. */
+export function spokenFace(r) {
+  if (r.result === 'ok') return `${r.name}, đúng mặt. ${r.clocked === 'out' ? 'Ra' : 'Vào'} ca lúc ${spokenTime(r.at)}.`;
+  if (r.result === 'wrong') return `${r.name}, sai mặt. Lượt này không tính. Quét lại mã.`;
+  if (r.result === 'review') return `${r.name}, sai mặt ba lần. Đã ghi giờ, chờ chủ quán duyệt.`;
+  const why = FACE_MISS_TEXT[r.reason];
+  return `${r.name}, chưa so được mặt.${why ? ` ${why}.` : ''} Quét lại mã.`;
+}
+
+/** Điện thoại nhân viên chờ máy quầy so mặt: câu báo khi không được tính (sai mặt / hết giờ). Đúng mặt thì null. */
+export function faceWaitText(r) {
+  if (r.status === 'ok' || r.status === 'review') return null;
+  if (r.status === 'wrong') return `❌ Sai mặt — lượt này không tính.
+Quét lại mã trên máy quầy và nhìn thẳng vào camera.${r.tries_left ? ` Sai thêm ${r.tries_left} lần thì máy vẫn ghi giờ nhưng chờ chủ quán duyệt.` : ''}`;
+  if (r.status === 'expired') return `⚠️ Máy quầy chưa so được mặt${FACE_MISS_TEXT[r.reason] ? ` (${FACE_MISS_TEXT[r.reason].toLowerCase()})` : ''}.
+Quét lại mã trên máy quầy.`;
+  return 'Không tìm thấy lượt quét này. Quét lại mã trên máy quầy.';
 }
 
 // Đúng giờ / trễ / sớm so với ca của người đó, báo ngay sau khi quét (chỉ từ ngày tính giờ theo ca).

@@ -27,6 +27,8 @@ import { AUTO_CLOSE_BY } from '@/lib/attendanceRules.mjs';
 import { LINK_CODE_MINUTES, REPORT_SECTIONS, readReportSettings, reportPlan, reportSections, reportStatus, saveReportSettings, validSendAt } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
+import { loadPayrollMonth } from '@/lib/payrollMonth.mjs';
+import { payrollCost } from '@/lib/payroll.mjs';
 import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, dailyReportText, dailyWarnings, isMonthKey, itemKey, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
 
 export const runtime = 'nodejs';
@@ -34,7 +36,8 @@ export const dynamic = 'force-dynamic';
 const headers = { 'Cache-Control': 'private, no-store', Vary: 'Cookie' };
 const missingTable = error => ['PGRST205', '42P01'].includes(error?.code);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
-const KINDS = ['drink', 'salary', 'fixed', 'custom'];
+// Lương không nhập tay nữa: Sổ thu chi tự lấy theo chấm công (trang Lương).
+const KINDS = ['drink', 'fixed', 'custom'];
 const CATEGORY_SCOPES = ['salary', 'fixed', 'tab'];
 const MAX_CATEGORIES_PER_SCOPE = 30;
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
@@ -205,9 +208,15 @@ async function loadMonth(db, month, today) {
   for (const result of [entriesResult, accountsResult, staffResult]) if (result.error) throw result.error;
   if (closesResult.error && !missingTable(closesResult.error)) throw closesResult.error;
   const entries = entriesResult.data || [];
+  // Lương mỗi ngày theo chấm công (cùng công thức trang Lương). Đọc lỗi thì sổ vẫn mở, báo chưa có lương.
+  let wages = null;
+  try {
+    const [year, monthNo] = month.split('-').map(Number);
+    wages = payrollCost({ year, month: monthNo, ...await loadPayrollMonth(db, year, monthNo) });
+  } catch (error) { console.error('[admin/finance] wages', error); }
   return {
     entries, categories,
-    summary: summarizeMonth({ month, revenue, paperBills, notes, entries, closes: closesResult.data || [], categories, today }),
+    summary: summarizeMonth({ month, revenue, paperBills, notes, entries, closes: closesResult.data || [], categories, wages, today }),
     accounts: (accountsResult.data || []).map(a => ({ id: a.id, name: [a.bank_name, a.account_name].filter(Boolean).join(' · ') || 'Tài khoản', last4: String(a.account_number || '').slice(-4) })),
     staff: (staffResult.data || []).map(s => s.full_name).filter(Boolean),
   };
@@ -795,6 +804,7 @@ export async function POST(request) {
     let entryDate = String(body.entry_date || '');
     let label = String(body.label || '').trim().slice(0, 120);
     let category = null;
+    if (kind === 'salary') return NextResponse.json({ error: 'Lương tự tính theo chấm công ở trang Lương, không nhập ở Sổ thu chi nữa.' }, { status: 400, headers });
     if (!KINDS.includes(kind)) return NextResponse.json({ error: 'Loại khoản chi không hợp lệ.' }, { status: 400, headers });
     if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_AMOUNT) return NextResponse.json({ error: 'Số tiền không hợp lệ.' }, { status: 400, headers });
     // Mục tự đặt còn đang dùng (chưa ẩn) thuộc đúng nhóm.
@@ -809,10 +819,6 @@ export async function POST(request) {
       if (!builtIn && !own) return NextResponse.json({ error: 'Chọn mục chi cố định.' }, { status: 400, headers });
       category = builtIn ? builtIn.key : own.id;
       label = label || (builtIn ? builtIn.label : own.name);
-    } else if (kind === 'salary' && body.category) {
-      const own = await ownCategory('salary');
-      if (!own) return NextResponse.json({ error: 'Loại lương không còn, chọn lại.' }, { status: 400, headers });
-      category = own.id;
     } else if (kind === 'custom') {
       const tab = await ownCategory('tab');
       if (!tab) return NextResponse.json({ error: 'Tab này không còn, tải lại trang.' }, { status: 400, headers });
@@ -826,7 +832,7 @@ export async function POST(request) {
     } else if (!DATE.test(entryDate)) {
       return NextResponse.json({ error: 'Ngày không hợp lệ.' }, { status: 400, headers });
     }
-    if (!label) return NextResponse.json({ error: kind === 'salary' ? 'Nhập tên nhân viên.' : 'Nhập nội dung.' }, { status: 400, headers });
+    if (!label) return NextResponse.json({ error: 'Nhập nội dung.' }, { status: 400, headers });
     const { data, error } = await db.from('finance_entries').insert({
       entry_date: entryDate, kind, category, label, amount,
       note: String(body.note || '').trim().slice(0, 300) || null,
