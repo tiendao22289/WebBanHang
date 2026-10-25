@@ -451,6 +451,8 @@ export default function PayrollPage() {
   };
 
   const [expandedSalaryStaff, setExpandedSalaryStaff] = useState(null);
+  // Phiếu lương trên điện thoại: gọn (tên · thực lĩnh · 1 dòng tóm tắt), bấm để xem chi tiết.
+  const [openSalaryCard, setOpenSalaryCard] = useState(null);
 
   const fetchAll = useCallback(async () => {
     fetchCheckin();
@@ -1059,53 +1061,38 @@ export default function PayrollPage() {
   // ── ADMIN VIEW ───────────────────────────────────────────────────────────────
   return (
     <div className="payroll-page">
+      {/* Gọn cho điện thoại: tên trang + Đồng bộ một hàng; người dùng + giờ đồng bộ một dòng nhỏ. */}
       <div className="payroll-header">
-        <div className="payroll-title">💰 Tính Lương Nhân Viên</div>
-        {currentUser && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            {currentUser.role === 'admin' && (
-              <button
-                onClick={fetchAll}
-                disabled={loading}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: loading ? '#94a3b8' : '#3b82f6', color: 'white', border: 'none', borderRadius: 10, fontSize: '0.82rem', fontWeight: 700, cursor: loading ? 'wait' : 'pointer', boxShadow: '0 2px 6px rgba(59, 130, 246, 0.25)' }}
-              >
-                <RefreshCw size={15} />
-                {loading ? 'Đang đồng bộ...' : 'Đồng bộ'}
-              </button>
-            )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', background: currentUser.role === 'admin' ? '#fef3c7' : '#dbeafe', borderRadius: 20, fontSize: '0.78rem', fontWeight: 700, color: currentUser.role === 'admin' ? '#92400e' : '#1d4ed8', flexShrink: 0 }}>
-              <span>{currentUser.role === 'admin' ? '👑' : '👤'}</span>
-              <span>{currentUser.full_name}</span>
-              <span style={{ fontWeight: 400, opacity: 0.7 }}>· {currentUser.role === 'admin' ? 'Admin' : 'Nhân viên'}</span>
-              <button
-                onClick={logout}
-                title="Đăng xuất"
-                style={{ marginLeft: 4, background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1, padding: '2px 4px', borderRadius: 6, opacity: 0.6 }}
-              >🚪</button>
-            </div>
-          </div>
+        <div className="payroll-title">💰 Lương nhân viên</div>
+        {currentUser?.role === 'admin' && (
+          <button className="payroll-sync" onClick={fetchAll} disabled={loading}>
+            <RefreshCw size={15} className={loading ? 'spin' : ''} />
+            {loading ? 'Đang tải...' : 'Đồng bộ'}
+          </button>
         )}
       </div>
-
-      {lastSyncedAt && (
-        <div style={{ fontSize: '0.82rem', color: '#64748b', margin: '-6px 0 10px', textAlign: 'right' }}>
-          Đã đồng bộ lúc {lastSyncedAt.toLocaleTimeString('vi-VN')}.
+      {currentUser && (
+        <div className="payroll-who">
+          <span>{currentUser.role === 'admin' ? '👑' : '👤'} {currentUser.full_name} · {currentUser.role === 'admin' ? 'Admin' : 'Nhân viên'}</span>
+          {lastSyncedAt && <span>· đồng bộ {lastSyncedAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>}
+          <button onClick={logout} title="Đăng xuất">🚪 Thoát</button>
         </div>
       )}
 
-      {/* Tabs */}
+      {/* Mục: lưới (điện thoại 4 cột) — thấy đủ mọi mục, không còn mục bị khuất bên phải. */}
       <div className="payroll-tabs">
         {[
-          { key: 'salary', label: '📊 Bảng Lương' },
-          { key: 'requests', label: '📋 Yêu cầu', badge: pendingCount + (checkin?.fixes || []).filter(f => f.status === 'pending').length + (checkin?.extras || []).length },
-          { key: 'violations', label: '⚠️ Vi phạm', badge: fineHints.length },
-          { key: 'attendance', label: '⏰ Chấm công' },
-          { key: 'qr', label: '📱 Cài chấm công' },
-          { key: 'accounts', label: '👤 Tài khoản' },
-          { key: 'config', label: '⚙️ Cấu hình' },
+          { key: 'salary', icon: '📊', label: 'Bảng lương' },
+          { key: 'requests', icon: '📋', label: 'Yêu cầu', badge: pendingCount + (checkin?.fixes || []).filter(f => f.status === 'pending').length + (checkin?.extras || []).length },
+          { key: 'violations', icon: '⚠️', label: 'Vi phạm', badge: fineHints.length },
+          { key: 'attendance', icon: '⏰', label: 'Chấm công' },
+          { key: 'qr', icon: '📱', label: 'Cài chấm công' },
+          { key: 'accounts', icon: '👤', label: 'Tài khoản' },
+          { key: 'config', icon: '⚙️', label: 'Cấu hình' },
         ].map(tab => (
-          <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)}>
-            {tab.label}
+          <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)} aria-pressed={activeTab === tab.key}>
+            <span className="tab-icon" aria-hidden="true">{tab.icon}</span>
+            <span className="tab-label">{tab.label}</span>
             {tab.badge > 0 && <span className="badge">{tab.badge}</span>}
           </button>
         ))}
@@ -1116,11 +1103,7 @@ export default function PayrollPage() {
           <p>Bấm Đồng bộ để tải dữ liệu tính lương từ Supabase.</p>
           <p className="text-sm text-muted">Trang sẽ không tự tải dữ liệu admin cho tới khi bạn bấm đồng bộ.</p>
           {currentUser?.role === 'admin' && (
-            <button
-              onClick={fetchAll}
-              disabled={loading}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 12, padding: '9px 16px', background: loading ? '#94a3b8' : '#3b82f6', color: 'white', border: 'none', borderRadius: 10, fontSize: '0.86rem', fontWeight: 700, cursor: loading ? 'wait' : 'pointer', boxShadow: '0 2px 6px rgba(59, 130, 246, 0.25)' }}
-            >
+            <button className="payroll-sync" onClick={fetchAll} disabled={loading} style={{ marginTop: 12 }}>
               <RefreshCw size={15} />
               {loading ? 'Đang đồng bộ...' : 'Đồng bộ ngay'}
             </button>
@@ -1203,16 +1186,20 @@ export default function PayrollPage() {
                   {filtered.length === 0 && <div className="empty-state">Chưa có nhân viên</div>}
                   {filtered.map(s => {
                     const c = salaryOf(s.id);
+                    const cardOpen = openSalaryCard === s.id;
                     return (
                       <div key={s.id} className="salary-card">
-                        <div className="salary-card-header">
-                          <div>
+                        <button type="button" className="salary-card-header" onClick={() => setOpenSalaryCard(cardOpen ? null : s.id)} aria-expanded={cardOpen}>
+                          <div style={{ minWidth: 0 }}>
                             <div className="salary-card-name">{c.locked ? '🔒 ' : ''}{s.full_name}</div>
-                            <div className="salary-card-phone">{s.phone}</div>
+                            <div className="salary-card-sum">{[daysText(c), c.otHours ? `tăng ca ${fmtNum(c.otHours)} giờ` : null, c.advAmt ? `ứng ${formatMoney(c.advAmt)}` : null, c.vioAmt ? `phạt ${formatMoney(c.vioAmt)}` : null].filter(Boolean).join(' · ')}</div>
                           </div>
-                          <div className={`salary-card-net ${c.net < 0 ? 'negative' : ''}`}>{formatMoney(c.net)}</div>
-                        </div>
-                        <div className="salary-card-body">
+                          <div className="salary-card-end">
+                            <div className={`salary-card-net ${c.net < 0 ? 'negative' : ''}`}>{formatMoney(c.net)}</div>
+                            <small>{c.locked ? 'đã chốt' : running ? 'tạm tính' : 'thực lĩnh'} {cardOpen ? '▴' : '▾'}</small>
+                          </div>
+                        </button>
+                        {cardOpen && <div className="salary-card-body">
                           <div className="salary-card-row">
                             <span className="salary-card-label">Lương cơ bản</span>
                             <span className="salary-card-value">{formatMoney(c.base)}</span>
@@ -1271,9 +1258,9 @@ export default function PayrollPage() {
                               <span className="salary-card-value" style={{ color: '#b45309' }}>{formatMoney(c.liveNet)}</span>
                             </div>
                           )}
-                        </div>
+                        </div>}
                         {isAdmin && <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} />}
-                        {isAdmin && (
+                        {isAdmin && cardOpen && (
                           <button
                             onClick={() => setExpandedSalaryStaff(expandedSalaryStaff === s.id ? null : s.id)}
                             style={{ width: '100%', marginTop: 4, padding: '7px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f8fafc', border: '1px solid #e2e8f0', borderBottomLeftRadius: 12, borderBottomRightRadius: 12, fontSize: '0.8rem', fontWeight: 700, color: '#1d4ed8', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
@@ -1938,9 +1925,10 @@ export default function PayrollPage() {
           {/* === TÀI KHOẢN === */}
           {activeTab === 'accounts' && (
             <div>
-              {/* Create form */}
-              <div className="payroll-form">
-                <h3>➕ Tạo tài khoản nhân viên mới</h3>
+              {/* Create form — thu gọn, bấm để mở */}
+              <details className="payroll-form">
+                <summary style={{ fontWeight: 800, cursor: 'pointer' }}>➕ Tạo tài khoản nhân viên mới</summary>
+                <div style={{ height: 10 }} />
                 {accMsg && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: accMsg.startsWith('✅') ? '#dcfce7' : '#fee2e2', color: accMsg.startsWith('✅') ? '#15803d' : '#dc2626', fontSize: '0.85rem', fontWeight: 600 }}>{accMsg}</div>}
                 <div className="form-grid">
                   <div className="form-group">
@@ -1964,7 +1952,7 @@ export default function PayrollPage() {
                   </div>
                 </div>
                 <button className="btn-primary" onClick={handleCreateAccount}>Tạo tài khoản</button>
-              </div>
+              </details>
 
               {/* Staff list */}
               <div className="config-list">
@@ -2036,7 +2024,7 @@ export default function PayrollPage() {
               <div className="payroll-form" style={{ marginBottom: 8 }}>
                 <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>💡 Thiết lập lương cơ bản (lương đủ {STANDARD_DAYS} ngày công), giá tăng ca mỗi giờ (để 0 nếu không trả tăng ca) và ngày phát lương cho từng nhân viên.</p>
               </div>
-              <div className="config-list">
+              <div className="config-list config-salary">
                 {staffList.map(s => {
                   const edit = configEdits[s.id] || { base_salary: 0, overtime_rate: 25000, pay_day: 5 };
                   return (
@@ -2054,7 +2042,7 @@ export default function PayrollPage() {
                           onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value } }))} />
                       </div>
                       <div className="form-group" style={{ margin: 0 }}>
-                        <label>Ngày phát lương</label>
+                        <label>Ngày phát</label>
                         <input type="number" min="1" max="31" value={edit.pay_day || 5}
                           onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, pay_day: e.target.value } }))} />
                       </div>
