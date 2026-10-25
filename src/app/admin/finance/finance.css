@@ -336,16 +336,35 @@
 .fin-day-nums .loss { color: #b91c1c; }
 .fin-day-today { margin-top: 12px; }
 
-/* Thêm chi: 2 phần lớn (trong ngày / cố định), chọn nhanh khoản chi, danh sách đã chi trong ngày. */
-.fin-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-.fin-mode button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 56px; padding: 8px 12px; border: 1.5px solid #d1d5db; border-radius: 12px; background: white; color: #111827; font-size: 15px; font-weight: 700; text-align: left; }
-.fin-mode button small { font-size: 12px; font-weight: 500; color: #6b7280; }
-.fin-mode button.active { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; }
-.fin-mode button.active small { color: #1d4ed8; }
-.fin-filter-row .fin-search-tables.fin-wrap { flex-wrap: wrap; overflow: visible; margin: 0; padding: 0; }
+/* Tab Hôm nay: chuyển ngày, việc trong ngày (theo thứ tự làm), chi trong ngày. */
+.fin-daynav { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 6px; margin-bottom: 8px; }
+.fin-daynav-title { display: flex; flex-direction: column; align-items: center; line-height: 1.25; }
+.fin-daynav-title b { font-size: 18px; color: #111827; }
+.fin-daynav-title small { font-size: 12px; color: #6b7280; }
+.fin-back-today { display: block; margin: -2px auto 8px; }
+.fin-remind { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-bottom: 10px; padding: 10px 12px; border: 1px solid #fcd34d; border-radius: 12px; background: #fffbeb; color: #92400e; font-size: 14px; font-weight: 700; text-align: left; }
+.fin-tasks { background: white; border: 1px solid #e5e7eb; border-radius: 14px; padding: 12px 14px; margin: 10px 0; }
+.fin-tasks h2 { margin: 0 0 6px; font-size: 15px; }
+.fin-tasks ol { list-style: none; margin: 0; padding: 0; }
+.fin-tasks li { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid #f1f5f9; }
+.fin-tasks li:first-child { border-top: 0; }
+.fin-task-mark { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 999px; background: #e5e7eb; color: #374151; font-size: 12px; font-weight: 800; }
+.fin-tasks li.done .fin-task-mark { background: #dcfce7; color: #15803d; }
+.fin-tasks li.warn .fin-task-mark { background: #fee2e2; color: #b91c1c; }
+.fin-tasks li.todo .fin-task-mark { background: #dbeafe; color: #1d4ed8; }
+.fin-task-text { display: flex; flex-direction: column; min-width: 0; }
+.fin-task-text b { font-size: 14px; color: #111827; }
+.fin-task-text small { font-size: 12px; color: #6b7280; line-height: 1.35; }
+.fin-tasks li.warn .fin-task-text small { color: #b91c1c; }
+.fin-task-actions { display: flex; flex-direction: column; gap: 4px; }
+.fin-task-actions button { min-height: 34px; padding: 0 12px; border: 1px solid #2563eb; border-radius: 999px; background: #eff6ff; color: #1d4ed8; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.fin-panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.fin-panel h2 small { font-size: 12px; font-weight: 500; color: #6b7280; margin-left: 6px; }
+.fin-spend form { margin-top: 8px; }
+.fin-picks { margin-bottom: 10px; }
+.fin-search-tables.fin-wrap { flex-wrap: wrap; overflow: visible; max-height: none; }
 .fin-search-tables .fin-chip-add { border-style: dashed; border-color: #2563eb; background: #eff6ff; color: #1d4ed8; font-weight: 700; }
-.fin-date-pick { min-height: 40px; padding: 0 8px; border: 1px solid #d1d5db; border-radius: 999px; font-size: 14px; background: white; color: #374151; flex-shrink: 0; }
 .fin-last { display: block; margin: -4px 0 8px; }
-.fin-daylist { margin-top: 14px; border-top: 1px solid #e5e7eb; padding-top: 10px; }
-.fin-daylist-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; margin-bottom: 4px; }
+.fin-daylist { margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 8px; }
 .fin-day-cost { margin: 6px 0 0; font-size: 12px; color: #4b5563; line-height: 1.4; }
+.fin-switch .fin-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; margin-left: 5px; padding: 0 5px; border-radius: 999px; background: #dc2626; color: white; font-size: 11px; font-weight: 800; }
