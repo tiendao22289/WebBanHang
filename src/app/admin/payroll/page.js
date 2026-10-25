@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
@@ -7,7 +7,7 @@ import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessi
 import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
-import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users, RefreshCw } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users } from 'lucide-react';
 import './payroll.css';
 
 const now = new Date();
@@ -483,7 +483,22 @@ export default function PayrollPage() {
   }, [selMonth, selYear, fetchCheckin, fetchPayrollMonth]);
 
 
-  // Đổi tháng / năm sau khi đã đồng bộ thì tải lại ngay: trước đây vẫn dùng giờ công tháng cũ để tính.
+  // Mở trang là tự tải (không còn nút Đồng bộ). Quay lại trang (mở lại app) sau ≥ 1 phút thì tải lại cho mới.
+  const fetchAllRef = useRef(fetchAll);
+  fetchAllRef.current = fetchAll;
+  const syncedAtRef = useRef(null);
+  syncedAtRef.current = lastSyncedAt;
+  useEffect(() => {
+    if (currentUser?.role !== 'admin') return;
+    fetchAllRef.current();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && Date.now() - (syncedAtRef.current?.getTime() || 0) > 60000) fetchAllRef.current();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [currentUser?.role]);
+
+  // Đổi tháng / năm sau khi đã tải thì tải lại ngay: trước đây vẫn dùng giờ công tháng cũ để tính.
   useEffect(() => {
     if (hasSynced) fetchAll();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1061,20 +1076,14 @@ export default function PayrollPage() {
   // ── ADMIN VIEW ───────────────────────────────────────────────────────────────
   return (
     <div className="payroll-page">
-      {/* Gọn cho điện thoại: tên trang + Đồng bộ một hàng; người dùng + giờ đồng bộ một dòng nhỏ. */}
+      {/* Gọn cho điện thoại: tên trang; người dùng + lúc cập nhật một dòng nhỏ. Dữ liệu tự tải. */}
       <div className="payroll-header">
         <div className="payroll-title">💰 Lương nhân viên</div>
-        {currentUser?.role === 'admin' && (
-          <button className="payroll-sync" onClick={fetchAll} disabled={loading}>
-            <RefreshCw size={15} className={loading ? 'spin' : ''} />
-            {loading ? 'Đang tải...' : 'Đồng bộ'}
-          </button>
-        )}
       </div>
       {currentUser && (
         <div className="payroll-who">
           <span>{currentUser.role === 'admin' ? '👑' : '👤'} {currentUser.full_name} · {currentUser.role === 'admin' ? 'Admin' : 'Nhân viên'}</span>
-          {lastSyncedAt && <span>· đồng bộ {lastSyncedAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>}
+          {loading ? <span>· đang cập nhật…</span> : lastSyncedAt && <span>· cập nhật {lastSyncedAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>}
           <button onClick={logout} title="Đăng xuất">🚪 Thoát</button>
         </div>
       )}
@@ -1098,17 +1107,8 @@ export default function PayrollPage() {
         ))}
       </div>
 
-      {loading ? <div className="empty-state">Đang tải...</div> : !hasSynced ? (
-        <div className="empty-state">
-          <p>Bấm Đồng bộ để tải dữ liệu tính lương từ Supabase.</p>
-          <p className="text-sm text-muted">Trang sẽ không tự tải dữ liệu admin cho tới khi bạn bấm đồng bộ.</p>
-          {currentUser?.role === 'admin' && (
-            <button className="payroll-sync" onClick={fetchAll} disabled={loading} style={{ marginTop: 12 }}>
-              <RefreshCw size={15} />
-              {loading ? 'Đang đồng bộ...' : 'Đồng bộ ngay'}
-            </button>
-          )}
-        </div>
+      {!hasSynced ? (
+        <div className="empty-state">Đang tải dữ liệu lương…</div>
       ) : (
         <>
           {/* === BẢNG LƯƠNG === */}
@@ -1755,7 +1755,7 @@ export default function PayrollPage() {
 
           {/* === CÀI CHẤM CÔNG: giờ làm, máy quầy, chạy thử / chặn thật === */}
           {activeTab === 'qr' && (() => {
-            if (!checkin || !hoursEdit) return <div className="empty-state">Đang tải phần cài chấm công… (bấm Đồng bộ nếu lâu)</div>;
+            if (!checkin || !hoursEdit) return <div className="empty-state">Đang tải phần cài chấm công… (mở lại trang nếu lâu)</div>;
             const nameOf = id => staffList.find(s => s.id === id)?.full_name || 'Không rõ';
             const when = ts => ts ? new Date(ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '—';
             const serverNow = Date.parse(checkin.now) || Date.now();
