@@ -5,6 +5,7 @@ import { Banknote, Camera, ChevronDown, ChevronLeft, ChevronRight, CreditCard, P
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import { useBackClose } from '@/lib/useBackClose';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
+import { costParts } from '@/lib/ownerFinance.mjs';
 import './finance.css';
 
 const money = value => `${Math.round(Number(value || 0)).toLocaleString('vi-VN')}đ`;
@@ -32,7 +33,8 @@ async function api(path, options) {
   return result;
 }
 
-const KIND_LABEL = { drink: 'Nước ngọt / bia', salary: 'Lương', fixed: 'Chi cố định', custom: 'Chi khác' };
+// 'drink' (tên cũ trong DB) = chi trong ngày: nước ngọt, đá, gas… — tên khoản là label.
+const KIND_LABEL = { drink: 'Chi trong ngày', salary: 'Lương', fixed: 'Chi cố định', custom: 'Chi khác' };
 const NEW = '__new';
 
 // Tên hiển thị của 1 khoản đã nhập: loại lương / mục cố định / tên tab tự tạo.
@@ -40,7 +42,7 @@ function entryTitle(entry, categories = []) {
   const own = categories.find(c => c.id === entry.category);
   if (entry.kind === 'salary') return `${own?.name || 'Lương'}: ${entry.label}`;
   if (entry.kind === 'custom') return own && entry.label !== own.name ? `${own.name}: ${entry.label}` : (own?.name || entry.label);
-  if (entry.kind === 'fixed') return entry.label;
+  if (entry.kind === 'fixed' || entry.kind === 'drink') return entry.label || KIND_LABEL[entry.kind];
   const kind = KIND_LABEL[entry.kind] || '';
   return !entry.label || entry.label === kind ? kind : `${kind}: ${entry.label}`;
 }
@@ -81,108 +83,198 @@ function NewCategory({ scope, onDone, onCancel }) {
   </div>;
 }
 
-function AddEntryForm({ data, month, onSaved }) {
-  // Mục/tab vừa tạo được giữ tạm ở đây cho tới khi danh sách tải lại xong —
-  // không thì form chọn tab mới khi server chưa trả về, mất tên tab.
+// Chi trong ngày: chọn nhanh khoản hay chi (lưu là khoản "trong ngày", tên = khoản đã chọn).
+const DAILY_PRESETS = ['Nước ngọt / bia', 'Đá', 'Gas', 'Rau / chợ', 'Ship / xe'];
+const OTHER = '__other';
+const shortDay = d => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+const shiftDay = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+// Khoản chi trong ngày: 'drink' (tên cũ trong DB) hoặc tab tự tạo nhập theo ngày.
+const isDailyEntry = (e, categories) => e.kind === 'drink' || (e.kind === 'custom' && !categories.find(c => c.id === e.category && c.schedule === 'monthly'));
+
+// Chi trong ngày của một ngày: bấm khoản (nước ngọt, đá, gas…, tab tự tạo theo ngày, Khác), nhập tiền.
+// Ngay dưới là các khoản đã chi trong ngày đó, xoá được.
+function DailySpend({ date, entries, history, categories: loaded, onSaved }) {
+  // Tab vừa tạo được giữ tạm cho tới khi danh sách tải lại xong (không thì mất tên tab).
   const [created, setCreated] = useState([]);
-  const loaded = data?.categories || [];
   const categories = [...loaded, ...created.filter(c => !loaded.some(x => x.id === c.id))];
-  const active = scope => categories.filter(c => c.scope === scope && !c.archived);
-  const tabs = active('tab');
-  const [kind, setKind] = useState('drink'); // 'drink' | 'fixed' | 'tab:<id>' — lương tự tính theo chấm công
-  const [date, setDate] = useState(vnToday());
+  const dailyTabs = categories.filter(c => c.scope === 'tab' && !c.archived && c.schedule !== 'monthly');
+  const [pick, setPick] = useState(DAILY_PRESETS[0]); // tên khoản | 'tab:<id>' | OTHER
   const [label, setLabel] = useState('');
-  const [fixedCategory, setFixedCategory] = useState('rent');
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
-  const [adding, setAdding] = useState(null); // 'tab' | 'fixed'
+  const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
+  useEffect(() => { setSaved(''); setError(''); }, [date]);
 
-  const tab = kind.startsWith('tab:') ? categories.find(c => c.id === kind.slice(4)) : null;
-  // Tab đã bị ẩn (ở máy khác) → quay về tab mặc định.
-  useEffect(() => { if (kind.startsWith('tab:') && data && (!tab || tab.archived)) setKind('drink'); }, [kind, tab, data]);
-  const monthly = kind === 'fixed' || tab?.schedule === 'monthly';
-  const kindName = (tab ? tab.name : KIND_LABEL[kind]) || '';
+  const tab = pick.startsWith('tab:') ? categories.find(c => c.id === pick.slice(4)) : null;
+  // Tab đã bị ẩn (ở máy khác) → quay về khoản mặc định.
+  useEffect(() => { if (pick.startsWith('tab:') && !dailyTabs.some(t => `tab:${t.id}` === pick)) setPick(DAILY_PRESETS[0]); }, [loaded, pick]);
+  const name = pick === OTHER ? label.trim() : tab ? tab.name : pick;
+  const mine = entries.filter(e => isDailyEntry(e, categories));
+  const total = mine.reduce((s, e) => s + Number(e.amount || 0), 0);
+  // Lần trước chi khoản này bao nhiêu (bấm để điền lại).
+  const titleOf = e => (e.kind === 'custom' ? categories.find(c => c.id === e.category)?.name : e.label);
+  const last = name ? [...history].filter(e => isDailyEntry(e, categories) && titleOf(e) === name)
+    .sort((a, b) => String(b.entry_date).localeCompare(String(a.entry_date)) || String(b.created_at).localeCompare(String(a.created_at)))[0] || null : null;
 
-  function choose(next) {
-    if (next !== kind) setLabel('');
-    setKind(next); setAdding(null); setError(''); setSaved('');
-  }
+  function choose(next) { setPick(next); setLabel(''); setAdding(false); setError(''); setSaved(''); }
 
   async function save(event) {
     event.preventDefault();
     setBusy(true); setError(''); setSaved('');
     try {
-      const { entry } = await post({
-        action: 'add', kind: tab ? 'custom' : kind, entry_date: date, month, amount: Number(digits(amount)), note,
-        category: tab ? tab.id : kind === 'fixed' ? fixedCategory : undefined,
-        label: kind === 'drink' ? (label || 'Nước ngọt / bia') : label,
-      });
-      setAmount(''); setNote(''); if (kind !== 'drink') setLabel('');
+      if (!name) throw new Error('Ghi khoản chi là gì (vd: Than, Khăn giấy).');
+      const body = tab ? { kind: 'custom', category: tab.id, label: tab.name } : { kind: 'drink', label: name };
+      const { entry } = await post({ action: 'add', ...body, entry_date: date, amount: Number(digits(amount)), note });
+      setAmount(''); setNote(''); if (pick === OTHER) setLabel('');
       setSaved(`✓ Đã thêm ${entryTitle(entry, categories)} · ${money(entry.amount)}`);
       onSaved();
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
 
-  async function archive(category, after) {
-    if (!confirm(`Ẩn "${category.name}"? Các khoản đã nhập vẫn được giữ và vẫn tính vào sổ.`)) return;
-    try { await post({ action: 'archive_category', id: category.id }); after(); onSaved(); } catch (err) { alert(err.message); }
+  async function remove(entry) {
+    if (!confirm(`Xoá "${entryTitle(entry, categories)}" ${money(entry.amount)}?`)) return;
+    try { await post({ action: 'delete', id: entry.id }); onSaved(); } catch (err) { alert(err.message); }
   }
 
-  const ownFixed = active('fixed');
-  const selectedOwn = kind === 'fixed' ? ownFixed.find(c => c.id === fixedCategory) : null;
+  async function archive(category) {
+    if (!confirm(`Ẩn "${category.name}"? Các khoản đã nhập vẫn được giữ và vẫn tính vào sổ.`)) return;
+    try { await post({ action: 'archive_category', id: category.id }); choose(DAILY_PRESETS[0]); onSaved(); } catch (err) { alert(err.message); }
+  }
 
-  return <form className="fin-form" onSubmit={save}>
-    <div className="fin-tabs" role="tablist">
-      {['drink', 'fixed'].map(k => <button key={k} type="button" role="tab" aria-selected={kind === k}
-        className={kind === k ? 'active' : ''} onClick={() => choose(k)}>{KIND_LABEL[k]}</button>)}
-      {tabs.map(t => <button key={t.id} type="button" role="tab" aria-selected={kind === `tab:${t.id}`}
-        className={kind === `tab:${t.id}` ? 'active' : ''} onClick={() => choose(`tab:${t.id}`)}>{t.name}</button>)}
-      <button type="button" className="fin-tab-add" onClick={() => { setAdding(adding === 'tab' ? null : 'tab'); setError(''); }}>+ Thêm tab</button>
+  return <section className="fin-panel fin-spend" id="fin-spend">
+    <h2 className="fin-panel-head"><span>Chi trong ngày</span><b>{money(total)}</b></h2>
+    <p className="fin-hint">Khoản mỗi ngày mỗi khác: nước ngọt, đá, gas… Đi chợ / nhập hàng thì ghi ở Sổ tay, lương tự tính theo chấm công.</p>
+    <form onSubmit={save}>
+      <div className="fin-search-tables fin-wrap fin-picks">
+        {DAILY_PRESETS.map(p => <button key={p} type="button" aria-pressed={pick === p} className={pick === p ? 'active' : ''} onClick={() => choose(p)}>{p}</button>)}
+        {dailyTabs.map(t => <button key={t.id} type="button" aria-pressed={pick === `tab:${t.id}`} className={pick === `tab:${t.id}` ? 'active' : ''} onClick={() => choose(`tab:${t.id}`)}>{t.name}</button>)}
+        <button type="button" aria-pressed={pick === OTHER} className={pick === OTHER ? 'active' : ''} onClick={() => choose(OTHER)}>Khác…</button>
+        <button type="button" className="fin-chip-add" onClick={() => { setAdding(a => !a); setError(''); }}>+ Thêm loại</button>
+      </div>
+      {adding && <NewCategory scope="tab" onCancel={() => setAdding(false)}
+        onDone={category => { setCreated(prev => [...prev, category]); setAdding(false); onSaved();
+          if (category.schedule === 'monthly') alert(`"${category.name}" nhập theo tháng: nhập ở tab Tháng → Chi cố định.`); else setPick(`tab:${category.id}`); }} />}
+      <div className="fin-fields">
+        {pick === OTHER && <label className="fin-wide">Nội dung<input value={label} onChange={e => setLabel(e.target.value)} placeholder="VD: Than, Khăn giấy, Sửa ống nước" maxLength={120} /></label>}
+        <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''}
+          onChange={e => setAmount(digits(e.target.value))} placeholder="0" enterKeyHint="done" required /></label>
+        <label>Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
+      </div>
+      {last && !amount && <button type="button" className="fin-link fin-last" onClick={() => setAmount(String(Math.round(Number(last.amount))))}>
+        Lần trước ({shortDay(last.entry_date)}): {money(last.amount)} · bấm để điền</button>}
+      {error && <p className="fin-error">{error}</p>}
+      {saved && <p className="fin-saved" role="status">{saved}</p>}
+      <button className="fin-primary" disabled={busy}>{busy ? 'Đang lưu...' : `Thêm chi ngày ${shortDay(date)}${name ? `: ${name}` : ''}`}</button>
+      {tab && <button type="button" className="fin-link" onClick={() => archive(tab)}>Ẩn loại "{tab.name}"</button>}
+    </form>
+    <div className="fin-daylist">
+      {mine.length === 0 && <p className="fin-empty">Ngày {shortDay(date)} chưa có khoản chi nào.</p>}
+      {mine.map(entry => <div key={entry.id} className="fin-row static">
+        <span>{entryTitle(entry, categories)}{entry.note && <small>{entry.note}</small>}</span>
+        <span className="fin-row-end"><b>{money(entry.amount)}</b>
+          <button type="button" className="fin-icon danger" onClick={() => remove(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
+      </div>)}
     </div>
+  </section>;
+}
 
-    {adding === 'tab' && <NewCategory scope="tab" onCancel={() => setAdding(null)}
-      onDone={category => { setCreated(prev => [...prev, category]); setAdding(null); onSaved(); choose(`tab:${category.id}`); }} />}
+// Chi cố định của tháng (tiền nhà, điện, nước, internet… + tab tự tạo nhập theo tháng): nhập 1 lần
+// cho cả tháng, sổ tự chia đều cho từng ngày.
+function MonthlyCosts({ data, month, onSaved }) {
+  const [created, setCreated] = useState([]);
+  const loaded = data?.categories || [];
+  const categories = [...loaded, ...created.filter(c => !loaded.some(x => x.id === c.id))];
+  const ownFixed = categories.filter(c => c.scope === 'fixed' && !c.archived);
+  const monthlyTabs = categories.filter(c => c.scope === 'tab' && !c.archived && c.schedule === 'monthly');
+  const [pick, setPick] = useState('rent'); // mục cố định | id mục tự thêm | 'tab:<id>'
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [saved, setSaved] = useState('');
 
-    <div className="fin-fields">
-      {kind === 'fixed' && <label className="fin-wide">Mục<select value={fixedCategory} onChange={e => e.target.value === NEW ? setAdding('fixed') : setFixedCategory(e.target.value)}>
-        {(data?.fixedCategories || []).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-        {ownFixed.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        <option value={NEW}>+ Thêm mục mới...</option>
-      </select></label>}
-      {(kind === 'drink' || tab) && <label className="fin-wide">Nội dung<input value={label} onChange={e => setLabel(e.target.value)} placeholder={tab ? tab.name : 'Nước ngọt / bia'} /></label>}
-      {!monthly && <label>Ngày<input type="date" value={date} min={data?.startDate} max={vnToday()} onChange={e => setDate(e.target.value)} required /></label>}
-      <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''}
-        onChange={e => setAmount(digits(e.target.value))} placeholder="0" enterKeyHint="done" required /></label>
-      <label className="fin-wide">Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
-    </div>
+  const tab = pick.startsWith('tab:') ? categories.find(c => c.id === pick.slice(4)) : null;
+  const own = ownFixed.find(c => c.id === pick);
+  useEffect(() => { if (data && pick.startsWith('tab:') && !monthlyTabs.some(t => `tab:${t.id}` === pick)) setPick('rent'); }, [data, pick]);
+  const name = tab ? tab.name : own ? own.name : (data?.fixedCategories || []).find(c => c.key === pick)?.label || 'chi cố định';
+  const monthText = `${month.slice(5)}/${month.slice(0, 4)}`;
+  const perDay = data?.daysInMonth ? Math.round((data.fixedMonthTotal || 0) / data.daysInMonth) : 0;
+  const listed = [...(data?.fixedEntries || []), ...(data?.customMonthlyEntries || [])];
+  const listedTotal = listed.reduce((s, e) => s + Number(e.amount || 0), 0);
 
-    {adding === 'fixed' && <NewCategory scope="fixed" onCancel={() => setAdding(null)}
-      onDone={category => { setCreated(prev => [...prev, category]); setAdding(null); onSaved(); setFixedCategory(category.id); }} />}
+  async function save(event) {
+    event.preventDefault();
+    setBusy(true); setError(''); setSaved('');
+    try {
+      const body = tab ? { kind: 'custom', category: tab.id, label: tab.name } : { kind: 'fixed', category: pick, label: '' };
+      const { entry } = await post({ action: 'add', ...body, month, amount: Number(digits(amount)), note });
+      setAmount(''); setNote('');
+      setSaved(`✓ Đã thêm ${entryTitle(entry, categories)} · ${money(entry.amount)} cho tháng ${monthText}`);
+      onSaved();
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+  async function remove(entry) {
+    if (!confirm(`Xoá "${entryTitle(entry, categories)}" ${money(entry.amount)}?`)) return;
+    try { await post({ action: 'delete', id: entry.id }); onSaved(); } catch (err) { alert(err.message); }
+  }
+  async function copyLast() {
+    try { const result = await post({ action: 'copy_fixed', month }); alert(`Đã chép ${result.entries.length} khoản chi cố định.`); onSaved(); } catch (err) { alert(err.message); }
+  }
+  async function archive(category) {
+    if (!confirm(`Ẩn "${category.name}"? Các khoản đã nhập vẫn được giữ và vẫn tính vào sổ.`)) return;
+    try { await post({ action: 'archive_category', id: category.id }); setPick('rent'); onSaved(); } catch (err) { alert(err.message); }
+  }
 
-    {monthly && <p className="fin-hint">Ghi cho cả tháng {month.slice(5)}/{month.slice(0, 4)}, tự chia đều cho từng ngày.</p>}
-    <p className="fin-hint">Lương không nhập ở đây: Sổ thu chi tự tính theo chấm công ở trang Lương.</p>
-    {error && <p className="fin-error">{error}</p>}
-    {saved && <p className="fin-saved" role="status">{saved}</p>}
-    <button className="fin-primary" disabled={busy}>{busy ? 'Đang lưu...' : `Thêm ${kindName.toLowerCase()}`}</button>
-    {(tab || selectedOwn) && <button type="button" className="fin-link" onClick={() => tab
-      ? archive(tab, () => choose('drink'))
-      : archive(selectedOwn, () => setFixedCategory('rent'))}>
-      Ẩn {tab ? `tab "${tab.name}"` : `mục "${selectedOwn.name}"`}
-    </button>}
-  </form>;
+  return <section className="fin-panel fin-spend">
+    <h2 className="fin-panel-head"><span>Chi cố định tháng {monthText}</span><b>{money(listedTotal)}</b></h2>
+    <p className="fin-hint">Tiền nhà, điện, nước, internet… nhập 1 lần cho cả tháng, sổ tự chia đều cho từng ngày{perDay ? ` (đang ≈ ${money(perDay)}/ngày)` : ''}.</p>
+    {listed.map(entry => <div key={entry.id} className="fin-row static">
+      <span>{entryTitle(entry, categories)}{entry.note && <small>{entry.note}</small>}</span>
+      <span className="fin-row-end"><b>{money(entry.amount)}</b>
+        <button type="button" className="fin-icon danger" onClick={() => remove(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
+    </div>)}
+    {data && !data.fixedEntries?.length && month > FIRST_MONTH && <button type="button" className="fin-secondary" onClick={copyLast}>Chép chi cố định từ tháng trước</button>}
+    <form onSubmit={save}>
+      <div className="fin-fields">
+        <label className="fin-wide">Mục<select value={pick} onChange={e => { if (e.target.value === NEW) setAdding(true); else { setPick(e.target.value); setSaved(''); setError(''); } }}>
+          {(data?.fixedCategories || []).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+          {ownFixed.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          {monthlyTabs.map(t => <option key={t.id} value={`tab:${t.id}`}>{t.name}</option>)}
+          <option value={NEW}>+ Thêm mục mới...</option>
+        </select></label>
+        <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''}
+          onChange={e => setAmount(digits(e.target.value))} placeholder="0" enterKeyHint="done" required /></label>
+        <label>Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
+      </div>
+      {adding && <NewCategory scope="fixed" onCancel={() => setAdding(false)}
+        onDone={category => { setCreated(prev => [...prev, category]); setAdding(false); onSaved(); setPick(category.id); }} />}
+      {error && <p className="fin-error">{error}</p>}
+      {saved && <p className="fin-saved" role="status">{saved}</p>}
+      <button className="fin-primary" disabled={busy}>{busy ? 'Đang lưu...' : `Thêm ${name.toLowerCase()} tháng ${monthText}`}</button>
+      {(tab || own) && <button type="button" className="fin-link" onClick={() => archive(tab || own)}>Ẩn mục "{(tab || own).name}"</button>}
+    </form>
+  </section>;
 }
 
 // Chênh lệch chốt sổ: dương = thừa, âm = thiếu so với sổ.
 const diffText = diff => diff === 0 ? 'Khớp ✓' : diff > 0 ? `Thừa ${money(diff)}` : `Thiếu ${money(-diff)}`;
 const diffClass = diff => diff === 0 ? 'ok' : 'bad';
 const dayCost = d => d.purchases + d.drinks + d.salary + d.fixedShare + d.customTotal;
+// "Trong ngày 350k · Nhập hàng 1,2tr · Lương 900k · Cố định 300k" (bỏ nhóm 0đ).
+const costLine = (d, categories) => {
+  const p = costParts(d, categories);
+  return [['Trong ngày', p.daily], ['Nhập hàng', p.purchases], ['Lương', p.salary], ['Cố định', p.fixed]]
+    .filter(([, v]) => v > 0).map(([k, v]) => `${k} ${money(v)}`).join(' · ');
+};
 
 // Nhóm gập/mở: tiêu đề + số đếm / tổng tiền luôn hiện, bấm để xem chi tiết.
-function Fold({ title, sub, initial = false, children }) {
+function Fold({ title, sub, initial = false, openTick = 0, children }) {
   const [open, setOpen] = useState(initial);
+  useEffect(() => { if (openTick) setOpen(true); }, [openTick]);
   return <section className="fin-fold">
     <button type="button" className="fin-fold-head" onClick={() => setOpen(o => !o)} aria-expanded={open}>
       <b>{title}</b><span>{sub}</span><ChevronDown size={16} style={{ transform: open ? 'rotate(180deg)' : 'none' }} />
@@ -191,7 +283,7 @@ function Fold({ title, sub, initial = false, children }) {
   </section>;
 }
 
-function CloseForm({ detail, accounts, onSaved }) {
+function CloseForm({ detail, accounts, openTick = 0, onSaved }) {
   const saved = detail.close;
   const [cash, setCash] = useState(saved?.cash_counted ?? '');
   const [bank, setBank] = useState(() => Object.fromEntries(Object.entries(saved?.bank_counted || {}).map(([k, v]) => [k, String(v)])));
@@ -199,6 +291,7 @@ function CloseForm({ detail, accounts, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(false);
+  useEffect(() => { if (openTick) setOpen(true); }, [openTick]);
   const canClose = detail.date >= detail.startDate && detail.date <= detail.today;
   // Tài khoản có tiền trong sổ hôm đó + tài khoản đang hiện trong cài đặt.
   const accountIds = [...new Set([...Object.keys(detail.dayByAccount || {}), ...accounts.map(a => a.id)])].filter(id => id !== 'unknown');
@@ -264,15 +357,61 @@ async function sendReceipt(fields, image) {
   return result;
 }
 
-function DayDetail({ date, summary, accounts, categories, onClose, onChanged }) {
+// Việc trong một ngày, đúng thứ tự làm: bill tự vào sổ → đi chợ ghi Sổ tay → chi trong ngày → kiểm tra
+// bill chuyển khoản → chốt sổ. Mục xong có dấu ✓, mục cần làm có nút làm luôn.
+function DayTasks({ date, detail, spend, onSearch, onOpenNotes, onOpenClose }) {
+  const transfer = detail.bills.filter(b => b.payment_method === 'transfer');
+  const paperTransfer = (detail.paperBills || []).filter(b => b.paymentMethod === 'transfer');
+  const noPhoto = transfer.filter(b => !b.transfer_image_url).length + paperTransfer.filter(b => !b.transferImageUrl && !b.imagesPurged).length;
+  const unchecked = transfer.filter(b => !b.verified_at).length + paperTransfer.filter(b => !b.verified).length;
+  const badNotes = detail.notes.filter(n => (n.mismatch && n.mismatch !== 0) || n.lineWarnings?.length || n.suspicious?.length).length;
+  const paperCount = (detail.paperBills || []).length;
+  const revenue = [...detail.bills, ...(detail.paperBills || [])].reduce((s, b) => s + Number(b.amount || 0), 0);
+  const diffs = detail.closeDiff;
+  const closeText = detail.close
+    ? [`Đã chốt ${clock(detail.close.closed_at)}`, diffs?.cashDiff != null ? `tiền mặt ${diffText(diffs.cashDiff).toLowerCase()}` : null,
+      ...Object.values(diffs?.bankDiffs || {}).filter(d => d !== 0).map(d => `thẻ ${diffText(d).toLowerCase()}`)].filter(Boolean).join(' · ')
+    : 'Đếm tiền mặt trong két, xem số tiền thật trên app ngân hàng';
+  const closeBad = detail.close && ((diffs?.cashDiff ?? 0) !== 0 || Object.values(diffs?.bankDiffs || {}).some(d => d !== 0));
+  const steps = [
+    { state: 'done', title: 'Bill tự vào sổ khi đóng bàn', sub: `${detail.bills.length} bill${paperCount ? ` + ${paperCount} bill giấy` : ''} · ${money(revenue)}` },
+    { state: badNotes ? 'warn' : detail.notes.length ? 'done' : 'idle', title: 'Đi chợ / nhập hàng ghi ở Sổ tay',
+      sub: detail.notes.length ? `${detail.notes.length} phiếu · ${money(detail.notes.reduce((s, n) => s + n.cost, 0))}${badNotes ? ` · ⚠ ${badNotes} phiếu cần xem lại` : ''}` : 'Chưa có phiếu nào',
+      actions: badNotes ? [['Xem phiếu', onOpenNotes]] : [] },
+    { state: spend.count ? 'done' : 'idle', title: 'Chi trong ngày', sub: spend.count ? `${spend.count} khoản · ${money(spend.total)}` : 'Nước ngọt, đá, gas… chưa nhập',
+      actions: [[spend.count ? 'Thêm' : 'Nhập', () => document.getElementById('fin-spend')?.scrollIntoView({ behavior: 'smooth', block: 'start' })]] },
+    { state: !transfer.length && !paperTransfer.length ? 'done' : noPhoto || unchecked ? 'warn' : 'done', title: 'Kiểm tra bill chuyển khoản',
+      sub: !transfer.length && !paperTransfer.length ? 'Không có bill chuyển khoản'
+        : [noPhoto && `📷 ${noPhoto} chưa có ảnh`, unchecked && `☐ ${unchecked} chưa đối chiếu`].filter(Boolean).join(' · ') || 'Đủ ảnh, đã đối chiếu',
+      actions: [noPhoto > 0 && ['Chụp ảnh', () => onSearch({ from: date, to: date, photo: 'missing' })], unchecked > 0 && ['Đối chiếu', () => onSearch({ from: date, to: date, check: 'unchecked' })]].filter(Boolean) },
+    { state: !detail.close ? 'todo' : closeBad ? 'warn' : 'done', title: 'Chốt sổ cuối ngày', sub: closeText,
+      actions: [[detail.close ? 'Xem / sửa' : 'Chốt sổ', onOpenClose]] },
+  ];
+  return <section className="fin-tasks" aria-label="Việc trong ngày">
+    <h2>Việc trong ngày</h2>
+    <ol>
+      {steps.map((s, i) => <li key={s.title} className={s.state}>
+        <span className="fin-task-mark" aria-hidden="true">{s.state === 'done' ? '✓' : s.state === 'warn' ? '!' : i + 1}</span>
+        <span className="fin-task-text"><b>{s.title}</b><small>{s.sub}</small></span>
+        {s.actions?.length > 0 && <span className="fin-task-actions">{s.actions.map(([text, run]) => <button key={text} type="button" onClick={run}>{text}</button>)}</span>}
+      </li>)}
+    </ol>
+  </section>;
+}
+
+// Tab Hôm nay: một ngày (mặc định hôm nay, ‹ › để đổi ngày) — tổng ngày, việc cần làm, chi trong ngày,
+// chốt sổ, bill đã thu, bill giấy, phiếu Sổ tay.
+function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSearch }) {
+  const categories = data?.categories || [];
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
   const [open, setOpen] = useState(null);
   const [view, setView] = useState(null);
   const [attaching, setAttaching] = useState(null);
+  const [notesTick, setNotesTick] = useState(0);
+  const [closeTick, setCloseTick] = useState(0);
   const attachInput = useRef(null);
-  // Back (Android) / vuốt lùi (iPhone): đóng ảnh đang xem trước, rồi mới đóng chi tiết ngày.
-  useBackClose(true, onClose);
+  // Back (Android) / vuốt lùi (iPhone): đóng ảnh đang xem.
   useBackClose(!!view, () => setView(null));
 
   // Ảnh CK: chụp màn hình ĐT khách trong web (không lưu vào máy) hoặc chọn ảnh có sẵn.
@@ -304,137 +443,135 @@ function DayDetail({ date, summary, accounts, categories, onClose, onChanged }) 
     setError('');
     try { setDetail(await api(`/api/admin/finance?date=${date}`)); } catch (err) { setError(err.message); }
   }
-  useEffect(() => { load(); }, [date]);
-  // Khoá cuộn trang phía sau (iOS vẫn cuộn nền khi vuốt trong khung) + Esc để đóng.
-  useEffect(() => {
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const onKey = e => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => { document.body.style.overflow = previous; window.removeEventListener('keydown', onKey); };
-  }, []);
-
-  async function remove(entry) {
-    if (!confirm(`Xoá "${entry.label}" ${money(entry.amount)}?`)) return;
-    try {
-      await api('/api/admin/finance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', id: entry.id }) });
-      await load(); onChanged();
-    } catch (err) { alert(err.message); }
-  }
+  useEffect(() => { setDetail(null); setOpen(null); load(); }, [date]);
+  async function changed() { await load(); onChanged(); }
 
   const cardName = id => { const a = accounts.find(x => x.id === id); return a ? cardLabel(a) : 'Chuyển khoản'; };
-  // Lương nhập tay kiểu cũ không còn tính (lương lấy theo chấm công).
-  const typed = (detail?.entries || []).filter(e => e.kind !== 'salary');
-  return <div className="fin-overlay" onClick={onClose}>
-    <div className="fin-sheet" onClick={e => e.stopPropagation()} role="dialog" aria-label={`Chi tiết ${dayLabel(date)}`}>
-      <header><h2>{dayLabel(date)}</h2><button className="fin-icon" onClick={onClose} aria-label="Đóng"><X size={20} /></button></header>
-      {error && <p className="fin-error">{error}</p>}
-      {!detail && !error && <p className="fin-empty">Đang tải...</p>}
-      {detail && <>
-        {/* Gọn: tổng ngày trên cùng → chốt sổ (thu gọn) → từng nhóm gập/mở, có số đếm và tổng tiền. */}
-        {summary && <div className="fin-daysum">
-          <div className="fin-daysum-nums">
-            <div><small>Thu</small><b>{money(summary.revenue)}</b></div>
-            <div><small>Chi</small><b>{money(dayCost(summary))}</b></div>
-            <div><small>{summary.profit < 0 ? 'Lỗ' : 'Lãi'}</small><b className={summary.profit < 0 ? 'loss' : 'gain'}>{money(Math.abs(summary.profit))}</b></div>
-          </div>
-          <div className="fin-daysum-money">
-            <span>💵 Tiền mặt {money(summary.cash)}</span>
-            {Object.entries(summary.byAccount || {}).map(([id, amount]) => <span key={id}>💳 {cardName(id)} {money(amount)}</span>)}
-          </div>
-          {summary.salary > 0 && <div className="fin-daysum-money"><span>👷 Lương theo chấm công {money(summary.salary)} (đã trừ vào chi)</span></div>}
-        </div>}
+  const startDate = data?.startDate || detail?.startDate || '2026-10-23';
+  const yesterday = shiftDay(today, -1);
+  const yesterdayDay = data?.days?.find(d => d.date === yesterday);
+  const spendEntries = (detail?.entries || []).filter(e => isDailyEntry(e, categories));
+  const spend = { count: spendEntries.length, total: spendEntries.reduce((s, e) => s + Number(e.amount || 0), 0) };
+  const scrollTo = id => setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
 
-        <CloseForm detail={detail} accounts={accounts} onSaved={async () => { await load(); onChanged(); }} />
-
-        <Fold title="Bill đã thu" sub={`${detail.bills.length} bill · ${money(detail.bills.reduce((s, b) => s + Number(b.amount || 0), 0))}`} initial={detail.bills.length <= 6}>
-          {detail.bills.length === 0 && <p className="fin-empty">Chưa có bill.</p>}
-          {detail.bills.map(bill => {
-            const isOpen = open === bill.order_id;
-            const transfer = bill.payment_method === 'transfer';
-            const photo = bill.transfer_image_url || bill.cash_image_url;
-            return <div key={bill.order_id} className="fin-bill">
-              {photo
-                ? <button className="fin-bill-photo" onClick={() => setView(photo)} aria-label={transfer ? 'Xem ảnh CK' : 'Xem ảnh tiền mặt'}><img src={photo} alt="" draggable={false} /></button>
-                : transfer
-                  ? <button className="fin-bill-photo add" onClick={() => startCamera({ order_id: bill.order_id })} disabled={!!attaching} aria-label="Chụp ảnh CK"><Camera size={18} /><small>Chụp</small></button>
-                  : <span className="fin-bill-photo none"><Banknote size={18} /></span>}
-              <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : bill.order_id)} aria-expanded={isOpen}>
-                <b>{clock(bill.paid_at)} · Bàn {bill.table_number || '?'}</b>
-                <small>{bill.customer_name || 'Khách'} · {transfer ? cardName(bill.account_id) : 'Tiền mặt'}{bill.photo_skip_reason ? ' · ⚠ không ảnh' : ''}</small>
-              </button>
-              <div className="fin-bill-end"><b>{money(bill.amount)}</b></div>
-              {isOpen && <div className="fin-bill-more">
-                {bill.photo_skip_reason && <p className="fin-warn">⚠ Đóng bàn không ảnh: {bill.photo_skip_reason}{bill.photo_by ? ` (${bill.photo_by})` : ''}</p>}
-                {transfer && <span className="fin-hit-add">
-                  <button className="fin-ck-add primary" onClick={() => startCamera({ order_id: bill.order_id })} disabled={!!attaching}>📷 {bill.transfer_image_url ? 'Chụp lại ảnh CK' : 'Chụp ảnh CK'}</button>
-                  <button className="fin-ck-add" onClick={() => startAttach({ order_id: bill.order_id })} disabled={!!attaching}>Chọn ảnh có sẵn</button>
-                </span>}
-                <ul className="fin-items">{(bill.items || []).map((item, i) =>
-                  <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>
-              </div>}
-            </div>;
-          })}
-        </Fold>
-
-        {(detail.paperBills || []).length > 0 && <Fold title="Bill giấy" sub={`${detail.paperBills.length} bill · ${money(detail.paperBills.reduce((s, b) => s + b.amount, 0))}`} initial={detail.paperBills.length <= 6}>
-          {detail.paperBills.map(b => {
-            const isOpen = open === b.id;
-            const photo = b.imageUrl || b.transferImageUrl;
-            return <div key={b.id} className="fin-bill">
-              {photo
-                ? <button className="fin-bill-photo" onClick={() => setView(photo)} aria-label="Xem ảnh bill"><img src={photo} alt="" draggable={false} /></button>
-                : !b.imagesPurged
-                  ? <button className="fin-bill-photo add" onClick={() => startCamera({ action: 'attach_bill', receipt_id: b.id })} disabled={!!attaching} aria-label="Chụp ảnh bill"><Camera size={18} /><small>Chụp</small></button>
-                  : <span className="fin-bill-photo none" title="Ảnh đã xoá sau 3 tháng"><Banknote size={18} /></span>}
-              <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : b.id)} aria-expanded={isOpen}>
-                <b>{clock(b.receivedAt)} · {b.tableLabel || 'Bill giấy'}</b>
-                <small>{b.paymentMethod === 'transfer' ? cardName(b.accountId) : 'Tiền mặt'}{b.createdByName ? ` · ${b.createdByName}` : ''}</small>
-              </button>
-              <div className="fin-bill-end"><b>{money(b.amount)}</b></div>
-              {isOpen && <div className="fin-bill-more">
-                {b.note && <p>{b.note}</p>}
-                {b.imageUrl && b.transferImageUrl && <button className="fin-hit-photo" onClick={() => setView(b.transferImageUrl)}><img src={b.transferImageUrl} alt="" draggable={false} /><span>Ảnh CK</span></button>}
-                <span className="fin-hit-add">
-                  {!b.imagesPurged && <button className="fin-ck-add" onClick={() => startAttach({ action: 'attach_bill', receipt_id: b.id })} disabled={!!attaching}>Chọn ảnh bill</button>}
-                  {b.paymentMethod === 'transfer' && <button className="fin-ck-add primary" onClick={() => startCamera({ receipt_id: b.id })} disabled={!!attaching}>📷 {b.transferImageUrl ? 'Chụp lại ảnh CK' : 'Chụp ảnh CK'}</button>}
-                  <button className="fin-ck-add danger" onClick={() => removePaper(b)}><Trash2 size={14} /> Xoá bill giấy</button>
-                </span>
-              </div>}
-            </div>;
-          })}
-        </Fold>}
-
-        <Fold title="Đi chợ / nhập hàng (Sổ tay)" sub={detail.notes.length ? `${detail.notes.length} phiếu · ${money(detail.notes.reduce((s, n) => s + n.cost, 0))}` : 'Không có phiếu'} initial>
-          {detail.notes.map(note => <div key={note.id} className="fin-row-block">
-            <div className="fin-row static"><span>{clock(note.createdAt)} · {note.staffName || 'Nhân viên'}
-              {note.debtLeft > 0 ? <small>Còn nợ {money(note.debtLeft)}</small> : note.debt > 0 && <small>Đã trả hết nợ {money(note.debt)}</small>}</span><b>{money(note.cost)}</b></div>
-            {note.items?.length > 0 && <ul className="fin-items">{note.items.map((item, i) =>
-              <li key={i}><span>{item.qty ? `${item.qty} ` : ''}{item.name}{item.paymentStatus === 'debt' ? ' (nợ)' : ''}</span><span>{item.price}</span></li>)}</ul>}
-            {!note.items && note.text && <p className="fin-note-text">{note.text}</p>}
-            {note.mismatch !== 0 && note.mismatch !== undefined && <p className="fin-warn">⚠ Phiếu lệch tiền: tổng phiếu ghi {money(note.cost)} nhưng các dòng hàng cộng lại {money(note.cost - note.mismatch)} (lệch {money(Math.abs(note.mismatch))}). Thường do lỗi cũ của Sổ tay, ví dụ "2,5kg" bị tính thành 25kg. Mở phiếu trong Sổ tay, bấm Sửa rồi Lưu để tính lại.</p>}
-            {note.lineWarnings?.length > 0 && <p className="fin-warn">⚠ {note.lineWarnings.join(' · ')}</p>}
-            {note.suspicious?.length > 0 && <p className="fin-warn">⚠ Giá có thể gõ thiếu chữ "k" ({note.suspicious.join(', ')}). Sổ tay hiểu "250" là 250đ, "250k" mới là 250.000đ. Kiểm tra lại phiếu trong Sổ tay.</p>}
-          </div>)}
-        </Fold>
-
-        <Fold title="Khoản tự nhập" sub={typed.length ? `${typed.length} khoản · ${money(typed.reduce((s, e) => s + Number(e.amount || 0), 0))}` : 'Chưa có (nhập ở tab Thêm chi)'} initial>
-          {typed.map(entry => <div key={entry.id} className="fin-row static">
-            <span>{entryTitle(entry, categories)}{entry.note && <small>{entry.note}</small>}</span>
-            <span className="fin-row-end"><b>{money(entry.amount)}</b>
-              <button className="fin-icon danger" onClick={() => remove(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
-          </div>)}
-        </Fold>
-      </>}
-      <input ref={attachInput} type="file" accept="image/*" onChange={attach} hidden />
-      <input ref={attachCapture} type="file" accept="image/*" capture="environment" onChange={attach} hidden />
-      {cameraFor && <CameraCapture onCapture={blob => uploadProof(cameraFor, blob)} onClose={() => setCameraFor(null)} />}
-      {view && <div className="rc-viewer" onClick={() => setView(null)} onContextMenu={e => e.preventDefault()} role="dialog" aria-label="Xem ảnh">
-        <button className="fin-icon" aria-label="Đóng"><X size={20} /></button>
-        <img src={view} alt="Ảnh" draggable={false} />
-      </div>}
+  return <section className="fin-section fin-daypage">
+    <div className="fin-daynav">
+      <button className="fin-icon" onClick={() => onDate(shiftDay(date, -1))} disabled={date <= startDate} aria-label="Ngày trước"><ChevronLeft size={20} /></button>
+      <div className="fin-daynav-title">
+        {date === today || date === yesterday
+          ? <><b>{date === today ? 'Hôm nay' : 'Hôm qua'}</b><small>{dayLabel(date)}/{date.slice(0, 4)}</small></>
+          : <b>{dayLabel(date)}/{date.slice(0, 4)}</b>}
+      </div>
+      <button className="fin-icon" onClick={() => onDate(shiftDay(date, 1))} disabled={date >= today} aria-label="Ngày sau"><ChevronRight size={20} /></button>
     </div>
-  </div>;
+    {date !== today && <button className="fin-link fin-back-today" onClick={() => onDate(today)}>← Về hôm nay</button>}
+    {date === today && yesterdayDay && !yesterdayDay.close && yesterday >= startDate && <button className="fin-remind" onClick={() => onDate(yesterday)}>
+      ⚠ Hôm qua ({shortDay(yesterday)}) chưa chốt sổ — bấm để mở và chốt<ChevronRight size={16} /></button>}
+
+    {error && <p className="fin-error">{error}</p>}
+    {!detail && !error && <p className="fin-empty">Đang tải...</p>}
+
+    {summary && <div className="fin-daysum">
+      <div className="fin-daysum-nums">
+        <div><small>Thu</small><b>{money(summary.revenue)}</b></div>
+        <div><small>Chi</small><b>{money(dayCost(summary))}</b></div>
+        <div><small>{summary.profit < 0 ? 'Lỗ' : 'Lãi'}</small><b className={summary.profit < 0 ? 'loss' : 'gain'}>{money(Math.abs(summary.profit))}</b></div>
+      </div>
+      <div className="fin-daysum-money">
+        <span>💵 Tiền mặt {money(summary.cash)}</span>
+        {Object.entries(summary.byAccount || {}).map(([id, amount]) => <span key={id}>💳 {cardName(id)} {money(amount)}</span>)}
+      </div>
+      {dayCost(summary) > 0 && <div className="fin-daysum-money"><span>Chi: {costLine(summary, categories)}</span></div>}
+    </div>}
+
+    {detail && <>
+      <DayTasks date={date} detail={detail} spend={spend} onSearch={onSearch}
+        onOpenNotes={() => { setNotesTick(t => t + 1); scrollTo('fin-notes'); }} onOpenClose={() => { setCloseTick(t => t + 1); scrollTo('fin-close'); }} />
+
+      <DailySpend date={date} entries={detail.entries || []} history={data?.entries || []} categories={categories} onSaved={changed} />
+
+      <div id="fin-close"><CloseForm detail={detail} accounts={accounts} openTick={closeTick} onSaved={changed} /></div>
+
+      <Fold title="Bill đã thu" sub={`${detail.bills.length} bill · ${money(detail.bills.reduce((s, b) => s + Number(b.amount || 0), 0))}`}>
+        {detail.bills.length === 0 && <p className="fin-empty">Chưa có bill.</p>}
+        {detail.bills.map(bill => {
+          const isOpen = open === bill.order_id;
+          const transfer = bill.payment_method === 'transfer';
+          const photo = bill.transfer_image_url || bill.cash_image_url;
+          return <div key={bill.order_id} className="fin-bill">
+            {photo
+              ? <button className="fin-bill-photo" onClick={() => setView(photo)} aria-label={transfer ? 'Xem ảnh CK' : 'Xem ảnh tiền mặt'}><img src={photo} alt="" draggable={false} /></button>
+              : transfer
+                ? <button className="fin-bill-photo add" onClick={() => startCamera({ order_id: bill.order_id })} disabled={!!attaching} aria-label="Chụp ảnh CK"><Camera size={18} /><small>Chụp</small></button>
+                : <span className="fin-bill-photo none"><Banknote size={18} /></span>}
+            <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : bill.order_id)} aria-expanded={isOpen}>
+              <b>{clock(bill.paid_at)} · Bàn {bill.table_number || '?'}</b>
+              <small>{bill.customer_name || 'Khách'} · {transfer ? cardName(bill.account_id) : 'Tiền mặt'}{bill.photo_skip_reason ? ' · ⚠ không ảnh' : ''}</small>
+            </button>
+            <div className="fin-bill-end"><b>{money(bill.amount)}</b></div>
+            {isOpen && <div className="fin-bill-more">
+              {bill.photo_skip_reason && <p className="fin-warn">⚠ Đóng bàn không ảnh: {bill.photo_skip_reason}{bill.photo_by ? ` (${bill.photo_by})` : ''}</p>}
+              {transfer && <span className="fin-hit-add">
+                <button className="fin-ck-add primary" onClick={() => startCamera({ order_id: bill.order_id })} disabled={!!attaching}>📷 {bill.transfer_image_url ? 'Chụp lại ảnh CK' : 'Chụp ảnh CK'}</button>
+                <button className="fin-ck-add" onClick={() => startAttach({ order_id: bill.order_id })} disabled={!!attaching}>Chọn ảnh có sẵn</button>
+              </span>}
+              <ul className="fin-items">{(bill.items || []).map((item, i) =>
+                <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>
+            </div>}
+          </div>;
+        })}
+      </Fold>
+
+      {(detail.paperBills || []).length > 0 && <Fold title="Bill giấy" sub={`${detail.paperBills.length} bill · ${money(detail.paperBills.reduce((s, b) => s + b.amount, 0))}`}>
+        {detail.paperBills.map(b => {
+          const isOpen = open === b.id;
+          const photo = b.imageUrl || b.transferImageUrl;
+          return <div key={b.id} className="fin-bill">
+            {photo
+              ? <button className="fin-bill-photo" onClick={() => setView(photo)} aria-label="Xem ảnh bill"><img src={photo} alt="" draggable={false} /></button>
+              : !b.imagesPurged
+                ? <button className="fin-bill-photo add" onClick={() => startCamera({ action: 'attach_bill', receipt_id: b.id })} disabled={!!attaching} aria-label="Chụp ảnh bill"><Camera size={18} /><small>Chụp</small></button>
+                : <span className="fin-bill-photo none" title="Ảnh đã xoá sau 3 tháng"><Banknote size={18} /></span>}
+            <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : b.id)} aria-expanded={isOpen}>
+              <b>{clock(b.receivedAt)} · {b.tableLabel || 'Bill giấy'}</b>
+              <small>{b.paymentMethod === 'transfer' ? cardName(b.accountId) : 'Tiền mặt'}{b.createdByName ? ` · ${b.createdByName}` : ''}</small>
+            </button>
+            <div className="fin-bill-end"><b>{money(b.amount)}</b></div>
+            {isOpen && <div className="fin-bill-more">
+              {b.note && <p>{b.note}</p>}
+              {b.imageUrl && b.transferImageUrl && <button className="fin-hit-photo" onClick={() => setView(b.transferImageUrl)}><img src={b.transferImageUrl} alt="" draggable={false} /><span>Ảnh CK</span></button>}
+              <span className="fin-hit-add">
+                {!b.imagesPurged && <button className="fin-ck-add" onClick={() => startAttach({ action: 'attach_bill', receipt_id: b.id })} disabled={!!attaching}>Chọn ảnh bill</button>}
+                {b.paymentMethod === 'transfer' && <button className="fin-ck-add primary" onClick={() => startCamera({ receipt_id: b.id })} disabled={!!attaching}>📷 {b.transferImageUrl ? 'Chụp lại ảnh CK' : 'Chụp ảnh CK'}</button>}
+                <button className="fin-ck-add danger" onClick={() => removePaper(b)}><Trash2 size={14} /> Xoá bill giấy</button>
+              </span>
+            </div>}
+          </div>;
+        })}
+      </Fold>}
+
+      <div id="fin-notes"><Fold title="Đi chợ / nhập hàng (Sổ tay)" openTick={notesTick} sub={detail.notes.length ? `${detail.notes.length} phiếu · ${money(detail.notes.reduce((s, n) => s + n.cost, 0))}` : 'Không có phiếu'}>
+        {detail.notes.length === 0 && <p className="fin-empty">Nhân viên đi chợ / nhập hàng ghi phiếu ở Sổ tay, phiếu tự hiện ở đây.</p>}
+        {detail.notes.map(note => <div key={note.id} className="fin-row-block">
+          <div className="fin-row static"><span>{clock(note.createdAt)} · {note.staffName || 'Nhân viên'}
+            {note.debtLeft > 0 ? <small>Còn nợ {money(note.debtLeft)}</small> : note.debt > 0 && <small>Đã trả hết nợ {money(note.debt)}</small>}</span><b>{money(note.cost)}</b></div>
+          {note.items?.length > 0 && <ul className="fin-items">{note.items.map((item, i) =>
+            <li key={i}><span>{item.qty ? `${item.qty} ` : ''}{item.name}{item.paymentStatus === 'debt' ? ' (nợ)' : ''}</span><span>{item.price}</span></li>)}</ul>}
+          {!note.items && note.text && <p className="fin-note-text">{note.text}</p>}
+          {note.mismatch !== 0 && note.mismatch !== undefined && <p className="fin-warn">⚠ Phiếu lệch tiền: tổng phiếu ghi {money(note.cost)} nhưng các dòng hàng cộng lại {money(note.cost - note.mismatch)} (lệch {money(Math.abs(note.mismatch))}). Thường do lỗi cũ của Sổ tay, ví dụ "2,5kg" bị tính thành 25kg. Mở phiếu trong Sổ tay, bấm Sửa rồi Lưu để tính lại.</p>}
+          {note.lineWarnings?.length > 0 && <p className="fin-warn">⚠ {note.lineWarnings.join(' · ')}</p>}
+          {note.suspicious?.length > 0 && <p className="fin-warn">⚠ Giá có thể gõ thiếu chữ "k" ({note.suspicious.join(', ')}). Sổ tay hiểu "250" là 250đ, "250k" mới là 250.000đ. Kiểm tra lại phiếu trong Sổ tay.</p>}
+        </div>)}
+      </Fold></div>
+    </>}
+    <input ref={attachInput} type="file" accept="image/*" onChange={attach} hidden />
+    <input ref={attachCapture} type="file" accept="image/*" capture="environment" onChange={attach} hidden />
+    {cameraFor && <CameraCapture onCapture={blob => uploadProof(cameraFor, blob)} onClose={() => setCameraFor(null)} />}
+    {view && <div className="rc-viewer" onClick={() => setView(null)} onContextMenu={e => e.preventDefault()} role="dialog" aria-label="Xem ảnh">
+      <button className="fin-icon" aria-label="Đóng"><X size={20} /></button>
+      <img src={view} alt="Ảnh" draggable={false} />
+    </div>}
+  </section>;
 }
 
 // Tra cứu bill trong khoảng ngày để đối chiếu ảnh chuyển khoản / ảnh bill giấy.
@@ -872,22 +1009,26 @@ function ItemsView({ month, today }) {
   </section>;
 }
 
+// 4 tab theo việc: Hôm nay (việc trong ngày, chi trong ngày, chốt sổ) · Tháng (lãi lỗ, chi cố định,
+// danh sách ngày, báo cáo Zalo) · Món · Tra cứu.
+const VIEWS = [['today', 'Hôm nay'], ['month', 'Tháng'], ['items', 'Món'], ['search', 'Tra cứu']];
+
 export default function FinancePage() {
   const [month, setMonth] = useState(vnToday().slice(0, 7));
+  const [date, setDate] = useState(vnToday());
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [day, setDay] = useState(null);
-  // Mục đang xem (Tổng quan / Từng ngày / Thêm chi) — nhớ trên máy cho lần sau.
-  const [view, setView] = useState('overview');
-  // Bộ lọc mở sẵn khi bấm cảnh báo ở Tổng quan → Tra cứu.
+  // Tab đang xem — nhớ trên máy cho lần sau (tên tab cũ thì mở Hôm nay).
+  const [view, setView] = useState('today');
+  // Bộ lọc mở sẵn khi bấm việc cần làm → Tra cứu.
   const [searchPreset, setSearchPreset] = useState({ key: 0, filters: {} });
   const pending = useRef(0);
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem('financeView');
-      if (['overview', 'days', 'items', 'add', 'search'].includes(saved)) setView(saved);
+      if (VIEWS.some(([k]) => k === saved)) setView(saved);
     } catch { /* trình duyệt chặn lưu trữ → dùng mặc định */ }
   }, []);
   function chooseView(next) {
@@ -897,6 +1038,13 @@ export default function FinancePage() {
   function openSearch(filters) {
     setSearchPreset(p => ({ key: p.key + 1, filters }));
     chooseView('search');
+    window.scrollTo({ top: 0 });
+  }
+  // Bấm một ngày ở tab Tháng → mở ngày đó ở tab Hôm nay.
+  function openDay(d) {
+    setDate(d);
+    chooseView('today');
+    window.scrollTo({ top: 0 });
   }
 
   async function load() {
@@ -910,45 +1058,42 @@ export default function FinancePage() {
     } finally { if (ticket === pending.current) setBusy(false); }
   }
   useEffect(() => { load(); }, [month]);
-
-  async function copyFixed() {
-    try {
-      const result = await api('/api/admin/finance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'copy_fixed', month }) });
-      alert(`Đã chép ${result.entries.length} khoản chi cố định.`);
-      load();
-    } catch (err) { alert(err.message); }
-  }
-
-  async function removeFixed(entry) {
-    if (!confirm(`Xoá "${entry.label}" ${money(entry.amount)}?`)) return;
-    try {
-      await api('/api/admin/finance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', id: entry.id }) });
-      load();
-    } catch (err) { alert(err.message); }
-  }
+  // Tab Hôm nay cần số của tháng chứa ngày đang xem.
+  useEffect(() => { if (view === 'today' && date.slice(0, 7) !== month) setMonth(date.slice(0, 7)); }, [view, date, month]);
 
   const t = data?.totals;
+  const today = data?.today || vnToday();
   const accounts = data?.accounts || [];
+  const categories = data?.categories || [];
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ tài khoản';
   const shortAccount = id => { const a = accounts.find(x => x.id === id); return a ? cardLabel(a) : 'Không rõ tài khoản'; };
   const days = [...(data?.days || [])].reverse();
   // Tab tự tạo: đang dùng, hoặc đã ẩn nhưng tháng này còn tiền (để tổng vẫn khớp).
-  const customTabs = (data?.categories || []).filter(c => c.scope === 'tab' && (!c.archived || data?.totals?.custom?.[c.id]));
+  const customTabs = categories.filter(c => c.scope === 'tab' && (!c.archived || data?.totals?.custom?.[c.id]));
   const totalCost = t ? t.purchases + t.drinks + t.salary + t.fixedShare + t.customTotal : 0;
   // Các khoản chi của tháng — dòng 0đ của tab tự tạo thì ẩn cho gọn.
   const costRows = t ? [
-    { key: 'purchases', name: 'Nhập hàng (Sổ tay)', amount: t.purchases },
-    { key: 'drinks', name: 'Nước ngọt / bia', amount: t.drinks },
+    { key: 'purchases', name: 'Đi chợ / nhập hàng (Sổ tay)', amount: t.purchases },
+    { key: 'drinks', name: 'Chi trong ngày', sub: 'nước ngọt, đá, gas… nhập ở tab Hôm nay', amount: t.drinks },
     { key: 'salary', name: 'Lương (theo chấm công)', amount: t.salary,
       sub: !data.wagesReady ? 'Chưa đọc được chấm công, thử tải lại' : t.salaryExtra ? `gồm thưởng − phạt cả tháng ${t.salaryExtra > 0 ? '+' : '-'}${money(Math.abs(t.salaryExtra))}` : '' },
-    { key: 'fixed', name: 'Chi cố định (chia đều mỗi ngày)', amount: t.fixedShare, sub: data.fixedMonthTotal ? `cả tháng ${money(data.fixedMonthTotal)}, đã tính tới hôm nay` : '' },
+    { key: 'fixed', name: 'Chi cố định (chia đều mỗi ngày)', amount: t.fixedShare, sub: data.fixedMonthTotal ? `cả tháng ${money(data.fixedMonthTotal)}, đã tính tới hôm nay` : 'nhập ở mục Chi cố định bên dưới' },
     ...customTabs.map(tab => ({ key: tab.id, name: tab.name, amount: t.custom[tab.id] || 0,
       sub: tab.schedule === 'monthly' ? `cả tháng ${money(data.customMonthTotals?.[tab.id] || 0)}` : '', optional: true })),
   ].filter(r => !r.optional || r.amount > 0) : [];
-  const today = days.find(d => d.date === data?.today);
   const monthText = `${month.slice(5)}/${month.slice(0, 4)}`;
   const pendingCk = data?.transferAlerts;
+  const byDayCk = data?.transferByDay || {};
   const monthRange = data ? { from: data.from || `${month}-01`, to: data.to || data.today } : {};
+
+  // Số việc còn phải làm của hôm nay (hiện trên tên tab): bill CK chưa ảnh / chưa đối chiếu, phiếu Sổ tay
+  // cần xem, chưa chốt sổ hôm qua. Chỉ biết khi đang có số của tháng chứa hôm nay.
+  const todayDay = data?.days?.find(d => d.date === today);
+  const yesterdayDay = data?.days?.find(d => d.date === shiftDay(today, -1));
+  const todayTasks = data && month === today.slice(0, 7)
+    ? (byDayCk[today]?.missingPhoto || 0) + (byDayCk[today]?.unchecked || 0) + (todayDay?.mismatchNotes || 0) + (todayDay?.suspiciousNotes || 0)
+      + (yesterdayDay && !yesterdayDay.close ? 1 : 0)
+    : 0;
 
   const dayTags = d => <>
     {d.close
@@ -958,7 +1103,8 @@ export default function FinancePage() {
           {Object.entries(d.close.bankDiffs).filter(([, diff]) => diff !== 0).map(([id, diff]) =>
             <span key={id} className="fin-tag bad">{shortAccount(id)}: {diffText(diff)}</span>)}
         </>
-      : d.date < data.today && <span className="fin-tag muted">Chưa chốt sổ</span>}
+      : d.date < today && <span className="fin-tag muted">Chưa chốt sổ</span>}
+    {byDayCk[d.date]?.missingPhoto > 0 && <span className="fin-tag bad">📷 {byDayCk[d.date].missingPhoto} CK chưa ảnh</span>}
     {d.mismatchNotes > 0 && <span className="fin-tag bad">⚠ {d.mismatchNotes} phiếu Sổ tay lệch tiền</span>}
     {d.suspiciousNotes > 0 && <span className="fin-tag bad">⚠ {d.suspiciousNotes} phiếu Sổ tay giá đáng ngờ</span>}
   </>;
@@ -968,18 +1114,20 @@ export default function FinancePage() {
       <div className="fin-title"><h1><PiggyBank size={22} />Sổ thu chi</h1>
         <p>Số thật từ {data?.startDate ? `${data.startDate.slice(8)}/${data.startDate.slice(5, 7)}/${data.startDate.slice(0, 4)}` : '23/10/2026'}</p></div>
       <div className="fin-header-tools">
-        <div className="fin-month" role="group" aria-label="Chọn tháng">
+        {(view === 'month' || view === 'items') && <div className="fin-month" role="group" aria-label="Chọn tháng">
           <button onClick={() => setMonth(shiftMonth(month, -1))} disabled={month <= FIRST_MONTH} aria-label="Tháng trước"><ChevronLeft size={18} /></button>
           <b>Tháng {monthText}</b>
           <button onClick={() => setMonth(shiftMonth(month, 1))} disabled={month >= vnToday().slice(0, 7)} aria-label="Tháng sau"><ChevronRight size={18} /></button>
-        </div>
+        </div>}
         <button className="fin-icon" onClick={load} disabled={busy} aria-label="Tải lại"><RefreshCw size={18} className={busy ? 'fin-spin' : ''} /></button>
       </div>
     </header>
 
     <nav className="fin-switch" role="tablist" aria-label="Mục sổ thu chi">
-      {[['overview', 'Tổng quan'], ['days', 'Từng ngày'], ['items', 'Món'], ['add', 'Thêm chi'], ['search', 'Tra cứu']].map(([key, text]) =>
-        <button key={key} role="tab" aria-selected={view === key} className={view === key ? 'active' : ''} onClick={() => chooseView(key)}>{text}</button>)}
+      {VIEWS.map(([key, text]) =>
+        <button key={key} role="tab" aria-selected={view === key} className={view === key ? 'active' : ''} onClick={() => chooseView(key)}>
+          {text}{key === 'today' && todayTasks > 0 && <span className="fin-badge" aria-label={`${todayTasks} việc cần làm`}>{todayTasks}</span>}
+        </button>)}
     </nav>
 
     {error && <p className="fin-error">{error}</p>}
@@ -1002,7 +1150,10 @@ export default function FinancePage() {
       </div>)}
     </section>}
 
-    {view === 'overview' && t && <>
+    {view === 'today' && <DayPage date={date} today={today} data={data} accounts={accounts} onDate={setDate} onChanged={load} onSearch={openSearch}
+      summary={data?.days?.find(d => d.date === date)} />}
+
+    {view === 'month' && t && <section className="fin-section">
       <section className={`fin-hero ${t.profit < 0 ? 'loss' : ''}`}>
         <span>{t.profit < 0 ? 'Lỗ' : 'Lãi'} tháng {monthText}</span>
         <b>{money(Math.abs(t.profit))}</b>
@@ -1013,24 +1164,12 @@ export default function FinancePage() {
         <p>{t.bills} bill{t.paperBills ? ` + ${t.paperBills} bill giấy (${money(t.paperRevenue)})` : ''} · Tiền mặt {money(t.cash)} · Chuyển khoản {money(t.transfer)}</p>
       </section>
 
-      {today && <button className="fin-day fin-day-today" onClick={() => setDay(today.date)}>
-        <div className="fin-day-head">
-          <span className="fin-day-date"><b>Hôm nay</b><small>{today.bills} bill{today.paperBills ? ` + ${today.paperBills} bill giấy` : ''} · bấm để xem bill, chốt sổ</small></span>
-          <ChevronRight size={18} />
-        </div>
-        <div className="fin-day-nums">
-          <span><small>Thu</small>{money(today.revenue)}</span>
-          <span><small>Chi</small>{money(dayCost(today))}</span>
-          <span className={today.profit < 0 ? 'loss' : 'gain'}><small>{today.profit < 0 ? 'Lỗ' : 'Lãi'}</small>{money(Math.abs(today.profit))}</span>
-        </div>
-      </button>}
-
       {/* Mọi việc cần xem lại trong tháng, gom 1 chỗ; bấm là mở đúng danh sách. */}
       {((t.mismatchNotes > 0 || t.suspiciousNotes > 0) || (pendingCk && (pendingCk.missingPhoto > 0 || pendingCk.unchecked > 0))) && <section className="fin-pending">
         <b>Cần xem lại tháng {monthText}</b>
         {pendingCk?.missingPhoto > 0 && <button onClick={() => openSearch({ ...monthRange, photo: 'missing' })}>📷 {pendingCk.missingPhoto} bill chuyển khoản chưa có ảnh <ChevronRight size={16} /></button>}
         {pendingCk?.unchecked > 0 && <button onClick={() => openSearch({ ...monthRange, check: 'unchecked' })}>☐ {pendingCk.unchecked} bill chuyển khoản chưa đối chiếu <ChevronRight size={16} /></button>}
-        {(t.mismatchNotes > 0 || t.suspiciousNotes > 0) && <button onClick={() => chooseView('days')}>⚠ {[t.mismatchNotes > 0 && `${t.mismatchNotes} phiếu Sổ tay lệch tiền`, t.suspiciousNotes > 0 && `${t.suspiciousNotes} phiếu Sổ tay giá / số lượng đáng ngờ`].filter(Boolean).join(' · ')} <ChevronRight size={16} /></button>}
+        {(t.mismatchNotes > 0 || t.suspiciousNotes > 0) && <button onClick={() => document.getElementById('fin-month-days')?.scrollIntoView({ behavior: 'smooth' })}>⚠ {[t.mismatchNotes > 0 && `${t.mismatchNotes} phiếu Sổ tay lệch tiền`, t.suspiciousNotes > 0 && `${t.suspiciousNotes} phiếu Sổ tay giá / số lượng đáng ngờ`].filter(Boolean).join(' · ')} — xem ngày có dấu ⚠ <ChevronRight size={16} /></button>}
       </section>}
 
       <section className="fin-panel">
@@ -1042,61 +1181,39 @@ export default function FinancePage() {
         <div className="fin-cost-total"><span>Tổng chi</span><b>{money(totalCost)}</b></div>
       </section>
 
+      <MonthlyCosts data={data} month={month} onSaved={load} />
+
+      <section className="fin-panel" id="fin-month-days">
+        <h2>Từng ngày <small>bấm để mở ngày đó</small></h2>
+        {days.length === 0 && <p className="fin-empty">Tháng này chưa có ngày nào được tính.</p>}
+        <div className="fin-days">
+          {days.map(d => <button key={d.date} className="fin-day" onClick={() => openDay(d.date)}>
+            <div className="fin-day-head">
+              <span className="fin-day-date"><b>{d.date === today ? 'Hôm nay' : dayLabel(d.date)}</b><small>{d.bills} bill{d.paperBills ? ` + ${d.paperBills} bill giấy` : ''}</small></span>
+              <ChevronRight size={16} />
+            </div>
+            {/* 3 cột thẳng hàng giữa các ngày để so nhanh. */}
+            <div className="fin-day-nums">
+              <span><small>Thu</small>{money(d.revenue)}</span>
+              <span><small>Chi</small>{money(dayCost(d))}</span>
+              <span className={d.profit < 0 ? 'loss' : 'gain'}><small>{d.profit < 0 ? 'Lỗ' : 'Lãi'}</small>{money(Math.abs(d.profit))}</span>
+            </div>
+            {dayCost(d) > 0 && <p className="fin-day-cost">Chi: {costLine(d, categories)}</p>}
+            <div className="fin-day-tags">{dayTags(d)}</div>
+          </button>)}
+        </div>
+      </section>
+
       {Object.keys(t.byAccount).length > 0 && <section className="fin-panel">
         <h2>Chuyển khoản theo tài khoản</h2>
         {Object.entries(t.byAccount).map(([id, amount]) => <div key={id} className="fin-row static"><span>{accountName(id)}</span><b>{money(amount)}</b></div>)}
       </section>}
 
       <ZaloReportPanel status={data.zaloReport} onChanged={load} />
-    </>}
-
-    {view === 'days' && <section className="fin-section">
-      {data && days.length === 0 && <p className="fin-empty">Tháng này chưa có ngày nào được tính.</p>}
-      <div className="fin-days">
-        {days.map(d => <button key={d.date} className="fin-day" onClick={() => setDay(d.date)}>
-          <div className="fin-day-head">
-            <span className="fin-day-date"><b>{dayLabel(d.date)}</b><small>{d.bills} bill{d.paperBills ? ` + ${d.paperBills} bill giấy` : ''}</small></span>
-            <ChevronRight size={16} />
-          </div>
-          {/* 3 cột thẳng hàng giữa các ngày để so nhanh. */}
-          <div className="fin-day-nums">
-            <span><small>Thu</small>{money(d.revenue)}</span>
-            <span><small>Chi</small>{money(dayCost(d))}</span>
-            <span className={d.profit < 0 ? 'loss' : 'gain'}><small>{d.profit < 0 ? 'Lỗ' : 'Lãi'}</small>{money(Math.abs(d.profit))}</span>
-          </div>
-          <div className="fin-day-tags">{dayTags(d)}</div>
-        </button>)}
-      </div>
     </section>}
 
-    {view === 'items' && <ItemsView month={month} today={data?.today || vnToday()} />}
+    {view === 'items' && <ItemsView month={month} today={today} />}
 
     {view === 'search' && <SearchView key={searchPreset.key} accounts={accounts} preset={searchPreset.filters} />}
-
-    {view === 'add' && <section className="fin-section">
-      <AddEntryForm data={data} month={month} onSaved={load} />
-      {data && !data.fixedEntries?.length && month > '2026-10' && <button className="fin-secondary" onClick={copyFixed} disabled={busy}>
-        Chép chi cố định từ tháng trước
-      </button>}
-      {data?.fixedEntries?.length > 0 && <details className="fin-fixed" open>
-        <summary>Chi cố định tháng {monthText}<b>{money(data.fixedMonthTotal)}</b></summary>
-        {data.fixedEntries.map(entry => <div key={entry.id} className="fin-row static">
-          <span>{entry.label}{entry.note && <small>{entry.note}</small>}</span>
-          <span className="fin-row-end"><b>{money(entry.amount)}</b>
-            <button className="fin-icon danger" onClick={() => removeFixed(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
-        </div>)}
-      </details>}
-      {data?.customMonthlyEntries?.length > 0 && <details className="fin-fixed" open>
-        <summary>Khoản theo tháng {monthText}</summary>
-        {data.customMonthlyEntries.map(entry => <div key={entry.id} className="fin-row static">
-          <span>{entryTitle(entry, data.categories)}{entry.note && <small>{entry.note}</small>}</span>
-          <span className="fin-row-end"><b>{money(entry.amount)}</b>
-            <button className="fin-icon danger" onClick={() => removeFixed(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
-        </div>)}
-      </details>}
-      <p className="fin-hint fin-add-hint">Khoản chi theo ngày (nước ngọt, lương, tab theo ngày) xem và xoá trong mục <b>Từng ngày</b>.</p>
-    </section>}
-
-    {day && <DayDetail date={day} summary={data?.days?.find(d => d.date === day)} accounts={accounts} categories={data?.categories || []} onClose={() => setDay(null)} onChanged={load} />}
   </div>;
 }

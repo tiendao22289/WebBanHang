@@ -174,7 +174,8 @@ async function repairMissingBills(db) {
 }
 
 // Bill chuyển khoản trong khoảng ngày: chưa có ảnh CK / chưa đối chiếu.
-async function transferAlerts(db, from, to, today) {
+// byDay: thêm số đếm của từng ngày (tab Hôm nay / danh sách ngày của tab Tháng).
+async function transferAlerts(db, from, to, today, { byDay = false } = {}) {
   const keepFrom = photoKeepFrom(today);
   const [bills, paper] = await Promise.all([
     readAll(() => db.from('finance_revenue_ledger').select('order_id, business_date, transfer_image_path, verified_at')
@@ -184,10 +185,19 @@ async function transferAlerts(db, from, to, today) {
       .catch(error => { if (missingTable(error)) return []; throw error; }),
   ]);
   const rows = [...bills, ...paper];
-  return {
+  const out = {
     missingPhoto: rows.filter(r => !r.transfer_image_path && r.business_date >= keepFrom).length,
     unchecked: rows.filter(r => !r.verified_at).length,
   };
+  if (byDay) {
+    out.byDay = {};
+    for (const r of rows) {
+      const d = out.byDay[r.business_date] ||= { missingPhoto: 0, unchecked: 0 };
+      if (!r.transfer_image_path && r.business_date >= keepFrom) d.missingPhoto += 1;
+      if (!r.verified_at) d.unchecked += 1;
+    }
+  }
+  return out;
 }
 
 // Số liệu cả tháng (dùng cho trang Tổng quan và báo cáo Zalo).
@@ -576,7 +586,7 @@ export async function GET(request) {
         bills: bills.map(({ transfer_image_path: path, cash_image_path: cashPath, ...b }) => ({ ...b, transfer_image_url: urls[path] || null, cash_image_url: urls[cashPath] || null })),
         paperBills: paper.map(r => ({ id: r.id, receivedAt: r.received_at, amount: Number(r.amount), paymentMethod: r.payment_method,
           accountId: r.account_id, tableLabel: r.table_label, note: r.note, createdByName: r.created_by_name,
-          imageUrl: urls[r.image_path] || null, transferImageUrl: urls[r.transfer_image_path] || null, imagesPurged: !!r.images_purged_at })),
+          imageUrl: urls[r.image_path] || null, transferImageUrl: urls[r.transfer_image_path] || null, imagesPurged: !!r.images_purged_at, verified: !!r.verified_at })),
         notes: notes.map(noteView).filter(n => n.cost > 0), entries,
         close, closeDiff: closeDifferences(day, close), dayCash: day.cash, dayByAccount: day.byAccount }, { headers });
     }
@@ -599,7 +609,7 @@ export async function GET(request) {
     const { summary, entries, categories } = loaded;
     // Bill CK chưa có ảnh / chưa đối chiếu trong tháng; cột chưa cài thì bỏ qua.
     const alertTo = addDays(next, -1) < today ? addDays(next, -1) : today;
-    const pending = start <= alertTo ? await transferAlerts(db, start, alertTo, today).catch(error => { console.error('[admin/finance] alerts', error); return null; }) : null;
+    const pending = start <= alertTo ? await transferAlerts(db, start, alertTo, today, { byDay: true }).catch(error => { console.error('[admin/finance] alerts', error); return null; }) : null;
     const zaloReport = reportStatus(await readReportSettings(db).catch(() => null));
     const monthlyTabs = new Set(categories.filter(c => c.scope === 'tab' && c.schedule === 'monthly').map(c => c.id));
     return NextResponse.json({
@@ -607,7 +617,8 @@ export async function GET(request) {
       entries: entries.filter(e => e.kind !== 'fixed'),
       // Khoản của tab nhập theo tháng — liệt kê riêng như chi cố định.
       customMonthlyEntries: entries.filter(e => e.kind === 'custom' && monthlyTabs.has(e.category)),
-      accounts: loaded.accounts, staff: loaded.staff, transferAlerts: pending, zaloReport,
+      accounts: loaded.accounts, staff: loaded.staff, zaloReport,
+      transferAlerts: pending && { missingPhoto: pending.missingPhoto, unchecked: pending.unchecked }, transferByDay: pending?.byDay || {},
       // Bill sổ tự bổ sung lần này từ lịch sử bàn, và bill chưa bổ sung được
       // (null = không kiểm tra được).
       recoveredBills: repair ? repair.recovered : null,

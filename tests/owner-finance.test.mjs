@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
-import { monthBounds, noteCost, summarizeMonth, vnDate } from '../src/lib/ownerFinance.mjs';
+import { costParts, monthBounds, noteCost, summarizeMonth, vnDate } from '../src/lib/ownerFinance.mjs';
 import * as finance from '../src/lib/ownerFinance.mjs';
 
 test('daily summary splits revenue, counts Sổ tay purchases with debt, entries, wages from attendance and a fixed daily share', () => {
@@ -195,7 +195,7 @@ test('the daily Zalo report lists money per card, costs, profit and anything tha
   assert.match(text, /T7 24\/10\/2026/);
   assert.match(text, /Doanh thu: 1\.200\.000đ \(10 bill \+ 1 bill giấy\)/);
   assert.match(text, /• CK VCB: 700\.000đ/);
-  assert.match(text, /Chi: 550\.000đ \(đi chợ 400\.000đ, nước 100\.000đ, cố định 50\.000đ\)/);
+  assert.match(text, /Chi: 550\.000đ \(đi chợ 400\.000đ, trong ngày 100\.000đ, cố định 50\.000đ\)/);
   assert.match(text, /Lãi ngày: \+650\.000đ/);
   assert.match(text, /Tháng 10 tới nay: thu 2\.000\.000đ · lỗ 100\.000đ/);
   assert.match(text, /⚠ Tiền mặt thiếu 20\.000đ/);
@@ -205,4 +205,11 @@ test('the daily Zalo report lists money per card, costs, profit and anything tha
   const quiet = finance.dailyReportText({ day: { ...day, suspiciousNotes: 0, close: { cashDiff: 0, bankDiffs: {} } } });
   assert.match(quiet, /✓ Không có gì bất thường/);
   assert.match(finance.dailyReportText({ day: { ...day, close: null } }), /Chưa chốt sổ/);
+});
+
+test('a day of spending splits into: during the day, shopping, wages, fixed (shared out per day)', () => {
+  const categories = [{ id: 'gas', scope: 'tab', schedule: 'daily' }, { id: 'loan', scope: 'tab', schedule: 'monthly' }];
+  const day = { drinks: 350000, purchases: 1200000, salary: 900000, fixedShare: 300000, custom: { gas: 120000, loan: 50000 } };
+  assert.deepEqual(costParts(day, categories), { daily: 470000, purchases: 1200000, salary: 900000, fixed: 350000 });
+  assert.deepEqual(costParts({ drinks: 0, purchases: 0, salary: 0, fixedShare: 0 }), { daily: 0, purchases: 0, salary: 0, fixed: 0 });
 });
