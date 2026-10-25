@@ -3,7 +3,8 @@
  *  - lossBlock:    bill huỷ, món bị bớt sau khi in bếp, giảm giá, món tặng
  *  - staffBlock:   chấm công trong ngày, trễ / sớm, ai quên ra ca, đơn chờ duyệt
  *  - compareBlock: so với hôm qua / cùng thứ tuần trước, bill, giờ đông, món bán chạy
- * Mỗi hàm trả về chuỗi (hoặc '' nếu không có gì đáng báo).
+ * Mỗi hàm trả về chuỗi (hoặc '' nếu không có gì đáng báo). lossData / staffData / staffRangeData trả về
+ * cùng số liệu dạng dữ liệu cho trang /thongke (thẻ số, bảng) — chữ Zalo dựng từ chính dữ liệu đó.
  */
 import { dayFlags, durationText, flagTexts, normalizeRules, sessionHours, workDayOf } from './attendanceRules.mjs';
 import { DAY_PAY_FROM, EARLY_CUT_MINUTES } from './payroll.mjs';
@@ -17,27 +18,22 @@ const label = (name, options) => `${name || 'Món'}${optionsText(options) ? ` ($
 const pct = (now, before) => (before > 0 ? `${now >= before ? '+' : '−'}${Math.round(Math.abs(now - before) / before * 100)}%` : '');
 
 /**
- * ledgerDay: bill đã thu trong ngày { order_id, table_number, paid_at, amount, items[] }.
+ * ledgerDay: bill đã thu trong ngày (hoặc trong khoảng ngày) { order_id, table_number, paid_at, amount, items[] }.
  * printed: Map order_id → [ảnh chụp món lúc in: { id, quantity, unit_price, name, item_options, is_gift }].
  * movedIds: Set mã món đang nằm ở bill khác (chuyển / gộp bàn) — không tính là bớt.
- * cancelled: bill huỷ trong ngày { id, table_number, cancelled_at, cancelled_by_name, total_amount }.
+ * cancelled: bill huỷ { id, table_number, cancelled_at, cancelled_by_name, total_amount }.
  * menuPrice: Map tên món (chữ thường) → giá menu, để ước giá trị món tặng.
+ * Trả về từng loại thất thoát (số lần / số món, tiền, từng dòng) và tổng tiền ước tính.
  */
-export function lossBlock({ ledgerDay = [], printed = new Map(), movedIds = new Set(), cancelled = [], menuPrice = new Map() }) {
-  const lines = [];
+export function lossData({ ledgerDay = [], printed = new Map(), movedIds = new Set(), cancelled = [], menuPrice = new Map() }) {
   // Bill huỷ — kèm món đã in bếp (đã làm mà không thu tiền).
-  if (cancelled.length) {
-    const rows = cancelled.map(o => {
-      const snap = latestByItem(printed.get(o.id) || []);
-      const printedValue = [...snap.values()].reduce((a, i) => a + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0);
-      return { o, printedCount: [...snap.values()].reduce((a, i) => a + (Number(i.quantity) || 0), 0), printedValue };
-    });
-    const total = rows.reduce((a, r) => a + (r.printedValue || Number(r.o.total_amount) || 0), 0);
-    lines.push(`Bill huỷ: ${rows.length} — ${vnd(total)}`);
-    for (const { o, printedCount, printedValue } of rows.slice(0, 8)) {
-      lines.push(`• ${o.cancelled_at ? clock(o.cancelled_at) : '--:--'} Bàn ${o.table_number ?? '?'}${printedCount ? ` · ${printedCount} món đã in bếp (${vnd(printedValue)})` : ` · ${vnd(o.total_amount)}`}${o.cancelled_by_name ? ` · huỷ bởi ${o.cancelled_by_name}` : ''}`);
-    }
-  }
+  const cancelRows = cancelled.map(o => {
+    const snap = latestByItem(printed.get(o.id) || []);
+    const printedValue = [...snap.values()].reduce((a, i) => a + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0);
+    const printedCount = [...snap.values()].reduce((a, i) => a + (Number(i.quantity) || 0), 0);
+    return { at: o.cancelled_at || null, table: o.table_number ?? null, printedCount, printedValue, amount: Number(o.total_amount) || 0, by: o.cancelled_by_name || null };
+  });
+  const cancelTotal = cancelRows.reduce((a, r) => a + (r.printedValue || r.amount), 0);
   // Món đã in bếp nhưng bill lúc thu không còn (hoặc ít hơn).
   const removed = [];
   for (const bill of ledgerDay) {
@@ -55,13 +51,8 @@ export function lossBlock({ ledgerDay = [], printed = new Map(), movedIds = new 
     }
     for (const [k, p] of printedQty) {
       const diff = p.qty - (finalQty.get(k) || 0);
-      if (diff > 0) removed.push({ bill, name: label(p.name, p.options), qty: diff, value: diff * p.price });
+      if (diff > 0) removed.push({ table: bill.table_number ?? null, paidAt: bill.paid_at || null, name: label(p.name, p.options), qty: diff, value: diff * p.price });
     }
-  }
-  if (removed.length) {
-    lines.push(`Món bị bớt sau khi in bếp: ${removed.reduce((a, r) => a + r.qty, 0)} món — ${vnd(removed.reduce((a, r) => a + r.value, 0))}`);
-    for (const r of removed.slice(0, 10)) lines.push(`• Bàn ${r.bill.table_number ?? '?'} (thu ${clock(r.bill.paid_at)}): ${r.name} ×${r.qty} (${vnd(r.value)})`);
-    if (removed.length > 10) lines.push(`• … và ${removed.length - 10} món khác`);
   }
   // Giảm giá (dòng âm trong bill) gom theo loại.
   const discounts = new Map();
@@ -72,10 +63,7 @@ export function lossBlock({ ledgerDay = [], printed = new Map(), movedIds = new 
     const d = discounts.get(kind) || { count: 0, amount: 0 };
     discounts.set(kind, { count: d.count + 1, amount: d.amount - amount });
   }
-  if (discounts.size) {
-    const all = [...discounts.values()];
-    lines.push(`Giảm giá: ${all.reduce((a, d) => a + d.count, 0)} lần — ${vnd(all.reduce((a, d) => a + d.amount, 0))} (${[...discounts.entries()].sort((a, b) => b[1].amount - a[1].amount).map(([k, d]) => `${k} ${d.count} lần ${vnd(d.amount)}`).join(', ')})`);
-  }
+  const kinds = [...discounts.entries()].sort((a, b) => b[1].amount - a[1].amount).map(([kind, d]) => ({ kind, ...d }));
   // Món tặng (0đ) — ước giá trị theo giá menu.
   const gifts = new Map();
   for (const bill of ledgerDay) for (const i of bill.items || []) {
@@ -84,10 +72,36 @@ export function lossBlock({ ledgerDay = [], printed = new Map(), movedIds = new 
     const q = Number(i.quantity) || 0;
     gifts.set(i.name, { qty: g.qty + q, value: g.value + q * (menuPrice.get(String(i.name || '').trim().toLowerCase()) || 0) });
   }
-  if (gifts.size) {
-    const all = [...gifts.values()];
-    const value = all.reduce((a, g) => a + g.value, 0);
-    lines.push(`Món tặng: ${all.reduce((a, g) => a + g.qty, 0)} món${value > 0 ? ` ~ ${vnd(value)}` : ''} (${[...gifts.entries()].sort((a, b) => b[1].qty - a[1].qty).slice(0, 6).map(([n, g]) => `${n} ×${g.qty}`).join(', ')})`);
+  const giftItems = [...gifts.entries()].sort((a, b) => b[1].qty - a[1].qty).map(([name, g]) => ({ name, ...g }));
+  const out = {
+    cancelled: { count: cancelRows.length, total: cancelTotal, rows: cancelRows },
+    removed: { qty: removed.reduce((a, r) => a + r.qty, 0), value: removed.reduce((a, r) => a + r.value, 0), rows: removed },
+    discounts: { count: kinds.reduce((a, d) => a + d.count, 0), amount: kinds.reduce((a, d) => a + d.amount, 0), kinds },
+    gifts: { qty: giftItems.reduce((a, g) => a + g.qty, 0), value: giftItems.reduce((a, g) => a + g.value, 0), items: giftItems },
+  };
+  out.total = out.cancelled.total + out.removed.value + out.discounts.amount + out.gifts.value;
+  return out;
+}
+
+export function lossBlock(input) {
+  const d = lossData(input);
+  const lines = [];
+  if (d.cancelled.count) {
+    lines.push(`Bill huỷ: ${d.cancelled.count} — ${vnd(d.cancelled.total)}`);
+    for (const r of d.cancelled.rows.slice(0, 8)) {
+      lines.push(`• ${r.at ? clock(r.at) : '--:--'} Bàn ${r.table ?? '?'}${r.printedCount ? ` · ${r.printedCount} món đã in bếp (${vnd(r.printedValue)})` : ` · ${vnd(r.amount)}`}${r.by ? ` · huỷ bởi ${r.by}` : ''}`);
+    }
+  }
+  if (d.removed.rows.length) {
+    lines.push(`Món bị bớt sau khi in bếp: ${d.removed.qty} món — ${vnd(d.removed.value)}`);
+    for (const r of d.removed.rows.slice(0, 10)) lines.push(`• Bàn ${r.table ?? '?'} (thu ${clock(r.paidAt)}): ${r.name} ×${r.qty} (${vnd(r.value)})`);
+    if (d.removed.rows.length > 10) lines.push(`• … và ${d.removed.rows.length - 10} món khác`);
+  }
+  if (d.discounts.kinds.length) {
+    lines.push(`Giảm giá: ${d.discounts.count} lần — ${vnd(d.discounts.amount)} (${d.discounts.kinds.map(k => `${k.kind} ${k.count} lần ${vnd(k.amount)}`).join(', ')})`);
+  }
+  if (d.gifts.items.length) {
+    lines.push(`Món tặng: ${d.gifts.qty} món${d.gifts.value > 0 ? ` ~ ${vnd(d.gifts.value)}` : ''} (${d.gifts.items.slice(0, 6).map(g => `${g.name} ×${g.qty}`).join(', ')})`);
   }
   return lines.length ? ['🔍 Kiểm soát thất thoát', ...lines].join('\n') : '🔍 Kiểm soát thất thoát: không có bill huỷ, món bị bớt, giảm giá hay món tặng.';
 }
@@ -114,31 +128,28 @@ const ALERT_TEXT = { other_network: 'không dùng wifi quán', unknown_device: '
  * settings / shifts / hours: dòng checkin_settings, staff_shifts, checkin_hours (null = tính cả ca như cũ);
  * reviews: chủ đã cho / không cho tính giờ ngoài ca; staffNames: { id: tên }.
  */
-export function staffBlock({ sessions = [], pending = [], fixes = [], alerts = [], settings = null, shifts = [], hours = [], reviews = [], staffNames = {}, date = null }) {
+export function staffData({ sessions = [], pending = [], fixes = [], alerts = [], settings = null, shifts = [], hours = [], reviews = [], staffNames = {}, date = null }) {
   const rules = settings ? normalizeRules(settings, shifts, hours) : null;
   if (date) sessions = sessions.filter(s => workDayOf(s, rules) === date);
   const reviewOf = new Map(reviews.map(r => [r.attendance_id, r]));
-  const lines = ['👥 Nhân viên'];
-  const byStaff = new Map(), outside = [];
+  const nameOf = id => staffNames[id] || 'Không rõ';
+  const byStaff = new Map();
   for (const s of sessions) byStaff.set(s.staff_id, [...(byStaff.get(s.staff_id) || []), s]);
-  if (!byStaff.size) lines.push('Không ai chấm công trong ngày.');
+  const people = [], outside = [];
   for (const [id, list] of [...byStaff.entries()].sort((a, b) => String(a[1][0].clock_in).localeCompare(String(b[1][0].clock_in)))) {
     const sorted = [...list].sort((a, b) => String(a.clock_in).localeCompare(String(b.clock_in)));
     // Giờ tính lương: cả ca, hoặc (từ ngày tính theo ca) chỉ trong ca + giờ ngoài ca chủ đã cho.
     const counted = sorted.map(s => sessionHours(s, rules, reviewOf.get(s.id)));
-    const hours = counted.reduce((a, h) => a + h.countedMs, 0) / 3600000;
     const waitMs = counted.reduce((a, h) => a + h.pendingMs, 0);
-    if (waitMs) outside.push({ id, minutes: Math.round(waitMs / 60000) });
-    const open = sorted.some(s => !s.clock_out);
-    const spans = sorted.map(s => `${clock(s.clock_in)}–${s.clock_out ? clock(s.clock_out) : '…'}`).join(', ');
-    const forgot = sorted.some(s => s.auto_closed);
-    const dayFlag = dayFlags(sorted, rules);
-    const flags = flagTexts(dayFlag);
+    if (waitMs) outside.push({ id, name: nameOf(id), minutes: Math.round(waitMs / 60000) });
+    const flags = dayFlags(sorted, rules);
     // Về sớm từ 30 phút (từ tháng 11) bị trừ lương theo giờ.
-    if (dayFlag.leftEarly >= EARLY_CUT_MINUTES && date && date.slice(0, 7) >= DAY_PAY_FROM) flags[flags.findIndex(t => t.startsWith('về sớm'))] += ' (trừ lương)';
-    lines.push(`• ${staffNames[id] || 'Không rõ'}: ${spans} (${(Math.round(hours * 10) / 10).toString().replace('.', ',')} giờ)${flags.length ? ` ⚠ ${flags.join(', ')}` : ''}${open ? ' ⚠ chưa bấm ra ca' : ''}${forgot ? ' ⚠ quên ra ca, máy tự tính giờ ra' : ''}`);
+    const cut = flags.leftEarly >= EARLY_CUT_MINUTES && !!date && date.slice(0, 7) >= DAY_PAY_FROM;
+    people.push({ id, name: nameOf(id), spans: sorted.map(s => ({ in: s.clock_in, out: s.clock_out || null })),
+      hours: Math.round(counted.reduce((a, h) => a + h.countedMs, 0) / 360000) / 10, flags, cut,
+      open: sorted.some(s => !s.clock_out), forgot: sorted.some(s => s.auto_closed), waitMinutes: Math.round(waitMs / 60000) });
   }
-  // Gộp cảnh báo theo người: "Phát: không dùng wifi quán ×2; bị chặn 1 lần".
+  // Gộp cảnh báo theo người: "không dùng wifi quán ×2; bị chặn 1 lần".
   const byPerson = new Map();
   for (const a of alerts) {
     const m = byPerson.get(a.staff_id) || new Map();
@@ -146,20 +157,80 @@ export function staffBlock({ sessions = [], pending = [], fixes = [], alerts = [
     if (a.action === 'blocked') m.set('bị chặn không cho chấm', (m.get('bị chặn không cho chấm') || 0) + 1);
     byPerson.set(a.staff_id, m);
   }
-  if (byPerson.size) {
-    lines.push('⚠ Cảnh báo chấm công:');
-    for (const [id, m] of byPerson) lines.push(`• ${staffNames[id] || 'Không rõ'}: ${[...m].map(([t, n]) => (n > 1 ? `${t} ×${n}` : t)).join('; ')}`);
+  return {
+    people,
+    alerts: [...byPerson].map(([id, m]) => ({ id, name: nameOf(id), items: [...m].map(([text, count]) => ({ text, count })) })),
+    pending: pending.map(r => ({ id: r.staff_id, name: nameOf(r.staff_id), kind: r.request_type === 'advance' ? 'advance' : 'absent', amount: Number(r.amount) || 0, days: Number(r.days) || 1, reason: r.reason ? String(r.reason).slice(0, 60) : '' })),
+    fixes: fixes.map(f => ({ id: f.staff_id, name: nameOf(f.staff_id), reason: f.reason ? String(f.reason).slice(0, 60) : '' })),
+    outside,
+  };
+}
+
+export function staffBlock(input) {
+  const d = staffData(input);
+  const lines = ['👥 Nhân viên'];
+  if (!d.people.length) lines.push('Không ai chấm công trong ngày.');
+  for (const p of d.people) {
+    const spans = p.spans.map(s => `${clock(s.in)}–${s.out ? clock(s.out) : '…'}`).join(', ');
+    const flags = flagTexts(p.flags);
+    if (p.cut) flags[flags.findIndex(t => t.startsWith('về sớm'))] += ' (trừ lương)';
+    lines.push(`• ${p.name}: ${spans} (${p.hours.toString().replace('.', ',')} giờ)${flags.length ? ` ⚠ ${flags.join(', ')}` : ''}${p.open ? ' ⚠ chưa bấm ra ca' : ''}${p.forgot ? ' ⚠ quên ra ca, máy tự tính giờ ra' : ''}`);
   }
-  const waiting = pending.length + fixes.length + outside.length;
+  if (d.alerts.length) {
+    lines.push('⚠ Cảnh báo chấm công:');
+    for (const a of d.alerts) lines.push(`• ${a.name}: ${a.items.map(({ text, count }) => (count > 1 ? `${text} ×${count}` : text)).join('; ')}`);
+  }
+  const waiting = d.pending.length + d.fixes.length + d.outside.length;
   if (waiting) {
     lines.push(`Chờ bạn duyệt (${waiting}):`);
-    for (const r of pending.slice(0, 8)) {
-      lines.push(`• ${staffNames[r.staff_id] || 'Không rõ'} ${r.request_type === 'advance' ? `xin ứng ${vnd(r.amount)}` : `báo nghỉ ${r.days || 1} ngày`}${r.reason ? ` — ${String(r.reason).slice(0, 60)}` : ''}`);
+    for (const r of d.pending.slice(0, 8)) {
+      lines.push(`• ${r.name} ${r.kind === 'advance' ? `xin ứng ${vnd(r.amount)}` : `báo nghỉ ${r.days} ngày`}${r.reason ? ` — ${r.reason}` : ''}`);
     }
-    for (const f of fixes.slice(0, 8)) lines.push(`• ${staffNames[f.staff_id] || 'Không rõ'} xin sửa giờ chấm công${f.reason ? ` — ${String(f.reason).slice(0, 60)}` : ''}`);
-    for (const o of outside) lines.push(`• ${staffNames[o.id] || 'Không rõ'} có ${durationText(o.minutes)} ngoài ca chưa tính lương`);
+    for (const f of d.fixes.slice(0, 8)) lines.push(`• ${f.name} xin sửa giờ chấm công${f.reason ? ` — ${f.reason}` : ''}`);
+    for (const o of d.outside) lines.push(`• ${o.name} có ${durationText(o.minutes)} ngoài ca chưa tính lương`);
   }
   return lines.join('\n');
+}
+
+/**
+ * Nhân viên trong một khoảng ngày (tuần / tháng): mỗi người bao nhiêu ngày, bao nhiêu giờ, mấy lần trễ /
+ * về sớm / quên ra ca / bị cảnh báo khi quét. from / to: ngày làm đầu / cuối (YYYY-MM-DD).
+ */
+export function staffRangeData({ sessions = [], alerts = [], settings = null, shifts = [], hours = [], reviews = [], staffNames = {}, from, to }) {
+  const rules = settings ? normalizeRules(settings, shifts, hours) : null;
+  const reviewOf = new Map(reviews.map(r => [r.attendance_id, r]));
+  const byDay = new Map();
+  for (const s of sessions) {
+    const day = workDayOf(s, rules);
+    if (day < from || day > to) continue;
+    const key = `${s.staff_id}|${day}`;
+    byDay.set(key, [...(byDay.get(key) || []), s]);
+  }
+  const people = new Map();
+  const person = id => {
+    if (!people.has(id)) people.set(id, { id, name: staffNames[id] || 'Không rõ', days: 0, hours: 0, late: { count: 0, minutes: 0 }, leftEarly: { count: 0, minutes: 0 },
+      early: { count: 0, minutes: 0 }, stayed: { count: 0, minutes: 0 }, forgot: 0, warnings: 0, blocked: 0, waitMinutes: 0 });
+    return people.get(id);
+  };
+  for (const [key, list] of byDay) {
+    const p = person(key.split('|')[0]);
+    const sorted = [...list].sort((a, b) => String(a.clock_in).localeCompare(String(b.clock_in)));
+    const counted = sorted.map(s => sessionHours(s, rules, reviewOf.get(s.id)));
+    p.days += 1;
+    p.hours += counted.reduce((a, h) => a + h.countedMs, 0) / 3600000;
+    p.waitMinutes += Math.round(counted.reduce((a, h) => a + h.pendingMs, 0) / 60000);
+    const f = dayFlags(sorted, rules);
+    for (const k of ['late', 'leftEarly', 'early', 'stayed']) if (f[k]) { p[k].count += 1; p[k].minutes += f[k]; }
+    if (sorted.some(s => s.auto_closed)) p.forgot += 1;
+  }
+  for (const a of alerts) {
+    const p = person(a.staff_id);
+    if (a.action === 'blocked') p.blocked += 1;
+    else if (a.warnings?.length) p.warnings += 1;
+  }
+  const list = [...people.values()].map(p => ({ ...p, hours: Math.round(p.hours * 10) / 10 })).sort((a, b) => b.hours - a.hours);
+  return { people: list, totals: { people: list.filter(p => p.days).length, hours: Math.round(list.reduce((a, p) => a + p.hours, 0) * 10) / 10,
+    late: list.reduce((a, p) => a + p.late.count, 0), forgot: list.reduce((a, p) => a + p.forgot, 0), warnings: list.reduce((a, p) => a + p.warnings + p.blocked, 0) } };
 }
 
 /**

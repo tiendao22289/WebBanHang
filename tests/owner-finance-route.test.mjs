@@ -4,8 +4,8 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as finance from '../src/lib/ownerFinance.mjs';
 import * as zaloLink from '../src/lib/financeZaloLink.mjs';
-import { notesReportMessages, packMessages } from '../src/lib/notesReport.mjs';
-import { compareBlock, compareData, lossBlock, staffBlock } from '../src/lib/dailyInsights.mjs';
+import { notesDayData, notesRangeData, notesReportMessages, packMessages } from '../src/lib/notesReport.mjs';
+import { compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData } from '../src/lib/dailyInsights.mjs';
 import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { payrollCost } from '../src/lib/payroll.mjs';
 import { normalizeRules } from '../src/lib/attendanceRules.mjs';
@@ -75,7 +75,7 @@ function fakeDb(state, { failTable } = {}) {
 function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFails = false, env = {} }) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...finance, ...zaloLink, notesReportMessages, packMessages, compareBlock, compareData, lossBlock, staffBlock, AUTO_CLOSE_BY: 'Máy tự đóng (quên ra ca)', createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
+    NextResponse, ...finance, ...zaloLink, notesReportMessages, notesDayData, notesRangeData, packMessages, compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData, AUTO_CLOSE_BY: 'Máy tự đóng (quên ra ca)', createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
     sendOaText: async (_db, id, text) => { sent.push({ id, text }); return zaloFails ? { ok: false, detail: { error: -230 } } : { ok: true }; },
     URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
@@ -618,4 +618,27 @@ test('the owner can switch the Zalo report off without unlinking, and still read
   await post(api, { action: 'zalo_set_enabled', enabled: true });
   assert.equal((await run()).body.ok, true);
   assert.match(sent[0].text, /Xem trên web: https:\/\/ocbaokhang\.online\/thongke\?date=/, 'the Zalo summary links to the page');
+});
+
+test('/thongke reads a week or a month: each day, totals, sales, losses, staff and Sổ tay, and the day as data', async () => {
+  const today = finance.vnDate(Date.now());
+  const state = empty();
+  state.finance_revenue_ledger.push({ order_id: 'r1', business_date: today, paid_at: later(-5), table_number: '4', amount: 80000, payment_method: 'cash',
+    items: [{ name: 'Sò', quantity: 1, unit_price: 80000 }, { name: 'Nước suối', quantity: 1, unit_price: 0, is_gift: true }] });
+  const api = load({ state });
+  const week = (await get(api, `period=week&date=${today}`)).body;
+  assert.equal(week.days.length, 7, 'Monday to Sunday');
+  assert.equal(week.totals.revenue, 80000);
+  assert.deepEqual(plain(week.sales.top), [{ name: 'Sò', qty: 1 }]);
+  assert.equal(week.loss.gifts.qty, 1);
+  assert.ok(week.staff && week.notes, 'staff and Sổ tay of the week');
+  const month = (await get(api, `period=month&date=${today}`)).body;
+  assert.equal(month.from, `${today.slice(0, 7)}-01`);
+  assert.equal(month.weekdays.length, 7);
+  assert.equal((await get(api, 'period=year')).status, 400);
+  assert.equal((await get(api, 'period=week&date=2099-01-01')).status, 400, 'no future days');
+  const day = (await get(api, `report=${today}`)).body;
+  assert.equal(day.loss.gifts.qty, 1, 'losses of the day as data');
+  assert.ok(day.staff.people && day.notes.summary, 'staff and Sổ tay of the day as data');
+  assert.ok(day.summary.costs.every(c => c.label !== 'Nước ngọt / bia'));
 });

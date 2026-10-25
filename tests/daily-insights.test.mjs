@@ -91,3 +91,31 @@ test('from November the daily report says an early leave of 30 minutes or more i
   assert.doesNotMatch(block('2026-11-04', '15:40'), /trừ lương/, '20 minutes early: flagged, not cut');
   assert.doesNotMatch(block('2026-10-27', '13:00'), /trừ lương/, 'October keeps the old formula');
 });
+
+test('losses, staff of a day and staff of a week come as data for the stats page', async () => {
+  const { lossData, staffData, staffRangeData } = await import('../src/lib/dailyInsights.mjs');
+  const printed = new Map([['x', [[{ id: 'p', name: 'Tôm', quantity: 2, unit_price: 80000 }]]]]);
+  const bill = { order_id: 'o1', table_number: '3', paid_at: '2026-10-23T13:00:00Z', items: [{ name: 'Giảm giá: khách quen', quantity: 1, unit_price: -20000 }, { name: 'Nước suối', quantity: 2, unit_price: 0, is_gift: true }] };
+  const d = lossData({ ledgerDay: [bill], printed, cancelled: [{ id: 'x', table_number: 7, cancelled_at: '2026-10-23T14:05:00Z', cancelled_by_name: 'Lan', total_amount: 0 }], menuPrice: new Map([['nước suối', 10000]]) });
+  assert.deepEqual([d.cancelled.count, d.cancelled.total, d.cancelled.rows[0].printedCount, d.cancelled.rows[0].by], [1, 160000, 2, 'Lan']);
+  assert.deepEqual([d.discounts.count, d.discounts.amount, d.discounts.kinds[0].kind], [1, 20000, 'Giảm giá']);
+  assert.deepEqual([d.gifts.qty, d.gifts.value], [2, 20000]);
+  assert.equal(d.total, 200000);
+  assert.equal(lossData({}).total, 0);
+
+  const settings = { hours_from: '2026-10-01' };
+  const hours = [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }];
+  const s = staffData({ staffNames: { a: 'Phát' }, settings, hours, date: '2026-10-23', sessions: [{ id: 's1', staff_id: 'a', date: '2026-10-23', clock_in: '2026-10-23T07:30:00Z', clock_out: null }],
+    alerts: [{ staff_id: 'a', warnings: ['other_network'] }], pending: [{ staff_id: 'a', request_type: 'advance', amount: 200000 }] });
+  assert.deepEqual([s.people[0].name, s.people[0].flags.late, s.people[0].open], ['Phát', 30, true]);
+  assert.deepEqual(s.alerts[0].items, [{ text: 'không dùng wifi quán', count: 1 }]);
+  assert.equal(s.pending[0].kind, 'advance');
+
+  const w = staffRangeData({ staffNames: { a: 'Phát' }, settings, hours, from: '2026-10-19', to: '2026-10-25', sessions: [
+    { id: 'x1', staff_id: 'a', date: '2026-10-20', clock_in: '2026-10-20T07:20:00Z', clock_out: '2026-10-20T16:00:00Z' },
+    { id: 'x2', staff_id: 'a', date: '2026-10-21', clock_in: '2026-10-21T07:00:00Z', clock_out: '2026-10-21T15:00:00Z', auto_closed: true },
+    { id: 'x3', staff_id: 'a', date: '2026-10-27', clock_in: '2026-10-27T07:00:00Z', clock_out: '2026-10-27T16:00:00Z' },
+  ], alerts: [{ staff_id: 'a', action: 'blocked' }] });
+  assert.deepEqual([w.people[0].days, w.people[0].late.count, w.people[0].late.minutes, w.people[0].forgot, w.people[0].blocked], [2, 1, 20, 1, 1]);
+  assert.equal(w.totals.people, 1);
+});

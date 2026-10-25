@@ -3,6 +3,7 @@
  * (trả / nợ / đã trả bớt / còn nợ), dư hoặc thiếu so với tiền chủ đưa, lịch sử
  * sửa trong ngày, từng lần trả nợ, phiếu ngày khác bị sửa / xoá trong ngày, và
  * còn nợ theo chủ nợ. Mỗi tin Zalo tối đa ~2.000 ký tự → chia nhiều tin.
+ * notesDayData / notesRangeData: cùng số liệu dạng dữ liệu cho trang /thongke.
  */
 import { lineWarnings, noteTotals, parsePrice, parseQty } from './notesMath.mjs';
 import { notesSummary } from './notesSummary.mjs';
@@ -171,4 +172,126 @@ export function packMessages(head, blocks) {
   }
   if (current) messages.push(current);
   return messages;
+}
+
+// ── Dữ liệu cho trang /thongke (thẻ số, bảng) — cùng cách tính với tin Zalo ở trên.
+
+/** Tiền của một món: tổng, phần nợ, đã trả bớt, còn nợ, chủ nợ. */
+function itemMoney(item) {
+  const total = lineTotal(item);
+  const owed = debtBase(item);
+  const paid = Math.min(owed, Number(item.paid_amount) || 0);
+  return { name: String(item.name).trim(), qty: String(item.qty || '').trim(), price: String(item.price || '').trim(), total,
+    payNow: total - owed, owed, paid, left: owed - paid, creditor: String(item.creditor || '').trim(), warnings: lineWarnings(item) };
+}
+
+// Còn nợ theo chủ nợ (từng món, từ ngày nào), nợ nhiều nhất trước.
+function owedByCreditor(allNotes) {
+  const byWho = new Map();
+  for (const n of allNotes) {
+    for (const item of named(readContent(n.content)?.items)) {
+      const m = itemMoney(item);
+      if (m.left > 0) {
+        const who = m.creditor || 'Không ghi tên';
+        byWho.set(who, [...(byWho.get(who) || []), { what: m.name, left: m.left, day: dayMonth(n.created_at) }]);
+      }
+    }
+  }
+  return [...byWho.entries()].map(([who, items]) => ({ who, total: items.reduce((a, o) => a + o.left, 0), items }))
+    .sort((a, b) => b.total - a.total);
+}
+
+/** Sổ tay của một ngày dạng dữ liệu: tổng, từng phiếu (từng món), trả nợ, phiếu cũ bị sửa / xoá, còn nợ. */
+export function notesDayData({ date, dayNotes = [], allNotes = [], payments = [], deleted = [], staffNames = {}, range }) {
+  const inDay = iso => { const t = new Date(iso).getTime(); return t >= range.start.getTime() && t < range.end.getTime(); };
+  const fundedBy = new Map();
+  for (const p of payments) if (p.paid_from_note_id) fundedBy.set(p.paid_from_note_id, (fundedBy.get(p.paid_from_note_id) || 0) + Number(p.amount || 0));
+  const nameOf = n => n.staff?.full_name || staffNames[n.staff_id] || 'Không rõ';
+  const byId = new Map(allNotes.map(n => [n.id, n]));
+  const sorted = [...dayNotes].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  const s = notesSummary(allNotes, payments, range);
+  const newDebt = sorted.reduce((a, n) => a + (Number(n.debt) || 0), 0);
+  const sumOf = list => (Array.isArray(list) ? list : []).reduce((a, r) => a + (Number(r?.amount) || 0), 0);
+
+  const notes = sorted.map(n => {
+    const data = readContent(n.content);
+    const saved = (Number(n.amount) || 0) + (Number(n.debt) || 0);
+    if (n.note_type !== 'expense' || data?.type !== 'structured_expense') {
+      return { id: n.id, at: n.created_at, who: nameOf(n), kind: TYPE_LABEL[n.note_type] || '🛒 Chi tiền', text: String(data?.note ?? n.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 300), saved, items: [] };
+    }
+    const given = Number(data.input_amount) || 0;
+    const paidNow = Number(n.amount) || 0;
+    const funded = fundedBy.get(n.id) || 0;
+    const carriedIn = sumOf(data.carried_in), carriedOut = sumOf(data.carried_out);
+    const itemsTotal = noteTotals(named(data.items)).total;
+    return {
+      id: n.id, at: n.created_at, who: nameOf(n), kind: '🛒 Đi chợ', given, carriedIn, carriedOut, saved, paidNow, debt: Number(n.debt) || 0, funded,
+      // Dư (≥ 0, trả lại chủ) hoặc thiếu (< 0, người đi chợ bỏ thêm); null = không có tiền chủ đưa.
+      left: given || carriedIn ? given + carriedIn - paidNow - funded : null,
+      mismatch: Math.abs(saved - itemsTotal) >= 1000 ? { saved, items: itemsTotal } : null,
+      items: named(data.items).filter(i => lineTotal(i) || String(i.price || '').trim()).map(itemMoney),
+      note: String(data.note || '').replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200),
+      edits: (data.history || []).filter(h => historyOnDay(h.ts, date)).map(h => ({ at: historyClock(h.ts), by: h.by || '', changes: String(h.changes || '').replace(/\n+/g, '; ') })),
+    };
+  });
+
+  const paid = payments.filter(p => inDay(p.paid_at)).sort((a, b) => String(a.paid_at).localeCompare(String(b.paid_at))).map(p => {
+    const note = byId.get(p.note_id);
+    const item = p.item_index !== null && p.item_index !== undefined ? readContent(note?.content)?.items?.[p.item_index] || null : null;
+    return { at: p.paid_at, amount: Number(p.amount) || 0, item: item?.name || null, creditor: String(item?.creditor || '').trim() || null,
+      noteDay: note ? dayMonth(note.created_at) : null, fromNote: !!p.paid_from_note_id, by: p.created_by_name || null };
+  });
+
+  const dayIds = new Set(sorted.map(n => n.id));
+  const edited = allNotes.filter(n => !dayIds.has(n.id)).flatMap(n => (readContent(n.content)?.history || [])
+    .filter(h => historyOnDay(h.ts, date) && !/^💰/.test(String(h.changes || '')))
+    .map(h => ({ noteDay: dayMonth(n.created_at), who: nameOf(n), at: historyClock(h.ts), by: h.by || '', changes: String(h.changes || '').replace(/\n+/g, '; ') })));
+  const removedNotes = deleted.map(row => {
+    const old = row.old_row || {};
+    return { at: row.changed_at, noteDay: old.created_at ? dayMonth(old.created_at) : null, who: staffNames[old.staff_id] || 'Không rõ',
+      amount: (Number(old.amount) || 0) + (Number(old.debt) || 0), by: row.staff_id ? staffNames[row.staff_id] || 'Không rõ' : null };
+  });
+
+  return {
+    summary: { count: sorted.length, given: s.given, hasGiven: s.hasGiven, goods: s.goods, cashNow: s.cashNow, newDebt, debtPaid: s.debtPaid, cash: s.cash,
+      giveBack: s.giveBack, debtLeft: s.debtLeft, warnings: notes.filter(n => n.mismatch || n.items.some(i => i.warnings.length)).length },
+    notes, payments: paid, edited, deleted: removedNotes, owed: owedByCreditor(allNotes),
+  };
+}
+
+/**
+ * Sổ tay trong một khoảng ngày (tuần / tháng): tổng tiền, theo người đi chợ, món mua nhiều tiền nhất,
+ * còn nợ. allNotes: mọi phiếu tới hết khoảng; range: { start, end } (Date).
+ */
+export function notesRangeData({ allNotes = [], payments = [], staffNames = {}, range }) {
+  const inRange = n => { const t = new Date(n.created_at).getTime(); return t >= range.start.getTime() && t < range.end.getTime(); };
+  const notes = allNotes.filter(inRange);
+  const s = notesSummary(allNotes, payments, range);
+  const byStaff = new Map(), bought = new Map();
+  let warnings = 0;
+  for (const n of notes) {
+    const who = n.staff?.full_name || staffNames[n.staff_id] || 'Không rõ';
+    const p = byStaff.get(who) || { who, notes: 0, goods: 0 };
+    p.notes += 1; p.goods += (Number(n.amount) || 0) + (Number(n.debt) || 0);
+    byStaff.set(who, p);
+    const data = readContent(n.content);
+    if (data?.type !== 'structured_expense') continue;
+    const items = named(data.items);
+    if (Math.abs((Number(n.amount) || 0) + (Number(n.debt) || 0) - noteTotals(items).total) >= 1000 || items.some(i => lineWarnings(i).length)) warnings += 1;
+    for (const item of items) {
+      const total = lineTotal(item);
+      if (!total) continue;
+      const key = String(item.name).trim().toLowerCase();
+      const b = bought.get(key) || { name: String(item.name).trim(), times: 0, total: 0 };
+      b.times += 1; b.total += total;
+      bought.set(key, b);
+    }
+  }
+  return {
+    summary: { count: notes.length, given: s.given, hasGiven: s.hasGiven, goods: s.goods, cashNow: s.cashNow, newDebt: notes.reduce((a, n) => a + (Number(n.debt) || 0), 0),
+      debtPaid: s.debtPaid, cash: s.cash, giveBack: s.giveBack, debtLeft: s.debtLeft, warnings },
+    byStaff: [...byStaff.values()].sort((a, b) => b.goods - a.goods),
+    top: [...bought.values()].sort((a, b) => b.total - a.total).slice(0, 10),
+    owed: owedByCreditor(allNotes),
+  };
 }
