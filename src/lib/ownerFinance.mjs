@@ -201,6 +201,19 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
   return { month, from, to, daysInMonth, fixedMonthTotal, fixedEntries, customMonthTotals, days, totals, wagesReady: !!wages };
 }
 
+/**
+ * Chi của một ngày (hoặc cả tháng) chia nhóm. daily: chi trong ngày (khoản 'drink' — nước ngọt, đá, gas… —
+ * và tab tự tạo nhập theo ngày); fixed: chi cố định chia đều + tab nhập theo tháng chia đều.
+ */
+export function costParts(day, categories = []) {
+  const monthly = new Set(categories.filter(c => c.scope === 'tab' && c.schedule === 'monthly').map(c => c.id));
+  let dailyTabs = 0, monthlyTabs = 0;
+  for (const [id, v] of Object.entries(day.custom || {})) {
+    if (monthly.has(id)) monthlyTabs += Number(v) || 0; else dailyTabs += Number(v) || 0;
+  }
+  return { daily: (Number(day.drinks) || 0) + dailyTabs, purchases: Number(day.purchases) || 0, salary: Number(day.salary) || 0, fixed: (Number(day.fixedShare) || 0) + monthlyTabs };
+}
+
 const vnd = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;
 const signed = n => `${n < 0 ? '-' : '+'}${vnd(Math.abs(n))}`;
 
@@ -218,7 +231,7 @@ export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, 
   lines.push(`Doanh thu: ${vnd(day.revenue)} (${day.bills} bill${day.paperBills ? ` + ${day.paperBills} bill giấy` : ''})`);
   lines.push(`• Tiền mặt: ${vnd(day.cash)}`);
   for (const [id, amount] of Object.entries(day.byAccount || {})) lines.push(`• CK ${accountName(id)}: ${vnd(amount)}`);
-  const parts = [['đi chợ', day.purchases], ['nước', day.drinks], ['lương', day.salary], ['cố định', day.fixedShare], ['khác', day.customTotal]]
+  const parts = [['đi chợ', day.purchases], ['trong ngày', day.drinks], ['lương', day.salary], ['cố định', day.fixedShare], ['khác', day.customTotal]]
     .filter(([, v]) => v > 0).map(([k, v]) => `${k} ${vnd(v)}`);
   lines.push(`Chi: ${vnd(cost)}${parts.length ? ` (${parts.join(', ')})` : ''}`);
   lines.push(`${day.profit < 0 ? 'Lỗ' : 'Lãi'} ngày: ${signed(day.profit)}`);

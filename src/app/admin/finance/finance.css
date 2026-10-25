@@ -335,3 +335,17 @@
 .fin-day-nums .gain { color: #15803d; }
 .fin-day-nums .loss { color: #b91c1c; }
 .fin-day-today { margin-top: 12px; }
+
+/* Thêm chi: 2 phần lớn (trong ngày / cố định), chọn nhanh khoản chi, danh sách đã chi trong ngày. */
+.fin-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+.fin-mode button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 56px; padding: 8px 12px; border: 1.5px solid #d1d5db; border-radius: 12px; background: white; color: #111827; font-size: 15px; font-weight: 700; text-align: left; }
+.fin-mode button small { font-size: 12px; font-weight: 500; color: #6b7280; }
+.fin-mode button.active { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; }
+.fin-mode button.active small { color: #1d4ed8; }
+.fin-filter-row .fin-search-tables.fin-wrap { flex-wrap: wrap; overflow: visible; margin: 0; padding: 0; }
+.fin-search-tables .fin-chip-add { border-style: dashed; border-color: #2563eb; background: #eff6ff; color: #1d4ed8; font-weight: 700; }
+.fin-date-pick { min-height: 40px; padding: 0 8px; border: 1px solid #d1d5db; border-radius: 999px; font-size: 14px; background: white; color: #374151; flex-shrink: 0; }
+.fin-last { display: block; margin: -4px 0 8px; }
+.fin-daylist { margin-top: 14px; border-top: 1px solid #e5e7eb; padding-top: 10px; }
+.fin-daylist-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; margin-bottom: 4px; }
+.fin-day-cost { margin: 6px 0 0; font-size: 12px; color: #4b5563; line-height: 1.4; }

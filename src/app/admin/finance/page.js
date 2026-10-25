@@ -5,6 +5,7 @@ import { Banknote, Camera, ChevronDown, ChevronLeft, ChevronRight, CreditCard, P
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import { useBackClose } from '@/lib/useBackClose';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
+import { costParts } from '@/lib/ownerFinance.mjs';
 import './finance.css';
 
 const money = value => `${Math.round(Number(value || 0)).toLocaleString('vi-VN')}đ`;
@@ -32,7 +33,8 @@ async function api(path, options) {
   return result;
 }
 
-const KIND_LABEL = { drink: 'Nước ngọt / bia', salary: 'Lương', fixed: 'Chi cố định', custom: 'Chi khác' };
+// 'drink' (tên cũ trong DB) = chi trong ngày: nước ngọt, đá, gas… — tên khoản là label.
+const KIND_LABEL = { drink: 'Chi trong ngày', salary: 'Lương', fixed: 'Chi cố định', custom: 'Chi khác' };
 const NEW = '__new';
 
 // Tên hiển thị của 1 khoản đã nhập: loại lương / mục cố định / tên tab tự tạo.
@@ -40,7 +42,7 @@ function entryTitle(entry, categories = []) {
   const own = categories.find(c => c.id === entry.category);
   if (entry.kind === 'salary') return `${own?.name || 'Lương'}: ${entry.label}`;
   if (entry.kind === 'custom') return own && entry.label !== own.name ? `${own.name}: ${entry.label}` : (own?.name || entry.label);
-  if (entry.kind === 'fixed') return entry.label;
+  if (entry.kind === 'fixed' || entry.kind === 'drink') return entry.label || KIND_LABEL[entry.kind];
   const kind = KIND_LABEL[entry.kind] || '';
   return !entry.label || entry.label === kind ? kind : `${kind}: ${entry.label}`;
 }
@@ -81,18 +83,30 @@ function NewCategory({ scope, onDone, onCancel }) {
   </div>;
 }
 
-function AddEntryForm({ data, month, onSaved }) {
+// Chi trong ngày: chọn nhanh khoản hay chi (lưu là khoản "trong ngày", tên = khoản đã chọn).
+const DAILY_PRESETS = ['Nước ngọt / bia', 'Đá', 'Gas', 'Rau / chợ', 'Ship / xe'];
+const OTHER = '__other';
+const shortDay = d => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+const shiftDay = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+
+// Thêm chi, 2 phần: Chi trong ngày (mỗi ngày mỗi khác: nước ngọt, đá, gas… + tab tự tạo nhập theo ngày)
+// và Chi cố định hàng tháng (tiền nhà, điện, nước, internet… + tab theo tháng — tự chia đều cho từng ngày).
+function AddEntryForm({ data, month, mode, setMode, onSaved }) {
   // Mục/tab vừa tạo được giữ tạm ở đây cho tới khi danh sách tải lại xong —
   // không thì form chọn tab mới khi server chưa trả về, mất tên tab.
   const [created, setCreated] = useState([]);
   const loaded = data?.categories || [];
   const categories = [...loaded, ...created.filter(c => !loaded.some(x => x.id === c.id))];
   const active = scope => categories.filter(c => c.scope === scope && !c.archived);
-  const tabs = active('tab');
-  const [kind, setKind] = useState('drink'); // 'drink' | 'fixed' | 'tab:<id>' — lương tự tính theo chấm công
-  const [date, setDate] = useState(vnToday());
+  const dailyTabs = active('tab').filter(t => t.schedule !== 'monthly');
+  const monthlyTabs = active('tab').filter(t => t.schedule === 'monthly');
+  const ownFixed = active('fixed');
+
+  const today = vnToday();
+  const [date, setDate] = useState(today);
+  const [pick, setPick] = useState(DAILY_PRESETS[0]); // tên khoản | 'tab:<id>' | OTHER
+  const [fixedPick, setFixedPick] = useState('rent'); // mục cố định | id mục tự thêm | 'tab:<id>'
   const [label, setLabel] = useState('');
-  const [fixedCategory, setFixedCategory] = useState('rent');
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [adding, setAdding] = useState(null); // 'tab' | 'fixed'
@@ -100,30 +114,53 @@ function AddEntryForm({ data, month, onSaved }) {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
 
-  const tab = kind.startsWith('tab:') ? categories.find(c => c.id === kind.slice(4)) : null;
-  // Tab đã bị ẩn (ở máy khác) → quay về tab mặc định.
-  useEffect(() => { if (kind.startsWith('tab:') && data && (!tab || tab.archived)) setKind('drink'); }, [kind, tab, data]);
-  const monthly = kind === 'fixed' || tab?.schedule === 'monthly';
-  const kindName = (tab ? tab.name : KIND_LABEL[kind]) || '';
+  const daily = mode === 'daily';
+  const tab = daily
+    ? (pick.startsWith('tab:') ? categories.find(c => c.id === pick.slice(4)) : null)
+    : (fixedPick.startsWith('tab:') ? categories.find(c => c.id === fixedPick.slice(4)) : null);
+  // Tab đã bị ẩn (ở máy khác) → quay về khoản mặc định.
+  useEffect(() => {
+    if (!data) return;
+    if (pick.startsWith('tab:') && !dailyTabs.some(t => `tab:${t.id}` === pick)) setPick(DAILY_PRESETS[0]);
+    if (fixedPick.startsWith('tab:') && !monthlyTabs.some(t => `tab:${t.id}` === fixedPick)) setFixedPick('rent');
+  }, [data, pick, fixedPick]);
+
+  const dailyName = pick === OTHER ? label.trim() : tab ? tab.name : pick;
+  const fixedOwn = ownFixed.find(c => c.id === fixedPick);
+  const fixedName = tab ? tab.name : fixedOwn ? fixedOwn.name : (data?.fixedCategories || []).find(c => c.key === fixedPick)?.label || '';
+
+  // Khoản trong ngày đã nhập cho ngày đang chọn (để thấy ngay, xoá nhầm được).
+  const isDaily = e => e.kind === 'drink' || (e.kind === 'custom' && !categories.find(c => c.id === e.category && c.schedule === 'monthly'));
+  const dayEntries = (data?.entries || []).filter(e => e.entry_date === date && isDaily(e));
+  const dayTotal = dayEntries.reduce((s, e) => s + Number(e.amount || 0), 0);
+  // Lần trước chi khoản này bao nhiêu (bấm để điền lại).
+  const lastOf = name => [...(data?.entries || [])].filter(e => isDaily(e) && (e.label === name || categories.find(c => c.id === e.category)?.name === name))
+    .sort((a, b) => String(b.entry_date).localeCompare(String(a.entry_date)) || String(b.created_at).localeCompare(String(a.created_at)))[0] || null;
+  const last = daily && dailyName ? lastOf(dailyName) : null;
 
   function choose(next) {
-    if (next !== kind) setLabel('');
-    setKind(next); setAdding(null); setError(''); setSaved('');
+    if (daily) setPick(next); else setFixedPick(next);
+    setLabel(''); setAdding(null); setError(''); setSaved('');
   }
 
   async function save(event) {
     event.preventDefault();
     setBusy(true); setError(''); setSaved('');
     try {
-      const { entry } = await post({
-        action: 'add', kind: tab ? 'custom' : kind, entry_date: date, month, amount: Number(digits(amount)), note,
-        category: tab ? tab.id : kind === 'fixed' ? fixedCategory : undefined,
-        label: kind === 'drink' ? (label || 'Nước ngọt / bia') : label,
-      });
-      setAmount(''); setNote(''); if (kind !== 'drink') setLabel('');
-      setSaved(`✓ Đã thêm ${entryTitle(entry, categories)} · ${money(entry.amount)}`);
+      const body = daily
+        ? (tab ? { kind: 'custom', category: tab.id, label: tab.name } : { kind: 'drink', label: dailyName })
+        : (tab ? { kind: 'custom', category: tab.id, label: tab.name } : { kind: 'fixed', category: fixedPick, label: '' });
+      if (daily && !body.label) throw new Error('Ghi khoản chi là gì (vd: Đá, Gas).');
+      const { entry } = await post({ action: 'add', ...body, entry_date: date, month, amount: Number(digits(amount)), note });
+      setAmount(''); setNote(''); if (pick === OTHER) setLabel('');
+      setSaved(`✓ Đã thêm ${entryTitle(entry, categories)} · ${money(entry.amount)}${daily ? ` ngày ${shortDay(date)}` : ''}`);
       onSaved();
     } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+
+  async function remove(entry) {
+    if (!confirm(`Xoá "${entryTitle(entry, categories)}" ${money(entry.amount)}?`)) return;
+    try { await post({ action: 'delete', id: entry.id }); onSaved(); } catch (err) { alert(err.message); }
   }
 
   async function archive(category, after) {
@@ -131,47 +168,78 @@ function AddEntryForm({ data, month, onSaved }) {
     try { await post({ action: 'archive_category', id: category.id }); after(); onSaved(); } catch (err) { alert(err.message); }
   }
 
-  const ownFixed = active('fixed');
-  const selectedOwn = kind === 'fixed' ? ownFixed.find(c => c.id === fixedCategory) : null;
+  const perDay = data?.daysInMonth ? Math.round((data.fixedMonthTotal || 0) / data.daysInMonth) : 0;
 
   return <form className="fin-form" onSubmit={save}>
-    <div className="fin-tabs" role="tablist">
-      {['drink', 'fixed'].map(k => <button key={k} type="button" role="tab" aria-selected={kind === k}
-        className={kind === k ? 'active' : ''} onClick={() => choose(k)}>{KIND_LABEL[k]}</button>)}
-      {tabs.map(t => <button key={t.id} type="button" role="tab" aria-selected={kind === `tab:${t.id}`}
-        className={kind === `tab:${t.id}` ? 'active' : ''} onClick={() => choose(`tab:${t.id}`)}>{t.name}</button>)}
-      <button type="button" className="fin-tab-add" onClick={() => { setAdding(adding === 'tab' ? null : 'tab'); setError(''); }}>+ Thêm tab</button>
+    <div className="fin-mode" role="tablist" aria-label="Loại chi">
+      <button type="button" role="tab" aria-selected={daily} className={daily ? 'active' : ''} onClick={() => { setMode('daily'); setError(''); setSaved(''); }}>
+        📅 Chi trong ngày<small>Mỗi ngày mỗi khác</small></button>
+      <button type="button" role="tab" aria-selected={!daily} className={!daily ? 'active' : ''} onClick={() => { setMode('monthly'); setError(''); setSaved(''); }}>
+        🏠 Chi cố định<small>Hàng tháng, chia đều</small></button>
     </div>
 
-    {adding === 'tab' && <NewCategory scope="tab" onCancel={() => setAdding(null)}
-      onDone={category => { setCreated(prev => [...prev, category]); setAdding(null); onSaved(); choose(`tab:${category.id}`); }} />}
+    {daily && <>
+      <div className="fin-filter-row">
+        <span>Ngày</span>
+        <div className="fin-search-tables">
+          {[[today, 'Hôm nay'], [shiftDay(today, -1), 'Hôm qua']].map(([d, t]) =>
+            <button key={d} type="button" aria-pressed={date === d} className={date === d ? 'active' : ''} onClick={() => setDate(d)}>{t}</button>)}
+          <input type="date" className="fin-date-pick" value={date} min={data?.startDate} max={today} onChange={e => e.target.value && setDate(e.target.value)} aria-label="Chọn ngày khác" />
+        </div>
+      </div>
+      <div className="fin-filter-row">
+        <span>Chi gì</span>
+        <div className="fin-search-tables fin-wrap">
+          {DAILY_PRESETS.map(p => <button key={p} type="button" aria-pressed={pick === p} className={pick === p ? 'active' : ''} onClick={() => choose(p)}>{p}</button>)}
+          {dailyTabs.map(t => <button key={t.id} type="button" aria-pressed={pick === `tab:${t.id}`} className={pick === `tab:${t.id}` ? 'active' : ''} onClick={() => choose(`tab:${t.id}`)}>{t.name}</button>)}
+          <button type="button" aria-pressed={pick === OTHER} className={pick === OTHER ? 'active' : ''} onClick={() => choose(OTHER)}>Khác…</button>
+          <button type="button" className="fin-chip-add" onClick={() => { setAdding(adding === 'tab' ? null : 'tab'); setError(''); }}>+ Thêm loại</button>
+        </div>
+      </div>
+      {adding === 'tab' && <NewCategory scope="tab" onCancel={() => setAdding(null)}
+        onDone={category => { setCreated(prev => [...prev, category]); setAdding(null); onSaved();
+          if (category.schedule === 'monthly') { setMode('monthly'); setFixedPick(`tab:${category.id}`); } else setPick(`tab:${category.id}`); }} />}
+    </>}
+
+    {!daily && <>
+      <div className="fin-fields">
+        <label className="fin-wide">Mục<select value={fixedPick} onChange={e => e.target.value === NEW ? setAdding('fixed') : choose(e.target.value)}>
+          {(data?.fixedCategories || []).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+          {ownFixed.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          {monthlyTabs.map(t => <option key={t.id} value={`tab:${t.id}`}>{t.name}</option>)}
+          <option value={NEW}>+ Thêm mục mới...</option>
+        </select></label>
+      </div>
+      {adding === 'fixed' && <NewCategory scope="fixed" onCancel={() => setAdding(null)}
+        onDone={category => { setCreated(prev => [...prev, category]); setAdding(null); onSaved(); setFixedPick(category.id); }} />}
+    </>}
 
     <div className="fin-fields">
-      {kind === 'fixed' && <label className="fin-wide">Mục<select value={fixedCategory} onChange={e => e.target.value === NEW ? setAdding('fixed') : setFixedCategory(e.target.value)}>
-        {(data?.fixedCategories || []).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-        {ownFixed.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        <option value={NEW}>+ Thêm mục mới...</option>
-      </select></label>}
-      {(kind === 'drink' || tab) && <label className="fin-wide">Nội dung<input value={label} onChange={e => setLabel(e.target.value)} placeholder={tab ? tab.name : 'Nước ngọt / bia'} /></label>}
-      {!monthly && <label>Ngày<input type="date" value={date} min={data?.startDate} max={vnToday()} onChange={e => setDate(e.target.value)} required /></label>}
+      {daily && pick === OTHER && <label className="fin-wide">Nội dung<input value={label} onChange={e => setLabel(e.target.value)} placeholder="VD: Than, Khăn giấy, Sửa ống nước" maxLength={120} /></label>}
       <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''}
         onChange={e => setAmount(digits(e.target.value))} placeholder="0" enterKeyHint="done" required /></label>
-      <label className="fin-wide">Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
+      <label>Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
     </div>
+    {last && !amount && <button type="button" className="fin-link fin-last" onClick={() => setAmount(String(Math.round(Number(last.amount))))}>
+      Lần trước ({shortDay(last.entry_date)}): {money(last.amount)} · bấm để điền</button>}
 
-    {adding === 'fixed' && <NewCategory scope="fixed" onCancel={() => setAdding(null)}
-      onDone={category => { setCreated(prev => [...prev, category]); setAdding(null); onSaved(); setFixedCategory(category.id); }} />}
-
-    {monthly && <p className="fin-hint">Ghi cho cả tháng {month.slice(5)}/{month.slice(0, 4)}, tự chia đều cho từng ngày.</p>}
-    <p className="fin-hint">Lương không nhập ở đây: Sổ thu chi tự tính theo chấm công ở trang Lương.</p>
+    {!daily && <p className="fin-hint">Ghi cho cả tháng {month.slice(5)}/{month.slice(0, 4)}, tự chia đều cho từng ngày{perDay ? ` (đang ≈ ${money(perDay)}/ngày)` : ''}.</p>}
     {error && <p className="fin-error">{error}</p>}
     {saved && <p className="fin-saved" role="status">{saved}</p>}
-    <button className="fin-primary" disabled={busy}>{busy ? 'Đang lưu...' : `Thêm ${kindName.toLowerCase()}`}</button>
-    {(tab || selectedOwn) && <button type="button" className="fin-link" onClick={() => tab
-      ? archive(tab, () => choose('drink'))
-      : archive(selectedOwn, () => setFixedCategory('rent'))}>
-      Ẩn {tab ? `tab "${tab.name}"` : `mục "${selectedOwn.name}"`}
-    </button>}
+    <button className="fin-primary" disabled={busy}>{busy ? 'Đang lưu...' : daily ? `Thêm chi ngày ${shortDay(date)}${dailyName ? `: ${dailyName}` : ''}` : `Thêm ${fixedName.toLowerCase() || 'chi cố định'}`}</button>
+    {tab && <button type="button" className="fin-link" onClick={() => archive(tab, () => (daily ? setPick(DAILY_PRESETS[0]) : setFixedPick('rent')))}>Ẩn loại "{tab.name}"</button>}
+    {!daily && fixedOwn && <button type="button" className="fin-link" onClick={() => archive(fixedOwn, () => setFixedPick('rent'))}>Ẩn mục "{fixedOwn.name}"</button>}
+
+    {daily && <div className="fin-daylist">
+      <div className="fin-daylist-head"><b>Đã chi ngày {shortDay(date)}</b><b>{money(dayTotal)}</b></div>
+      {dayEntries.length === 0 && <p className="fin-empty">Chưa có khoản nào.</p>}
+      {dayEntries.map(entry => <div key={entry.id} className="fin-row static">
+        <span>{entryTitle(entry, categories)}{entry.note && <small>{entry.note}</small>}</span>
+        <span className="fin-row-end"><b>{money(entry.amount)}</b>
+          <button type="button" className="fin-icon danger" onClick={() => remove(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
+      </div>)}
+    </div>}
+    <p className="fin-hint">Lương không nhập ở đây: Sổ thu chi tự tính theo chấm công ở trang Lương. Đi chợ / nhập hàng ghi ở Sổ tay.</p>
   </form>;
 }
 
@@ -179,6 +247,12 @@ function AddEntryForm({ data, month, onSaved }) {
 const diffText = diff => diff === 0 ? 'Khớp ✓' : diff > 0 ? `Thừa ${money(diff)}` : `Thiếu ${money(-diff)}`;
 const diffClass = diff => diff === 0 ? 'ok' : 'bad';
 const dayCost = d => d.purchases + d.drinks + d.salary + d.fixedShare + d.customTotal;
+// "Trong ngày 350k · Nhập hàng 1,2tr · Lương 900k · Cố định 300k" (bỏ nhóm 0đ).
+const costLine = (d, categories) => {
+  const p = costParts(d, categories);
+  return [['Trong ngày', p.daily], ['Nhập hàng', p.purchases], ['Lương', p.salary], ['Cố định', p.fixed]]
+    .filter(([, v]) => v > 0).map(([k, v]) => `${k} ${money(v)}`).join(' · ');
+};
 
 // Nhóm gập/mở: tiêu đề + số đếm / tổng tiền luôn hiện, bấm để xem chi tiết.
 function Fold({ title, sub, initial = false, children }) {
@@ -342,7 +416,8 @@ function DayDetail({ date, summary, accounts, categories, onClose, onChanged }) 
             <span>💵 Tiền mặt {money(summary.cash)}</span>
             {Object.entries(summary.byAccount || {}).map(([id, amount]) => <span key={id}>💳 {cardName(id)} {money(amount)}</span>)}
           </div>
-          {summary.salary > 0 && <div className="fin-daysum-money"><span>👷 Lương theo chấm công {money(summary.salary)} (đã trừ vào chi)</span></div>}
+          {dayCost(summary) > 0 && <div className="fin-daysum-money"><span>Chi: {costLine(summary, categories)}</span></div>}
+          {summary.salary > 0 && <div className="fin-daysum-money"><span>👷 Lương theo chấm công (đã trừ vào chi)</span></div>}
         </div>}
 
         <CloseForm detail={detail} accounts={accounts} onSaved={async () => { await load(); onChanged(); }} />
@@ -880,6 +955,8 @@ export default function FinancePage() {
   const [day, setDay] = useState(null);
   // Mục đang xem (Tổng quan / Từng ngày / Thêm chi) — nhớ trên máy cho lần sau.
   const [view, setView] = useState('overview');
+  // Thêm chi: 'daily' (chi trong ngày) | 'monthly' (chi cố định hàng tháng).
+  const [addMode, setAddMode] = useState('daily');
   // Bộ lọc mở sẵn khi bấm cảnh báo ở Tổng quan → Tra cứu.
   const [searchPreset, setSearchPreset] = useState({ key: 0, filters: {} });
   const pending = useRef(0);
@@ -938,7 +1015,7 @@ export default function FinancePage() {
   // Các khoản chi của tháng — dòng 0đ của tab tự tạo thì ẩn cho gọn.
   const costRows = t ? [
     { key: 'purchases', name: 'Nhập hàng (Sổ tay)', amount: t.purchases },
-    { key: 'drinks', name: 'Nước ngọt / bia', amount: t.drinks },
+    { key: 'drinks', name: 'Chi trong ngày', sub: 'nước ngọt, đá, gas… nhập ở Thêm chi', amount: t.drinks },
     { key: 'salary', name: 'Lương (theo chấm công)', amount: t.salary,
       sub: !data.wagesReady ? 'Chưa đọc được chấm công, thử tải lại' : t.salaryExtra ? `gồm thưởng − phạt cả tháng ${t.salaryExtra > 0 ? '+' : '-'}${money(Math.abs(t.salaryExtra))}` : '' },
     { key: 'fixed', name: 'Chi cố định (chia đều mỗi ngày)', amount: t.fixedShare, sub: data.fixedMonthTotal ? `cả tháng ${money(data.fixedMonthTotal)}, đã tính tới hôm nay` : '' },
@@ -1064,6 +1141,7 @@ export default function FinancePage() {
             <span><small>Chi</small>{money(dayCost(d))}</span>
             <span className={d.profit < 0 ? 'loss' : 'gain'}><small>{d.profit < 0 ? 'Lỗ' : 'Lãi'}</small>{money(Math.abs(d.profit))}</span>
           </div>
+          {dayCost(d) > 0 && <p className="fin-day-cost">Chi: {costLine(d, data?.categories || [])}</p>}
           <div className="fin-day-tags">{dayTags(d)}</div>
         </button>)}
       </div>
@@ -1074,11 +1152,11 @@ export default function FinancePage() {
     {view === 'search' && <SearchView key={searchPreset.key} accounts={accounts} preset={searchPreset.filters} />}
 
     {view === 'add' && <section className="fin-section">
-      <AddEntryForm data={data} month={month} onSaved={load} />
-      {data && !data.fixedEntries?.length && month > '2026-10' && <button className="fin-secondary" onClick={copyFixed} disabled={busy}>
+      <AddEntryForm data={data} month={month} mode={addMode} setMode={setAddMode} onSaved={load} />
+      {addMode === 'monthly' && data && !data.fixedEntries?.length && month > '2026-10' && <button className="fin-secondary" onClick={copyFixed} disabled={busy}>
         Chép chi cố định từ tháng trước
       </button>}
-      {data?.fixedEntries?.length > 0 && <details className="fin-fixed" open>
+      {addMode === 'monthly' && data?.fixedEntries?.length > 0 && <details className="fin-fixed" open>
         <summary>Chi cố định tháng {monthText}<b>{money(data.fixedMonthTotal)}</b></summary>
         {data.fixedEntries.map(entry => <div key={entry.id} className="fin-row static">
           <span>{entry.label}{entry.note && <small>{entry.note}</small>}</span>
@@ -1086,7 +1164,7 @@ export default function FinancePage() {
             <button className="fin-icon danger" onClick={() => removeFixed(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
         </div>)}
       </details>}
-      {data?.customMonthlyEntries?.length > 0 && <details className="fin-fixed" open>
+      {addMode === 'monthly' && data?.customMonthlyEntries?.length > 0 && <details className="fin-fixed" open>
         <summary>Khoản theo tháng {monthText}</summary>
         {data.customMonthlyEntries.map(entry => <div key={entry.id} className="fin-row static">
           <span>{entryTitle(entry, data.categories)}{entry.note && <small>{entry.note}</small>}</span>
@@ -1094,7 +1172,6 @@ export default function FinancePage() {
             <button className="fin-icon danger" onClick={() => removeFixed(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
         </div>)}
       </details>}
-      <p className="fin-hint fin-add-hint">Khoản chi theo ngày (nước ngọt, lương, tab theo ngày) xem và xoá trong mục <b>Từng ngày</b>.</p>
     </section>}
 
     {day && <DayDetail date={day} summary={data?.days?.find(d => d.date === day)} accounts={accounts} categories={data?.categories || []} onClose={() => setDay(null)} onChanged={load} />}
