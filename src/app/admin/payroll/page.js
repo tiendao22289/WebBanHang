@@ -6,7 +6,6 @@ import { workforce } from '@/lib/staffApi';
 import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, workDayOf } from '@/lib/attendanceRules.mjs';
 import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
-import { FACE_LEVEL_TEXT } from '@/lib/faceCheck.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
 import { unlockSpeech } from '@/lib/speak';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users } from 'lucide-react';
@@ -1926,60 +1925,6 @@ export default function PayrollPage() {
                       </div>
                     );
                   })}
-                </div>
-
-                {/* So khuôn mặt ở máy quầy (app iPhone "Chấm công") */}
-                <div style={card}>
-                  <div style={{ fontWeight: 800, marginBottom: 6 }}>🙂 So khuôn mặt ở máy quầy (app)</div>
-                  {!faces || faces.missing ? <div style={{ fontSize: '0.84rem', color: '#64748b' }}>{faces?.missing ? 'Máy chủ đang cập nhật phần so mặt, mở lại sau ít phút.' : 'Đang tải…'}</div> : (() => {
-                    const app = [...(faces.apps || [])].sort((a, b) => String(b.seen_at).localeCompare(String(a.seen_at)))[0];
-                    const appOn = app && serverNow - Date.parse(app.seen_at) < 5 * 60000;
-                    const count = st => (faces.checks || []).filter(c => c.status === st).length;
-                    const people = (faces.staff || []).filter(p => p.role !== 'admin' && !p.departed);
-                    return (
-                      <>
-                        <div style={{ fontSize: '0.8rem', color: '#64748b', lineHeight: 1.6, marginBottom: 8 }}>
-                          Quét mã xong nhân viên nhìn camera máy quầy và chớp mắt. Đúng mặt mới ghi giờ; sai thì lượt đó không tính; sai 3 lần liền thì vẫn ghi giờ nhưng chờ bạn duyệt ở mục Yêu cầu. Chỉ lưu dấu mặt (dãy số), không lưu ảnh.
-                        </div>
-                        <div style={{ fontSize: '0.84rem', marginBottom: 8 }}>
-                          {appOn ? `📱 App máy quầy đang chạy (bản ${app.version || '?'}).` : app ? `📱 App máy quầy chạy lần cuối ${when(app.seen_at)}.` : '📱 Chưa có máy quầy nào chạy app — chưa so mặt.'}
-                        </div>
-                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
-                          <button className={faces.settings.enabled ? 'btn-danger' : 'btn-success'}
-                            onClick={() => faceAction('save_face_settings', { enabled: !faces.settings.enabled }, faces.settings.enabled ? 'Tắt so mặt? Nhân viên quét mã là chấm luôn như trước.' : '')}>
-                            {faces.settings.enabled ? 'Tắt so mặt' : 'Bật so mặt'}
-                          </button>
-                          <span style={{ fontSize: '0.84rem', fontWeight: 700 }}>{faces.settings.enabled ? '✅ Đang bật' : '⏸ Đang tắt'}</span>
-                          <label style={{ fontSize: '0.84rem', display: 'flex', gap: 6, alignItems: 'center' }}>
-                            Độ khắt khe
-                            <select value={faces.settings.level} onChange={e => faceAction('save_face_settings', { level: e.target.value })} style={timeInput}>
-                              {Object.entries(FACE_LEVEL_TEXT).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
-                            </select>
-                          </label>
-                        </div>
-                        <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 6, lineHeight: 1.6 }}>
-                          Lấy mặt mẫu: trên máy quầy (app) <strong>chạm nhanh 5 lần vào đồng hồ</strong> → đăng nhập chủ quán → chọn tên → người đó nhìn camera, chớp mắt. Ai chưa có mặt mẫu thì quét mã chấm như cũ.
-                        </div>
-                        {people.map(p => (
-                          <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', fontSize: '0.85rem' }}>
-                            <div style={{ flex: 1, minWidth: 160 }}>
-                              <strong>{p.full_name}</strong>
-                              <div style={{ fontSize: '0.75rem', color: p.face ? '#15803d' : '#b45309' }}>
-                                {p.face ? `✅ Có mặt mẫu · lấy ${when(p.face.created_at)}${p.face.enrolled_by ? ` · ${p.face.enrolled_by}` : ''}` : 'Chưa có mặt mẫu'}
-                              </div>
-                            </div>
-                            {p.face && <button style={{ fontSize: '0.78rem', padding: '4px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}
-                              onClick={() => faceAction('face_delete', { staff_id: p.id }, `Xoá mặt mẫu của ${p.full_name}? Người này sẽ chấm như cũ (không so mặt) tới khi lấy mặt mẫu lại.`)}>Xoá mặt mẫu</button>}
-                          </div>
-                        ))}
-                        {(faces.checks || []).length > 0 && (
-                          <div style={{ fontSize: '0.8rem', color: '#475569', marginTop: 8 }}>
-                            14 ngày qua: ✅ {count('ok')} đúng mặt · ❌ {count('wrong')} sai mặt · ⏳ {count('review')} chờ duyệt · ⚠ {count('expired')} chưa so được
-                          </div>
-                        )}
-                      </>
-                    );
-                  })()}
                 </div>
 
                 {/* Điện thoại đã đăng ký */}
