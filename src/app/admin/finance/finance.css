@@ -368,3 +368,10 @@
 .fin-daylist { margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 8px; }
 .fin-day-cost { margin: 6px 0 0; font-size: 12px; color: #4b5563; line-height: 1.4; }
 .fin-switch .fin-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; margin-left: 5px; padding: 0 5px; border-radius: 999px; background: #dc2626; color: white; font-size: 11px; font-weight: 800; }
+
+/* Kết quả máy tự kiểm tra */
+.fin-check .fin-panel-head b.bad { color: #b91c1c; }
+.fin-check .fin-panel-head b.ok { color: #15803d; }
+.fin-check .fin-fold-body .fin-secondary { margin-bottom: 6px; }
+.fin-check .fin-fold-head { grid-template-columns: minmax(0, 1fr) auto auto; }
+.fin-check .fin-fold-head b { font-size: 14px; line-height: 1.35; }

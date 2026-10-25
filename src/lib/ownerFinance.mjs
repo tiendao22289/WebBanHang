@@ -3,6 +3,7 @@
 
 // Sổ bắt đầu tính từ ngày này; dữ liệu trước đó không đưa vào.
 import { lineWarnings, noteTotals, parsePrice as linePrice, parseQty } from './notesMath.mjs';
+import { dayCheckLines } from './dayCheck.mjs';
 
 export const FINANCE_START_DATE = '2026-10-23';
 
@@ -118,10 +119,11 @@ function datesBetween(from, toInclusive) {
  * categories: finance_categories (để biết tab tự tạo nhập theo ngày hay theo tháng);
  * paperBills: finance_manual_receipts (bill giấy nhập tay, cộng vào doanh thu).
  * wages: payrollCost() — lương mỗi ngày theo chấm công (byDay) + thưởng − phạt cả tháng (monthExtra).
+ * checks: finance_day_checks (máy tự kiểm tra) → day.check { ok, problems, checkedAt, by }.
  *   Khoản lương nhập tay cũ (finance_entries kind 'salary') không tính nữa.
  * Chỉ tính các ngày từ FINANCE_START_DATE đến hết hôm nay (giờ VN).
  */
-export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [], entries = [], closes = [], categories = [], wages = null, today, startDate = FINANCE_START_DATE }) {
+export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [], entries = [], closes = [], checks = [], categories = [], wages = null, today, startDate = FINANCE_START_DATE }) {
   const { start, next, daysInMonth } = monthBounds(month);
   const lastOfMonth = new Date(Date.parse(`${next}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
   const from = start > startDate ? start : startDate;
@@ -144,7 +146,7 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
   const days = dates.map(date => ({
     date, revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {},
     purchases: 0, purchaseNotes: 0, suspiciousNotes: 0, mismatchNotes: 0, drinks: 0, salary: Number(wages?.byDay?.[date]) || 0, fixedShare: fixedPerDay,
-    custom: { ...customDailyShare }, customTotal: 0, profit: 0, close: null,
+    custom: { ...customDailyShare }, customTotal: 0, profit: 0, close: null, check: null,
   }));
   const byDate = new Map(days.map(d => [d.date, d]));
 
@@ -184,6 +186,10 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
 
   const closeByDate = new Map(closes.map(c => [c.business_date, c]));
   for (const day of days) day.close = closeDifferences(day, closeByDate.get(day.date));
+  for (const c of checks) {
+    const day = byDate.get(c.business_date);
+    if (day) day.check = { ok: !c.problems, problems: Number(c.problems) || 0, checkedAt: c.checked_at, by: c.checked_by || null };
+  }
 
   const totals = { revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {}, purchases: 0, drinks: 0, salary: 0, fixedShare: 0,
     custom: {}, customTotal: 0, profit: 0 };
@@ -222,7 +228,7 @@ const signed = n => `${n < 0 ? '-' : '+'}${vnd(Math.abs(n))}`;
  * summarizeMonth().days, `monthTotals` là totals của tháng (tới ngày đó),
  * `alerts` = { missingPhoto, unchecked } của bill chuyển khoản trong tháng.
  */
-export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, title = 'Báo cáo', forZalo = true }) {
+export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, check = null, today = null, title = 'Báo cáo', forZalo = true }) {
   const [y, m, d] = day.date.split('-');
   const weekday = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][new Date(`${day.date}T00:00:00Z`).getUTCDay()];
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
@@ -237,21 +243,23 @@ export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, 
   lines.push(`${day.profit < 0 ? 'Lỗ' : 'Lãi'} ngày: ${signed(day.profit)}`);
   if (monthTotals) lines.push(`Tháng ${m} tới nay: thu ${vnd(monthTotals.revenue)} · ${monthTotals.profit < 0 ? 'lỗ' : 'lãi'} ${vnd(Math.abs(monthTotals.profit))}`);
 
-  const warnings = dailyWarnings({ day, accounts, alerts });
+  const warnings = dailyWarnings({ day, accounts, alerts, today });
   lines.push('');
   if (warnings.length) lines.push(...warnings.map(w => `⚠ ${w}`));
   else lines.push('✓ Không có gì bất thường');
+  // Kết quả máy tự kiểm tra ngày đó (bill thiếu, CK chưa ảnh, đóng bàn không ảnh, huỷ / bớt món, Sổ tay lệch).
+  if (check) lines.push('', ...dayCheckLines(check));
   // Zalo chỉ cho OA nhắn lại người vừa nhắn mình → nhắc chủ quán trả lời. Trang /thongke thì không cần.
   if (forZalo) lines.push('', 'Nhắn "ok" để Zalo cho phép gửi tiếp báo cáo các ngày sau.');
   return lines.join('\n');
 }
 
 /** Cảnh báo của một ngày (chưa chốt sổ, lệch két, bill CK thiếu ảnh...) — dùng cho Zalo và /thongke. */
-export function dailyWarnings({ day, accounts = [], alerts = {} }) {
+export function dailyWarnings({ day, accounts = [], alerts = {}, today = null }) {
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
   const warnings = [];
-  if (!day.close) warnings.push('Chưa chốt sổ ngày này');
-  else {
+  if (!day.close && !day.check && !(today && day.date >= today)) warnings.push('Máy chưa kiểm tra ngày này');
+  if (day.close) {
     if (day.close.cashDiff) warnings.push(`Tiền mặt ${day.close.cashDiff < 0 ? 'thiếu' : 'dư'} ${vnd(Math.abs(day.close.cashDiff))}`);
     for (const [id, diff] of Object.entries(day.close.bankDiffs || {})) {
       if (diff) warnings.push(`${accountName(id)} ${diff < 0 ? 'thiếu' : 'dư'} ${vnd(Math.abs(diff))}`);
@@ -259,6 +267,8 @@ export function dailyWarnings({ day, accounts = [], alerts = {} }) {
   }
   if (alerts.missingPhoto) warnings.push(`${alerts.missingPhoto} bill CK chưa có ảnh (tháng này)`);
   if (alerts.unchecked) warnings.push(`${alerts.unchecked} bill CK chưa đối chiếu (tháng này)`);
+  // Phiếu Sổ tay lệch: máy tự kiểm tra đã liệt kê (dayCheckLines) thì không nhắc lại lần nữa.
+  if (day.check) return warnings;
   if (day.mismatchNotes) warnings.push(`${day.mismatchNotes} phiếu Sổ tay lệch tiền (tổng phiếu khác các dòng hàng)`);
   if (day.suspiciousNotes) warnings.push(`${day.suspiciousNotes} phiếu Sổ tay giá / số lượng đáng ngờ`);
   return warnings;

@@ -63,3 +63,18 @@ test('long days are split into several Zalo messages under the limit; empty days
   assert.match(msgs[0], /Tiền hàng: 54\.000\.000đ/);
   assert.match(all(notesReportMessages({ date: '2026-10-23', dayNotes: [], allNotes: [], payments: [], range })), /Không có phiếu Sổ tay nào ghi trong ngày/);
 });
+
+test('Sổ tay of a day and of a week come as data for the stats page', async () => {
+  const { notesDayData, notesRangeData } = await import('../src/lib/notesReport.mjs');
+  const day = note('n1', '2026-10-23T01:15:00Z', [
+    { name: 'Ốc hương', qty: '2 ký', price: '220k', paymentStatus: 'full' },
+    { name: 'Sò điệp', qty: '3 ký', price: '90k', paymentStatus: 'debt', creditor: 'Chị Lan', paid_amount: 100000 },
+  ], { given: 1000000, amount: 440000, debt: 270000 });
+  const d = notesDayData({ date: '2026-10-23', dayNotes: [day], allNotes: [day], payments: [], range });
+  assert.deepEqual([d.summary.count, d.summary.goods, d.summary.newDebt], [1, 710000, 270000]);
+  assert.deepEqual([d.notes[0].who, d.notes[0].given, d.notes[0].left], ['Thy', 1000000, 560000], 'given 1.000.000 − paid 440.000 = 560.000 back');
+  assert.deepEqual(d.notes[0].items.map(i => [i.name, i.total, i.owed, i.left, i.creditor]), [['Ốc hương', 440000, 0, 0, ''], ['Sò điệp', 270000, 270000, 170000, 'Chị Lan']]);
+  assert.deepEqual(d.owed.map(o => [o.who, o.total]), [['Chị Lan', 170000]]);
+  const w = notesRangeData({ allNotes: [day], payments: [], range });
+  assert.deepEqual([w.summary.count, w.byStaff[0].who, w.top[0].name], [1, 'Thy', 'Ốc hương']);
+});

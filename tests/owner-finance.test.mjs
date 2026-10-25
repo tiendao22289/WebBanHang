@@ -204,7 +204,13 @@ test('the daily Zalo report lists money per card, costs, profit and anything tha
   assert.doesNotMatch(text, /VCB (thiếu|dư)|chưa đối chiếu|Chưa chốt/);
   const quiet = finance.dailyReportText({ day: { ...day, suspiciousNotes: 0, close: { cashDiff: 0, bankDiffs: {} } } });
   assert.match(quiet, /✓ Không có gì bất thường/);
-  assert.match(finance.dailyReportText({ day: { ...day, close: null } }), /Chưa chốt sổ/);
+  assert.match(finance.dailyReportText({ day: { ...day, close: null } }), /Máy chưa kiểm tra ngày này/);
+  assert.doesNotMatch(finance.dailyReportText({ day: { ...day, close: null }, today: '2026-10-24' }), /chưa kiểm tra/i, 'today is still open');
+  // Máy đã tự kiểm tra: không nhắc chốt sổ, kèm kết quả kiểm tra (phiếu Sổ tay chỉ báo một lần, trong kết quả).
+  const checked = finance.dailyReportText({ day: { ...day, close: null, check: { ok: false, problems: 1 } },
+    check: { ok: false, problems: 1, issues: [{ key: 'ck_no_photo', title: 'Bill chuyển khoản chưa có ảnh', count: 2, amount: 300000 }] } });
+  assert.doesNotMatch(checked, /chưa kiểm tra|chốt sổ|⚠ 1 phiếu Sổ tay/i);
+  assert.match(checked, /🤖 Máy tự kiểm tra: 1 việc cần xem\n• Bill chuyển khoản chưa có ảnh: 2 \(300\.000đ\)/);
 });
 
 test('a day of spending splits into: during the day, shopping, wages, fixed (shared out per day)', () => {

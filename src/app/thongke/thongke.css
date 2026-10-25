@@ -19,7 +19,7 @@
 }
 .tk-page *, .tk-page *::before, .tk-page *::after { box-sizing: border-box; }
 .tk-page button { font: inherit; color: inherit; }
-.tk-page h1, .tk-page h2 { font-family: inherit; letter-spacing: 0; color: inherit; }
+.tk-page h1, .tk-page h2, .tk-page h3 { font-family: inherit; letter-spacing: 0; color: inherit; }
 .tk-shell { max-width: 560px; margin: 0 auto; padding: 14px 16px 0; }
 .tk-content { display: flex; flex-direction: column; gap: 12px; transition: opacity 0.2s; }
 .tk-content.dim { opacity: 0.5; pointer-events: none; }
@@ -178,3 +178,86 @@
 .tk-tag.ok { background: var(--tk-ok-bg); color: var(--tk-pos); }
 .tk-link { display: block; margin-top: 12px; font-size: 14px; font-weight: 700; color: var(--tk-c2); text-decoration: none; }
 .tk-staff-kpis small { display: block; font-size: 12px; color: var(--tk-muted); margin-top: 2px; }
+
+/* Ngày / Tuần / Tháng */
+.tk-periods { max-width: 560px; margin: 0 auto; padding: 0 16px 8px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.tk-periods button { height: 38px; border: 0; border-radius: 10px; background: var(--tk-soft); color: var(--tk-muted); font-size: 14px; font-weight: 700; cursor: pointer; }
+.tk-periods button.on { background: var(--tk-text); color: var(--tk-surface); }
+.tk-week.thin { gap: 2px; }
+.tk-week.thin .tk-week-track { height: 72px; }
+.tk-week.thin .tk-week-label { font-size: 10px; height: 14px; }
+.tk-kpi .tk-delta { margin-top: 6px; background: var(--tk-soft); color: var(--tk-muted); }
+.tk-kpi .tk-delta.up { background: color-mix(in srgb, var(--tk-neg) 12%, transparent); color: var(--tk-neg); }
+.tk-kpi .tk-delta.down { background: color-mix(in srgb, var(--tk-pos) 12%, transparent); color: var(--tk-pos); }
+
+/* Ô số trong thẻ */
+.tk-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.tk-tiles.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.tk-tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 10px 12px; border-radius: 12px; background: var(--tk-soft); border: 1px solid transparent; text-align: left; }
+button.tk-tile { cursor: pointer; }
+.tk-tile-label { font-size: 12px; color: var(--tk-muted); line-height: 1.3; }
+.tk-tile b { font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tk-tile small { font-size: 12px; color: var(--tk-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.tk-tile.bad b { color: var(--tk-neg); }
+.tk-tile.warn b { color: var(--tk-warn); }
+.tk-tile.good b { color: var(--tk-pos); }
+.tk-tile.zero b { color: var(--tk-muted); font-weight: 600; }
+.tk-tile.on { border-color: var(--tk-text); background: var(--tk-surface); }
+.tk-card.warn .tk-tile { background: var(--tk-surface); }
+
+/* Bảng dòng trong thẻ */
+.tk-table { list-style: none; margin: 0; padding: 0; }
+.tk-table > li { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-top: 1px solid var(--tk-line); }
+.tk-table > li:first-child { border-top: 0; }
+.tk-cell-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tk-cell-main b { font-size: 14px; }
+.tk-cell-main small, .tk-cell-end small { font-size: 12px; color: var(--tk-muted); line-height: 1.4; }
+.tk-cell-end { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; text-align: right; flex-shrink: 0; }
+.tk-cell-end b { font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tk-person { align-items: center; }
+.tk-avatar { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; background: color-mix(in srgb, var(--tk-c2) 16%, transparent); color: var(--tk-c2); font-weight: 800; font-size: 14px; }
+.tk-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.tk-pill { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; background: var(--tk-soft); color: var(--tk-muted); white-space: nowrap; }
+.tk-pill.bad { background: color-mix(in srgb, var(--tk-neg) 13%, transparent); color: var(--tk-neg); }
+.tk-pill.warn { background: color-mix(in srgb, var(--tk-warn) 15%, transparent); color: var(--tk-warn); }
+.tk-pill.good { background: var(--tk-ok-bg); color: var(--tk-pos); }
+.tk-sub { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--tk-line); }
+.tk-sub h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 13px; font-weight: 700; color: var(--tk-muted); text-transform: uppercase; letter-spacing: 0.02em; }
+.tk-sub.bad h3 { color: var(--tk-neg); }
+.tk-sub-head { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; cursor: pointer; }
+.tk-sub-head h3 { flex: 1; margin: 0; text-align: left; }
+.tk-sub-head b { font-variant-numeric: tabular-nums; color: var(--tk-neg); }
+.tk-chev { color: var(--tk-muted); transition: transform 0.2s; flex-shrink: 0; }
+.tk-chev.on { transform: rotate(180deg); }
+.tk-good { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--tk-pos); font-weight: 700; font-size: 14px; }
+.tk-good-text { color: var(--tk-pos); }
+.tk-bad-text { color: var(--tk-neg); }
+.tk-warn-text { color: var(--tk-warn); font-weight: 700; font-style: normal; }
+.tk-muted { color: var(--tk-muted); font-weight: 500; }
+
+/* Phiếu Sổ tay */
+.tk-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.tk-notes > li { border: 1px solid var(--tk-line); border-radius: 14px; overflow: hidden; }
+.tk-notes > li.bad { border-color: color-mix(in srgb, var(--tk-neg) 45%, var(--tk-line)); }
+.tk-note-head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 0; background: none; text-align: left; cursor: pointer; }
+.tk-note-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.tk-items { list-style: none; margin: 0; padding: 0; }
+.tk-items li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px dashed var(--tk-line); font-size: 13.5px; }
+.tk-items li:first-child { border-top: 0; }
+.tk-items li > span:first-child { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.tk-items small { color: var(--tk-muted); font-size: 12px; }
+.tk-items em { font-size: 12px; }
+.tk-item-end { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
+.tk-item-end b { font-variant-numeric: tabular-nums; }
+.tk-note-foot { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; padding-top: 8px; border-top: 1px solid var(--tk-line); font-size: 13px; color: var(--tk-muted); }
+.tk-note-foot b { font-size: 13.5px; }
+.tk-note-text { margin: 0; font-size: 13px; color: var(--tk-muted); line-height: 1.45; }
+.tk-warn-box { margin: 0; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--tk-neg) 10%, transparent); color: var(--tk-neg); font-size: 13px; font-weight: 600; line-height: 1.45; }
+.tk-edits { list-style: none; margin: 0; padding: 0; font-size: 12px; color: var(--tk-muted); display: flex; flex-direction: column; gap: 2px; }
+.tk-table > li.tk-more { justify-content: center; }
+.tk-more button { border: 0; background: var(--tk-soft); border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 700; color: var(--tk-c2); cursor: pointer; }
+
+/* Không có gì bất thường + giờ máy tự kiểm tra */
+.tk-ok > span { display: flex; flex-direction: column; gap: 2px; }
+.tk-ok-sub { font-size: 12px; font-weight: 500; color: var(--tk-muted); }
+.tk-muted-text { color: var(--tk-muted); }
