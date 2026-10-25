@@ -12,9 +12,15 @@ public struct LandmarkedFace {
 public enum FaceLandmarker {
     /// The largest face in an upright picture, with the five alignment points.
     public static func largestFace(in image: CGImage) throws -> LandmarkedFace? {
-        let request = VNDetectFaceLandmarksRequest()
-        let handler = VNImageRequestHandler(cgImage: image, orientation: .up, options: [:])
-        try handler.perform([request])
+        var request = VNDetectFaceLandmarksRequest()
+        do {
+            try VNImageRequestHandler(cgImage: image, orientation: .up, options: [:]).perform([request])
+        } catch {
+            // No usable GPU / Neural Engine (e.g. a virtual Mac): run Vision on the CPU instead.
+            request = VNDetectFaceLandmarksRequest()
+            useCPU(request)
+            try VNImageRequestHandler(cgImage: image, orientation: .up, options: [:]).perform([request])
+        }
         let size = CGSize(width: image.width, height: image.height)
         let faces = (request.results ?? []).sorted { $0.boundingBox.width * $0.boundingBox.height > $1.boundingBox.width * $1.boundingBox.height }
         for face in faces {
@@ -25,6 +31,19 @@ public enum FaceLandmarker {
             }
         }
         return nil
+    }
+
+    static func useCPU(_ request: VNRequest) {
+        if #available(iOS 17.0, macOS 14.0, *) {
+            guard let stages = try? request.supportedComputeStageDevices() else { return }
+            for (stage, devices) in stages {
+                if let cpu = devices.first(where: { if case .cpu(_) = $0 { return true } else { return false } }) {
+                    request.setComputeDevice(cpu, for: stage)
+                }
+            }
+        } else {
+            request.usesCPUOnly = true
+        }
     }
 
     static func fivePoints(_ face: VNFaceObservation, imageSize size: CGSize) -> [CGPoint]? {

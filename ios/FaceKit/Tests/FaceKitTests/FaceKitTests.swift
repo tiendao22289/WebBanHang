@@ -140,6 +140,7 @@ final class FaceKitTests: XCTestCase {
     /// Other ways to pick the nose tip from Vision's landmarks, printed for comparison with YuNet's.
     func noseCandidates(_ img: CGImage) -> [(String, CGPoint)] {
         let request = VNDetectFaceLandmarksRequest()
+        FaceLandmarker.useCPU(request)
         try? VNImageRequestHandler(cgImage: img, orientation: .up).perform([request])
         guard let face = request.results?.max(by: { $0.boundingBox.width < $1.boundingBox.width }), let lm = face.landmarks else { return [] }
         let size = CGSize(width: img.width, height: img.height)
