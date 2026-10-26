@@ -678,3 +678,42 @@
   .mobile-tap-hint       { display: block; }
   .mobile-table-hint     { display: none; } /* hide old hint, replaced by universal one */
 }
+
+/* ── Phiếu đi chợ: tab Hàng ốc / Khác ── */
+.kind-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 0 0 8px; padding: 4px; background: #f3f4f6; border-radius: 12px; }
+.kind-tabs button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-height: 48px; padding: 6px 10px; border: 0; border-radius: 9px; background: transparent; color: #4b5563; text-align: left; cursor: pointer; }
+.kind-tabs button b { font-size: 0.92rem; }
+.kind-tabs button small { font-size: 0.72rem; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.kind-tabs button.on { background: #fff; color: #b91c1c; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.kind-select { width: 100%; margin: 0 0 6px; padding: 7px 8px; border: 1.5px solid #c7d2fe; border-radius: 8px; background: #eef2ff; color: #3730a3; font-size: 0.88rem; font-weight: 600; }
+.kind-tag { display: inline-block; margin-left: 4px; padding: 1px 7px; border-radius: 999px; background: #eef2ff; color: #4338ca; font-size: 0.7rem; font-weight: 600; white-space: nowrap; vertical-align: middle; }
+.kind-hint { margin: 0 0 8px; font-size: 0.78rem; color: #4b5563; line-height: 1.45; }
+
+/* ── Chủ quán: tab Phiếu / Chi khác ── */
+.notes-admin-tabs { margin: 10px 16px 0; }
+.oc-wrap { display: flex; flex-direction: column; gap: 12px; padding: 12px 16px 96px; }
+.oc-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 12px 14px; }
+.oc-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.oc-head b { font-size: 0.95rem; color: #111827; }
+.oc-head span { font-weight: 800; color: #4338ca; white-space: nowrap; }
+.oc-sub { margin: 4px 0 8px; font-size: 0.78rem; color: #6b7280; line-height: 1.45; }
+.oc-empty { margin: 8px 0 0; font-size: 0.85rem; color: #6b7280; }
+.oc-group { border-top: 1px solid #f3f4f6; }
+.oc-row { display: grid; grid-template-columns: minmax(0, 1fr) 64px auto; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 6px 0; border: 0; background: none; text-align: left; cursor: pointer; color: #111827; }
+.oc-row span:first-child { display: flex; flex-direction: column; min-width: 0; }
+.oc-row span:first-child b { overflow-wrap: anywhere; }
+.oc-row small { font-size: 0.72rem; color: #6b7280; }
+.oc-bar { height: 6px; border-radius: 99px; background: #eef2ff; overflow: hidden; }
+.oc-bar i { display: block; height: 100%; background: #6366f1; border-radius: 99px; }
+.oc-lines { list-style: none; margin: 0 0 8px; padding: 0 0 0 10px; border-left: 2px solid #e0e7ff; }
+.oc-lines li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; font-size: 0.84rem; border-bottom: 1px dashed #f3f4f6; }
+.oc-lines li span { min-width: 0; overflow-wrap: anywhere; }
+.oc-lines small { display: block; font-size: 0.72rem; color: #6b7280; }
+.oc-lines b { white-space: nowrap; }
+.oc-edit { display: flex; gap: 8px; margin-top: 8px; }
+.oc-edit input { flex: 1; min-width: 0; min-height: 42px; padding: 8px 10px; border: 1.5px solid #d1d5db; border-radius: 9px; font-size: 0.92rem; }
+.oc-edit button { flex-shrink: 0; min-width: 64px; min-height: 42px; border-radius: 9px; font-weight: 700; font-size: 0.88rem; cursor: pointer; }
+.oc-del { border: 1px solid #fecaca; background: #fef2f2; color: #b91c1c; }
+.oc-add { border: 1px solid #c7d2fe; background: #eef2ff; color: #3730a3; }
+.oc-add:disabled { opacity: 0.5; }
+.oc-save { width: 100%; min-height: 44px; margin-top: 4px; border: 0; border-radius: 10px; background: #4f46e5; color: #fff; font-weight: 700; font-size: 0.95rem; cursor: pointer; }

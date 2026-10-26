@@ -30,7 +30,7 @@ export function fakeDb(state) {
     return { data: structuredClone(created), error: null };
   },
   from(table) {
-    let op = 'read', values, single = false, maybe = false, max = Infinity, skip = 0;
+    let op = 'read', values, single = false, maybe = false, max = Infinity, skip = 0, conflict = 'id';
     const conditions = [], orders = [];
     const q = {
       select() { return q; },
@@ -50,6 +50,7 @@ export function fakeDb(state) {
       single() { single = true; return q; },
       insert(v) { op = 'insert'; values = v; return q; },
       update(v) { op = 'update'; values = v; return q; },
+      upsert(v, o) { op = 'upsert'; values = v; conflict = o?.onConflict || 'id'; return q; },
       delete() { op = 'delete'; return q; },
       then(ok, bad) { return new Promise(run).then(ok, bad); },
     };
@@ -78,6 +79,17 @@ export function fakeDb(state) {
           return row;
         });
         return resolve({ data: structuredClone(single ? added[0] : added), error: null });
+      }
+      if (op === 'upsert') {
+        const keys = conflict.split(',').map(k => k.trim());
+        const list = (Array.isArray(values) ? values : [values]).map(v => {
+          const row = state[table].find(r => keys.every(k => r[k] === v[k]));
+          if (row) return Object.assign(row, v);
+          const added = { id: v.id || `00000000-0000-4000-8000-${String(++state.__seq).padStart(12, '0')}`, ...v };
+          state[table].push(added);
+          return added;
+        });
+        return resolve({ data: structuredClone(single ? list[0] : list), error: null });
       }
       if (op === 'update') {
         rows.forEach(r => Object.assign(r, values));

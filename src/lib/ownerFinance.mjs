@@ -4,6 +4,7 @@
 // Sổ bắt đầu tính từ ngày này; dữ liệu trước đó không đưa vào.
 import { lineWarnings, noteTotals, parsePrice as linePrice, parseQty } from './notesMath.mjs';
 import { dayCheckLines } from './dayCheck.mjs';
+import { addCosts, categoryName, lineCategory, noteOtherCosts, OTHER_ID, otherCostRows } from './noteCategories.mjs';
 
 export const FINANCE_START_DATE = '2026-10-23';
 
@@ -120,6 +121,8 @@ function datesBetween(from, toInclusive) {
  * paperBills: finance_manual_receipts (bill giấy nhập tay, cộng vào doanh thu).
  * wages: payrollCost() — lương mỗi ngày theo chấm công (byDay) + thưởng − phạt cả tháng (monthExtra).
  * checks: finance_day_checks (máy tự kiểm tra) → day.check { ok, problems, checkedAt, by }.
+ * Dòng tab "Khác" của phiếu Sổ tay (xăng xe, sửa chữa…) vẫn nằm trong purchases, tách riêng ở
+ *   day.notesOther = { [id loại]: tiền } (shoppingParts() chia ra để hiện).
  *   Khoản lương nhập tay cũ (finance_entries kind 'salary') không tính nữa.
  * Chỉ tính các ngày từ FINANCE_START_DATE đến hết hôm nay (giờ VN).
  */
@@ -145,7 +148,7 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
 
   const days = dates.map(date => ({
     date, revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {},
-    purchases: 0, purchaseNotes: 0, suspiciousNotes: 0, mismatchNotes: 0, drinks: 0, salary: Number(wages?.byDay?.[date]) || 0, fixedShare: fixedPerDay,
+    purchases: 0, purchaseNotes: 0, notesOther: {}, suspiciousNotes: 0, mismatchNotes: 0, drinks: 0, salary: Number(wages?.byDay?.[date]) || 0, fixedShare: fixedPerDay,
     custom: { ...customDailyShare }, customTotal: 0, profit: 0, close: null, check: null,
   }));
   const byDate = new Map(days.map(d => [d.date, d]));
@@ -172,6 +175,7 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     if (!day || cost <= 0) continue;
     day.purchases += cost;
     day.purchaseNotes += 1;
+    addCosts(day.notesOther, noteOtherCosts(noteItems(note), cost, noteLineCost));
     if (suspiciousNoteItems(noteItems(note)).length || noteLineWarnings(note).length) day.suspiciousNotes += 1;
     if (noteMismatch(note)) day.mismatchNotes += 1;
   }
@@ -191,7 +195,7 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     if (day) day.check = { ok: !c.problems, problems: Number(c.problems) || 0, checkedAt: c.checked_at, by: c.checked_by || null };
   }
 
-  const totals = { revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {}, purchases: 0, drinks: 0, salary: 0, fixedShare: 0,
+  const totals = { revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {}, purchases: 0, notesOther: {}, drinks: 0, salary: 0, fixedShare: 0,
     custom: {}, customTotal: 0, profit: 0 };
   for (const day of days) {
     day.customTotal = Object.values(day.custom).reduce((sum, v) => sum + v, 0);
@@ -199,6 +203,7 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     for (const key of ['revenue', 'bills', 'paperBills', 'paperRevenue', 'cash', 'transfer', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit', 'suspiciousNotes', 'mismatchNotes']) totals[key] = (totals[key] || 0) + day[key];
     for (const [acc, amount] of Object.entries(day.byAccount)) totals.byAccount[acc] = (totals.byAccount[acc] || 0) + amount;
     for (const [id, amount] of Object.entries(day.custom)) totals.custom[id] = (totals.custom[id] || 0) + amount;
+    addCosts(totals.notesOther, day.notesOther);
   }
   // Thưởng − phạt lương tính theo tháng (trang Lương), không chia vào ngày nào.
   totals.salaryExtra = Number(wages?.monthExtra) || 0;
@@ -220,6 +225,16 @@ export function costParts(day, categories = []) {
   return { daily: (Number(day.drinks) || 0) + dailyTabs, purchases: Number(day.purchases) || 0, salary: Number(day.salary) || 0, fixed: (Number(day.fixedShare) || 0) + monthlyTabs };
 }
 
+/**
+ * Tiền Sổ tay của một ngày (hoặc cả kỳ) tách loại: đi chợ hàng ốc, rồi từng loại Khác chủ quán tạo
+ * (xăng xe, sửa chữa…). [{ id ('' = đi chợ), name, amount }]; tổng luôn bằng day.purchases.
+ */
+export function shoppingParts(day, noteCategories = []) {
+  const other = otherCostRows(day?.notesOther, noteCategories);
+  const otherSum = other.reduce((s, r) => s + r.amount, 0);
+  return [{ id: '', name: 'Đi chợ', amount: Math.max(0, (Number(day?.purchases) || 0) - otherSum) }, ...other];
+}
+
 const vnd = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;
 const signed = n => `${n < 0 ? '-' : '+'}${vnd(Math.abs(n))}`;
 
@@ -228,7 +243,7 @@ const signed = n => `${n < 0 ? '-' : '+'}${vnd(Math.abs(n))}`;
  * summarizeMonth().days, `monthTotals` là totals của tháng (tới ngày đó),
  * `alerts` = { missingPhoto, unchecked } của bill chuyển khoản trong tháng.
  */
-export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, check = null, today = null, title = 'Báo cáo', forZalo = true }) {
+export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, check = null, today = null, noteCategories = [], title = 'Báo cáo', forZalo = true }) {
   const [y, m, d] = day.date.split('-');
   const weekday = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][new Date(`${day.date}T00:00:00Z`).getUTCDay()];
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
@@ -237,7 +252,7 @@ export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, 
   lines.push(`Doanh thu: ${vnd(day.revenue)} (${day.bills} bill${day.paperBills ? ` + ${day.paperBills} bill giấy` : ''})`);
   lines.push(`• Tiền mặt: ${vnd(day.cash)}`);
   for (const [id, amount] of Object.entries(day.byAccount || {})) lines.push(`• CK ${accountName(id)}: ${vnd(amount)}`);
-  const parts = [['đi chợ', day.purchases], ['trong ngày', day.drinks], ['lương', day.salary], ['cố định', day.fixedShare], ['khác', day.customTotal]]
+  const parts = [...shoppingParts(day, noteCategories).map(p => [p.id ? p.name.toLowerCase() : 'đi chợ', p.amount]), ['trong ngày', day.drinks], ['lương', day.salary], ['cố định', day.fixedShare], ['khác', day.customTotal]]
     .filter(([, v]) => v > 0).map(([k, v]) => `${k} ${vnd(v)}`);
   lines.push(`Chi: ${vnd(cost)}${parts.length ? ` (${parts.join(', ')})` : ''}`);
   lines.push(`${day.profit < 0 ? 'Lỗ' : 'Lãi'} ngày: ${signed(day.profit)}`);
@@ -308,7 +323,7 @@ const groupWords = g => (g.keywords?.length ? g.keywords : [g.name]).map(itemKey
  * Sổ tay + nước ngọt nhập tay), rồi gom theo nhóm chủ quán đặt: món / hàng
  * nào có chứa từ khoá của nhóm thì vào nhóm đó (nhóm đứng trước được ưu tiên).
  */
-export function summarizeItems({ bills = [], notes = [], drinks = [], paperRevenue = 0, groups = [] }) {
+export function summarizeItems({ bills = [], notes = [], drinks = [], paperRevenue = 0, groups = [], noteCategories = [] }) {
   const sold = new Map();
   for (const bill of bills) {
     for (const item of bill.items || []) {
@@ -334,6 +349,18 @@ export function summarizeItems({ bills = [], notes = [], drinks = [], paperReven
     if (n) { row.qtyTotal += n; row.units.add(String(qty).replace(/[0-9.,\s]/g, '').toLowerCase()); }
     bought.set(key, row);
   };
+  // Dòng tab "Khác" (xăng xe, sửa chữa…): theo loại, không so với món bán.
+  const known = new Set(noteCategories.map(c => c.id));
+  const other = new Map();
+  const addOther = (id, name, cost) => {
+    const key = known.has(id) ? id : OTHER_ID;
+    const g = other.get(key) || { id: key, name: categoryName(key, noteCategories), amount: 0, items: new Map() };
+    g.amount += cost;
+    const row = g.items.get(itemKey(name)) || { name: String(name).trim(), times: 0, cost: 0 };
+    row.times += 1; row.cost += cost;
+    g.items.set(itemKey(name), row);
+    other.set(key, g);
+  };
   // unitemized: phiếu không ghi dòng hàng; mismatch: tổng phiếu đã lưu − tổng các dòng (phiếu lệch tiền).
   let notesTotal = 0, itemizedTotal = 0, unitemized = 0, mismatch = 0, mismatchNotes = 0;
   for (const note of notes) {
@@ -345,6 +372,7 @@ export function summarizeItems({ bills = [], notes = [], drinks = [], paperReven
       const cost = noteLineCost(item);
       if (!item.name || !cost) continue;
       lines += cost;
+      if (lineCategory(item)) { addOther(lineCategory(item), item.name, cost); continue; }
       addBought(item.name, cost, item.qty);
     }
     itemizedTotal += lines;
@@ -376,10 +404,12 @@ export function summarizeItems({ bills = [], notes = [], drinks = [], paperReven
     .slice(0, 8).map(r => r.name);
 
   const revenue = soldRows.reduce((s, r) => s + r.revenue, 0);
+  const otherRows = [...other.values()].sort((a, b) => b.amount - a.amount)
+    .map(g => ({ id: g.id, name: g.name, amount: g.amount, items: [...g.items.values()].sort((a, b) => b.cost - a.cost) }));
   return {
-    sold: soldRows, bought: boughtRows, groups: groupRows, suggestions,
+    sold: soldRows, bought: boughtRows, groups: groupRows, suggestions, other: otherRows,
     totals: {
-      revenue, paperRevenue, cost: notesTotal + drinksTotal,
+      revenue, paperRevenue, cost: notesTotal + drinksTotal, otherCost: otherRows.reduce((s, g) => s + g.amount, 0),
       notesTotal, drinksTotal, unitemized, mismatch, mismatchNotes,
       ungroupedRevenue: soldRows.filter(r => !r.group).reduce((s, r) => s + r.revenue, 0),
       ungroupedCost: boughtRows.filter(r => !r.group).reduce((s, r) => s + r.cost, 0) + unitemized + mismatch,
