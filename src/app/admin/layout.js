@@ -16,7 +16,6 @@ import {
   X,
   QrCode,
   History,
-  PiggyBank,
   ScanQrCode,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
@@ -33,7 +32,6 @@ const ALL_NAV = [
   { href: '/admin/notes', label: 'Sổ tay', icon: ChefHat },
   { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
   { href: '/admin/stats', label: 'Thống kê', icon: BarChart3 },
-  { href: '/admin/finance', label: 'Sổ thu chi', icon: PiggyBank, adminOnly: true },
   { href: '/admin/settings', label: 'Cài đặt', icon: Settings, adminOnly: true },
   { href: '/admin/logs', label: 'Lịch sử bàn', icon: History, adminOnly: true },
 ];

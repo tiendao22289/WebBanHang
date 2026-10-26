@@ -5,6 +5,7 @@ import { removeVietnameseTones } from '@/lib/utils';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createQuickMatcher } from '@/lib/quickMatch';
 import Image from 'next/image';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { buildQrUrl } from '@/lib/bankAccount';
 import { prepareTableStatsPayment } from '@/lib/tableStatsQuota';
@@ -359,6 +360,11 @@ export default function TablesPage() {
   const [tableHistoryData, setTableHistoryData] = useState([]);
   const [tableHistoryLoading, setTableHistoryLoading] = useState(false);
   const [currentStaff, setCurrentStaff] = useState(null); // nhân viên đang đăng nhập (từ localStorage)
+  // Lối vào Sổ thu chi (đã ẩn khỏi menu): chủ quán bấm hình 🛵 / chữ "Mang về" ở ô Mang về.
+  // Nhân viên bấm vào đó không có gì (máy chủ cũng chỉ cho chủ quán xem sổ).
+  const financeDoor = (children, style = {}) => currentStaff?.role === 'admin'
+    ? <Link href="/admin/finance" aria-label="Mang về" style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, color: 'inherit', textDecoration: 'none', WebkitTapHighlightColor: 'transparent', ...style }}>{children}</Link>
+    : <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, ...style }}>{children}</div>;
   const [historyTab, setHistoryTab] = useState('bills'); // 'bills' | 'opens' — tab trong modal lịch sử
   const [tableOpenLog, setTableOpenLog] = useState([]); // nhật ký mở bàn (6 tiếng)
   const [tableOpenLogLoading, setTableOpenLogLoading] = useState(false);
@@ -3200,6 +3206,7 @@ export default function TablesPage() {
               {takeawayTable && (
                 <div style={{ margin: '8px 8px 0', background: '#eff6ff', border: '2px solid #bfdbfe', borderRadius: 16, padding: '14px', gridColumn: '1 / -1' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                    {financeDoor(<>
                     <span style={{ fontSize: '1.8rem' }}>🛵</span>
                     <div>
                       <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#1d4ed8' }}>
@@ -3209,6 +3216,7 @@ export default function TablesPage() {
                         {takeawayOrders.length > 0 ? `${takeawayOrders.length} đơn đang chờ giao` : 'Chưa có đơn nào'}
                       </div>
                     </div>
+                    </>)}
                     <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
                       <button
                         onClick={() => { fetchTakeawayOrders(); setShowTakeawayOrders(true); }}
@@ -3785,6 +3793,7 @@ export default function TablesPage() {
                       {/* Takeaway pinned card — desktop */}
                       {takeawayTable && (
                         <div style={{ background: '#eff6ff', border: '2px solid #bfdbfe', borderRadius: 12, padding: '10px 14px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+                          {financeDoor(<>
                           <span style={{ fontSize: '1.5rem' }}>🛵</span>
                           <div style={{ flex: 1 }}>
                             <div style={{ fontWeight: 800, fontSize: '0.9rem', color: '#1d4ed8' }}>{takeawayTable.table_name || 'Mang về'}</div>
@@ -3792,6 +3801,7 @@ export default function TablesPage() {
                               {takeawayOrders.length > 0 ? `${takeawayOrders.length} đơn đang chờ` : 'Chưa có đơn'}
                             </div>
                           </div>
+                          </>, { flex: 1 })}
                           <button
                             onClick={() => { fetchTakeawayOrders(); setShowTakeawayOrders(true); }}
                             style={{ padding: '6px 12px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
