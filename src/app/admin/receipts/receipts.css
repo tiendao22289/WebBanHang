@@ -37,3 +37,6 @@
 .rc-ck-actions { display: grid; grid-template-columns: 3fr 2fr; gap: 8px; }
 .rc-ck-actions .rc-attach { min-height: 44px; }
 .rc-ck-busy { grid-column: 1 / -1; text-align: center; color: #1d4ed8; font-size: 14px; padding: 10px 0; }
+
+/* Tab "Bill giấy" trong trang Mã QR: bỏ lề trang (trang Mã QR đã có lề). */
+.receipts.embedded { padding: 0 0 24px; background: transparent; min-height: 0; }

@@ -1322,7 +1322,7 @@ export default function TablesPage() {
       setSelectedTable(null);
       fetchTables(snapshot.groupTableIds);
       proof.onDone?.();
-      if (blob && !result.photoSaved) Swal.fire('Đã đóng bàn', 'Bàn đã thanh toán xong nhưng chưa lưu được ảnh. Thêm ảnh ở Sổ thu chi hoặc trang Bill giấy.', 'warning');
+      if (blob && !result.photoSaved) Swal.fire('Đã đóng bàn', 'Bàn đã thanh toán xong nhưng chưa lưu được ảnh. Thêm ảnh ở Sổ thu chi hoặc tab Bill giấy (trang Mã QR).', 'warning');
     } catch (error) {
       console.error('[settleTable]', error);
       Swal.fire('Chưa thể thanh toán', error?.message || 'Không kiểm tra được đầy đủ bill. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
