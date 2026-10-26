@@ -15,7 +15,6 @@ import {
   Menu,
   X,
   QrCode,
-  Star,
   History,
   PiggyBank,
   ScanQrCode,
@@ -31,7 +30,6 @@ const ALL_NAV = [
   { href: '/admin/qr', label: 'Mã QR · Bill giấy', icon: QrCode },
 
   { href: '/admin/customers', label: 'Khách hàng', icon: UsersRound },
-  { href: '/admin/reviews', label: 'Đánh giá', icon: Star },
   { href: '/admin/notes', label: 'Sổ tay', icon: ChefHat },
   { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
   { href: '/admin/stats', label: 'Thống kê', icon: BarChart3 },

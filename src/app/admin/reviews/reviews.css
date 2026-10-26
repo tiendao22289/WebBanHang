@@ -172,3 +172,18 @@
   .review-top { flex-direction: column; }
   .review-total { align-self: flex-start; }
 }
+
+/* Khung trượt "Đánh giá" mở từ nút nhỏ ★ ở mép phải trang Bàn: gọn, cuộn bên trong. */
+.reviews-panel.embedded { display: flex; flex-direction: column; height: 100%; min-height: 0; background: #f8fafc; }
+.reviews-drawer-head { display: flex; align-items: center; gap: 8px; padding: calc(12px + env(safe-area-inset-top)) 12px 10px; background: #fffbeb; border-bottom: 1px solid #fde68a; flex-shrink: 0; }
+.reviews-drawer-head b { flex: 1; display: flex; align-items: center; gap: 6px; font-size: 1rem; color: #92400e; }
+.reviews-drawer-head .reviews-refresh { padding: 8px 10px; background: #f59e0b; }
+.reviews-close { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: none; border-radius: 50%; background: #fef3c7; color: #92400e; cursor: pointer; }
+.reviews-panel.embedded > :not(.reviews-drawer-head) { margin-left: 12px; margin-right: 12px; }
+.reviews-panel.embedded .reviews-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 10px 12px 8px; }
+.reviews-panel.embedded .reviews-card { flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 10px; border-radius: 12px; }
+.reviews-panel.embedded .reviews-card-icon { width: 28px; height: 28px; }
+.reviews-panel.embedded .reviews-card-icon svg { width: 15px; height: 15px; }
+.reviews-panel.embedded .reviews-value { font-size: 1.05rem; }
+.reviews-panel.embedded .reviews-label { font-size: 0.68rem; }
+.reviews-panel.embedded .reviews-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: calc(12px + env(safe-area-inset-bottom)); }

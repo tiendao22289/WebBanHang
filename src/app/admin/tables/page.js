@@ -18,6 +18,7 @@ import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders'
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import PaymentProof from '@/components/PaymentProof';
+import ReviewsPanel from '../reviews/ReviewsPanel';
 import { fetchWithTimeout } from '@/lib/compressImage';
 import { cashChange, cashChoices } from '@/lib/cashChange.mjs';
 import { QRCodeSVG } from 'qrcode.react';
@@ -317,6 +318,8 @@ export default function TablesPage() {
   const [adjustOpen, setAdjustOpen] = useState(false);      // bảng Cộng/Trừ tiền, Giảm % vào bill
   // Tab "Quà hôm nay": xem quà đã tặng hôm nay + món tặng nào đang bật/tắt.
   const [showGiftsToday, setShowGiftsToday] = useState(false);
+  // Khung trượt "Đánh giá khách hàng" (nút nhỏ ★ ở mép phải, chỉ admin) — thay cho mục Đánh giá trong menu.
+  const [showReviews, setShowReviews] = useState(false);
   const [giftsTodayData, setGiftsTodayData] = useState(null);   // { given:[{name,qty}], items:[{id,name,on}] }
   const [giftsTodayLoading, setGiftsTodayLoading] = useState(false);
   const [giftPending, setGiftPending] = useState({});           // {id: bậtMới} — thay đổi CHƯA lưu
@@ -6960,6 +6963,40 @@ export default function TablesPage() {
         >
           ‹
         </button>
+      )}
+
+      {/* ─── Tab nhỏ "Đánh giá" (★) ngay dưới tab Quà hôm nay — chỉ admin, chỉ khi xem lưới bàn ─── */}
+      {!selectedTable && currentStaff?.role === 'admin' && (
+        <button
+          onClick={() => setShowReviews(true)}
+          title="Đánh giá khách hàng"
+          aria-label="Đánh giá khách hàng"
+          style={{
+            position: 'fixed', right: 0, top: 'calc(46% + 46px)', transform: 'translateY(-50%)',
+            zIndex: 55, width: 12, height: 40,
+            border: 'none', borderRadius: '6px 0 0 6px',
+            background: 'linear-gradient(135deg,#f59e0b,#b45309)', color: 'white',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 0, fontSize: '0.55rem', fontWeight: 800, lineHeight: 1,
+            boxShadow: '-2px 2px 8px rgba(217,119,6,0.32)',
+          }}
+        >
+          ★
+        </button>
+      )}
+      {showReviews && (
+        <div onClick={() => setShowReviews(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 99998, background: 'rgba(15,23,42,0.45)' }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{
+              position: 'absolute', top: 0, bottom: 0, right: 0,
+              width: 'min(92%, 420px)', background: 'white',
+              boxShadow: '-8px 0 30px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column',
+              borderRadius: '16px 0 0 16px', overflow: 'hidden',
+            }}>
+            <ReviewsPanel embedded onClose={() => setShowReviews(false)} />
+          </div>
+        </div>
       )}
 
       {/* Drawer "Quà hôm nay": đã tặng hôm nay + món tặng bật/tắt */}
