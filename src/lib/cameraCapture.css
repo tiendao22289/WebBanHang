@@ -4,7 +4,10 @@
 .cam-title small { display: block; font-size: 12px; font-weight: 400; color: #cbd5e1; margin-top: 2px; }
 .cam-video { flex: 1; width: 100%; min-height: 0; object-fit: contain; background: #000; }
 .cam-msg { position: absolute; top: 40%; left: 16px; right: 16px; text-align: center; color: white; font-size: 15px; }
-.cam-msg.error { color: #fecaca; }
+.cam-msg.error { color: #fecaca; line-height: 1.45; }
+.cam-msg.error p { margin: 0 0 14px; }
+.cam-native { display: inline-flex; align-items: center; gap: 8px; min-height: 48px; padding: 0 20px; border: 0; border-radius: 24px; background: white; color: #0f172a; font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; }
+.cam-native:disabled { opacity: .6; }
 .cam-bar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 16px 20px calc(20px + env(safe-area-inset-bottom)); background: #000; }
 .cam-close { justify-self: start; min-width: 48px; height: 48px; border-radius: 24px; border: 0; background: rgba(255, 255, 255, .15); color: white; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 0 12px; font: inherit; font-size: 14px; }
 .cam-shoot { width: 76px; height: 76px; border-radius: 50%; border: 5px solid white; background: #2563eb; color: white; display: grid; place-items: center; cursor: pointer; }
