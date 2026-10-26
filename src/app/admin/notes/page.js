@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { Fragment, useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { ChefHat, FileText, CheckCircle, XCircle, LogOut, Plus, Clock, Trash2, User, CornerDownRight } from 'lucide-react';
 import './notes.css';
@@ -11,7 +11,8 @@ import { LineHint, filterRange, notesSummary } from './notesStats';
 import DebtPicker from './DebtPicker';
 import { CategorySelect, KindTabs, KindTag, OtherHint, isOtherLine, newOtherLine } from './NoteKinds';
 import OtherCosts from './OtherCosts';
-import { fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
+import { MoneyInput, NoteItemRow, Section, TripSummary, vnd } from './NewNoteParts';
+import { allOpenDebts, fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
 
 // Chỉ tính tiền thừa của phiếu từ tháng 10/2026 (khớp ô "Trả lại chủ" của tháng; phiếu cũ hơn đã trả chủ).
 const LEFTOVER_SINCE = '2026-10-01';
@@ -31,6 +32,7 @@ export default function StaffNotesPage() {
   const [addTab, setAddTab] = useState('oc');
   const [editTab, setEditTab] = useState('oc');
   const [lastCategory, setLastCategory] = useState('');
+  const [showNoteText, setShowNoteText] = useState(false);
   const [adminTab, setAdminTab] = useState('notes'); // chủ quán: 'notes' (phiếu) | 'other' (chi khác)
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
@@ -359,9 +361,10 @@ export default function StaffNotesPage() {
         return { note_id: noteId, item_index: index === 'note' ? null : Number(index), amount, from_note_id };
       });
 
-    const hasItems = newNoteType === 'expense' && expenseItems.some(i => i.name.trim());
+    const filled = expenseItems.filter(i => i.name.trim() && !(i.preset && !String(i.price || '').trim()));
+    const hasItems = newNoteType === 'expense' && filled.length > 0;
     if (!hasItems && !newNoteContent.trim() && !payDebts.length) {
-      alert('Vui lòng nhập nội dung!');
+      alert('Chưa ghi hàng nào: ghi ít nhất 1 dòng hàng có giá.');
       return;
     }
 
@@ -371,7 +374,7 @@ export default function StaffNotesPage() {
     try {
       await notesApi('create', {
         note_type: newNoteType,
-        items: newNoteType === 'expense' ? expenseItems.filter(i => i.name.trim()) : [],
+        items: newNoteType === 'expense' ? filled : [],
         note: newNoteContent,
         input_amount: newNoteInputAmount,
         pay_debts: payDebts,
@@ -393,6 +396,7 @@ export default function StaffNotesPage() {
       setNewNoteInputAmount('');
       setNewNoteType('expense');
       setAddTab('oc');
+      setShowNoteText(false);
       setNewNotePayDebtEnabled(false);
       setNewNotePayDebtAmount('');
       setDebtPays({});
@@ -1834,195 +1838,89 @@ export default function StaffNotesPage() {
         </div>
       )}
 
-      {/* ── Add Note Modal ── */}
+      {/* ── Phiếu đi chợ mới: 1 tiền chủ giao → 2 hàng đã mua → 3 tiền thừa & nợ cũ → 4 tổng kết ── */}
       {showAddModal && (() => {
+        const { paid: thucChi, debt: tienNo } = calculateTotals();
+        const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
+        const leftoverList = openLeftovers(notes, payments, LEFTOVER_SINCE);
+        const carried = carryLeftover ? leftoverList.reduce((a, l) => a + l.left, 0) : 0;
+        // Phần trả nợ lấy từ tiền thừa phiếu trước không trừ vào tiền của phiếu này.
+        const fromLeftover = useLeftoverForDebt && !carryLeftover ? fundDebtPayments(Object.entries(debtPays).map(([key, amount]) => ({ key, amount })),
+          leftoverList.map(l => ({ id: l.note_id, left: l.left }))).filter(x => x.from_note_id).reduce((a, x) => a + x.amount, 0) : 0;
+        const payOldDebt = debtPayTotal - fromLeftover;
+        const balance = inputAmt + carried - thucChi - payOldDebt;
+        const surplus = (inputAmt > 0 ? inputAmt - thucChi : 0) + carried;
+        const goods = thucChi + tienNo;
+        const tabItems = expenseItems.map((item, idx) => ({ item, idx })).filter(({ item }) => isOtherLine(item) === (addTab === 'other'));
+        const hasDebtStep = leftoverList.length > 0 || allOpenDebts(notes).length > 0;
+        const now = new Date();
+        const when = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        let no = 0;
         return (
         <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '450px' }}>
-            <div className="modal-header">
-              <h3>Phiếu đi chợ mới</h3>
-              <button className="btn btn-icon btn-ghost" onClick={() => setShowAddModal(false)}><XCircle size={20} /></button>
+          <div className="modal-content np-sheet" onClick={e => e.stopPropagation()} role="dialog" aria-label="Phiếu đi chợ mới">
+            <div className="modal-header np-head">
+              <div><h3>Phiếu đi chợ mới</h3><small>{currentUser.full_name} · {when}</small></div>
+              <button type="button" className="np-close" onClick={() => setShowAddModal(false)} aria-label="Đóng"><XCircle size={22} /></button>
             </div>
-            <div className="modal-body">
-              {/* Phiếu mới giờ chỉ dùng cho đi chợ (newNoteType luôn là 'expense'). */}
-              {newNoteType === 'expense' ? (
-                <div className="expense-fields-container mb-4">
-                  {/* ── Tiền chủ giao (nhập trước khi ghi món) ── */}
-                  <div className="add-input-amount">
-                    <label htmlFor="new-note-input-amount">💵 Tiền chủ giao</label>
-                    <input
-                      id="new-note-input-amount"
-                      type="text" inputMode="numeric"
-                      placeholder="VD: 500.000"
-                      value={newNoteInputAmount}
-                      onChange={e => {
-                        const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                        setNewNoteInputAmount(raw ? Number(raw).toLocaleString('vi-VN') : '');
-                      }}
-                    />
-                  </div>
-                  <label className="form-label mb-2 block" style={{ marginTop: 12 }}>Chi tiết mua hàng</label>
-                  <KindTabs tab={addTab} onTab={openAddTab} items={expenseItems} />
-                  {addTab === 'other' && <OtherHint categories={noteCategories} isAdmin={currentUser.role === 'admin'} />}
-                  <div className="add-items">
-                    {(() => {
-                      // Dòng cuối của tab đang mở (dòng trống để gõ tiếp) không có nút xoá.
-                      const lastIdx = expenseItems.reduce((at, it, i) => (isOtherLine(it) === (addTab === 'other') ? i : at), -1);
-                      return expenseItems.map((item, idx) => isOtherLine(item) !== (addTab === 'other') ? null : (
-                      <div key={idx} className="add-item">
-                        {addTab === 'other' && <CategorySelect value={item.category} categories={noteCategories}
-                          onChange={v => { updateExpenseItem(idx, 'category', v); setLastCategory(v); }} />}
-                        <div className="add-item-top">
-                          {addTab === 'other'
-                            ? <input type="text" className="expense-input-clean" style={{ flex: 1, minWidth: 0 }} placeholder="Tên (VD: đổ xăng, sửa xe)"
-                                value={item.name} onChange={e => updateExpenseItem(idx, 'name', e.target.value)} />
-                            : <MenuNameInput names={menuNames} className="expense-input-clean" style={{ flex: 1, minWidth: 0 }}
-                                placeholder={idx === lastIdx && !item.name ? 'Nhập tên đồ...' : 'Tên món'}
-                                value={item.name} onChange={v => updateExpenseItem(idx, 'name', v)} />}
-                          {expenseItems.length > 1 && (addTab === 'other' ? !(idx === lastIdx && !item.name.trim()) : idx < lastIdx)
-                            ? <button type="button" className="btn-remove-row" onClick={() => removeExpenseItem(idx)} aria-label="Xoá dòng"><XCircle size={16} /></button>
-                            : <span className="add-item-spacer" />}
-                        </div>
-                        <div className="add-item-bottom">
-                          <input type="text" className="expense-input-clean" placeholder="Giá" value={item.price}
-                            onChange={e => updateExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleExpenseBlur(idx, 'price', e)} />
-                          <input type="text" className="expense-input-clean" placeholder="SL/Ký" value={item.qty}
-                            onChange={e => updateExpenseItem(idx, 'qty', e.target.value)} onBlur={e => handleExpenseBlur(idx, 'qty', e)} />
-                          <div className="expense-status-wrapper add-item-status">
-                            <label className={`status-label ${item.paymentStatus === 'full' ? 'checked-full' : ''}`}>
-                              <input type="radio" name={`s-${idx}`} checked={item.paymentStatus === 'full'} onChange={() => updateExpenseItem(idx, 'paymentStatus', 'full')} /> Đủ
-                            </label>
-                            <label className={`status-label ${item.paymentStatus === 'debt' ? 'checked-debt' : ''}`}>
-                              <input type="radio" name={`s-${idx}`} checked={item.paymentStatus === 'debt'} onChange={() => updateExpenseItem(idx, 'paymentStatus', 'debt')} /> Nợ
-                            </label>
-                          </div>
-                        </div>
-                        {item.paymentStatus === 'debt' && (
-                          <div className="add-item-debt">
-                          {(() => {
-                            const p = parseVal(item.price);
-                            const q = parseVal(item.qty, true) || 1;
-                            const cap = p * q;
-                            return (<>
-                              <input
-                                type="text" inputMode="numeric"
-                                className="expense-input-clean"
-                                style={{ width: 100, textAlign: 'right', flexShrink: 0 }}
-                                placeholder={cap > 0 ? cap.toLocaleString('vi-VN') : 'Số tiền nợ'}
-                                value={item.debtAmount || ''}
-                                onChange={e => {
-                                  const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                                  const num = Number(raw);
-                                  if (cap > 0 && num > cap) { updateExpenseItem(idx, 'debtAmount', cap.toLocaleString('vi-VN')); return; }
-                                  updateExpenseItem(idx, 'debtAmount', raw ? num.toLocaleString('vi-VN') : '');
-                                }}
-                              />
-                              <input type="text" className="expense-input-clean" style={{ flex: 1, minWidth: 70 }} placeholder="Nợ của ai?" value={item.creditor} onChange={e => updateExpenseItem(idx, 'creditor', e.target.value)} />
-                            </>);
-                          })()}
-                          </div>
-                        )}
-                        {/* Thành tiền + cảnh báo (giá thiếu "k", số lượng nhiều số...) */}
-                        <LineHint item={item} />
-                      </div>
-                    ));
-                    })()}
-                  </div>
+            <div className="modal-body np-body">
+              <Section step={1} title="Tiền chủ giao" hint="Số tiền cầm đi chợ. Không cầm trước thì bỏ trống.">
+                <MoneyInput id="new-note-input-amount" value={newNoteInputAmount} onChange={setNewNoteInputAmount} placeholder="VD: 500.000" />
+              </Section>
+
+              <Section step={2} title="Hàng đã mua" aside={goods > 0 ? vnd(goods) : null}>
+                <KindTabs tab={addTab} onTab={openAddTab} items={expenseItems} />
+                {addTab === 'other' && <OtherHint categories={noteCategories} isAdmin={currentUser.role === 'admin'} />}
+                <div className="np-items">
+                  {tabItems.map(({ item, idx }, k) => {
+                    const empty = !item.preset && !item.name.trim() && !String(item.price || '').trim() && !String(item.qty || '').trim();
+                    // Số thứ tự chỉ cho dòng sẽ lưu (dòng rau / gia vị chưa ghi giá thì chưa đánh số).
+                    const counted = !empty && !(item.preset && !String(item.price || '').trim());
+                    if (counted) no += 1;
+                    const firstPreset = item.preset && !tabItems[k - 1]?.item.preset;
+                    return <Fragment key={item._id || idx}>
+                      {firstPreset && <p className="np-group-label">Rau, gia vị · có mua thì ghi giá, không thì để trống</p>}
+                      <NoteItemRow item={item} no={counted ? no : null} other={addTab === 'other'} menuNames={menuNames} categories={noteCategories}
+                        onField={(field, v) => updateExpenseItem(idx, field, v)} onBlur={(field, e) => handleExpenseBlur(idx, field, e)}
+                        onRemove={() => removeExpenseItem(idx)} onCategory={v => { updateExpenseItem(idx, 'category', v); setLastCategory(v); }} />
+                    </Fragment>;
+                  })}
                 </div>
-              ) : (
-                <div className="form-group mb-4">
-                  <label className="form-label">Chi tiết</label>
-                  <textarea className="input" rows="5" placeholder="Nhập chi tiết..." value={newNoteContent} onChange={handleContentChange} onKeyDown={handleContentKeyDown} />
-                </div>
+                {showNoteText
+                  ? <textarea className="np-textarea" rows={2} placeholder="Ghi chú cho chủ (không bắt buộc)" value={newNoteContent} onChange={e => setNewNoteContent(e.target.value)} />
+                  : <button type="button" className="np-link" onClick={() => setShowNoteText(true)}>＋ Thêm ghi chú</button>}
+              </Section>
+
+              {hasDebtStep && (
+                <DebtPicker step={3} notes={notes} value={debtPays} onChange={setDebtPays}
+                  surplus={surplus} useSurplus={useSurplusForDebt} onUseSurplus={setUseSurplusForDebt}
+                  leftovers={leftoverList} useLeftover={useLeftoverForDebt} onUseLeftover={setUseLeftoverForDebt}
+                  canCarry carry={carryLeftover} onCarry={setCarryLeftover}
+                  surplusOld={carried > 0 ? Math.min(carried, Math.max(0, surplus)) : 0}
+                  onReturnLeftover={async l => {
+                    if (!confirm(`Người đi chợ đã đưa lại ${l.left.toLocaleString('vi-VN')}đ tiền thừa của phiếu này cho chủ?`)) return;
+                    try { await notesApi('return_leftover', { id: l.note_id, amount: l.left }); await fetchNotes(); } catch (err) { alert(err.message); }
+                  }} />
               )}
-              
-              {/* ── Nợ cũ còn lại: chọn khoản trả, tuỳ chọn lấy tiền dư trả nợ ── */}
-              {(() => {
-                const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
-                const leftoverList = openLeftovers(notes, payments, LEFTOVER_SINCE);
-                const carried = carryLeftover && newNoteType === 'expense' ? leftoverList.reduce((a, l) => a + l.left, 0) : 0;
-                const newSurplus = inputAmt > 0 ? inputAmt - calculateTotals().paid : 0;
-                const surplus = newSurplus + carried;
-                return (
-                  <DebtPicker notes={notes} value={debtPays} onChange={setDebtPays}
-                    surplus={surplus} useSurplus={useSurplusForDebt} onUseSurplus={setUseSurplusForDebt}
-                    leftovers={leftoverList} useLeftover={useLeftoverForDebt} onUseLeftover={setUseLeftoverForDebt}
-                    canCarry={newNoteType === 'expense'} carry={carryLeftover && newNoteType === 'expense'} onCarry={setCarryLeftover}
-                    surplusOld={carried > 0 ? Math.min(carried, Math.max(0, surplus)) : 0}
-                    onReturnLeftover={async l => {
-                      if (!confirm(`Người đi chợ đã đưa lại ${l.left.toLocaleString('vi-VN')}đ tiền thừa của phiếu này cho chủ?`)) return;
-                      try { await notesApi('return_leftover', { id: l.note_id, amount: l.left }); await fetchNotes(); } catch (err) { alert(err.message); }
-                    }} />
-                );
-              })()}
-              {/* ── Tổng kết chuyến chợ: tính như hoá đơn, kết quả ở cuối ── */}
-              {newNoteType === 'expense' && (() => {
-                const { paid: thucChi, debt: tienNo } = calculateTotals();
-                const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
-                const leftoverList = openLeftovers(notes, payments, LEFTOVER_SINCE);
-                // Phần trả nợ lấy từ tiền thừa phiếu trước không trừ vào tiền của phiếu này.
-                const fromLeftover = useLeftoverForDebt && !carryLeftover ? fundDebtPayments(Object.entries(debtPays).map(([key, amount]) => ({ key, amount })),
-                  leftoverList.map(l => ({ id: l.note_id, left: l.left }))).filter(x => x.from_note_id).reduce((a, x) => a + x.amount, 0) : 0;
-                const payOldDebt = debtPayTotal - fromLeftover;
-                // Tiền dư cũ cộng vào: tiêu tiền mới trước, thiếu mới lấy sang dư cũ.
-                const carried = carryLeftover ? leftoverList.reduce((a, l) => a + l.left, 0) : 0;
-                if (!inputAmt && !carried && !thucChi && !tienNo && !debtPayTotal) return null;
-                const hasMoney = inputAmt > 0 || carried > 0;
-                const balance = inputAmt + carried - thucChi - payOldDebt;
-                const newPart = inputAmt - thucChi - payOldDebt;
-                const oldLeft = carried > 0 ? Math.max(0, carried + Math.min(0, newPart)) : 0;
-                const row = (label, value, color, sign = '') => (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                    <span style={{ color }}>{label}</span>
-                    <strong style={{ color, whiteSpace: 'nowrap' }}>{sign}{formatMoney(value)}</strong>
-                  </div>
-                );
-                return (
-                  <div style={{ marginTop: 12, padding: '12px 14px', background: '#fff7ed', borderRadius: 10, border: '1px solid #fed7aa', fontSize: 13 }}>
-                    <div style={{ fontWeight: 700, color: '#c2410c', marginBottom: 8 }}>📊 Tổng kết chuyến chợ</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                      {hasMoney && row('💵 Tiền chủ giao', inputAmt, '#1d4ed8')}
-                      {carried > 0 && row('➕ Tiền dư cũ cộng vào', carried, '#15803d', '+ ')}
-                      {thucChi > 0 && row('💸 Trả tiền hàng', thucChi, '#c2410c', '− ')}
-                      {payOldDebt > 0 && row('💳 Trả nợ cũ', payOldDebt, '#7c3aed', '− ')}
-                      {hasMoney ? (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '7px 10px', borderRadius: 8, marginTop: 4, fontWeight: 800, background: balance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1.5px solid ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
-                          <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>{balance >= 0 ? '✅ Còn thừa — trả lại chủ' : '⚠️ Còn thiếu — nhân viên bỏ thêm'}</span>
-                          <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626', whiteSpace: 'nowrap' }}>{formatMoney(Math.abs(balance))}</span>
-                        </div>
-                      ) : (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, paddingTop: 5, borderTop: '1px solid #fed7aa', fontWeight: 800 }}>
-                          <span style={{ color: '#c2410c' }}>Tổng tiền chi</span>
-                          <span style={{ color: '#c2410c' }}>{formatMoney(thucChi + payOldDebt)}</span>
-                        </div>
-                      )}
-                      {carried > 0 && balance > 0 && (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#15803d', padding: '0 10px' }}>
-                          <span>Dư mới: <b>{formatMoney(Math.max(0, newPart))}</b></span>
-                          <span>Dư cũ: <b>{formatMoney(oldLeft)}</b></span>
-                        </div>
-                      )}
-                      {/* Thông tin thêm, không tính vào tiền trên. */}
-                      {(tienNo > 0 || fromLeftover > 0) && (
-                        <div style={{ marginTop: 4, paddingTop: 6, borderTop: '1px dashed #fed7aa', display: 'flex', flexDirection: 'column', gap: 3, fontSize: 12 }}>
-                          {tienNo > 0 && row(`🛒 Tiền hàng ${formatMoney(thucChi + tienNo)}, mua nợ`, tienNo, '#dc2626')}
-                          {fromLeftover > 0 && row('💵 Trả nợ bằng tiền thừa phiếu cũ', fromLeftover, '#15803d')}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
+
+              {(inputAmt > 0 || carried > 0 || goods > 0 || debtPayTotal > 0) && (
+                <Section step={hasDebtStep ? 4 : 3} title="Tổng kết chuyến chợ">
+                  <TripSummary given={inputAmt} carried={carried} paid={thucChi} debt={tienNo} payOldDebt={payOldDebt} fromLeftover={fromLeftover} />
+                </Section>
+              )}
             </div>
-            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '12px 16px', borderTop: '1px solid #f3f4f6' }}>
-              <button className="btn btn-outline" onClick={() => setShowAddModal(false)}>Huỷ</button>
-              <button className="btn btn-primary" style={{ padding: '10px 24px' }} onClick={submitNewNote} disabled={isLoading}>{isLoading ? 'Đang gửi...' : 'Gửi đi'}</button>
+            <div className="modal-footer np-footer">
+              <div className="np-footer-sum">
+                <span>Tiền hàng <b>{vnd(goods)}</b></span>
+                {(inputAmt > 0 || carried > 0) && <span className={balance >= 0 ? 'ok' : 'bad'}>{balance >= 0 ? 'Thừa' : 'Thiếu'} <b>{vnd(Math.abs(balance))}</b></span>}
+              </div>
+              <button type="button" className="btn btn-outline" onClick={() => setShowAddModal(false)}>Huỷ</button>
+              <button type="button" className="btn btn-primary" onClick={submitNewNote} disabled={isLoading}>{isLoading ? 'Đang lưu…' : 'Lưu phiếu'}</button>
             </div>
           </div>
         </div>
         );
       })()}
-
       </>)}
 
       {/* ── Delete Confirm Modal ── */}

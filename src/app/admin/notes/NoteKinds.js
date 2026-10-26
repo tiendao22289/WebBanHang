@@ -13,7 +13,8 @@ export const newOtherLine = category => ({ _id: `new-${Date.now()}-${Math.random
 
 /** Hai tab của phiếu, mỗi tab hiện số dòng + tiền đã ghi. */
 export function KindTabs({ tab, onTab, items }) {
-  const named = items.filter(i => String(i.name || '').trim());
+  // Dòng có sẵn (Tiền rau, Tiền gia vị) chưa ghi giá thì chưa tính.
+  const named = items.filter(i => String(i.name || '').trim() && !(i.preset && !String(i.price || '').trim()));
   const side = other => {
     const rows = named.filter(i => isOtherLine(i) === other);
     return rows.length ? `${rows.length} dòng · ${rows.reduce((s, i) => s + lineMoney(i), 0).toLocaleString('vi-VN')}đ` : 'chưa có';
