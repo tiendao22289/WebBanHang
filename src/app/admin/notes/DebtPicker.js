@@ -55,28 +55,29 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
 
   // Danh sách dài nên thu gọn; tự mở khi đã chọn khoản trả.
   const showLines = openLines || chosen > 0;
+  const showLeft = openLeft || !!carry || !!useLeftover;
   return (
     <section className="np-section">
       <div className="np-section-head"><span className="np-step">{step}</span><b>Tiền thừa & nợ cũ</b>
         {chosen > 0 && <span className="np-aside violet">Trả {money(chosen)}</span>}</div>
       {leftovers.length > 0 && (
         <div className="np-box ok">
-          <button type="button" className="np-box-head" onClick={() => setOpenLeft(o => !o)} aria-expanded={openLeft}>
-            <span>💵 Tiền thừa phiếu trước chưa trả chủ</span><b>{money(leftoverTotal)}</b><ChevronDown size={16} className={openLeft ? 'up' : ''} />
+          <button type="button" className="np-box-head" onClick={() => setOpenLeft(o => !o)} aria-expanded={showLeft}>
+            <span>💵 Tiền thừa phiếu trước</span><b>{money(leftoverTotal)}</b><ChevronDown size={16} className={showLeft ? 'up' : ''} />
           </button>
-          {openLeft && leftovers.map(l => (
+          {showLeft && leftovers.map(l => (
             <div key={l.note_id} className="np-box-line">
               <span>Phiếu {dayMonth(l.created_at)}{l.writer ? ` · ${l.writer}` : ''} · còn <b>{money(l.left)}</b></span>
               <button type="button" className="np-mini ok" onClick={() => onReturnLeftover?.(l)}>Đã trả chủ</button>
             </div>
           ))}
-          {canCarry && (
+          {showLeft && canCarry && (
             <label className="np-check ok">
               <input type="checkbox" checked={!!carry} onChange={e => { onCarry?.(e.target.checked); if (e.target.checked) onUseLeftover?.(false); }} />
               Cộng tiền dư cũ vào phiếu này
             </label>
           )}
-          {lines.length > 0 && !carry && (
+          {showLeft && lines.length > 0 && !carry && (
             <label className="np-check ok">
               <input type="checkbox" checked={!!useLeftover} onChange={e => onUseLeftover?.(e.target.checked)} />
               Dùng tiền thừa này để trả nợ
@@ -87,10 +88,9 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
       {lines.length > 0 && (
         <div className="np-box debt">
           <button type="button" className="np-box-head" onClick={() => setOpenLines(o => !o)} aria-expanded={showLines}>
-            <span>📋 Nợ cũ còn lại · {lines.length} khoản</span><b>{money(total)}</b><ChevronDown size={16} className={showLines ? 'up' : ''} />
+            <span>📋 Nợ cũ · {lines.length} khoản <small>{showLines ? '' : '(bấm để trả)'}</small></span><b>{money(total)}</b><ChevronDown size={16} className={showLines ? 'up' : ''} />
           </button>
-          {!showLines && <p className="np-box-tip">Bấm để chọn khoản trả lần này (không trả thì bỏ qua).</p>}
-          {surplus > 0 && (
+          {(showLines || useSurplus) && surplus > 0 && (
             <label className="np-check violet">
               <input type="checkbox" checked={!!useSurplus} onChange={e => onUseSurplus(e.target.checked)} />
               <span>Lấy tiền dư {money(surplus)} trả nợ{surplusOld > 0 && <small> (mới {money(surplus - surplusOld)} + cũ {money(surplusOld)})</small>}</span>

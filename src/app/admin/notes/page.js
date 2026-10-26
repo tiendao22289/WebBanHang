@@ -11,7 +11,7 @@ import { LineHint, filterRange, notesSummary } from './notesStats';
 import DebtPicker from './DebtPicker';
 import { CategorySelect, KindTabs, KindTag, OtherHint, isOtherLine, newOtherLine } from './NoteKinds';
 import OtherCosts from './OtherCosts';
-import { MoneyInput, NoteItemRow, Section, TripSummary, vnd } from './NewNoteParts';
+import { ItemsHead, MoneyInput, NoteItemRow, Section, TripSummary, vnd } from './NewNoteParts';
 import { allOpenDebts, fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
 
 // Chỉ tính tiền thừa của phiếu từ tháng 10/2026 (khớp ô "Trả lại chủ" của tháng; phiếu cũ hơn đã trả chủ).
@@ -1855,32 +1855,26 @@ export default function StaffNotesPage() {
         const hasDebtStep = leftoverList.length > 0 || allOpenDebts(notes).length > 0;
         const now = new Date();
         const when = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-        let no = 0;
         return (
         <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
           <div className="modal-content np-sheet" onClick={e => e.stopPropagation()} role="dialog" aria-label="Phiếu đi chợ mới">
             <div className="modal-header np-head">
-              <div><h3>Phiếu đi chợ mới</h3><small>{currentUser.full_name} · {when}</small></div>
-              <button type="button" className="np-close" onClick={() => setShowAddModal(false)} aria-label="Đóng"><XCircle size={22} /></button>
+              <h3>Phiếu đi chợ mới <small>{currentUser.full_name} · {when}</small></h3>
+              <button type="button" className="np-close" onClick={() => setShowAddModal(false)} aria-label="Đóng"><XCircle size={20} /></button>
             </div>
             <div className="modal-body np-body">
-              <Section step={1} title="Tiền chủ giao" hint="Số tiền cầm đi chợ. Không cầm trước thì bỏ trống.">
-                <MoneyInput id="new-note-input-amount" value={newNoteInputAmount} onChange={setNewNoteInputAmount} placeholder="VD: 500.000" />
-              </Section>
+              <Section step={1} title="Tiền chủ giao" className="np-given"
+                aside={<MoneyInput id="new-note-input-amount" value={newNoteInputAmount} onChange={setNewNoteInputAmount} placeholder="không cầm thì bỏ trống" />} />
 
-              <Section step={2} title="Hàng đã mua" aside={goods > 0 ? vnd(goods) : null}>
-                <KindTabs tab={addTab} onTab={openAddTab} items={expenseItems} />
-                {addTab === 'other' && <OtherHint categories={noteCategories} isAdmin={currentUser.role === 'admin'} />}
+              <Section step={2} title="Hàng" aside={<><KindTabs compact tab={addTab} onTab={openAddTab} items={expenseItems} />{goods > 0 && <b className="np-goods">{vnd(goods)}</b>}</>}>
+                {addTab === 'other' && <OtherHint short categories={noteCategories} isAdmin={currentUser.role === 'admin'} />}
+                <ItemsHead />
                 <div className="np-items">
                   {tabItems.map(({ item, idx }, k) => {
-                    const empty = !item.preset && !item.name.trim() && !String(item.price || '').trim() && !String(item.qty || '').trim();
-                    // Số thứ tự chỉ cho dòng sẽ lưu (dòng rau / gia vị chưa ghi giá thì chưa đánh số).
-                    const counted = !empty && !(item.preset && !String(item.price || '').trim());
-                    if (counted) no += 1;
                     const firstPreset = item.preset && !tabItems[k - 1]?.item.preset;
                     return <Fragment key={item._id || idx}>
-                      {firstPreset && <p className="np-group-label">Rau, gia vị · có mua thì ghi giá, không thì để trống</p>}
-                      <NoteItemRow item={item} no={counted ? no : null} other={addTab === 'other'} menuNames={menuNames} categories={noteCategories}
+                      {firstPreset && <p className="np-group-label">Rau, gia vị · có mua thì ghi giá</p>}
+                      <NoteItemRow item={item} other={addTab === 'other'} menuNames={menuNames} categories={noteCategories}
                         onField={(field, v) => updateExpenseItem(idx, field, v)} onBlur={(field, e) => handleExpenseBlur(idx, field, e)}
                         onRemove={() => removeExpenseItem(idx)} onCategory={v => { updateExpenseItem(idx, 'category', v); setLastCategory(v); }} />
                     </Fragment>;
@@ -1888,7 +1882,7 @@ export default function StaffNotesPage() {
                 </div>
                 {showNoteText
                   ? <textarea className="np-textarea" rows={2} placeholder="Ghi chú cho chủ (không bắt buộc)" value={newNoteContent} onChange={e => setNewNoteContent(e.target.value)} />
-                  : <button type="button" className="np-link" onClick={() => setShowNoteText(true)}>＋ Thêm ghi chú</button>}
+                  : <button type="button" className="np-link" onClick={() => setShowNoteText(true)}>＋ Ghi chú</button>}
               </Section>
 
               {hasDebtStep && (
@@ -1904,18 +1898,18 @@ export default function StaffNotesPage() {
               )}
 
               {(inputAmt > 0 || carried > 0 || goods > 0 || debtPayTotal > 0) && (
-                <Section step={hasDebtStep ? 4 : 3} title="Tổng kết chuyến chợ">
+                <Section step={hasDebtStep ? 4 : 3} title="Tổng kết">
                   <TripSummary given={inputAmt} carried={carried} paid={thucChi} debt={tienNo} payOldDebt={payOldDebt} fromLeftover={fromLeftover} />
                 </Section>
               )}
             </div>
+            {/* Thanh dưới: tiền hàng + thừa / thiếu bên trái, nút lưu bên phải (huỷ = nút đóng trên cùng). */}
             <div className="modal-footer np-footer">
               <div className="np-footer-sum">
                 <span>Tiền hàng <b>{vnd(goods)}</b></span>
                 {(inputAmt > 0 || carried > 0) && <span className={balance >= 0 ? 'ok' : 'bad'}>{balance >= 0 ? 'Thừa' : 'Thiếu'} <b>{vnd(Math.abs(balance))}</b></span>}
               </div>
-              <button type="button" className="btn btn-outline" onClick={() => setShowAddModal(false)}>Huỷ</button>
-              <button type="button" className="btn btn-primary" onClick={submitNewNote} disabled={isLoading}>{isLoading ? 'Đang lưu…' : 'Lưu phiếu'}</button>
+              <button type="button" className="btn btn-primary np-save" onClick={submitNewNote} disabled={isLoading}>{isLoading ? 'Đang lưu…' : 'Lưu phiếu'}</button>
             </div>
           </div>
         </div>
