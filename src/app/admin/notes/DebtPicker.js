@@ -8,9 +8,11 @@
  * tích "Cộng tiền dư cũ vào phiếu này" để chuyển hẳn sang phiếu mới (hiện tách dư cũ / dư mới),
  * hoặc bấm "Đã trả chủ" khi người đi chợ đã đưa lại tiền thừa.
  *
+ * Danh sách nợ và danh sách tiền thừa thu gọn, bấm để mở (tự mở khi đã chọn khoản trả).
  * value: { [debtKey]: số tiền } — khoản đang chọn trả.
  */
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { allOpenDebts, allocateToDebts, debtKey } from '@/lib/notesDebts.mjs';
 
 const money = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
@@ -18,7 +20,9 @@ const dayMonth = iso => { const d = new Date(new Date(iso).getTime() + 7 * 36000
 const digits = v => String(v ?? '').replace(/\D/g, '');
 
 export default function DebtPicker({ notes, value, onChange, surplus, useSurplus, onUseSurplus,
-  leftovers = [], useLeftover, onUseLeftover, onReturnLeftover, canCarry, carry, onCarry, surplusOld = 0 }) {
+  leftovers = [], useLeftover, onUseLeftover, onReturnLeftover, canCarry, carry, onCarry, surplusOld = 0, step = 3 }) {
+  const [openLines, setOpenLines] = useState(false);
+  const [openLeft, setOpenLeft] = useState(false);
   const lines = useMemo(() => allOpenDebts(notes || []), [notes]);
   const total = lines.reduce((a, l) => a + l.left, 0);
   const chosen = Object.values(value || {}).reduce((a, v) => a + (Number(v) || 0), 0);
@@ -49,69 +53,69 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
     onChange({ ...(value || {}), [debtKey(line)]: n });
   };
 
+  // Danh sách dài nên thu gọn; tự mở khi đã chọn khoản trả.
+  const showLines = openLines || chosen > 0;
+  const showLeft = openLeft || !!carry || !!useLeftover;
   return (
-    <>
-    {leftovers.length > 0 && (
-      <div style={{ marginTop: 12, padding: '12px 14px', background: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 10 }}>
-        <div style={{ fontWeight: 700, color: '#15803d', fontSize: 13, marginBottom: 6 }}>💵 Tiền thừa phiếu trước chưa trả chủ: {money(leftoverTotal)}</div>
-        {leftovers.map(l => (
-          <div key={l.note_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 0', fontSize: 12.5 }}>
-            <span style={{ color: '#374151' }}>Phiếu {dayMonth(l.created_at)}{l.writer ? ` · ${l.writer}` : ''} · còn <b style={{ color: '#15803d' }}>{money(l.left)}</b></span>
-            <button type="button" onClick={() => onReturnLeftover?.(l)}
-              style={{ flexShrink: 0, minHeight: 32, padding: '4px 10px', borderRadius: 7, border: '1px solid #86efac', background: 'white', color: '#15803d', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
-              Đã trả chủ
-            </button>
-          </div>
-        ))}
-        {canCarry && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, marginTop: 6, padding: '6px 10px', borderRadius: 8, background: 'white', border: '1px solid #86efac', fontSize: 13, fontWeight: 700, color: '#15803d', cursor: 'pointer' }}>
-            <input type="checkbox" checked={!!carry} onChange={e => { onCarry?.(e.target.checked); if (e.target.checked) onUseLeftover?.(false); }} style={{ width: 18, height: 18, accentColor: '#16a34a' }} />
-            Cộng tiền dư cũ vào phiếu này
-          </label>
-        )}
-        {lines.length > 0 && !carry && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, marginTop: 6, padding: '6px 10px', borderRadius: 8, background: 'white', border: '1px solid #86efac', fontSize: 13, fontWeight: 700, color: '#15803d', cursor: 'pointer' }}>
-            <input type="checkbox" checked={!!useLeftover} onChange={e => onUseLeftover?.(e.target.checked)} style={{ width: 18, height: 18, accentColor: '#16a34a' }} />
-            Dùng tiền thừa này để trả nợ
-          </label>
-        )}
-      </div>
-    )}
-    {lines.length > 0 && (
-    <div style={{ marginTop: 12, padding: '12px 14px', background: '#fef2f2', border: '1.5px solid #fca5a5', borderRadius: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
-        <span style={{ fontWeight: 700, color: '#dc2626', fontSize: 13 }}>📋 Nợ cũ còn lại: {money(total)}</span>
-        {chosen > 0 && <span style={{ fontSize: 12, fontWeight: 700, color: '#7c3aed' }}>Trả lần này: {money(chosen)}</span>}
-      </div>
-
-      {surplus > 0 && (
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 40, padding: '6px 10px', marginBottom: 8, borderRadius: 8, background: 'white', border: '1px solid #c4b5fd', fontSize: 13, fontWeight: 700, color: '#5b21b6', cursor: 'pointer' }}>
-          <input type="checkbox" checked={!!useSurplus} onChange={e => onUseSurplus(e.target.checked)} style={{ width: 18, height: 18, accentColor: '#7c3aed' }} />
-          Lấy tiền dư {money(surplus)} trả nợ{surplusOld > 0 && <span style={{ fontWeight: 500 }}>&nbsp;(mới {money(surplus - surplusOld)} + cũ {money(surplusOld)})</span>}
-        </label>
-      )}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
-        {lines.map(line => {
-          const key = debtKey(line);
-          const picked = value?.[key] !== undefined;
-          return (
-            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 8, background: picked ? '#f5f3ff' : 'white', border: `1px solid ${picked ? '#c4b5fd' : '#fecaca'}` }}>
-              <input type="checkbox" checked={picked} onChange={() => toggle(line)} style={{ width: 18, height: 18, flexShrink: 0, accentColor: '#7c3aed' }} aria-label={`Trả ${line.name}`} />
-              <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 1.35 }}>
-                <div style={{ fontWeight: 700, color: '#111827' }}>{line.creditor || 'Không ghi tên'} — {line.name}</div>
-                <div style={{ color: '#6b7280' }}>Phiếu {dayMonth(line.created_at)}{line.writer ? ` · ${line.writer}` : ''} · còn <b style={{ color: '#dc2626' }}>{money(line.left)}</b></div>
-              </div>
-              {picked && (
-                <input type="text" inputMode="numeric" value={Number(value[key] || 0).toLocaleString('vi-VN')} onChange={e => setAmount(line, e.target.value)}
-                  style={{ width: 96, padding: '6px 8px', border: '1.5px solid #c4b5fd', borderRadius: 7, fontSize: 14, textAlign: 'right' }} aria-label="Số tiền trả" />
-              )}
+    <section className="np-section">
+      <div className="np-section-head"><span className="np-step">{step}</span><b>Tiền thừa & nợ cũ</b>
+        {chosen > 0 && <span className="np-aside violet">Trả {money(chosen)}</span>}</div>
+      {leftovers.length > 0 && (
+        <div className="np-box ok">
+          <button type="button" className="np-box-head" onClick={() => setOpenLeft(o => !o)} aria-expanded={showLeft}>
+            <span>💵 Tiền thừa phiếu trước</span><b>{money(leftoverTotal)}</b><ChevronDown size={16} className={showLeft ? 'up' : ''} />
+          </button>
+          {showLeft && leftovers.map(l => (
+            <div key={l.note_id} className="np-box-line">
+              <span>Phiếu {dayMonth(l.created_at)}{l.writer ? ` · ${l.writer}` : ''} · còn <b>{money(l.left)}</b></span>
+              <button type="button" className="np-mini ok" onClick={() => onReturnLeftover?.(l)}>Đã trả chủ</button>
             </div>
-          );
-        })}
-      </div>
-    </div>
-    )}
-    </>
+          ))}
+          {showLeft && canCarry && (
+            <label className="np-check ok">
+              <input type="checkbox" checked={!!carry} onChange={e => { onCarry?.(e.target.checked); if (e.target.checked) onUseLeftover?.(false); }} />
+              Cộng tiền dư cũ vào phiếu này
+            </label>
+          )}
+          {showLeft && lines.length > 0 && !carry && (
+            <label className="np-check ok">
+              <input type="checkbox" checked={!!useLeftover} onChange={e => onUseLeftover?.(e.target.checked)} />
+              Dùng tiền thừa này để trả nợ
+            </label>
+          )}
+        </div>
+      )}
+      {lines.length > 0 && (
+        <div className="np-box debt">
+          <button type="button" className="np-box-head" onClick={() => setOpenLines(o => !o)} aria-expanded={showLines}>
+            <span>📋 Nợ cũ · {lines.length} khoản <small>{showLines ? '' : '(bấm để trả)'}</small></span><b>{money(total)}</b><ChevronDown size={16} className={showLines ? 'up' : ''} />
+          </button>
+          {(showLines || useSurplus) && surplus > 0 && (
+            <label className="np-check violet">
+              <input type="checkbox" checked={!!useSurplus} onChange={e => onUseSurplus(e.target.checked)} />
+              <span>Lấy tiền dư {money(surplus)} trả nợ{surplusOld > 0 && <small> (mới {money(surplus - surplusOld)} + cũ {money(surplusOld)})</small>}</span>
+            </label>
+          )}
+          {showLines && <div className="np-debt-list">
+            {lines.map(line => {
+              const key = debtKey(line);
+              const picked = value?.[key] !== undefined;
+              return (
+                <div key={key} className={`np-debt-line${picked ? ' on' : ''}`}>
+                  <input type="checkbox" checked={picked} onChange={() => toggle(line)} aria-label={`Trả ${line.name}`} />
+                  <div>
+                    <b>{line.creditor || 'Không ghi tên'} — {line.name}</b>
+                    <small>Phiếu {dayMonth(line.created_at)}{line.writer ? ` · ${line.writer}` : ''} · còn <em>{money(line.left)}</em></small>
+                  </div>
+                  {picked && (
+                    <input type="text" inputMode="numeric" className="np-input" value={Number(value[key] || 0).toLocaleString('vi-VN')} onChange={e => setAmount(line, e.target.value)} aria-label="Số tiền trả" />
+                  )}
+                </div>
+              );
+            })}
+          </div>}
+        </div>
+      )}
+    </section>
   );
 }

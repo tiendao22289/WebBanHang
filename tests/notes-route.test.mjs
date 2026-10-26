@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as math from '../src/lib/notesMath.mjs';
 import { noteLeftover, noteMoney, openDebtLines } from '../src/lib/notesDebts.mjs';
+import * as categoriesLib from '../src/lib/noteCategories.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
 
 const source = readFileSync(new URL('../src/app/api/admin/notes/route.js', import.meta.url), 'utf8')
@@ -14,7 +15,7 @@ const STAFF = { id: '00000000-0000-4000-8000-00000000bbbb', full_name: 'Thy', ro
 function load(state, user = ADMIN) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...math, openDebtLines, noteLeftover, noteMoney, crypto: globalThis.crypto, Object, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
+    NextResponse, ...math, ...categoriesLib, openDebtLines, noteLeftover, noteMoney, crypto: globalThis.crypto, Object, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
     getStaffSession: async () => ({ code: 200, user }), staffDatabase: () => fakeDb(state),
   });
 }
@@ -208,4 +209,37 @@ test('a note cannot be edited below the leftover it already handed back or moved
   assert.equal(low.status, 400);
   assert.match(low.body.error, /500\.000/);
   assert.equal((await post(api, { action: 'edit', id: trip.id, note_type: 'expense', items, note: '', input_amount: 950000 })).status, 200);
+});
+
+test('the owner makes the "Khác" kinds; staff put lines like petrol or repairs in them and the line keeps its kind', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const staff = load(state, STAFF);
+  const admin = load(state, ADMIN);
+  assert.equal((await post(staff, { action: 'set_categories', categories: [{ name: 'Xăng xe' }] })).status, 403, 'only the owner edits kinds');
+  const set = await post(admin, { action: 'set_categories', categories: [{ name: ' Xăng  xe ' }, { name: 'xăng xe' }, { name: 'Khác' }, { name: '' }, { name: 'Sửa chữa' }] });
+  assert.equal(set.status, 200);
+  assert.deepEqual(set.body.categories.map(c => c.name), ['Xăng xe', 'Sửa chữa'], 'no blanks, no duplicates, "Khác" is built in');
+  const [petrol, repair] = set.body.categories;
+  const renamed = await post(admin, { action: 'set_categories', categories: [{ id: petrol.id, name: 'Xăng / đi lại' }, repair] });
+  assert.equal(renamed.body.categories[0].id, petrol.id, 'renaming keeps the id, so old lines keep their kind');
+  assert.equal(state.finance_settings.length, 1);
+
+  const r = await post(staff, { action: 'create', note_type: 'expense', items: [
+    { name: 'Ốc hương', qty: '2', price: '200k' },
+    { name: 'Đổ xăng', price: '50k', category: petrol.id },
+    { name: 'Thay vòi nước', price: '120k', category: 'bad id!' },
+  ] });
+  assert.equal(r.status, 200);
+  const saved = JSON.parse(state.staff_notes[0].content).items;
+  assert.deepEqual(saved.map(i => i.category ?? ''), ['', petrol.id, ''], 'a broken kind falls back to Hàng ốc');
+  assert.equal(state.staff_notes[0].amount, 570000, 'Khác lines still count in the note total');
+
+  const edited = saved.map((i, idx) => (idx === 2 ? { ...i, category: repair.id } : i));
+  assert.equal((await post(staff, { action: 'edit', id: state.staff_notes[0].id, note_type: 'expense', items: edited, note: '' })).status, 200);
+  const after = JSON.parse(state.staff_notes[0].content);
+  assert.equal(after.items[2].category, repair.id);
+  assert.match(after.history.at(-1).changes, /Thay vòi nước: loại Hàng ốc → Khác · Sửa chữa/);
+
+  const list = plain(await staff.GET({}));
+  assert.deepEqual(list.body.categories.map(c => c.name), ['Xăng / đi lại', 'Sửa chữa'], 'staff get the kinds to pick from');
 });

@@ -5,7 +5,7 @@ import { Banknote, Camera, ChevronDown, ChevronLeft, ChevronRight, CreditCard, P
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import { useBackClose } from '@/lib/useBackClose';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
-import { costParts } from '@/lib/ownerFinance.mjs';
+import { costParts, shoppingParts } from '@/lib/ownerFinance.mjs';
 import './finance.css';
 
 const money = value => `${Math.round(Number(value || 0)).toLocaleString('vi-VN')}đ`;
@@ -1037,6 +1037,14 @@ function ItemsView({ month, today }) {
         </div>)}
         {t.unitemized > 0 && <div className="fin-row static"><span>Phiếu Sổ tay không ghi chi tiết hàng</span><b>{money(t.unitemized)}</b></div>}
         {t.mismatch !== 0 && t.mismatch !== undefined && <div className="fin-row static"><span>⚠ Phiếu lệch tiền ({t.mismatchNotes} phiếu)<small>Tổng phiếu đã lưu khác các dòng hàng — xem Từng ngày để sửa</small></span><b>{t.mismatch > 0 ? '+' : ''}{money(t.mismatch)}</b></div>}
+        {/* Dòng tab "Khác" của Sổ tay: không phải hàng làm món nên không vào nhóm món. */}
+        {data.other?.length > 0 && <>
+          <p className="fin-hint"><b>Chi khác (Sổ tay · tab Khác, không tính vào món)</b> · {money(t.otherCost)}</p>
+          {data.other.map(g => <div key={g.id} className="fin-row static">
+            <span>📦 {g.name}<small>{g.items.slice(0, 4).map(i => i.name).join(', ')}{g.items.length > 4 ? '…' : ''}</small></span>
+            <b>{money(g.amount)}</b>
+          </div>)}
+        </>}
       </div>}
     </>}
   </section>;
@@ -1106,7 +1114,10 @@ export default function FinancePage() {
   const totalCost = t ? t.purchases + t.drinks + t.salary + t.fixedShare + t.customTotal : 0;
   // Các khoản chi của tháng — dòng 0đ của tab tự tạo thì ẩn cho gọn.
   const costRows = t ? [
-    { key: 'purchases', name: 'Đi chợ / nhập hàng (Sổ tay)', amount: t.purchases },
+    // Sổ tay: đi chợ hàng ốc, rồi từng loại tab "Khác" (xăng xe, sửa chữa…) chủ tạo ở trang Sổ tay.
+    ...shoppingParts(t, data.noteCategories || []).map(p => (p.id
+      ? { key: `note-${p.id}`, name: `📦 ${p.name}`, sub: 'Sổ tay · tab Khác', amount: p.amount }
+      : { key: 'purchases', name: 'Đi chợ / nhập hàng (Sổ tay)', amount: p.amount })),
     { key: 'drinks', name: 'Chi trong ngày', sub: 'nước ngọt, đá, gas… nhập ở tab Hôm nay', amount: t.drinks },
     { key: 'salary', name: 'Lương (theo chấm công)', amount: t.salary,
       sub: !data.wagesReady ? 'Chưa đọc được chấm công, thử tải lại' : t.salaryExtra ? `gồm thưởng − phạt cả tháng ${t.salaryExtra > 0 ? '+' : '-'}${money(Math.abs(t.salaryExtra))}` : '' },

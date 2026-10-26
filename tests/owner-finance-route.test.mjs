@@ -7,6 +7,7 @@ import * as zaloLink from '../src/lib/financeZaloLink.mjs';
 import { notesDayData, notesRangeData, notesReportMessages, packMessages } from '../src/lib/notesReport.mjs';
 import { compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData } from '../src/lib/dailyInsights.mjs';
 import * as dayCheckLib from '../src/lib/dayCheck.mjs';
+import * as noteCategoriesLib from '../src/lib/noteCategories.mjs';
 import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { payrollCost } from '../src/lib/payroll.mjs';
 import { normalizeRules } from '../src/lib/attendanceRules.mjs';
@@ -76,7 +77,7 @@ function fakeDb(state, { failTable } = {}) {
 function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFails = false, env = {} }) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...finance, ...zaloLink, ...dayCheckLib, notesReportMessages, notesDayData, notesRangeData, packMessages, compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData, AUTO_CLOSE_BY: 'Máy tự đóng (quên ra ca)', createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
+    NextResponse, ...finance, ...zaloLink, ...dayCheckLib, ...noteCategoriesLib, notesReportMessages, notesDayData, notesRangeData, packMessages, compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData, AUTO_CLOSE_BY: 'Máy tự đóng (quên ra ca)', createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
     sendOaText: async (_db, id, text) => { sent.push({ id, text }); return zaloFails ? { ok: false, detail: { error: -230 } } : { ok: true }; },
     URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
@@ -646,12 +647,14 @@ test('/thongke reads a week or a month: each day, totals, sales, losses, staff a
 
 test('the owner never has to close the day: the machine checks it, saves the result and stops asking', async () => {
   const today = finance.vnDate(Date.now());
+  // Giờ trong ngày VN đang xem (không lấy 'mấy phút trước': chạy lúc vừa qua nửa đêm sẽ rơi sang hôm qua).
+  const at = m => new Date(Date.parse(finance.vnDayStartIso(today)) + m * 60000).toISOString();
   const state = empty();
   state.finance_revenue_ledger.push(
-    { order_id: '00000000-0000-0000-0000-0000000000c1', business_date: today, paid_at: later(-30), table_number: '2', amount: 200000, payment_method: 'transfer', transfer_image_path: null, items: [] },
-    { order_id: '00000000-0000-0000-0000-0000000000c2', business_date: today, paid_at: later(-20), table_number: '3', amount: 150000, payment_method: 'cash', photo_skip_reason: 'Máy hỏng camera', items: [] });
+    { order_id: '00000000-0000-0000-0000-0000000000c1', business_date: today, paid_at: at(1), table_number: '2', amount: 200000, payment_method: 'transfer', transfer_image_path: null, items: [] },
+    { order_id: '00000000-0000-0000-0000-0000000000c2', business_date: today, paid_at: at(2), table_number: '3', amount: 150000, payment_method: 'cash', photo_skip_reason: 'Máy hỏng camera', items: [] });
   // Bàn đã thu nhưng sổ chưa có (trigger lỗi, lịch sử bàn đã hết hạn).
-  state.orders = [{ id: '00000000-0000-0000-0000-0000000000c3', status: 'paid', paid_at: later(-10), total_amount: 90000, payment_method: 'cash', table_id: 't5' }];
+  state.orders = [{ id: '00000000-0000-0000-0000-0000000000c3', status: 'paid', paid_at: at(3), total_amount: 90000, payment_method: 'cash', table_id: 't5' }];
   state.tables = [{ id: 't5', table_number: 5 }];
   const api = load({ state });
   const before = (await get(api, `month=${today.slice(0, 7)}`)).body.days.find(d => d.date === today);
@@ -672,4 +675,20 @@ test('the owner never has to close the day: the machine checks it, saves the res
   assert.equal(report.summary.check.problems, 3);
   assert.equal((await post(api, { action: 'check_day', date: '2099-01-01' })).status, 400);
   assert.equal((await post(load({ role: 'staff', state }), { action: 'check_day', date: today })).status, 403);
+});
+
+test('Sổ tay "Khác" kinds (petrol, repairs) show as their own costs on /thongke, the week view and the month book', async () => {
+  const state = empty();
+  state.finance_settings = [{ key: 'note_categories', value: { categories: [{ id: 'xang', name: 'Xăng xe' }] } }];
+  const content = JSON.stringify({ type: 'structured_expense', items: [{ name: 'Ốc hương', qty: '1', price: '300k' }, { name: 'Đổ xăng', price: '50k', category: 'xang' }] });
+  state.staff_notes.push({ id: 'k1', created_at: '2026-10-23T03:00:00.000Z', note_type: 'expense', amount: 350000, debt: 0, content, staff: { full_name: 'Lan' } });
+  const api = load({ state });
+  const report = (await get(api, 'report=2026-10-23')).body;
+  assert.deepEqual(plain(report.summary.costs.slice(0, 2)), [{ label: 'Đi chợ', amount: 300000 }, { label: 'Xăng xe (Sổ tay)', amount: 50000 }]);
+  assert.equal(report.summary.cost, 350000, 'same total as before');
+  const week = (await get(api, 'period=week&date=2026-10-23')).body;
+  assert.ok(week.totals.costs.some(c => c.label === 'Xăng xe (Sổ tay)' && c.amount === 50000));
+  const month = (await get(api, 'month=2026-10')).body;
+  assert.deepEqual(plain(month.noteCategories), [{ id: 'xang', name: 'Xăng xe' }]);
+  assert.deepEqual(plain(month.totals.notesOther), { xang: 50000 });
 });

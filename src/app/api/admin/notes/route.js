@@ -8,17 +8,20 @@
  * trigger trong DB ghi vào staff_data_audit. Mỗi thao tác ghi một lần qua hàm
  * staff_notes_commit (cả giao dịch, kiểm tra phiếu chưa bị đổi từ lúc đọc).
  *
- * GET  → { notes (kèm staff), payments }  (admin: tất cả; nhân viên: của mình)
+ * GET  → { notes (kèm staff), payments, categories }  (admin: tất cả; nhân viên: của mình)
+ *       categories: các loại "Khác" chủ quán tạo (dòng hàng tab Khác có category = id loại)
  * POST {action}: create (kèm pay_debts: [{ note_id, item_index|null, amount }] — trả đúng các khoản
  *       nợ cũ đã chọn; from_note_id = lấy từ tiền thừa của phiếu trước, bỏ trống = tiền phiếu mới;
  *       carry_leftovers [{ note_id, amount }] = cộng tiền dư phiếu cũ vào phiếu mới),
  *       edit, pay_item (item_index null = cả phiếu), return_leftover (đã trả tiền thừa cho chủ),
- *       delete (admin; hoàn lại nợ đã trả / tiền dư đã chuyển bằng phiếu đó)
+ *       delete (admin; hoàn lại nợ đã trả / tiền dư đã chuyển bằng phiếu đó),
+ *       set_categories (admin; { categories: [{ id?, name }] } — tạo / đổi tên / xoá loại Khác)
  */
 import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
 import { noteLeftover, noteMoney, openDebtLines } from '@/lib/notesDebts.mjs';
+import { categoryName, cleanCategories, lineCategory } from '@/lib/noteCategories.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -48,6 +51,9 @@ function cleanItems(items, stored = []) {
       _id: str(i._id || `item-${Date.now()}-${idx}`, 60),
     };
     if (i.preset) row.preset = true;
+    // Dòng tab "Khác" (xăng xe, sửa chữa…): id loại; dòng hàng ốc không có trường này.
+    const category = lineCategory(i);
+    if (category) row.category = category;
     if (old?.paid_amount) {
       row.paid_amount = Number(old.paid_amount) || 0;
       row.payment_logs = old.payment_logs || [];
@@ -65,7 +71,8 @@ function debtBase(i) {
 }
 
 /** Lịch sử thay đổi giữa dòng đang lưu và dòng mới (giống trang Sổ tay cũ). */
-function diffItems(oldItems, newItems, oldText, newText) {
+function diffItems(oldItems, newItems, oldText, newText, categories = []) {
+  const kind = i => (lineCategory(i) ? `Khác · ${categoryName(lineCategory(i), categories)}` : 'Hàng ốc');
   const lines = [];
   const oldById = new Map(oldItems.map((o, idx) => [o._id || `#${idx}`, o]));
   newItems.forEach((n, idx) => {
@@ -82,12 +89,20 @@ function diffItems(oldItems, newItems, oldText, newText) {
     if ((o.paymentStatus || 'full') !== n.paymentStatus) d.push(`trạng thái ${o.paymentStatus === 'debt' ? 'Nợ' : 'Đủ'} → ${n.paymentStatus === 'debt' ? 'Nợ' : 'Đủ'}`);
     if (n.paymentStatus === 'debt' && (o.debtAmount || '') !== n.debtAmount) d.push(`số nợ ${o.debtAmount || '(toàn bộ)'} → ${n.debtAmount || '—'}`);
     if ((o.creditor || '') !== n.creditor && (o.creditor || n.creditor)) d.push(`nợ của: ${n.creditor || '—'}`);
+    if (lineCategory(o) !== lineCategory(n)) d.push(`loại ${kind(o)} → ${kind(n)}`);
     if (d.length) lines.push(`✏️ Sửa ${n.name}: ${d.join(', ')}`);
   });
   const newIds = new Set(newItems.map(n => n._id));
   oldItems.forEach((o, idx) => { if (!newIds.has(o._id || `#${idx}`)) lines.push(`🗑️ Xóa: ${o.name}`); });
   if ((oldText || '') !== (newText || '')) lines.push(`📝 Ghi chú thêm: "${newText || '(xóa)'}"`);
   return lines;
+}
+
+// Loại "Khác" của Sổ tay: finance_settings['note_categories'] (chưa có → chưa tạo loại nào).
+async function readCategories(db) {
+  const { data, error } = await db.from('finance_settings').select('value').eq('key', 'note_categories').maybeSingle();
+  if (error) { console.error('[notes] categories', error); return []; }
+  return Array.isArray(data?.value?.categories) ? data.value.categories : [];
 }
 
 const parseContent = content => { try { const d = JSON.parse(content); return d && typeof d === 'object' ? d : null; } catch { return null; } };
@@ -185,7 +200,7 @@ export async function GET(request) {
       const ids = new Set((notes || []).map(n => n.id));
       payments = (p.data || []).filter(x => ids.has(x.note_id) || ids.has(x.paid_from_note_id));
     }
-    return NextResponse.json({ notes: notes || [], payments }, { headers });
+    return NextResponse.json({ notes: notes || [], payments, categories: await readCategories(db) }, { headers });
   } catch (error) {
     console.error('[notes] GET', error);
     return fail('Không tải được Sổ tay, thử lại.', 500);
@@ -280,6 +295,14 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, note: created }, { headers });
     }
 
+    if (body.action === 'set_categories') {
+      if (!isAdmin) return fail('Chỉ chủ quán được sửa loại.', 403);
+      const categories = cleanCategories(body.categories, () => `c${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`);
+      const { error } = await db.from('finance_settings').upsert({ key: 'note_categories', value: { categories }, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+      if (error) throw error;
+      return NextResponse.json({ ok: true, categories }, { headers });
+    }
+
     if (!UUID.test(body.id || '')) return fail('Thiếu phiếu.');
     const { data: note, error: noteErr } = await db.from('staff_notes').select('*').eq('id', body.id).maybeSingle();
     if (noteErr) throw noteErr;
@@ -351,7 +374,7 @@ export async function POST(request) {
       const ts = stamp(), by = user.full_name || 'Không rõ';
       let content, amount = 0, debt = 0;
       if (items.length) {
-        const lines = diffItems(storedItems, items, stored?.note || '', noteText);
+        const lines = diffItems(storedItems, items, stored?.note || '', noteText, await readCategories(db));
         const t = noteTotals(items);
         amount = t.paid; debt = t.debt;
         const before = (Number(note.amount) || 0) + (Number(note.debt) || 0);

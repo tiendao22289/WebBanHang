@@ -7,12 +7,22 @@ import './notes.css';
 import MenuNameInput from '@/lib/MenuNameInput';
 import { normalizePriceInput, noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
 import { notesApi, workforce } from '@/lib/staffApi';
-import { LineHint, filterRange, notesSummary } from './notesStats';
+import { filterRange, notesSummary } from './notesStats';
 import DebtPicker from './DebtPicker';
-import { fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
+import { KindTag, isOtherLine, newOtherLine } from './NoteKinds';
+import OtherCosts from './OtherCosts';
+import { MoneyInput, NoteItemsList, Section, TripSummary, vnd } from './NewNoteParts';
+import { allOpenDebts, fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
 
 // Chỉ tính tiền thừa của phiếu từ tháng 10/2026 (khớp ô "Trả lại chủ" của tháng; phiếu cũ hơn đã trả chủ).
 const LEFTOVER_SINCE = '2026-10-01';
+// Dòng sẵn của phiếu đi chợ mới: dòng gõ hàng ốc, Tiền rau, Tiền gia vị, dòng gõ Khác (xăng xe, sửa chữa…).
+const freshNoteRows = () => [
+  { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+  { name: 'Tiền rau', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+  { name: 'Tiền gia vị', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+  newOtherLine(),
+];
 
 export default function StaffNotesPage() {
   // Tên món trong menu để chọn nhanh ở ô tên hàng (vẫn gõ tự do được).
@@ -24,6 +34,10 @@ export default function StaffNotesPage() {
   const [currentUser, setCurrentUser] = useState(null);
   // Các lần trả nợ (staff_note_payments) — để thống kê theo đúng ngày trả.
   const [payments, setPayments] = useState([]);
+  // Loại "Khác" của dòng hàng (xăng xe, sửa chữa…) do chủ tạo; nhóm Khác nằm cuối danh sách hàng của phiếu.
+  const [noteCategories, setNoteCategories] = useState([]);
+  const [showNoteText, setShowNoteText] = useState(false);
+  const [adminTab, setAdminTab] = useState('notes'); // chủ quán: 'notes' (phiếu) | 'other' (chi khác)
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -42,11 +56,7 @@ export default function StaffNotesPage() {
   // New Note State
   const [newNoteType, setNewNoteType] = useState('expense'); // 'expense' | 'stock' | 'repair' | 'other'
   const [newNoteContent, setNewNoteContent] = useState('');
-  const [expenseItems, setExpenseItems] = useState([
-    { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
-    { name: 'Tiền rau', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
-    { name: 'Tiền gia vị', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }
-  ]);
+  const [expenseItems, setExpenseItems] = useState(() => freshNoteRows());
   const [newNoteAmount, setNewNoteAmount] = useState(0);
   const [newNoteDebt, setNewNoteDebt] = useState(0);
   const [newNoteInputAmount, setNewNoteInputAmount] = useState(''); // Tiền chủ giao trước khi đi chợ
@@ -268,6 +278,7 @@ export default function StaffNotesPage() {
       const result = await response.json();
       setNotes(result.notes || []);
       setPayments(result.payments || []);
+      setNoteCategories(result.categories || []);
     } catch { /* mạng chập chờn → giữ danh sách đang có */ }
   };
 
@@ -350,9 +361,10 @@ export default function StaffNotesPage() {
         return { note_id: noteId, item_index: index === 'note' ? null : Number(index), amount, from_note_id };
       });
 
-    const hasItems = newNoteType === 'expense' && expenseItems.some(i => i.name.trim());
+    const filled = expenseItems.filter(i => i.name.trim() && !(i.preset && !String(i.price || '').trim()));
+    const hasItems = newNoteType === 'expense' && filled.length > 0;
     if (!hasItems && !newNoteContent.trim() && !payDebts.length) {
-      alert('Vui lòng nhập nội dung!');
+      alert('Chưa ghi hàng nào: ghi ít nhất 1 dòng hàng có giá.');
       return;
     }
 
@@ -362,7 +374,7 @@ export default function StaffNotesPage() {
     try {
       await notesApi('create', {
         note_type: newNoteType,
-        items: newNoteType === 'expense' ? expenseItems.filter(i => i.name.trim()) : [],
+        items: newNoteType === 'expense' ? filled : [],
         note: newNoteContent,
         input_amount: newNoteInputAmount,
         pay_debts: payDebts,
@@ -374,15 +386,12 @@ export default function StaffNotesPage() {
     if (!error) {
       setShowAddModal(false);
       setNewNoteContent('');
-      setExpenseItems([
-        { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
-        { name: 'Tiền rau', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
-        { name: 'Tiền gia vị', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }
-      ]);
+      setExpenseItems(freshNoteRows());
       setNewNoteAmount(0);
       setNewNoteDebt(0);
       setNewNoteInputAmount('');
       setNewNoteType('expense');
+      setShowNoteText(false);
       setNewNotePayDebtEnabled(false);
       setNewNotePayDebtAmount('');
       setDebtPays({});
@@ -434,9 +443,9 @@ export default function StaffNotesPage() {
         const existingNames = items.map(i => i.name.trim().toLowerCase());
         const presetItems = presets
           .filter(n => !existingNames.includes(n.toLowerCase()))
-          .map(n => ({ _id: `preset-${n}-${Date.now()}`, name: n, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }));
+          .map(n => ({ _id: `preset-${n}-${Date.now()}`, name: n, preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }));
         const allItems = [...items, ...presetItems];
-        const withEmpty = [...allItems, { _id: `new-${Date.now()}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }];
+        const withEmpty = [...allItems, { _id: `new-${Date.now()}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }, newOtherLine()];
         setEditOriginalItems(JSON.parse(JSON.stringify(allItems))); // deep copy tránh shared reference
         setEditExpenseItems(withEmpty);
         setEditNoteContent(data.note || '');
@@ -474,13 +483,18 @@ export default function StaffNotesPage() {
   };
 
   const updateEditExpenseItem = (index, field, value) => {
-    const newItems = editExpenseItems.map((item, i) =>
-      i === index ? { ...item, [field]: value } : item
-    );
-    if (index === newItems.length - 1 && value.trim() !== '' && field === 'name') {
-      newItems.push({ _id: `new-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' });
-    }
-    setEditExpenseItems(newItems);
+    setEditExpenseItems(prev => {
+      const row = prev[index] || {};
+      const other = isOtherLine(row);
+      const newItems = prev.map((item, i) => (i === index ? { ...item, [field]: value } : item));
+      if (field === 'name' && !row.preset && !String(row.name || '').trim() && String(value).trim()) {
+        const next = prev[index + 1];
+        const hasEmptyAfter = next && !next.preset && !String(next.name || '').trim() && isOtherLine(next) === other;
+        if (!hasEmptyAfter) newItems.splice(index + 1, 0, other ? newOtherLine(row.category)
+          : { _id: `new-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' });
+      }
+      return newItems;
+    });
   };
 
   const handleEditExpenseBlur = (index, field, e) => {
@@ -524,7 +538,7 @@ export default function StaffNotesPage() {
     let paid = 0, debt = 0;
 
     const validItems = editNoteType === 'expense'
-      ? editExpenseItems.filter(i => i.name.trim() !== '')
+      ? editExpenseItems.filter(i => i.name.trim() !== '' && !(String(i._id || '').startsWith('preset-') && !String(i.price || '').trim()))
       : [];
 
     // ── Generate history entry ──
@@ -663,13 +677,15 @@ export default function StaffNotesPage() {
     setExpenseItems(prev => {
       const wasEmpty = prev[index]?.name?.trim() === '';
       const isPreset = prev[index]?.preset;
+      const other = isOtherLine(prev[index] || {});
       const newItems = prev.map((item, i) => i === index ? { ...item, [field]: value } : item);
-      // When typing a name into a non-preset empty item, insert ONE new empty row right after it
+      // When typing a name into a non-preset empty item, insert ONE new empty row right after it (same tab)
       if (field === 'name' && wasEmpty && value.trim() !== '' && !isPreset) {
         const next = prev[index + 1];
-        const alreadyHasEmptyAfter = next && !next.preset && next.name.trim() === '';
+        const alreadyHasEmptyAfter = next && !next.preset && next.name.trim() === '' && isOtherLine(next) === other;
         if (!alreadyHasEmptyAfter) {
-          newItems.splice(index + 1, 0, { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' });
+          newItems.splice(index + 1, 0, other ? newOtherLine(prev[index].category)
+            : { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' });
         }
       }
       return newItems;
@@ -791,7 +807,7 @@ export default function StaffNotesPage() {
                       <tr key={idx}>
                         <td style={{ textAlign: 'center' }}>{idx + 1}</td>
                         <td style={{ fontWeight: 600 }}>
-                          {item.name}
+                          {item.name} <KindTag item={item} categories={noteCategories} />
                           {isDebt && item.creditor?.trim() && (
                             <div style={{ fontSize: '0.75rem', color: '#dc2626', fontWeight: 400, marginTop: 1 }}>👤 {item.creditor}</div>
                           )}
@@ -845,7 +861,7 @@ export default function StaffNotesPage() {
                   }}>
                     {/* Top row: name + Trả nợ button — full width */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{idx + 1}. {item.name}</div>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{idx + 1}. {item.name} <KindTag item={item} categories={noteCategories} /></div>
                       <div style={{ paddingLeft: 10 }}>
                         {isDebt && remaining > 0 ? (
                           <button
@@ -1366,7 +1382,20 @@ export default function StaffNotesPage() {
       )}
 
       {/* ══ NOTES content ══ */}
-      {(currentUser.role === 'admin' || activeNotesTab === 'notes') && (<>
+      {/* ── Chủ quán: tab Phiếu / Chi khác ── */}
+      {currentUser.role === 'admin' && (
+        <div className="kind-tabs notes-admin-tabs" role="tablist" aria-label="Sổ tay">
+          {[['notes', '📋 Phiếu đi chợ', `${filteredByDate.length} phiếu`], ['other', '📦 Chi khác', `${noteCategories.length} loại`]].map(([key, label, sub]) => (
+            <button key={key} type="button" role="tab" aria-selected={adminTab === key} className={adminTab === key ? 'on' : ''} onClick={() => setAdminTab(key)}>
+              <b>{label}</b><small>{sub}</small>
+            </button>))}
+        </div>
+      )}
+      {currentUser.role === 'admin' && adminTab === 'other' && (
+        <OtherCosts notes={filteredByDate} categories={noteCategories} filterLabel={filterLabel} onCategories={setNoteCategories} />
+      )}
+
+      {(currentUser.role === 'admin' ? adminTab === 'notes' : activeNotesTab === 'notes') && (<>
 
 
 
@@ -1610,56 +1639,11 @@ export default function StaffNotesPage() {
                   {editNoteType === 'expense' ? (
                     <div>
                       <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Chi tiết mua hàng</label>
-                      {editExpenseItems.map((item, idx) => (
-                        <div key={idx} style={{ marginBottom: 8, padding: '8px 10px', background: 'white', borderRadius: 8, border: '1px solid #e5e7eb' }}>
-                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
-                            <MenuNameInput names={menuNames} placeholder="Tên món" value={item.name} onChange={v => updateEditExpenseItem(idx, 'name', v)}
-                              style={{ flex: 1, minWidth: 90, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }} />
-
-                            <input type="text" placeholder="Giá" value={item.price} onChange={e => updateEditExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleEditExpenseBlur(idx, 'price', e)}
-                              style={{ width: 68, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, textAlign: 'center' }} />
-                            <input type="text" placeholder="SL/Ký" value={item.qty} onChange={e => updateEditExpenseItem(idx, 'qty', e.target.value)} onBlur={e => handleEditExpenseBlur(idx, 'qty', e)}
-                              style={{ width: 68, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, textAlign: 'center' }} />
-                            {editExpenseItems.length > 1 && idx < editExpenseItems.length - 1 && (
-                              <button onClick={() => removeEditExpenseItem(idx)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 2 }}><XCircle size={16} /></button>
-                            )}
-                          </div>
-                          <LineHint item={item} />
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer' }}>
-                              <input type="radio" checked={item.paymentStatus === 'full'} onChange={() => updateEditExpenseItem(idx, 'paymentStatus', 'full')} /> ✓ Đủ
-                            </label>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer' }}>
-                              <input type="radio" checked={item.paymentStatus === 'debt'} onChange={() => {
-                                updateEditExpenseItem(idx, 'paymentStatus', 'debt');
-                                // Auto-fill debtAmount when switching to debt
-                                if (!item.debtAmount) {
-                                  const p = parseVal(item.price); const q = parseVal(item.qty, true) || 1;
-                                  const total = p * q;
-                                  if (total > 0) updateEditExpenseItem(idx, 'debtAmount', total.toLocaleString('vi-VN'));
-                                }
-                              }} /> Nợ
-                            </label>
-                            {item.paymentStatus === 'debt' && (<>
-                              <input
-                                type="text" inputMode="numeric"
-                                placeholder="Số tiền nợ"
-                                value={item.debtAmount || ''}
-                                onChange={e => {
-                                  const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                                  const p = parseVal(item.price); const q = parseVal(item.qty, true) || 1; const cap = p * q;
-                                  const num = Number(raw);
-                                  if (cap > 0 && num > cap) { updateEditExpenseItem(idx, 'debtAmount', cap.toLocaleString('vi-VN')); return; }
-                                  updateEditExpenseItem(idx, 'debtAmount', raw ? num.toLocaleString('vi-VN') : '');
-                                }}
-                                style={{ width: 90, padding: '4px 7px', border: '1.5px solid #fca5a5', borderRadius: 6, fontSize: 12, textAlign: 'right', color: '#dc2626', fontWeight: 700 }}
-                              />
-                              <input type="text" placeholder="Nợ của ai?" value={item.creditor || ''} onChange={e => updateEditExpenseItem(idx, 'creditor', e.target.value)}
-                                style={{ flex: 1, minWidth: 70, padding: '4px 7px', border: '1px solid #fca5a5', borderRadius: 6, fontSize: 12 }} />
-                            </>)}
-                          </div>
-                        </div>
-                      ))}
+                      <div className="np-edit-list">
+                        <NoteItemsList items={editExpenseItems} menuNames={menuNames} categories={noteCategories} isAdmin={currentUser.role === 'admin'}
+                          onField={updateEditExpenseItem} onBlur={handleEditExpenseBlur} onRemove={removeEditExpenseItem}
+                          onCategory={(idx, v) => updateEditExpenseItem(idx, 'category', v)} />
+                      </div>
                       <div style={{ marginBottom: 8 }}>
                         <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Ghi chú thêm</label>
                         <textarea rows={2} value={editNoteContent} onChange={e => setEditNoteContent(e.target.value)}
@@ -1784,184 +1768,72 @@ export default function StaffNotesPage() {
         </div>
       )}
 
-      {/* ── Add Note Modal ── */}
+      {/* ── Phiếu đi chợ mới: 1 tiền chủ giao → 2 hàng đã mua → 3 tiền thừa & nợ cũ → 4 tổng kết ── */}
       {showAddModal && (() => {
+        const { paid: thucChi, debt: tienNo } = calculateTotals();
+        const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
+        const leftoverList = openLeftovers(notes, payments, LEFTOVER_SINCE);
+        const carried = carryLeftover ? leftoverList.reduce((a, l) => a + l.left, 0) : 0;
+        // Phần trả nợ lấy từ tiền thừa phiếu trước không trừ vào tiền của phiếu này.
+        const fromLeftover = useLeftoverForDebt && !carryLeftover ? fundDebtPayments(Object.entries(debtPays).map(([key, amount]) => ({ key, amount })),
+          leftoverList.map(l => ({ id: l.note_id, left: l.left }))).filter(x => x.from_note_id).reduce((a, x) => a + x.amount, 0) : 0;
+        const payOldDebt = debtPayTotal - fromLeftover;
+        const balance = inputAmt + carried - thucChi - payOldDebt;
+        const surplus = (inputAmt > 0 ? inputAmt - thucChi : 0) + carried;
+        const goods = thucChi + tienNo;
+        const hasDebtStep = leftoverList.length > 0 || allOpenDebts(notes).length > 0;
+        const now = new Date();
+        const when = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
         return (
         <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '450px' }}>
-            <div className="modal-header">
-              <h3>Phiếu đi chợ mới</h3>
-              <button className="btn btn-icon btn-ghost" onClick={() => setShowAddModal(false)}><XCircle size={20} /></button>
+          <div className="modal-content np-sheet" onClick={e => e.stopPropagation()} role="dialog" aria-label="Phiếu đi chợ mới">
+            <div className="modal-header np-head">
+              <h3>Phiếu đi chợ mới <small>{currentUser.full_name} · {when}</small></h3>
+              <button type="button" className="np-close" onClick={() => setShowAddModal(false)} aria-label="Đóng"><XCircle size={20} /></button>
             </div>
-            <div className="modal-body">
-              {/* Phiếu mới giờ chỉ dùng cho đi chợ (newNoteType luôn là 'expense'). */}
-              {newNoteType === 'expense' ? (
-                <div className="expense-fields-container mb-4">
-                  {/* ── Tiền chủ giao (nhập trước khi ghi món) ── */}
-                  <div className="add-input-amount">
-                    <label htmlFor="new-note-input-amount">💵 Tiền chủ giao</label>
-                    <input
-                      id="new-note-input-amount"
-                      type="text" inputMode="numeric"
-                      placeholder="VD: 500.000"
-                      value={newNoteInputAmount}
-                      onChange={e => {
-                        const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                        setNewNoteInputAmount(raw ? Number(raw).toLocaleString('vi-VN') : '');
-                      }}
-                    />
-                  </div>
-                  <label className="form-label mb-2 block" style={{ marginTop: 12 }}>Chi tiết mua hàng</label>
-                  <div className="add-items">
-                    {expenseItems.map((item, idx) => (
-                      <div key={idx} className="add-item">
-                        <div className="add-item-top">
-                          <MenuNameInput names={menuNames} className="expense-input-clean" style={{ flex: 1, minWidth: 0 }}
-                            placeholder={idx === expenseItems.length - 1 && !item.name ? 'Nhập tên đồ...' : 'Tên món'}
-                            value={item.name} onChange={v => updateExpenseItem(idx, 'name', v)} />
-                          {expenseItems.length > 1 && idx < expenseItems.length - 1
-                            ? <button type="button" className="btn-remove-row" onClick={() => removeExpenseItem(idx)} aria-label="Xoá dòng"><XCircle size={16} /></button>
-                            : <span className="add-item-spacer" />}
-                        </div>
-                        <div className="add-item-bottom">
-                          <input type="text" className="expense-input-clean" placeholder="Giá" value={item.price}
-                            onChange={e => updateExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleExpenseBlur(idx, 'price', e)} />
-                          <input type="text" className="expense-input-clean" placeholder="SL/Ký" value={item.qty}
-                            onChange={e => updateExpenseItem(idx, 'qty', e.target.value)} onBlur={e => handleExpenseBlur(idx, 'qty', e)} />
-                          <div className="expense-status-wrapper add-item-status">
-                            <label className={`status-label ${item.paymentStatus === 'full' ? 'checked-full' : ''}`}>
-                              <input type="radio" name={`s-${idx}`} checked={item.paymentStatus === 'full'} onChange={() => updateExpenseItem(idx, 'paymentStatus', 'full')} /> Đủ
-                            </label>
-                            <label className={`status-label ${item.paymentStatus === 'debt' ? 'checked-debt' : ''}`}>
-                              <input type="radio" name={`s-${idx}`} checked={item.paymentStatus === 'debt'} onChange={() => updateExpenseItem(idx, 'paymentStatus', 'debt')} /> Nợ
-                            </label>
-                          </div>
-                        </div>
-                        {item.paymentStatus === 'debt' && (
-                          <div className="add-item-debt">
-                          {(() => {
-                            const p = parseVal(item.price);
-                            const q = parseVal(item.qty, true) || 1;
-                            const cap = p * q;
-                            return (<>
-                              <input
-                                type="text" inputMode="numeric"
-                                className="expense-input-clean"
-                                style={{ width: 100, textAlign: 'right', flexShrink: 0 }}
-                                placeholder={cap > 0 ? cap.toLocaleString('vi-VN') : 'Số tiền nợ'}
-                                value={item.debtAmount || ''}
-                                onChange={e => {
-                                  const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                                  const num = Number(raw);
-                                  if (cap > 0 && num > cap) { updateExpenseItem(idx, 'debtAmount', cap.toLocaleString('vi-VN')); return; }
-                                  updateExpenseItem(idx, 'debtAmount', raw ? num.toLocaleString('vi-VN') : '');
-                                }}
-                              />
-                              <input type="text" className="expense-input-clean" style={{ flex: 1, minWidth: 70 }} placeholder="Nợ của ai?" value={item.creditor} onChange={e => updateExpenseItem(idx, 'creditor', e.target.value)} />
-                            </>);
-                          })()}
-                          </div>
-                        )}
-                        {/* Thành tiền + cảnh báo (giá thiếu "k", số lượng nhiều số...) */}
-                        <LineHint item={item} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="form-group mb-4">
-                  <label className="form-label">Chi tiết</label>
-                  <textarea className="input" rows="5" placeholder="Nhập chi tiết..." value={newNoteContent} onChange={handleContentChange} onKeyDown={handleContentKeyDown} />
-                </div>
+            <div className="modal-body np-body">
+              <Section step={1} title="Tiền chủ giao" className="np-given"
+                aside={<MoneyInput id="new-note-input-amount" value={newNoteInputAmount} onChange={setNewNoteInputAmount} placeholder="không cầm thì bỏ trống" />} />
+
+              <Section step={2} title="Hàng đã mua" aside={goods > 0 ? <b className="np-goods">{vnd(goods)}</b> : null}>
+                <NoteItemsList items={expenseItems} menuNames={menuNames} categories={noteCategories} isAdmin={currentUser.role === 'admin'}
+                  onField={updateExpenseItem} onBlur={handleExpenseBlur} onRemove={removeExpenseItem}
+                  onCategory={(idx, v) => updateExpenseItem(idx, 'category', v)} />
+                {showNoteText
+                  ? <textarea className="np-textarea" rows={2} placeholder="Ghi chú cho chủ (không bắt buộc)" value={newNoteContent} onChange={e => setNewNoteContent(e.target.value)} />
+                  : <button type="button" className="np-link" onClick={() => setShowNoteText(true)}>＋ Ghi chú</button>}
+              </Section>
+
+              {hasDebtStep && (
+                <DebtPicker step={3} notes={notes} value={debtPays} onChange={setDebtPays}
+                  surplus={surplus} useSurplus={useSurplusForDebt} onUseSurplus={setUseSurplusForDebt}
+                  leftovers={leftoverList} useLeftover={useLeftoverForDebt} onUseLeftover={setUseLeftoverForDebt}
+                  canCarry carry={carryLeftover} onCarry={setCarryLeftover}
+                  surplusOld={carried > 0 ? Math.min(carried, Math.max(0, surplus)) : 0}
+                  onReturnLeftover={async l => {
+                    if (!confirm(`Người đi chợ đã đưa lại ${l.left.toLocaleString('vi-VN')}đ tiền thừa của phiếu này cho chủ?`)) return;
+                    try { await notesApi('return_leftover', { id: l.note_id, amount: l.left }); await fetchNotes(); } catch (err) { alert(err.message); }
+                  }} />
               )}
-              
-              {/* ── Nợ cũ còn lại: chọn khoản trả, tuỳ chọn lấy tiền dư trả nợ ── */}
-              {(() => {
-                const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
-                const leftoverList = openLeftovers(notes, payments, LEFTOVER_SINCE);
-                const carried = carryLeftover && newNoteType === 'expense' ? leftoverList.reduce((a, l) => a + l.left, 0) : 0;
-                const newSurplus = inputAmt > 0 ? inputAmt - calculateTotals().paid : 0;
-                const surplus = newSurplus + carried;
-                return (
-                  <DebtPicker notes={notes} value={debtPays} onChange={setDebtPays}
-                    surplus={surplus} useSurplus={useSurplusForDebt} onUseSurplus={setUseSurplusForDebt}
-                    leftovers={leftoverList} useLeftover={useLeftoverForDebt} onUseLeftover={setUseLeftoverForDebt}
-                    canCarry={newNoteType === 'expense'} carry={carryLeftover && newNoteType === 'expense'} onCarry={setCarryLeftover}
-                    surplusOld={carried > 0 ? Math.min(carried, Math.max(0, surplus)) : 0}
-                    onReturnLeftover={async l => {
-                      if (!confirm(`Người đi chợ đã đưa lại ${l.left.toLocaleString('vi-VN')}đ tiền thừa của phiếu này cho chủ?`)) return;
-                      try { await notesApi('return_leftover', { id: l.note_id, amount: l.left }); await fetchNotes(); } catch (err) { alert(err.message); }
-                    }} />
-                );
-              })()}
-              {/* ── Tổng kết chuyến chợ: tính như hoá đơn, kết quả ở cuối ── */}
-              {newNoteType === 'expense' && (() => {
-                const { paid: thucChi, debt: tienNo } = calculateTotals();
-                const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
-                const leftoverList = openLeftovers(notes, payments, LEFTOVER_SINCE);
-                // Phần trả nợ lấy từ tiền thừa phiếu trước không trừ vào tiền của phiếu này.
-                const fromLeftover = useLeftoverForDebt && !carryLeftover ? fundDebtPayments(Object.entries(debtPays).map(([key, amount]) => ({ key, amount })),
-                  leftoverList.map(l => ({ id: l.note_id, left: l.left }))).filter(x => x.from_note_id).reduce((a, x) => a + x.amount, 0) : 0;
-                const payOldDebt = debtPayTotal - fromLeftover;
-                // Tiền dư cũ cộng vào: tiêu tiền mới trước, thiếu mới lấy sang dư cũ.
-                const carried = carryLeftover ? leftoverList.reduce((a, l) => a + l.left, 0) : 0;
-                if (!inputAmt && !carried && !thucChi && !tienNo && !debtPayTotal) return null;
-                const hasMoney = inputAmt > 0 || carried > 0;
-                const balance = inputAmt + carried - thucChi - payOldDebt;
-                const newPart = inputAmt - thucChi - payOldDebt;
-                const oldLeft = carried > 0 ? Math.max(0, carried + Math.min(0, newPart)) : 0;
-                const row = (label, value, color, sign = '') => (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                    <span style={{ color }}>{label}</span>
-                    <strong style={{ color, whiteSpace: 'nowrap' }}>{sign}{formatMoney(value)}</strong>
-                  </div>
-                );
-                return (
-                  <div style={{ marginTop: 12, padding: '12px 14px', background: '#fff7ed', borderRadius: 10, border: '1px solid #fed7aa', fontSize: 13 }}>
-                    <div style={{ fontWeight: 700, color: '#c2410c', marginBottom: 8 }}>📊 Tổng kết chuyến chợ</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                      {hasMoney && row('💵 Tiền chủ giao', inputAmt, '#1d4ed8')}
-                      {carried > 0 && row('➕ Tiền dư cũ cộng vào', carried, '#15803d', '+ ')}
-                      {thucChi > 0 && row('💸 Trả tiền hàng', thucChi, '#c2410c', '− ')}
-                      {payOldDebt > 0 && row('💳 Trả nợ cũ', payOldDebt, '#7c3aed', '− ')}
-                      {hasMoney ? (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '7px 10px', borderRadius: 8, marginTop: 4, fontWeight: 800, background: balance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1.5px solid ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
-                          <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626' }}>{balance >= 0 ? '✅ Còn thừa — trả lại chủ' : '⚠️ Còn thiếu — nhân viên bỏ thêm'}</span>
-                          <span style={{ color: balance >= 0 ? '#15803d' : '#dc2626', whiteSpace: 'nowrap' }}>{formatMoney(Math.abs(balance))}</span>
-                        </div>
-                      ) : (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, paddingTop: 5, borderTop: '1px solid #fed7aa', fontWeight: 800 }}>
-                          <span style={{ color: '#c2410c' }}>Tổng tiền chi</span>
-                          <span style={{ color: '#c2410c' }}>{formatMoney(thucChi + payOldDebt)}</span>
-                        </div>
-                      )}
-                      {carried > 0 && balance > 0 && (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#15803d', padding: '0 10px' }}>
-                          <span>Dư mới: <b>{formatMoney(Math.max(0, newPart))}</b></span>
-                          <span>Dư cũ: <b>{formatMoney(oldLeft)}</b></span>
-                        </div>
-                      )}
-                      {/* Thông tin thêm, không tính vào tiền trên. */}
-                      {(tienNo > 0 || fromLeftover > 0) && (
-                        <div style={{ marginTop: 4, paddingTop: 6, borderTop: '1px dashed #fed7aa', display: 'flex', flexDirection: 'column', gap: 3, fontSize: 12 }}>
-                          {tienNo > 0 && row(`🛒 Tiền hàng ${formatMoney(thucChi + tienNo)}, mua nợ`, tienNo, '#dc2626')}
-                          {fromLeftover > 0 && row('💵 Trả nợ bằng tiền thừa phiếu cũ', fromLeftover, '#15803d')}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
+
+              {(inputAmt > 0 || carried > 0 || goods > 0 || debtPayTotal > 0) && (
+                <Section step={hasDebtStep ? 4 : 3} title="Tổng kết">
+                  <TripSummary given={inputAmt} carried={carried} paid={thucChi} debt={tienNo} payOldDebt={payOldDebt} fromLeftover={fromLeftover} />
+                </Section>
+              )}
             </div>
-            <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '12px 16px', borderTop: '1px solid #f3f4f6' }}>
-              <button className="btn btn-outline" onClick={() => setShowAddModal(false)}>Huỷ</button>
-              <button className="btn btn-primary" style={{ padding: '10px 24px' }} onClick={submitNewNote} disabled={isLoading}>{isLoading ? 'Đang gửi...' : 'Gửi đi'}</button>
+            {/* Thanh dưới: tiền hàng + thừa / thiếu bên trái, nút lưu bên phải (huỷ = nút đóng trên cùng). */}
+            <div className="modal-footer np-footer">
+              <div className="np-footer-sum">
+                <span>Tiền hàng <b>{vnd(goods)}</b></span>
+                {(inputAmt > 0 || carried > 0) && <span className={balance >= 0 ? 'ok' : 'bad'}>{balance >= 0 ? 'Thừa' : 'Thiếu'} <b>{vnd(Math.abs(balance))}</b></span>}
+              </div>
+              <button type="button" className="btn btn-primary np-save" onClick={submitNewNote} disabled={isLoading}>{isLoading ? 'Đang lưu…' : 'Lưu phiếu'}</button>
             </div>
           </div>
         </div>
         );
       })()}
-
       </>)}
 
       {/* ── Delete Confirm Modal ── */}
