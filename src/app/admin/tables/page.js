@@ -5,6 +5,7 @@ import { removeVietnameseTones } from '@/lib/utils';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createQuickMatcher } from '@/lib/quickMatch';
 import Image from 'next/image';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { buildQrUrl } from '@/lib/bankAccount';
 import { prepareTableStatsPayment } from '@/lib/tableStatsQuota';
@@ -18,6 +19,7 @@ import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders'
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import PaymentProof from '@/components/PaymentProof';
+import ReviewsPanel from '../reviews/ReviewsPanel';
 import { fetchWithTimeout } from '@/lib/compressImage';
 import { cashChange, cashChoices } from '@/lib/cashChange.mjs';
 import { QRCodeSVG } from 'qrcode.react';
@@ -317,6 +319,8 @@ export default function TablesPage() {
   const [adjustOpen, setAdjustOpen] = useState(false);      // bảng Cộng/Trừ tiền, Giảm % vào bill
   // Tab "Quà hôm nay": xem quà đã tặng hôm nay + món tặng nào đang bật/tắt.
   const [showGiftsToday, setShowGiftsToday] = useState(false);
+  // Khung trượt "Đánh giá khách hàng" (nút nhỏ ★ ở mép phải, chỉ admin) — thay cho mục Đánh giá trong menu.
+  const [showReviews, setShowReviews] = useState(false);
   const [giftsTodayData, setGiftsTodayData] = useState(null);   // { given:[{name,qty}], items:[{id,name,on}] }
   const [giftsTodayLoading, setGiftsTodayLoading] = useState(false);
   const [giftPending, setGiftPending] = useState({});           // {id: bậtMới} — thay đổi CHƯA lưu
@@ -356,6 +360,11 @@ export default function TablesPage() {
   const [tableHistoryData, setTableHistoryData] = useState([]);
   const [tableHistoryLoading, setTableHistoryLoading] = useState(false);
   const [currentStaff, setCurrentStaff] = useState(null); // nhân viên đang đăng nhập (từ localStorage)
+  // Lối vào Sổ thu chi (đã ẩn khỏi menu): chủ quán bấm hình 🛵 / chữ "Mang về" ở ô Mang về.
+  // Nhân viên bấm vào đó không có gì (máy chủ cũng chỉ cho chủ quán xem sổ).
+  const financeDoor = (children, style = {}) => currentStaff?.role === 'admin'
+    ? <Link href="/admin/finance" aria-label="Mang về" style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, color: 'inherit', textDecoration: 'none', WebkitTapHighlightColor: 'transparent', ...style }}>{children}</Link>
+    : <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, ...style }}>{children}</div>;
   const [historyTab, setHistoryTab] = useState('bills'); // 'bills' | 'opens' — tab trong modal lịch sử
   const [tableOpenLog, setTableOpenLog] = useState([]); // nhật ký mở bàn (6 tiếng)
   const [tableOpenLogLoading, setTableOpenLogLoading] = useState(false);
@@ -1226,8 +1235,9 @@ export default function TablesPage() {
 
   // ═══════════════════════════════════════════════════════════════════════════
   // completeTable — bước 1 khi đóng bill cho một nhóm bàn: đọc lại bill, chặn món chưa
-  // giá / bill đổi số tiền, rồi mở camera (PaymentProof). Ảnh chụp xong (hoặc lý do không
-  // chụp được) mới gửi lên máy chủ đóng bàn — settleTable. extra: { given, onDone }.
+  // giá / bill đổi số tiền. Chuyển khoản: mở camera (PaymentProof), ảnh màn hình CK (hoặc lý do
+  // không chụp được) mới gửi lên máy chủ đóng bàn — settleTable. Tiền mặt: đóng bàn luôn,
+  // không chụp (chủ quán bỏ bước chụp tiền 2026-10-27). extra: { given, onDone }.
   // ═══════════════════════════════════════════════════════════════════════════
   async function completeTable(tableObj, paymentMethod = 'cash', shouldHideStats = false, expectedAmount = null, accountId = null, extra = {}) {
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
@@ -1237,6 +1247,7 @@ export default function TablesPage() {
     if (completingTablesRef.current.has(hostId)) return false;
     completingTablesRef.current.add(hostId);
     setPayingHostId(hostId);
+    let settleNow = null;
 
     try {
       // Re-read the group and its items before marking anything paid. A stale
@@ -1262,9 +1273,10 @@ export default function TablesPage() {
         }
       }
 
-      setPayProof({ table, paymentMethod, shouldHideStats, accountId, code: paymentMethod === 'transfer' ? transactionCode : null,
-        snapshot, given: extra.given, onDone: extra.onDone });
-      return true;
+      const proof = { table, paymentMethod, shouldHideStats, accountId, code: paymentMethod === 'transfer' ? transactionCode : null,
+        snapshot, given: extra.given, onDone: extra.onDone };
+      if (paymentMethod === 'cash') settleNow = proof;
+      else setPayProof(proof);
     } catch (error) {
       console.error('[completeTable]', error);
       Swal.fire('Chưa thể thanh toán', error?.message || 'Không kiểm tra được đầy đủ bill. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
@@ -1273,18 +1285,22 @@ export default function TablesPage() {
       completingTablesRef.current.delete(hostId);
       setPayingHostId(null);
     }
+    // Tiền mặt: đóng bàn ngay, không cần ảnh.
+    if (settleNow) await settleTable(settleNow, {});
+    return true;
   }
 
   // Bước 2: đóng bàn trên máy chủ cùng ảnh (/api/admin/receipts table_pay) — máy chủ lưu ảnh,
   // gọi complete_table_payment_atomic (khoá nhóm bàn, kiểm tra lại bill + số tiền, lỗi thì
-  // rollback hết) rồi gắn ảnh vào Sổ thu chi. Không có ảnh thì phải có lý do.
+  // rollback hết) rồi gắn ảnh vào Sổ thu chi. Chuyển khoản không có ảnh thì phải có lý do;
+  // tiền mặt gửi không ảnh.
   async function settleTable(proof, { blob, skipReason }) {
     const { table, paymentMethod, snapshot } = proof;
     const hostId = table.merged_with || table.id;
     if (completingTablesRef.current.has(hostId)) return;
     completingTablesRef.current.add(hostId);
     setPayingHostId(hostId);
-    setPayProof({ ...proof, saving: true });
+    if (blob || skipReason) setPayProof({ ...proof, saving: true });
     try {
       const form = new FormData();
       form.set('action', 'table_pay');
@@ -1298,7 +1314,7 @@ export default function TablesPage() {
         if (proof.code) form.set('transaction_code', proof.code);
       }
       if (blob) form.set('image', blob, paymentMethod === 'cash' ? 'cash.jpg' : 'ck.jpg');
-      else form.set('skip_reason', skipReason);
+      else if (skipReason) form.set('skip_reason', skipReason);
       const response = await fetchWithTimeout('/api/admin/receipts', { method: 'POST', body: form, cache: 'no-store' });
       const result = await response.json().catch(() => ({}));
       if (response.status === 401) window.dispatchEvent(new Event('staff-session-expired'));
@@ -1315,7 +1331,7 @@ export default function TablesPage() {
       setSelectedTable(null);
       fetchTables(snapshot.groupTableIds);
       proof.onDone?.();
-      if (blob && !result.photoSaved) Swal.fire('Đã đóng bàn', 'Bàn đã thanh toán xong nhưng chưa lưu được ảnh. Thêm ảnh ở Sổ thu chi hoặc trang Bill giấy.', 'warning');
+      if (blob && !result.photoSaved) Swal.fire('Đã đóng bàn', 'Bàn đã thanh toán xong nhưng chưa lưu được ảnh. Thêm ảnh ở Sổ thu chi hoặc tab Bill giấy (trang Mã QR).', 'warning');
     } catch (error) {
       console.error('[settleTable]', error);
       Swal.fire('Chưa thể thanh toán', error?.message || 'Không kiểm tra được đầy đủ bill. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
@@ -3190,6 +3206,7 @@ export default function TablesPage() {
               {takeawayTable && (
                 <div style={{ margin: '8px 8px 0', background: '#eff6ff', border: '2px solid #bfdbfe', borderRadius: 16, padding: '14px', gridColumn: '1 / -1' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                    {financeDoor(<>
                     <span style={{ fontSize: '1.8rem' }}>🛵</span>
                     <div>
                       <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#1d4ed8' }}>
@@ -3199,6 +3216,7 @@ export default function TablesPage() {
                         {takeawayOrders.length > 0 ? `${takeawayOrders.length} đơn đang chờ giao` : 'Chưa có đơn nào'}
                       </div>
                     </div>
+                    </>)}
                     <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
                       <button
                         onClick={() => { fetchTakeawayOrders(); setShowTakeawayOrders(true); }}
@@ -3775,6 +3793,7 @@ export default function TablesPage() {
                       {/* Takeaway pinned card — desktop */}
                       {takeawayTable && (
                         <div style={{ background: '#eff6ff', border: '2px solid #bfdbfe', borderRadius: 12, padding: '10px 14px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+                          {financeDoor(<>
                           <span style={{ fontSize: '1.5rem' }}>🛵</span>
                           <div style={{ flex: 1 }}>
                             <div style={{ fontWeight: 800, fontSize: '0.9rem', color: '#1d4ed8' }}>{takeawayTable.table_name || 'Mang về'}</div>
@@ -3782,6 +3801,7 @@ export default function TablesPage() {
                               {takeawayOrders.length > 0 ? `${takeawayOrders.length} đơn đang chờ` : 'Chưa có đơn'}
                             </div>
                           </div>
+                          </>, { flex: 1 })}
                           <button
                             onClick={() => { fetchTakeawayOrders(); setShowTakeawayOrders(true); }}
                             style={{ padding: '6px 12px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
@@ -6523,7 +6543,7 @@ export default function TablesPage() {
               {/* Buttons */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
-                {/* Tiền mặt: nhập tiền khách đưa → báo tiền thối → Xác nhận → chụp tiền (bắt buộc) → đóng bàn. */}
+                {/* Tiền mặt: nhập tiền khách đưa → báo tiền thối → Xác nhận → đóng bàn (không cần chụp tiền). */}
                 {/* Khoá nút khi đang xử lý — chặn bấm 2 lần */}
                 {(() => {
                   const total = confirmPayment.totalAmount;
@@ -6551,7 +6571,7 @@ export default function TablesPage() {
                       <div style={{ fontSize: '1.6rem' }}>💵</div>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#16a34a' }}>Tiền mặt</div>
-                        <div style={{ fontSize: '0.8rem', color: '#15803d', marginTop: 2, fontWeight: 500 }}>Nhập tiền khách đưa, chụp tiền rồi đóng bàn</div>
+                        <div style={{ fontSize: '0.8rem', color: '#15803d', marginTop: 2, fontWeight: 500 }}>Nhập tiền khách đưa rồi đóng bàn</div>
                       </div>
                     </div>
                     <input
@@ -6574,7 +6594,7 @@ export default function TablesPage() {
                     </div>}
                     <button type="button" onClick={confirmCash} disabled={!ready || !!payingHostId}
                       style={{ width: '100%', marginTop: 10, padding: '13px', borderRadius: 12, border: 'none', background: ready && !payingHostId ? '#16a34a' : '#86efac', color: 'white', fontWeight: 800, fontSize: '1rem', cursor: ready && !payingHostId ? 'pointer' : 'not-allowed' }}>
-                      {payingHostId ? '⏳ Đang xử lý...' : '📷 Xác nhận & chụp tiền'}
+                      {payingHostId ? '⏳ Đang đóng bàn...' : '✅ Xác nhận đã nhận tiền'}
                     </button>
                   </div>;
                 })()}
@@ -6953,6 +6973,40 @@ export default function TablesPage() {
         >
           ‹
         </button>
+      )}
+
+      {/* ─── Tab nhỏ "Đánh giá" (★) ngay dưới tab Quà hôm nay — chỉ admin, chỉ khi xem lưới bàn ─── */}
+      {!selectedTable && currentStaff?.role === 'admin' && (
+        <button
+          onClick={() => setShowReviews(true)}
+          title="Đánh giá khách hàng"
+          aria-label="Đánh giá khách hàng"
+          style={{
+            position: 'fixed', right: 0, top: 'calc(46% + 46px)', transform: 'translateY(-50%)',
+            zIndex: 55, width: 12, height: 40,
+            border: 'none', borderRadius: '6px 0 0 6px',
+            background: 'linear-gradient(135deg,#f59e0b,#b45309)', color: 'white',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 0, fontSize: '0.55rem', fontWeight: 800, lineHeight: 1,
+            boxShadow: '-2px 2px 8px rgba(217,119,6,0.32)',
+          }}
+        >
+          ★
+        </button>
+      )}
+      {showReviews && (
+        <div onClick={() => setShowReviews(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 99998, background: 'rgba(15,23,42,0.45)' }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{
+              position: 'absolute', top: 0, bottom: 0, right: 0,
+              width: 'min(92%, 420px)', background: 'white',
+              boxShadow: '-8px 0 30px rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column',
+              borderRadius: '16px 0 0 16px', overflow: 'hidden',
+            }}>
+            <ReviewsPanel embedded onClose={() => setShowReviews(false)} />
+          </div>
+        </div>
       )}
 
       {/* Drawer "Quà hôm nay": đã tặng hôm nay + món tặng bật/tắt */}

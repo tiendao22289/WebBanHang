@@ -10,6 +10,9 @@ const REASONS = ['Máy lỗi camera', 'Khách không cho chụp'];
 
 export default function PaymentProof({ title, subtitle, saving, onPhoto, onSkip, onBack }) {
   const [asking, setAsking] = useState(() => !cameraSupported());
+  // Máy dùng thẳng camera của máy (camera trong trang không mở được): chưa chụp lần nào thì ghi "Chụp ảnh".
+  const [nativeOnly] = useState(() => !cameraSupported());
+  const [tried, setTried] = useState(false);
   const [reason, setReason] = useState('');
   const shot = useRef(false);
   const fileInput = useRef(null);
@@ -21,6 +24,7 @@ export default function PaymentProof({ title, subtitle, saving, onPhoto, onSkip,
     try { onPhoto(await compressImage(file)); } catch (err) { alert(err.message); }
   }
   function retake() {
+    setTried(true);
     if (cameraSupported()) { setAsking(false); return; }
     fileInput.current.click();
   }
@@ -42,9 +46,9 @@ export default function PaymentProof({ title, subtitle, saving, onPhoto, onSkip,
     />}
     {asking && <div style={overlay}>
       <div style={sheet}>
-        <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#0f172a' }}>Chưa chụp ảnh</div>
+        <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#0f172a' }}>{nativeOnly && !tried ? title : 'Chưa chụp ảnh'}</div>
         <div style={{ fontSize: '0.85rem', color: '#475569', marginTop: 4 }}>{subtitle}</div>
-        <button onClick={retake} style={{ ...button, width: '100%', marginTop: 12, background: '#2563eb', color: 'white', border: 'none' }}>📷 Chụp lại</button>
+        <button onClick={retake} style={{ ...button, width: '100%', marginTop: 12, background: '#2563eb', color: 'white', border: 'none' }}>{nativeOnly && !tried ? '📷 Mở camera chụp' : '📷 Chụp lại'}</button>
         <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#334155', marginTop: 14 }}>Không chụp được? Ghi lý do để vẫn đóng bàn:</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
           {REASONS.map(r => <button key={r} onClick={() => setReason(r)}

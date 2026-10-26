@@ -7,8 +7,9 @@ import { getShadowAccount, buildQrUrl } from '@/lib/bankAccount';
 import { newLuckyRequestId } from '@/lib/luckyRewardFlow';
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
-import { QrCode, RefreshCw, CheckCircle2, Banknote, X } from 'lucide-react';
+import { QrCode, RefreshCw, CheckCircle2, Banknote, X, Camera } from 'lucide-react';
 import Swal from 'sweetalert2';
+import ReceiptsPanel from '../receipts/ReceiptsPanel';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cổng QR Tùy chỉnh — chuyển khoản dùng thẻ ẨN; tiền mặt có phiếu thu riêng.
@@ -23,6 +24,7 @@ import Swal from 'sweetalert2';
 //   - BẮT BUỘC chụp tờ bill hoặc màn hình ĐT khách: bấm xác nhận / nhận tiền mặt
 //     là mở camera ngay; ảnh và việc ghi tiền gửi lên máy chủ cùng một lần
 //     (/api/admin/receipts qr_confirm / qr_cash) — đóng camera thì chưa ghi gì.
+//   - Tab "Bill giấy" (?tab=bill): nhập bill giấy + ảnh CK hôm nay (trước là trang /admin/receipts riêng).
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function postQrPayment(fields, blob, kind) {
@@ -52,6 +54,13 @@ export default function QrGeneratorPage() {
   const pendingShot = useRef(null);
 
   const router = useRouter();
+  // Tab: 'qr' (tạo mã QR, nhận tiền) | 'bill' (Bill giấy). Mở thẳng tab Bill giấy bằng /admin/qr?tab=bill.
+  const [tab, setTab] = useState('qr');
+  useEffect(() => { if (new URLSearchParams(window.location.search).get('tab') === 'bill') setTab('bill'); }, []);
+  const openTab = next => {
+    setTab(next);
+    window.history.replaceState(window.history.state, '', next === 'bill' ? '/admin/qr?tab=bill' : '/admin/qr');
+  };
 
   // Máy không mở được camera trong web → dùng ứng dụng camera của máy.
   function openCamera(shot) {
@@ -239,7 +248,17 @@ export default function QrGeneratorPage() {
     <div className="page-content" style={{ background: '#f8fafc', padding: 12 }}>
       <div style={{ maxWidth: 460, margin: '0 auto' }}>
 
-        <div style={{ background: 'white', borderRadius: 20, padding: 14, boxShadow: '0 10px 40px rgba(0,0,0,0.05)', border: '1px solid #e2e8f0' }}>
+        <div role="tablist" aria-label="Thu tiền" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, padding: 4, marginBottom: 10, borderRadius: 14, background: '#e2e8f0' }}>
+          {[['qr', 'Mã QR', QrCode], ['bill', 'Bill giấy', Camera]].map(([key, label, Icon]) => (
+            <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => openTab(key)}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 40, border: 'none', borderRadius: 10, cursor: 'pointer',
+                fontWeight: 800, fontSize: '0.92rem', background: tab === key ? 'white' : 'transparent', color: tab === key ? '#1d4ed8' : '#475569',
+                boxShadow: tab === key ? '0 1px 3px rgba(0,0,0,0.12)' : 'none' }}>
+              <Icon size={17} />{label}
+            </button>))}
+        </div>
+
+        {tab === 'bill' ? <ReceiptsPanel embedded /> : <div style={{ background: 'white', borderRadius: 20, padding: 14, boxShadow: '0 10px 40px rgba(0,0,0,0.05)', border: '1px solid #e2e8f0' }}>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
             <div style={{ background: '#eff6ff', padding: 7, borderRadius: 10, color: '#2563eb', display: 'flex' }}>
@@ -351,7 +370,7 @@ export default function QrGeneratorPage() {
             </div>
           </div>}
 
-        </div>
+        </div>}
       </div>
     </div>
   );

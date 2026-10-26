@@ -1,7 +1,21 @@
 // Lời nhắn khi camera trong web không mở được (CameraCapture) — tách riêng để kiểm tra bằng test.
+const agent = () => (typeof navigator !== 'undefined' ? navigator.userAgent : '');
+
+/** Trình duyệt bên trong Zalo / Facebook / Instagram / Line — thường chặn camera của trang. */
+export const isInAppBrowser = (userAgent = agent()) => /zalo|FBAN|FBAV|Instagram|Line\//i.test(userAgent);
+
+/**
+ * Lỗi này có nên ghi nhớ "máy này không mở được camera trong trang" (lần sau mở thẳng camera của máy)?
+ * Chưa cho phép camera trong Chrome thì không — bật quyền là chạy lại. Trình duyệt trong Zalo thì có.
+ */
+export function rememberCameraFailure(err, userAgent = agent()) {
+  const denied = err?.name === 'NotAllowedError' || err?.name === 'SecurityError';
+  return !denied || isInAppBrowser(userAgent);
+}
+
 /** Lời nhắn khi không mở được camera (kèm mã lỗi để báo lại cho người sửa). */
-export function cameraErrorText(err, userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '') {
-  const inApp = /zalo|FBAN|FBAV|Instagram|Line\//i.test(userAgent);
+export function cameraErrorText(err, userAgent = agent()) {
+  const inApp = isInAppBrowser(userAgent);
   const fallback = 'bấm "Dùng camera của máy" bên dưới để chụp';
   const text = {
     NotAllowedError: inApp

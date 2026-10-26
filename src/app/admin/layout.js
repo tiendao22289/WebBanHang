@@ -15,10 +15,7 @@ import {
   Menu,
   X,
   QrCode,
-  Star,
   History,
-  PiggyBank,
-  Camera,
   ScanQrCode,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
@@ -29,15 +26,12 @@ import './admin.css';
 const ALL_NAV = [
   { href: '/admin/tables', label: 'Quản lý bàn', icon: LayoutGrid },
   { href: '/admin/menu', label: 'Thực đơn', icon: UtensilsCrossed },
-  { href: '/admin/qr', label: 'Mã QR', icon: QrCode },
+  { href: '/admin/qr', label: 'Mã QR · Bill giấy', icon: QrCode },
 
   { href: '/admin/customers', label: 'Khách hàng', icon: UsersRound },
-  { href: '/admin/reviews', label: 'Đánh giá', icon: Star },
   { href: '/admin/notes', label: 'Sổ tay', icon: ChefHat },
   { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
   { href: '/admin/stats', label: 'Thống kê', icon: BarChart3 },
-  { href: '/admin/finance', label: 'Sổ thu chi', icon: PiggyBank, adminOnly: true },
-  { href: '/admin/receipts', label: 'Bill giấy', icon: Camera },
   { href: '/admin/settings', label: 'Cài đặt', icon: Settings, adminOnly: true },
   { href: '/admin/logs', label: 'Lịch sử bàn', icon: History, adminOnly: true },
 ];

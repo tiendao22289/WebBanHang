@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Camera, X } from 'lucide-react';
 import { useBackClose } from './useBackClose';
 import { compressImage } from './compressImage';
-import { cameraErrorText } from './cameraErrors.mjs';
+import { cameraErrorText, rememberCameraFailure } from './cameraErrors.mjs';
 import './cameraCapture.css';
 
 // Chụp ảnh NGAY TRONG WEB (camera sau) — ảnh chỉ nằm tạm trong bộ nhớ rồi
@@ -25,12 +25,26 @@ const ATTEMPTS = [
 // Lỗi do quyền / không có camera: thử cách khác cũng vậy, dừng luôn.
 const FINAL = ['NotAllowedError', 'SecurityError', 'NotFoundError'];
 
+// Máy đã lỗi camera trong trang (Android lỗi, trình duyệt Zalo…): trong 1 ngày các trang mở thẳng camera
+// của máy ngay khi bấm chụp — khỏi hiện màn hình lỗi mỗi lần thu tiền. Hết ngày thì thử lại camera trong trang.
+const BROKEN_KEY = 'cameraInPageBroken';
+const BROKEN_MS = 86400000;
+function markBroken(err) {
+  try { localStorage.setItem(BROKEN_KEY, JSON.stringify({ at: Date.now(), name: err?.name || '' })); } catch { /* không lưu được thì thôi */ }
+}
+function clearBroken() { try { localStorage.removeItem(BROKEN_KEY); } catch { /* bỏ qua */ } }
+function markedBroken() {
+  try { const v = JSON.parse(localStorage.getItem(BROKEN_KEY) || 'null'); return !!v && Date.now() - v.at < BROKEN_MS; } catch { return false; }
+}
+const hasCameraApi = () => typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
+
+/** Mở camera trong trang được không (false → các trang dùng ứng dụng camera của máy). */
 export function cameraSupported() {
-  return typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
+  return hasCameraApi() && !markedBroken();
 }
 
 async function openCamera() {
-  if (!cameraSupported()) throw Object.assign(new Error('no camera api'), { name: 'NoCameraApi' });
+  if (!hasCameraApi()) throw Object.assign(new Error('no camera api'), { name: 'NoCameraApi' });
   let last;
   for (const video of ATTEMPTS) {
     try { return await navigator.mediaDevices.getUserMedia({ audio: false, video }); } catch (err) {
@@ -61,12 +75,14 @@ export default function CameraCapture({ onCapture, onClose, title, subtitle, clo
         const media = await openCamera();
         if (cancelled) { media.getTracks().forEach(t => t.stop()); return; }
         stream.current = media;
+        clearBroken();
         video.current.srcObject = media;
         await video.current.play().catch(() => {});
         setReady(true);
       } catch (err) {
         if (cancelled) return;
         console.warn('[camera]', err?.name, err?.message);
+        if (rememberCameraFailure(err)) markBroken(err);
         setError(cameraErrorText(err));
       }
     })();
