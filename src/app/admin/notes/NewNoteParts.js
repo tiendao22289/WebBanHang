@@ -7,7 +7,7 @@
 import { X } from 'lucide-react';
 import MenuNameInput from '@/lib/MenuNameInput';
 import { lineWarnings, parsePrice, parseQty } from '@/lib/notesMath.mjs';
-import { CategorySelect } from './NoteKinds';
+import { CategorySelect, isOtherLine } from './NoteKinds';
 
 export const vnd = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
 const lineTotal = i => Math.round(parsePrice(i.price) * parseQty(i.qty));
@@ -38,8 +38,9 @@ export function MoneyInput({ id, value, onChange, placeholder, className = '' })
 export const ItemsHead = () => <div className="np-cols" aria-hidden="true"><span>Tên hàng</span><span>Giá</span><span>SL</span><span>Trả</span><span /></div>;
 
 /**
- * Một dòng hàng. Dòng trống là dòng "＋ Thêm hàng" (viền đứt): gõ tên thì tự thêm dòng trống mới.
- * Dòng có sẵn (Tiền rau, Tiền gia vị) để trống giá thì không lưu. Bấm "Đủ" / "Nợ" để đổi.
+ * Một dòng hàng. Dòng trống là dòng "＋ Thêm hàng" / "＋ Thêm khác" (viền đứt): gõ tên thì tự thêm dòng
+ * trống mới. Dòng có sẵn (Tiền rau, Tiền gia vị) để trống giá thì không lưu. Bấm "Đủ" / "Nợ" để đổi.
+ * other: dòng nhóm Khác (xăng xe, sửa chữa…) — tên gõ tự do, dòng nhỏ bên dưới để chọn loại.
  */
 export function NoteItemRow({ item, other, menuNames, categories, onField, onBlur, onRemove, onCategory }) {
   const empty = !item.preset && !String(item.name || '').trim() && !String(item.price || '').trim() && !String(item.qty || '').trim();
@@ -47,8 +48,8 @@ export function NoteItemRow({ item, other, menuNames, categories, onField, onBlu
   const debt = item.paymentStatus === 'debt';
   const warnings = String(item.name || '').trim() ? lineWarnings(item) : [];
   // minWidth 0: ô tên co lại trong cột lưới, không đẩy ô giá / số lượng ra ngoài.
-  const nameProps = { className: 'np-name', style: { minWidth: 0 }, value: item.name, placeholder: empty ? '＋ Thêm hàng' : 'Tên' };
-  // Dòng phụ chỉ khi cần: chọn loại (tab Khác), số nợ / nợ ai, cảnh báo. Thành tiền nằm ngay dưới tên.
+  const nameProps = { className: 'np-name', style: { minWidth: 0 }, value: item.name, placeholder: empty ? (other ? '＋ Thêm khác: xăng, sửa xe…' : '＋ Thêm hàng') : 'Tên' };
+  // Dòng phụ chỉ khi cần: chọn loại (nhóm Khác), số nợ / nợ ai, cảnh báo. Thành tiền nằm ngay dưới tên.
   const sub = !empty && (other || debt || warnings.length > 0);
   return <div className={`np-row${empty ? ' add' : ''}${debt ? ' debt' : ''}${item.preset && !total ? ' idle' : ''}`}>
     <div className="np-line">
@@ -81,6 +82,30 @@ export function NoteItemRow({ item, other, menuNames, categories, onField, onBlu
       {warnings.length > 0 && <span className="np-warn" title={warnings.join(' · ')}>⚠ {warnings[0]}</span>}
     </div>}
   </div>;
+}
+
+/**
+ * Mọi dòng hàng của phiếu trong một danh sách, chia 3 nhóm: hàng ốc (gõ thêm ở dòng "＋ Thêm hàng"),
+ * rau / gia vị (dòng có sẵn), Khác (xăng xe, sửa chữa… — chọn loại ở từng dòng). Hàm on*(vị trí trong items, …).
+ */
+export function NoteItemsList({ items, menuNames, categories, onField, onBlur, onRemove, onCategory, isAdmin }) {
+  const rows = items.map((item, idx) => ({ item, idx }));
+  const groups = [
+    [null, rows.filter(({ item }) => !item.preset && !isOtherLine(item))],
+    ['Rau, gia vị · có mua thì ghi giá', rows.filter(({ item }) => item.preset)],
+    [`Khác · xăng xe, sửa chữa, đồ dùng…${!categories.length && isAdmin ? ' (tạo loại ở tab "📦 Chi khác")' : ''}`, rows.filter(({ item }) => isOtherLine(item))],
+  ];
+  return <>
+    <ItemsHead />
+    <div className="np-items">
+      {groups.map(([label, list]) => list.length > 0 && <div key={label || 'oc'} className="np-group">
+        {label && <p className="np-group-label">{label}</p>}
+        {list.map(({ item, idx }) => <NoteItemRow key={item._id || idx} item={item} other={isOtherLine(item)} menuNames={menuNames} categories={categories}
+          onField={(field, v) => onField(idx, field, v)} onBlur={(field, e) => onBlur(idx, field, e)}
+          onRemove={() => onRemove(idx)} onCategory={v => onCategory(idx, v)} />)}
+      </div>)}
+    </div>
+  </>;
 }
 
 /**

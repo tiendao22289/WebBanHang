@@ -687,7 +687,6 @@
 .kind-tabs button.on { background: #fff; color: #b91c1c; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
 .kind-select { width: 100%; margin: 0 0 6px; padding: 7px 8px; border: 1.5px solid #c7d2fe; border-radius: 8px; background: #eef2ff; color: #3730a3; font-size: 0.88rem; font-weight: 600; }
 .kind-tag { display: inline-block; margin-left: 4px; padding: 1px 7px; border-radius: 999px; background: #eef2ff; color: #4338ca; font-size: 0.7rem; font-weight: 600; white-space: nowrap; vertical-align: middle; }
-.kind-hint { margin: 0 0 8px; font-size: 0.78rem; color: #4b5563; line-height: 1.45; }
 
 /* ── Chủ quán: tab Phiếu / Chi khác ── */
 .notes-admin-tabs { margin: 10px 16px 0; }
@@ -740,16 +739,13 @@
 .np-money input::placeholder { color: #93c5fd; font-size: 0.75rem; font-weight: 500; }
 .np-money span { font-size: 0.85rem; font-weight: 700; color: #1d4ed8; }
 
-.kind-chips { display: inline-flex; gap: 3px; padding: 2px; border-radius: 8px; background: #f3f4f6; }
-.kind-chips button { display: inline-flex; align-items: center; gap: 3px; min-height: 26px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: #6b7280; font-size: 0.74rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
-.kind-chips button.on { background: #fff; color: #b91c1c; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
-.kind-chips i { font-style: normal; min-width: 15px; padding: 0 3px; border-radius: 99px; background: #fee2e2; color: #b91c1c; font-size: 0.66rem; text-align: center; }
-.np-section .kind-hint { margin: 2px 0 2px; font-size: 0.72rem; }
 
 .np-cols, .np-line { display: grid; grid-template-columns: minmax(0, 1fr) 66px 46px 38px 22px; gap: 4px; align-items: center; }
 .np-cols { margin: 4px 0 2px; padding: 0 6px; font-size: 0.64rem; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.02em; }
 .np-cols span:nth-child(2), .np-cols span:nth-child(3), .np-cols span:nth-child(4) { text-align: center; }
 .np-items { display: flex; flex-direction: column; gap: 3px; }
+.np-group { display: flex; flex-direction: column; gap: 3px; }
+.np-edit-list { margin-bottom: 8px; padding: 6px; border-radius: 10px; background: #fff; }
 .np-row { border: 1px solid #eceef1; border-radius: 8px; padding: 3px 6px; background: #fff; }
 .np-row:focus-within { border-color: #fca5a5; }
 .np-row.debt { border-color: #fecaca; background: #fffafa; }

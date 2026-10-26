@@ -1,21 +1,28 @@
 'use client';
 
-import { Fragment, useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { ChefHat, FileText, CheckCircle, XCircle, LogOut, Plus, Clock, Trash2, User, CornerDownRight } from 'lucide-react';
 import './notes.css';
 import MenuNameInput from '@/lib/MenuNameInput';
 import { normalizePriceInput, noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
 import { notesApi, workforce } from '@/lib/staffApi';
-import { LineHint, filterRange, notesSummary } from './notesStats';
+import { filterRange, notesSummary } from './notesStats';
 import DebtPicker from './DebtPicker';
-import { CategorySelect, KindTabs, KindTag, OtherHint, isOtherLine, newOtherLine } from './NoteKinds';
+import { KindTag, isOtherLine, newOtherLine } from './NoteKinds';
 import OtherCosts from './OtherCosts';
-import { ItemsHead, MoneyInput, NoteItemRow, Section, TripSummary, vnd } from './NewNoteParts';
+import { MoneyInput, NoteItemsList, Section, TripSummary, vnd } from './NewNoteParts';
 import { allOpenDebts, fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
 
 // Chỉ tính tiền thừa của phiếu từ tháng 10/2026 (khớp ô "Trả lại chủ" của tháng; phiếu cũ hơn đã trả chủ).
 const LEFTOVER_SINCE = '2026-10-01';
+// Dòng sẵn của phiếu đi chợ mới: dòng gõ hàng ốc, Tiền rau, Tiền gia vị, dòng gõ Khác (xăng xe, sửa chữa…).
+const freshNoteRows = () => [
+  { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+  { name: 'Tiền rau', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+  { name: 'Tiền gia vị', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+  newOtherLine(),
+];
 
 export default function StaffNotesPage() {
   // Tên món trong menu để chọn nhanh ở ô tên hàng (vẫn gõ tự do được).
@@ -27,11 +34,8 @@ export default function StaffNotesPage() {
   const [currentUser, setCurrentUser] = useState(null);
   // Các lần trả nợ (staff_note_payments) — để thống kê theo đúng ngày trả.
   const [payments, setPayments] = useState([]);
-  // Loại "Khác" của dòng hàng (xăng xe, sửa chữa…) do chủ tạo; tab Hàng ốc / Khác của phiếu.
+  // Loại "Khác" của dòng hàng (xăng xe, sửa chữa…) do chủ tạo; nhóm Khác nằm cuối danh sách hàng của phiếu.
   const [noteCategories, setNoteCategories] = useState([]);
-  const [addTab, setAddTab] = useState('oc');
-  const [editTab, setEditTab] = useState('oc');
-  const [lastCategory, setLastCategory] = useState('');
   const [showNoteText, setShowNoteText] = useState(false);
   const [adminTab, setAdminTab] = useState('notes'); // chủ quán: 'notes' (phiếu) | 'other' (chi khác)
   const [phone, setPhone] = useState('');
@@ -52,11 +56,7 @@ export default function StaffNotesPage() {
   // New Note State
   const [newNoteType, setNewNoteType] = useState('expense'); // 'expense' | 'stock' | 'repair' | 'other'
   const [newNoteContent, setNewNoteContent] = useState('');
-  const [expenseItems, setExpenseItems] = useState([
-    { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
-    { name: 'Tiền rau', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
-    { name: 'Tiền gia vị', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }
-  ]);
+  const [expenseItems, setExpenseItems] = useState(() => freshNoteRows());
   const [newNoteAmount, setNewNoteAmount] = useState(0);
   const [newNoteDebt, setNewNoteDebt] = useState(0);
   const [newNoteInputAmount, setNewNoteInputAmount] = useState(''); // Tiền chủ giao trước khi đi chợ
@@ -386,16 +386,11 @@ export default function StaffNotesPage() {
     if (!error) {
       setShowAddModal(false);
       setNewNoteContent('');
-      setExpenseItems([
-        { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
-        { name: 'Tiền rau', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
-        { name: 'Tiền gia vị', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }
-      ]);
+      setExpenseItems(freshNoteRows());
       setNewNoteAmount(0);
       setNewNoteDebt(0);
       setNewNoteInputAmount('');
       setNewNoteType('expense');
-      setAddTab('oc');
       setShowNoteText(false);
       setNewNotePayDebtEnabled(false);
       setNewNotePayDebtAmount('');
@@ -428,7 +423,6 @@ export default function StaffNotesPage() {
   // ── Edit Note Logic ──
   const openEditNote = (note) => {
     setEditingNoteId(note.id);
-    setEditTab('oc');
     setEditNoteType(note.note_type || 'other');
     if (note.note_type === 'expense' && note.content?.includes('structured_expense')) {
       try {
@@ -449,9 +443,9 @@ export default function StaffNotesPage() {
         const existingNames = items.map(i => i.name.trim().toLowerCase());
         const presetItems = presets
           .filter(n => !existingNames.includes(n.toLowerCase()))
-          .map(n => ({ _id: `preset-${n}-${Date.now()}`, name: n, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }));
+          .map(n => ({ _id: `preset-${n}-${Date.now()}`, name: n, preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }));
         const allItems = [...items, ...presetItems];
-        const withEmpty = [...allItems, { _id: `new-${Date.now()}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }];
+        const withEmpty = [...allItems, { _id: `new-${Date.now()}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' }, newOtherLine()];
         setEditOriginalItems(JSON.parse(JSON.stringify(allItems))); // deep copy tránh shared reference
         setEditExpenseItems(withEmpty);
         setEditNoteContent(data.note || '');
@@ -479,18 +473,6 @@ export default function StaffNotesPage() {
     }, 50);
   };
 
-  const firstCategory = () => lastCategory || noteCategories[0]?.id || '';
-  const openAddTab = tab => {
-    setAddTab(tab);
-    if (tab === 'other' && !expenseItems.some(isOtherLine)) setExpenseItems(prev => [...prev, newOtherLine(firstCategory())]);
-  };
-  const openEditTab = tab => {
-    setEditTab(tab);
-    if (tab === 'other' && !editExpenseItems.some(isOtherLine)) {
-      setEditExpenseItems(prev => [...prev.slice(0, -1), newOtherLine(firstCategory()), ...prev.slice(-1)]);
-    }
-  };
-
   const closeEditNote = () => {
     setEditingNoteId(null);
     setEditNoteContent('');
@@ -501,18 +483,18 @@ export default function StaffNotesPage() {
   };
 
   const updateEditExpenseItem = (index, field, value) => {
-    const newItems = editExpenseItems.map((item, i) =>
-      i === index ? { ...item, [field]: value } : item
-    );
-    const row = editExpenseItems[index];
-    if (isOtherLine(row)) {
-      // Dòng Khác cuối cùng vừa có tên → thêm dòng Khác trống ngay sau.
-      const lastOther = editExpenseItems.reduce((at, it, i) => (isOtherLine(it) ? i : at), -1);
-      if (field === 'name' && index === lastOther && !row.name.trim() && value.trim()) newItems.splice(index + 1, 0, newOtherLine(row.category));
-    } else if (index === newItems.length - 1 && value.trim() !== '' && field === 'name') {
-      newItems.push({ _id: `new-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' });
-    }
-    setEditExpenseItems(newItems);
+    setEditExpenseItems(prev => {
+      const row = prev[index] || {};
+      const other = isOtherLine(row);
+      const newItems = prev.map((item, i) => (i === index ? { ...item, [field]: value } : item));
+      if (field === 'name' && !row.preset && !String(row.name || '').trim() && String(value).trim()) {
+        const next = prev[index + 1];
+        const hasEmptyAfter = next && !next.preset && !String(next.name || '').trim() && isOtherLine(next) === other;
+        if (!hasEmptyAfter) newItems.splice(index + 1, 0, other ? newOtherLine(row.category)
+          : { _id: `new-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' });
+      }
+      return newItems;
+    });
   };
 
   const handleEditExpenseBlur = (index, field, e) => {
@@ -556,7 +538,7 @@ export default function StaffNotesPage() {
     let paid = 0, debt = 0;
 
     const validItems = editNoteType === 'expense'
-      ? editExpenseItems.filter(i => i.name.trim() !== '')
+      ? editExpenseItems.filter(i => i.name.trim() !== '' && !(String(i._id || '').startsWith('preset-') && !String(i.price || '').trim()))
       : [];
 
     // ── Generate history entry ──
@@ -1657,63 +1639,11 @@ export default function StaffNotesPage() {
                   {editNoteType === 'expense' ? (
                     <div>
                       <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 6 }}>Chi tiết mua hàng</label>
-                      <KindTabs tab={editTab} onTab={openEditTab} items={editExpenseItems} />
-                      {editTab === 'other' && <OtherHint categories={noteCategories} isAdmin={currentUser.role === 'admin'} />}
-                      {editExpenseItems.map((item, idx) => isOtherLine(item) !== (editTab === 'other') ? null : (
-                        <div key={idx} style={{ marginBottom: 8, padding: '8px 10px', background: 'white', borderRadius: 8, border: '1px solid #e5e7eb' }}>
-                          {editTab === 'other' && <CategorySelect value={item.category} categories={noteCategories}
-                            onChange={v => { updateEditExpenseItem(idx, 'category', v); setLastCategory(v); }} style={{ marginBottom: 6 }} />}
-                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
-                            {editTab === 'other'
-                              ? <input type="text" placeholder="Tên (VD: đổ xăng)" value={item.name} onChange={e => updateEditExpenseItem(idx, 'name', e.target.value)}
-                                  style={{ flex: 1, minWidth: 90, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }} />
-                              : <MenuNameInput names={menuNames} placeholder="Tên món" value={item.name} onChange={v => updateEditExpenseItem(idx, 'name', v)}
-                                  style={{ flex: 1, minWidth: 90, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13 }} />}
-
-                            <input type="text" placeholder="Giá" value={item.price} onChange={e => updateEditExpenseItem(idx, 'price', e.target.value)} onBlur={e => handleEditExpenseBlur(idx, 'price', e)}
-                              style={{ width: 68, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, textAlign: 'center' }} />
-                            <input type="text" placeholder="SL/Ký" value={item.qty} onChange={e => updateEditExpenseItem(idx, 'qty', e.target.value)} onBlur={e => handleEditExpenseBlur(idx, 'qty', e)}
-                              style={{ width: 68, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, textAlign: 'center' }} />
-                            {editExpenseItems.length > 1 && idx < editExpenseItems.length - 1 && !(isOtherLine(item) && !item.name.trim() && idx === editExpenseItems.reduce((at, it, i) => (isOtherLine(it) ? i : at), -1)) && (
-                              <button onClick={() => removeEditExpenseItem(idx)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 2 }}><XCircle size={16} /></button>
-                            )}
-                          </div>
-                          <LineHint item={item} />
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer' }}>
-                              <input type="radio" checked={item.paymentStatus === 'full'} onChange={() => updateEditExpenseItem(idx, 'paymentStatus', 'full')} /> ✓ Đủ
-                            </label>
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer' }}>
-                              <input type="radio" checked={item.paymentStatus === 'debt'} onChange={() => {
-                                updateEditExpenseItem(idx, 'paymentStatus', 'debt');
-                                // Auto-fill debtAmount when switching to debt
-                                if (!item.debtAmount) {
-                                  const p = parseVal(item.price); const q = parseVal(item.qty, true) || 1;
-                                  const total = p * q;
-                                  if (total > 0) updateEditExpenseItem(idx, 'debtAmount', total.toLocaleString('vi-VN'));
-                                }
-                              }} /> Nợ
-                            </label>
-                            {item.paymentStatus === 'debt' && (<>
-                              <input
-                                type="text" inputMode="numeric"
-                                placeholder="Số tiền nợ"
-                                value={item.debtAmount || ''}
-                                onChange={e => {
-                                  const raw = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                                  const p = parseVal(item.price); const q = parseVal(item.qty, true) || 1; const cap = p * q;
-                                  const num = Number(raw);
-                                  if (cap > 0 && num > cap) { updateEditExpenseItem(idx, 'debtAmount', cap.toLocaleString('vi-VN')); return; }
-                                  updateEditExpenseItem(idx, 'debtAmount', raw ? num.toLocaleString('vi-VN') : '');
-                                }}
-                                style={{ width: 90, padding: '4px 7px', border: '1.5px solid #fca5a5', borderRadius: 6, fontSize: 12, textAlign: 'right', color: '#dc2626', fontWeight: 700 }}
-                              />
-                              <input type="text" placeholder="Nợ của ai?" value={item.creditor || ''} onChange={e => updateEditExpenseItem(idx, 'creditor', e.target.value)}
-                                style={{ flex: 1, minWidth: 70, padding: '4px 7px', border: '1px solid #fca5a5', borderRadius: 6, fontSize: 12 }} />
-                            </>)}
-                          </div>
-                        </div>
-                      ))}
+                      <div className="np-edit-list">
+                        <NoteItemsList items={editExpenseItems} menuNames={menuNames} categories={noteCategories} isAdmin={currentUser.role === 'admin'}
+                          onField={updateEditExpenseItem} onBlur={handleEditExpenseBlur} onRemove={removeEditExpenseItem}
+                          onCategory={(idx, v) => updateEditExpenseItem(idx, 'category', v)} />
+                      </div>
                       <div style={{ marginBottom: 8 }}>
                         <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Ghi chú thêm</label>
                         <textarea rows={2} value={editNoteContent} onChange={e => setEditNoteContent(e.target.value)}
@@ -1851,7 +1781,6 @@ export default function StaffNotesPage() {
         const balance = inputAmt + carried - thucChi - payOldDebt;
         const surplus = (inputAmt > 0 ? inputAmt - thucChi : 0) + carried;
         const goods = thucChi + tienNo;
-        const tabItems = expenseItems.map((item, idx) => ({ item, idx })).filter(({ item }) => isOtherLine(item) === (addTab === 'other'));
         const hasDebtStep = leftoverList.length > 0 || allOpenDebts(notes).length > 0;
         const now = new Date();
         const when = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -1866,20 +1795,10 @@ export default function StaffNotesPage() {
               <Section step={1} title="Tiền chủ giao" className="np-given"
                 aside={<MoneyInput id="new-note-input-amount" value={newNoteInputAmount} onChange={setNewNoteInputAmount} placeholder="không cầm thì bỏ trống" />} />
 
-              <Section step={2} title="Hàng" aside={<><KindTabs compact tab={addTab} onTab={openAddTab} items={expenseItems} />{goods > 0 && <b className="np-goods">{vnd(goods)}</b>}</>}>
-                {addTab === 'other' && <OtherHint short categories={noteCategories} isAdmin={currentUser.role === 'admin'} />}
-                <ItemsHead />
-                <div className="np-items">
-                  {tabItems.map(({ item, idx }, k) => {
-                    const firstPreset = item.preset && !tabItems[k - 1]?.item.preset;
-                    return <Fragment key={item._id || idx}>
-                      {firstPreset && <p className="np-group-label">Rau, gia vị · có mua thì ghi giá</p>}
-                      <NoteItemRow item={item} other={addTab === 'other'} menuNames={menuNames} categories={noteCategories}
-                        onField={(field, v) => updateExpenseItem(idx, field, v)} onBlur={(field, e) => handleExpenseBlur(idx, field, e)}
-                        onRemove={() => removeExpenseItem(idx)} onCategory={v => { updateExpenseItem(idx, 'category', v); setLastCategory(v); }} />
-                    </Fragment>;
-                  })}
-                </div>
+              <Section step={2} title="Hàng đã mua" aside={goods > 0 ? <b className="np-goods">{vnd(goods)}</b> : null}>
+                <NoteItemsList items={expenseItems} menuNames={menuNames} categories={noteCategories} isAdmin={currentUser.role === 'admin'}
+                  onField={updateExpenseItem} onBlur={handleExpenseBlur} onRemove={removeExpenseItem}
+                  onCategory={(idx, v) => updateExpenseItem(idx, 'category', v)} />
                 {showNoteText
                   ? <textarea className="np-textarea" rows={2} placeholder="Ghi chú cho chủ (không bắt buộc)" value={newNoteContent} onChange={e => setNewNoteContent(e.target.value)} />
                   : <button type="button" className="np-link" onClick={() => setShowNoteText(true)}>＋ Ghi chú</button>}
