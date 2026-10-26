@@ -1226,8 +1226,9 @@ export default function TablesPage() {
 
   // ═══════════════════════════════════════════════════════════════════════════
   // completeTable — bước 1 khi đóng bill cho một nhóm bàn: đọc lại bill, chặn món chưa
-  // giá / bill đổi số tiền, rồi mở camera (PaymentProof). Ảnh chụp xong (hoặc lý do không
-  // chụp được) mới gửi lên máy chủ đóng bàn — settleTable. extra: { given, onDone }.
+  // giá / bill đổi số tiền. Chuyển khoản: mở camera (PaymentProof), ảnh màn hình CK (hoặc lý do
+  // không chụp được) mới gửi lên máy chủ đóng bàn — settleTable. Tiền mặt: đóng bàn luôn,
+  // không chụp (chủ quán bỏ bước chụp tiền 2026-10-27). extra: { given, onDone }.
   // ═══════════════════════════════════════════════════════════════════════════
   async function completeTable(tableObj, paymentMethod = 'cash', shouldHideStats = false, expectedAmount = null, accountId = null, extra = {}) {
     const table = typeof tableObj === 'object' ? tableObj : { id: tableObj, merged_with: null };
@@ -1237,6 +1238,7 @@ export default function TablesPage() {
     if (completingTablesRef.current.has(hostId)) return false;
     completingTablesRef.current.add(hostId);
     setPayingHostId(hostId);
+    let settleNow = null;
 
     try {
       // Re-read the group and its items before marking anything paid. A stale
@@ -1262,9 +1264,10 @@ export default function TablesPage() {
         }
       }
 
-      setPayProof({ table, paymentMethod, shouldHideStats, accountId, code: paymentMethod === 'transfer' ? transactionCode : null,
-        snapshot, given: extra.given, onDone: extra.onDone });
-      return true;
+      const proof = { table, paymentMethod, shouldHideStats, accountId, code: paymentMethod === 'transfer' ? transactionCode : null,
+        snapshot, given: extra.given, onDone: extra.onDone };
+      if (paymentMethod === 'cash') settleNow = proof;
+      else setPayProof(proof);
     } catch (error) {
       console.error('[completeTable]', error);
       Swal.fire('Chưa thể thanh toán', error?.message || 'Không kiểm tra được đầy đủ bill. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
@@ -1273,18 +1276,22 @@ export default function TablesPage() {
       completingTablesRef.current.delete(hostId);
       setPayingHostId(null);
     }
+    // Tiền mặt: đóng bàn ngay, không cần ảnh.
+    if (settleNow) await settleTable(settleNow, {});
+    return true;
   }
 
   // Bước 2: đóng bàn trên máy chủ cùng ảnh (/api/admin/receipts table_pay) — máy chủ lưu ảnh,
   // gọi complete_table_payment_atomic (khoá nhóm bàn, kiểm tra lại bill + số tiền, lỗi thì
-  // rollback hết) rồi gắn ảnh vào Sổ thu chi. Không có ảnh thì phải có lý do.
+  // rollback hết) rồi gắn ảnh vào Sổ thu chi. Chuyển khoản không có ảnh thì phải có lý do;
+  // tiền mặt gửi không ảnh.
   async function settleTable(proof, { blob, skipReason }) {
     const { table, paymentMethod, snapshot } = proof;
     const hostId = table.merged_with || table.id;
     if (completingTablesRef.current.has(hostId)) return;
     completingTablesRef.current.add(hostId);
     setPayingHostId(hostId);
-    setPayProof({ ...proof, saving: true });
+    if (blob || skipReason) setPayProof({ ...proof, saving: true });
     try {
       const form = new FormData();
       form.set('action', 'table_pay');
@@ -1298,7 +1305,7 @@ export default function TablesPage() {
         if (proof.code) form.set('transaction_code', proof.code);
       }
       if (blob) form.set('image', blob, paymentMethod === 'cash' ? 'cash.jpg' : 'ck.jpg');
-      else form.set('skip_reason', skipReason);
+      else if (skipReason) form.set('skip_reason', skipReason);
       const response = await fetchWithTimeout('/api/admin/receipts', { method: 'POST', body: form, cache: 'no-store' });
       const result = await response.json().catch(() => ({}));
       if (response.status === 401) window.dispatchEvent(new Event('staff-session-expired'));
@@ -6523,7 +6530,7 @@ export default function TablesPage() {
               {/* Buttons */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
-                {/* Tiền mặt: nhập tiền khách đưa → báo tiền thối → Xác nhận → chụp tiền (bắt buộc) → đóng bàn. */}
+                {/* Tiền mặt: nhập tiền khách đưa → báo tiền thối → Xác nhận → đóng bàn (không cần chụp tiền). */}
                 {/* Khoá nút khi đang xử lý — chặn bấm 2 lần */}
                 {(() => {
                   const total = confirmPayment.totalAmount;
@@ -6551,7 +6558,7 @@ export default function TablesPage() {
                       <div style={{ fontSize: '1.6rem' }}>💵</div>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#16a34a' }}>Tiền mặt</div>
-                        <div style={{ fontSize: '0.8rem', color: '#15803d', marginTop: 2, fontWeight: 500 }}>Nhập tiền khách đưa, chụp tiền rồi đóng bàn</div>
+                        <div style={{ fontSize: '0.8rem', color: '#15803d', marginTop: 2, fontWeight: 500 }}>Nhập tiền khách đưa rồi đóng bàn</div>
                       </div>
                     </div>
                     <input
@@ -6574,7 +6581,7 @@ export default function TablesPage() {
                     </div>}
                     <button type="button" onClick={confirmCash} disabled={!ready || !!payingHostId}
                       style={{ width: '100%', marginTop: 10, padding: '13px', borderRadius: 12, border: 'none', background: ready && !payingHostId ? '#16a34a' : '#86efac', color: 'white', fontWeight: 800, fontSize: '1rem', cursor: ready && !payingHostId ? 'pointer' : 'not-allowed' }}>
-                      {payingHostId ? '⏳ Đang xử lý...' : '📷 Xác nhận & chụp tiền'}
+                      {payingHostId ? '⏳ Đang đóng bàn...' : '✅ Xác nhận đã nhận tiền'}
                     </button>
                   </div>;
                 })()}

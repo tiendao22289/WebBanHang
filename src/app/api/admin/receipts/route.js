@@ -12,8 +12,9 @@
  *   qr_confirm       code, amount, account_id, kind ('ck' | 'bill'), image — trang Mã QR: "Xác nhận đã nhận tiền"
  *   qr_cash          receipt_id, amount, image — trang Mã QR: "Nhận tiền mặt"
  *   table_pay        table_id, order_ids, amount, method, account_id?, hide_stats, transaction_code?,
- *                    image | skip_reason — trang Bàn: đóng bàn (complete_table_payment_atomic) chỉ khi có
- *                    ảnh màn hình CK / tiền mặt khách đưa, hoặc lý do không chụp được (máy lỗi...)
+ *                    image | skip_reason — trang Bàn: đóng bàn (complete_table_payment_atomic). Chuyển khoản
+ *                    chỉ khi có ảnh màn hình CK của khách, hoặc lý do không chụp được (máy lỗi...).
+ *                    Tiền mặt không cần ảnh (chủ quán bỏ bước chụp tiền 2026-10-27); có ảnh thì vẫn lưu.
  *
  * source = 'qr:<mã>' / 'cash:<id phiếu>': bill giấy DB tự ghi khi thu ở trang
  * Mã QR (owner_finance.sql, capture_qr_page_receipt). qr_confirm / qr_cash bắt
@@ -252,8 +253,8 @@ export async function POST(request) {
       if (hasImage) {
         const problem = receiptImageProblem(image);
         if (problem) return fail(problem);
-      } else if (skipReason.length < 3) {
-        return fail(method === 'cash' ? 'Chụp tiền khách đưa trước khi đóng bàn.' : 'Chụp màn hình chuyển khoản của khách trước khi đóng bàn.');
+      } else if (method === 'transfer' && skipReason.length < 3) {
+        return fail('Chụp màn hình chuyển khoản của khách trước khi đóng bàn.');
       }
       // Lưu ảnh trước: bàn chỉ được đóng khi ảnh đã nằm trong kho.
       const path = hasImage ? await uploadReceiptImage(db, image, method === 'cash' ? 'cash' : 'ck') : null;
@@ -270,6 +271,8 @@ export async function POST(request) {
         return fail(error.code === 'P0001' ? error.message : 'Chưa đóng được bàn, thử lại.');
       }
       const by = session.user.full_name || null;
+      // Tiền mặt không ảnh, không lý do: không có gì gắn vào Sổ thu chi.
+      if (!hasImage && skipReason.length < 3) return NextResponse.json({ ok: true, photoSaved: false }, { headers });
       const patch = !hasImage ? { photo_skip_reason: skipReason, photo_by: by }
         : method === 'cash' ? { cash_image_path: path, photo_by: by } : { transfer_image_path: path, transfer_image_by: by, photo_by: by };
       // Sổ thu chi đã ghi bill (trigger capture_finance_revenue, cùng giao dịch đóng bàn).

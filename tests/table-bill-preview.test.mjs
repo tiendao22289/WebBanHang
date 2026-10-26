@@ -27,43 +27,55 @@ test('preview belongs to its table and cannot appear on the next table', () => {
   assert.equal(render(null).showBillPreview, false);
 });
 
-for (const method of ['cash', 'transfer']) {
-  test(`${method} settlement closes preview only after the photo is taken and the payment succeeds`, async () => {
-    for (const [status, body, success] of [[200, { ok: true, photoSaved: true }, true], [409, { reason: 'amount_changed', total: 120000 }, false], [500, { error: 'x' }, false]]) {
-      let previewOpen = true;
-      let selectedTable = { id: 'table-1' };
-      let proof = null;
-      let sent = null;
-      let done = 0;
-      const context = {
-        completingTablesRef: { current: new Set() }, setPayingHostId: () => {},
-        getFreshPaymentSnapshot: async () => ({ bills: [{ id: 'bill-1' }], total: 100000, unpricedItems: [], groupTableIds: ['table-1'] }),
-        transactionCode: 'HD1', setPayProof: value => { proof = value; }, setConfirmPayment: () => {},
-        fetchWithTimeout: async (url, options) => { sent = options.body; return new Response(JSON.stringify(body), { status }); },
-        FormData, Response, Event: class {}, window: { dispatchEvent: () => {} }, console: { error() {} },
-        setShowBillPreview: value => { previewOpen = value; },
-        setSelectedTable: value => { selectedTable = value; },
-        fetchTables: async () => {}, Swal: { fire: () => {} }, formatPrice: String, promptFixUnpricedItems: () => false,
-      };
-      const complete = vm.runInNewContext(`(${completeSource.trim()})`, context);
-      const settle = vm.runInNewContext(`(${settleSource.trim()})`, context);
-
-      // Bước 1: kiểm tra bill rồi mở camera — chưa đóng gì.
-      assert.equal(await complete({ id: 'table-1' }, method, false, 100000, method === 'transfer' ? 'acc-1' : null, { onDone: () => { done += 1; } }), true);
-      assert.equal(previewOpen, true);
-      assert.equal(sent, null, 'nothing is sent before the photo');
-      assert.equal(proof.paymentMethod, method);
-
-      // Bước 2: chụp xong → máy chủ đóng bàn cùng ảnh.
-      const opened = proof;
-      await settle(opened, { blob: new Blob(['jpg'], { type: 'image/jpeg' }) });
-      assert.deepEqual([sent.get('action'), sent.get('order_ids'), sent.get('amount'), sent.get('method')], ['table_pay', 'bill-1', '100000', method]);
-      assert.equal(sent.get('image').size, 3);
-      if (method === 'transfer') assert.deepEqual([sent.get('account_id'), sent.get('transaction_code')], ['acc-1', 'HD1']);
-      assert.equal(previewOpen, !success);
-      assert.equal(selectedTable === null, success);
-      assert.equal(done, success ? 1 : 0);
-      assert.equal(proof, null, 'camera closes either way');
-    }
-  });
+// Một lần thanh toán với máy chủ giả trả (status, body): complete / settle chạy như trên trang Bàn.
+function harness(status, body) {
+  const box = { previewOpen: true, selectedTable: { id: 'table-1' }, proof: null, proofs: [], sent: null, done: 0 };
+  const context = {
+    completingTablesRef: { current: new Set() }, setPayingHostId: () => {},
+    getFreshPaymentSnapshot: async () => ({ bills: [{ id: 'bill-1' }], total: 100000, unpricedItems: [], groupTableIds: ['table-1'] }),
+    transactionCode: 'HD1', setPayProof: value => { box.proof = value; box.proofs.push(value); }, setConfirmPayment: () => {},
+    fetchWithTimeout: async (url, options) => { box.sent = options.body; return new Response(JSON.stringify(body), { status }); },
+    FormData, Response, Event: class {}, window: { dispatchEvent: () => {} }, console: { error() {} },
+    setShowBillPreview: value => { box.previewOpen = value; },
+    setSelectedTable: value => { box.selectedTable = value; },
+    fetchTables: async () => {}, Swal: { fire: () => {} }, formatPrice: String, promptFixUnpricedItems: () => false,
+  };
+  box.complete = vm.runInNewContext(`(${completeSource.trim()})`, context);
+  box.settle = vm.runInNewContext(`(${settleSource.trim()})`, context);
+  context.settleTable = box.settle;
+  return box;
 }
+const OUTCOMES = [[200, { ok: true, photoSaved: true }, true], [409, { reason: 'amount_changed', total: 120000 }, false], [500, { error: 'x' }, false]];
+
+test('transfer settlement closes preview only after the photo is taken and the payment succeeds', async () => {
+  for (const [status, body, success] of OUTCOMES) {
+    const t = harness(status, body);
+    // Bước 1: kiểm tra bill rồi mở camera — chưa đóng gì.
+    assert.equal(await t.complete({ id: 'table-1' }, 'transfer', false, 100000, 'acc-1', { onDone: () => { t.done += 1; } }), true);
+    assert.equal(t.previewOpen, true);
+    assert.equal(t.sent, null, 'nothing is sent before the photo');
+    assert.equal(t.proof.paymentMethod, 'transfer');
+
+    // Bước 2: chụp xong → máy chủ đóng bàn cùng ảnh.
+    await t.settle(t.proof, { blob: new Blob(['jpg'], { type: 'image/jpeg' }) });
+    assert.deepEqual([t.sent.get('action'), t.sent.get('order_ids'), t.sent.get('amount'), t.sent.get('method')], ['table_pay', 'bill-1', '100000', 'transfer']);
+    assert.equal(t.sent.get('image').size, 3);
+    assert.deepEqual([t.sent.get('account_id'), t.sent.get('transaction_code')], ['acc-1', 'HD1']);
+    assert.equal(t.previewOpen, !success);
+    assert.equal(t.selectedTable === null, success);
+    assert.equal(t.done, success ? 1 : 0);
+    assert.equal(t.proof, null, 'camera closes either way');
+  }
+});
+
+test('cash closes the table right away with no photo (the owner dropped the cash photo)', async () => {
+  for (const [status, body, success] of OUTCOMES) {
+    const t = harness(status, body);
+    assert.equal(await t.complete({ id: 'table-1' }, 'cash', false, 100000, null, { given: 100000, onDone: () => { t.done += 1; } }), true);
+    assert.deepEqual([t.sent.get('action'), t.sent.get('method'), t.sent.get('amount')], ['table_pay', 'cash', '100000']);
+    assert.deepEqual([t.sent.get('image'), t.sent.get('skip_reason')], [null, null], 'no photo and no "no photo" reason');
+    assert.ok(t.proofs.every(p => p === null), 'the camera never opens');
+    assert.equal(t.previewOpen, !success);
+    assert.equal(t.done, success ? 1 : 0);
+  }
+});

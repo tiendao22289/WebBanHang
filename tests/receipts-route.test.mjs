@@ -297,14 +297,19 @@ const tableDb = () => ({ ...base(), rpc: {
 } });
 const payTable = (api, fields = {}) => post(api, { action: 'table_pay', table_id: TABLE, order_ids: ORDERS.join(','), amount: '300000', method: 'cash', image: image(), ...fields });
 
-test('a table closes only with a photo of the cash or the customer transfer screen, put on every bill of the group', async () => {
+test('a transfer table closes only with a photo of the customer screen; cash needs no photo; a photo goes on every bill of the group', async () => {
   const state = tableDb();
   const staff = load({ state });
-  let res = await payTable(staff.api, { image: undefined });
-  assert.deepEqual([res.status, res.body.error], [400, 'Chụp tiền khách đưa trước khi đóng bàn.']);
-  res = await payTable(staff.api, { method: 'transfer', account_id: ACC, image: undefined });
-  assert.equal(res.body.error, 'Chụp màn hình chuyển khoản của khách trước khi đóng bàn.');
-  assert.equal(state.rpcCalls, undefined, 'no photo, no reason → the table stays open');
+  let res = await payTable(staff.api, { method: 'transfer', account_id: ACC, image: undefined });
+  assert.deepEqual([res.status, res.body.error], [400, 'Chụp màn hình chuyển khoản của khách trước khi đóng bàn.']);
+  assert.equal(state.rpcCalls, undefined, 'transfer: no photo, no reason → the table stays open');
+
+  // Tiền mặt: chủ quán bỏ bước chụp tiền — đóng bàn luôn, Sổ thu chi không ghi "không ảnh".
+  const cashOnly = tableDb();
+  res = await payTable(load({ state: cashOnly }).api, { image: undefined });
+  assert.deepEqual([res.status, res.body.ok], [200, true]);
+  assert.equal(plain(cashOnly.rpcCalls)[0][1].p_payment_method, 'cash');
+  assert.deepEqual(plain(cashOnly.finance_revenue_ledger).map(r => [r.photo_skip_reason ?? null, r.cash_image_path ?? null]), [[null, null], [null, null]]);
 
   res = await payTable(staff.api);
   assert.deepEqual([res.status, res.body.photoSaved], [200, true]);
@@ -327,11 +332,11 @@ test('a transfer table keeps the customer screen as its transfer photo and passe
     [['2026-10/ck-1.jpg', 'Thu ngân', null], ['2026-10/ck-1.jpg', 'Thu ngân', null]]);
 });
 
-test('when the camera is broken the table closes only with a written reason, shown in the finance book', async () => {
+test('when the camera is broken a transfer table closes only with a written reason, shown in the finance book', async () => {
   const state = tableDb();
   const staff = load({ state });
-  assert.equal((await payTable(staff.api, { image: undefined, skip_reason: ' a ' })).status, 400, 'a real reason is needed');
-  const res = await payTable(staff.api, { image: undefined, skip_reason: 'Máy lỗi camera' });
+  assert.equal((await payTable(staff.api, { method: 'transfer', account_id: ACC, image: undefined, skip_reason: ' a ' })).status, 400, 'a real reason is needed');
+  const res = await payTable(staff.api, { method: 'transfer', account_id: ACC, image: undefined, skip_reason: 'Máy lỗi camera' });
   assert.deepEqual([res.status, res.body.photoSaved], [200, true]);
   assert.equal(staff.uploads.length, 0);
   assert.deepEqual(plain(state.finance_revenue_ledger).map(r => [r.photo_skip_reason, r.photo_by]), [['Máy lỗi camera', 'Thu ngân'], ['Máy lỗi camera', 'Thu ngân']]);
