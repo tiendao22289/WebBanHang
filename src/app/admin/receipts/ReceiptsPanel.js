@@ -228,7 +228,8 @@ export default function ReceiptsPanel({ embedded = false }) {
           <span className="rc-item-main">{clock(b.receivedAt)}{b.tableLabel ? ` · ${b.tableLabel}` : ''}
             <small>{b.paymentMethod === 'transfer' ? accountName(b.accountId) : 'Tiền mặt'}{b.createdByName ? ` · ${b.createdByName}` : ''}{b.imageUrl || b.transferImageUrl ? '' : ' · chưa có ảnh bill'}</small></span>
           <b>{money(b.amount)}</b>
-          {(b.mine || data.me?.role === 'admin') && <button className="fin-icon danger" onClick={() => remove(b)} aria-label="Xoá"><Trash2 size={16} /></button>}
+          {/* Bill giấy đã lưu: chỉ chủ quán xoá được (nhân viên nhập sai thì báo chủ quán). */}
+          {data.me?.role === 'admin' && <button className="fin-icon danger" onClick={() => remove(b)} aria-label="Xoá"><Trash2 size={16} /></button>}
         </div>
         {!b.imageUrl && !b.transferImageUrl && <div className="rc-ck-actions">
           {attaching?.key === `bill-${b.id}` ? <span className="rc-ck-busy">Đang gửi ảnh...</span> : <>
@@ -250,12 +251,13 @@ export default function ReceiptsPanel({ embedded = false }) {
           <span className="rc-item-main">{clock(t.at)} · {t.title}<small>{accountName(t.accountId)}{t.url ? ' · ✓ có ảnh CK' : ''}</small></span>
           <b>{money(t.amount)}</b>
         </div>
-        <div className="rc-ck-actions">
+        {/* Đã có ảnh CK: chỉ chủ quán được chụp lại; nhân viên chỉ thêm ảnh còn thiếu. */}
+        {(!t.url || data.me?.role === 'admin') && <div className="rc-ck-actions">
           {attaching?.key === t.key ? <span className="rc-ck-busy">Đang gửi ảnh...</span> : <>
             <button className="rc-attach" onClick={() => startCamera(t)}>📷 {t.url ? 'Chụp lại' : 'Chụp ĐT khách'}</button>
             <button className="rc-attach done" onClick={() => startGallery(t)}>Chọn ảnh có sẵn</button>
           </>}
-        </div>
+        </div>}
       </div>)}
     </section>
 
