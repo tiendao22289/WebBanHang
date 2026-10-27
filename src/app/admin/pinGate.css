@@ -1,0 +1,23 @@
+/* Màn nhập mã PIN trước các tab của chủ quán (AdminPinGate). */
+.pin-gate { min-height: 100%; display: flex; align-items: flex-start; justify-content: center; padding: 28px 16px calc(96px + env(safe-area-inset-bottom)); background: #f8fafc; box-sizing: border-box; }
+.pin-card { width: 100%; max-width: 340px; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 22px 18px 18px; background: #fff; border: 1px solid #e5e7eb; border-radius: 20px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06); }
+.pin-icon { display: flex; align-items: center; justify-content: center; width: 52px; height: 52px; border-radius: 50%; background: #fef2f2; color: #dc2626; }
+.pin-card h2 { margin: 0; font-size: 1.1rem; font-weight: 800; color: #111827; }
+.pin-prompt { margin: 0; font-size: 0.88rem; color: #4b5563; text-align: center; }
+.pin-dots { display: flex; gap: 12px; min-height: 18px; margin: 4px 0; }
+.pin-dots.wide { gap: 8px; flex-wrap: wrap; justify-content: center; }
+.pin-dots span { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #cbd5e1; }
+.pin-dots span.on { background: #dc2626; border-color: #dc2626; }
+.pin-error { margin: 0; font-size: 0.84rem; font-weight: 600; color: #dc2626; text-align: center; }
+.pin-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; width: 100%; margin-top: 4px; }
+.pin-pad button { min-height: 58px; border: 1px solid #e5e7eb; border-radius: 14px; background: #f9fafb; color: #111827; font-size: 1.4rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.pin-pad button:active { background: #e5e7eb; }
+.pin-pad button.ok { background: #dc2626; border-color: #dc2626; color: #fff; }
+.pin-pad button.del { color: #6b7280; }
+.pin-pad button:disabled { opacity: 0.5; }
+.pin-links { display: flex; justify-content: space-between; gap: 10px; width: 100%; margin-top: 4px; }
+.pin-links button { border: 0; background: none; padding: 8px 2px; color: #2563eb; font-weight: 700; font-size: 0.85rem; cursor: pointer; }
+.pin-note { margin: 0; font-size: 0.76rem; color: #6b7280; text-align: center; line-height: 1.4; }
+/* Đang mở khoá: nút nhỏ khoá lại ngay (góc trái dưới, trên thanh menu điện thoại). */
+.pin-lock-now { position: fixed; left: 10px; bottom: calc(84px + env(safe-area-inset-bottom)); z-index: 200; width: 36px; height: 36px; border: 0; border-radius: 50%; background: rgba(17, 24, 39, 0.72); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18); }
+@media (min-width: 769px) { .pin-lock-now { bottom: 16px; left: auto; right: 16px; } }
