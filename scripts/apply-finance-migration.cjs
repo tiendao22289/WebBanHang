@@ -120,11 +120,21 @@ async function main() {
   console.log(JSON.stringify(face));
   if (face.tables !== 5 || face.settings !== 1 || !face.anon_blocked) throw new Error('Chưa cài đủ bảng so khuôn mặt.');
 
-  // Nhân viên gửi món: gửi lại không cộng 2 lần, không cộng vào dòng quà 0đ (confirm_draft_order_lines.sql).
+  // Báo bếp đúng món mới (kitchen_tickets.sql) — cài TRƯỚC confirm_draft_order_lines.sql vì hàm gửi món gọi các hàm này.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'kitchen_tickets.sql'), 'utf8'));
+  const [kitchen] = await query(`SELECT
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'order_items' AND column_name = 'kitchen_sent_at') AS sent_col,
+    EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mark_items_sent_to_kitchen' AND NOT tgisinternal) AS trigger_on,
+    has_function_privilege('anon', 'public.queue_kitchen_tickets(uuid,uuid[])', 'EXECUTE') AS web_can_print,
+    has_function_privilege('anon', 'public.add_item_portion(uuid,integer,uuid,text)', 'EXECUTE') AS web_can_add`);
+  console.log(JSON.stringify(kitchen));
+  if (!kitchen.sent_col || !kitchen.trigger_on || !kitchen.web_can_print || !kitchen.web_can_add) throw new Error('Chưa cài được phần báo bếp.');
+
+  // Nhân viên gửi món: gửi lại không cộng 2 lần, không cộng vào dòng quà 0đ, tự in bếp món bếp (confirm_draft_order_lines.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'confirm_draft_order_lines.sql'), 'utf8'));
   const [draft] = await query(`SELECT
     to_regclass('public.draft_order_lines') IS NOT NULL AS lines,
-    position('draft_order_lines' in pg_get_functiondef('public.confirm_draft_order(uuid,jsonb,uuid,text)'::regprocedure)) > 0 AS fn_updated,
+    position('queue_kitchen_tickets' in pg_get_functiondef('public.confirm_draft_order(uuid,jsonb,uuid,text)'::regprocedure)) > 0 AS fn_updated,
     has_function_privilege('anon', 'public.confirm_draft_order(uuid,jsonb,uuid,text)', 'EXECUTE') AS web_can_call,
     NOT has_table_privilege('anon', 'public.draft_order_lines', 'SELECT') AS anon_blocked`);
   console.log(JSON.stringify(draft));

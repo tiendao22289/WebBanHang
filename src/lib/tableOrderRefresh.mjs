@@ -1,8 +1,10 @@
+// order_items(*): kitchen_sent_at (dấu "đã báo bếp") chỉ có sau khi chạy
+// kitchen_tickets.sql — ghi tên cột ra thì trang lỗi trước lúc cài migration.
 export const OPEN_TABLE_ORDER_SELECT = `
   id, table_id, status, total_amount, customer_name, customer_phone, customer_note,
   delivery_address, created_at, created_by_name,
   order_items (
-    id, quantity, unit_price, item_options, note, is_gift, menu_item_id, item_name, added_by_name,
+    *,
     menu_item:menu_items (name, price, image_url, category_id)
   ),
   print_jobs (id, status, created_at, printer_id, error_message, filter_category_ids, only_item_ids, order_ids)

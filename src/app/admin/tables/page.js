@@ -9,7 +9,7 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { buildQrUrl } from '@/lib/bankAccount';
 import { prepareTableStatsPayment } from '@/lib/tableStatsQuota';
-import { sendTableSummaryPrintJob, sendSmartPrintJobs } from '@/lib/print';
+import { sendTableSummaryPrintJob, sendSmartPrintJobs, sendGiftItemPrintJob } from '@/lib/print';
 import {
   getChannel, fetchChannelConfig, calcReviewDiscount, startOfTodayISO,
   isReviewDiscountItem,
@@ -19,6 +19,7 @@ import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders'
 import { promoGiftStatus } from '@/lib/promoGifts.mjs';
 import { isPrintJobBad, isUnresolvedBadJob } from '@/lib/printJobStatus.mjs';
 import { NO_DRAFT, updateDraftOf, addDraftLine, decreaseDraftLine, setDraftItemTotal, removeSentLines } from '@/lib/draftCart.mjs';
+import { resolvePrintCategory, isKitchenItem, unsentKitchenItems, nextKitchenCheckIn } from '@/lib/kitchenTicket.mjs';
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import PaymentProof from '@/components/PaymentProof';
@@ -749,11 +750,20 @@ export default function TablesPage() {
     setLoading(false);
   }, []);
 
-  // ─── Danh sách máy in (để hiển thị tên máy khi báo lỗi in) ───
+  // ─── Danh sách máy in (tên máy khi báo lỗi in + biết món nào là món bếp) ───
   useEffect(() => {
-    supabase.from('printers').select('id, name, target, type, interface')
+    supabase.from('printers').select('id, name, target, type, interface, is_active, is_default, is_bill_printer, sort_order, printer_categories(category_id)')
       .then(({ data }) => { if (data) setPrinters(data); });
   }, []);
+
+  // Món mới chỉ hiện "chưa báo bếp" sau KITCHEN_GRACE_MS (đơn QR đang tạo phiếu) — vẽ lại đúng lúc đó.
+  const [kitchenTick, setKitchenTick] = useState(0);
+  useEffect(() => {
+    const wait = nextKitchenCheckIn(Object.values(orders).flat().flatMap(o => o.order_items || []));
+    if (wait == null) return;
+    const timer = setTimeout(() => setKitchenTick(n => n + 1), wait);
+    return () => clearTimeout(timer);
+  }, [orders, kitchenTick]);
 
   // Gom lượt quay CHƯA vào bill theo bàn host để gắn icon lên thẻ bàn. Ưu tiên
   // trạng thái nặng nhất: error (cần xử lý) > waiting (đang chờ) > blocked.
@@ -873,19 +883,38 @@ export default function TablesPage() {
   }
 
   // Category thực tế để định tuyến máy in của 1 món (giống printer.js).
-  function resolveItemCategory(item) {
-    let cat = item.menu_item?.category_id ?? null;
-    const opts = item.menu_item?.options || menuItems.find(m => m.id === item.menu_item_id)?.options || [];
-    if (Array.isArray(item.item_options)) {
-      for (const opt of item.item_options) {
-        const mo = opts.find(o => o.name === opt.name);
-        if (mo && Array.isArray(mo.choiceCategories) && Array.isArray(mo.choices)) {
-          const idx = mo.choices.indexOf(opt.choice);
-          if (idx >= 0 && mo.choiceCategories[idx]) cat = mo.choiceCategories[idx];
-        }
-      }
-    }
-    return cat;
+  const menuOptionsOf = item => item.menu_item?.options || menuItems.find(m => m.id === item.menu_item_id)?.options || [];
+  const resolveItemCategory = item => resolvePrintCategory(item, menuOptionsOf(item));
+
+  // Món bếp của 1 bill chưa có phiếu bếp nào (đơn QR mất mạng trước khi tạo phiếu,
+  // quà chưa in được...). Nhân viên gửi món thì máy chủ tự in — xem kitchen_tickets.sql.
+  const unsentKitchenOf = order => unsentKitchenItems(order?.order_items, printers, menuOptionsOf);
+
+  async function sendUnsentToKitchen(order, items) {
+    const { data: jobs, error } = await supabase.rpc('queue_kitchen_tickets', {
+      p_order_id: order.id, p_item_ids: items.map(i => i.id),
+    });
+    if (error) Swal.fire('Chưa in bếp được', error.message || 'Vui lòng thử lại.', 'error');
+    else Swal.fire({ title: jobs > 0 ? 'Đã gửi bếp!' : 'Món đã được báo bếp rồi', icon: jobs > 0 ? 'success' : 'info', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
+    fetchOrdersForBills([order.id]);
+  }
+
+  // Khối "N món chưa báo bếp" + nút In bếp (chỉ in đúng các món đó).
+  function renderUnsentKitchenPanel(order) {
+    const items = unsentKitchenOf(order);
+    if (items.length === 0) return null;
+    const names = items.map(i => `${i.quantity}× ${i.item_name || i.menu_item?.name || 'Món'}`).join(', ');
+    return (
+      <div style={{ background: '#fff7ed', border: '1px solid #fdba74', borderRadius: 8, padding: '6px 8px', margin: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span title={names} style={{ flex: 1, minWidth: 0, fontSize: '0.76rem', color: '#c2410c', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          🍳 <b>{items.length} món chưa báo bếp</b> · {names}
+        </span>
+        <button onClick={() => sendUnsentToKitchen(order, items)}
+          style={{ background: '#ea580c', color: 'white', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+          In bếp
+        </button>
+      </div>
+    );
   }
 
   // Tập id các món CHƯA IN ĐƯỢC của 1 đơn (thuộc lệnh in lỗi/treo) — để đánh
@@ -2111,7 +2140,7 @@ export default function TablesPage() {
       const targetOrderId = [...groupBills].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0]?.id;
       if (!targetOrderId) return;
 
-      const { error } = await supabase.from('order_items').insert({
+      const { data: gift, error } = await supabase.from('order_items').insert({
         order_id: targetOrderId,
         menu_item_id: giftItem.id,
         quantity: 1,
@@ -2120,13 +2149,18 @@ export default function TablesPage() {
         note: null,
         is_gift: true,
         ...(currentStaff ? { added_by_id: currentStaff.id, added_by_name: currentStaff.full_name } : {}),
-      });
+      }).select('id').single();
       if (error) {
         Swal.fire('Lỗi', 'Không ghi được món tặng: ' + error.message, 'error');
         return;
       }
 
       syncOrderPromotions(targetOrderId); // đồng bộ promo_gift_unlocked cho trang khách — không cần đợi
+      // In phiếu riêng đúng món quà (trước đây quà nhân viên chọn không in, bếp không biết).
+      const printed = await sendGiftItemPrintJob(supabase, targetOrderId, gift.id);
+      if (!printed.success) {
+        Swal.fire({ icon: 'warning', title: 'Đã thêm quà, CHƯA in được phiếu', text: `${printed.error || 'Lỗi máy in'} — báo bếp hoặc bấm In bếp ở bill.` });
+      }
       await fetchOrdersForBills([targetOrderId]);
     } finally {
       setGiftPickerSaving(null);
@@ -2183,9 +2217,42 @@ export default function TablesPage() {
     }
   }
 
+  // Thêm phần cho món bếp ĐÃ báo bếp: phần thêm thành dòng mới + phiếu bếp riêng
+  // (add_item_portion). Cộng vào dòng cũ thì bếp không biết; hỏi trước vì bấm nhầm
+  // "+" giờ là bếp làm thêm món thật.
+  async function addKitchenPortion(orderId, line, qty) {
+    const { value, isConfirmed } = await Swal.fire({
+      title: 'Thêm món & báo bếp?',
+      text: `${line.menu_item?.name || line.item_name || 'Món'}: in phiếu bếp cho phần thêm.`,
+      input: 'number', inputValue: qty, inputAttributes: { min: 1, step: 1 },
+      showCancelButton: true, confirmButtonText: '🍳 Thêm & in bếp', cancelButtonText: 'Huỷ',
+      confirmButtonColor: '#ea580c', reverseButtons: true,
+      inputValidator: v => (parseInt(v, 10) >= 1 ? undefined : 'Nhập số phần thêm'),
+    });
+    if (!isConfirmed) return;
+    try {
+      const { data, error } = await supabase.rpc('add_item_portion', {
+        p_item_id: line.id, p_quantity: parseInt(value, 10),
+        p_staff_id: currentStaff?.id || null, p_staff_name: currentStaff?.full_name || null,
+      });
+      if (error) throw error;
+      await syncOrderPromotions(orderId);
+      if (data?.new_line && !data.print_jobs) Swal.fire('Đã thêm món, CHƯA in được phiếu bếp', 'Bấm In bếp ở đầu bill.', 'warning');
+    } catch (error) {
+      Swal.fire('Chưa thêm được món', error.message || 'Vui lòng thử lại.', 'error');
+    } finally {
+      await fetchOrdersForBills([orderId]);
+    }
+  }
+
   async function updateItemQuantity(orderId, itemId, currentQuantity, change) {
     const newQuantity = currentQuantity + change;
     if (newQuantity <= 0) return removeItemFromOrder(orderId, itemId);
+
+    const line = change > 0 && Object.values(orders).flat().find(o => o.id === orderId)?.order_items?.find(i => i.id === itemId);
+    if (line?.kitchen_sent_at && !line.is_gift && isKitchenItem(line, printers, menuOptionsOf(line))) {
+      return addKitchenPortion(orderId, line, change);
+    }
 
     // Optimistic: cập nhật local state ngay lập tức
     setOrders(prev => {
@@ -2507,7 +2574,8 @@ export default function TablesPage() {
       lineIds.forEach(id => lockedDraftLinesRef.current.delete(id));
       setAddingToOrder(null);
       setAddItemSearch('');
-      return true;
+      // Máy chủ tự in bếp món bếp vừa gửi (print_jobs / print_error) — người gọi báo lại cho nhân viên.
+      return data || true;
     } catch (err) {
       console.error('[confirmDraft] error:', err);
       Swal.fire({
@@ -2898,6 +2966,7 @@ export default function TablesPage() {
           const totalAmount = sumOrderItems(tableBills);
           const guestCount = tableBills.length;
           const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => isUnresolvedBadJob(pj, o)));
+          const unsentKitchenCount = tableBills.reduce((s, o) => s + unsentKitchenOf(o).length, 0);
           // Bill của bàn đã dùng vòng xoay may mắn chưa — báo cho nhân viên biết,
           // vì mỗi bill chỉ được nhận 1 lần quà (xem /api/lucky/spin).
           const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelOutcome));
@@ -3000,6 +3069,15 @@ export default function TablesPage() {
                     style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 100, padding: '3px 7px', display: 'flex', alignItems: 'center', gap: 3, border: '1px solid #93c5fd', fontSize: '0.65rem', fontWeight: 800, whiteSpace: 'nowrap' }}
                   >
                     🛒 {(draftsByTable[table.id] || []).reduce((s, d) => s + d.qty, 0)} chưa gửi
+                  </div>
+                )}
+                {unsentKitchenCount > 0 && (
+                  <div
+                    className="review-req-blink"
+                    title="Có món bếp chưa có phiếu bếp — mở bàn, bấm In bếp"
+                    style={{ background: '#fff7ed', color: '#c2410c', borderRadius: 100, padding: '3px 7px', display: 'flex', alignItems: 'center', gap: 3, border: '1px solid #fdba74', fontSize: '0.65rem', fontWeight: 800, whiteSpace: 'nowrap' }}
+                  >
+                    🍳 {unsentKitchenCount} chưa báo bếp
                   </div>
                 )}
                 {giftElig.shortGifts > 0 && (
@@ -3194,6 +3272,7 @@ export default function TablesPage() {
                 ) : tableBills.map((order, billIdx) => {
                   const billItems = (order.order_items || []).map(item => ({ ...item, _orderId: order.id }));
                   const unprintedIds = unprintedItemIds(order); // món chưa in được → đánh dấu
+                  const unsentKitchenIds = new Set(unsentKitchenOf(order).map(i => i.id));
                   return (
                     <div key={order.id}>
                       {/* Bill Header Row */}
@@ -3272,6 +3351,7 @@ export default function TablesPage() {
                       )}
                       {/* Báo món chưa in được + nút In lại (nếu có) */}
                       {renderPrintErrorPanel(order)}
+                      {renderUnsentKitchenPanel(order)}
                       {/* Items in this bill */}
                       {billItems.map((item, idx) => {
                         const optionText = item.item_options?.map(o => o.choice).join(', ') || '';
@@ -3287,6 +3367,7 @@ export default function TablesPage() {
                               <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#111827', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                 {item.menu_item?.name || item.item_name || item.name}
                                 {unprintedIds.has(item.id) && <span title="Món này chưa in được" style={{ fontSize: '0.62rem', background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 6px', fontWeight: 800 }}>🖨️ chưa in</span>}
+                                {unsentKitchenIds.has(item.id) && <span title="Món bếp chưa có phiếu bếp — bấm In bếp ở đầu bill" style={{ fontSize: '0.62rem', background: '#fff7ed', color: '#c2410c', border: '1px solid #fdba74', borderRadius: 4, padding: '1px 6px', fontWeight: 800 }}>🍳 chưa báo bếp</span>}
                                 {item.added_by_name && <span style={{ fontSize: '0.62rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700 }}>👤 NV: {item.added_by_name}</span>}
                               </div>
                               {optionText ? (
@@ -3767,6 +3848,7 @@ export default function TablesPage() {
                           const tableBills = getTableGroupOrders(table, tables, orders);
                           const tableTotal = sumOrderItems(tableBills);
                           const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => isUnresolvedBadJob(pj, o)));
+                          const unsentKitchenCount = tableBills.reduce((s, o) => s + unsentKitchenOf(o).length, 0);
                           const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelOutcome));
                           const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(tableBills) : { availableGiftSlots: 0, hasGiftInBill: false, shortGifts: 0, missingItems: 0 };
 
@@ -3866,6 +3948,14 @@ export default function TablesPage() {
                                 {(draftsByTable[table.id] || []).reduce((s, d) => s + d.qty, 0) > 0 && (
                                   <div title="Món đã chọn cho bàn này nhưng CHƯA bấm Gửi đi" style={{ position: 'absolute', top: -1, left: '50%', transform: 'translateX(-50%)', background: '#2563eb', color: 'white', borderRadius: '0 0 8px 8px', padding: '1px 6px', zIndex: 10, fontSize: '0.6rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
                                     🛒{(draftsByTable[table.id] || []).reduce((s, d) => s + d.qty, 0)}
+                                  </div>
+                                )}
+                                {unsentKitchenCount > 0 && (
+                                  // Bọc ngoài để căn giữa: hiệu ứng nhấp nháy dùng transform, không giữ được translateX.
+                                  <div style={{ position: 'absolute', bottom: -1, left: 0, right: 0, display: 'flex', justifyContent: 'center', zIndex: 10, pointerEvents: 'none' }}>
+                                    <div className="review-req-blink" title="Có món bếp chưa có phiếu bếp — mở bàn, bấm In bếp" style={{ background: '#ea580c', color: 'white', borderRadius: '8px 8px 0 0', padding: '1px 6px', fontSize: '0.6rem', fontWeight: 800, whiteSpace: 'nowrap', pointerEvents: 'auto' }}>
+                                      🍳{unsentKitchenCount}
+                                    </div>
                                   </div>
                                 )}
                                 {giftElig.shortGifts > 0 && (
@@ -4489,6 +4579,7 @@ export default function TablesPage() {
                       </div>
                       {/* Báo món chưa in được + nút In lại (nếu có) */}
                       {renderPrintErrorPanel(order)}
+                      {renderUnsentKitchenPanel(order)}
                       <div className="order-items-list">
                         {order.order_items?.map((item) => isReviewDiscountItem(item) ? (
                           // Dòng ưu đãi đánh giá Google — không phải món ăn, không cho sửa giá/số lượng
@@ -4580,6 +4671,7 @@ export default function TablesPage() {
                                 <span style={{ fontSize: '0.97rem', fontWeight: 600, color: '#111827', lineHeight: 1.3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                   {item.menu_item?.name || item.item_name || 'Món đã xoá'}
                                   {unprintedItemIds(order).has(item.id) && <span title="Món này chưa in được" style={{ fontSize: '0.62rem', background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 4, padding: '1px 6px', fontWeight: 800, lineHeight: 1.3 }}>🖨️ chưa in</span>}
+                                  {unsentKitchenOf(order).some(i => i.id === item.id) && <span title="Món bếp chưa có phiếu bếp — bấm In bếp ở đầu bill" style={{ fontSize: '0.62rem', background: '#fff7ed', color: '#c2410c', border: '1px solid #fdba74', borderRadius: 4, padding: '1px 6px', fontWeight: 800, lineHeight: 1.3 }}>🍳 chưa báo bếp</span>}
                                   {item.is_gift && <span style={{ fontSize: '0.65rem', background: '#dcfce7', color: '#15803d', borderRadius: 4, padding: '1px 5px', fontWeight: 700, lineHeight: 1 }}>🎁 Món Tặng</span>}
                                   {item.added_by_name && <span style={{ fontSize: '0.62rem', background: '#eff6ff', color: '#2563eb', borderRadius: 4, padding: '1px 6px', fontWeight: 700, lineHeight: 1.3 }}>👤 NV: {item.added_by_name}</span>}
                                 </span>
@@ -4847,8 +4939,13 @@ export default function TablesPage() {
                         disabled={pendingQty === 0 || isConfirmingDraft}
                         onClick={async () => {
                           if (pendingQty === 0 || isConfirmingDraft) return;
-                          if (!(await confirmDraft())) return;
-                          Swal.fire({ title: '✅ Đã gửi lên bill!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500 });
+                          const sent = await confirmDraft();
+                          if (!sent) return;
+                          if (sent.print_error) {
+                            Swal.fire({ icon: 'warning', title: 'Đã gửi lên bill, CHƯA in được phiếu bếp', text: 'Bấm "In bếp" ở bill của bàn hoặc báo bếp.' });
+                          } else {
+                            Swal.fire({ title: sent.print_jobs > 0 ? '✅ Đã gửi lên bill, đã in bếp!' : '✅ Đã gửi lên bill!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500 });
+                          }
                         }}
                         style={{
                           marginLeft: 'auto', flexShrink: 0,
