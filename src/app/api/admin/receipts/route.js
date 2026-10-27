@@ -7,7 +7,8 @@
  *   create_paper     amount, method, account_id?, table_label?, note?, image (bắt buộc), transfer_image?
  *   attach_transfer  order_id | receipt_id | source, image
  *   attach_bill      receipt_id | source, image — ảnh tờ bill chụp bổ sung (bill từ trang Mã QR)
- *   delete_paper     id — nhân viên chỉ xoá bill giấy mình nhập trong ngày; admin xoá được mọi bill giấy
+ *                    Nhân viên chỉ THÊM ảnh cho bill hôm nay chưa có ảnh; đổi ảnh đã có chỉ chủ quán.
+ *   delete_paper     id — chỉ chủ quán (bill giấy đã lưu thì nhân viên không xoá / sửa được, 2026-10-27)
  *
  *   qr_confirm       code, amount, account_id, kind ('ck' | 'bill'), image — trang Mã QR: "Xác nhận đã nhận tiền"
  *   qr_cash          receipt_id, amount, image — trang Mã QR: "Nhận tiền mặt"
@@ -154,8 +155,8 @@ export async function POST(request) {
         if (orderIds.length > 50 || !orderIds.every(id => UUID.test(id))) return fail('Danh sách bill không hợp lệ.');
         const { data: rows, error } = await db.from('finance_revenue_ledger').select('order_id, transfer_image_path, payment_method, business_date').in('order_id', orderIds);
         if (error) throw error;
-        const targets = (rows || []).filter(r => r.payment_method === 'transfer' && (isAdmin || r.business_date === today));
-        if (!targets.length) return fail('Không tìm thấy bill chuyển khoản vừa thanh toán trong sổ.', 404);
+        const targets = (rows || []).filter(r => r.payment_method === 'transfer' && (isAdmin || (r.business_date === today && !r.transfer_image_path)));
+        if (!targets.length) return fail('Không tìm thấy bill chuyển khoản chưa có ảnh vừa thanh toán trong sổ.', 404);
         const path = await uploadReceiptImage(db, image, 'ck');
         const update = await db.from('finance_revenue_ledger')
           .update({ transfer_image_path: path, transfer_image_by: session.user.full_name || null })
@@ -173,8 +174,9 @@ export async function POST(request) {
       const { data: row, error } = await db.from(table).select(`${key}, transfer_image_path, payment_method, business_date`).eq(key, id).maybeSingle();
       if (error) throw error;
       if (!row || row.payment_method !== 'transfer') return fail('Không tìm thấy bill chuyển khoản này.', 404);
-      // Nhân viên chỉ thêm ảnh cho bill hôm nay; admin thêm cho mọi ngày.
+      // Nhân viên chỉ thêm ảnh cho bill hôm nay chưa có ảnh; admin thêm / đổi cho mọi ngày.
       if (!isAdmin && row.business_date !== today) return fail('Chỉ thêm ảnh cho bill hôm nay.', 403);
+      if (!isAdmin && row.transfer_image_path) return fail('Bill này đã có ảnh chuyển khoản. Chỉ chủ quán được đổi ảnh.', 403);
       const path = await uploadReceiptImage(db, image, 'ck');
       const patch = orderId ? { transfer_image_path: path, transfer_image_by: session.user.full_name || null } : { transfer_image_path: path };
       const update = await db.from(table).update(patch).eq(key, id);
@@ -193,6 +195,7 @@ export async function POST(request) {
       if (error) throw error;
       if (!row) return fail('Không tìm thấy bill giấy này.', 404);
       if (!isAdmin && row.business_date !== today) return fail('Chỉ thêm ảnh cho bill hôm nay.', 403);
+      if (!isAdmin && row.image_path) return fail('Bill này đã có ảnh. Chỉ chủ quán được đổi ảnh.', 403);
       const path = await uploadReceiptImage(db, image, 'bill');
       const update = await db.from('finance_manual_receipts').update({ image_path: path }).eq('id', row.id);
       if (update.error) { await removeReceiptImages(db, [path]); throw update.error; }
@@ -291,9 +294,8 @@ export async function POST(request) {
       const { data: row, error } = await db.from('finance_manual_receipts').select('*').eq('id', id).maybeSingle();
       if (error) throw error;
       if (!row) return fail('Không tìm thấy bill giấy.', 404);
-      if (!isAdmin && (row.created_by_id !== session.user.id || row.business_date !== today)) {
-        return fail('Chỉ xoá được bill giấy do bạn nhập trong hôm nay.', 403);
-      }
+      // Bill giấy đã lưu: nhân viên không xoá được (kể cả bill mình vừa nhập) — nhập sai thì báo chủ quán.
+      if (!isAdmin) return fail('Bill giấy đã lưu thì chỉ chủ quán được xoá. Nhập sai thì báo chủ quán.', 403);
       const del = await db.from('finance_manual_receipts').delete().eq('id', id);
       if (del.error) throw del.error;
       await removeReceiptImages(db, [row.image_path, row.transfer_image_path]);

@@ -97,39 +97,48 @@ test('a cashier saves a paper bill only with a photo and a total, and picks the 
   assert.deepEqual(list.body.accounts.map(a => a.id), [ACC], 'only active cards can be chosen');
 });
 
-test('staff delete only their own paper bills from today; admin can delete any', async () => {
+test('a saved paper bill can only be deleted by the owner, not even by the staff who entered it today', async () => {
   const state = base();
   state.finance_manual_receipts.push(
     { id: '00000000-0000-0000-0000-000000000101', business_date: today, created_by_id: STAFF, image_path: 'a.jpg', amount: 1, payment_method: 'cash' },
     { id: '00000000-0000-0000-0000-000000000102', business_date: today, created_by_id: OTHER, image_path: 'b.jpg', amount: 1, payment_method: 'cash' },
     { id: '00000000-0000-0000-0000-000000000103', business_date: '2026-10-23', created_by_id: STAFF, image_path: 'c.jpg', amount: 1, payment_method: 'cash' });
   const staff = load({ state });
-  assert.equal((await post(staff.api, { action: 'delete_paper', id: '00000000-0000-0000-0000-000000000102' })).status, 403);
-  if (today !== '2026-10-23') assert.equal((await post(staff.api, { action: 'delete_paper', id: '00000000-0000-0000-0000-000000000103' })).status, 403);
-  assert.equal((await post(staff.api, { action: 'delete_paper', id: '00000000-0000-0000-0000-000000000101' })).status, 200);
-  assert.deepEqual(staff.removed, ['a.jpg'], 'its photo is removed too');
+  for (const id of ['101', '102', '103']) {
+    const res = await post(staff.api, { action: 'delete_paper', id: `00000000-0000-0000-0000-000000000${id}` });
+    assert.equal(res.status, 403, `staff cannot delete bill ${id}`);
+  }
+  assert.equal(state.finance_manual_receipts.length, 3);
   const admin = load({ state, role: 'admin', userId: OTHER });
+  assert.equal((await post(admin.api, { action: 'delete_paper', id: '00000000-0000-0000-0000-000000000101' })).status, 200);
+  assert.deepEqual(admin.removed, ['a.jpg'], 'its photo is removed too');
   assert.equal((await post(admin.api, { action: 'delete_paper', id: '00000000-0000-0000-0000-000000000103' })).status, 200);
   assert.equal(state.finance_manual_receipts.length, 1);
 });
 
-test('a transfer screenshot is attached to a transfer bill, replacing the old one, and only for today when staff', async () => {
+test('staff add a missing transfer screenshot to today bills; only the owner replaces one or adds to older days', async () => {
   const state = base();
   state.finance_revenue_ledger.push(
     { order_id: '00000000-0000-0000-0000-000000000201', business_date: today, payment_method: 'transfer', transfer_image_path: 'old.jpg', amount: 1 },
     { order_id: '00000000-0000-0000-0000-000000000202', business_date: today, payment_method: 'cash', amount: 1 },
-    { order_id: '00000000-0000-0000-0000-000000000203', business_date: '2000-01-01', payment_method: 'transfer', amount: 1 });
+    { order_id: '00000000-0000-0000-0000-000000000203', business_date: '2000-01-01', payment_method: 'transfer', amount: 1 },
+    { order_id: '00000000-0000-0000-0000-000000000204', business_date: today, payment_method: 'transfer', transfer_image_path: null, amount: 1 });
   const staff = load({ state });
   let res = await post(staff.api, { action: 'attach_transfer', order_id: '00000000-0000-0000-0000-000000000201', image: image() });
+  assert.equal(res.status, 403, 'staff cannot replace a saved screenshot');
+  assert.equal(state.finance_revenue_ledger[0].transfer_image_path, 'old.jpg');
+  res = await post(staff.api, { action: 'attach_transfer', order_id: '00000000-0000-0000-0000-000000000204', image: image() });
   assert.equal(res.status, 200);
-  assert.deepEqual([state.finance_revenue_ledger[0].transfer_image_path, state.finance_revenue_ledger[0].transfer_image_by], ['2026-10/ck-1.jpg', 'Thu ngân']);
-  assert.deepEqual(staff.removed, ['old.jpg']);
+  assert.deepEqual([state.finance_revenue_ledger[3].transfer_image_path, state.finance_revenue_ledger[3].transfer_image_by], ['2026-10/ck-1.jpg', 'Thu ngân']);
+  const owner = load({ state, role: 'admin' });
+  assert.equal((await post(owner.api, { action: 'attach_transfer', order_id: '00000000-0000-0000-0000-000000000201', image: image() })).status, 200);
+  assert.deepEqual(owner.removed, ['old.jpg'], 'the owner replaces it and the old file goes');
   assert.equal((await post(staff.api, { action: 'attach_transfer', order_id: '00000000-0000-0000-0000-000000000202', image: image() })).status, 404, 'cash bills take no screenshot');
   assert.equal((await post(staff.api, { action: 'attach_transfer', order_id: '00000000-0000-0000-0000-000000000203', image: image() })).status, 403);
   assert.equal((await post(load({ state, role: 'admin' }).api, { action: 'attach_transfer', order_id: '00000000-0000-0000-0000-000000000203', image: image() })).status, 200);
   assert.equal((await post(staff.api, { action: 'attach_transfer', order_id: '00000000-0000-0000-0000-000000000201' })).status, 400, 'needs an image');
   const list = await get(staff.api);
-  assert.deepEqual(list.body.transferBills.map(b => b.orderId), ['00000000-0000-0000-0000-000000000201'], 'today transfer bills only');
+  assert.deepEqual(list.body.transferBills.map(b => b.orderId).sort(), ['00000000-0000-0000-0000-000000000201', '00000000-0000-0000-0000-000000000204'], 'today transfer bills only');
 });
 
 test('signed-out users cannot use the paper bill page', async () => {
@@ -160,10 +169,10 @@ test('right after "Đã nhận tiền" one customer-phone photo is attached to e
     { order_id: ids[2], business_date: '2000-01-01', payment_method: 'transfer', amount: 1 });
   const staff = load({ state });
   const res = await post(staff.api, { action: 'attach_transfer', order_ids: ids.join(','), image: image() });
-  assert.deepEqual([res.status, res.body.bills], [200, 2], 'staff: today bills only');
+  assert.deepEqual([res.status, res.body.bills], [200, 1], 'staff: today bills that have no screenshot yet');
   const rows = plain(state.finance_revenue_ledger);
-  assert.deepEqual(rows.map(r => r.transfer_image_path ?? null), ['2026-10/ck-1.jpg', '2026-10/ck-1.jpg', null]);
-  assert.deepEqual(staff.removed, ['old.jpg']);
+  assert.deepEqual(rows.map(r => r.transfer_image_path ?? null), ['old.jpg', '2026-10/ck-1.jpg', null]);
+  assert.deepEqual(staff.removed, [], 'a saved screenshot stays');
   assert.equal((await post(staff.api, { action: 'attach_transfer', order_ids: 'x,y', image: image() })).status, 400);
   assert.equal((await post(staff.api, { action: 'attach_transfer', order_ids: '00000000-0000-0000-0000-000000000999', image: image() })).status, 404);
   assert.equal(staff.uploads.length, 1, 'nothing uploaded for refused requests');
@@ -187,10 +196,12 @@ test('the QR page adds a bill photo and a transfer screenshot to the paper bill 
   assert.equal(state.finance_manual_receipts[1].image_path, '2026-10/bill-3.jpg');
   assert.equal((await post(staff.api, { action: 'attach_transfer', source: CASH, image: image() })).status, 404, 'cash takes no screenshot');
 
-  // Chụp lại: ảnh cũ bị thay và xoá.
-  assert.equal((await post(staff.api, { action: 'attach_bill', receipt_id: '00000000-0000-0000-0000-000000000401', image: image() })).status, 200);
-  assert.equal(state.finance_manual_receipts[0].image_path, '2026-10/bill-4.jpg');
-  assert.deepEqual(staff.removed, ['2026-10/bill-1.jpg']);
+  // Chụp lại: nhân viên không thay được ảnh đã lưu; chủ quán thay thì ảnh cũ bị xoá.
+  assert.equal((await post(staff.api, { action: 'attach_bill', receipt_id: '00000000-0000-0000-0000-000000000401', image: image() })).status, 403);
+  assert.equal(state.finance_manual_receipts[0].image_path, '2026-10/bill-1.jpg');
+  const owner = load({ state, role: 'admin' });
+  assert.equal((await post(owner.api, { action: 'attach_bill', receipt_id: '00000000-0000-0000-0000-000000000401', image: image() })).status, 200);
+  assert.deepEqual(owner.removed, ['2026-10/bill-1.jpg']);
 
   assert.equal((await post(staff.api, { action: 'attach_bill', source: 'qr:OLDDAY01', image: image() })).status, 403, 'staff: today only');
   assert.equal((await post(load({ state, role: 'admin' }).api, { action: 'attach_bill', source: 'qr:OLDDAY01', image: image() })).status, 200);
@@ -198,7 +209,7 @@ test('the QR page adds a bill photo and a transfer screenshot to the paper bill 
   for (const source of ['qr:../x', 'qr:', 'order:1', 'cash:abc'])
     assert.equal((await post(staff.api, { action: 'attach_bill', source, image: image() })).status, 400, source);
   assert.equal((await post(staff.api, { action: 'attach_bill', source: 'qr:QRAB1234' })).status, 400, 'needs an image');
-  assert.equal(staff.uploads.length, 4, 'nothing uploaded for refused requests');
+  assert.equal(staff.uploads.length, 3, 'nothing uploaded for refused requests (incl. the refused re-take)');
 });
 
 test('paper bills from the QR page show on the paper bill page with who took them and no photo yet', async () => {
