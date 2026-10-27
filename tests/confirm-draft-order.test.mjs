@@ -14,9 +14,18 @@ await db.exec(`
     created_by_id uuid, created_by_name text);
   CREATE TABLE order_items(id uuid DEFAULT gen_random_uuid() PRIMARY KEY, order_id uuid REFERENCES orders,
     menu_item_id uuid, quantity integer, unit_price numeric, item_options jsonb, note text,
-    item_name text, added_by_id uuid, added_by_name text, is_gift boolean DEFAULT false);
+    item_name text, added_by_id uuid, added_by_name text, is_gift boolean DEFAULT false,
+    created_at timestamptz DEFAULT now());
+  -- Không có máy in → không món nào là món bếp: kiểm tra luật cộng dồn cũ (nước, bia, khăn).
+  -- Món bếp / phiếu bếp: tests/kitchen-tickets-sql.test.mjs.
+  CREATE TABLE menu_items(id uuid PRIMARY KEY, category_id uuid, options jsonb);
+  CREATE TABLE printers(id uuid PRIMARY KEY, is_active boolean, is_default boolean, is_bill_printer boolean, sort_order integer);
+  CREATE TABLE printer_categories(printer_id uuid, category_id uuid);
+  CREATE TABLE print_jobs(id bigserial PRIMARY KEY, order_id uuid, status text, printer_id uuid,
+    filter_category_ids uuid[], order_ids uuid[], only_item_ids uuid[], created_at timestamptz DEFAULT now());
   INSERT INTO tables(id, status) VALUES ('${id(1)}', 'available'), ('${id(2)}', 'available');
 `);
+await db.exec(readFileSync(new URL('../supabase/migrations/kitchen_tickets.sql', import.meta.url), 'utf8'));
 await db.exec(readFileSync(new URL('../supabase/migrations/confirm_draft_order_lines.sql', import.meta.url), 'utf8'));
 
 const STAFF = id(90);
