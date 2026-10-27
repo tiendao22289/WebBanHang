@@ -16,6 +16,7 @@ import {
 } from '@/lib/reviewReward';
 import { getMenuCached } from '@/lib/menuCache';
 import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders';
+import { promoGiftStatus } from '@/lib/promoGifts.mjs';
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import PaymentProof from '@/components/PaymentProof';
@@ -621,30 +622,11 @@ export default function TablesPage() {
    * nhau (trang khách phải lọc riêng theo SĐT vì lý do này — xem order/page.jsx).
    */
   function giftEligibilityFor(bills) {
-    if (!promoConfig.enabled) return { availableGiftSlots: 0, hasGiftInBill: false };
-    let totalPoints = 0;
-    let usedGiftSlots = 0;
-    let hasGiftInBill = false;
-    (bills || []).forEach(order => {
-      (order.order_items || []).forEach(oi => {
-        if (oi.is_gift) {
-          // Quà vòng xoay không phải quà "8 tặng 1" → không tính vào lượt đã
-          // dùng, nếu không khách trúng nước vòng xoay sẽ bị trừ oan lượt quà
-          // khuyến mãi (và làm sai badge "🎁 còn X lượt").
-          if (oi.note === 'Quà tặng từ vòng quay may mắn') return;
-          usedGiftSlots += Number(oi.quantity) || 1;
-          hasGiftInBill = true;
-        } else {
-          const menuItem = menuItems.find(m => m.id === oi.menu_item_id);
-          const divisor = getPromoDivisor(menuItem, oi.item_options);
-          if (divisor) totalPoints += (Number(oi.quantity) || 0) / divisor;
-        }
-      });
-    });
-    const qualifyingQty = Math.round(totalPoints * 10000) / 10000;
-    const giftCount = Math.floor(qualifyingQty / promoConfig.threshold);
-    const availableGiftSlots = Math.max(0, giftCount - usedGiftSlots);
-    return { availableGiftSlots, hasGiftInBill };
+    if (!promoConfig.enabled) return { availableGiftSlots: 0, hasGiftInBill: false, shortGifts: 0, missingItems: 0 };
+    // Quà vòng xoay không phải quà "8 tặng 1" (lib bỏ qua theo ghi chú) — không trừ oan lượt quà khuyến mãi.
+    // shortGifts / missingItems: khách bớt món sau khi đã chọn quà → quà vẫn giữ, ô bàn báo thiếu bao nhiêu món.
+    return promoGiftStatus((bills || []).flatMap(o => o.order_items || []), promoConfig.threshold,
+      oi => getPromoDivisor(menuItems.find(m => m.id === oi.menu_item_id), oi.item_options));
   }
 
   // ─── Gửi lệnh in tới PrintAgent — gộp orders của bàn → 1 phiếu → máy mặc định ───
@@ -2073,7 +2055,7 @@ export default function TablesPage() {
       // Lấy tất cả orders + items của bàn hôm nay
       const { data: tableOrders } = await supabase
         .from('orders')
-        .select(`id, order_items( id, quantity, is_gift, note, created_at, item_options, menu_items( id, counts_for_promotion, options ) )`)
+        .select(`id, order_items( id, quantity, is_gift, item_options, menu_items( id, counts_for_promotion, options ) )`)
         .eq('table_id', tableId)
         .gte('created_at', startOfDay)
         .in('status', ['pending', 'preparing', 'completed']);
@@ -2081,20 +2063,12 @@ export default function TablesPage() {
       if (!tableOrders) return;
 
       let qualifyingQty = 0;
-      let allGiftItems = [];
 
       for (const ord of tableOrders) {
         for (const it of (ord.order_items || [])) {
-          if (it.is_gift) {
-            // Quà VÒNG XOAY (nước/món tặng khi quay trúng) cũng là is_gift=true
-            // nhưng KHÔNG thuộc khuyến mãi "8 tặng 1" — phải loại ra, nếu không
-            // nó bị tính là "quà dư" rồi bị xoá/giảm số lượng mỗi khi nhân viên
-            // thêm/sửa món (khách trúng 2 chai còn 1 chai, hoặc mất hẳn phần quà).
-            // Nhận diện bằng đúng ghi chú finalizeGiftItem ghi vào — quà vòng
-            // xoay có item_name=null nên isLuckyWheelItem không bắt được.
-            if (it.note === 'Quà tặng từ vòng quay may mắn') continue;
-            allGiftItems.push(it);
-          } else if (it.menu_items?.counts_for_promotion) {
+          // Món quà (8 tặng 1 hay vòng xoay) không tính vào số món đủ quà.
+          if (it.is_gift) continue;
+          if (it.menu_items?.counts_for_promotion) {
             let divisor = null;
             // 1. Check choice-specific divisor
             if (it.item_options && Array.isArray(it.item_options) && it.menu_items.options) {
@@ -2120,29 +2094,8 @@ export default function TablesPage() {
       }
 
       const maxGifts = Math.floor(qualifyingQty / promoConfig.threshold);
-      let totalGifts = allGiftItems.reduce((acc, g) => acc + g.quantity, 0);
-      let excessGifts = totalGifts - maxGifts;
-
-      if (excessGifts > 0) {
-        // Xoá gift dư thừa (ưu tiên xoá mới nhất)
-        allGiftItems.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-        for (const gift of allGiftItems) {
-          if (excessGifts <= 0) break;
-          if (gift.quantity <= excessGifts) {
-            await supabase.from('order_items').delete().eq('id', gift.id);
-            excessGifts -= gift.quantity;
-          } else {
-            await supabase.from('order_items').update({ quantity: gift.quantity - excessGifts }).eq('id', gift.id);
-            excessGifts = 0;
-          }
-        }
-        // Recalc totals cho từng order có gift bị xoá
-        for (const ord of tableOrders) {
-          const { data: remaining } = await supabase.from('order_items').select('unit_price, quantity').eq('order_id', ord.id);
-          const newTotal = (remaining || []).reduce((s, i) => s + i.unit_price * i.quantity, 0);
-          await supabase.from('orders').update({ total_amount: newTotal }).eq('id', ord.id);
-        }
-      }
+      // Quà đã chọn mà giờ thiếu món (khách bớt món): KHÔNG tự xoá nữa — bếp có thể đã in / làm món quà
+      // (chủ quán 2026-10-27). Ô bàn hiện "⚠🎁 thiếu N món" (giftEligibilityFor) để nhân viên báo khách gọi thêm.
 
       // Cập nhật promo_gift_unlocked trên bàn → Realtime thông báo cho khách
       await supabase.from('tables').update({ promo_gift_unlocked: maxGifts }).eq('id', tableId);
@@ -3019,7 +2972,7 @@ export default function TablesPage() {
           // Lượt quay CHƯA vào bill của bàn này (chờ Quan tâm Zalo / lỗi hệ thống)
           const luckyCard = luckyByHost[hostIdCard];
           // KM mua N tặng 1 — Mang về gộp nhiều khách khác nhau nên bỏ qua ở đây
-          const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(tableBills) : { availableGiftSlots: 0, hasGiftInBill: false };
+          const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(tableBills) : { availableGiftSlots: 0, hasGiftInBill: false, shortGifts: 0, missingItems: 0 };
           let timeElapsed = '';
           if (isOccupied && table.occupied_at) {
             const diffMs = Date.now() - new Date(table.occupied_at).getTime();
@@ -3109,6 +3062,15 @@ export default function TablesPage() {
                     </div>
                   );
                 })()}
+                {giftElig.shortGifts > 0 && (
+                  <div
+                    className="review-req-blink"
+                    title={`Khách đã bớt món — quà tặng đang thiếu ${giftElig.missingItems} món mới đủ ${promoConfig.threshold} món. Báo khách gọi thêm.`}
+                    style={{ background: '#fff7ed', color: '#c2410c', borderRadius: 100, padding: '3px 7px', display: 'flex', alignItems: 'center', gap: 3, border: '1px solid #fdba74', fontSize: '0.65rem', fontWeight: 800, whiteSpace: 'nowrap' }}
+                  >
+                    ⚠🎁 thiếu {giftElig.missingItems}
+                  </div>
+                )}
                 {giftElig.availableGiftSlots > 0 && (
                   <div
                     title="Đủ điều kiện nhận quà — bấm để chọn quà cho khách"
@@ -3277,6 +3239,14 @@ export default function TablesPage() {
                 <span style={{ background: '#f0fdf4', color: '#16a34a', borderRadius: 100, padding: '4px 10px', fontSize: '0.72rem', fontWeight: 600, border: '1px solid #bbf7d0' }}>giá khuyến mãi</span>
                 <button onClick={() => setAddingToOrder('admin')} style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>+ Thêm món</button>
               </div>
+              {(() => {
+                const g = selectedTable && selectedTable.table_type !== 'takeaway' ? giftEligibilityFor(getSelectedTableOrders()) : null;
+                return g?.shortGifts > 0 && (
+                  <div role="status" style={{ margin: '6px 12px', padding: '8px 12px', borderRadius: 10, background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', fontSize: '0.85rem', fontWeight: 600, lineHeight: 1.4 }}>
+                    ⚠🎁 Khách đã bớt món: quà tặng đang thiếu <b>{g.missingItems} món</b> mới đủ {promoConfig.threshold} món. Báo khách gọi thêm (quà vẫn giữ trong bill).
+                  </div>
+                );
+              })()}
               {/* Items grouped by bill */}
               <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
                 {tableBills.length === 0 ? (
@@ -3858,7 +3828,7 @@ export default function TablesPage() {
                           const tableTotal = sumOrderItems(tableBills);
                           const hasPrintError = tableBills.some(o => o.print_jobs && o.print_jobs.some(pj => isUnresolvedBadJob(pj, o)));
                           const hasLuckyWheel = tableBills.some(o => (o.order_items || []).some(isLuckyWheelOutcome));
-                          const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(tableBills) : { availableGiftSlots: 0, hasGiftInBill: false };
+                          const giftElig = table.table_type !== 'takeaway' ? giftEligibilityFor(tableBills) : { availableGiftSlots: 0, hasGiftInBill: false, shortGifts: 0, missingItems: 0 };
 
                           // Style derivation: Merged group is Purple, Normal Occupied is Blue, Empty is White
                           const bgColors = {
@@ -3951,6 +3921,15 @@ export default function TablesPage() {
                                 {hasLuckyWheel && (
                                   <div title="Bill đã dùng vòng xoay may mắn" style={{ position: 'absolute', top: -1, left: -1, background: '#a21caf', color: 'white', borderRadius: '14px 0 8px 0', padding: '2px 5px', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, fontSize: '0.6rem' }}>
                                     🎰
+                                  </div>
+                                )}
+                                {giftElig.shortGifts > 0 && (
+                                  <div
+                                    className="review-req-blink"
+                                    title={`Khách đã bớt món — quà tặng đang thiếu ${giftElig.missingItems} món mới đủ ${promoConfig.threshold} món. Báo khách gọi thêm.`}
+                                    style={{ position: 'absolute', bottom: -1, right: -1, background: '#f97316', color: 'white', borderRadius: '8px 0 14px 0', padding: '2px 5px', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, fontSize: '0.6rem', fontWeight: 800 }}
+                                  >
+                                    ⚠🎁-{giftElig.missingItems}
                                   </div>
                                 )}
                                 {giftElig.availableGiftSlots > 0 && (
@@ -4389,6 +4368,14 @@ export default function TablesPage() {
                     <X size={20} />
                   </button>
                 </div>
+                {(() => {
+                  const g = selectedTable && selectedTable.table_type !== 'takeaway' ? giftEligibilityFor(getSelectedTableOrders()) : null;
+                  return g?.shortGifts > 0 && (
+                    <div role="status" style={{ margin: '4px 0 0', padding: '8px 12px', borderRadius: 10, background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', fontSize: '0.85rem', fontWeight: 600, lineHeight: 1.4 }}>
+                      ⚠🎁 Khách đã bớt món: quà tặng đang thiếu <b>{g.missingItems} món</b> mới đủ {promoConfig.threshold} món. Báo khách gọi thêm (quà vẫn giữ trong bill).
+                    </div>
+                  );
+                })()}
 
               </div>
               <div className="modal-body" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
