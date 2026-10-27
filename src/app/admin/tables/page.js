@@ -17,6 +17,8 @@ import {
 import { getMenuCached } from '@/lib/menuCache';
 import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders';
 import { promoGiftStatus } from '@/lib/promoGifts.mjs';
+import { isPrintJobBad, isUnresolvedBadJob } from '@/lib/printJobStatus.mjs';
+import { NO_DRAFT, updateDraftOf, addDraftLine, decreaseDraftLine, setDraftItemTotal, removeSentLines } from '@/lib/draftCart.mjs';
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import PaymentProof from '@/components/PaymentProof';
@@ -52,30 +54,6 @@ import LongOpenTables from './LongOpenTables';
 // ─── Nhận diện nước ngọt / bia / khăn (không dựa vào category vì DB để trống) ───
 const DRINK_KEYWORDS = ['bia', 'coca', 'pepsi', '7 up', '7up', 'xa xi', 'sa xi', 'sting', 'siting', '0 do', 'nuoc', 'tra', 'khan', 'sprite', 'fanta', 'mirinda', 'aquafina', 'lavie', 'la vie', 'red bull', 'redbull', 'revive'];
 
-// Job in còn 'pending' quá 60s coi như treo (PrintAgent tắt/rớt mạng) — job
-// dạng này không bao giờ tự chuyển 'failed' nên phải tự tính theo tuổi job,
-// nếu không thẻ bàn sẽ không báo gì dù bill chưa in ra máy nào cả.
-const STALE_PRINT_JOB_MS = 60000;
-function isPrintJobBad(pj) {
-  if (pj.status === 'failed') return true;
-  return pj.status === 'pending' && pj.created_at && (Date.now() - new Date(pj.created_at).getTime()) > STALE_PRINT_JOB_MS;
-}
-// Lệnh in kẹt hàng đợi thường TỰ in lại được (hoặc nhân viên bấm "In lại"),
-// nhưng dòng 'failed' cũ vẫn nằm nguyên → thẻ bàn cứ đỏ hoài. Coi lệnh lỗi là
-// ĐÃ XỬ LÝ nếu CÙNG máy in đó có 1 lệnh 'done' quanh thời điểm đó (±/sau, trong
-// 10 phút) — tức là máy đã nhả phiếu cho đơn này rồi.
-function isJobResolvedByReprint(job, allJobs) {
-  if (!job || !job.printer_id) return false;
-  const t = new Date(job.created_at || 0).getTime();
-  return (allJobs || []).some(j =>
-    j.status === 'done' && j.printer_id === job.printer_id && j.id !== job.id
-    && new Date(j.created_at || 0).getTime() >= t - 10 * 60 * 1000
-  );
-}
-// Lệnh in CÒN LỖI THẬT của 1 đơn (lỗi/treo VÀ chưa được in lại thành công).
-function isUnresolvedBadJob(job, order) {
-  return isPrintJobBad(job) && !isJobResolvedByReprint(job, order?.print_jobs || []);
-}
 function isDrinkName(name) {
   const n = removeVietnameseTones(name || '');
   return DRINK_KEYWORDS.some(k => n.includes(k));
@@ -302,7 +280,16 @@ export default function TablesPage() {
   const [quickBatchText, setQuickBatchText] = useState('');
   const [quickParsed, setQuickParsed] = useState(null);
   // ─── Draft Cart: giỏ hàng tạm, chỉ push lên server khi bấm "Xác nhận" ───
-  const [draftCart, setDraftCart] = useState([]); // [{ menuItemId, menuItem, qty, options, note, price }]
+  // Giữ riêng TỪNG bàn: chọn món ở bàn 5 chưa gửi rồi mở bàn 9 thì bàn 9 không bị tính món đó.
+  const [draftsByTable, setDraftsByTable] = useState({}); // { [tableId]: [{ lineId, menuItemId, menuItem, qty, options, note, price }] }
+  const draftKey = selectedTable?.id || null;
+  const draftCart = (draftKey && draftsByTable[draftKey]) || NO_DRAFT;
+  const setDraftCart = useCallback(update => {
+    if (draftKey) setDraftsByTable(prev => updateDraftOf(prev, draftKey, update));
+  }, [draftKey]);
+  // Dòng đang gửi / gửi chưa rõ kết quả: bấm thêm món thì mở dòng mới (xem lib/draftCart.mjs).
+  const lockedDraftLinesRef = useRef(new Set());
+  const sendingDraftLinesRef = useRef(new Set());
   const [isConfirmingDraft, setIsConfirmingDraft] = useState(false);
 
   // States for Item Options
@@ -969,6 +956,7 @@ export default function TablesPage() {
   // Lý do lỗi in — rút gọn cho dễ đọc (giấu đoạn lỗi kỹ thuật dài vào tooltip).
   function shortPrintError(job) {
     if (job.status === 'pending') return 'máy in chưa nhận';
+    if (job.status === 'printing') return 'kẹt giữa chừng';
     const m = (job.error_message || '').toLowerCase();
     if (m.includes('offline') || m.includes('phản hồi') || m.includes('phan hoi') || m.includes('mất kết nối') || m.includes('mat ket noi')) return 'máy in mất kết nối';
     if (m.includes('kẹt') || m.includes('ket trong hang doi') || m.includes('giấy') || m.includes('giay')) return 'kẹt / hết giấy';
@@ -2318,7 +2306,9 @@ export default function TablesPage() {
 
   async function updateOrderItemOptions(orderId, itemId, newOptions, note, newPrice = null, newQty = null) {
     const updatePayload = { item_options: newOptions, note: note || '' };
-    if (newPrice != null && newPrice >= 0) updatePayload.unit_price = newPrice;
+    // Món quà giữ 0đ khi "Đổi loại" — trước đây dòng quà bị gán giá loại mới mà vẫn mang dấu 🎁.
+    const editing = Object.values(orders).flat().find(o => o.id === orderId)?.order_items?.find(i => i.id === itemId);
+    if (newPrice != null && newPrice >= 0 && !editing?.is_gift) updatePayload.unit_price = newPrice;
     if (newQty != null && newQty > 0) updatePayload.quantity = newQty;
     try {
       const { data: updated, error } = await supabase.from('order_items')
@@ -2464,67 +2454,40 @@ export default function TablesPage() {
       return;
     }
     const finalPrice = price != null ? price : menuItem.price;
-    const optsKey = JSON.stringify(options);
-    setDraftCart(prev => {
-      const idx = prev.findIndex(d =>
-        d.menuItemId === menuItem.id &&
-        JSON.stringify(d.options) === optsKey &&
-        (d.note || '') === (note || '')
-      );
-      if (idx !== -1) {
-        const next = [...prev];
-        next[idx] = { ...next[idx], qty: next[idx].qty + qty };
-        return next;
-      }
-      return [...prev, { menuItemId: menuItem.id, menuItem, qty, options, note: note || '', price: finalPrice }];
-    });
+    setDraftCart(prev => addDraftLine(prev,
+      { menuItemId: menuItem.id, menuItem, qty, options, note: note || '', price: finalPrice },
+      lockedDraftLinesRef.current));
   }
 
   function decreaseFromDraft(menuItemId) {
-    setDraftCart(prev => {
-      let lastIdx = -1;
-      for (let i = prev.length - 1; i >= 0; i--) {
-        if (prev[i].menuItemId === menuItemId) { lastIdx = i; break; }
-      }
-      if (lastIdx === -1) return prev;
-      const next = [...prev];
-      if (next[lastIdx].qty <= 1) {
-        next.splice(lastIdx, 1);
-      } else {
-        next[lastIdx] = { ...next[lastIdx], qty: next[lastIdx].qty - 1 };
-      }
-      return next;
-    });
+    setDraftCart(prev => decreaseDraftLine(prev, menuItemId, sendingDraftLinesRef.current));
   }
 
+  // Ô gõ số lượng hiện TỔNG mọi kiểu chế biến của món → chỉ thêm / bớt phần chênh lệch.
   function setDraftQuantity(menuItemId, newQty) {
-    if (newQty <= 0) {
-      setDraftCart(prev => prev.filter(item => item.menuItemId !== menuItemId));
-      return;
-    }
-    setDraftCart(prev => {
-      let lastIdx = -1;
-      for (let i = prev.length - 1; i >= 0; i--) {
-        if (prev[i].menuItemId === menuItemId) { lastIdx = i; break; }
-      }
-      if (lastIdx === -1) return prev;
-      const next = [...prev];
-      next[lastIdx] = { ...next[lastIdx], qty: newQty };
-      return next;
-    });
+    setDraftCart(prev => setDraftItemTotal(prev, menuItemId, Math.max(0, newQty),
+      lockedDraftLinesRef.current, sendingDraftLinesRef.current));
   }
 
   // ─── Xác nhận draft: gửi tất cả items lên server 1 lần ─────────────────────
   async function confirmDraft() {
-    if (draftCart.length === 0 || !selectedTable) return;
+    if (draftCart.length === 0 || !selectedTable || isConfirmingDraft) return false;
+    const key = selectedTable.id;
+    const lines = draftCart;
+    const lineIds = lines.map(d => d.lineId);
+    // Bàn có thể vừa bị gộp / tách trên máy khác — lấy nhóm bàn mới nhất.
+    const liveTable = (tablesStateRef.current || []).find(t => t.id === key) || selectedTable;
+    lineIds.forEach(id => { lockedDraftLinesRef.current.add(id); sendingDraftLinesRef.current.add(id); });
     setIsConfirmingDraft(true);
     try {
       // Gộp toàn bộ luồng (tìm/tạo order Admin → ghi món → tính lại tổng) thành
       // 1 lệnh RPC duy nhất — trước đây 5 round-trip tuần tự, mạng quán chập
-      // chờn làm độ trễ từng round-trip cộng dồn lại (xem confirm_draft_order_rpc.sql).
+      // chờn làm độ trễ từng round-trip cộng dồn lại (xem confirm_draft_order_lines.sql).
+      // line_id: gửi lại dòng đã vào bill thì máy chủ bỏ qua, không cộng 2 lần.
       const { data, error } = await supabase.rpc('confirm_draft_order', {
-        p_table_id: selectedTable.merged_with || selectedTable.id,
-        p_items: draftCart.map(draft => ({
+        p_table_id: liveTable.merged_with || liveTable.id,
+        p_items: lines.map(draft => ({
+          line_id: draft.lineId,
           menu_item_id: draft.menuItemId,
           quantity: draft.qty,
           unit_price: draft.price,
@@ -2539,55 +2502,24 @@ export default function TablesPage() {
       // Sync khuyến mãi (không await — chạy ngầm)
       if (data?.order_id) syncOrderPromotions(data.order_id);
 
-      // Clear draft, đóng modal, refresh
-      setDraftCart([]);
+      // Chỉ bỏ các dòng vừa gửi — món bấm thêm trong lúc chờ vẫn nằm lại trong nháp.
+      setDraftsByTable(prev => updateDraftOf(prev, key, cur => removeSentLines(cur, lineIds)));
+      lineIds.forEach(id => lockedDraftLinesRef.current.delete(id));
       setAddingToOrder(null);
       setAddItemSearch('');
-      fetchOrdersOnly([selectedTable.id]);
+      return true;
     } catch (err) {
       console.error('[confirmDraft] error:', err);
+      Swal.fire({
+        icon: 'error', title: 'Chưa chắc đã gửi được món',
+        html: 'Mạng chập chờn hoặc máy chủ báo lỗi — món vẫn nằm trong giỏ.<br>Xem bill của bàn rồi bấm <b>gửi lại</b>: món nào đã vào bill sẽ <b>không bị cộng thêm</b>.',
+      });
+      return false;
     } finally {
+      lineIds.forEach(id => sendingDraftLinesRef.current.delete(id));
       setIsConfirmingDraft(false);
+      fetchOrdersOnly([key]);
     }
-  }
-
-  // ─── Legacy addItemToOrder: chỉ dùng cho các path ngoài menu modal ──────────
-  async function addItemToOrder(orderId, menuItem, optionsData = [], qty = 1, note = '') {
-    // Nếu gọi từ menu modal → chuyển sang draft
-    if (orderId === 'admin') {
-      addToDraft(menuItem, optionsData, qty, note, null);
-      return;
-    }
-    // Các path khác (giữ nguyên logic cũ)
-    const optionsJsonb = optionsData.length > 0 ? optionsData : [];
-    const { data: existingItems } = await supabase
-      .from('order_items').select('*')
-      .eq('order_id', orderId).eq('menu_item_id', menuItem.id);
-    const staffId = currentStaff?.id || null;
-    let existing = null;
-    if (existingItems?.length > 0) {
-      existing = existingItems.find(item => {
-        return JSON.stringify(item.item_options || []) === JSON.stringify(optionsJsonb) &&
-          (item.note || '') === note &&
-          (item.added_by_id || null) === staffId;
-      });
-    }
-    if (existing) {
-      await supabase.from('order_items').update({ quantity: existing.quantity + qty }).eq('id', existing.id);
-    } else {
-      await supabase.from('order_items').insert({
-        order_id: orderId, menu_item_id: menuItem.id, quantity: qty,
-        unit_price: menuItem.price, item_options: optionsJsonb, note,
-        ...(currentStaff ? { added_by_id: currentStaff.id, added_by_name: currentStaff.full_name } : {}),
-      });
-    }
-    const orderNow = Object.values(orders).flat().find(o => o.id === orderId);
-    const newTotal = existing
-      ? (orderNow?.order_items || []).reduce((s, i) => s + i.unit_price * (i.id === existing.id ? existing.quantity + qty : i.quantity), 0)
-      : (orderNow?.order_items || []).reduce((s, i) => s + i.unit_price * i.quantity, 0) + menuItem.price * qty;
-    await supabase.from('orders').update({ total_amount: newTotal }).eq('id', orderId);
-    syncOrderPromotions(orderId);
-    fetchOrdersForBills([orderId]);
   }
 
   function handleConfirmOptions() {
@@ -3062,6 +2994,14 @@ export default function TablesPage() {
                     </div>
                   );
                 })()}
+                {(draftsByTable[table.id] || []).reduce((s, d) => s + d.qty, 0) > 0 && (
+                  <div
+                    title="Món đã chọn cho bàn này nhưng CHƯA bấm Gửi đi"
+                    style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 100, padding: '3px 7px', display: 'flex', alignItems: 'center', gap: 3, border: '1px solid #93c5fd', fontSize: '0.65rem', fontWeight: 800, whiteSpace: 'nowrap' }}
+                  >
+                    🛒 {(draftsByTable[table.id] || []).reduce((s, d) => s + d.qty, 0)} chưa gửi
+                  </div>
+                )}
                 {giftElig.shortGifts > 0 && (
                   <div
                     className="review-req-blink"
@@ -3670,7 +3610,7 @@ export default function TablesPage() {
                                 }
                                 // Bỏ qua OptionModal nếu món không có tuỳ chọn (thêm tức thì cho mượt)
                                 if (!item.options || item.options.length === 0) {
-                                  addItemToOrder('admin', item, [], 1, '');
+                                  addToDraft(item);
                                   return;
                                 }
 
@@ -3921,6 +3861,11 @@ export default function TablesPage() {
                                 {hasLuckyWheel && (
                                   <div title="Bill đã dùng vòng xoay may mắn" style={{ position: 'absolute', top: -1, left: -1, background: '#a21caf', color: 'white', borderRadius: '14px 0 8px 0', padding: '2px 5px', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, fontSize: '0.6rem' }}>
                                     🎰
+                                  </div>
+                                )}
+                                {(draftsByTable[table.id] || []).reduce((s, d) => s + d.qty, 0) > 0 && (
+                                  <div title="Món đã chọn cho bàn này nhưng CHƯA bấm Gửi đi" style={{ position: 'absolute', top: -1, left: '50%', transform: 'translateX(-50%)', background: '#2563eb', color: 'white', borderRadius: '0 0 8px 8px', padding: '1px 6px', zIndex: 10, fontSize: '0.6rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
+                                    🛒{(draftsByTable[table.id] || []).reduce((s, d) => s + d.qty, 0)}
                                   </div>
                                 )}
                                 {giftElig.shortGifts > 0 && (
@@ -4902,7 +4847,7 @@ export default function TablesPage() {
                         disabled={pendingQty === 0 || isConfirmingDraft}
                         onClick={async () => {
                           if (pendingQty === 0 || isConfirmingDraft) return;
-                          await confirmDraft();
+                          if (!(await confirmDraft())) return;
                           Swal.fire({ title: '✅ Đã gửi lên bill!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500 });
                         }}
                         style={{

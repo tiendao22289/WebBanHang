@@ -535,6 +535,11 @@ function OrderContent() {
   const [customerPhone, setCustomerPhone] = useState('');
   const customerPhoneRef = useRef(customerPhone);
   useEffect(() => { customerPhoneRef.current = customerPhone; }, [customerPhone]);
+  // Mang về: điểm 8 tặng 1 tính theo SĐT → nhập đủ số thì tải lại đúng bill của khách này.
+  const takeawayPhoneDigits = isTakeaway ? customerPhone.replace(/\D/g, '') : '';
+  useEffect(() => {
+    if (takeawayPhoneDigits.length >= 10) fetchGroupOrders();
+  }, [takeawayPhoneDigits]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [customerNote, setCustomerNote] = useState(''); // ghi chú khách gửi cho bếp (chỉ takeaway)
@@ -1457,24 +1462,8 @@ function OrderContent() {
         if (activeOrders && activeOrders.length > 0) {
           // Has active order → skip info modal, load orders and show the "Đã gọi" modal
           setShowInfoModal(false);
-
-          // Pre-fill cart with items from the existing order
-          const cartItems = [];
-          const seen = new Set();
-          activeOrders.forEach(order => {
-            (order.order_items || []).forEach(oi => {
-              if (!oi.menu_item) return;
-              if (seen.has(oi.menu_item_id)) {
-                const idx = cartItems.findIndex(c => c.id === oi.menu_item_id);
-                if (idx !== -1) cartItems[idx].quantity += oi.quantity;
-              } else {
-                seen.add(oi.menu_item_id);
-                cartItems.push({ id: oi.menu_item_id, name: oi.menu_item.name, price: oi.unit_price, quantity: oi.quantity });
-              }
-            });
-          });
-          if (cartItems.length > 0) setCart(cartItems);
-
+          // KHÔNG đổ món đã gọi vào giỏ: trước đây khách mở lại trang rồi thêm 1 chai nước
+          // là gửi lại cả đơn cũ → bếp in lại toàn bộ, bill có 2 lần món.
           await fetchPreviousOrders(savedPhone);
           setShowOrdered(true);
           isSessionRestored.current = true;
@@ -3177,8 +3166,11 @@ function OrderContent() {
       .in('status', ['pending', 'preparing', 'completed']);
 
     // ── TAKEAWAY: filter theo SĐT để KM không pool chung giữa các khách Mang Về ──
+    // Chưa có SĐT thì chưa có điểm nào — trước đây lấy luôn bill của MỌI khách mang về
+    // trong ngày → khách mới được "Chọn món tặng" oan.
     const phone = customerPhoneRef.current?.trim();
-    if (isTakeawayRef.current && phone) {
+    if (isTakeawayRef.current) {
+      if (!phone) { setGroupOrders([]); return; }
       query = query.eq('customer_phone', phone);
     }
 

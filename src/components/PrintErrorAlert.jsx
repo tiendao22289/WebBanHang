@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
+import { STALE_PRINTING_JOB_MS } from '@/lib/printJobStatus.mjs';
 import { AlertCircle, X, CheckCircle2, Printer, BellOff } from 'lucide-react';
 
 // ── Audio: alarm gắt cho lỗi máy in (square wave, khác chuông đơn mới) ──
@@ -281,7 +282,7 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
       let query = supabase
         .from('print_jobs')
         .select('id, order_id, order_ids, printer_id, status, created_at')
-        .eq('status', 'pending')
+        .in('status', ['pending', 'printing'])
         .lt('created_at', cutoff)
         .limit(20);
 
@@ -289,8 +290,11 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
         query = query.or(`order_id.in.(${allKnownIds.join(',')}),order_ids.ov.{${allKnownIds.join(',')}}`);
       }
 
-      const { data: staleJobs, error } = await query;
-      if (error || !staleJobs?.length) return;
+      const { data: found, error } = await query;
+      // 'printing' quá 3 phút: PrintAgent / máy in khởi động lại giữa chừng, phiếu kẹt mãi ở đó.
+      const printingCutoff = Date.now() - STALE_PRINTING_JOB_MS;
+      const staleJobs = (found || []).filter(j => j.status === 'pending' || new Date(j.created_at).getTime() < printingCutoff);
+      if (error || !staleJobs.length) return;
 
       // Chỉ báo cho ĐƠN CÒN MỞ (pending/preparing). Lệnh in 'pending' mồ côi trên
       // bill đã THANH TOÁN / HUỶ không phải "máy in lỗi" → bỏ qua, nếu không thẻ
@@ -317,7 +321,9 @@ export default function PrintErrorAlert({ isAdmin = false, customerOrderId = nul
           return [{
             id: job.id,
             isDone: false,
-            msg: `Máy in không phản hồi sau ${STALE_PENDING_SECONDS}s — có thể PrintAgent tại quán đang tắt hoặc mất mạng.`,
+            msg: job.status === 'printing'
+              ? 'Phiếu in kẹt giữa chừng hơn 3 phút — kiểm tra máy in / PrintAgent tại quán rồi bấm In lại.'
+              : `Máy in không phản hồi sau ${STALE_PENDING_SECONDS}s — có thể PrintAgent tại quán đang tắt hoặc mất mạng.`,
             orderInfo,
             printerName,
             time: new Date(),

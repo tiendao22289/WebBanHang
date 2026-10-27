@@ -120,6 +120,16 @@ async function main() {
   console.log(JSON.stringify(face));
   if (face.tables !== 5 || face.settings !== 1 || !face.anon_blocked) throw new Error('Chưa cài đủ bảng so khuôn mặt.');
 
+  // Nhân viên gửi món: gửi lại không cộng 2 lần, không cộng vào dòng quà 0đ (confirm_draft_order_lines.sql).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'confirm_draft_order_lines.sql'), 'utf8'));
+  const [draft] = await query(`SELECT
+    to_regclass('public.draft_order_lines') IS NOT NULL AS lines,
+    position('draft_order_lines' in pg_get_functiondef('public.confirm_draft_order(uuid,jsonb,uuid,text)'::regprocedure)) > 0 AS fn_updated,
+    has_function_privilege('anon', 'public.confirm_draft_order(uuid,jsonb,uuid,text)', 'EXECUTE') AS web_can_call,
+    NOT has_table_privilege('anon', 'public.draft_order_lines', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(draft));
+  if (!draft.lines || !draft.fn_updated || !draft.web_can_call || !draft.anon_blocked) throw new Error('Chưa cài được bản gửi món an toàn.');
+
   // Băm mã PIN còn lưu chữ thường (web đang chạy ở 127.0.0.1:3000 làm việc này).
   const crypto = require('node:crypto');
   const serverKey = crypto.createHmac('sha256', key).update('staff-maintenance').digest('hex');
