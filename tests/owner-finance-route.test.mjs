@@ -8,6 +8,7 @@ import { notesDayData, notesRangeData, notesReportMessages, packMessages } from 
 import { compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData } from '../src/lib/dailyInsights.mjs';
 import * as dayCheckLib from '../src/lib/dayCheck.mjs';
 import * as noteCategoriesLib from '../src/lib/noteCategories.mjs';
+import { dayAudit } from '../src/lib/dayAudit.mjs';
 import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { payrollCost } from '../src/lib/payroll.mjs';
 import { normalizeRules } from '../src/lib/attendanceRules.mjs';
@@ -77,7 +78,7 @@ function fakeDb(state, { failTable } = {}) {
 function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFails = false, env = {} }) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...finance, ...zaloLink, ...dayCheckLib, ...noteCategoriesLib, notesReportMessages, notesDayData, notesRangeData, packMessages, compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData, AUTO_CLOSE_BY: 'Máy tự đóng (quên ra ca)', createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
+    NextResponse, ...finance, ...zaloLink, ...dayCheckLib, ...noteCategoriesLib, dayAudit, notesReportMessages, notesDayData, notesRangeData, packMessages, compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData, AUTO_CLOSE_BY: 'Máy tự đóng (quên ra ca)', createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
     sendOaText: async (_db, id, text) => { sent.push({ id, text }); return zaloFails ? { ok: false, detail: { error: -230 } } : { ok: true }; },
     URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
@@ -691,4 +692,46 @@ test('Sổ tay "Khác" kinds (petrol, repairs) show as their own costs on /thong
   const month = (await get(api, 'month=2026-10')).body;
   assert.deepEqual(plain(month.noteCategories), [{ id: 'xang', name: 'Xăng xe' }]);
   assert.deepEqual(plain(month.totals.notesOther), { xang: 50000 });
+});
+
+test('the day audit run by the shop machine reads one day and writes nothing; it needs its own key and shows no names', async () => {
+  const today = finance.vnDate(Date.now());
+  const day = finance.vnDate(Date.now() - 86400000);
+  const at = m => new Date(Date.parse(finance.vnDayStartIso(day)) + m * 60000).toISOString();
+  const state = empty();
+  state.finance_revenue_ledger.push(
+    { order_id: '00000000-0000-0000-0000-0000000000d1', business_date: day, paid_at: at(600), table_number: '2', amount: 200000, payment_method: 'transfer', transfer_image_path: null, customer_name: 'Chị Hoa', items: [] },
+    { order_id: '00000000-0000-0000-0000-0000000000d2', business_date: day, paid_at: at(610), table_number: '3', amount: 150000, payment_method: 'cash', items: [] });
+  state.tables = [{ id: 't5', table_number: 5 }, { id: 't7', table_number: 7 }, { id: 't8', table_number: 8 }];
+  state.orders = [
+    // Đã thu mà sổ chưa có / bill còn mở / bill gọi nhân viên (bỏ qua) / bill huỷ.
+    { id: '00000000-0000-0000-0000-0000000000d3', status: 'paid', paid_at: at(620), created_at: at(500), total_amount: 90000, payment_method: 'cash', table_id: 't5', customer_phone: '0900' },
+    { id: '00000000-0000-0000-0000-0000000000d4', status: 'pending', created_at: at(700), total_amount: 120000, table_id: 't7' },
+    { id: '00000000-0000-0000-0000-0000000000d5', status: 'pending', created_at: at(710), total_amount: 0, table_id: 't7', customer_phone: 'BAO_BEP' },
+    { id: '00000000-0000-0000-0000-0000000000d6', status: 'cancelled', created_at: at(650), cancelled_at: at(655), cancelled_by_name: 'Lan', total_amount: 80000, table_id: 't8' },
+  ];
+  state.attendance_sessions = [{ id: 'att1', staff_id: 'aaaa1111-0000-4000-8000-000000000001', date: day, clock_in: at(540), clock_out: null }];
+  const env = { SUPABASE_SERVICE_ROLE_KEY: 'k'.repeat(40) };
+  const key = purpose => createHmac('sha256', 'k'.repeat(40)).update(purpose).digest('hex');
+  const call = (api, body, k) => api.POST({ json: async () => body, headers: new Map([['x-finance-report-key', k]]) }).then(plain);
+  const cron = load({ state, code: 401, env });
+
+  assert.equal((await call(cron, { action: 'day_audit' }, key('finance-daily-report'))).status, 401, 'the daily report key cannot read the audit');
+  const res = await call(cron, { action: 'day_audit' }, key('finance-day-audit'));
+  assert.equal(res.status, 200);
+  const { audit } = res.body;
+  assert.equal(audit.date, day, 'yesterday by default');
+  assert.deepEqual([audit.money.bills, audit.money.amount], [2, 350000]);
+  assert.deepEqual(audit.bills.unrecorded.map(b => b.table), [5]);
+  assert.deepEqual(audit.bills.leftOpen.map(b => [b.table, b.amount]), [[7, 120000]], 'the staff-call bill is not a bill');
+  assert.deepEqual(audit.photos.transferNoPhoto.map(b => b.table), ['2']);
+  assert.deepEqual(audit.loss.cancelled.map(b => [b.table, b.amount]), [[8, 80000]]);
+  assert.deepEqual(audit.staff.people.map(p => [p.staff, p.open]), [['NV-aaaa', true]]);
+  const text = JSON.stringify(res.body);
+  for (const name of ['Chị Hoa', 'Lan']) assert.ok(!text.includes(name), `no "${name}" in a public log`);
+
+  assert.equal(state.finance_revenue_ledger.length, 2, 'read-only: the missing bill is reported, not added');
+  assert.equal((state.finance_day_checks || []).length, 0, 'read-only: no day check saved');
+  assert.equal((await call(cron, { action: 'day_audit', date: '2099-01-01' }, key('finance-day-audit'))).status, 400);
+  assert.equal((await call(cron, { action: 'day_audit', date: today }, key('finance-day-audit'))).status, 200, 'today so far is allowed');
 });
