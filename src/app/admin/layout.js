@@ -22,6 +22,8 @@ import PrintErrorAlert from '@/components/PrintErrorAlert';
 import QrClockScanner from '@/components/QrClockScanner';
 import { unlockSpeech } from '@/lib/speak';
 import './admin.css';
+import AdminPinGate from './AdminPinGate';
+import { lockedSection } from '@/lib/adminLockPaths.mjs';
 
 const ALL_NAV = [
   { href: '/admin/tables', label: 'Quản lý bàn', icon: LayoutGrid },
@@ -302,7 +304,11 @@ export default function AdminLayout({ children }) {
       </aside>
 
       <main className="admin-main">
-        {children}
+        {/* Tab của chủ quán (Lương, Thống kê & Kế toán, Khách hàng, Cài đặt, Sổ thu chi): mỗi lần mở tab là nhập mã PIN
+            (key theo tab: chuyển sang tab khoá khác cũng hỏi lại). */}
+        {user.role === 'admin' && lockedSection(pathname)
+          ? <AdminPinGate key={`${user.id}:${lockedSection(pathname)}`} section={lockedSection(pathname)}>{children}</AdminPinGate>
+          : children}
       </main>
       {scanOpen && <QrClockScanner onClose={() => setScanOpen(false)} />}
       <PrintErrorAlert isAdmin={true} />
