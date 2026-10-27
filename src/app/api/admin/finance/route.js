@@ -16,6 +16,8 @@
  * POST {action:'zalo_link_code'|'zalo_unlink'|'zalo_test'|'zalo_set_enabled'} → báo cáo Zalo hằng ngày.
  * POST {action:'daily_report'} + header x-finance-report-key → gửi báo cáo
  *      (workflow "Finance Daily Report" gọi lúc 8 giờ sáng, không cần đăng nhập).
+ * POST {action:'day_audit', date?} + header x-finance-report-key (khoá 'finance-day-audit') → kiểm tra tổng thể
+ *      một ngày, CHỈ ĐỌC (workflow "Finance Day Audit"); không tên khách / nhân viên trong kết quả.
  *
  * Chạy bằng service role vì các bảng sổ thu chi đã chặn anon. Không liên quan
  * tới /admin/stats.
@@ -27,6 +29,7 @@ import { notesDayData, notesRangeData, notesReportMessages, packMessages } from 
 import { compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData } from '@/lib/dailyInsights.mjs';
 import { AUTO_CLOSE_BY } from '@/lib/attendanceRules.mjs';
 import { AUTO_CHECK_BY, AUTO_CHECK_HOUR, dayCheck } from '@/lib/dayCheck.mjs';
+import { dayAudit } from '@/lib/dayAudit.mjs';
 import { LINK_CODE_MINUTES, REPORT_SECTIONS, readReportSettings, reportPlan, reportSections, reportStatus, saveReportSettings, validSendAt } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
@@ -287,12 +290,64 @@ async function ensureDayCheck(db, date, today) {
   return runDayCheck(db, date, today);
 }
 
-// Workflow báo cáo trên máy chủ ký bằng khoá service role (không cần thêm bí mật mới).
-function reportKeyOk(request) {
+/**
+ * Kiểm tra tổng thể một ngày, CHỈ ĐỌC (workflow "Finance Day Audit" trên máy quán): như runDayCheck nhưng không tự
+ * bổ sung bill sót, không lưu kết quả; thêm bill còn mở, chấm công, phiếu Sổ tay bị xoá, giảm giá / món tặng.
+ * Trả về dayAudit() — không tên / SĐT khách, không tên nhân viên (nhật ký workflow ai cũng xem được).
+ */
+async function auditDay(db, date, today) {
+  const range = { start: new Date(vnDayStartIso(date)), end: new Date(vnDayStartIso(addDays(date, 1))) };
+  const [from, to] = [range.start.toISOString(), range.end.toISOString()];
+  const quiet = (name, promise, fallback) => promise.catch(error => { console.error(`[admin/finance] audit ${name}`, error); return fallback; });
+  const [ledger, paper, paidOrders, dayOrders, lossIn, noteRows, staffIn, pending, fixes, deleted, missing, tableRows] = await Promise.all([
+    readAll(() => db.from('finance_revenue_ledger').select('*').eq('business_date', date).order('order_id')),
+    readPaper(db, date, addDays(date, 1)),
+    readAll(() => db.from('orders').select('id, table_id, paid_at, total_amount, payment_method, customer_phone').eq('status', 'paid')
+      .gte('paid_at', from).lt('paid_at', to).order('id')),
+    readAll(() => db.from('orders').select('id, table_id, status, total_amount, created_at, customer_phone').gte('created_at', from).lt('created_at', to).order('id')),
+    quiet('loss', lossInputs(db, { from: date, to: date, range }), null),
+    quiet('notes', notesBetween(db, from, to), []),
+    quiet('staff', staffInputs(db, { from: date, to: date, range }), null),
+    db.from('payroll_requests').select('staff_id, request_type, amount, days, reason').eq('status', 'pending').then(r => r.data || []),
+    db.from('attendance_fix_requests').select('staff_id, reason').eq('status', 'pending').then(r => r.data || []),
+    db.from('staff_data_audit').select('changed_at').eq('table_name', 'staff_notes').eq('op', 'DELETE').gte('changed_at', from).lt('changed_at', to)
+      .then(r => (r.error ? [] : r.data || [])),
+    // Lịch sử bàn chỉ giữ 10 giờ: kiểm tra muộn thì phần này rỗng, bill thiếu chỉ còn dò qua orders.
+    quiet('missing', findMissingBills(db), []),
+    db.from('tables').select('id, table_number').then(r => r.data || []),
+  ]);
+  const tables = new Map(tableRows.map(t => [t.id, t.table_number]));
+  const inBook = new Set(ledger.map(r => r.order_id));
+  // Bill sót còn trong lịch sử bàn: bỏ bill đã mở lại / huỷ sau khi thu (như repairMissingBills, nhưng không ghi gì).
+  const missingDay = missing.filter(m => vnDate(m.paidAt) === date);
+  const statusOf = new Map();
+  for (const part of inChunks(missingDay.map(m => m.orderId))) {
+    const { data } = await db.from('orders').select('id, status').in('id', part);
+    for (const o of data || []) statusOf.set(o.id, o.status);
+  }
+  const fromHistory = missingDay.filter(m => !statusOf.has(m.orderId) || statusOf.get(m.orderId) === 'paid');
+  const unrecorded = [
+    ...fromHistory,
+    ...paidOrders.filter(o => !inBook.has(o.id) && o.customer_phone !== 'BAO_BEP' && !fromHistory.some(m => m.orderId === o.id))
+      .map(o => ({ orderId: o.id, tableNumber: tables.get(o.table_id) ?? null, paidAt: o.paid_at, amount: Number(o.total_amount) || 0, paymentMethod: o.payment_method })),
+  ];
+  const loss = lossIn ? lossData(lossIn) : null;
+  const notes = noteRows.map(noteView);
+  const check = dayCheck({ date, ledger, paper, unrecorded, loss, notes, keepPhotosFrom: photoKeepFrom(today), checkedAt: new Date().toISOString(), by: 'Kiểm tra ngày (chỉ đọc)' });
+  // Bill tạo trong ngày còn chưa thu / chưa huỷ lúc kiểm tra (quên đóng bàn, bill treo).
+  const openOrders = dayOrders.filter(o => !['paid', 'cancelled'].includes(o.status) && o.customer_phone !== 'BAO_BEP')
+    .map(o => ({ ...o, table: tables.get(o.table_id) ?? null }));
+  const staff = staffIn ? staffData({ ...staffIn, pending, fixes, staffNames: {}, date }) : null;
+  return dayAudit({ date, check, ledger, paper, openOrders, staff, notes, deletedNotes: deleted.length, loss });
+}
+
+// Workflow trên máy chủ ký bằng khoá service role (không cần thêm bí mật mới). purpose: việc được làm —
+// 'finance-daily-report' (gửi báo cáo, tự kiểm tra sáng) hoặc 'finance-day-audit' (kiểm tra ngày chỉ đọc).
+function reportKeyOk(request, purpose = 'finance-daily-report') {
   const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
   const given = String(request.headers?.get?.('x-finance-report-key') || '');
   if (secret.length < 20 || !given) return false;
-  const want = createHmac('sha256', secret).update('finance-daily-report').digest('hex');
+  const want = createHmac('sha256', secret).update(purpose).digest('hex');
   return given.length === want.length && timingSafeEqual(Buffer.from(given), Buffer.from(want));
 }
 
@@ -831,6 +886,13 @@ export async function POST(request) {
       if (!DATE.test(body.date || '') && !plan.due) return NextResponse.json({ ok: true, skipped: `chưa tới giờ gửi ${plan.sendAt}` }, { headers });
       const date = DATE.test(body.date || '') ? body.date : plan.date;
       return NextResponse.json(await sendDailyReport(db, { date, today, scheduled: true }), { headers });
+    }
+    // Kiểm tra tổng thể một ngày (mặc định hôm qua), chỉ đọc — workflow "Finance Day Audit" trên máy quán.
+    if (body.action === 'day_audit' && reportKeyOk(request, 'finance-day-audit')) {
+      const today = vnDate(Date.now());
+      const date = DATE.test(body.date || '') ? body.date : addDays(today, -1);
+      if (date < FINANCE_START_DATE || date > today) return NextResponse.json({ error: 'Ngày không hợp lệ.' }, { status: 400, headers });
+      return NextResponse.json({ ok: true, audit: await auditDay(statusDatabase(), date, today) }, { headers });
     }
     const session = await requireOwner(request);
     if (session.code !== 200) return deny(session.code);

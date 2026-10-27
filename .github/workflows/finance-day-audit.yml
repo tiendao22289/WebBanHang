@@ -1,0 +1,28 @@
+name: Finance Day Audit
+# Chạy tay: kiểm tra tổng thể một ngày trên web prod (chỉ đọc) — tiền, bill thiếu / bàn còn mở, ảnh CK,
+# huỷ / bớt món, chấm công, Sổ tay. Không in tên / SĐT khách, không in tên nhân viên (NV-xxxx).
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Ngày YYYY-MM-DD (bỏ trống = hôm qua)'
+        required: false
+permissions:
+  contents: read
+jobs:
+  audit:
+    if: github.ref == 'refs/heads/master' && github.repository == 'tiendao22289/WebBanHang'
+    runs-on: [self-hosted, Windows, X64, webbanhang-production]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Audit the day
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+        env:
+          AUDIT_DATE: ${{ inputs.date }}
+        run: |
+          & node scripts/day-audit.cjs 'C:\Tool\SupabaseLocal\production.env' "$env:AUDIT_DATE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
