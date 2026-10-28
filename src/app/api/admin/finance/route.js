@@ -36,7 +36,7 @@ import { signReceiptImages } from '@/lib/receiptImages.mjs';
 import { loadPayrollMonth } from '@/lib/payrollMonth.mjs';
 import { payrollCost } from '@/lib/payroll.mjs';
 import { addCosts } from '@/lib/noteCategories.mjs';
-import { FINANCE_START_DATE, FIXED_CATEGORIES, billHasStaff, billStaff, closeDifferences, dailyReportText, dailyWarnings, isMonthKey, itemKey, shoppingParts, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, plainName, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
+import { FINANCE_START_DATE, FIXED_CATEGORIES, billHasStaff, billStaff, checkoutKey, closeDifferences, dailyReportText, dailyWarnings, groupPaidBills, isMonthKey, itemKey, shoppingParts, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, plainName, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -73,6 +73,26 @@ async function readAll(build) {
     rows.push(...(data || []));
     if (!data || data.length < 1000) return rows;
   }
+}
+
+// Đọc theo từng nhóm giá trị (bộ lọc .in() có giới hạn độ dài địa chỉ).
+async function readChunks(values, read, size = 100) {
+  const rows = [];
+  for (const part of inChunks(values, size)) rows.push(...await read(part));
+  return rows;
+}
+
+// Tra cứu hiện một dòng cho một lần đóng bàn: thêm các bill cùng lần thu (cùng giờ thanh toán, cách trả, thẻ)
+// mà bộ lọc không lấy (vd. bill kia đã đối chiếu), để dòng gộp đủ bill và đúng tổng tiền bàn.
+async function wholeCheckouts(db, bills) {
+  const have = new Set(bills.map(b => b.order_id));
+  const keys = new Set(bills.map(checkoutKey));
+  const times = [...new Set(bills.map(b => b.paid_at).filter(Boolean))];
+  const same = await readChunks(times, chunk => readAll(() => db.from('finance_revenue_ledger')
+    .select('order_id, paid_at, payment_method, account_id').in('paid_at', chunk).order('order_id')), 50);
+  const missing = same.filter(b => !have.has(b.order_id) && keys.has(checkoutKey(b))).map(b => b.order_id);
+  if (!missing.length) return bills;
+  return [...bills, ...await readChunks(missing, ids => readAll(() => db.from('finance_revenue_ledger').select('*').in('order_id', ids).order('order_id')))];
 }
 
 function parseNoteItems(note) {
@@ -640,12 +660,19 @@ export async function GET(request) {
 
       let bills = [];
       if (type !== 'paper') {
+        // Số tiền: khớp một bill hoặc tổng cả bàn trong một lần đóng bàn (khách chuyển khoản tổng tiền bàn).
+        let amountIds = null;
+        if (amount) {
+          const light = await readAll(() => db.from('finance_revenue_ledger').select('order_id, paid_at, payment_method, account_id, amount')
+            .gte('business_date', from).lt('business_date', addDays(to, 1)).order('order_id'));
+          amountIds = groupPaidBills(light).filter(g => g.amount === amount || g.bills.some(b => Number(b.amount) === amount)).flatMap(g => g.orderIds);
+        }
         // '*': cột ảnh tiền mặt / lý do không chụp có thể chưa cài (owner_finance.sql) — không làm hỏng tra cứu.
-        const ledger = () => {
+        const ledger = (ids = null) => {
           let q = db.from('finance_revenue_ledger').select('*')
             .gte('business_date', from).lt('business_date', addDays(to, 1)).order('paid_at', { ascending: false });
+          if (ids) q = q.in('order_id', ids);
           if (table) q = q.eq('table_number', table);
-          if (amount) q = q.eq('amount', amount);
           if (type === 'transfer' || type === 'cash') q = q.eq('payment_method', type);
           if (onlyWithImage) q = q.not('transfer_image_path', 'is', null);
           if (transferOnly) q = q.eq('payment_method', 'transfer');
@@ -655,13 +682,18 @@ export async function GET(request) {
           if (check === 'checked') q = q.not('verified_at', 'is', null);
           return q;
         };
-        // Tên người thêm món nằm trong từng món (jsonb) → đọc cả khoảng ngày (tối đa 3 tháng) rồi lọc ở đây.
-        if (staff) bills = (await readAll(() => ledger().order('order_id'))).filter(b => billHasStaff(b, staff)).slice(0, LIMIT);
-        else {
+        if (amountIds) {
+          bills = (await readChunks(amountIds, ids => readAll(() => ledger(ids).order('order_id'))))
+            .filter(b => !staff || billHasStaff(b, staff)).sort((a, b) => String(b.paid_at).localeCompare(String(a.paid_at))).slice(0, LIMIT);
+        } else if (staff) {
+          // Tên người thêm món nằm trong từng món (jsonb) → đọc cả khoảng ngày (tối đa 3 tháng) rồi lọc ở đây.
+          bills = (await readAll(() => ledger().order('order_id'))).filter(b => billHasStaff(b, staff)).slice(0, LIMIT);
+        } else {
           const r = await ledger().limit(LIMIT);
           if (r.error) throw r.error;
           bills = r.data || [];
         }
+        bills = await wholeCheckouts(db, bills);
       }
       let paper = [];
       if (type === 'all' || type === 'paper' || type === 'transfer' || type === 'cash') {
@@ -684,7 +716,7 @@ export async function GET(request) {
       }
       const urls = await signReceiptImages(db, [...bills.flatMap(b => [b.transfer_image_path, b.cash_image_path]), ...paper.flatMap(p => [p.image_path, p.transfer_image_path])]);
       const results = [
-        ...bills.map(b => ({ kind: 'bill', id: b.order_id, at: b.paid_at, date: b.business_date, table: b.table_number, customer: b.customer_name,
+        ...bills.map(b => ({ kind: 'bill', id: b.order_id, group: checkoutKey(b), at: b.paid_at, date: b.business_date, table: b.table_number, customer: b.customer_name,
           method: b.payment_method, accountId: b.account_id, amount: Number(b.amount), items: b.items || [],
           transferImageUrl: urls[b.transfer_image_path] || null, cashImageUrl: urls[b.cash_image_path] || null,
           imageExpired: !b.transfer_image_path && !b.cash_image_path && b.business_date < keepFrom,
@@ -945,10 +977,15 @@ export async function POST(request) {
     if (body.action === 'verify') {
       const table = body.kind === 'paper' ? 'finance_manual_receipts' : body.kind === 'bill' ? 'finance_revenue_ledger' : null;
       const key = body.kind === 'paper' ? 'id' : 'order_id';
-      if (!table || typeof body.id !== 'string' || !UUID.test(body.id)) return NextResponse.json({ error: 'Thiếu bill cần đối chiếu.' }, { status: 400, headers });
+      // ids: mọi bill của một lần đóng bàn (một lần chuyển khoản) — Tra cứu đối chiếu cả dòng gộp một lần.
+      const ids = body.kind === 'bill' && Array.isArray(body.ids) ? body.ids : null;
+      const valid = ids ? ids.length > 0 && ids.length <= 50 && ids.every(id => typeof id === 'string' && UUID.test(id))
+        : typeof body.id === 'string' && UUID.test(body.id);
+      if (!table || !valid) return NextResponse.json({ error: 'Thiếu bill cần đối chiếu.' }, { status: 400, headers });
       const patch = body.verified === false ? { verified_at: null, verified_by: null }
         : { verified_at: new Date().toISOString(), verified_by: session.user.full_name || null };
-      const { data, error } = await db.from(table).update(patch).eq(key, body.id).eq('payment_method', 'transfer').select(key);
+      const update = db.from(table).update(patch);
+      const { data, error } = await (ids ? update.in(key, ids) : update.eq(key, body.id)).eq('payment_method', 'transfer').select(key);
       if (error) throw error;
       if (!data?.length) return NextResponse.json({ error: 'Không tìm thấy bill chuyển khoản này.' }, { status: 404, headers });
       return NextResponse.json({ ok: true, verifiedAt: patch.verified_at, verifiedBy: patch.verified_by }, { headers });
