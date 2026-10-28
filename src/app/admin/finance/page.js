@@ -636,6 +636,28 @@ const orderedBy = (customerName, staff) => customerName !== 'Admin' ? customerNa
 // Một dòng món trong bill, kèm tên nhân viên đã thêm / duyệt món đó (nếu sổ có lưu).
 const itemRow = (item, i) => <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}{item.added_by && <small className="fin-item-by"> · {item.added_by}</small>}</span>
   <span>{money(item.unit_price * item.quantity)}</span></li>;
+// Một dòng Tra cứu = một lần đóng bàn: các bill cùng r.group (máy chủ gửi đủ cả lần thu) gộp lại, tổng tiền bàn,
+// ảnh CK chung; đối chiếu / chụp ảnh áp cho cả dòng. Bill giấy giữ từng dòng.
+function searchRows(items) {
+  const rows = new Map();
+  for (const r of items) {
+    const key = r.kind === 'bill' && r.group ? `bill-${r.group}` : `${r.kind}-${r.id}`;
+    (rows.get(key) || rows.set(key, []).get(key)).push(r);
+  }
+  return [...rows.entries()].map(([key, parts]) => {
+    const [first] = parts;
+    if (first.kind !== 'bill') return { ...first, key, parts };
+    const photos = [...new Set(parts.map(p => p.transferImageUrl || p.cashImageUrl).filter(Boolean))];
+    const skipped = parts.find(p => p.skipReason);
+    const verified = parts.every(p => p.verifiedAt) ? parts.find(p => p.verifiedAt) : null;
+    return { ...first, key, parts, amount: parts.reduce((sum, p) => sum + p.amount, 0),
+      table: [...new Set(parts.map(p => p.table).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), 'vi', { numeric: true })).join(' + '),
+      transferImageUrl: parts.find(p => p.transferImageUrl)?.transferImageUrl || null, cashImageUrl: parts.find(p => p.cashImageUrl)?.cashImageUrl || null,
+      otherPhotos: photos.slice(1), imageExpired: parts.every(p => p.imageExpired),
+      skipReason: skipped?.skipReason || null, photoBy: skipped?.photoBy || null,
+      verifiedAt: verified?.verifiedAt || null, verifiedBy: verified?.verifiedBy || null };
+  });
+}
 const stamp = iso => { const d = new Date(Date.parse(iso) + 7 * 3600000).toISOString(); return `${clock(iso)} ${d.slice(8, 10)}/${d.slice(5, 7)}`; };
 
 function Chips({ label, value, options, onPick }) {
@@ -684,15 +706,17 @@ function SearchView({ accounts, preset }) {
   }
   useEffect(() => { search(); }, []);
 
-  // Đánh dấu đã đối chiếu với app ngân hàng (bấm lại để bỏ).
+  // Đánh dấu đã đối chiếu với app ngân hàng (bấm lại để bỏ). Dòng gộp: mọi bill của lần chuyển khoản đó.
   async function toggleVerify(r) {
     const verified = !r.verifiedAt;
-    const patchHit = fields => setResult(res => ({ ...res, results: res.results.map(x => x.kind === r.kind && x.id === r.id ? { ...x, ...fields } : x) }));
+    const ids = new Set(r.parts.map(p => p.id));
+    const changed = r.parts.filter(p => !p.verifiedAt === verified).length;
+    const patchHit = fields => setResult(res => ({ ...res, results: res.results.map(x => x.kind === r.kind && ids.has(x.id) ? { ...x, ...fields } : x) }));
     setSaving(r.id);
     try {
-      const res = await post({ action: 'verify', kind: r.kind, id: r.id, verified });
+      const res = await post(r.kind === 'bill' ? { action: 'verify', kind: 'bill', ids: [...ids], verified } : { action: 'verify', kind: r.kind, id: r.id, verified });
       patchHit({ verifiedAt: res.verifiedAt, verifiedBy: res.verifiedBy });
-      setResult(cur => cur.alerts ? { ...cur, alerts: { ...cur.alerts, unchecked: Math.max(0, cur.alerts.unchecked + (verified ? -1 : 1)) } } : cur);
+      setResult(cur => cur.alerts ? { ...cur, alerts: { ...cur.alerts, unchecked: Math.max(0, cur.alerts.unchecked + (verified ? -changed : changed)) } } : cur);
     } catch (err) { alert(err.message); } finally { setSaving(null); }
   }
 
@@ -701,7 +725,7 @@ function SearchView({ accounts, preset }) {
   const pendingGallery = useRef(null);
   const galleryInput = useRef(null);
   const captureInput = useRef(null);
-  const target = r => r.kind === 'paper' ? { receipt_id: r.id } : { order_id: r.id };
+  const target = r => r.kind === 'paper' ? { receipt_id: r.id } : { order_ids: r.parts.map(p => p.id).join(',') };
   async function uploadProof(r, blob) {
     setSaving(r.id);
     try { await sendReceipt({ action: 'attach_transfer', ...target(r) }, blob); await search(); }
@@ -789,24 +813,24 @@ function SearchView({ accounts, preset }) {
     {result && <p className="fin-search-sum">{result.results.length} bill · {money(total)}{result.truncated ? ' · chỉ hiện 200 bill mới nhất, thu hẹp ngày để xem thêm' : ''}</p>}
     {result && !result.results.length && <p className="fin-empty">Không có bill nào khớp.</p>}
 
-    {/* Gọn: gom theo ngày, mỗi bill 1 dòng (ảnh nhỏ | giờ · bàn | tiền + đối chiếu); bấm vào để xem thêm. */}
+    {/* Gọn: gom theo ngày, mỗi lần đóng bàn 1 dòng (ảnh nhỏ | giờ · bàn | tiền + đối chiếu); bấm vào để xem từng bill. */}
     <div className="fin-search-list">
       {days.map(day => <section key={day.date} className="fin-bill-day">
         <h4><span>{shortDate(day.date)}</span><span>{day.items.length} bill · {money(day.total)}</span></h4>
-        {day.items.map(r => {
-          const isOpen = open === `${r.kind}-${r.id}`;
+        {searchRows(day.items).map(r => {
+          const isOpen = open === r.key;
           const ckMissing = r.method === 'transfer' && !r.transferImageUrl && !r.imageExpired;
           const photo = r.transferImageUrl || r.cashImageUrl || r.billImageUrl;
-          return <div key={`${r.kind}-${r.id}`} className={`fin-bill${r.verifiedAt ? ' verified' : ''}`}>
+          return <div key={r.key} className={`fin-bill${r.verifiedAt ? ' verified' : ''}`}>
             {photo
               ? <button className="fin-bill-photo" onClick={() => setView(photo)} aria-label={r.transferImageUrl ? 'Xem ảnh CK' : r.cashImageUrl ? 'Xem ảnh tiền mặt' : 'Xem ảnh bill'}><img src={photo} alt="" draggable={false} /></button>
               : ckMissing
                 ? <button className="fin-bill-photo add" onClick={() => startCamera(r)} disabled={saving === r.id} aria-label="Chụp ảnh CK"><Camera size={18} /><small>Chụp</small></button>
                 : <span className="fin-bill-photo none" title={r.imageExpired ? 'Ảnh đã xoá sau 3 tháng' : ''}>{r.method === 'transfer' ? <CreditCard size={18} /> : <Banknote size={18} />}</span>}
-            <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : `${r.kind}-${r.id}`)} aria-expanded={isOpen}>
+            <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : r.key)} aria-expanded={isOpen}>
               <b>{clock(r.at)} · {r.kind === 'paper' && !/^\d/.test(r.table || '') ? (r.table || 'Bill giấy') : `Bàn ${r.table || '?'}`}</b>
-              <small>{r.kind === 'paper' ? 'Bill giấy' : r.staff ? orderedBy(r.customer, r.staff) : (r.customer || 'Khách')} · {r.method === 'transfer' ? cardName(r.accountId) : 'Tiền mặt'}{r.skipReason ? ' · ⚠ không ảnh' : ''}</small>
-              {r.staff && <small className="fin-bill-staff">👤 {staffText([r.staff])}</small>}
+              <small>{r.kind === 'paper' ? 'Bill giấy' : r.parts.length > 1 ? `${r.parts.length} bill` : r.staff ? orderedBy(r.customer, r.staff) : (r.customer || 'Khách')} · {r.method === 'transfer' ? cardName(r.accountId) : 'Tiền mặt'}{r.skipReason ? ' · ⚠ không ảnh' : ''}</small>
+              {r.kind === 'bill' && <small className="fin-bill-staff">👤 {staffText(r.parts.map(p => p.staff).filter(Boolean))}</small>}
               {r.kind === 'paper' && r.by && <small className="fin-bill-staff">👤 Người nhập: {r.by}</small>}
             </button>
             <div className="fin-bill-end">
@@ -824,8 +848,13 @@ function SearchView({ accounts, preset }) {
                 <button className="fin-ck-add primary" onClick={() => startCamera(r)} disabled={saving === r.id}>📷 {r.transferImageUrl ? 'Chụp lại ảnh CK' : 'Chụp ảnh CK'}</button>
                 <button className="fin-ck-add" onClick={() => startGallery(r)} disabled={saving === r.id}>Chọn ảnh có sẵn</button>
               </span>}
+              {r.otherPhotos?.length > 0 && <div className="fin-hit-photos">{r.otherPhotos.map(p =>
+                <button key={p} className="fin-hit-photo" onClick={() => setView(p)}><img src={p} alt="" draggable={false} /><span>Ảnh khác</span></button>)}</div>}
               {r.kind === 'bill'
-                ? <ul className="fin-items">{(r.items || []).map(itemRow)}</ul>
+                ? r.parts.map(p => <div key={p.id} className="fin-bill-part">
+                    {r.parts.length > 1 && <div className="fin-bill-part-head"><span>{p.staff ? orderedBy(p.customer, p.staff) : (p.customer || 'Khách')}{r.table.includes('+') ? ` · Bàn ${p.table || '?'}` : ''}</span><b>{money(p.amount)}</b></div>}
+                    <ul className="fin-items">{(p.items || []).map(itemRow)}</ul>
+                  </div>)
                 : r.note && <p className="fin-note-text">{r.note}</p>}
             </div>}
           </div>;

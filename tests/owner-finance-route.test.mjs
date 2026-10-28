@@ -438,7 +438,8 @@ test('Tra cứu finds bills by staff name: who took the money, who ordered or ap
   const find = async q => (await get(api, `search=1&from=2026-10-20&to=2026-10-27&${q}`)).body;
 
   let r = await find('staff=hung');
-  assert.deepEqual(r.results.map(x => x.id), ['p2', 'b2', 'b3'], 'typed without accents; dishes, the QR page, and an old bill closed with a photo');
+  assert.deepEqual(r.results.map(x => x.id), ['p2', 'b2', 'b1', 'b3'],
+    'typed without accents; dishes, the QR page, an old bill closed with a photo, and the rest of the table checkout (b1) so its row has the full total');
   assert.deepEqual(plain(r.results.find(x => x.id === 'b2').staff), { paidBy: 'Lan', dishes: ['Đức Hùng'], dishesKnown: true });
   r = await find('staff=Lan');
   assert.deepEqual(r.results.map(x => x.id).sort(), ['b1', 'b2'], 'both bills of the table she closed');
@@ -451,6 +452,47 @@ test('Tra cứu finds bills by staff name: who took the money, who ordered or ap
   assert.equal(r.results.length, 6, 'no name: every bill as before');
   assert.deepEqual(plain(r.staffNames), ['Đức Hùng', 'Lan', 'Mai'], 'names to pick from, in Vietnamese order');
   assert.deepEqual(plain(r.results.find(x => x.id === 'b4').staff), { paidBy: null, dishes: [], dishesKnown: false }, 'an old bill: unknown, not guessed');
+});
+
+test('Tra cứu shows whole table checkouts: the table total finds them, filters never leave half a table, one tick checks every bill', async () => {
+  const state = empty();
+  const id = n => `00000000-0000-0000-0000-00000000000${n}`;
+  const BAN4 = '2026-10-27T10:46:45.494296+00:00', BAN6 = '2026-10-27T10:48:30.842531+00:00';
+  const bill = (n, at, table, amount, more = {}) => ({ order_id: id(n), business_date: '2026-10-27', paid_at: at, table_number: table, amount,
+    payment_method: 'transfer', account_id: ACC_A, transfer_image_path: `ck-${table}.jpg`, items: [], ...more });
+  state.finance_revenue_ledger.push(
+    bill(1, BAN4, '4', 395000), bill(2, BAN4, '4', 17000, { verified_at: '2026-10-27T12:00:00Z' }),
+    bill(3, BAN6, '6', 42000), bill(4, BAN6, '6', 130000), bill(5, BAN6, '6', 383000),
+    // Bàn 4 lượt khách sau: cùng bàn, khác lần đóng bàn.
+    bill(6, '2026-10-27T13:00:00.000001+00:00', '4', 412000),
+    // Cùng giờ nhưng thẻ khác → không phải cùng lần chuyển khoản.
+    bill(7, BAN4, '4', 5000, { account_id: '00000000-0000-0000-0000-0000000000bb' }));
+  const api = load({ state });
+  const find = async q => (await get(api, `search=1&from=2026-10-27&to=2026-10-27&${q}`)).body;
+  const ids = r => r.results.map(x => x.id).sort();
+
+  // Khách chuyển khoản tổng bàn: 412.000đ ra lần đóng bàn 17:46 (395.000 + 17.000) và bill 412.000đ của lượt sau.
+  let r = await find('amount=412.000');
+  assert.deepEqual(ids(r), [id(1), id(2), id(6)]);
+  assert.equal(new Set(r.results.filter(x => x.at === BAN4).map(x => x.group)).size, 1, 'both bills of the 17:46 checkout carry one group key');
+  r = await find('amount=555000');
+  assert.deepEqual(ids(r), [id(3), id(4), id(5)], 'Bàn 6 found by its total');
+  r = await find('amount=130000');
+  assert.deepEqual(ids(r), [id(3), id(4), id(5)], 'one bill amount still works and brings its whole checkout');
+  assert.deepEqual(ids(await find('amount=999000')), []);
+  // Bill 2 đã đối chiếu, bill 1 chưa: lọc "chưa đối chiếu" vẫn ra cả lần đóng bàn để thấy tổng đúng.
+  r = await find('check=unchecked&table=4');
+  assert.deepEqual(ids(r), [id(1), id(2), id(6), id(7)]);
+  assert.equal(r.results.find(x => x.id === id(7)).group === r.results.find(x => x.id === id(1)).group, false, 'another card is another checkout');
+
+  const tick = await post(api, { action: 'verify', kind: 'bill', ids: [id(3), id(4), id(5)] });
+  assert.equal(tick.status, 200);
+  assert.deepEqual(state.finance_revenue_ledger.filter(b => b.verified_at).map(b => b.order_id).sort(), [id(2), id(3), id(4), id(5)]);
+  await post(api, { action: 'verify', kind: 'bill', ids: [id(3), id(4), id(5)], verified: false });
+  assert.deepEqual(state.finance_revenue_ledger.filter(b => b.verified_at).map(b => b.order_id), [id(2)]);
+  for (const bad of [[], ['x'], Array(51).fill(id(1))]) {
+    assert.equal((await post(api, { action: 'verify', kind: 'bill', ids: bad })).status, 400, JSON.stringify(bad).slice(0, 40));
+  }
 });
 
 test('transfer bills can be filtered by card, missing photo and checked state, and ticked off after checking the bank', async () => {

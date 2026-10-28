@@ -45,6 +45,20 @@ async function requireStaff(request) {
 }
 
 // Bill giấy theo id, hoặc theo source khi gửi từ trang Mã QR.
+// Ảnh CK lúc đóng bàn dùng chung cho mọi bill của lần thu đó: chỉ xoá file cũ khi không còn bill nào trỏ tới
+// (chụp lại ảnh cho 1 bill không được làm mất ảnh của các bill cùng bàn). Không đọc được thì giữ file.
+async function unusedImages(db, paths) {
+  const list = [...new Set(paths.filter(Boolean))];
+  if (!list.length) return [];
+  const [ck, cash] = await Promise.all([
+    db.from('finance_revenue_ledger').select('transfer_image_path').in('transfer_image_path', list),
+    db.from('finance_revenue_ledger').select('cash_image_path').in('cash_image_path', list),
+  ]);
+  if (ck.error || cash.error) return [];
+  const used = new Set([...(ck.data || []).map(r => r.transfer_image_path), ...(cash.data || []).map(r => r.cash_image_path)]);
+  return list.filter(p => !used.has(p));
+}
+
 const paperKey = form => form.get('source') ? { key: 'source', id: form.get('source') } : { key: 'id', id: form.get('receipt_id') };
 const validKey = (key, id) => !!id && (key === 'source' ? SOURCE : UUID).test(id);
 
@@ -164,7 +178,7 @@ export async function POST(request) {
         if (update.error) { await removeReceiptImages(db, [path]); throw update.error; }
         // Ảnh cũ không còn dòng nào dùng thì xoá.
         const old = [...new Set(targets.map(r => r.transfer_image_path).filter(p => p && p !== path))];
-        await removeReceiptImages(db, old);
+        await removeReceiptImages(db, await unusedImages(db, old));
         return NextResponse.json({ ok: true, bills: targets.length }, { headers });
       }
       const orderId = form.get('order_id');
@@ -181,7 +195,7 @@ export async function POST(request) {
       const patch = orderId ? { transfer_image_path: path, transfer_image_by: session.user.full_name || null } : { transfer_image_path: path };
       const update = await db.from(table).update(patch).eq(key, id);
       if (update.error) { await removeReceiptImages(db, [path]); throw update.error; }
-      await removeReceiptImages(db, [row.transfer_image_path]);
+      await removeReceiptImages(db, await unusedImages(db, [row.transfer_image_path]));
       return NextResponse.json({ ok: true }, { headers });
     }
 

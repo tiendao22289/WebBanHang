@@ -113,10 +113,12 @@ export function closeDifferences(day, close) {
  * cùng thẻ = cùng một lần thu. Hai lượt khách ở cùng một bàn có giờ khác nhau
  * nên vẫn tách. Chỉ để hiển thị: bill giữ nguyên trong nhóm, tổng tiền không đổi.
  */
+export const checkoutKey = bill => (bill.paid_at ? `${bill.paid_at}|${bill.payment_method || ''}|${bill.account_id || ''}` : `bill|${bill.order_id}`);
+
 export function groupPaidBills(bills = []) {
   const groups = new Map();
   for (const bill of bills) {
-    const key = bill.paid_at ? `${bill.paid_at}|${bill.payment_method || ''}|${bill.account_id || ''}` : `bill|${bill.order_id}`;
+    const key = checkoutKey(bill);
     let group = groups.get(key);
     if (!group) groups.set(key, group = { key, paid_at: bill.paid_at, payment_method: bill.payment_method, account_id: bill.account_id || null, amount: 0, tables: [], bills: [] });
     group.bills.push(bill);
