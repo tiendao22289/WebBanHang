@@ -141,6 +141,18 @@ test('staff add a missing transfer screenshot to today bills; only the owner rep
   assert.deepEqual(list.body.transferBills.map(b => b.orderId).sort(), ['00000000-0000-0000-0000-000000000201', '00000000-0000-0000-0000-000000000204'], 'today transfer bills only');
 });
 
+test('re-taking the screenshot of one bill keeps the shared table photo the other bills of that checkout still use', async () => {
+  const state = base();
+  const ids = ['00000000-0000-0000-0000-000000000501', '00000000-0000-0000-0000-000000000502'];
+  for (const id of ids) state.finance_revenue_ledger.push({ order_id: id, business_date: today, payment_method: 'transfer', transfer_image_path: 'ban4.jpg', amount: 1 });
+  const owner = load({ state, role: 'admin' });
+  assert.equal((await post(owner.api, { action: 'attach_transfer', order_id: ids[0], image: image() })).status, 200);
+  assert.deepEqual(plain(state.finance_revenue_ledger).map(r => r.transfer_image_path), ['2026-10/ck-1.jpg', 'ban4.jpg']);
+  assert.deepEqual(owner.removed, [], 'bill 502 still shows ban4.jpg');
+  assert.equal((await post(owner.api, { action: 'attach_transfer', order_id: ids[1], image: image() })).status, 200);
+  assert.deepEqual(owner.removed, ['ban4.jpg'], 'removed once nobody uses it');
+});
+
 test('signed-out users cannot use the paper bill page', async () => {
   const { api } = load({ state: base(), code: 401 });
   assert.equal((await get(api)).status, 401);
