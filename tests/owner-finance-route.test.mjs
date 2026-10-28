@@ -259,8 +259,8 @@ test('bills missing from the ledger are filled in from table history, except reo
     { order_id: 'in-ledger', paid_at: later(-60), expires_at: later(500), snapshot: {} },
     // Bill chuyển khoản đã bị dọn khỏi orders (định mức) → vẫn phải vào sổ.
     { order_id: 'missing', paid_at: paidAt, expires_at: later(500),
-      snapshot: { table_number: 7, customer_name: 'Lan', payment_method: 'transfer',
-        order_items: [{ unit_price: 50000, quantity: 2, menu_item: { name: 'Ốc' } }, { unit_price: -10000, quantity: 1, item_name: 'Giảm' }] } },
+      snapshot: { table_number: 7, customer_name: 'Lan', payment_method: 'transfer', paid_by_name: 'Thu ngân Hoa', created_by_name: null,
+        order_items: [{ unit_price: 50000, quantity: 2, menu_item: { name: 'Ốc' }, added_by_name: 'Hùng' }, { unit_price: -10000, quantity: 1, item_name: 'Giảm' }] } },
     { order_id: 'missing-cash', paid_at: paidAt, expires_at: later(500),
       snapshot: { table_number: 8, payment_method: 'cash', order_items: [{ unit_price: 20000, quantity: 1 }] } },
     // Thu xong rồi mở lại → không còn là doanh thu.
@@ -274,6 +274,7 @@ test('bills missing from the ledger are filled in from table history, except reo
   const row = plain(state.finance_revenue_ledger.find(r => r.order_id === 'missing'));
   assert.deepEqual([row.amount, row.payment_method, row.account_id, row.table_number, row.business_date, row.items.map(i => i.name)],
     [90000, 'transfer', 'acc-b', '7', finance.vnDate(paidAt), ['Ốc', 'Giảm']]);
+  assert.deepEqual([row.paid_by_name, row.items.map(i => i.added_by)], ['Thu ngân Hoa', ['Hùng', null]], 'names come back from table history too');
   assert.equal(state.finance_revenue_ledger.some(r => r.order_id === 'reopened'), false);
   const today = res.body.days.find(d => d.date === finance.vnDate(paidAt));
   if (today) assert.ok(today.revenue >= 110000, 'recovered bills are already in the totals');
@@ -418,6 +419,38 @@ test('bills can be looked up later by table, amount, type and photo to check tra
   assert.equal((await get(api, 'search=1&from=2026-10-23&to=2026-10-01')).status, 400);
   assert.equal((await get(api, 'search=1&from=2026-01-01&to=2026-10-23')).status, 400, 'at most 3 months per search');
   assert.equal((await get(load({ state, role: 'staff' }), 'search=1')).status, 403, 'owner only');
+});
+
+test('Tra cứu finds bills by staff name: who took the money, who ordered or approved dishes, who typed a paper bill', async () => {
+  const state = empty();
+  state.staff = [{ id: 's1', full_name: 'Đức Hùng' }, { id: 's2', full_name: 'Lan' }, { id: 's3', full_name: 'Mai' }];
+  state.finance_revenue_ledger.push(
+    { order_id: 'b1', business_date: '2026-10-27', paid_at: '2026-10-27T10:46:45.494296+00:00', table_number: '4', amount: 395000, payment_method: 'transfer', paid_by_name: 'Lan',
+      customer_name: 'Khách ẩn danh', items: [{ name: 'Ốc', quantity: 1, unit_price: 395000, added_by: null }] },
+    { order_id: 'b2', business_date: '2026-10-27', paid_at: '2026-10-27T10:46:45.494296+00:00', table_number: '4', amount: 17000, payment_method: 'transfer', paid_by_name: 'Lan',
+      customer_name: 'Admin', created_by_name: 'Đức Hùng', items: [{ name: 'Bia', quantity: 1, unit_price: 17000, added_by: 'Đức Hùng' }] },
+    { order_id: 'b3', business_date: '2026-10-26', paid_at: '2026-10-26T12:00:00+00:00', table_number: '6', amount: 50000, payment_method: 'cash', photo_by: 'Đức Hùng', items: [{ name: 'Ốc', quantity: 1, unit_price: 50000 }] },
+    { order_id: 'b4', business_date: '2026-10-26', paid_at: '2026-10-26T13:00:00+00:00', table_number: '7', amount: 60000, payment_method: 'cash', items: [{ name: 'Ốc', quantity: 1, unit_price: 60000 }] });
+  state.finance_manual_receipts = [
+    { id: 'p1', business_date: '2026-10-27', received_at: '2026-10-27T11:00:00Z', table_label: 'Bàn 9', amount: 250000, payment_method: 'cash', created_by_name: 'Mai' },
+    { id: 'p2', business_date: '2026-10-27', received_at: '2026-10-27T12:00:00Z', table_label: null, amount: 80000, payment_method: 'transfer', created_by_name: 'Trang Mã QR · Đức Hùng' }];
+  const api = load({ state });
+  const find = async q => (await get(api, `search=1&from=2026-10-20&to=2026-10-27&${q}`)).body;
+
+  let r = await find('staff=hung');
+  assert.deepEqual(r.results.map(x => x.id), ['p2', 'b2', 'b3'], 'typed without accents; dishes, the QR page, and an old bill closed with a photo');
+  assert.deepEqual(plain(r.results.find(x => x.id === 'b2').staff), { paidBy: 'Lan', dishes: ['Đức Hùng'], dishesKnown: true });
+  r = await find('staff=Lan');
+  assert.deepEqual(r.results.map(x => x.id).sort(), ['b1', 'b2'], 'both bills of the table she closed');
+  r = await find('staff=Mai&type=paper');
+  assert.deepEqual(r.results.map(x => x.id), ['p1']);
+  r = await find('staff=lan&table=4&type=transfer');
+  assert.equal(r.results.length, 2, 'works together with the other filters');
+  assert.deepEqual(plain((await find('staff=Linh')).results), []);
+  r = await find('');
+  assert.equal(r.results.length, 6, 'no name: every bill as before');
+  assert.deepEqual(plain(r.staffNames), ['Đức Hùng', 'Lan', 'Mai'], 'names to pick from, in Vietnamese order');
+  assert.deepEqual(plain(r.results.find(x => x.id === 'b4').staff), { paidBy: null, dishes: [], dishesKnown: false }, 'an old bill: unknown, not guessed');
 });
 
 test('transfer bills can be filtered by card, missing photo and checked state, and ticked off after checking the bank', async () => {

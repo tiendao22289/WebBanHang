@@ -132,6 +132,42 @@ export function groupPaidBills(bills = []) {
   });
 }
 
+// Bỏ dấu, chữ thường: tra "hung" ra "Hùng".
+export const plainName = value => String(value ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/gi, 'd').toLowerCase().trim();
+
+/**
+ * Ai thao tác một bill trong sổ (finance_revenue_ledger).
+ * paidBy: người chốt bàn thu tiền (bill cũ: người chụp ảnh / ghi lý do lúc đóng bàn, cùng một lần bấm).
+ * dishes: người mở bill "Admin" + người thêm / duyệt từng món (items[].added_by).
+ * dishesKnown = false: bill vào sổ trước khi sổ lưu người thêm món → trang ghi "không rõ", không đoán.
+ */
+export function billStaff(bill) {
+  const items = Array.isArray(bill.items) ? bill.items : [];
+  return {
+    paidBy: bill.paid_by_name || bill.photo_by || null,
+    dishes: [...new Set([bill.created_by_name, ...items.map(i => i?.added_by)].filter(Boolean))],
+    dishesKnown: !items.length || items.some(i => i && Object.prototype.hasOwnProperty.call(i, 'added_by')),
+  };
+}
+
+// Một dòng tên cho một hay nhiều bill (billStaff của từng bill): "Thu tiền: Lan · Gọi món: Hùng, Mai".
+export function staffText(people) {
+  const paid = [...new Set(people.map(p => p.paidBy).filter(Boolean))];
+  const dishes = [...new Set(people.flatMap(p => p.dishes))];
+  const unknown = people.some(p => !p.dishesKnown);
+  const parts = [`Thu tiền: ${paid.length ? paid.join(', ') : 'không rõ'}`];
+  if (dishes.length || unknown) parts.push(`Gọi món: ${[...dishes, ...(unknown ? ['không rõ'] : [])].join(', ')}`);
+  return parts.join(' · ');
+}
+
+// Tra cứu theo tên nhân viên: người thu tiền hoặc gọi / duyệt món của bill, không phân biệt dấu.
+export function billHasStaff(bill, query) {
+  const needle = plainName(query);
+  if (!needle) return true;
+  const { paidBy, dishes } = billStaff(bill);
+  return [paidBy, ...dishes].some(name => plainName(name).includes(needle));
+}
+
 function datesBetween(from, toInclusive) {
   const out = [];
   for (let t = Date.parse(`${from}T00:00:00Z`); t <= Date.parse(`${toInclusive}T00:00:00Z`); t += DAY_MS) {
