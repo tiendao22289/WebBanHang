@@ -106,6 +106,32 @@ export function closeDifferences(day, close) {
   };
 }
 
+/**
+ * "Bill đã thu" gọn: các bill trả trong cùng một lần đóng bàn thành một dòng.
+ * Đóng bàn (complete_table_payment_atomic) ghi paid_at = now() cho mọi bill của
+ * bàn, kể cả bàn ghép, nên cùng giờ thanh toán (tới micro giây), cùng cách trả,
+ * cùng thẻ = cùng một lần thu. Hai lượt khách ở cùng một bàn có giờ khác nhau
+ * nên vẫn tách. Chỉ để hiển thị: bill giữ nguyên trong nhóm, tổng tiền không đổi.
+ */
+export function groupPaidBills(bills = []) {
+  const groups = new Map();
+  for (const bill of bills) {
+    const key = bill.paid_at ? `${bill.paid_at}|${bill.payment_method || ''}|${bill.account_id || ''}` : `bill|${bill.order_id}`;
+    let group = groups.get(key);
+    if (!group) groups.set(key, group = { key, paid_at: bill.paid_at, payment_method: bill.payment_method, account_id: bill.account_id || null, amount: 0, tables: [], bills: [] });
+    group.bills.push(bill);
+    group.amount += Number(bill.amount) || 0;
+    const table = bill.table_number === null || bill.table_number === undefined ? '' : String(bill.table_number);
+    if (table && !group.tables.includes(table)) group.tables.push(table);
+  }
+  return [...groups.values()].map(group => {
+    // Ảnh CK / ảnh tiền mặt: đóng bàn gắn một ảnh cho cả bàn; ảnh khác (chụp lại riêng 1 bill) vẫn giữ để xem.
+    const photos = [...new Set(group.bills.map(b => b.transfer_image_url || b.cash_image_url).filter(Boolean))];
+    return { ...group, tables: group.tables.sort((a, b) => a.localeCompare(b, 'vi', { numeric: true })), photos,
+      orderIds: group.bills.map(b => b.order_id), skipped: group.bills.find(b => b.photo_skip_reason) || null };
+  });
+}
+
 function datesBetween(from, toInclusive) {
   const out = [];
   for (let t = Date.parse(`${from}T00:00:00Z`); t <= Date.parse(`${toInclusive}T00:00:00Z`); t += DAY_MS) {

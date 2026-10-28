@@ -219,3 +219,62 @@ test('a day of spending splits into: during the day, shopping, wages, fixed (sha
   assert.deepEqual(costParts(day, categories), { daily: 470000, purchases: 1200000, salary: 900000, fixed: 350000 });
   assert.deepEqual(costParts({ drinks: 0, purchases: 0, salary: 0, fixedShare: 0 }), { daily: 0, purchases: 0, salary: 0, fixed: 0 });
 });
+// Số liệu thật ngày 27/10 (Sổ thu chi, "Bill đã thu"): đóng bàn ghi cùng một paid_at cho mọi bill của bàn.
+const ledgerBill = (id, paidAt, table, amount, more = {}) => ({ order_id: `o-${id}`, paid_at: paidAt, table_number: table, amount: String(amount),
+  payment_method: 'transfer', account_id: 'AGRI', customer_name: 'Khách ẩn danh', transfer_image_url: `ck-${paidAt}`, cash_image_url: null, items: [], ...more });
+const BAN4 = '2026-10-27T10:46:45.494296+00:00', BAN6 = '2026-10-27T10:48:30.842531+00:00';
+
+test('"Bill đã thu" shows one row per table checkout: Bàn 4 (2 bills) and Bàn 6 (3 bills) each become one row with the total', () => {
+  const bills = [
+    ledgerBill(1, BAN4, '4', 395000), ledgerBill(2, BAN4, '4', 17000, { customer_name: 'Admin' }),
+    ledgerBill(3, BAN6, '6', 42000, { customer_name: 'Admin' }), ledgerBill(4, BAN6, '6', 130000), ledgerBill(5, BAN6, '6', 383000),
+  ];
+  const groups = finance.groupPaidBills(bills);
+  assert.deepEqual(groups.map(g => [g.tables, g.amount, g.bills.length, g.payment_method, g.account_id]),
+    [[['4'], 412000, 2, 'transfer', 'AGRI'], [['6'], 555000, 3, 'transfer', 'AGRI']]);
+  assert.deepEqual(groups[0].photos, [`ck-${BAN4}`], 'the one screenshot taken when the table was closed');
+  assert.deepEqual(groups[1].orderIds, ['o-3', 'o-4', 'o-5'], 'every bill stays inside the row, in order');
+  assert.deepEqual(groups[0].bills.map(b => [b.customer_name, b.amount]), [['Khách ẩn danh', '395000'], ['Admin', '17000']]);
+});
+
+test('"Bill đã thu" keeps two visits at the same table apart, and nothing is lost or counted twice', () => {
+  const bills = [
+    ledgerBill(1, '2026-10-27T11:36:57.834565+00:00', '60', 26000, { payment_method: 'cash', account_id: null }),
+    ledgerBill(2, '2026-10-27T11:36:57.834565+00:00', '60', 325000, { payment_method: 'cash', account_id: null }),
+    ledgerBill(3, '2026-10-27T12:53:54.14238+00:00', '7', 235000),
+    // Bàn 60 lượt khách sau, cùng bàn nhưng khác lần đóng bàn → dòng riêng.
+    ledgerBill(4, '2026-10-27T13:24:12.152351+00:00', '60', 4000, { payment_method: 'cash', account_id: null }),
+    ledgerBill(5, '2026-10-27T13:24:12.152351+00:00', '60', 217000, { payment_method: 'cash', account_id: null }),
+    // Hai bàn đóng trong cùng một giây vẫn là hai lần thu (khác micro giây).
+    ledgerBill(6, '2026-10-27T13:25:40.228456+00:00', '28', 413000), ledgerBill(7, '2026-10-27T13:25:40.228999+00:00', '1', 230000),
+  ];
+  const groups = finance.groupPaidBills(bills);
+  assert.deepEqual(groups.map(g => [g.tables.join('+'), g.amount]), [['60', 351000], ['7', 235000], ['60', 221000], ['28', 413000], ['1', 230000]]);
+  assert.equal(groups.reduce((s, g) => s + g.amount, 0), bills.reduce((s, b) => s + Number(b.amount), 0), 'the day total stays the same');
+  assert.deepEqual(groups.flatMap(g => g.orderIds).sort(), bills.map(b => b.order_id).sort(), 'each bill appears exactly once');
+  assert.equal(groups[1].bills.length, 1);
+});
+
+test('"Bill đã thu" puts merged tables paid together on one row, and splits anything paid a different way', () => {
+  const at = '2026-10-27T14:02:05.526886+00:00';
+  const groups = finance.groupPaidBills([
+    ledgerBill(1, at, '29', 270000, { payment_method: 'cash', account_id: null, transfer_image_url: null }),
+    ledgerBill(2, at, '28', 76000, { payment_method: 'cash', account_id: null, transfer_image_url: null }),
+    ledgerBill(3, at, '29', 0, { payment_method: 'cash', account_id: null, transfer_image_url: null, photo_skip_reason: 'Máy hỏng camera', photo_by: 'Lan' }),
+    ledgerBill(4, BAN4, '4', 100000), ledgerBill(5, BAN4, '4', 50000, { account_id: 'MB' }),
+    ledgerBill(6, BAN4, '4', 20000, { payment_method: 'cash', account_id: null }),
+    ledgerBill(7, null, '9', 10000), ledgerBill(8, null, '9', 20000),
+  ]);
+  assert.deepEqual(groups.map(g => [g.tables.join(' + '), g.amount, g.payment_method, g.account_id]), [
+    ['28 + 29', 346000, 'cash', null],
+    ['4', 100000, 'transfer', 'AGRI'], ['4', 50000, 'transfer', 'MB'], ['4', 20000, 'cash', null],
+    ['9', 10000, 'transfer', 'AGRI'], ['9', 20000, 'transfer', 'AGRI'],
+  ], 'merged tables share one checkout; a different card or cash, or no payment time, never joins a row');
+  assert.deepEqual([groups[0].photos, groups[0].skipped?.photo_skip_reason], [[], 'Máy hỏng camera']);
+});
+
+test('"Bill đã thu" still shows a screenshot that was re-taken for one bill of the row', () => {
+  const [group] = finance.groupPaidBills([ledgerBill(1, BAN6, '6', 42000), ledgerBill(2, BAN6, '6', 130000, { transfer_image_url: 'ck-again' }),
+    ledgerBill(3, BAN6, '6', 383000, { transfer_image_url: null, cash_image_url: null })]);
+  assert.deepEqual(group.photos, [`ck-${BAN6}`, 'ck-again']);
+});

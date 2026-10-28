@@ -5,7 +5,7 @@ import { Banknote, Camera, ChevronDown, ChevronLeft, ChevronRight, CreditCard, P
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import { useBackClose } from '@/lib/useBackClose';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
-import { costParts, shoppingParts } from '@/lib/ownerFinance.mjs';
+import { costParts, groupPaidBills, shoppingParts } from '@/lib/ownerFinance.mjs';
 import './finance.css';
 
 const money = value => `${Math.round(Number(value || 0)).toLocaleString('vi-VN')}đ`;
@@ -527,29 +527,38 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
 
       <Fold title="Bill đã thu" sub={`${detail.bills.length} bill · ${money(detail.bills.reduce((s, b) => s + Number(b.amount || 0), 0))}`}>
         {detail.bills.length === 0 && <p className="fin-empty">Chưa có bill.</p>}
-        {detail.bills.map(bill => {
-          const isOpen = open === bill.order_id;
-          const transfer = bill.payment_method === 'transfer';
-          const photo = bill.transfer_image_url || bill.cash_image_url;
-          return <div key={bill.order_id} className="fin-bill">
+        {/* Một dòng = một lần đóng bàn: các bill thu cùng lúc gộp lại, bấm vào để xem từng bill. */}
+        {groupPaidBills(detail.bills).map(group => {
+          const isOpen = open === group.key;
+          const transfer = group.payment_method === 'transfer';
+          const [photo, ...otherPhotos] = group.photos;
+          const single = group.bills.length === 1 ? group.bills[0] : null;
+          // Ảnh CK chụp ở đây gắn cho cả nhóm (cùng một lần chuyển khoản).
+          const target = { order_ids: group.orderIds.join(',') };
+          return <div key={group.key} className="fin-bill">
             {photo
               ? <button className="fin-bill-photo" onClick={() => setView(photo)} aria-label={transfer ? 'Xem ảnh CK' : 'Xem ảnh tiền mặt'}><img src={photo} alt="" draggable={false} /></button>
               : transfer
-                ? <button className="fin-bill-photo add" onClick={() => startCamera({ order_id: bill.order_id })} disabled={!!attaching} aria-label="Chụp ảnh CK"><Camera size={18} /><small>Chụp</small></button>
+                ? <button className="fin-bill-photo add" onClick={() => startCamera(target)} disabled={!!attaching} aria-label="Chụp ảnh CK"><Camera size={18} /><small>Chụp</small></button>
                 : <span className="fin-bill-photo none"><Banknote size={18} /></span>}
-            <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : bill.order_id)} aria-expanded={isOpen}>
-              <b>{clock(bill.paid_at)} · Bàn {bill.table_number || '?'}</b>
-              <small>{bill.customer_name || 'Khách'} · {transfer ? cardName(bill.account_id) : 'Tiền mặt'}{bill.photo_skip_reason ? ' · ⚠ không ảnh' : ''}</small>
+            <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : group.key)} aria-expanded={isOpen}>
+              <b>{clock(group.paid_at)} · Bàn {group.tables.join(' + ') || '?'}</b>
+              <small>{single ? single.customer_name || 'Khách' : `${group.bills.length} bill`} · {transfer ? cardName(group.account_id) : 'Tiền mặt'}{group.skipped ? ' · ⚠ không ảnh' : ''}</small>
             </button>
-            <div className="fin-bill-end"><b>{money(bill.amount)}</b></div>
+            <div className="fin-bill-end"><b>{money(group.amount)}</b></div>
             {isOpen && <div className="fin-bill-more">
-              {bill.photo_skip_reason && <p className="fin-warn">⚠ Đóng bàn không ảnh: {bill.photo_skip_reason}{bill.photo_by ? ` (${bill.photo_by})` : ''}</p>}
+              {group.skipped && <p className="fin-warn">⚠ Đóng bàn không ảnh: {group.skipped.photo_skip_reason}{group.skipped.photo_by ? ` (${group.skipped.photo_by})` : ''}</p>}
               {transfer && <span className="fin-hit-add">
-                <button className="fin-ck-add primary" onClick={() => startCamera({ order_id: bill.order_id })} disabled={!!attaching}>📷 {bill.transfer_image_url ? 'Chụp lại ảnh CK' : 'Chụp ảnh CK'}</button>
-                <button className="fin-ck-add" onClick={() => startAttach({ order_id: bill.order_id })} disabled={!!attaching}>Chọn ảnh có sẵn</button>
+                <button className="fin-ck-add primary" onClick={() => startCamera(target)} disabled={!!attaching}>📷 {photo ? 'Chụp lại ảnh CK' : 'Chụp ảnh CK'}</button>
+                <button className="fin-ck-add" onClick={() => startAttach(target)} disabled={!!attaching}>Chọn ảnh có sẵn</button>
               </span>}
-              <ul className="fin-items">{(bill.items || []).map((item, i) =>
-                <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>
+              {otherPhotos.length > 0 && <div className="fin-hit-photos">{otherPhotos.map(p =>
+                <button key={p} className="fin-hit-photo" onClick={() => setView(p)}><img src={p} alt="" draggable={false} /><span>Ảnh khác</span></button>)}</div>}
+              {group.bills.map(bill => <div key={bill.order_id} className="fin-bill-part">
+                {!single && <div className="fin-bill-part-head"><span>{bill.customer_name || 'Khách'}{group.tables.length > 1 ? ` · Bàn ${bill.table_number || '?'}` : ''}</span><b>{money(bill.amount)}</b></div>}
+                <ul className="fin-items">{(bill.items || []).map((item, i) =>
+                  <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>
+              </div>)}
             </div>}
           </div>;
         })}
