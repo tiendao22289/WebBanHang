@@ -178,6 +178,18 @@ test('right after "Đã nhận tiền" one customer-phone photo is attached to e
   assert.equal(staff.uploads.length, 1, 'nothing uploaded for refused requests');
 });
 
+test('the owner re-takes the screenshot of a grouped "Bill đã thu" row: every bill of that checkout gets it, the shared old file goes once', async () => {
+  const state = base();
+  const ids = ['00000000-0000-0000-0000-000000000311', '00000000-0000-0000-0000-000000000312', '00000000-0000-0000-0000-000000000313'];
+  for (const id of ids) state.finance_revenue_ledger.push({ order_id: id, business_date: '2026-10-27', payment_method: 'transfer', transfer_image_path: 'ban6.jpg', amount: 1 });
+  state.finance_revenue_ledger.push({ order_id: '00000000-0000-0000-0000-000000000314', business_date: '2026-10-27', payment_method: 'transfer', transfer_image_path: 'ban9.jpg', amount: 1 });
+  const owner = load({ state, role: 'admin' });
+  const res = await post(owner.api, { action: 'attach_transfer', order_ids: ids.join(','), image: image() });
+  assert.deepEqual([res.status, res.body.bills], [200, 3]);
+  assert.deepEqual(plain(state.finance_revenue_ledger).map(r => r.transfer_image_path), ['2026-10/ck-1.jpg', '2026-10/ck-1.jpg', '2026-10/ck-1.jpg', 'ban9.jpg'], 'another table keeps its photo');
+  assert.deepEqual(owner.removed, ['ban6.jpg']);
+});
+
 test('the QR page adds a bill photo and a transfer screenshot to the paper bill the database wrote', async () => {
   const state = base();
   const CASH = 'cash:00000000-0000-4000-8000-0000000000c1';

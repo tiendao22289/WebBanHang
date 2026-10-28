@@ -285,6 +285,11 @@
 .fin-bill-more { grid-column: 1 / -1; display: grid; gap: 6px; padding-top: 6px; border-top: 1px dashed #e5e7eb; }
 .fin-bill-more p { margin: 0; font-size: 12px; color: #4b5563; }
 .fin-bill-more .fin-items { margin: 0; }
+/* Dòng gộp nhiều bill (cùng một lần đóng bàn): từng bill bên trong, tên khách + số tiền rồi tới món. */
+.fin-bill-part + .fin-bill-part { padding-top: 6px; border-top: 1px solid #f1f5f9; }
+.fin-bill-part-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 4px; font-size: 13px; color: #111827; }
+.fin-bill-part-head span { min-width: 0; overflow-wrap: anywhere; }
+.fin-bill-part-head b { white-space: nowrap; }
 
 /* Tra cứu — bộ lọc gọn: chọn nhanh ngày, 1 hàng tìm, "Lọc thêm" thu gọn. */
 .fin-search { gap: 8px; }
