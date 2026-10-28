@@ -100,6 +100,50 @@ test('paying a bill records its real amount and account, and the record outlives
   } finally { await db.close(); }
 });
 
+test('closing a table keeps who took the money, who opened the staff bill and who added each dish', async () => {
+  const db = await financeDb();
+  try {
+    await db.exec(`ALTER TABLE orders ADD COLUMN paid_by_name text, ADD COLUMN created_by_name text;
+      ALTER TABLE order_items ADD COLUMN added_by_name text;
+      UPDATE orders SET created_by_name = 'Mai' WHERE customer_phone = '0900';
+      UPDATE order_items SET added_by_name = 'Hùng' WHERE item_name IS NULL;`);
+    await db.exec(`UPDATE orders SET status='paid', payment_method='cash', paid_at=now(), paid_by_name='Lan' WHERE customer_phone='0900';`);
+    const { rows } = await db.query(`SELECT paid_by_name, created_by_name, items FROM finance_revenue_ledger`);
+    assert.deepEqual([rows[0].paid_by_name, rows[0].created_by_name, rows[0].items.map(i => i.added_by)], ['Lan', 'Mai', ['Hùng', null]]);
+    // Bill gốc bị dọn sau khi thu: tên vẫn còn trong sổ.
+    await db.exec(`DELETE FROM order_items; DELETE FROM orders;`);
+    assert.equal((await db.query(`SELECT paid_by_name FROM finance_revenue_ledger`)).rows[0].paid_by_name, 'Lan');
+  } finally { await db.close(); }
+});
+
+test('bills recorded before names were kept get them from the original bill when it is still there, never by guessing', async () => {
+  const db = await financeDb();
+  try {
+    await db.exec(`ALTER TABLE orders ADD COLUMN paid_by_name text, ADD COLUMN created_by_name text;
+      ALTER TABLE order_items ADD COLUMN added_by_name text;
+      INSERT INTO orders VALUES ('00000000-0000-0000-0000-000000000021', '00000000-0000-0000-0000-000000000001', 'paid', '0901', 'Admin', 'cash', now(), 'Lan', 'Mai'),
+        ('00000000-0000-0000-0000-000000000022', '00000000-0000-0000-0000-000000000001', 'paid', '0902', 'Khách', 'cash', now(), 'Lan', NULL);
+      INSERT INTO order_items VALUES
+        ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-000000000021', '00000000-0000-0000-0000-0000000000a1', NULL, 1, 50000, NULL, false, 'Mai'),
+        ('00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-000000000021', NULL, 'Bia', 3, 20000, NULL, false, 'Hùng'),
+        ('00000000-0000-0000-0000-0000000000d3', '00000000-0000-0000-0000-000000000022', NULL, 'Nước', 2, 10000, NULL, false, 'Hùng');
+      -- Dòng sổ kiểu cũ (chưa có tên). 022: món trong sổ khác bill gốc → không ghi tên người thêm món. 099: bill gốc đã bị dọn.
+      INSERT INTO finance_revenue_ledger(order_id, paid_at, business_date, amount, payment_method, items) VALUES
+        ('00000000-0000-0000-0000-000000000021', now(), '2026-10-27', 110000, 'cash', '[{"name":"Ốc hương","quantity":1,"unit_price":50000},{"name":"Bia","quantity":3,"unit_price":20000}]'),
+        ('00000000-0000-0000-0000-000000000022', now(), '2026-10-27', 20000, 'cash', '[{"name":"Nước","quantity":1,"unit_price":20000}]'),
+        ('00000000-0000-0000-0000-000000000099', now(), '2026-10-27', 30000, 'cash', '[{"name":"Ốc","quantity":1,"unit_price":30000}]');`);
+    const migration = readFileSync(new URL('../supabase/migrations/owner_finance.sql', import.meta.url), 'utf8');
+    await db.exec(migration);
+    const rows = async () => (await db.query(`SELECT right(order_id::text, 2) AS id, paid_by_name, created_by_name, items FROM finance_revenue_ledger ORDER BY order_id`)).rows
+      .map(r => [r.id, r.paid_by_name, r.created_by_name, r.items.map(i => i.added_by)]);
+    const expected = [['21', 'Lan', 'Mai', ['Mai', 'Hùng']], ['22', 'Lan', null, [undefined]], ['99', null, null, [undefined]]];
+    assert.deepEqual(await rows(), expected);
+    await db.exec(`UPDATE orders SET paid_by_name = 'Ai đó', created_by_name = 'Ai đó'; UPDATE order_items SET added_by_name = 'Ai đó';`);
+    await db.exec(migration);
+    assert.deepEqual(await rows(), expected, 'running it again never overwrites a name already in the book');
+  } finally { await db.close(); }
+});
+
 test('reopening a paid bill removes it from the ledger and paying again re-records it', async () => {
   const db = await financeDb();
   try {
@@ -218,4 +262,83 @@ test('a day of spending splits into: during the day, shopping, wages, fixed (sha
   const day = { drinks: 350000, purchases: 1200000, salary: 900000, fixedShare: 300000, custom: { gas: 120000, loan: 50000 } };
   assert.deepEqual(costParts(day, categories), { daily: 470000, purchases: 1200000, salary: 900000, fixed: 350000 });
   assert.deepEqual(costParts({ drinks: 0, purchases: 0, salary: 0, fixedShare: 0 }), { daily: 0, purchases: 0, salary: 0, fixed: 0 });
+});
+// Số liệu thật ngày 27/10 (Sổ thu chi, "Bill đã thu"): đóng bàn ghi cùng một paid_at cho mọi bill của bàn.
+const ledgerBill = (id, paidAt, table, amount, more = {}) => ({ order_id: `o-${id}`, paid_at: paidAt, table_number: table, amount: String(amount),
+  payment_method: 'transfer', account_id: 'AGRI', customer_name: 'Khách ẩn danh', transfer_image_url: `ck-${paidAt}`, cash_image_url: null, items: [], ...more });
+const BAN4 = '2026-10-27T10:46:45.494296+00:00', BAN6 = '2026-10-27T10:48:30.842531+00:00';
+
+test('"Bill đã thu" shows one row per table checkout: Bàn 4 (2 bills) and Bàn 6 (3 bills) each become one row with the total', () => {
+  const bills = [
+    ledgerBill(1, BAN4, '4', 395000), ledgerBill(2, BAN4, '4', 17000, { customer_name: 'Admin' }),
+    ledgerBill(3, BAN6, '6', 42000, { customer_name: 'Admin' }), ledgerBill(4, BAN6, '6', 130000), ledgerBill(5, BAN6, '6', 383000),
+  ];
+  const groups = finance.groupPaidBills(bills);
+  assert.deepEqual(groups.map(g => [g.tables, g.amount, g.bills.length, g.payment_method, g.account_id]),
+    [[['4'], 412000, 2, 'transfer', 'AGRI'], [['6'], 555000, 3, 'transfer', 'AGRI']]);
+  assert.deepEqual(groups[0].photos, [`ck-${BAN4}`], 'the one screenshot taken when the table was closed');
+  assert.deepEqual(groups[1].orderIds, ['o-3', 'o-4', 'o-5'], 'every bill stays inside the row, in order');
+  assert.deepEqual(groups[0].bills.map(b => [b.customer_name, b.amount]), [['Khách ẩn danh', '395000'], ['Admin', '17000']]);
+});
+
+test('"Bill đã thu" keeps two visits at the same table apart, and nothing is lost or counted twice', () => {
+  const bills = [
+    ledgerBill(1, '2026-10-27T11:36:57.834565+00:00', '60', 26000, { payment_method: 'cash', account_id: null }),
+    ledgerBill(2, '2026-10-27T11:36:57.834565+00:00', '60', 325000, { payment_method: 'cash', account_id: null }),
+    ledgerBill(3, '2026-10-27T12:53:54.14238+00:00', '7', 235000),
+    // Bàn 60 lượt khách sau, cùng bàn nhưng khác lần đóng bàn → dòng riêng.
+    ledgerBill(4, '2026-10-27T13:24:12.152351+00:00', '60', 4000, { payment_method: 'cash', account_id: null }),
+    ledgerBill(5, '2026-10-27T13:24:12.152351+00:00', '60', 217000, { payment_method: 'cash', account_id: null }),
+    // Hai bàn đóng trong cùng một giây vẫn là hai lần thu (khác micro giây).
+    ledgerBill(6, '2026-10-27T13:25:40.228456+00:00', '28', 413000), ledgerBill(7, '2026-10-27T13:25:40.228999+00:00', '1', 230000),
+  ];
+  const groups = finance.groupPaidBills(bills);
+  assert.deepEqual(groups.map(g => [g.tables.join('+'), g.amount]), [['60', 351000], ['7', 235000], ['60', 221000], ['28', 413000], ['1', 230000]]);
+  assert.equal(groups.reduce((s, g) => s + g.amount, 0), bills.reduce((s, b) => s + Number(b.amount), 0), 'the day total stays the same');
+  assert.deepEqual(groups.flatMap(g => g.orderIds).sort(), bills.map(b => b.order_id).sort(), 'each bill appears exactly once');
+  assert.equal(groups[1].bills.length, 1);
+});
+
+test('"Bill đã thu" puts merged tables paid together on one row, and splits anything paid a different way', () => {
+  const at = '2026-10-27T14:02:05.526886+00:00';
+  const groups = finance.groupPaidBills([
+    ledgerBill(1, at, '29', 270000, { payment_method: 'cash', account_id: null, transfer_image_url: null }),
+    ledgerBill(2, at, '28', 76000, { payment_method: 'cash', account_id: null, transfer_image_url: null }),
+    ledgerBill(3, at, '29', 0, { payment_method: 'cash', account_id: null, transfer_image_url: null, photo_skip_reason: 'Máy hỏng camera', photo_by: 'Lan' }),
+    ledgerBill(4, BAN4, '4', 100000), ledgerBill(5, BAN4, '4', 50000, { account_id: 'MB' }),
+    ledgerBill(6, BAN4, '4', 20000, { payment_method: 'cash', account_id: null }),
+    ledgerBill(7, null, '9', 10000), ledgerBill(8, null, '9', 20000),
+  ]);
+  assert.deepEqual(groups.map(g => [g.tables.join(' + '), g.amount, g.payment_method, g.account_id]), [
+    ['28 + 29', 346000, 'cash', null],
+    ['4', 100000, 'transfer', 'AGRI'], ['4', 50000, 'transfer', 'MB'], ['4', 20000, 'cash', null],
+    ['9', 10000, 'transfer', 'AGRI'], ['9', 20000, 'transfer', 'AGRI'],
+  ], 'merged tables share one checkout; a different card or cash, or no payment time, never joins a row');
+  assert.deepEqual([groups[0].photos, groups[0].skipped?.photo_skip_reason], [[], 'Máy hỏng camera']);
+});
+
+test('"Bill đã thu" still shows a screenshot that was re-taken for one bill of the row', () => {
+  const [group] = finance.groupPaidBills([ledgerBill(1, BAN6, '6', 42000), ledgerBill(2, BAN6, '6', 130000, { transfer_image_url: 'ck-again' }),
+    ledgerBill(3, BAN6, '6', 383000, { transfer_image_url: null, cash_image_url: null })]);
+  assert.deepEqual(group.photos, [`ck-${BAN6}`, 'ck-again']);
+});
+
+test('each "Bill đã thu" row says who took the money and who ordered the dishes, and "không rõ" when the book never had it', () => {
+  const lan = finance.billStaff({ paid_by_name: 'Lan', customer_name: 'Khách ẩn danh', items: [{ name: 'Ốc', added_by: null }, { name: 'Bia', added_by: 'Hùng' }] });
+  const admin = finance.billStaff({ paid_by_name: 'Lan', customer_name: 'Admin', created_by_name: 'Mai', items: [{ name: 'Ốc', added_by: 'Mai' }, { name: 'Nghêu', added_by: 'Hùng' }] });
+  assert.deepEqual(lan, { paidBy: 'Lan', dishes: ['Hùng'], dishesKnown: true });
+  assert.equal(finance.staffText([lan, admin]), 'Thu tiền: Lan · Gọi món: Hùng, Mai', 'one line for the whole table, every name once');
+  assert.equal(finance.staffText([finance.billStaff({ customer_name: 'Khách', items: [{ name: 'Ốc', added_by: null }] })]), 'Thu tiền: không rõ',
+    'no staff added dishes, and who took the money is unknown');
+  // Bill cũ (trước khi sổ lưu tên): người chụp ảnh lúc đóng bàn là người thu tiền; người gọi món không rõ.
+  assert.equal(finance.staffText([finance.billStaff({ photo_by: 'Lan', items: [{ name: 'Ốc' }] })]), 'Thu tiền: Lan · Gọi món: không rõ');
+  assert.equal(finance.staffText([finance.billStaff({ items: [{ name: 'Ốc' }] })]), 'Thu tiền: không rõ · Gọi món: không rõ');
+  assert.equal(finance.staffText([lan, finance.billStaff({ items: [{ name: 'Ốc' }] })]), 'Thu tiền: Lan · Gọi món: Hùng, không rõ');
+});
+
+test('bills are found by a staff name typed without accents, in any role, but not by other people on the bill', () => {
+  const bill = { paid_by_name: 'Nguyễn Thị Lan', created_by_name: 'Mai', items: [{ added_by: 'Đức Hùng' }], transfer_image_by: 'Tú', verified_by: 'Chủ' };
+  for (const q of ['lan', 'NGUYEN THI', 'mai', 'duc hung', 'Hùng', ' hung ', '']) assert.equal(finance.billHasStaff(bill, q), true, q);
+  for (const q of ['Tú', 'chu', 'Linh']) assert.equal(finance.billHasStaff(bill, q), false, q);
+  assert.equal(finance.billHasStaff({ photo_by: 'Lan', items: [] }, 'lan'), true, 'old bills: whoever closed the table with a photo');
 });

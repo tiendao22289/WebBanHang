@@ -36,7 +36,7 @@ import { signReceiptImages } from '@/lib/receiptImages.mjs';
 import { loadPayrollMonth } from '@/lib/payrollMonth.mjs';
 import { payrollCost } from '@/lib/payroll.mjs';
 import { addCosts } from '@/lib/noteCategories.mjs';
-import { FINANCE_START_DATE, FIXED_CATEGORIES, closeDifferences, dailyReportText, dailyWarnings, isMonthKey, itemKey, shoppingParts, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
+import { FINANCE_START_DATE, FIXED_CATEGORIES, billHasStaff, billStaff, closeDifferences, dailyReportText, dailyWarnings, isMonthKey, itemKey, shoppingParts, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, plainName, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -166,13 +166,13 @@ async function repairMissingBills(db) {
     if (status && status !== 'paid') continue; // mở lại / huỷ sau khi thu → không phải doanh thu
     const items = (bill.snapshot?.order_items || []).map(i => ({
       name: i.item_name || i.menu_item?.name || null, quantity: i.quantity, unit_price: i.unit_price,
-      options: i.item_options ?? null, is_gift: i.is_gift ?? null,
+      options: i.item_options ?? null, is_gift: i.is_gift ?? null, added_by: i.added_by_name ?? null,
     }));
     const { error } = await db.from('finance_revenue_ledger').upsert({
       order_id: bill.orderId, paid_at: bill.paidAt, business_date: vnDate(bill.paidAt),
       table_number: bill.tableNumber === null ? null : String(bill.tableNumber), customer_name: bill.customerName,
       payment_method: bill.paymentMethod, account_id: bill.paymentMethod === 'transfer' ? await accountOf(bill.orderId) : null,
-      amount: bill.amount, items,
+      amount: bill.amount, items, paid_by_name: bill.snapshot?.paid_by_name ?? null, created_by_name: bill.snapshot?.created_by_name ?? null,
     }, { onConflict: 'order_id', ignoreDuplicates: true });
     const view = { orderId: bill.orderId, paidAt: bill.paidAt, tableNumber: bill.tableNumber, customerName: bill.customerName, paymentMethod: bill.paymentMethod, amount: bill.amount };
     if (error) { console.error('[admin/finance] repair', error); unrecovered.push(view); } else recovered.push(view);
@@ -631,6 +631,8 @@ export async function GET(request) {
       const missingImage = params.get('image') === 'missing';
       const account = UUID.test(params.get('account') || '') ? params.get('account') : null;
       const check = ['checked', 'unchecked'].includes(params.get('check')) ? params.get('check') : null;
+      // Tên nhân viên (thu tiền / gọi món / người nhập bill giấy), không phân biệt dấu.
+      const staff = String(params.get('staff') || '').trim().slice(0, 40);
       const keepFrom = photoKeepFrom(today);
       // Thẻ / thiếu ảnh / đối chiếu chỉ có nghĩa với bill chuyển khoản.
       const transferOnly = !!(account || missingImage || check);
@@ -639,35 +641,46 @@ export async function GET(request) {
       let bills = [];
       if (type !== 'paper') {
         // '*': cột ảnh tiền mặt / lý do không chụp có thể chưa cài (owner_finance.sql) — không làm hỏng tra cứu.
-        let q = db.from('finance_revenue_ledger').select('*')
-          .gte('business_date', from).lt('business_date', addDays(to, 1)).order('paid_at', { ascending: false }).limit(LIMIT);
-        if (table) q = q.eq('table_number', table);
-        if (amount) q = q.eq('amount', amount);
-        if (type === 'transfer' || type === 'cash') q = q.eq('payment_method', type);
-        if (onlyWithImage) q = q.not('transfer_image_path', 'is', null);
-        if (transferOnly) q = q.eq('payment_method', 'transfer');
-        if (account) q = q.eq('account_id', account);
-        if (missingImage) q = q.is('transfer_image_path', null).gte('business_date', keepFrom);
-        if (check === 'unchecked') q = q.is('verified_at', null);
-        if (check === 'checked') q = q.not('verified_at', 'is', null);
-        const r = await q;
-        if (r.error) throw r.error;
-        bills = r.data || [];
+        const ledger = () => {
+          let q = db.from('finance_revenue_ledger').select('*')
+            .gte('business_date', from).lt('business_date', addDays(to, 1)).order('paid_at', { ascending: false });
+          if (table) q = q.eq('table_number', table);
+          if (amount) q = q.eq('amount', amount);
+          if (type === 'transfer' || type === 'cash') q = q.eq('payment_method', type);
+          if (onlyWithImage) q = q.not('transfer_image_path', 'is', null);
+          if (transferOnly) q = q.eq('payment_method', 'transfer');
+          if (account) q = q.eq('account_id', account);
+          if (missingImage) q = q.is('transfer_image_path', null).gte('business_date', keepFrom);
+          if (check === 'unchecked') q = q.is('verified_at', null);
+          if (check === 'checked') q = q.not('verified_at', 'is', null);
+          return q;
+        };
+        // Tên người thêm món nằm trong từng món (jsonb) → đọc cả khoảng ngày (tối đa 3 tháng) rồi lọc ở đây.
+        if (staff) bills = (await readAll(() => ledger().order('order_id'))).filter(b => billHasStaff(b, staff)).slice(0, LIMIT);
+        else {
+          const r = await ledger().limit(LIMIT);
+          if (r.error) throw r.error;
+          bills = r.data || [];
+        }
       }
       let paper = [];
       if (type === 'all' || type === 'paper' || type === 'transfer' || type === 'cash') {
-        let q = db.from('finance_manual_receipts').select('*')
-          .gte('business_date', from).lt('business_date', addDays(to, 1)).order('received_at', { ascending: false }).limit(LIMIT);
-        if (table) q = q.ilike('table_label', `%${table}%`);
-        if (amount) q = q.eq('amount', amount);
-        if (type === 'transfer' || type === 'cash') q = q.eq('payment_method', type);
-        const r = await q;
+        const receipts = () => {
+          let q = db.from('finance_manual_receipts').select('*')
+            .gte('business_date', from).lt('business_date', addDays(to, 1)).order('received_at', { ascending: false });
+          if (table) q = q.ilike('table_label', `%${table}%`);
+          if (amount) q = q.eq('amount', amount);
+          if (type === 'transfer' || type === 'cash') q = q.eq('payment_method', type);
+          return q;
+        };
+        const r = staff ? await readAll(() => receipts().order('id')).then(data => ({ data }), error => ({ error })) : await receipts().limit(LIMIT);
         if (r.error && !missingTable(r.error)) throw r.error;
-        paper = (r.data || []).filter(p => (!onlyWithImage || p.transfer_image_path || p.image_path)
+        paper = (r.data || []).filter(p => (!staff || plainName(p.created_by_name).includes(plainName(staff)))
+          && (!onlyWithImage || p.transfer_image_path || p.image_path)
           && (!transferOnly || p.payment_method === 'transfer')
           && (!account || p.account_id === account)
           && (!missingImage || (!p.transfer_image_path && p.business_date >= keepFrom))
-          && (check !== 'unchecked' || !p.verified_at) && (check !== 'checked' || !!p.verified_at));
+          && (check !== 'unchecked' || !p.verified_at) && (check !== 'checked' || !!p.verified_at)).slice(0, LIMIT);
       }
       const urls = await signReceiptImages(db, [...bills.flatMap(b => [b.transfer_image_path, b.cash_image_path]), ...paper.flatMap(p => [p.image_path, p.transfer_image_path])]);
       const results = [
@@ -675,7 +688,7 @@ export async function GET(request) {
           method: b.payment_method, accountId: b.account_id, amount: Number(b.amount), items: b.items || [],
           transferImageUrl: urls[b.transfer_image_path] || null, cashImageUrl: urls[b.cash_image_path] || null,
           imageExpired: !b.transfer_image_path && !b.cash_image_path && b.business_date < keepFrom,
-          skipReason: b.photo_skip_reason || null, photoBy: b.photo_by || null,
+          skipReason: b.photo_skip_reason || null, photoBy: b.photo_by || null, staff: billStaff(b),
           verifiedAt: b.verified_at || null, verifiedBy: b.verified_by || null })),
         ...paper.map(p => ({ kind: 'paper', id: p.id, at: p.received_at, date: p.business_date, table: p.table_label, customer: null,
           method: p.payment_method, accountId: p.account_id, amount: Number(p.amount), note: p.note, by: p.created_by_name,
@@ -696,7 +709,10 @@ export async function GET(request) {
       const tables = Object.entries(counts).map(([name, count]) => ({ name, count }))
         .sort((a, b) => a.name.localeCompare(b.name, 'vi', { numeric: true }));
       const alerts = await transferAlerts(db, from, to, today).catch(() => null);
-      return NextResponse.json({ from, to, results, tables, alerts, truncated: bills.length >= LIMIT || paper.length >= LIMIT }, { headers });
+      // Gợi ý tên khi gõ ô "Tên nhân viên" (cả người đã nghỉ, vì bill cũ vẫn mang tên họ).
+      const staffNames = await db.from('staff').select('full_name')
+        .then(r => [...new Set((r.data || []).map(x => String(x.full_name || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'vi')), () => []);
+      return NextResponse.json({ from, to, results, tables, alerts, staffNames, truncated: bills.length >= LIMIT || paper.length >= LIMIT }, { headers });
     }
 
     // Báo cáo ngày cho trang /thongke — đúng nội dung tin Zalo, đủ mọi mục.

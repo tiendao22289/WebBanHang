@@ -5,7 +5,7 @@ import { Banknote, Camera, ChevronDown, ChevronLeft, ChevronRight, CreditCard, P
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import { useBackClose } from '@/lib/useBackClose';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
-import { costParts, shoppingParts } from '@/lib/ownerFinance.mjs';
+import { billStaff, costParts, groupPaidBills, shoppingParts, staffText } from '@/lib/ownerFinance.mjs';
 import './finance.css';
 
 const money = value => `${Math.round(Number(value || 0)).toLocaleString('vi-VN')}đ`;
@@ -527,29 +527,39 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
 
       <Fold title="Bill đã thu" sub={`${detail.bills.length} bill · ${money(detail.bills.reduce((s, b) => s + Number(b.amount || 0), 0))}`}>
         {detail.bills.length === 0 && <p className="fin-empty">Chưa có bill.</p>}
-        {detail.bills.map(bill => {
-          const isOpen = open === bill.order_id;
-          const transfer = bill.payment_method === 'transfer';
-          const photo = bill.transfer_image_url || bill.cash_image_url;
-          return <div key={bill.order_id} className="fin-bill">
+        {/* Một dòng = một lần đóng bàn: các bill thu cùng lúc gộp lại, bấm vào để xem từng bill. */}
+        {groupPaidBills(detail.bills).map(group => {
+          const isOpen = open === group.key;
+          const transfer = group.payment_method === 'transfer';
+          const [photo, ...otherPhotos] = group.photos;
+          const single = group.bills.length === 1 ? group.bills[0] : null;
+          const staff = group.bills.map(billStaff);
+          // Ảnh CK chụp ở đây gắn cho cả nhóm (cùng một lần chuyển khoản).
+          const target = { order_ids: group.orderIds.join(',') };
+          return <div key={group.key} className="fin-bill">
             {photo
               ? <button className="fin-bill-photo" onClick={() => setView(photo)} aria-label={transfer ? 'Xem ảnh CK' : 'Xem ảnh tiền mặt'}><img src={photo} alt="" draggable={false} /></button>
               : transfer
-                ? <button className="fin-bill-photo add" onClick={() => startCamera({ order_id: bill.order_id })} disabled={!!attaching} aria-label="Chụp ảnh CK"><Camera size={18} /><small>Chụp</small></button>
+                ? <button className="fin-bill-photo add" onClick={() => startCamera(target)} disabled={!!attaching} aria-label="Chụp ảnh CK"><Camera size={18} /><small>Chụp</small></button>
                 : <span className="fin-bill-photo none"><Banknote size={18} /></span>}
-            <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : bill.order_id)} aria-expanded={isOpen}>
-              <b>{clock(bill.paid_at)} · Bàn {bill.table_number || '?'}</b>
-              <small>{bill.customer_name || 'Khách'} · {transfer ? cardName(bill.account_id) : 'Tiền mặt'}{bill.photo_skip_reason ? ' · ⚠ không ảnh' : ''}</small>
+            <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : group.key)} aria-expanded={isOpen}>
+              <b>{clock(group.paid_at)} · Bàn {group.tables.join(' + ') || '?'}</b>
+              <small>{single ? orderedBy(single.customer_name, staff[0]) : `${group.bills.length} bill`} · {transfer ? cardName(group.account_id) : 'Tiền mặt'}{group.skipped ? ' · ⚠ không ảnh' : ''}</small>
+              <small className="fin-bill-staff">👤 {staffText(staff)}</small>
             </button>
-            <div className="fin-bill-end"><b>{money(bill.amount)}</b></div>
+            <div className="fin-bill-end"><b>{money(group.amount)}</b></div>
             {isOpen && <div className="fin-bill-more">
-              {bill.photo_skip_reason && <p className="fin-warn">⚠ Đóng bàn không ảnh: {bill.photo_skip_reason}{bill.photo_by ? ` (${bill.photo_by})` : ''}</p>}
+              {group.skipped && <p className="fin-warn">⚠ Đóng bàn không ảnh: {group.skipped.photo_skip_reason}{group.skipped.photo_by ? ` (${group.skipped.photo_by})` : ''}</p>}
               {transfer && <span className="fin-hit-add">
-                <button className="fin-ck-add primary" onClick={() => startCamera({ order_id: bill.order_id })} disabled={!!attaching}>📷 {bill.transfer_image_url ? 'Chụp lại ảnh CK' : 'Chụp ảnh CK'}</button>
-                <button className="fin-ck-add" onClick={() => startAttach({ order_id: bill.order_id })} disabled={!!attaching}>Chọn ảnh có sẵn</button>
+                <button className="fin-ck-add primary" onClick={() => startCamera(target)} disabled={!!attaching}>📷 {photo ? 'Chụp lại ảnh CK' : 'Chụp ảnh CK'}</button>
+                <button className="fin-ck-add" onClick={() => startAttach(target)} disabled={!!attaching}>Chọn ảnh có sẵn</button>
               </span>}
-              <ul className="fin-items">{(bill.items || []).map((item, i) =>
-                <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>
+              {otherPhotos.length > 0 && <div className="fin-hit-photos">{otherPhotos.map(p =>
+                <button key={p} className="fin-hit-photo" onClick={() => setView(p)}><img src={p} alt="" draggable={false} /><span>Ảnh khác</span></button>)}</div>}
+              {group.bills.map((bill, k) => <div key={bill.order_id} className="fin-bill-part">
+                {!single && <div className="fin-bill-part-head"><span>{orderedBy(bill.customer_name, staff[k])}{group.tables.length > 1 ? ` · Bàn ${bill.table_number || '?'}` : ''}</span><b>{money(bill.amount)}</b></div>}
+                <ul className="fin-items">{(bill.items || []).map(itemRow)}</ul>
+              </div>)}
             </div>}
           </div>;
         })}
@@ -620,6 +630,12 @@ function rangeDates(key, today) {
   return { from: addDaysLocal(today, -6), to: today };
 }
 const cardLabel = a => `${a.name.split(' · ')[0]}${a.last4 ? ` ·${a.last4}` : ''}`;
+// Ai gọi bill: khách thì tên khách; bill "Admin" do nhân viên gọi thì tên thật của nhân viên (staff = billStaff()).
+const orderedBy = (customerName, staff) => customerName !== 'Admin' ? customerName || 'Khách'
+  : staff.dishes.length ? `NV ${staff.dishes.join(', ')}` : staff.dishesKnown ? 'Nhân viên' : 'Nhân viên (không rõ tên)';
+// Một dòng món trong bill, kèm tên nhân viên đã thêm / duyệt món đó (nếu sổ có lưu).
+const itemRow = (item, i) => <li key={i}><span>{item.quantity}× {item.name || 'Món'}{item.is_gift ? ' (tặng)' : ''}{item.added_by && <small className="fin-item-by"> · {item.added_by}</small>}</span>
+  <span>{money(item.unit_price * item.quantity)}</span></li>;
 const stamp = iso => { const d = new Date(Date.parse(iso) + 7 * 3600000).toISOString(); return `${clock(iso)} ${d.slice(8, 10)}/${d.slice(5, 7)}`; };
 
 function Chips({ label, value, options, onPick }) {
@@ -634,7 +650,7 @@ function Chips({ label, value, options, onPick }) {
 function SearchView({ accounts, preset }) {
   const today = vnToday();
   const [filters, setFilters] = useState(() => ({
-    table: '', amount: '', from: addDaysLocal(today, -6), to: today, type: 'all', account: '', photo: 'all', check: 'all', ...preset,
+    table: '', amount: '', staff: '', from: addDaysLocal(today, -6), to: today, type: 'all', account: '', photo: 'all', check: 'all', ...preset,
   }));
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -658,6 +674,7 @@ function SearchView({ accounts, preset }) {
       const q = new URLSearchParams({ search: '1', from: f.from, to: f.to, type: f.type });
       if (f.table.trim()) q.set('table', f.table.trim());
       if (digits(f.amount)) q.set('amount', digits(f.amount));
+      if (f.staff.trim()) q.set('staff', f.staff.trim());
       if (f.account) q.set('account', f.account);
       if (f.photo !== 'all') q.set('image', f.photo === 'has' ? '1' : 'missing');
       if (f.check !== 'all') q.set('check', f.check);
@@ -701,7 +718,8 @@ function SearchView({ accounts, preset }) {
     try { await uploadProof(r, await compressImage(file)); } catch (err) { alert(err.message); }
   }
 
-  const { table, amount, from, to, type, account, photo, check } = filters;
+  const { table, amount, staff, from, to, type, account, photo, check } = filters;
+  const staffNames = result?.staffNames || [];
   const total = (result?.results || []).reduce((s, r) => s + r.amount, 0);
   // Bill theo ngày, giữ thứ tự mới → cũ của máy chủ.
   const days = [...(result?.results || []).reduce((map, r) => {
@@ -736,6 +754,13 @@ function SearchView({ accounts, preset }) {
         <input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''} onChange={e => set({ amount: digits(e.target.value) })}
           placeholder="Số tiền" aria-label="Số tiền" enterKeyHint="search" />
         <button className="fin-search-go" disabled={busy}><Search size={17} />{busy ? '...' : 'Tìm'}</button>
+      </div>
+      {/* Tìm theo tên nhân viên: người thu tiền, người gọi / duyệt món, người nhập bill giấy. Chọn tên gợi ý là tìm luôn. */}
+      <div className="fin-search-staff">
+        <input value={staff} list="fin-staff-names" placeholder="Tên nhân viên (thu tiền / gọi món)" aria-label="Tên nhân viên" enterKeyHint="search"
+          onChange={e => (staffNames.includes(e.target.value) ? search(null, { staff: e.target.value }) : set({ staff: e.target.value }))} />
+        {staff && <button type="button" aria-label="Bỏ tên nhân viên" onClick={() => search(null, { staff: '' })}><X size={16} /></button>}
+        <datalist id="fin-staff-names">{staffNames.map(name => <option key={name} value={name} />)}</datalist>
       </div>
       <div className="fin-search-types" role="radiogroup" aria-label="Loại bill">
         {[['all', 'Tất cả'], ['transfer', 'Chuyển khoản'], ['cash', 'Tiền mặt'], ['paper', 'Bill giấy']].map(([k, t]) =>
@@ -780,7 +805,9 @@ function SearchView({ accounts, preset }) {
                 : <span className="fin-bill-photo none" title={r.imageExpired ? 'Ảnh đã xoá sau 3 tháng' : ''}>{r.method === 'transfer' ? <CreditCard size={18} /> : <Banknote size={18} />}</span>}
             <button className="fin-bill-main" onClick={() => setOpen(isOpen ? null : `${r.kind}-${r.id}`)} aria-expanded={isOpen}>
               <b>{clock(r.at)} · {r.kind === 'paper' && !/^\d/.test(r.table || '') ? (r.table || 'Bill giấy') : `Bàn ${r.table || '?'}`}</b>
-              <small>{r.kind === 'paper' ? 'Bill giấy' : (r.customer || 'Khách')} · {r.method === 'transfer' ? cardName(r.accountId) : 'Tiền mặt'}{r.skipReason ? ' · ⚠ không ảnh' : ''}</small>
+              <small>{r.kind === 'paper' ? 'Bill giấy' : r.staff ? orderedBy(r.customer, r.staff) : (r.customer || 'Khách')} · {r.method === 'transfer' ? cardName(r.accountId) : 'Tiền mặt'}{r.skipReason ? ' · ⚠ không ảnh' : ''}</small>
+              {r.staff && <small className="fin-bill-staff">👤 {staffText([r.staff])}</small>}
+              {r.kind === 'paper' && r.by && <small className="fin-bill-staff">👤 Người nhập: {r.by}</small>}
             </button>
             <div className="fin-bill-end">
               <b>{money(r.amount)}</b>
@@ -798,7 +825,7 @@ function SearchView({ accounts, preset }) {
                 <button className="fin-ck-add" onClick={() => startGallery(r)} disabled={saving === r.id}>Chọn ảnh có sẵn</button>
               </span>}
               {r.kind === 'bill'
-                ? <ul className="fin-items">{(r.items || []).map((item, i) => <li key={i}><span>{item.quantity}× {item.name || 'Món'}</span><span>{money(item.unit_price * item.quantity)}</span></li>)}</ul>
+                ? <ul className="fin-items">{(r.items || []).map(itemRow)}</ul>
                 : r.note && <p className="fin-note-text">{r.note}</p>}
             </div>}
           </div>;

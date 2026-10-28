@@ -48,14 +48,16 @@ async function main() {
     to_regclass('public.finance_day_checks') IS NOT NULL AS day_checks,
     EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'finance_revenue_ledger' AND column_name = 'verified_at') AS verify_cols,
     (SELECT count(*)::int FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'finance_revenue_ledger' AND column_name IN ('cash_image_path', 'photo_skip_reason', 'photo_by')) = 3 AS table_photo_cols,
+    (SELECT count(*)::int FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'finance_revenue_ledger' AND column_name IN ('paid_by_name', 'created_by_name')) = 2 AS staff_cols,
     EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'capture_finance_revenue' AND tgrelid = 'public.orders'::regclass AND tgenabled = 'O') AS trigger_on,
     EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'capture_qr_page_receipt' AND tgrelid = to_regclass('public.payment_transactions') AND tgenabled = 'O') AS qr_trigger_on,
     EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'capture_qr_page_receipt' AND tgrelid = to_regclass('public.custom_cash_receipts') AND tgenabled = 'O') AS cash_trigger_on,
     to_regprocedure('public.confirm_custom_qr_payment(text,numeric,uuid)') IS NOT NULL AS qr_confirm_fixed,
     NOT has_table_privilege('anon', 'public.finance_revenue_ledger', 'SELECT') AS anon_blocked,
-    (SELECT count(*)::int FROM public.finance_revenue_ledger) AS ledger_rows`);
+    (SELECT count(*)::int FROM public.finance_revenue_ledger) AS ledger_rows,
+    (SELECT count(*)::int FROM public.finance_revenue_ledger WHERE paid_by_name IS NOT NULL OR photo_by IS NOT NULL) AS rows_with_cashier`);
   console.log(JSON.stringify(check));
-  if (!check.ledger || !check.entries || !check.day_closes || !check.categories || !check.paper || !check.settings || !check.day_checks || !check.verify_cols || !check.table_photo_cols || !check.trigger_on || !check.qr_trigger_on || !check.cash_trigger_on || !check.qr_confirm_fixed || !check.anon_blocked) {
+  if (!check.ledger || !check.entries || !check.day_closes || !check.categories || !check.paper || !check.settings || !check.day_checks || !check.verify_cols || !check.table_photo_cols || !check.staff_cols || !check.trigger_on || !check.qr_trigger_on || !check.cash_trigger_on || !check.qr_confirm_fixed || !check.anon_blocked) {
     throw new Error('Cài chưa đủ, xem kết quả kiểm tra ở trên.');
   }
   console.log('Đã cài sổ thu chi vào DB thật.');
