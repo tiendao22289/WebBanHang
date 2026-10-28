@@ -1,0 +1,27 @@
+{
+  "id": "/thongke",
+  "name": "Thống kê - Ốc Bảo Khang",
+  "short_name": "Thống kê",
+  "description": "Xem doanh thu, nhân viên, Sổ tay trên điện thoại",
+  "start_url": "/thongke",
+  "scope": "/thongke",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f4f6",
+  "theme_color": "#ffffff",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
