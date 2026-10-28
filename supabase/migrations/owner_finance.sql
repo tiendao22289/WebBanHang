@@ -107,6 +107,12 @@ ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS verified_by t
 ALTER TABLE public.finance_manual_receipts ADD COLUMN IF NOT EXISTS verified_at timestamptz;
 ALTER TABLE public.finance_manual_receipts ADD COLUMN IF NOT EXISTS verified_by text;
 
+-- Ai thao tác bill (Sổ thu chi: "Bill đã thu" và Tra cứu theo tên nhân viên): người chốt bàn thu tiền,
+-- người mở bill "Admin" của bàn; người thêm / duyệt từng món ở items[].added_by. Ghi lúc thu tiền vì
+-- bill gốc và lịch sử bàn (10 giờ) có thể bị dọn sau đó. Trống = không rõ (bill cũ), không đoán.
+ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS paid_by_name text;
+ALTER TABLE public.finance_revenue_ledger ADD COLUMN IF NOT EXISTS created_by_name text;
+
 -- Bill giấy tự ghi từ trang Mã QR: 'qr:<mã giao dịch>' / 'cash:<id phiếu thu>'
 -- (xem capture_qr_page_receipt). Bill nhập tay để trống.
 ALTER TABLE public.finance_manual_receipts ADD COLUMN IF NOT EXISTS source text;
@@ -148,7 +154,7 @@ BEGIN
     settled_at := COALESCE(NEW.paid_at, now());
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
         'name', COALESCE(i.item_name, m.name), 'quantity', i.quantity, 'unit_price', i.unit_price,
-        'options', i.item_options, 'is_gift', i.is_gift) ORDER BY i.id), '[]'::jsonb),
+        'options', i.item_options, 'is_gift', i.is_gift, 'added_by', to_jsonb(i)->>'added_by_name') ORDER BY i.id), '[]'::jsonb),
       COALESCE(sum(COALESCE(i.unit_price, 0) * COALESCE(i.quantity, 0)), 0)
       INTO items, total
       FROM public.order_items i LEFT JOIN public.menu_items m ON m.id = i.menu_item_id
@@ -159,15 +165,18 @@ BEGIN
           AND tx.status IN ('pending', 'completed')
         ORDER BY (tx.status = 'completed') DESC, tx.transaction_code DESC LIMIT 1;
     END IF;
+    -- Tên nhân viên đọc qua to_jsonb: DB thiếu cột (bản thử cũ) thì để trống, không làm hỏng việc ghi sổ.
     INSERT INTO public.finance_revenue_ledger(order_id, paid_at, business_date, table_number,
-        customer_name, payment_method, account_id, amount, items)
+        customer_name, payment_method, account_id, amount, items, paid_by_name, created_by_name)
       VALUES (NEW.id, settled_at, (settled_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::date,
         (SELECT table_number::text FROM public.tables WHERE id = NEW.table_id),
-        NEW.customer_name, NEW.payment_method, account, GREATEST(total, 0), items)
+        NEW.customer_name, NEW.payment_method, account, GREATEST(total, 0), items,
+        to_jsonb(NEW)->>'paid_by_name', to_jsonb(NEW)->>'created_by_name')
       ON CONFLICT (order_id) DO UPDATE SET paid_at = EXCLUDED.paid_at,
         business_date = EXCLUDED.business_date, table_number = EXCLUDED.table_number,
         customer_name = EXCLUDED.customer_name, payment_method = EXCLUDED.payment_method,
         account_id = EXCLUDED.account_id, amount = EXCLUDED.amount, items = EXCLUDED.items,
+        paid_by_name = EXCLUDED.paid_by_name, created_by_name = EXCLUDED.created_by_name,
         recorded_at = now();
   ELSIF OLD.status = 'paid' AND NEW.status IS DISTINCT FROM 'paid' THEN
     -- Bill mở lại / huỷ sau khi đã thu: bỏ khỏi sổ, thu lại thì ghi lại.
@@ -180,6 +189,36 @@ EXCEPTION WHEN OTHERS THEN
   RETURN NEW;
 END $$;
 REVOKE ALL ON FUNCTION public.capture_finance_revenue() FROM PUBLIC, anon, authenticated;
+
+-- Bill vào sổ trước khi sổ lưu tên nhân viên: lấy lại từ bill gốc nếu còn. Bill đã bị dọn thì
+-- để trống (trang hiện "không rõ"). Chỉ điền chỗ còn trống nên chạy lại được; tên người thêm món
+-- chỉ ghi khi mọi món của bill khớp đúng từng dòng (thứ tự, tên, số lượng) với bill gốc.
+UPDATE public.finance_revenue_ledger l
+  SET paid_by_name = to_jsonb(o)->>'paid_by_name', created_by_name = to_jsonb(o)->>'created_by_name'
+  FROM public.orders o
+  WHERE o.id = l.order_id AND l.paid_by_name IS NULL AND l.created_by_name IS NULL
+    AND (to_jsonb(o)->>'paid_by_name' IS NOT NULL OR to_jsonb(o)->>'created_by_name' IS NOT NULL);
+WITH pending AS (
+  SELECT order_id, items FROM public.finance_revenue_ledger
+  WHERE jsonb_typeof(items) = 'array' AND jsonb_array_length(items) > 0
+    AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(items) e WHERE (e -> 'added_by') IS NOT NULL)
+), lines AS (
+  SELECT i.order_id, row_number() OVER (PARTITION BY i.order_id ORDER BY i.id) AS n,
+    COALESCE(i.item_name, m.name) AS name, i.quantity, to_jsonb(i)->>'added_by_name' AS added_by
+  FROM public.order_items i LEFT JOIN public.menu_items m ON m.id = i.menu_item_id
+  WHERE i.order_id IN (SELECT order_id FROM pending)
+), matched AS (
+  SELECT p.order_id, jsonb_agg(e.value || jsonb_build_object('added_by', li.added_by) ORDER BY e.n) AS items,
+    count(li.n) AS hits, jsonb_array_length(p.items) AS total,
+    (SELECT count(*) FROM lines x WHERE x.order_id = p.order_id) AS line_count
+  FROM pending p
+  CROSS JOIN LATERAL jsonb_array_elements(p.items) WITH ORDINALITY AS e(value, n)
+  LEFT JOIN lines li ON li.order_id = p.order_id AND li.n = e.n
+    AND li.name IS NOT DISTINCT FROM e.value->>'name' AND li.quantity::text IS NOT DISTINCT FROM e.value->>'quantity'
+  GROUP BY p.order_id, p.items
+)
+UPDATE public.finance_revenue_ledger l SET items = m.items
+  FROM matched m WHERE m.order_id = l.order_id AND m.hits = m.total AND m.line_count = m.total;
 
 -- Chỉ tạo khi chưa có: orders thuộc supabase_admin nên vai trò postgres
 -- (SQL Editor) tạo được trigger nhưng không DROP được → DROP/CREATE lại sẽ

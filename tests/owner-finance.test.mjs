@@ -100,6 +100,50 @@ test('paying a bill records its real amount and account, and the record outlives
   } finally { await db.close(); }
 });
 
+test('closing a table keeps who took the money, who opened the staff bill and who added each dish', async () => {
+  const db = await financeDb();
+  try {
+    await db.exec(`ALTER TABLE orders ADD COLUMN paid_by_name text, ADD COLUMN created_by_name text;
+      ALTER TABLE order_items ADD COLUMN added_by_name text;
+      UPDATE orders SET created_by_name = 'Mai' WHERE customer_phone = '0900';
+      UPDATE order_items SET added_by_name = 'Hùng' WHERE item_name IS NULL;`);
+    await db.exec(`UPDATE orders SET status='paid', payment_method='cash', paid_at=now(), paid_by_name='Lan' WHERE customer_phone='0900';`);
+    const { rows } = await db.query(`SELECT paid_by_name, created_by_name, items FROM finance_revenue_ledger`);
+    assert.deepEqual([rows[0].paid_by_name, rows[0].created_by_name, rows[0].items.map(i => i.added_by)], ['Lan', 'Mai', ['Hùng', null]]);
+    // Bill gốc bị dọn sau khi thu: tên vẫn còn trong sổ.
+    await db.exec(`DELETE FROM order_items; DELETE FROM orders;`);
+    assert.equal((await db.query(`SELECT paid_by_name FROM finance_revenue_ledger`)).rows[0].paid_by_name, 'Lan');
+  } finally { await db.close(); }
+});
+
+test('bills recorded before names were kept get them from the original bill when it is still there, never by guessing', async () => {
+  const db = await financeDb();
+  try {
+    await db.exec(`ALTER TABLE orders ADD COLUMN paid_by_name text, ADD COLUMN created_by_name text;
+      ALTER TABLE order_items ADD COLUMN added_by_name text;
+      INSERT INTO orders VALUES ('00000000-0000-0000-0000-000000000021', '00000000-0000-0000-0000-000000000001', 'paid', '0901', 'Admin', 'cash', now(), 'Lan', 'Mai'),
+        ('00000000-0000-0000-0000-000000000022', '00000000-0000-0000-0000-000000000001', 'paid', '0902', 'Khách', 'cash', now(), 'Lan', NULL);
+      INSERT INTO order_items VALUES
+        ('00000000-0000-0000-0000-0000000000d1', '00000000-0000-0000-0000-000000000021', '00000000-0000-0000-0000-0000000000a1', NULL, 1, 50000, NULL, false, 'Mai'),
+        ('00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-000000000021', NULL, 'Bia', 3, 20000, NULL, false, 'Hùng'),
+        ('00000000-0000-0000-0000-0000000000d3', '00000000-0000-0000-0000-000000000022', NULL, 'Nước', 2, 10000, NULL, false, 'Hùng');
+      -- Dòng sổ kiểu cũ (chưa có tên). 022: món trong sổ khác bill gốc → không ghi tên người thêm món. 099: bill gốc đã bị dọn.
+      INSERT INTO finance_revenue_ledger(order_id, paid_at, business_date, amount, payment_method, items) VALUES
+        ('00000000-0000-0000-0000-000000000021', now(), '2026-10-27', 110000, 'cash', '[{"name":"Ốc hương","quantity":1,"unit_price":50000},{"name":"Bia","quantity":3,"unit_price":20000}]'),
+        ('00000000-0000-0000-0000-000000000022', now(), '2026-10-27', 20000, 'cash', '[{"name":"Nước","quantity":1,"unit_price":20000}]'),
+        ('00000000-0000-0000-0000-000000000099', now(), '2026-10-27', 30000, 'cash', '[{"name":"Ốc","quantity":1,"unit_price":30000}]');`);
+    const migration = readFileSync(new URL('../supabase/migrations/owner_finance.sql', import.meta.url), 'utf8');
+    await db.exec(migration);
+    const rows = async () => (await db.query(`SELECT right(order_id::text, 2) AS id, paid_by_name, created_by_name, items FROM finance_revenue_ledger ORDER BY order_id`)).rows
+      .map(r => [r.id, r.paid_by_name, r.created_by_name, r.items.map(i => i.added_by)]);
+    const expected = [['21', 'Lan', 'Mai', ['Mai', 'Hùng']], ['22', 'Lan', null, [undefined]], ['99', null, null, [undefined]]];
+    assert.deepEqual(await rows(), expected);
+    await db.exec(`UPDATE orders SET paid_by_name = 'Ai đó', created_by_name = 'Ai đó'; UPDATE order_items SET added_by_name = 'Ai đó';`);
+    await db.exec(migration);
+    assert.deepEqual(await rows(), expected, 'running it again never overwrites a name already in the book');
+  } finally { await db.close(); }
+});
+
 test('reopening a paid bill removes it from the ledger and paying again re-records it', async () => {
   const db = await financeDb();
   try {
@@ -277,4 +321,24 @@ test('"Bill đã thu" still shows a screenshot that was re-taken for one bill of
   const [group] = finance.groupPaidBills([ledgerBill(1, BAN6, '6', 42000), ledgerBill(2, BAN6, '6', 130000, { transfer_image_url: 'ck-again' }),
     ledgerBill(3, BAN6, '6', 383000, { transfer_image_url: null, cash_image_url: null })]);
   assert.deepEqual(group.photos, [`ck-${BAN6}`, 'ck-again']);
+});
+
+test('each "Bill đã thu" row says who took the money and who ordered the dishes, and "không rõ" when the book never had it', () => {
+  const lan = finance.billStaff({ paid_by_name: 'Lan', customer_name: 'Khách ẩn danh', items: [{ name: 'Ốc', added_by: null }, { name: 'Bia', added_by: 'Hùng' }] });
+  const admin = finance.billStaff({ paid_by_name: 'Lan', customer_name: 'Admin', created_by_name: 'Mai', items: [{ name: 'Ốc', added_by: 'Mai' }, { name: 'Nghêu', added_by: 'Hùng' }] });
+  assert.deepEqual(lan, { paidBy: 'Lan', dishes: ['Hùng'], dishesKnown: true });
+  assert.equal(finance.staffText([lan, admin]), 'Thu tiền: Lan · Gọi món: Hùng, Mai', 'one line for the whole table, every name once');
+  assert.equal(finance.staffText([finance.billStaff({ customer_name: 'Khách', items: [{ name: 'Ốc', added_by: null }] })]), 'Thu tiền: không rõ',
+    'no staff added dishes, and who took the money is unknown');
+  // Bill cũ (trước khi sổ lưu tên): người chụp ảnh lúc đóng bàn là người thu tiền; người gọi món không rõ.
+  assert.equal(finance.staffText([finance.billStaff({ photo_by: 'Lan', items: [{ name: 'Ốc' }] })]), 'Thu tiền: Lan · Gọi món: không rõ');
+  assert.equal(finance.staffText([finance.billStaff({ items: [{ name: 'Ốc' }] })]), 'Thu tiền: không rõ · Gọi món: không rõ');
+  assert.equal(finance.staffText([lan, finance.billStaff({ items: [{ name: 'Ốc' }] })]), 'Thu tiền: Lan · Gọi món: Hùng, không rõ');
+});
+
+test('bills are found by a staff name typed without accents, in any role, but not by other people on the bill', () => {
+  const bill = { paid_by_name: 'Nguyễn Thị Lan', created_by_name: 'Mai', items: [{ added_by: 'Đức Hùng' }], transfer_image_by: 'Tú', verified_by: 'Chủ' };
+  for (const q of ['lan', 'NGUYEN THI', 'mai', 'duc hung', 'Hùng', ' hung ', '']) assert.equal(finance.billHasStaff(bill, q), true, q);
+  for (const q of ['Tú', 'chu', 'Linh']) assert.equal(finance.billHasStaff(bill, q), false, q);
+  assert.equal(finance.billHasStaff({ photo_by: 'Lan', items: [] }, 'lan'), true, 'old bills: whoever closed the table with a photo');
 });

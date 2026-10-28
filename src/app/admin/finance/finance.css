@@ -290,6 +290,13 @@
 .fin-bill-part-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 4px; font-size: 13px; color: #111827; }
 .fin-bill-part-head span { min-width: 0; overflow-wrap: anywhere; }
 .fin-bill-part-head b { white-space: nowrap; }
+/* Ai thao tác bill: hiện đủ tên (xuống dòng, không cắt "…"). */
+.fin-bill-main small.fin-bill-staff { white-space: normal; overflow: visible; overflow-wrap: anywhere; color: #475569; }
+.fin-item-by { color: #2563eb; font-size: 12px; }
+.fin-search-staff { position: relative; display: flex; }
+.fin-search-staff input { flex: 1; padding-right: 40px; }
+.fin-search-staff input::-webkit-calendar-picker-indicator { display: none !important; }
+.fin-search-staff button { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border: 0; background: none; color: #64748b; display: flex; align-items: center; justify-content: center; }
 
 /* Tra cứu — bộ lọc gọn: chọn nhanh ngày, 1 hàng tìm, "Lọc thêm" thu gọn. */
 .fin-search { gap: 8px; }
@@ -298,7 +305,7 @@
 .fin-seg button.active { background: white; color: #1d4ed8; box-shadow: 0 1px 3px rgba(15, 23, 42, .14); }
 .fin-search-dates { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 6px; }
 .fin-search-dates span { color: #94a3b8; font-size: 14px; }
-.fin-search-dates input, .fin-search-row input { width: 100%; height: 42px; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 16px; color: #111827; background: white; min-width: 0; -webkit-appearance: none; appearance: none; }
+.fin-search-dates input, .fin-search-row input, .fin-search-staff input { width: 100%; height: 42px; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 16px; color: #111827; background: white; min-width: 0; -webkit-appearance: none; appearance: none; }
 .fin-search-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) auto; gap: 6px; }
 .fin-search-go { height: 42px; padding: 0 14px; border: 0; border-radius: 8px; background: #2563eb; color: white; font-size: 15px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; }
 .fin-search-go:disabled { opacity: .7; }
