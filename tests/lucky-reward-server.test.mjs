@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import * as voucherServer from '../src/lib/voucherServer.mjs';
 
 const read = file => readFileSync(new URL(file, import.meta.url), 'utf8');
 const wheel = await import(`data:text/javascript;base64,${Buffer.from(read('../src/lib/luckyWheel.js')).toString('base64')}`);
@@ -54,6 +55,12 @@ function database(spin = spinTemplate) {
           }
           let rows = (state[table] || []).filter(r => conditions.every(c => c(r))).slice(0, max);
           if (op === 'insert') {
+            // Bảng vouchers: id do DB sinh, mã + issue_key là UNIQUE (vouchers.sql).
+            if (table === 'vouchers') {
+              state.vouchers ||= [];
+              if (state.vouchers.some(r => r.code === values.code || (values.issue_key && r.issue_key === values.issue_key))) return resolve({ data: null, error: { code: '23505' } });
+              values = { id: `voucher-${state.vouchers.length + 1}`, status: 'active', sent_at: null, ...values };
+            }
             if (state[table].some(r => r.id === values.id || (values.dedupe_key && r.dedupe_key === values.dedupe_key))) {
               return resolve({ data: null, error: { code: '23505' } });
             }
@@ -75,6 +82,7 @@ function database(spin = spinTemplate) {
   const sendOaText = async (_sb, userId, text) => { sentMessages.push({ userId, text }); return { ok: true }; };
   const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyForSpin, grantLuckySpinManually, removeLuckyGiftItem, listAdminLuckySpins, markFollowTapped, autoApproveTappedSpin, moveLuckySpinsWithBill })`, {
     ...wheel, sendGiftItemPrintJob: print, sendOaText, console: { log() {}, error() {} }, Date, Set,
+    issueWheelVoucher: voucherServer.issueWheelVoucher, wheelVoucherMessage: voucherServer.wheelVoucherMessage,
   });
   return { state, fail, db, sentMessages, ...funcs };
 }
@@ -487,4 +495,26 @@ test('lucky spin move refuses a bill that is not on the target table', async () 
   const result = await h.moveLuckySpinsWithBill(h.db, { orderId: 'order', sourceTableIds: ['table'], targetTableId: 'table2' });
   assert.equal(result.ok, false);
   assert.equal(h.state.lucky_spins[0].host_table_id, 'table');
+});
+
+test('trúng "Voucher lần sau": không trừ bill hôm nay, tạo đúng 1 mã, nhắn Zalo mã đó đúng 1 lần', async () => {
+  const spin = { ...spinTemplate, prize_type: 'voucher_next', prize_value: 50000, prize_label: 'Voucher 50.000đ lần sau',
+    discount_amount: 0, gift_menu_item_id: null, zalo_user_id: 'zalo-user', customer_name: 'Khách', auto_approved_at: now };
+  const h = database(spin);
+  await h.completeLuckySpin(h.db, spin);
+  await h.completeLuckySpin(h.db, { ...spin, applied_item_id: h.state.lucky_spins[0].applied_item_id });
+  assert.equal(h.state.vouchers.length, 1);
+  const v = h.state.vouchers[0];
+  assert.deepEqual([v.source, v.discount_value, v.customer_phone, v.issued_spin_id], ['wheel', 50000, '0900000000', 'spin']);
+  assert.equal(h.state.lucky_spins[0].applied_item_id, v.id, 'lượt quay ghi nhận đã nhận quà');
+  assert.deepEqual(h.state.order_items.map(i => i.id), ['food-line'], 'bill hôm nay không có dòng giảm');
+  assert.equal(h.state.orders[0].total_amount, 100000);
+  assert.equal(h.sentMessages.length, 1);
+  assert.match(h.sentMessages[0].text, new RegExp(`Mã: ${v.code}`));
+  assert.ok(v.sent_at, 'mã đánh dấu đã nhắn để không gửi lại lần nữa');
+
+  const [row] = await h.listAdminLuckySpins(h.db);
+  assert.equal(row.voucherCode, v.code);
+  assert.equal(row.voucherSent, true);
+  assert.notEqual(row.adminState, 'auto_pending', 'không báo nhầm "chưa vào bill"');
 });

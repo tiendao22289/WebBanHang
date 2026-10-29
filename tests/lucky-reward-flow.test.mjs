@@ -106,6 +106,7 @@ test('blocked or already-delivered gifts show neither picker nor follow', () => 
 test('success title uses the actual percentage instead of an admin placeholder', () => {
   assert.equal(luckyPrizeTitle({ prize_type: 'percent', prize_value: 9, prize_label: 'Phần quà mới' }), 'Giảm 9% hoá đơn');
   assert.equal(luckyPrizeTitle({ prizeType: 'percent', prizeValue: 5 }), 'Giảm 5% hoá đơn');
+  assert.equal(luckyPrizeTitle({ prize_type: 'voucher_next', prize_value: 50000 }), 'Voucher 50.000đ cho lần ghé tới');
 });
 
 test('reload restores an unfinished reward and starts checking', async () => {

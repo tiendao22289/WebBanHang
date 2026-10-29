@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { getActiveAccount } from '@/lib/bankAccount';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, calcReviewDiscount } from '@/lib/reviewReward';
-import { LUCKY_SETTING_KEYS, parseLuckyConfig, PRIZE_TYPES, prizeChance, totalWeight, isGiftPrizeType } from '@/lib/luckyWheel';
+import { LUCKY_SETTING_KEYS, parseLuckyConfig, PRIZE_TYPES, prizeChance, totalWeight, isGiftPrizeType, isVoucherPrizeType } from '@/lib/luckyWheel';
 
 const BANKS = [
   'Vietcombank', 'MB Bank', 'Techcombank', 'Agribank', 'Vietinbank',
@@ -255,6 +255,9 @@ export default function SettingsPage() {
     if (isGiftPrizeType(prize.type)) {
       const v = Number(prize.value);
       if (!(v >= 1)) { flash('Số lượng tặng phải từ 1 trở lên', true); return; }
+    }
+    if (isVoucherPrizeType(prize.type) && !(Number(prize.value) >= 1000)) {
+      flash('Giá trị voucher phải từ 1.000đ', true); return;
     }
 
     setPrizeSaving(true);
@@ -1062,7 +1065,8 @@ export default function SettingsPage() {
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                       <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#374151' }}>
-                        {prize.type === 'percent' ? '% giảm' : prize.type === 'amount' ? 'Số tiền giảm (đ)' : 'Số lượng tặng'}
+                        {prize.type === 'percent' ? '% giảm' : prize.type === 'amount' ? 'Số tiền giảm (đ)'
+                          : isVoucherPrizeType(prize.type) ? 'Giá trị voucher (đ)' : 'Số lượng tặng'}
                       </label>
                       <input
                         type="number"
@@ -1075,6 +1079,11 @@ export default function SettingsPage() {
                       {isGiftPrizeType(prize.type) && (
                         <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>
                           vd 1 = tặng 1 {prize.type === 'gift_drink' ? 'chai/lon' : 'phần'}
+                        </span>
+                      )}
+                      {isVoucherPrizeType(prize.type) && (
+                        <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>
+                          Mã dùng ở lần ghé sau, hạn dùng chỉnh ở trang Voucher
                         </span>
                       )}
                     </div>

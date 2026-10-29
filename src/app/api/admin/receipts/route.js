@@ -28,6 +28,9 @@ import { NextResponse } from 'next/server';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { FINANCE_START_DATE, vnDate } from '@/lib/ownerFinance.mjs';
 import { purgeOldReceiptImages, receiptImageProblem, removeReceiptImages, signReceiptImages, uploadReceiptImage } from '@/lib/receiptImages.mjs';
+import { issueNextVisitVoucher, sendVoucherZalo } from '@/lib/voucherServer.mjs';
+import { voucherValueText } from '@/lib/voucher.mjs';
+import { sendOaText } from '@/lib/zaloOa';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,6 +40,22 @@ const SOURCE = /^(qr:[A-Z0-9]{8}|cash:[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4
 const MAX_AMOUNT = 1_000_000_000;
 const missingTable = error => ['PGRST205', '42P01', '42703'].includes(error?.code);
 const fail = (error, status = 400) => NextResponse.json({ error }, { status, headers });
+
+// Bàn vừa đóng → tặng mã "hẹn lần sau" cho SĐT của bill (Admin > Voucher bật/tắt).
+// Bàn đã đóng xong rồi: lỗi ở đây chỉ ghi log, không bao giờ làm hỏng việc thanh toán.
+// Tin Zalo gửi sau (không bắt nhân viên chờ Zalo trả lời).
+async function giveNextVisitVoucher(db, orderIds) {
+  try {
+    const { voucher, created } = await issueNextVisitVoucher(db, { orderIds });
+    if (!voucher || !created) return null;
+    sendVoucherZalo(db, voucher, { send: sendOaText, log: m => console.log('[receipts] voucher', m) })
+      .catch(error => console.error('[receipts] voucher zalo', error));
+    return { code: voucher.code, valueText: voucherValueText(voucher), name: voucher.customer_name || null };
+  } catch (error) {
+    console.error('[receipts] next voucher', error);
+    return null;
+  }
+}
 
 async function requireStaff(request) {
   const session = await getStaffSession(request);
@@ -288,8 +307,9 @@ export async function POST(request) {
         return fail(error.code === 'P0001' ? error.message : 'Chưa đóng được bàn, thử lại.');
       }
       const by = session.user.full_name || null;
+      const nextVoucher = await giveNextVisitVoucher(db, orderIds);
       // Tiền mặt không ảnh, không lý do: không có gì gắn vào Sổ thu chi.
-      if (!hasImage && skipReason.length < 3) return NextResponse.json({ ok: true, photoSaved: false }, { headers });
+      if (!hasImage && skipReason.length < 3) return NextResponse.json({ ok: true, photoSaved: false, ...(nextVoucher ? { nextVoucher } : {}) }, { headers });
       const patch = !hasImage ? { photo_skip_reason: skipReason, photo_by: by }
         : method === 'cash' ? { cash_image_path: path, photo_by: by } : { transfer_image_path: path, transfer_image_by: by, photo_by: by };
       // Sổ thu chi đã ghi bill (trigger capture_finance_revenue, cùng giao dịch đóng bàn).
@@ -299,7 +319,7 @@ export async function POST(request) {
         console.error('[receipts] table photo', update.error || 'no ledger rows');
         await removeReceiptImages(db, [path]);
       }
-      return NextResponse.json({ ok: true, photoSaved }, { headers });
+      return NextResponse.json({ ok: true, photoSaved, ...(nextVoucher ? { nextVoucher } : {}) }, { headers });
     }
 
     if (action === 'delete_paper') {

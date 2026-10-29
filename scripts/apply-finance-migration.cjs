@@ -142,6 +142,20 @@ async function main() {
   console.log(JSON.stringify(draft));
   if (!draft.lines || !draft.fn_updated || !draft.web_can_call || !draft.anon_blocked) throw new Error('Chưa cài được bản gửi món an toàn.');
 
+  // Voucher tặng khách (vouchers.sql): bảng mã, dùng mã vào bill, trả mã khi xoá dòng / huỷ bill.
+  // "Hẹn lần sau" mặc định TẮT — chủ quán bật ở Admin > Voucher.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'vouchers.sql'), 'utf8'));
+  const [vouchers] = await query(`SELECT
+    to_regclass('public.vouchers') IS NOT NULL AS table_ok,
+    to_regprocedure('public.redeem_voucher(text,uuid[],uuid,text)') IS NOT NULL AS redeem_ok,
+    (SELECT count(*)::int FROM pg_trigger WHERE tgname IN ('release_voucher_on_line_delete', 'release_voucher_on_bill_cancel') AND NOT tgisinternal) AS release_triggers,
+    (SELECT count(*)::int FROM public.settings WHERE key LIKE 'voucher_next_%') AS settings,
+    NOT has_table_privilege('anon', 'public.vouchers', 'SELECT') AS anon_blocked,
+    NOT has_function_privilege('anon', 'public.redeem_voucher(text,uuid[],uuid,text)', 'EXECUTE') AS anon_cannot_redeem`);
+  console.log(JSON.stringify(vouchers));
+  if (!vouchers.table_ok || !vouchers.redeem_ok || vouchers.release_triggers !== 2 || vouchers.settings !== 8
+    || !vouchers.anon_blocked || !vouchers.anon_cannot_redeem) throw new Error('Chưa cài đủ phần voucher.');
+
   // Băm mã PIN còn lưu chữ thường (web đang chạy ở 127.0.0.1:3000 làm việc này).
   const crypto = require('node:crypto');
   const serverKey = crypto.createHmac('sha256', key).update('staff-maintenance').digest('hex');

@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import { Delete, Lock } from 'lucide-react';
 import './pinGate.css';
 
-const TITLES = { payroll: 'Lương nhân viên', stats: 'Thống kê & Kế toán', customers: 'Khách hàng', settings: 'Cài đặt', finance: 'Sổ thu chi' };
+const TITLES = { payroll: 'Lương nhân viên', stats: 'Thống kê & Kế toán', customers: 'Khách hàng', settings: 'Cài đặt', finance: 'Sổ thu chi', vouchers: 'Voucher' };
 
 async function lockApi(body) {
   const response = await fetch('/api/admin/lock', body

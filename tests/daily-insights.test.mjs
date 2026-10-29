@@ -119,3 +119,10 @@ test('losses, staff of a day and staff of a week come as data for the stats page
   assert.deepEqual([w.people[0].days, w.people[0].late.count, w.people[0].late.minutes, w.people[0].forgot, w.people[0].blocked], [2, 1, 20, 1, 1]);
   assert.equal(w.totals.people, 1);
 });
+
+test('báo cáo ngày gom mọi dòng "Voucher BK-…" thành một nhóm Voucher', async () => {
+  const { lossData } = await import('../src/lib/dailyInsights.mjs');
+  const bill = (code, amount) => ({ order_id: code, items: [{ name: `Voucher ${code}`, quantity: 1, unit_price: -amount }] });
+  const d = lossData({ ledgerDay: [bill('BK-AAAAAA', 30000), bill('BK-BBBBBB', 50000)], printed: new Map(), cancelled: [], menuPrice: new Map() });
+  assert.deepEqual(d.discounts.kinds, [{ kind: 'Voucher', count: 2, amount: 80000 }]);
+});

@@ -32,6 +32,7 @@ import {
   Star,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
+import PaidNextVoucher, { WheelVoucher } from '@/components/NextVoucherTicket';
 // import ChatOrderButton from '@/components/ChatOrderButton'; // TẮT TÍNH NĂNG CHAT AI
 import './order.css';
 
@@ -608,6 +609,8 @@ function OrderContent() {
   const [userScrolling, setUserScrolling] = useState(false);
   const [orderCancelled, setOrderCancelled] = useState(false); // admin cancelled
   const [orderPaid, setOrderPaid] = useState(null); // { total } khi admin thanh toán
+  // Bill vừa thanh toán → hỏi máy chủ có tặng voucher "lần sau" không (vé giữ tới khi khách đóng).
+  const [paidVoucherOrderId, setPaidVoucherOrderId] = useState(null);
   const [locationWarning, setLocationWarning] = useState(false); // khách không ở nhà hàng
   // ── Ưu đãi đánh giá Google Maps ──
   const [channelCfgs, setChannelCfgs] = useState([]);    // cấu hình mọi kênh, lấy từ settings
@@ -884,6 +887,8 @@ function OrderContent() {
 
   /** reason: 'paid' | 'cancelled' | 'stale' (khách mới đã ngồi / phiên hết hạn) | 'silent' */
   function endSession(reason, paidTotal = 0) {
+    const endedOrderId = getSavedSession()?.orderId || currentOrderIdRef.current;
+    if (reason === 'paid' && endedOrderId) setPaidVoucherOrderId(endedOrderId);
     setCart([]);
     setNotes({});
     setPreviousOrders([]);
@@ -1367,6 +1372,7 @@ function OrderContent() {
         } else if (payload.new?.status === 'paid' && isMyOrder) {
           justPaidRef.current = true;
           setOrderPaid({ total: payload.new.total_amount });
+          setPaidVoucherOrderId(payload.new.id);
           setTimeout(() => setOrderPaid(null), 5000);
         } else {
           // Bất kỳ thay đổi nào khác (tổng tiền, status) → re-fetch
@@ -5400,7 +5406,13 @@ function OrderContent() {
                     <div className="co-wheel-prize">
                       {!wheelFollowPending && <div style={{ fontSize: '2.2rem' }}>🎉</div>}
                       <div className="co-wheel-prize-name">{luckyPrizeTitle(wheelSpin || wheelPrize)}</div>
-                      {wheelDone ? (
+                      {wheelDone && wheelSpin.prize_type === 'voucher_next' ? (
+                        <div role="status" style={{ fontWeight: 800, color: '#0f766e' }}>
+                          <div>Nhận quà thành công! 🎉</div>
+                          <div style={{ fontWeight: 600, marginBottom: 8 }}>Voucher dùng cho lần ghé tới — không trừ vào bill hôm nay.</div>
+                          <WheelVoucher spinId={wheelSpin.id} />
+                        </div>
+                      ) : wheelDone ? (
                         <div role="status" style={{ fontWeight: 800, color: '#0f766e' }}>
                           <div>Nhận quà thành công! 🎉</div>
                           {wheelSpin.prize_type === 'percent' && <div>Chúc mừng Quý khách được giảm {wheelSpin.prize_value}% hoá đơn.</div>}
@@ -5419,6 +5431,7 @@ function OrderContent() {
                         <div style={{ fontWeight: 700, color: '#0f766e' }}>
                           {wheelIsGiftPrize && wheelGiftChosen
                             ? '🎁 Quà đã chọn xong! Mở Zalo để hệ thống tự duyệt quà nha 👇'
+                            : wheelPrize.prizeType === 'voucher_next' ? 'Mở Zalo để nhận mã voucher cho lần ghé tới nha 👇'
                             : 'Mở Zalo để hệ thống tự duyệt ưu đãi vào hoá đơn nha 👇'}
                         </div>
                       ) : wheelNeedsGiftPick ? (
@@ -6093,6 +6106,9 @@ function OrderContent() {
             </button>
           </div>
         )}
+
+        {/* ─── Voucher "lần sau" tặng khi thanh toán xong ─── */}
+        {paidVoucherOrderId && <PaidNextVoucher orderId={paidVoucherOrderId} onClose={() => setPaidVoucherOrderId(null)} />}
 
         {/* ─── Order Cancelled Banner ─── */}
         {orderCancelled && (
