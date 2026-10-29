@@ -55,10 +55,27 @@ CREATE INDEX IF NOT EXISTS vouchers_used_item_idx ON public.vouchers (used_item_
 CREATE INDEX IF NOT EXISTS vouchers_spin_idx ON public.vouchers (issued_spin_id);
 CREATE INDEX IF NOT EXISTS vouchers_orders_idx ON public.vouchers USING gin (issued_order_ids);
 CREATE INDEX IF NOT EXISTS vouchers_created_idx ON public.vouchers (created_at DESC);
+-- Mỗi SĐT chỉ 1 mã "lần sau" cho mỗi ngày bán hàng (2 bàn cùng SĐT thanh toán cùng lúc).
+CREATE UNIQUE INDEX IF NOT EXISTS vouchers_next_visit_once
+  ON public.vouchers (customer_phone, valid_from) WHERE source = 'next_visit';
 
 ALTER TABLE public.vouchers ENABLE ROW LEVEL SECURITY;
 -- KHÔNG tạo policy → anon/authenticated bị chặn hết, chỉ service_role vào được.
 REVOKE ALL ON public.vouchers FROM anon, authenticated;
+
+-- ── Chìa khoá máy khách của bill ─────────────────────────────
+-- Bảng orders đọc được bằng khoá công khai, nên mã bill KHÔNG phải bí mật. Trang gọi món
+-- tự sinh mã bill TRƯỚC khi gửi món; ngay lúc đó nó đăng ký chìa khoá riêng của máy
+-- (lưu băm). Chỉ máy có chìa khoá mới xem được mã "lần sau" của bill (/api/voucher/mine).
+CREATE TABLE IF NOT EXISTS public.voucher_order_keys (
+  order_id uuid PRIMARY KEY,
+  table_id uuid NOT NULL,
+  key_hash text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS voucher_order_keys_table_idx ON public.voucher_order_keys (table_id, created_at);
+ALTER TABLE public.voucher_order_keys ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.voucher_order_keys FROM anon, authenticated;
 
 -- ── Dùng mã vào bill ─────────────────────────────────────────
 -- p_order_ids: các bill đang mở của bàn (nhóm gộp) mà trang Bàn đang thấy.
@@ -75,6 +92,7 @@ DECLARE
   takeaway boolean;
   target uuid;
   base numeric;
+  bill_now numeric;
   reduction integer;
   line_id uuid;
 BEGIN
@@ -122,10 +140,12 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'reason', 'bill_has_voucher');
   END IF;
 
-  -- Tiền món: dòng giá dương, không phải quà (giống "Giảm %" ở trang Bàn).
-  SELECT COALESCE(SUM(unit_price::numeric * quantity), 0) INTO base
-  FROM public.order_items
-  WHERE order_id = ANY(wanted) AND unit_price > 0 AND NOT COALESCE(is_gift, false);
+  -- Tiền món: dòng giá dương, không phải quà (giống "Giảm %" ở trang Bàn), cả nhóm bàn.
+  -- bill_now: tổng bill hiện tại (đã trừ các giảm giá khác) — số sẽ thanh toán.
+  SELECT COALESCE(SUM(unit_price::numeric * quantity) FILTER (WHERE unit_price > 0 AND NOT COALESCE(is_gift, false)), 0),
+         COALESCE(SUM(unit_price::numeric * quantity), 0)
+    INTO base, bill_now
+  FROM public.order_items WHERE order_id = ANY(locked);
   IF v.min_bill > 0 AND base < v.min_bill THEN
     RETURN jsonb_build_object('ok', false, 'reason', 'min_bill', 'min_bill', v.min_bill, 'base', base);
   END IF;
@@ -136,7 +156,9 @@ BEGIN
   ELSE
     reduction := v.discount_value;
   END IF;
-  reduction := LEAST(reduction, floor(base)::integer);
+  -- Không giảm quá tiền món, và chừa bill ít nhất 1.000đ: thanh toán không nhận bill 0đ / âm
+  -- (bill đã có giảm tay / vòng xoay mà voucher kéo về 0 thì bàn không đóng được).
+  reduction := LEAST(reduction, floor(base)::integer, floor(bill_now)::integer - 1000);
   IF reduction <= 0 THEN RETURN jsonb_build_object('ok', false, 'reason', 'zero'); END IF;
 
   SELECT id INTO target FROM public.orders WHERE id = ANY(wanted) ORDER BY created_at, id LIMIT 1;
@@ -196,8 +218,37 @@ AFTER UPDATE OF status ON public.orders
 FOR EACH ROW WHEN (NEW.status = 'cancelled' AND OLD.status IS DISTINCT FROM 'cancelled')
 EXECUTE FUNCTION public.release_voucher_on_bill_cancel();
 
+-- Mở lại bill đã huỷ (huỷ đã trả mã): dòng voucher trong bill phải lấy lại được đúng mã,
+-- nếu không thì chặn — không cho "huỷ rồi mở lại" để giữ dòng giảm mà mã đã dùng lại được.
+CREATE OR REPLACE FUNCTION public.voucher_guard_bill_reopen()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN
+    SELECT i.id, i.unit_price * i.quantity AS amount, substring(i.item_name from '^Voucher (BK-[A-Z0-9]{6})$') AS code
+    FROM public.order_items i
+    WHERE i.order_id = NEW.id AND i.menu_item_id IS NULL AND i.unit_price < 0 AND i.item_name LIKE 'Voucher BK-%'
+  LOOP
+    UPDATE public.vouchers SET status = 'used', used_at = now(), used_order_id = NEW.id, used_item_id = r.id,
+      used_table_id = NEW.table_id, discount_amount = -r.amount
+    WHERE code = r.code AND status = 'active';
+    IF NOT EXISTS (SELECT 1 FROM public.vouchers WHERE code = r.code AND status = 'used' AND used_item_id = r.id) THEN
+      RAISE EXCEPTION 'Bill có dòng voucher % nhưng mã đã dùng ở nơi khác / đã huỷ — không mở lại bill được', r.code;
+    END IF;
+  END LOOP;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS voucher_guard_bill_reopen ON public.orders;
+CREATE TRIGGER voucher_guard_bill_reopen
+BEFORE UPDATE OF status ON public.orders
+FOR EACH ROW WHEN (OLD.status = 'cancelled' AND NEW.status IN ('pending', 'preparing', 'completed'))
+EXECUTE FUNCTION public.voucher_guard_bill_reopen();
+
 REVOKE ALL ON FUNCTION public.release_voucher_on_line_delete() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.release_voucher_on_bill_cancel() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.voucher_guard_bill_reopen() FROM PUBLIC, anon, authenticated;
 
 -- ── Cấu hình "Hẹn lần sau" (Admin > Voucher sửa được) ───────
 -- Hạn dùng + bill tối thiểu lúc dùng cũng áp cho voucher trúng vòng xoay.

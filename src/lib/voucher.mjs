@@ -116,15 +116,18 @@ export const VOUCHER_STATE_TEXT = {
   active: 'Còn dùng được', not_yet: 'Chưa tới ngày dùng', expired: 'Hết hạn', used: 'Đã dùng', cancelled: 'Đã huỷ',
 };
 
-/** Xem trước số tiền giảm — cùng công thức redeem_voucher (SQL). base = tiền món. */
-export function calcVoucherDiscount(base, v) {
+/**
+ * Xem trước số tiền giảm — cùng công thức redeem_voucher (SQL). base = tiền món;
+ * billNow = tổng bill hiện tại (đã trừ giảm giá khác): bill luôn còn ít nhất 1.000đ.
+ */
+export function calcVoucherDiscount(base, v, billNow = Infinity) {
   const total = Math.max(0, Number(base) || 0);
   if (total <= 0 || !v) return 0;
   const value = Number(v.discount_value) || 0;
   let r = v.discount_type === 'percent' ? Math.floor(total * value / 100 / 1000) * 1000 : value;
   const max = Number(v.max_discount) || 0;
   if (v.discount_type === 'percent' && max > 0) r = Math.min(r, max);
-  return Math.max(0, Math.min(r, Math.floor(total)));
+  return Math.max(0, Math.min(r, Math.floor(total), Math.floor(Number(billNow)) - 1000));
 }
 
 /** Lý do redeem_voucher từ chối → câu cho nhân viên. */
@@ -143,7 +146,7 @@ export function redeemFailText(r) {
     case 'bill_changed': return 'Bill vừa thay đổi (thanh toán / gộp / chuyển bàn). Mở lại bàn rồi thử lại.';
     case 'bill_has_voucher': return 'Bill này đã dùng 1 voucher rồi — mỗi bill chỉ 1 voucher.';
     case 'min_bill': return `Voucher dành cho bill từ ${money(r.min_bill)} (tiền món hiện ${money(r.base)}).`;
-    case 'zero': return 'Bill chưa có món để giảm.';
+    case 'zero': return 'Bill chưa có món, hoặc đã được giảm gần hết — không trừ thêm được.';
     default: return r?.message || 'Chưa dùng được voucher, thử lại giúp nhé.';
   }
 }
@@ -225,7 +228,8 @@ export function customerRedeemText(r) {
     case 'min_bill': return `Voucher dành cho bill từ ${money(r.min_bill)} (bill hiện ${money(r.base)}). Quý khách gọi thêm chút nữa rồi nhập lại nhé 😋`;
     case 'bill_has_voucher': return 'Bill này đã dùng 1 voucher rồi ạ (mỗi bill 1 voucher).';
     case 'too_many': return 'Nhập sai nhiều lần quá, Quý khách nhờ nhân viên giúp nhé.';
-    case 'zero': return 'Quý khách gọi món trước rồi nhập mã nhé.';
+    case 'no_key': return 'Điện thoại này chưa gửi món ở bàn — Quý khách nhờ nhân viên áp mã giúp nhé.';
+    case 'zero': return 'Bill chưa có món (hoặc đã được giảm gần hết) nên chưa trừ thêm được ạ.';
     default: return 'Bàn chưa có bill đang mở để trừ voucher — Quý khách gọi món trước rồi nhập mã nhé.';
   }
 }

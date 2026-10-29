@@ -64,7 +64,7 @@ export function VoucherBanner({ vouchers, onOpen }) {
   );
 }
 
-export default function VoucherRedeemDialog({ tableNumber, orderIds, discountBase, vouchers, onClose, onApplied }) {
+export default function VoucherRedeemDialog({ tableNumber, orderIds, discountBase, billTotal, vouchers, onClose, onApplied }) {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(null);   // mã đang gửi
   const [problem, setProblem] = useState('');
@@ -101,7 +101,7 @@ export default function VoucherRedeemDialog({ tableNumber, orderIds, discountBas
           <>
             <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#374151', marginBottom: 6 }}>Khách trên bàn có voucher — kiểm tra đúng tên khách rồi bấm Dùng:</div>
             {vouchers.map(v => {
-              const reduce = calcVoucherDiscount(discountBase, v);
+              const reduce = calcVoucherDiscount(discountBase, v, billTotal);
               const short = Number(v.min_bill) > 0 && discountBase < Number(v.min_bill);
               return (
                 <div key={v.id} style={{ border: '1.5px solid #fde68a', background: '#fffbeb', borderRadius: 12, padding: '10px 12px', marginBottom: 8 }}>
@@ -118,6 +118,8 @@ export default function VoucherRedeemDialog({ tableNumber, orderIds, discountBas
                   </div>
                   {short ? (
                     <div style={{ fontSize: '0.78rem', color: '#b91c1c', fontWeight: 700, marginTop: 6 }}>Chưa đủ: tiền món {money(discountBase)} / cần {money(v.min_bill)}</div>
+                  ) : reduce <= 0 ? (
+                    <div style={{ fontSize: '0.78rem', color: '#b91c1c', fontWeight: 700, marginTop: 6 }}>Bill không còn tiền để giảm thêm.</div>
                   ) : (
                     <button onClick={() => redeem(v.code)} disabled={!!busy}
                       style={{ width: '100%', marginTop: 8, padding: '10px', border: 'none', borderRadius: 10, background: '#16a34a', color: 'white', fontWeight: 800, cursor: 'pointer', opacity: busy ? 0.6 : 1 }}>

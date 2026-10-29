@@ -32,7 +32,7 @@ import {
   Star,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
-import PaidNextVoucher, { WheelVoucher, CustomerVoucherBox, savedVouchers } from '@/components/NextVoucherTicket';
+import PaidNextVoucher, { WheelVoucher, CustomerVoucherBox, savedVouchers, bindOrderToDevice } from '@/components/NextVoucherTicket';
 // import ChatOrderButton from '@/components/ChatOrderButton'; // TẮT TÍNH NĂNG CHAT AI
 import './order.css';
 
@@ -3811,6 +3811,8 @@ function OrderContent() {
       const orderId = previousAttempt?.signature === signature && previousAttempt?.orderId
         ? previousAttempt.orderId : newLuckyRequestId();
       sessionStorage.setItem(attemptKey, JSON.stringify({ signature, orderId }));
+      // Đăng ký chìa khoá máy cho bill này TRƯỚC khi bill tồn tại (để sau thanh toán chỉ máy này thấy vé voucher).
+      await bindOrderToDevice(orderId, activeTableId);
       const { data: savedOrder, error: orderErr } = await supabase.rpc('submit_customer_order_atomic', {
         p_order_id: orderId,
         p_table_id: activeTableId,
@@ -4715,7 +4717,7 @@ function OrderContent() {
                 🎁 Vòng xoay
               </button>
             )}
-            {currentOrderId && !billVoucherLine && (
+            {currentOrderId && !billVoucherLine && previousOrders.some(o => ['pending', 'preparing', 'completed'].includes(o.status)) && (
               <button className="co-promo-pill" style={{ background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: 'white' }}
                 onClick={() => { setShowOrdered(true); fetchPreviousOrders(); }}>
                 🎟️ {mySavedVoucher ? `Dùng voucher −${Math.round(Number(mySavedVoucher.discount_value) / 1000)}${mySavedVoucher.discount_type === 'percent' ? '%' : 'K'}` : 'Voucher'}

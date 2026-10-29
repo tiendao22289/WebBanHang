@@ -5,10 +5,12 @@
 //  Hàm gửi Zalo (sendOaText) được truyền vào thay vì import, để file này chạy
 //  thẳng trong node --test với DB giả.
 // ============================================================
+import { createHash } from 'node:crypto';
 import {
   NEXT_VOUCHER_KEYS, parseNextVoucherConfig, nextVisitWindow, newVoucherCode,
   pickVoucherPhone, normalizePhone, fillVoucherMessage, GIFT_MESSAGE_TEMPLATE,
   NEXT_VISIT_MESSAGE_TEMPLATE, voucherValueText, shortDay, firstUseDay, lastUseDay, money, HOW_TO_USE,
+  calcVoucherDiscount,
 } from './voucher.mjs';
 
 export async function loadNextVoucherConfig(db) {
@@ -23,6 +25,8 @@ export async function insertVoucher(db, row, random = Math.random) {
     const { data, error } = await db.from('vouchers').insert({ ...row, code: newVoucherCode(random) }).select().maybeSingle();
     if (!error && data) return data;
     if (error?.code !== '23505') throw error || new Error('Không tạo được mã voucher.');
+    // Trùng "1 mã lần sau / SĐT / ngày" (2 bàn cùng SĐT thanh toán cùng lúc) — không phải trùng mã.
+    if (/vouchers_next_visit_once/.test(error.message || '')) throw error;
     if (row.issue_key) {
       const { data: existing, error: readError } = await db.from('vouchers')
         .select('*').eq('issue_key', row.issue_key).maybeSingle();
@@ -60,10 +64,11 @@ export async function issueNextVisitVoucher(db, { orderIds, nowMs = Date.now(), 
   if (cfg.minBill > 0 && total < cfg.minBill) return { skipped: 'small_bill' };
 
   if (!cfg.repeat) {
-    const { data: usedHere, error: usedError } = await db.from('vouchers').select('id')
-      .eq('status', 'used').in('used_order_id', ids).limit(1);
-    if (usedError) throw usedError;
-    if (usedHere?.length) return { skipped: 'used_voucher' };
+    // Xét chính các dòng trong bill (gộp bill chuyển dòng voucher sang bill chính).
+    const { data: lines, error: linesError } = await db.from('order_items').select('item_name')
+      .in('order_id', ids).lt('unit_price', 0);
+    if (linesError) throw linesError;
+    if ((lines || []).some(l => String(l.item_name || '').startsWith('Voucher BK-'))) return { skipped: 'used_voucher' };
   }
 
   const { data: current, error: currentError } = await db.from('vouchers').select('*')
@@ -73,13 +78,18 @@ export async function issueNextVisitVoucher(db, { orderIds, nowMs = Date.now(), 
   if (current?.length) return { skipped: 'has_active', voucher: current[0] };
 
   const win = nextVisitWindow(cfg.days, nowMs);
-  const voucher = await insertVoucher(db, {
-    source: 'next_visit', batch_name: 'Hẹn lần sau',
-    discount_type: cfg.type, discount_value: cfg.value, max_discount: cfg.type === 'percent' ? cfg.max : 0,
-    min_bill: cfg.useMinBill, valid_from: win.validFrom, valid_until: win.validUntil,
-    customer_phone: who.phone, customer_name: who.name, issue_key: issueKey, issued_order_ids: ids,
-  }, random);
-  return { voucher, created: true };
+  try {
+    const voucher = await insertVoucher(db, {
+      source: 'next_visit', batch_name: 'Hẹn lần sau',
+      discount_type: cfg.type, discount_value: cfg.value, max_discount: cfg.type === 'percent' ? cfg.max : 0,
+      min_bill: cfg.useMinBill, valid_from: win.validFrom, valid_until: win.validUntil,
+      customer_phone: who.phone, customer_name: who.name, issue_key: issueKey, issued_order_ids: ids,
+    }, random);
+    return { voucher, created: true };
+  } catch (error) {
+    if (/vouchers_next_visit_once/.test(error?.message || '')) return { skipped: 'has_active' };
+    throw error;
+  }
 }
 
 /** Trúng ô "Voucher lần sau" của vòng xoay → tạo mã (1 lượt quay = 1 mã). */
@@ -122,7 +132,9 @@ export async function zaloUserOfPhone(db, phone) {
   const { data: followers, error: followerError } = await db.from('zalo_followers')
     .select('zalo_user_id, unfollowed_at').eq('phone', phone).limit(5);
   if (followerError) throw followerError;
-  return (followers || []).find(f => !f.unfollowed_at)?.zalo_user_id || null;
+  // Nhiều tài khoản Zalo cùng nhắn SĐT này (có người nhắn SĐT của khách khác) → không biết ai thật, không gửi.
+  const uids = [...new Set((followers || []).filter(f => !f.unfollowed_at).map(f => f.zalo_user_id))];
+  return uids.length === 1 ? uids[0] : null;
 }
 
 /** Câu dễ hiểu cho lỗi Zalo trả về khi nhắn. */
@@ -166,9 +178,16 @@ export async function sendVoucherZalo(db, voucher, { send, zaloUserId = null, fo
  */
 export async function sendPendingVouchers(db, phone, zaloUserId, { send, nowMs = Date.now(), log = () => {} }) {
   if (!phone || !zaloUserId) return 0;
-  // SĐT đã nối với một tài khoản Zalo KHÁC → người lạ nhắn SĐT của khách, không gửi mã.
-  const linked = await zaloUserOfPhone(db, phone);
-  if (linked && linked !== zaloUserId) return 0;
+  // SĐT đã nối với một tài khoản Zalo KHÁC (hồ sơ khách, hoặc người khác đã nhắn SĐT này cho OA)
+  // → có thể là người lạ nhắn SĐT của khách: không gửi mã. (Webhook đã ghi SĐT vào dòng của
+  // chính người nhắn trước khi gọi hàm này, nên phải loại dòng đó ra.)
+  const { data: customer, error: customerError } = await db.from('customers').select('zalo_user_id').eq('phone', phone).maybeSingle();
+  if (customerError) throw customerError;
+  if (customer?.zalo_user_id && customer.zalo_user_id !== zaloUserId) return 0;
+  const { data: others, error: othersError } = await db.from('zalo_followers').select('zalo_user_id, unfollowed_at')
+    .eq('phone', phone).neq('zalo_user_id', zaloUserId).limit(5);
+  if (othersError) throw othersError;
+  if ((others || []).some(f => !f.unfollowed_at)) return 0;
   const { data, error } = await db.from('vouchers').select('*')
     .eq('customer_phone', phone).eq('status', 'active').is('sent_at', null)
     .gt('valid_until', new Date(nowMs).toISOString());
@@ -197,3 +216,39 @@ export async function activeVouchersForPhones(db, phones, nowMs = Date.now()) {
   const byPhone = Object.fromEntries((customers || []).map(c => [c.phone, c]));
   return data.map(v => ({ ...v, customer: byPhone[v.customer_phone] || null }));
 }
+
+/**
+ * Trước khi đóng bàn: dòng voucher còn đúng với bill hiện tại không (khách áp mã rồi nhờ bỏ bớt món):
+ * tiền món còn đủ mức tối thiểu, và số đã giảm không vượt mức được giảm bây giờ (voucher % tính
+ * lại theo tiền món còn lại, bill luôn còn ít nhất 1.000đ). Trả câu báo cho nhân viên, hoặc null nếu ổn.
+ */
+export async function voucherPayProblem(db, orderIds) {
+  const ids = (orderIds || []).filter(Boolean);
+  if (!ids.length) return null;
+  const { data: items, error } = await db.from('order_items').select('id, item_name, unit_price, quantity, is_gift, menu_item_id').in('order_id', ids);
+  if (error) throw error;
+  const lines = (items || []).filter(i => i.menu_item_id == null && Number(i.unit_price) < 0 && String(i.item_name || '').startsWith('Voucher BK-'));
+  if (!lines.length) return null;
+  const { data: vouchers, error: vError } = await db.from('vouchers')
+    .select('code, discount_type, discount_value, max_discount, min_bill, used_item_id').in('used_item_id', lines.map(l => l.id));
+  if (vError) throw vError;
+  const amount = i => Number(i.unit_price) * Number(i.quantity);
+  const base = (items || []).filter(i => Number(i.unit_price) > 0 && !i.is_gift).reduce((sum, i) => sum + amount(i), 0);
+  const bill = (items || []).reduce((sum, i) => sum + amount(i), 0);
+  const fix = 'Xoá dòng voucher (mã được trả lại cho khách) rồi áp lại mã, hoặc gọi thêm món.';
+  for (const v of vouchers || []) {
+    if (Number(v.min_bill) > 0 && base < Number(v.min_bill)) {
+      return `Voucher ${v.code} dành cho bill từ ${money(v.min_bill)}, tiền món giờ còn ${money(base)}. ${fix}`;
+    }
+    const line = lines.find(l => l.id === v.used_item_id);
+    const taken = -amount(line);
+    const allowed = calcVoucherDiscount(base, v, bill + taken);
+    if (taken > allowed) {
+      return `Voucher ${v.code} đang giảm ${money(taken)}, nhưng bill giờ chỉ được giảm ${money(allowed)} (đã bớt món). ${fix}`;
+    }
+  }
+  return null;
+}
+
+/** Băm chìa khoá máy khách (lưu băm, không lưu chìa khoá). */
+export const hashVoucherKey = key => createHash('sha256').update(String(key)).digest('hex');

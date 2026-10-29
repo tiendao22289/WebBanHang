@@ -165,8 +165,10 @@ test('lưu cài đặt "Hẹn lần sau": kiểm số trước khi lưu', async 
     voucher_next_max: '0', voucher_next_use_min_bill: '150000', voucher_next_days: '10', voucher_next_repeat: 'false' });
 });
 
-test('trang khách chỉ thấy mã của chính mình, không lộ SĐT', async () => {
+test('trang khách chỉ thấy mã của chính mình (phải có chìa khoá máy đã gọi món), không lộ SĐT', async () => {
   const state = {
+    voucher_order_keys: [{ order_id: id(10), key_hash: voucherServer.hashVoucherKey('K'.repeat(40)) },
+      { order_id: id(11), key_hash: voucherServer.hashVoucherKey('L'.repeat(40)) }],
     orders: [{ id: id(10), customer_phone: '+84 904 444 444' }, { id: id(11), customer_phone: '0905555555' }],
     vouchers: [
       { code: 'BK-NEXTAA', source: 'next_visit', customer_phone: '0904444444', issued_order_ids: [id(10), id(11)], discount_type: 'amount', discount_value: 30000 },
@@ -175,13 +177,15 @@ test('trang khách chỉ thấy mã của chính mình, không lộ SĐT', async
   };
   const { GET } = vm.runInNewContext(`${mineSource}\n({ GET })`, {
     NextResponse: { json: (body, init = {}) => ({ status: init.status || 200, body }) },
-    statusDatabase: () => fakeDb(state), normalizePhone: voucher.normalizePhone, URL, Promise,
+    statusDatabase: () => fakeDb(state), normalizePhone: voucher.normalizePhone, hashVoucherKey: voucherServer.hashVoucherKey, URL, Promise,
   });
-  const ask = q => GET({ url: `http://x/api/voucher/mine?${q}` });
+  const ask = (q, key = 'K'.repeat(40)) => GET({ url: `http://x/api/voucher/mine?${q}`, headers: { get: h => (h === 'x-voucher-key' ? key : null) } });
   const mine = await ask(`orderId=${id(10)}`);
   assert.equal(mine.body.voucher.code, 'BK-NEXTAA');
   assert.equal('customer_phone' in mine.body.voucher, false);
-  assert.equal((await ask(`orderId=${id(11)}`)).body.voucher, null, 'người khác cùng bàn gộp không thấy mã');
+  assert.equal((await ask(`orderId=${id(10)}`, '')).body.voucher, null, 'chỉ biết mã bill (đọc được bằng khoá công khai) thì không lấy được');
+  assert.equal((await ask(`orderId=${id(10)}`, 'X'.repeat(40))).body.voucher, null, 'chìa khoá máy khác');
+  assert.equal((await ask(`orderId=${id(11)}`, 'L'.repeat(40))).body.voucher, null, 'người khác cùng bàn gộp không thấy mã');
   assert.equal((await ask(`spinId=${id(70)}`)).body.voucher.code, 'BK-WHEELA');
   assert.equal((await ask(`orderId=${id(99)}`)).body.voucher, null);
   assert.equal((await ask('orderId=0904444444')).status, 400, 'không tra theo SĐT');
@@ -191,26 +195,31 @@ test('trang khách chỉ thấy mã của chính mình, không lộ SĐT', async
 function loadRedeem(state) {
   return vm.runInNewContext(`${redeemSource}\n({ POST })`, {
     NextResponse: { json: (body, init = {}) => ({ status: init.status || 200, body }) },
-    statusDatabase: () => fakeDb(state), ...voucher, URL, Promise, Date, console: { log() {}, error() {} },
+    statusDatabase: () => fakeDb(state), ...voucher, hashVoucherKey: voucherServer.hashVoucherKey,
+    URL, Promise, Date, console: { log() {}, error() {} },
   });
 }
-const ask = (POST, body, ip = '1.1.1.1') => POST({ json: async () => body, headers: { get: k => (k === 'x-forwarded-for' ? ip : null) } });
+// Chìa khoá máy đã gửi bill (đăng ký trước khi gửi món). Mặc định: đúng máy của bill đó.
+const keyOf = orderId => `key-${orderId}`;
+const ask = (POST, body, key = keyOf(body.orderId)) => POST({ json: async () => body, headers: { get: k => (k === 'x-voucher-key' ? key : null) } });
 const ago = h => new Date(Date.now() - h * 3600000).toISOString();
 function shop() {
+  const orders = [
+    { id: id(10), table_id: id(1), status: 'pending', customer_phone: '0901111111', created_at: ago(1) },
+    { id: id(11), table_id: id(2), status: 'completed', customer_phone: null, created_at: ago(1) },
+    { id: id(12), table_id: id(1), status: 'pending', customer_phone: 'BAO_BEP', created_at: ago(1) },
+    { id: id(13), table_id: id(3), status: 'pending', customer_phone: '0903333333', created_at: ago(1) },
+    { id: id(14), table_id: id(1), status: 'cancelled', customer_phone: '0904444444', created_at: ago(2) },
+    { id: id(15), table_id: id(1), status: 'cancelled', customer_phone: '0904444444', created_at: ago(20) },
+    { id: id(90), table_id: id(9), status: 'pending', customer_phone: '0905555555', created_at: ago(1) },
+    { id: id(91), table_id: id(9), status: 'pending', customer_phone: '0906666666', created_at: ago(1) },
+    { id: id(92), table_id: id(9), status: 'completed', customer_phone: '+84905555555', created_at: ago(1) },
+  ];
   return {
     tables: [{ id: id(1), merged_with: null, table_type: 'normal' }, { id: id(2), merged_with: id(1), table_type: 'normal' },
       { id: id(3), merged_with: null, table_type: 'normal' }, { id: id(9), merged_with: null, table_type: 'takeaway' }],
-    orders: [
-      { id: id(10), table_id: id(1), status: 'pending', customer_phone: '0901111111', created_at: ago(1) },
-      { id: id(11), table_id: id(2), status: 'completed', customer_phone: null, created_at: ago(1) },
-      { id: id(12), table_id: id(1), status: 'pending', customer_phone: 'BAO_BEP', created_at: ago(1) },
-      { id: id(13), table_id: id(3), status: 'pending', customer_phone: '0903333333', created_at: ago(1) },
-      { id: id(14), table_id: id(1), status: 'cancelled', customer_phone: '0904444444', created_at: ago(2) },
-      { id: id(15), table_id: id(1), status: 'cancelled', customer_phone: '0904444444', created_at: ago(20) },
-      { id: id(90), table_id: id(9), status: 'pending', customer_phone: '0905555555', created_at: ago(1) },
-      { id: id(91), table_id: id(9), status: 'pending', customer_phone: '0906666666', created_at: ago(1) },
-      { id: id(92), table_id: id(9), status: 'completed', customer_phone: '+84905555555', created_at: ago(1) },
-    ],
+    orders,
+    voucher_order_keys: orders.map(o => ({ order_id: o.id, key_hash: voucherServer.hashVoucherKey(keyOf(o.id)) })),
   };
 }
 
@@ -225,16 +234,26 @@ test('khách tự nhập mã: máy chủ tự lấy mọi bill mở của bàn g
   assert.deepEqual(args.p_order_ids.sort(), [id(10), id(11)], 'cả bàn gộp, bỏ đơn "Gọi nhân viên"');
 });
 
+test('khách tự nhập mã: phải là chính máy đã gửi bill (mã bill đọc được bằng khoá công khai)', async () => {
+  const state = shop();
+  const { POST } = loadRedeem(state);
+  for (const key of ['', 'key-sai', keyOf(id(13))]) {
+    const r = await ask(POST, { code: 'BK-7K3P9X', tableId: id(1), orderId: id(10) }, key);
+    assert.deepEqual([r.body.ok, r.body.reason], [false, 'no_key'], `chìa khoá "${key}"`);
+    assert.match(r.body.message, /nhờ nhân viên/);
+  }
+  assert.equal(state.rpc, undefined, 'không gọi trừ tiền');
+});
+
 test('khách tự nhập mã: phải có bill của chính mình ở đúng bàn', async () => {
   const state = shop();
   const { POST } = loadRedeem(state);
   for (const body of [
     { code: 'BK-7K3P9X', tableId: id(3), orderId: id(10) },     // bill bàn khác
-    { code: 'BK-7K3P9X', tableId: id(1), orderId: id(99) },     // bill không có
     { code: 'BK-7K3P9X', tableId: id(1), orderId: id(15) },     // bill bị huỷ / gộp từ hôm trước
     { code: 'BK-7K3P9X', tableId: 'abc', orderId: id(10) },
   ]) {
-    const r = await ask(POST, body, `ip-${body.orderId}`);
+    const r = await ask(POST, body);
     assert.equal(r.body.ok, false, JSON.stringify(body));
   }
   assert.equal(state.rpc, undefined, 'không gọi trừ tiền');
@@ -248,24 +267,24 @@ test('mang về: khách chỉ trừ vào bill của chính SĐT mình', async ()
   assert.deepEqual(JSON.parse(JSON.stringify(state.rpc[0][1].p_order_ids)).sort(), [id(90), id(92)]);
 });
 
-test('nhập sai nhiều lần thì khoá — không dò được mã; khách không biết mã đã dùng ở bàn nào', async () => {
+test('dò mã: mỗi máy / bill sai 6 lần là khoá; người ngoài không khoá được khách khác; khách không biết mã đã dùng ở đâu', async () => {
   const state = { ...shop(), rpcResult: () => ({ ok: false, reason: 'not_found' }) };
   const { POST } = loadRedeem(state);
+  // Người ngoài có mã bàn + mã bill (đọc được) nhưng không có chìa khoá máy → không đếm, không khoá.
+  for (let i = 0; i < 20; i++) await ask(POST, { code: 'BK-AAAAA2', tableId: id(1), orderId: id(10) }, 'chia-khoa-gia');
   for (let i = 0; i < 6; i++) {
-    const r = await ask(POST, { code: `BK-AAAAA${'23456789'[i]}`, tableId: id(3), orderId: id(13) }, '9.9.9.9');
+    const r = await ask(POST, { code: `BK-AAAAA${'23456789'[i]}`, tableId: id(3), orderId: id(13) });
     assert.equal(r.body.reason, 'not_found');
   }
   state.rpcResult = () => ({ ok: true, discount: 30000 });
-  const locked = await ask(POST, { code: 'BK-7K3P9X', tableId: id(3), orderId: id(13) }, '9.9.9.9');
+  const locked = await ask(POST, { code: 'BK-7K3P9X', tableId: id(3), orderId: id(13) });
   assert.deepEqual([locked.status, locked.body.reason], [429, 'too_many']);
-  const otherIp = await ask(POST, { code: 'BK-7K3P9X', tableId: id(3), orderId: id(13) }, '8.8.8.8');
-  assert.equal(otherIp.status, 429, 'đổi máy vẫn bị khoá theo bàn');
-  const otherTable = await ask(POST, { code: 'BK-7K3P9X', tableId: id(1), orderId: id(10) }, '9.9.9.9');
-  assert.equal(otherTable.status, 429, 'đổi bàn cùng máy vẫn bị khoá');
-  assert.equal((await ask(POST, { code: 'BK-7K3P9X', tableId: id(1), orderId: id(10) }, '7.7.7.7')).body.ok, true, 'bàn khác, máy khác vẫn dùng bình thường');
+  assert.equal((await ask(POST, { code: 'BK-7K3P9X', tableId: id(1), orderId: id(10) })).body.ok, true,
+    'khách bàn khác (và cùng bàn bị người ngoài thử) vẫn dùng bình thường');
+  assert.equal((await ask(POST, { code: 'BK-7K3P9X', tableId: id(2), orderId: id(11) })).body.ok, true, 'không khoá cả bàn / cả quán');
 
   const usedState = { ...shop(), rpcResult: () => ({ ok: false, reason: 'used', table_number: 5, used_at: '2026-10-29T12:40:00Z' }) };
-  const used = await ask(loadRedeem(usedState).POST, { code: 'BK-7K3P9X', tableId: id(1), orderId: id(10) }, '6.6.6.6');
+  const used = await ask(loadRedeem(usedState).POST, { code: 'BK-7K3P9X', tableId: id(1), orderId: id(10) });
   assert.equal(used.body.message, 'Mã này đã được dùng rồi ạ.');
   assert.ok(!JSON.stringify(used.body).includes('12:40') && !/bàn 5/.test(JSON.stringify(used.body)));
 });
