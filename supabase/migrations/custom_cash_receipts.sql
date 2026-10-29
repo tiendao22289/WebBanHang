@@ -24,5 +24,7 @@ BEGIN
   RETURN jsonb_build_object('success', true, 'receipt_id', p_id, 'amount', saved_amount);
 END $$;
 
-GRANT EXECUTE ON FUNCTION public.record_custom_cash_receipt(uuid, numeric) TO anon, authenticated;
+-- Chỉ máy chủ (/api/admin/receipts) ghi; khoá công khai không gọi được (bill_money_guard.sql).
+REVOKE ALL ON FUNCTION public.record_custom_cash_receipt(uuid, numeric) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_custom_cash_receipt(uuid, numeric) TO service_role;
 NOTIFY pgrst, 'reload schema';

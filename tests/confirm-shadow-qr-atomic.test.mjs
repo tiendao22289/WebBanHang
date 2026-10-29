@@ -7,7 +7,7 @@ const db = new PGlite();
 after(() => db.close());
 const account = '00000000-0000-4000-8000-000000000001';
 await db.exec(`
-  CREATE ROLE anon; CREATE ROLE authenticated;
+  CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;
   -- Như bảng thật trên máy quán: khoá là transaction_code, không có cột id, account_id kiểu text.
   CREATE TABLE payment_transactions(transaction_code varchar PRIMARY KEY, order_ids text NOT NULL,
     created_at timestamptz DEFAULT now(), account_id text, total_amount numeric, status varchar DEFAULT 'pending');
