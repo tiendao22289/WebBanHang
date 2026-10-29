@@ -45,7 +45,22 @@ export function offUntilISO(mode, nowMs = Date.now()) {
   return shiftEndISO(nowMs);
 }
 
-/** Cờ ẩn → "tắt luôn" (true) / "tắt đến 05:00 30/10" (giờ VN chưa qua); còn lại ''. */
+const vnClock = iso => {
+  const vn = new Date(new Date(iso).getTime() + VN_OFFSET_MS);
+  return `${String(vn.getUTCHours()).padStart(2, '0')}:${String(vn.getUTCMinutes()).padStart(2, '0')}`;
+};
+
+/** 4 ô của hộp "Tắt bao lâu?" (trang Bàn và trang Thực đơn): tên + giờ bán lại theo giờ VN. */
+export function offModeChoices(nowMs = Date.now()) {
+  return [
+    { mode: 'today', label: 'Hết hôm nay', hint: `Bán lại lúc ${vnClock(offUntilISO('today', nowMs))}` },
+    { mode: '2h', label: '2 tiếng', hint: `Bán lại lúc ${vnClock(offUntilISO('2h', nowMs))}` },
+    { mode: '4h', label: '4 tiếng', hint: `Bán lại lúc ${vnClock(offUntilISO('4h', nowMs))}` },
+    { mode: 'off', label: 'Vô thời hạn', hint: 'Đến khi bật lại' },
+  ];
+}
+
+/** Cờ ẩn →"tắt luôn" (true) / "tắt đến 05:00 30/10" (giờ VN chưa qua); còn lại ''. */
 export function offLabel(until, now = Date.now()) {
   if (until === true) return 'tắt luôn';
   if (typeof until !== 'string') return '';

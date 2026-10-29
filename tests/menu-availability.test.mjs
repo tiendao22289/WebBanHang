@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import vm from 'node:vm';
 import * as lib from '../src/lib/menuAvailability.mjs';
 
-const { isDishOff, isChoiceOff, shiftEndISO, offUntilISO, offLabel, dishChoices, cleanAvailabilityChanges, patchMenuItem, saveAvailability } = lib;
+const { isDishOff, isChoiceOff, shiftEndISO, offUntilISO, offModeChoices, offLabel, dishChoices, cleanAvailabilityChanges, patchMenuItem, saveAvailability } = lib;
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const CAT = id(900);
 const NOW = Date.parse('2026-10-29T15:00:00Z'); // 22:00 giờ VN
@@ -56,6 +56,23 @@ test('the four ways to turn off match the menu page: end of day, 2 hours, 4 hour
   assert.equal(offUntilISO('4h', NOW), '2026-10-29T19:00:00.000Z');
   assert.equal(offUntilISO('off', NOW), null);
   assert.equal(offLabel(offUntilISO('2h', NOW), NOW), 'tắt đến 00:00 30/10');
+});
+
+test('the "how long" box shows when each choice comes back on sale, in Vietnam time', () => {
+  assert.deepEqual(offModeChoices(NOW), [
+    { mode: 'today', label: 'Hết hôm nay', hint: 'Bán lại lúc 05:00' },
+    { mode: '2h', label: '2 tiếng', hint: 'Bán lại lúc 00:00' },
+    { mode: '4h', label: '4 tiếng', hint: 'Bán lại lúc 02:00' },
+    { mode: 'off', label: 'Vô thời hạn', hint: 'Đến khi bật lại' },
+  ]);
+});
+
+test('the menu page uses the same box and the same times as the tables panel', () => {
+  const menu = readFileSync(new URL('../src/app/admin/menu/page.jsx', import.meta.url), 'utf8');
+  assert.match(menu, /askOffMode\(\{ kind: 'dish', name: item\.name \}\)/);
+  assert.match(menu, /askOffMode\(\{ kind: 'choice'/);
+  assert.match(menu, /hiddenChoices\[choiceIndex\] = offUntilISO\(hideOption\) \|\| true;/);
+  assert.doesNotMatch(menu, /setHours\(23, 59/, '"Hết hôm nay" no longer ends at midnight on the menu page');
 });
 
 test('the panel lists every choice with its place in options, skipping the promo row', () => {
