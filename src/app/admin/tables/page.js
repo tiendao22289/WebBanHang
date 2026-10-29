@@ -14,7 +14,7 @@ import {
   getChannel, fetchChannelConfig, calcReviewDiscount, startOfTodayISO,
   isReviewDiscountItem,
 } from '@/lib/reviewReward';
-import { getMenuCached } from '@/lib/menuCache';
+import { getMenuCached, fetchMenuFromServer } from '@/lib/menuCache';
 import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders';
 import { promoGiftStatus } from '@/lib/promoGifts.mjs';
 import { isPrintJobBad, isUnresolvedBadJob } from '@/lib/printJobStatus.mjs';
@@ -51,6 +51,7 @@ import {
 } from 'lucide-react';
 import './tables.css';
 import LongOpenTables from './LongOpenTables';
+import DishQuickToggle from './DishQuickToggle';
 
 // ─── Nhận diện nước ngọt / bia / khăn (không dựa vào category vì DB để trống) ───
 const DRINK_KEYWORDS = ['bia', 'coca', 'pepsi', '7 up', '7up', 'xa xi', 'sa xi', 'sting', 'siting', '0 do', 'nuoc', 'tra', 'khan', 'sprite', 'fanta', 'mirinda', 'aquafina', 'lavie', 'la vie', 'red bull', 'redbull', 'revive'];
@@ -316,6 +317,8 @@ export default function TablesPage() {
   const [giftSaving, setGiftSaving] = useState(false);
   const [giftOffOpen, setGiftOffOpen] = useState(false);        // mở/thu nhóm "chưa là món tặng"
   const [giftSearch, setGiftSearch] = useState('');             // tìm nhanh trong danh sách TẮT
+  // Khung "Tắt / bật món" (nút đỏ ở mép phải, trên nút Quà): gạt nhiều món / loại rồi Lưu một lần.
+  const [showDishToggle, setShowDishToggle] = useState(false);
   // Ô nhập của bảng điều chỉnh bill giờ nằm trong BillAdjustDialog (state cục bộ,
   // tránh re-render cả trang khi gõ). Cha chỉ giữ mở/đóng + đang lưu.
   const [adjustBusy, setAdjustBusy] = useState(false);
@@ -1900,6 +1903,18 @@ export default function TablesPage() {
       Swal.fire({ icon: 'error', title: 'Lỗi', text: 'Không lưu được, thử lại giúp ạ.' });
     } finally {
       setGiftSaving(false);
+    }
+  }
+
+  // Sau khi lưu ở khung Tắt / bật món: đọc lại thực đơn (cập nhật cache admin + danh sách thêm món)
+  // và danh sách quà (món tắt thì không còn là quà chọn được).
+  async function refreshMenuAfterToggle() {
+    fetchPromoAndGifts();
+    try {
+      const { items } = await fetchMenuFromServer();
+      setMenuItems(items.filter(i => i.is_available).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi')));
+    } catch (e) {
+      console.error('[refreshMenuAfterToggle]', e);
     }
   }
 
@@ -6985,6 +7000,27 @@ export default function TablesPage() {
           </>}
         </div>
       </div>
+      {/* ─── Tab "Tắt / bật món" ngay trên tab Quà hôm nay (chỉ hiện khi đang xem lưới bàn) ─── */}
+      {!selectedTable && (
+        <button
+          onClick={() => setShowDishToggle(true)}
+          title="Tắt / bật món nhanh"
+          aria-label="Tắt / bật món nhanh"
+          style={{
+            position: 'fixed', right: 0, top: 'calc(46% - 46px)', transform: 'translateY(-50%)',
+            zIndex: 55, width: 10, height: 40,
+            border: 'none', borderRadius: '6px 0 0 6px',
+            background: 'linear-gradient(135deg,#ef4444,#b91c1c)', color: 'white',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 0, fontSize: '0.7rem', fontWeight: 800, lineHeight: 1,
+            boxShadow: '-2px 2px 8px rgba(220,38,38,0.32)',
+          }}
+        >
+          ‹
+        </button>
+      )}
+      {showDishToggle && <DishQuickToggle onClose={() => setShowDishToggle(false)} onSaved={refreshMenuAfterToggle} />}
+
       {/* ─── Tab "Quà hôm nay" ở mép phải màn hình bàn (chỉ hiện khi đang xem lưới bàn) ─── */}
       {!selectedTable && (
         <button
