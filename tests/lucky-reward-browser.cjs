@@ -95,9 +95,9 @@ if (!/^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(base)) throw new Error('Loca
       await panel.getByRole('button', { name: 'QUAY NGAY! 🎁', exact: true }).click();
     }
     await panel.waitFor({ state: 'visible' });
-    await panel.getByText('Mở Zalo, bấm Quan tâm!', { exact: false }).waitFor();
+    await panel.getByText('Mở Zalo để Quan tâm', { exact: false }).waitFor();
     await page.waitForTimeout(350); // let the modal entrance animation finish
-    const zaloLink = panel.getByRole('link', { name: 'Mở Zalo, bấm Quan tâm!', exact: true });
+    const zaloLink = panel.getByRole('link', { name: 'Mở Zalo để Quan tâm', exact: true });
     const box = await zaloLink.boundingBox();
     assert.ok(box && box.y >= 0 && box.y + box.height <= 640, 'Zalo CTA must be visible without scrolling');
     assert.equal(await zaloLink.getAttribute('target'), '_blank');
@@ -132,7 +132,7 @@ if (!/^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(base)) throw new Error('Loca
     await page.getByText('Bàn 1', { exact: false }).first().waitFor();
     assert.equal(await panel.count(), 0);
     await page.locator('.co-promo-pill.wheel').click();
-    await panel.getByText('Mở Zalo, bấm Quan tâm!', { exact: false }).waitFor();
+    await panel.getByText('Mở Zalo để Quan tâm', { exact: false }).waitFor();
     console.log('PASS choosing later stays closed; manual reopen resumes same reward');
 
     // Simulate server confirmation while the guest is away and a fresh page load.

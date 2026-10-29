@@ -13,7 +13,7 @@ import { supabase } from '@/lib/supabase';
 import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, fetchGroupBillTotal, startOfTodayISO, isReviewDiscountItem } from '@/lib/reviewReward';
 import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem } from '@/lib/luckyWheel';
-import { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, newLuckyRequestId, fetchLuckyNudgeConfig, wheelGiftGate } from '@/lib/luckyRewardFlow';
+import { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, newLuckyRequestId, fetchLuckyNudgeConfig, wheelGiftGate, wheelFollowStep } from '@/lib/luckyRewardFlow';
 import {
   Search,
   Plus,
@@ -520,6 +520,23 @@ const NUDGE_CONFETTI = Array.from({ length: 30 }, (_, i) => {
   };
 });
 
+// Hình minh hoạ trang Zalo của quán, chỉ chỗ nút "Quan tâm" — khách nhìn
+// hình là biết sang Zalo bấm vào đâu. Vẽ bằng CSS (không dùng ảnh chụp app
+// Zalo) nên chỉ là minh hoạ gần đúng, có ghi chữ "minh hoạ".
+const ZaloFollowPicture = () => (
+  <div className="co-zalo-mock" aria-hidden="true">
+    <div className="co-zalo-mock-top" />
+    <div className="co-zalo-mock-avatar">🐚</div>
+    <div className="co-zalo-mock-name">ỐC BẢO KHANG</div>
+    <div className="co-zalo-mock-btns">
+      <span className="co-zalo-mock-chat">Nhắn tin</span>
+      <span className="co-zalo-mock-follow">Quan tâm</span>
+    </div>
+    <span className="co-zalo-mock-hand">👆</span>
+    <div className="co-zalo-mock-caption">minh hoạ</div>
+  </div>
+);
+
 function OrderContent() {
   const searchParams = useSearchParams();
   const urlTableId = searchParams.get('table');
@@ -652,6 +669,10 @@ function OrderContent() {
   const wheelDrinkLoadedRef = useRef(false);
   const wheelDrinkLoadRef = useRef(null);
   const [wheelChecking, setWheelChecking] = useState(false);
+  // Dấu của bước Quan tâm Zalo cho lượt quay đang mở: tapped = khách đã bấm
+  // nút mở Zalo, acked = khách tự trả lời "Đã Quan tâm". Lưu cả localStorage
+  // (_auto_tap, _follow_ack) để quay lại từ Zalo / tải lại trang vẫn đúng bước.
+  const [wheelFollowMarks, setWheelFollowMarks] = useState({ tapped: null, acked: null });
   const zaloClaimRef = useRef(null);                // bản sao đọc ngay, không đợi setState
   const [zaloWaitedLong, setZaloWaitedLong] = useState(false); // chờ lâu → gợi ý nhắn SĐT
   // iOS chỉ mở app khi khách bấm TRỰC TIẾP link có scheme zalo:// (JS gọi thì
@@ -716,6 +737,10 @@ function OrderContent() {
     isGift: wheelIsGiftPrize, giftChosen: wheelGiftChosen } = wheelGiftGate({
       spin: wheelSpin, prizeType: wheelPrize?.prizeType,
       hasPrize: !!wheelPrize, requireFollow: luckyWheelRequireFollow });
+  const wheelFollowView = wheelFollowStep({ spin: wheelSpin, followPending: wheelFollowPending,
+    requireFollow: luckyWheelRequireFollow, hasZaloLink: !!wheelZaloCfg,
+    tapped: !!wheelPrize?.spinId && wheelFollowMarks.tapped === wheelPrize.spinId,
+    acked: !!wheelPrize?.spinId && wheelFollowMarks.acked === wheelPrize.spinId });
   const wheelGiftActiveList = wheelPrize?.prizeType === 'gift_dish' ? giftItems
     : wheelPrize?.prizeType === 'gift_drink' ? wheelDrinkItems : [];
 
@@ -2027,6 +2052,51 @@ function OrderContent() {
     setWheelOpen(false);
   }
 
+  // Đọc lại dấu bước Quan tâm Zalo mỗi khi đổi sang lượt quay khác.
+  useEffect(() => {
+    const spinId = wheelPrize?.spinId;
+    let tapped = null, acked = null;
+    try {
+      if (spinId && localStorage.getItem(`${wheelStorageKey()}_auto_tap`) === spinId) tapped = spinId;
+      if (spinId && localStorage.getItem(`${wheelStorageKey()}_follow_ack`) === spinId) acked = spinId;
+    } catch { }
+    setWheelFollowMarks({ tapped, acked });
+  }, [wheelPrize?.spinId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * Khách bấm nút mở Zalo của vòng xoay. Thẻ <a> tự điều hướng sau handler
+   * này (iOS chỉ mở app khi bấm trực tiếp link) nên ở đây chỉ lưu dấu:
+   * quay lại / Back thì khôi phục đúng nhiệm vụ thay vì đóng popup, và báo
+   * server tự duyệt quà khi lượt quay còn chờ. Quà đã ghi rồi thì chỉ mở
+   * lại Zalo cho khách bấm Quan tâm, không gọi server nữa.
+   */
+  function onWheelZaloTap() {
+    const spinId = wheelPrize?.spinId;
+    if (!spinId) return;
+    rememberWheel(spinId);
+    ensureBackGuard();
+    try { localStorage.setItem(`${wheelStorageKey()}_zalo_departure`, spinId); } catch { }
+    try { localStorage.setItem(`${wheelStorageKey()}_auto_tap`, spinId); } catch { }
+    setWheelFollowMarks(marks => ({ ...marks, tapped: spinId }));
+    if (!wheelFollowPending) return;
+    // Tự duyệt trên server; keepalive tiếp tục khi chuyển sang Zalo.
+    // Mốc local giúp claim-ready gửi lại nếu mạng ngắt lúc chuyển app.
+    try {
+      fetch('/api/lucky/follow-tapped', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spinId }), keepalive: true,
+      }).catch(() => {});
+    } catch { }
+  }
+
+  // Khách tự trả lời "Đã Quan tâm" — chỉ để thôi nhắc, không phải xác nhận của Zalo.
+  function ackWheelFollow() {
+    const spinId = wheelPrize?.spinId;
+    if (!spinId) return;
+    try { localStorage.setItem(`${wheelStorageKey()}_follow_ack`, spinId); } catch { }
+    setWheelFollowMarks(marks => ({ ...marks, acked: spinId }));
+  }
+
   // Restore on reload, bfcache return, or returning from the Zalo app.
   // A read/network failure must never erase the only saved reward reference.
   async function restoreWheel(manual = false) {
@@ -2372,7 +2442,7 @@ function OrderContent() {
         storedId = localStorage.getItem(key);
       } catch { }
       // Khách TỰ BẤM mở vòng xoay: nếu thiết bị này ĐÃ có lượt quay lưu lại
-      // (storedId) thì LUÔN khôi phục về đúng bản kết quả/"Mở Zalo, bấm Quan tâm!"
+      // (storedId) thì LUÔN khôi phục về đúng bản kết quả/"Mở Zalo để Quan tâm"
       // — kể cả khi khách đã lỡ bấm X/"Để sau" trước đó (dismiss xoá cờ _pending).
       // Vì khách đã quay rồi thì KHÔNG được hiện vòng xoay để quay lại. restoreWheel
       // ở chế độ manual bỏ qua cờ dismissed, và nếu lượt cũ/khác phiên thì nó tự
@@ -2445,7 +2515,10 @@ function OrderContent() {
       setTimeout(() => {
         setWheelPrize(data);
         setWheelSpinning(false);
-        showFeedbackToast('success', 'Chúc mừng Quý khách! 🎉', data.prizeLabel);
+        // resumed: khách đã quay trước đó mà chưa Quan tâm Zalo — server trả
+        // lại đúng lượt cũ (không quay quà mới) để khách làm tiếp bước Quan tâm.
+        if (data.resumed) showFeedbackToast('success', 'Quà của Quý khách vẫn còn đây 🎁', `${data.prizeLabel} — bấm Quan tâm Zalo để nhận nhé!`);
+        else showFeedbackToast('success', 'Chúc mừng Quý khách! 🎉', data.prizeLabel);
         // Quà chưa vào hoá đơn: còn chờ khách Quan tâm Zalo (theo dõi ở useEffect dưới)
         checkWheelReward(data.spinId);
       }, 4300);
@@ -2525,7 +2598,7 @@ function OrderContent() {
       }
       if (manual) {
         setWheelErr(luckyRewardState(data) === 'waiting_follow'
-          ? 'Quà vẫn đang chờ nhận. Quý khách bấm “Mở Zalo” để được tự duyệt, rồi quay lại kiểm tra nhé.'
+          ? 'Quà vẫn đang chờ nhận. Quý khách bấm nút xanh “Mở Zalo”, bấm Quan tâm rồi quay lại đây nhé.'
           : luckyRewardState(data) === 'saving'
             ? 'Quà chưa được ghi xong vào hoá đơn. Quý khách kiểm tra lại sau ít giây; nếu vẫn chưa được, vui lòng gọi nhân viên.' : '');
       } else if (luckyRewardState(data) === 'done') setWheelErr('');
@@ -5416,10 +5489,12 @@ function OrderContent() {
                           {wheelSpin.block_reason || 'Quán chưa áp được quà, Quý khách gọi nhân viên giúp ạ!'}
                         </div>
                       ) : wheelFollowPending ? (
-                        <div style={{ fontWeight: 700, color: '#0f766e' }}>
-                          {wheelIsGiftPrize && wheelGiftChosen
-                            ? '🎁 Quà đã chọn xong! Mở Zalo để hệ thống tự duyệt quà nha 👇'
-                            : 'Mở Zalo để hệ thống tự duyệt ưu đãi vào hoá đơn nha 👇'}
+                        <div className="co-wheel-follow-lead">
+                          {wheelFollowView === 'reopen'
+                            ? '⏳ Đang ghi quà vào hoá đơn…'
+                            : wheelIsGiftPrize && wheelGiftChosen
+                              ? '🎁 Đã chọn quà! Còn 1 bước nữa thôi 👇'
+                              : 'Còn 1 bước nữa để nhận quà 👇'}
                         </div>
                       ) : wheelNeedsGiftPick ? (
                         <div style={{ fontWeight: 700, color: '#0f766e' }}>
@@ -5520,43 +5595,78 @@ function OrderContent() {
                         luckyWheelRequireFollow (Cài đặt > Vòng xoay) — RIÊNG
                         với việc kênh "Ưu đãi mạng xã hội > Zalo" có bật hay
                         không, 2 tính năng độc lập nhau. */}
-                    {wheelFollowPending && wheelZaloCfg && (
-                      <>
+                    {/* Bước Quan tâm Zalo: 3 bước ngắn + hình chỉ chỗ nút Quan
+                        tâm + MỘT nút lớn màu xanh Zalo. Trước đây chữ hướng dẫn
+                        nhỏ lại báo quà được duyệt ngay khi mở Zalo nên khách mở
+                        Zalo rồi quay về ngay, bỏ qua nút Quan tâm. Quay lại thì
+                        hỏi khách đã bấm Quan tâm chưa (web không tự biết được). */}
+                    {(wheelFollowView === 'open' || wheelFollowView === 'reopen') && (
+                      <div className="co-wheel-follow">
+                        {wheelFollowView === 'reopen' && (
+                          <div className="co-wheel-follow-remind">
+                            Quý khách đã bấm <b>Quan tâm</b> trong Zalo chưa? Chưa thì mở lại Zalo nhé!
+                          </div>
+                        )}
+                        <div className="co-wheel-follow-body">
+                          <ol className="co-wheel-follow-steps">
+                            <li><span className="co-wheel-step-no">1</span><span>Bấm nút xanh <b>Mở Zalo</b> bên dưới</span></li>
+                            <li><span className="co-wheel-step-no">2</span><span>Trong Zalo, bấm nút <b>Quan tâm</b> như hình</span></li>
+                            <li><span className="co-wheel-step-no">3</span><span>Quay lại đây gọi món tiếp</span></li>
+                          </ol>
+                          <ZaloFollowPicture />
+                        </div>
                         <a
-                          className="co-gmap-cta co-wheel-zalo-cta"
+                          className="co-wheel-zalo-cta"
                           href={zaloOpenHref(wheelZaloCfg)}
-                          onClick={() => {
-                            rememberWheel(wheelPrize.spinId);
-                            ensureBackGuard();
-                            try { localStorage.setItem(`${wheelStorageKey()}_zalo_departure`, wheelPrize.spinId); } catch { }
-                            try { localStorage.setItem(`${wheelStorageKey()}_auto_tap`, wheelPrize.spinId); } catch { }
-                            // Tự duyệt trên server; keepalive tiếp tục khi chuyển sang Zalo.
-                            // Mốc local giúp claim-ready gửi lại nếu mạng ngắt lúc chuyển app.
-                            try {
-                              fetch('/api/lucky/follow-tapped', {
-                                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ spinId: wheelPrize.spinId }), keepalive: true,
-                              }).catch(() => {});
-                            } catch { }
-                          }}
+                          onClick={onWheelZaloTap}
                           target="_blank" rel="noopener noreferrer"
                         >
-                          Mở Zalo, bấm Quan tâm!
+                          <span className="co-wheel-zalo-cta-icon" aria-hidden="true">💬</span>
+                          {wheelFollowView === 'reopen' ? 'Mở lại Zalo để Quan tâm' : 'Mở Zalo để Quan tâm'}
                         </a>
-                        <div className="co-wheel-zalo-guide">
-                          <div>1. Mở Zalo và bấm <b>Quan tâm</b> để theo dõi quán.</div>
-                          <div>2. Quà được <b>tự duyệt</b> sau khi mở Zalo, không cần gửi SĐT.</div>
-                          <div>Quay lại đây để xem quà đã vào hoá đơn. Nếu chưa thấy, bấm <b>Kiểm tra nhận quà</b>.</div>
-                          {inZaloBrowser && <div>Giữ trang gọi món này mở. Nếu lỡ đóng, quét lại QR bàn trong Zalo để tiếp tục nhận quà.</div>}
+                        {isIOS && (
+                          <div className="co-wheel-follow-hint">Nếu hiện trang web Zalo, bấm nút <b>MỞ</b> ở góc trên để vào app.</div>
+                        )}
+                        <div className="co-wheel-follow-hint">Lỡ đóng trang này thì quét lại mã QR trên bàn nhé.</div>
+                      </div>
+                    )}
+
+                    {wheelFollowView === 'ask' && (
+                      <div className="co-wheel-follow co-wheel-follow-ask">
+                        <div className="co-wheel-follow-body">
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div className="co-wheel-follow-q">Quý khách đã bấm <b>Quan tâm</b> Zalo quán chưa ạ?</div>
+                            <div className="co-wheel-follow-why">Quan tâm để không lỡ ưu đãi lần sau của quán 💙</div>
+                          </div>
+                          <ZaloFollowPicture />
                         </div>
-                      </>
+                        <div className="co-wheel-follow-actions">
+                          <button type="button" className="co-wheel-follow-yes" onClick={ackWheelFollow}>
+                            ✅ Đã Quan tâm
+                          </button>
+                          <a
+                            className="co-wheel-follow-again"
+                            href={zaloOpenHref(wheelZaloCfg)}
+                            onClick={onWheelZaloTap}
+                            target="_blank" rel="noopener noreferrer"
+                          >
+                            Chưa, mở Zalo
+                          </a>
+                        </div>
+                      </div>
+                    )}
+                    {wheelFollowView === 'thanks' && (
+                      <div className="co-wheel-follow-thanks">💙 Cảm ơn Quý khách đã Quan tâm quán!</div>
                     )}
 
                     {wheelFollowPending && !wheelZaloCfg && (
                       <div role="alert" className="co-gmap-state co-gmap-warn">Quán chưa có đường dẫn Zalo. Quý khách gọi nhân viên hỗ trợ nhận quà nhé.</div>
                     )}
-                    {!wheelDone && wheelSpin?.status !== 'blocked' && (
-                      <button className="co-gmap-cta" disabled={wheelChecking || wheelGiftPicking}
+                    {/* Chưa mở Zalo thì ẩn nút kiểm tra: màn hình chỉ còn đúng
+                        một nút nổi bật là mở Zalo (trang vẫn tự kiểm tra định kỳ). */}
+                    {!wheelDone && wheelSpin?.status !== 'blocked' && wheelFollowView !== 'open' && (
+                      <button className={wheelFollowView === 'reopen' ? 'co-wheel-check-soft' : 'co-gmap-cta'}
+                        disabled={wheelChecking || wheelGiftPicking}
                         onClick={() => checkWheelReward(wheelPrize.spinId, true)}>
                         {wheelChecking ? 'Đang kiểm tra…' : 'Kiểm tra nhận quà'}
                       </button>

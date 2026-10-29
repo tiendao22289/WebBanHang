@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const flow = await import(`data:text/javascript;base64,${Buffer.from(read('../src/lib/luckyRewardFlow.js')).toString('base64')}`);
-const { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, hasPendingLuckySpin, wheelGiftGate } = flow;
+const { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, hasPendingLuckySpin, wheelGiftGate, wheelFollowStep } = flow;
 const page = read('../src/app/order/page.jsx');
 const restoreSource = page.slice(page.indexOf('  async function restoreWheel('), page.indexOf('  wheelResumeRef.current = restoreWheel;'));
 const today = new Date();
@@ -266,4 +266,50 @@ test('the invitation marker is scoped to the current occupied table session', as
   await h.run();
   assert.deepEqual(seenKeys, ['nudge_2026-09-07T09:13:55.494Z']);
   assert.equal(h.seen.shown, true);
+});
+
+// Bước Quan tâm Zalo: web không biết khách đã bấm Quan tâm thật hay chưa (sự
+// kiện follow của Zalo không mang mã lượt quay) — chỉ biết đã mở Zalo và câu
+// trả lời của khách. Các nhánh dưới đây giữ đúng cách hướng dẫn và nhắc nhẹ.
+const followBase = { requireFollow: true, hasZaloLink: true, tapped: false, acked: false };
+const followDone = { ...base, prize_type: 'percent', status: 'applied', applied_item_id: 'discount-line' };
+
+test('before opening Zalo the guest sees the 3-step follow guide', () => {
+  assert.equal(wheelFollowStep({ ...followBase, spin: base, followPending: true }), 'open');
+  assert.equal(wheelFollowStep({ ...followBase, spin: null, followPending: true }), 'open');
+});
+
+test('coming back before the reward is recorded reminds the guest and offers Zalo again', () => {
+  assert.equal(wheelFollowStep({ ...followBase, spin: base, followPending: true, tapped: true }), 'reopen');
+});
+
+test('after the reward lands the guest is asked, then thanked, never told Zalo confirmed it', () => {
+  assert.equal(wheelFollowStep({ ...followBase, spin: followDone, followPending: false, tapped: true }), 'ask');
+  assert.equal(wheelFollowStep({ ...followBase, spin: { ...followDone, applied_item_id: null }, followPending: false, tapped: true }), 'ask');
+  assert.equal(wheelFollowStep({ ...followBase, spin: followDone, followPending: false, tapped: true, acked: true }), 'thanks');
+});
+
+test('no follow prompt when it does not apply', () => {
+  // Không yêu cầu Quan tâm / thiếu link Zalo / bị chặn.
+  assert.equal(wheelFollowStep({ ...followBase, requireFollow: false, spin: base, followPending: false }), null);
+  assert.equal(wheelFollowStep({ ...followBase, hasZaloLink: false, spin: base, followPending: true }), null);
+  assert.equal(wheelFollowStep({ ...followBase, spin: { ...base, status: 'blocked' }, followPending: false, tapped: true }), null);
+  // Quà vào bill mà khách chưa từng bấm mở Zalo (vd quán duyệt tay): không hỏi.
+  assert.equal(wheelFollowStep({ ...followBase, spin: followDone, followPending: false }), null);
+  // Đang chọn món quà: để màn chọn món đứng một mình.
+  const choosing = { ...base, status: 'applied', gift_menu_item_id: null };
+  assert.equal(wheelFollowStep({ ...followBase, spin: choosing, followPending: false, tapped: true }), null);
+});
+
+test('the follow step has one big Zalo button and no copy that says following is optional', () => {
+  const modal = page.slice(page.indexOf('className="co-chal-modal co-wheel-modal"'), page.indexOf('Trúng thưởng gần đây'));
+  assert.ok(modal.includes('Mở Zalo để Quan tâm'));
+  assert.doesNotMatch(modal, /không cần gửi SĐT|tự duyệt/);
+  // Cả nút chính và nút "Chưa, mở Zalo" đều mở tab mới và dùng chung handler lưu dấu quay lại.
+  assert.equal(modal.match(/onClick=\{onWheelZaloTap\}\s*target="_blank"/g)?.length, 2);
+  // Chưa mở Zalo thì ẩn "Kiểm tra nhận quà" để chỉ còn một nút nổi bật.
+  assert.match(modal, /wheelFollowView !== 'open' && \(\s*<button/);
+  // Quà đã ghi thì mở lại Zalo chỉ để Quan tâm, không gọi tự duyệt lần nữa.
+  const tap = page.slice(page.indexOf('  function onWheelZaloTap()'), page.indexOf('  function ackWheelFollow()'));
+  assert.ok(tap.indexOf('if (!wheelFollowPending) return;') < tap.indexOf("fetch('/api/lucky/follow-tapped'"));
 });

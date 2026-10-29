@@ -36,6 +36,26 @@ export function wheelGiftGate({ spin, prizeType, hasPrize, requireFollow }) {
   return { needsGiftPick, followPending, isGift, giftChosen };
 }
 
+// Bước Quan tâm Zalo trên popup vòng xoay hiện gì. Sự kiện follow của Zalo
+// không mang mã lượt quay nên web KHÔNG biết khách đã bấm Quan tâm thật hay
+// chưa — chỉ biết khách đã bấm nút mở Zalo (tapped) và khách tự trả lời đã
+// Quan tâm (acked). Vì vậy khi quay lại chỉ HỎI và nhắc nhẹ, không bao giờ
+// báo "đã xác nhận Quan tâm".
+//  - 'open'   : chưa mở Zalo → 3 bước + hình nút Quan tâm + nút lớn mở Zalo.
+//  - 'reopen' : đã mở Zalo, quà chưa ghi xong → nhắc bấm Quan tâm, cho mở lại.
+//  - 'ask'    : quà đã vào bill → hỏi khách đã bấm Quan tâm chưa.
+//  - 'thanks' : khách nói đã Quan tâm → cảm ơn.
+//  - null     : không có bước Quan tâm (tắt yêu cầu, thiếu link Zalo, bị
+//               chặn, đang chọn món, hoặc khách chưa từng mở Zalo).
+export function wheelFollowStep({ spin, followPending, requireFollow, hasZaloLink, tapped, acked }) {
+  if (!requireFollow || !hasZaloLink || spin?.status === 'blocked') return null;
+  if (followPending) return tapped ? 'reopen' : 'open';
+  if (!tapped) return null;
+  const state = luckyRewardState(spin);
+  if (state !== 'done' && state !== 'saving') return null;
+  return acked ? 'thanks' : 'ask';
+}
+
 export function luckyPrizeTitle(prize) {
   const type = prize?.prize_type ?? prize?.prizeType;
   const value = Number(prize?.prize_value ?? prize?.prizeValue);

@@ -269,6 +269,53 @@ test('repeating a spin request after a lost response returns the original prize'
   assert.equal(h.state.lucky_spins.length, 1);
 });
 
+// Khách quay xong, CHƯA Quan tâm Zalo, lỡ thoát ra (máy không còn nhớ lượt
+// cũ) rồi vào quay lại: phải được đưa về đúng lượt đang chờ để bấm Quan tâm,
+// không bị báo "đã quay" và không được quay ra quà mới.
+function spinRoute(h) {
+  const routeSource = read('../src/app/api/lucky/spin/route.js')
+    .replace(/^import[\s\S]*?;\r?\n/gm, '').replace(/export /g, '');
+  return vm.runInNewContext(`${routeSource}\nPOST`, {
+    ...wheel, NextResponse: { json: data => data }, createClient: () => h.db,
+    process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'mock', SUPABASE_SERVICE_ROLE_KEY: 'mock' } },
+  });
+}
+const waitingSpin = { ...spinTemplate, id: 'waiting-spin', table_id: 'table', status: 'waiting_follow',
+  applied_order_id: null, gift_menu_item_id: null, prize_key: 'p10', prize_type: 'percent', prize_value: 10,
+  prize_label: 'Giảm 10% hoá đơn', created_at: new Date().toISOString() };
+const respinBody = phone => ({ json: async () => ({ tableId: 'table', name: 'Khách thử', phone,
+  requestId: '44444444-4444-4444-8444-444444444444' }) });
+
+test('spinning again before following resumes the same waiting spin', async () => {
+  const h = database(waitingSpin);
+  const reply = await spinRoute(h)(respinBody('0900000000'));
+  assert.equal(reply.ok, true);
+  assert.equal(reply.resumed, true);
+  assert.equal(reply.spinId, 'waiting-spin');
+  assert.equal(reply.prizeLabel, 'Giảm 10% hoá đơn');
+  assert.equal(h.state.lucky_spins.length, 1, 'no new spin or new prize is drawn');
+});
+
+test('another phone at the table does not receive someone else\'s waiting spin', async () => {
+  const h = database(waitingSpin);
+  const reply = await spinRoute(h)(respinBody('0911111111'));
+  assert.notEqual(reply.spinId, 'waiting-spin');
+  assert.notEqual(reply.resumed, true);
+});
+
+test('a spin from the previous guest at the table is never resumed', async () => {
+  const h = database({ ...waitingSpin, created_at: new Date(Date.now() - 3600000).toISOString() });
+  const reply = await spinRoute(h)(respinBody('0900000000'));
+  assert.notEqual(reply.spinId, 'waiting-spin');
+});
+
+test('a reward already on the bill is not reopened by spinning again', async () => {
+  const h = database({ ...waitingSpin, status: 'applied', applied_order_id: 'order', applied_item_id: 'line' });
+  const reply = await spinRoute(h)(respinBody('0900000000'));
+  assert.equal(reply.ok, false);
+  assert.match(reply.message, /đã nhận quà/);
+});
+
 test('gift chosen AFTER follow still sends exactly one congratulation message', async () => {
   // Khách đã Quan tâm Zalo (status applied, zalo_user_id có) NHƯNG chưa chọn quà
   // lúc đó → gift_menu_item_id null, applied_item_id null. Khi khách chọn món,
