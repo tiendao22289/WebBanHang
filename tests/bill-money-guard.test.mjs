@@ -207,6 +207,10 @@ test('mã QR: khoá công khai chỉ tạo mã chờ và huỷ mã chờ', async
   await assert.rejects(asWeb(`UPDATE payment_transactions SET status = 'failed', total_amount = 1 WHERE transaction_code = 'QRWEB001'`), denied);
   await assert.rejects(asWeb(`UPDATE payment_transactions SET status = 'pending' WHERE transaction_code = 'QRWEB002'`), denied);
   await assert.rejects(asWeb(`DELETE FROM payment_transactions WHERE transaction_code = 'QRWEB001'`), denied);
+  // Hàm xác nhận thuộc supabase_admin (không thu được quyền) mà khoá công khai gọi: vẫn bị chặn ở bảng.
+  await assert.rejects(asWebInsideDefiner('SELECT confirm_custom_qr_payment($1, $2, $3)', ['QRWEB001', 200000, id(41)]), denied);
+  await assert.rejects(asWebInsideDefiner('SELECT record_custom_cash_receipt($1, $2)', [id(71), 500000]), denied);
+  await assert.rejects(asWeb('INSERT INTO custom_cash_receipts(id, amount) VALUES ($1, 500000)', [id(72)]));
   assert.equal((await one('SELECT count(*)::int AS n FROM finance_manual_receipts')).n, 0, 'không ghi khống vào Sổ thu chi');
 
   // Nhân viên bấm "Đã nhận tiền" → máy chủ xác nhận → Sổ thu chi + tiền vào thẻ.
@@ -258,7 +262,8 @@ test('cài lại không tạo trùng trigger, không mở lại quyền', async 
   await db.exec(migration('confirm_custom_qr_payment.sql'));
   await db.exec(migration('bill_money_guard.sql'));
   const { rows } = await db.query(`SELECT tgname, count(*)::int AS n FROM pg_trigger
-    WHERE tgname IN ('paid_bill_guard', 'payment_transaction_guard', 'bank_total_guard') GROUP BY 1 ORDER BY 1`);
-  assert.deepEqual(rows, [{ tgname: 'bank_total_guard', n: 1 }, { tgname: 'paid_bill_guard', n: 1 }, { tgname: 'payment_transaction_guard', n: 1 }]);
+    WHERE tgname IN ('paid_bill_guard', 'payment_transaction_guard', 'bank_total_guard', 'cash_receipt_guard') GROUP BY 1 ORDER BY 1`);
+  assert.deepEqual(rows, [{ tgname: 'bank_total_guard', n: 1 }, { tgname: 'cash_receipt_guard', n: 1 },
+    { tgname: 'paid_bill_guard', n: 1 }, { tgname: 'payment_transaction_guard', n: 1 }]);
   assert.equal((await one(`SELECT has_function_privilege('anon', 'confirm_custom_qr_payment(text,numeric,uuid)', 'EXECUTE') AS ok`)).ok, false);
 });

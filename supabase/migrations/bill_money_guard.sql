@@ -5,7 +5,8 @@
 --     cộng tiền vào thẻ (process_bank_payment, bank_daily_totals);
 --   * đặt bill thành 'paid', sửa / huỷ / mở lại / xoá bill đã thu (bill đã thu đổi trạng thái là
 --     biến khỏi Sổ thu chi — capture_finance_revenue). Khách vẫn góp ý / sửa địa chỉ được;
---   * đổi mã QR (payment_transactions) sang 'completed' (ghi vào Sổ thu chi — capture_qr_page_receipt).
+--   * đổi mã QR (payment_transactions) sang 'completed', ghi "Nhận tiền mặt" (custom_cash_receipts) —
+--     cả hai tự ghi vào Sổ thu chi (capture_qr_page_receipt).
 -- Trình duyệt vẫn: tạo mã QR 'pending', huỷ mã 'pending' → 'failed', và mọi thao tác trên bill đang mở.
 --
 -- Chạy lại được nhiều lần (scripts/apply-finance-migration.cjs). orders thuộc supabase_admin nên
@@ -97,9 +98,21 @@ BEGIN
   IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
   RETURN NEW;
 END $$;
+-- "Nhận tiền mặt" ở trang Mã QR (record_custom_cash_receipt) → Sổ thu chi. Hàm đó có thể thuộc
+-- supabase_admin (không thu được quyền) nên chặn ở bảng.
+CREATE OR REPLACE FUNCTION public.cash_receipt_guard()
+RETURNS trigger LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+BEGIN
+  IF NOT public.trusted_db_caller() THEN
+    RAISE EXCEPTION 'Chỉ máy chủ được ghi tiền mặt trang Mã QR' USING ERRCODE = '42501';
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END $$;
 REVOKE ALL ON FUNCTION public.paid_bill_guard() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.payment_transaction_guard() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.bank_total_guard() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.cash_receipt_guard() FROM PUBLIC, anon, authenticated;
 
 DO $$
 BEGIN
@@ -117,11 +130,16 @@ BEGIN
     CREATE TRIGGER bank_total_guard BEFORE INSERT OR UPDATE OR DELETE ON public.bank_daily_totals
       FOR EACH ROW EXECUTE FUNCTION public.bank_total_guard();
   END IF;
+  IF to_regclass('public.custom_cash_receipts') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_trigger
+      WHERE tgname = 'cash_receipt_guard' AND tgrelid = to_regclass('public.custom_cash_receipts')) THEN
+    CREATE TRIGGER cash_receipt_guard BEFORE INSERT OR UPDATE OR DELETE ON public.custom_cash_receipts
+      FOR EACH ROW EXECUTE FUNCTION public.cash_receipt_guard();
+  END IF;
 END $$;
 
 -- Hàm chốt tiền: trang web đã gọi qua máy chủ (/api/admin/receipts) từ trước. Thu quyền mọi bản
--- (kể cả bản cũ khác tham số). Hàm thuộc supabase_admin thì postgres không thu được → chỉ cảnh báo;
--- trigger ở trên vẫn chặn khi hàm đó ghi tiền.
+-- (kể cả bản cũ khác tham số). Hàm thuộc supabase_admin (DB khôi phục từ bản sao) thì postgres không
+-- thu được → chỉ cảnh báo; khoá công khai gọi được nhưng trigger ở trên chặn mọi chỗ hàm đó ghi tiền.
 DO $$
 DECLARE fn regprocedure;
 BEGIN
