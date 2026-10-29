@@ -39,10 +39,10 @@ function fail(message) {
   return NextResponse.json({ ok: false, message });
 }
 
-function spinReply(spin, needFollow = true) {
+function spinReply(spin, needFollow = true, resumed = false) {
   return NextResponse.json({ ok: true, spinId: spin.id, prizeKey: spin.prize_key,
     prizeType: spin.prize_type, prizeValue: spin.prize_value, prizeLabel: spin.prize_label,
-    discountAmount: spin.discount_amount, billTotal: spin.bill_total, needFollow });
+    discountAmount: spin.discount_amount, billTotal: spin.bill_total, needFollow, resumed });
 }
 
 export async function POST(request) {
@@ -90,7 +90,7 @@ export async function POST(request) {
 
     const hostId = table.merged_with || table.id;
     const { data: groupTables } = await supabase
-      .from('tables').select('id, table_type').or(`id.eq.${hostId},merged_with.eq.${hostId}`);
+      .from('tables').select('id, table_type, occupied_at').or(`id.eq.${hostId},merged_with.eq.${hostId}`);
     const groupIds = (groupTables || []).map(t => t.id);
     if (groupIds.length === 0) groupIds.push(hostId);
     const isTakeaway = (groupTables || []).find(t => t.id === hostId)?.table_type === 'takeaway';
@@ -119,6 +119,22 @@ export async function POST(request) {
     if (cfg.minBill > 0 && total < cfg.minBill) {
       return fail(`Vòng xoay dành cho hoá đơn từ ${cfg.minBill.toLocaleString('vi-VN')}đ ạ. Quý khách gọi thêm chút nữa nhé 😋`);
     }
+
+    // ── Khách đã quay nhưng CHƯA Quan tâm Zalo, lỡ thoát ra rồi vào quay lại ──
+    // (mở bằng trình duyệt khác, hoặc Zalo xoá bộ nhớ trang nên máy không còn
+    // nhớ lượt cũ). Trước đây khách bị báo "đã quay" và mất luôn đường bấm
+    // Quan tâm. Giờ trả lại ĐÚNG lượt đang chờ của SĐT này trong lượt ngồi bàn
+    // hiện tại để khách bấm Quan tâm tiếp. Không quay quà mới, không thêm suất
+    // — chỉ mở lại lượt cũ, nên chặn 1 lượt/bàn và cooldown vẫn giữ nguyên.
+    const hostOccupiedAt = (groupTables || []).find(t => t.id === hostId)?.occupied_at;
+    const sessionStart = hostOccupiedAt && new Date(hostOccupiedAt) > startOfToday
+      ? new Date(hostOccupiedAt) : startOfToday;
+    const { data: waitingSpin, error: waitingError } = await supabase.from('lucky_spins')
+      .select('*').eq('host_table_id', hostId).eq('customer_phone', phone)
+      .eq('status', 'waiting_follow').gte('created_at', sessionStart.toISOString())
+      .order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (waitingError) throw waitingError;
+    if (waitingSpin) return spinReply(waitingSpin, cfg.requireFollow, true);
 
     // ── 1 lượt khách của bàn chỉ nhận 1 lần quà vòng xoay ─────────
     // Chặn ngay từ lúc quay nếu nhóm bàn ĐÃ CÓ 1 lượt quay được ÁP QUÀ
@@ -211,7 +227,7 @@ export async function POST(request) {
         const { data: existing } = await supabase.from('lucky_spins').select('*').eq('id', requestId).maybeSingle();
         if (existing?.table_id === tableId && existing.customer_phone === phone) return spinReply(existing);
       }
-      return fail('Bàn mình đã quay một lượt rồi ạ 🥰');
+      return fail('Bàn mình đã quay một lượt rồi ạ 🥰 Nếu quà chưa nhận xong, Quý khách nhập đúng SĐT lúc quay để nhận tiếp nhé.');
     }
     if (spinErr || !spin) {
       console.error('[Lucky] insert lỗi:', spinErr);

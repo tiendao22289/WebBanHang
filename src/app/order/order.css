@@ -2132,17 +2132,199 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
     --co-wheel-label-r: calc(var(--co-wheel-size) * 0.395);
   }
 }
-.co-wheel-zalo-cta { margin-top: 12px; }
-.co-wheel-zalo-guide {
+/* ── Bước Quan tâm Zalo của vòng xoay: 3 bước ngắn + hình chỉ chỗ nút Quan
+   tâm + MỘT nút lớn màu xanh Zalo (#0068ff) — nút nổi bật duy nhất trên
+   màn hình, chữ to cho khách lớn tuổi đọc được. ── */
+.co-wheel-follow-lead { font-weight: 800; font-size: 1rem; color: #0f766e; }
+.co-wheel-follow {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: #fff;
+  border: 2px solid #bfdbfe;
+  box-shadow: 0 4px 14px rgba(0, 104, 255, 0.12);
+}
+.co-wheel-follow-body { display: flex; align-items: center; gap: 10px; }
+.co-wheel-follow-steps {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.co-wheel-follow-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: .92rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: #0f172a;
+}
+.co-wheel-follow-steps b { color: #0068ff; font-weight: 900; }
+.co-wheel-step-no {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #0068ff;
+  color: #fff;
+  font-size: .85rem;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.co-wheel-follow-remind {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: .9rem;
+  font-weight: 800;
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* Hình minh hoạ trang Zalo của quán — khung điện thoại nhỏ, nút Quan tâm
+   nhấp nháy + bàn tay chỉ vào. */
+.co-zalo-mock {
+  position: relative;
+  flex-shrink: 0;
+  width: 108px;
+  padding-bottom: 6px;
+  border: 3px solid #1e293b;
+  border-radius: 16px;
+  background: #fff;
+  overflow: hidden;
+  text-align: center;
+}
+.co-zalo-mock-top { height: 24px; background: linear-gradient(135deg, #0068ff, #3b8bff); }
+.co-zalo-mock-avatar {
+  width: 32px;
+  height: 32px;
+  margin: -16px auto 2px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #fff7ed;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+}
+.co-zalo-mock-name { margin-bottom: 6px; font-size: .58rem; font-weight: 900; color: #0f172a; }
+.co-zalo-mock-btns { display: flex; flex-direction: column; gap: 5px; padding: 0 8px; }
+.co-zalo-mock-btns span { padding: 4px 0; border-radius: 7px; font-size: .66rem; font-weight: 800; }
+.co-zalo-mock-chat { background: #eef2f7; color: #475569; }
+.co-zalo-mock-follow {
+  background: #0068ff;
+  color: #fff;
+  animation: coZaloRing 1.6s ease-out infinite;
+}
+.co-zalo-mock-hand {
+  position: absolute;
+  right: 4px;
+  bottom: 8px;
+  font-size: 1.25rem;
+  line-height: 1;
+  animation: coZaloTap 1.6s ease-in-out infinite;
+}
+.co-zalo-mock-caption { margin-top: 4px; font-size: .55rem; color: #94a3b8; }
+@keyframes coZaloRing {
+  0%   { box-shadow: 0 0 0 0 rgba(0, 104, 255, 0.55); }
+  70%  { box-shadow: 0 0 0 7px rgba(0, 104, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 104, 255, 0); }
+}
+@keyframes coZaloTap {
+  0%, 100% { transform: translate(0, 0); }
+  50%      { transform: translate(-3px, -5px); }
+}
+
+.co-wheel-zalo-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 15px 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #1a7dff, #0058e0);
+  color: #fff;
+  font-family: 'Nunito', sans-serif;
+  font-size: 1.08rem;
+  font-weight: 900;
+  text-align: center;
+  text-decoration: none;
+  box-shadow: 0 6px 18px rgba(0, 104, 255, 0.4);
+  animation: coZaloCtaPulse 1.8s ease-in-out infinite;
+}
+.co-wheel-zalo-cta:active { transform: scale(0.98); }
+.co-wheel-zalo-cta-icon { font-size: 1.25rem; line-height: 1; }
+@keyframes coZaloCtaPulse {
+  0%, 100% { box-shadow: 0 6px 18px rgba(0, 104, 255, 0.4), 0 0 0 0 rgba(0, 104, 255, 0.45); }
+  50%      { box-shadow: 0 6px 18px rgba(0, 104, 255, 0.4), 0 0 0 8px rgba(0, 104, 255, 0); }
+}
+.co-wheel-follow-hint {
+  margin-top: 8px;
+  font-size: .8rem;
+  line-height: 1.4;
+  color: #475569;
+  text-align: center;
+}
+
+/* Quay lại sau khi quà đã vào bill: hỏi khách đã bấm Quan tâm chưa. */
+.co-wheel-follow-ask { border-color: #93c5fd; background: #f8fbff; }
+.co-wheel-follow-q { font-size: .98rem; font-weight: 800; line-height: 1.4; color: #0f172a; }
+.co-wheel-follow-q b { color: #0068ff; }
+.co-wheel-follow-why { margin-top: 6px; font-size: .84rem; line-height: 1.4; color: #475569; }
+.co-wheel-follow-actions { display: flex; gap: 8px; margin-top: 12px; }
+.co-wheel-follow-yes,
+.co-wheel-follow-again {
+  flex: 1;
+  padding: 12px 8px;
+  border-radius: 12px;
+  font-family: 'Nunito', sans-serif;
+  font-size: .92rem;
+  font-weight: 800;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+.co-wheel-follow-yes { border: 2px solid #86efac; background: #fff; color: #15803d; }
+.co-wheel-follow-again { border: 2px solid #0068ff; background: #0068ff; color: #fff; }
+.co-wheel-follow-thanks {
   margin-top: 10px;
   padding: 10px 12px;
   border-radius: 12px;
   background: #eff6ff;
-  color: #1e40af;
-  font-size: .84rem;
-  line-height: 1.5;
+  color: #1d4ed8;
+  font-weight: 800;
+  text-align: center;
 }
-.co-wheel-zalo-guide > div + div { margin-top: 5px; }
+/* Nút kiểm tra phụ khi đã mở Zalo — không tranh với nút mở Zalo. */
+.co-wheel-check-soft {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 11px 14px;
+  border: 2px solid #bfdbfe;
+  border-radius: 12px;
+  background: #fff;
+  color: #1d4ed8;
+  font-family: 'Nunito', sans-serif;
+  font-size: .9rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.co-wheel-check-soft:disabled { color: #94a3b8; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) {
+  .co-zalo-mock-follow, .co-zalo-mock-hand, .co-wheel-zalo-cta { animation: none; }
+}
 
 /* Nhãn NEW / HOT trên món — to, rõ, nhấp nháy cho sinh động */
 .co-badge {
