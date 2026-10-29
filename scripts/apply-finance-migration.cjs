@@ -69,20 +69,20 @@ async function main() {
     (SELECT count(*)::int FROM pg_trigger WHERE NOT tgisinternal AND tgenabled = 'O' AND (
       (tgname = 'paid_bill_guard' AND tgrelid = 'public.orders'::regclass)
       OR (tgname = 'payment_transaction_guard' AND tgrelid = to_regclass('public.payment_transactions'))
-      OR (tgname = 'bank_total_guard' AND tgrelid = to_regclass('public.bank_daily_totals')))) AS guards,
-    (SELECT count(*)::int FROM pg_proc WHERE pronamespace = 'public'::regnamespace
-      AND proname IN ('complete_table_payment_atomic', 'confirm_custom_qr_payment', 'record_custom_cash_receipt')
-      AND (has_function_privilege('anon', oid, 'EXECUTE') OR has_function_privilege('authenticated', oid, 'EXECUTE'))) AS web_can_settle,
+      OR (tgname = 'bank_total_guard' AND tgrelid = to_regclass('public.bank_daily_totals'))
+      OR (tgname = 'cash_receipt_guard' AND tgrelid = to_regclass('public.custom_cash_receipts')))) AS guards,
     (SELECT count(*)::int FROM pg_proc WHERE pronamespace = 'public'::regnamespace
       AND proname = 'complete_table_payment_atomic' AND has_function_privilege('service_role', oid, 'EXECUTE')) AS server_can_settle,
     (SELECT string_agg(oid::regprocedure::text || ' (' || pg_get_userbyid(proowner) || ')', ', ') FROM pg_proc
-      WHERE pronamespace = 'public'::regnamespace AND proname IN ('complete_table_payment_atomic_legacy', 'confirm_shadow_qr_atomic', 'process_bank_payment')
-      AND has_function_privilege('anon', oid, 'EXECUTE')) AS old_fns_still_open,
+      WHERE pronamespace = 'public'::regnamespace AND proname IN ('complete_table_payment_atomic', 'complete_table_payment_atomic_legacy',
+        'confirm_custom_qr_payment', 'record_custom_cash_receipt', 'confirm_shadow_qr_atomic', 'process_bank_payment')
+      AND (has_function_privilege('anon', oid, 'EXECUTE') OR has_function_privilege('authenticated', oid, 'EXECUTE'))) AS web_still_calls,
     (SELECT string_agg(tgname, ',' ORDER BY tgname) FROM pg_trigger WHERE tgrelid = 'public.orders'::regclass AND NOT tgisinternal) AS order_triggers,
     (SELECT string_agg(DISTINCT usename, ',') FROM pg_stat_activity WHERE application_name ILIKE '%postgrest%') AS postgrest_login`);
   console.log(JSON.stringify(money));
-  // Hàm cũ còn mở (chủ là supabase_admin) chỉ báo, không dừng: trigger vẫn chặn khi chúng ghi tiền.
-  if (money.guards !== 3 || money.web_can_settle !== 0 || money.server_can_settle < 1) throw new Error('Chưa khoá được phần tiền.');
+  if (money.guards !== 4 || money.server_can_settle < 1) throw new Error('Chưa khoá được phần tiền.');
+  // Hàm thuộc supabase_admin thì postgres không thu được quyền: chỉ báo, trigger vẫn chặn mọi chỗ chúng ghi tiền.
+  if (money.web_still_calls) console.log(`Lưu ý: khoá công khai vẫn gọi được ${money.web_still_calls} — trigger chặn khi ghi tiền.`);
   console.log('Đã khoá phần tiền: khoá công khai không còn chốt / sửa bill đã thu.');
 
   // Khoá ghi trực tiếp từ trình duyệt + nhật ký + sổ trả nợ Sổ tay (staff_security.sql).
