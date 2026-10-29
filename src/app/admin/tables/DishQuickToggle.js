@@ -4,11 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Swal from 'sweetalert2';
 import { supabase } from '@/lib/supabase';
 import { removeVietnameseTones } from '@/lib/utils';
-import { dishChoices, dishOffLabel, isDishOff } from '@/lib/menuAvailability.mjs';
+import { dishChoices, dishOffLabel, isDishOff, offModeChoices } from '@/lib/menuAvailability.mjs';
+import { askOffMode } from '@/lib/offModeDialog';
 
 // Khung "Tắt / bật món" ở trang Bàn: gạt nhiều món / nhiều lựa chọn (LOẠI, KHẨU VỊ…) rồi bấm Lưu một lần.
 // Dùng đúng cờ của trang Thực đơn (xem lib/menuAvailability.mjs); ghi qua /api/admin/menu-availability.
-const MODE_KEY = 'dishQuickToggleMode';
+// Bấm tắt món / loại thì hỏi tắt bao lâu (lib/offModeDialog — cùng hộp với trang Thực đơn).
+const MODE_LABEL = Object.fromEntries(offModeChoices().map(o => [o.mode, o.label]));
 const choiceKey = (id, c) => `${id}|${c.optIndex}|${c.index}`;
 const norm = s => removeVietnameseTones(String(s || '').toLowerCase());
 
@@ -24,23 +26,15 @@ function Switch({ on, small }) {
 const chip = { fontSize: '0.6rem', fontWeight: 800, color: '#ea580c', background: '#ffedd5', borderRadius: 6, padding: '1px 5px', flexShrink: 0 };
 
 export default function DishQuickToggle({ onClose, onSaved }) {
-  const [data, setData] = useState(null);           // { items, cats, offIds } — nhóm "đang tắt" tính lúc tải
+  const [data, setData] = useState(null);           // { items, cats, offIds } — món thuộc tab nào tính lúc tải
   const [loading, setLoading] = useState(true);
-  const [pendingDish, setPendingDish] = useState({});     // { id: tắt? } — chưa lưu
-  const [pendingChoice, setPendingChoice] = useState({}); // { "id|opt|idx": { id, option, optIndex, choice, index, off } }
-  const [mode, setMode] = useState('today');
+  const [pendingDish, setPendingDish] = useState({});     // { id: { off, mode } } — chưa lưu
+  const [pendingChoice, setPendingChoice] = useState({}); // { "id|opt|idx": { id, option, optIndex, choice, index, off, mode } }
   const [search, setSearch] = useState('');
-  const [openCats, setOpenCats] = useState({});
+  const [tab, setTab] = useState('on');                   // 'on' = Đang bán, 'off' = Đã tắt
+  const [closedCats, setClosedCats] = useState({});
   const [openDishes, setOpenDishes] = useState({});
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    try { if (localStorage.getItem(MODE_KEY) === 'off') setMode('off'); } catch { }
-  }, []);
-  const pickMode = m => {
-    setMode(m);
-    try { localStorage.setItem(MODE_KEY, m); } catch { }
-  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,7 +50,7 @@ export default function DishQuickToggle({ onClose, onSaved }) {
         const choices = dishChoices(m, now);
         return { ...m, choices, off: isDishOff(m, now), label: dishOffLabel(m, now), hasOffChoice: choices.some(c => c.off) };
       });
-      // Món đang tắt (cả món hoặc một vài lựa chọn) gom lên trên — tính lúc tải để gạt xong không nhảy chỗ.
+      // Món đang tắt (cả món hoặc một vài lựa chọn) vào tab "Đã tắt" — tính lúc tải để gạt xong không đổi tab.
       setData({ items, cats: catsRes.data || [], offIds: new Set(items.filter(m => m.off || m.hasOffChoice).map(m => m.id)) });
     } catch (e) {
       console.error('[DishQuickToggle] load', e);
@@ -68,24 +62,29 @@ export default function DishQuickToggle({ onClose, onSaved }) {
   useEffect(() => { load(); }, [load]);
 
   const nPending = Object.keys(pendingDish).length + Object.keys(pendingChoice).length;
-  const dishOffNow = m => (Object.prototype.hasOwnProperty.call(pendingDish, m.id) ? pendingDish[m.id] : m.off);
+  const dishOffNow = m => pendingDish[m.id]?.off ?? m.off;
   const choiceOffNow = (m, c) => pendingChoice[choiceKey(m.id, c)]?.off ?? c.off;
 
-  function toggleDish(m) {
+  // Gạt về như cũ thì bỏ thay đổi; gạt sang TẮT thì hỏi tắt bao lâu trước.
+  async function toggleDish(m) {
     const next = !dishOffNow(m);
+    const mode = next && next !== m.off ? await askOffMode({ kind: 'dish', name: m.name }) : null;
+    if (next && next !== m.off && !mode) return;
     setPendingDish(p => {
       const copy = { ...p };
-      if (next === m.off) delete copy[m.id]; else copy[m.id] = next;
+      if (next === m.off) delete copy[m.id]; else copy[m.id] = { off: next, mode };
       return copy;
     });
   }
-  function toggleChoice(m, c) {
+  async function toggleChoice(m, c) {
     const next = !choiceOffNow(m, c);
+    const mode = next && next !== c.off ? await askOffMode({ kind: 'choice', name: m.name, choice: c.choice }) : null;
+    if (next && next !== c.off && !mode) return;
     const key = choiceKey(m.id, c);
     setPendingChoice(p => {
       const copy = { ...p };
       if (next === c.off) delete copy[key];
-      else copy[key] = { id: m.id, option: c.option, optIndex: c.optIndex, choice: c.choice, index: c.index, off: next };
+      else copy[key] = { id: m.id, option: c.option, optIndex: c.optIndex, choice: c.choice, index: c.index, off: next, mode };
       return copy;
     });
   }
@@ -108,8 +107,7 @@ export default function DishQuickToggle({ onClose, onSaved }) {
       const res = await fetch('/api/admin/menu-availability', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          mode,
-          dishes: Object.entries(pendingDish).map(([id, off]) => ({ id, off })),
+          dishes: Object.entries(pendingDish).map(([id, d]) => ({ id, off: d.off, mode: d.mode })),
           choices: Object.values(pendingChoice),
         }),
       });
@@ -145,9 +143,10 @@ export default function DishQuickToggle({ onClose, onSaved }) {
     const match = m => !q || norm(m.name).includes(q) || m.choices.some(c => norm(c.choice).includes(q));
     const items = data.items.filter(match);
     const groups = [...data.cats, { id: null, name: 'Chưa phân loại' }]
-      .map(cat => ({ cat, items: items.filter(m => (m.category_id || null) === cat.id || (cat.id === null && !data.cats.some(c => c.id === m.category_id))) }))
+      .map(cat => ({ cat, items: items.filter(m => !m.off && ((m.category_id || null) === cat.id || (cat.id === null && !data.cats.some(c => c.id === m.category_id)))) }))
       .filter(g => g.items.length);
-    return { off: items.filter(m => data.offIds.has(m.id)), groups };
+    const offTab = items.filter(m => data.offIds.has(m.id));
+    return { offWhole: offTab.filter(m => m.off), offSome: offTab.filter(m => !m.off), offCount: offTab.length, onCount: items.filter(m => !m.off).length, groups };
   }, [data, q]);
 
   function renderChoice(m, c) {
@@ -161,6 +160,7 @@ export default function DishQuickToggle({ onClose, onSaved }) {
         <span style={{ flex: 1, minWidth: 0, fontSize: '0.82rem', fontWeight: 600, color: off ? '#b91c1c' : '#374151' }}>
           {c.choice}
           {off && !changed && c.label && <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 600, color: '#ef4444' }}>{c.label}</span>}
+          {off && changed && <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 600, color: '#ea580c' }}>sẽ tắt: {MODE_LABEL[pendingChoice[choiceKey(m.id, c)].mode]}</span>}
         </span>
         {changed && <span style={chip}>chưa lưu</span>}
         <span style={{ fontSize: '0.68rem', fontWeight: 800, color: off ? '#dc2626' : '#16a34a', flexShrink: 0 }}>{off ? 'TẮT' : 'BẬT'}</span>
@@ -170,7 +170,7 @@ export default function DishQuickToggle({ onClose, onSaved }) {
 
   function renderDish(m, onlyOffChoices = false) {
     const off = dishOffNow(m);
-    const changed = Object.prototype.hasOwnProperty.call(pendingDish, m.id);
+    const changed = !!pendingDish[m.id];
     const searchHit = q && !norm(m.name).includes(q);
     const expanded = !!openDishes[m.id] || !!searchHit;
     const shown = onlyOffChoices ? m.choices.filter(c => c.off) : searchHit ? m.choices.filter(c => norm(c.choice).includes(q)) : m.choices;
@@ -188,6 +188,7 @@ export default function DishQuickToggle({ onClose, onSaved }) {
             <span style={{ flex: 1, minWidth: 0, fontSize: '0.86rem', fontWeight: 700, color: off ? '#b91c1c' : '#15803d' }}>
               {m.name}
               {off && !changed && m.label && <span style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#ef4444' }}>{m.label}</span>}
+              {off && changed && <span style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#ea580c' }}>sẽ tắt: {MODE_LABEL[pendingDish[m.id].mode]}</span>}
               {!off && nOffChoices > 0 && !expanded && !onlyOffChoices && <span style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#b45309' }}>{nOffChoices} lựa chọn đang tắt</span>}
             </span>
             {changed && <span style={chip}>chưa lưu</span>}
@@ -231,21 +232,20 @@ export default function DishQuickToggle({ onClose, onSaved }) {
             </button>
             <button onClick={close} aria-label="Đóng" style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>✕</button>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9, fontSize: '0.74rem', color: '#475569', fontWeight: 700 }}>
-            <span style={{ flexShrink: 0 }}>Khi tắt:</span>
-            {[['today', 'Hết hôm nay'], ['off', 'Tắt luôn']].map(([k, label]) => (
-              <button key={k} type="button" onClick={() => pickMode(k)}
-                style={{ flex: 1, padding: '6px 4px', borderRadius: 8, cursor: 'pointer', fontSize: '0.76rem', fontWeight: 800,
-                  border: `1.5px solid ${mode === k ? '#dc2626' : '#e5e7eb'}`, background: mode === k ? '#dc2626' : 'white', color: mode === k ? 'white' : '#475569' }}>
+          <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: 5, lineHeight: 1.4 }}>
+            Bấm tắt sẽ hỏi tắt bao lâu. Gạt nhiều món rồi bấm <b>Lưu</b> một lần.
+          </div>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Tìm món hoặc loại (vd: ghẹ)…"
+            style={{ width: '100%', marginTop: 8, padding: '8px 11px', border: '1.5px solid #e5e7eb', borderRadius: 10, fontSize: '0.86rem', boxSizing: 'border-box', background: 'white' }} />
+          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            {[['on', `🍽️ Đang bán (${view?.onCount ?? 0})`, '#16a34a', '#dcfce7', '#15803d'], ['off', `🚫 Đã tắt (${view?.offCount ?? 0})`, '#dc2626', '#fee2e2', '#b91c1c']].map(([k, label, bd, bg, fg]) => (
+              <button key={k} type="button" onClick={() => setTab(k)}
+                style={{ flex: 1, padding: '8px 4px', borderRadius: 10, cursor: 'pointer', fontSize: '0.8rem', fontWeight: 800,
+                  border: `1.5px solid ${tab === k ? bd : '#e5e7eb'}`, background: tab === k ? bg : 'white', color: tab === k ? fg : '#64748b' }}>
                 {label}
               </button>
             ))}
           </div>
-          <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: 5, lineHeight: 1.4 }}>
-            {mode === 'today' ? '5 giờ sáng mai tự bán lại.' : 'Tắt đến khi bật lại ở đây hoặc trang Thực đơn.'} Gạt nhiều món rồi bấm <b>Lưu</b> một lần.
-          </div>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Tìm món hoặc loại (vd: ghẹ)…"
-            style={{ width: '100%', marginTop: 8, padding: '8px 11px', border: '1.5px solid #e5e7eb', borderRadius: 10, fontSize: '0.86rem', boxSizing: 'border-box', background: 'white' }} />
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px calc(14px + env(safe-area-inset-bottom))' }}>
@@ -253,22 +253,25 @@ export default function DishQuickToggle({ onClose, onSaved }) {
             <div style={{ textAlign: 'center', color: '#9ca3af', padding: 20 }}>Đang tải…</div>
           ) : data?.error ? (
             <div style={{ textAlign: 'center', color: '#dc2626', padding: 20 }}>Chưa tải được thực đơn. <button onClick={load} style={{ border: 'none', background: 'none', color: '#2563eb', fontWeight: 700, cursor: 'pointer' }}>Thử lại</button></div>
+          ) : tab === 'off' ? (
+            view.offCount === 0
+              ? <div style={{ fontSize: '0.82rem', color: '#9ca3af', background: '#f8fafc', borderRadius: 10, padding: '10px 12px' }}>{q ? 'Không có món đã tắt khớp.' : 'Không có món nào đang tắt.'}</div>
+              : <>
+                {view.offWhole.length > 0 && <div style={{ fontWeight: 800, fontSize: '0.8rem', color: '#b91c1c', marginBottom: 8 }}>Tắt cả món ({view.offWhole.length})</div>}
+                {view.offWhole.map(m => renderDish(m))}
+                {view.offSome.length > 0 && <div style={{ fontWeight: 800, fontSize: '0.8rem', color: '#b45309', margin: `${view.offWhole.length ? 14 : 0}px 0 8px` }}>Món còn bán, tắt vài loại ({view.offSome.length})</div>}
+                {view.offSome.map(m => renderDish(m, true))}
+              </>
           ) : (
             <>
-              <div style={{ fontWeight: 800, fontSize: '0.85rem', color: '#b91c1c', marginBottom: 8 }}>🚫 Đang tắt ({view.off.length})</div>
-              {view.off.length === 0
-                ? <div style={{ fontSize: '0.82rem', color: '#9ca3af', background: '#f8fafc', borderRadius: 10, padding: '10px 12px', marginBottom: 14 }}>{q ? 'Không có món đang tắt khớp.' : 'Không có món nào đang tắt.'}</div>
-                : <div style={{ marginBottom: 14 }}>{view.off.map(m => renderDish(m, !m.off))}</div>}
-
-              <div style={{ fontWeight: 800, fontSize: '0.85rem', color: '#0f172a', marginBottom: 8 }}>🍽️ Tất cả món</div>
               {view.groups.length === 0 && <div style={{ fontSize: '0.82rem', color: '#9ca3af' }}>Không có món khớp.</div>}
               {view.groups.map(g => {
                 const key = g.cat.id ?? 'none';
-                const open = !!q || !!openCats[key];
+                const open = !!q || !closedCats[key];
                 const nOff = g.items.filter(m => dishOffNow(m)).length;
                 return (
                   <div key={key} style={{ marginBottom: 8 }}>
-                    <button type="button" onClick={() => setOpenCats(o => ({ ...o, [key]: !o[key] }))}
+                    <button type="button" onClick={() => setClosedCats(o => ({ ...o, [key]: !o[key] }))}
                       style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6, background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 12px', cursor: 'pointer', fontWeight: 800, fontSize: '0.82rem', color: '#334155', textAlign: 'left' }}>
                       <span style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .2s' }}>›</span>
                       <span style={{ flex: 1 }}>{g.cat.name} ({g.items.length})</span>

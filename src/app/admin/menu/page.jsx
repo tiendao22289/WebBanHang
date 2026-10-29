@@ -5,6 +5,8 @@ import { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { writeMenuCache } from '@/lib/menuCache';
+import { offUntilISO } from '@/lib/menuAvailability.mjs';
+import { askOffMode } from '@/lib/offModeDialog';
 import Swal from 'sweetalert2';
 import {
   DndContext,
@@ -518,45 +520,12 @@ export default function MenuPage() {
     const isVisible = item.is_available && (!item.hidden_until || new Date(item.hidden_until) < new Date());
     
     if (isVisible) {
-      const { value: hideOption } = await Swal.fire({
-        title: 'Ẩn món ăn?',
-        text: 'Chọn thời gian ẩn món ăn này:',
-        icon: 'question',
-        input: 'radio',
-        inputOptions: {
-          'today': 'Hết hôm nay',
-          '2h': '2 tiếng',
-          '4h': '4 tiếng',
-          'indefinite': 'Vô thời hạn'
-        },
-        inputValidator: (value) => {
-          if (!value) {
-            return 'Bạn cần chọn thời gian ẩn!';
-          }
-        },
-        showCancelButton: true,
-        confirmButtonColor: '#ef4444',
-        cancelButtonColor: '#9ca3af',
-        confirmButtonText: 'Vâng, ẩn món',
-        cancelButtonText: 'Huỷ'
-      });
-
+      // Cùng hộp "Tắt bao lâu?" với trang Bàn; "Hết hôm nay" = 5 giờ sáng mai (quán bán qua nửa đêm).
+      const hideOption = await askOffMode({ kind: 'dish', name: item.name });
       if (!hideOption) return;
 
-      let updates = {};
-      if (hideOption === 'indefinite') {
-        updates = { is_available: false, hidden_until: null };
-      } else if (hideOption === 'today') {
-        const endOfDay = new Date();
-        endOfDay.setHours(23, 59, 59, 999);
-        updates = { is_available: true, hidden_until: endOfDay.toISOString() };
-      } else if (hideOption === '2h') {
-        const time = new Date(Date.now() + 2 * 60 * 60 * 1000);
-        updates = { is_available: true, hidden_until: time.toISOString() };
-      } else if (hideOption === '4h') {
-        const time = new Date(Date.now() + 4 * 60 * 60 * 1000);
-        updates = { is_available: true, hidden_until: time.toISOString() };
-      }
+      const until = offUntilISO(hideOption);
+      const updates = until ? { is_available: true, hidden_until: until } : { is_available: false, hidden_until: null };
 
       const updatedItem = { ...item, ...updates };
       setMenuItems(prev => prev.map(i => i.id === item.id ? updatedItem : i));
@@ -646,42 +615,9 @@ export default function MenuPage() {
     const isHidden = h === true || (typeof h === 'string' && new Date(h) > new Date());
 
     if (!isHidden) {
-      const { value: hideOption } = await Swal.fire({
-        title: 'Ẩn lựa chọn này?',
-        text: 'Chọn thời gian ẩn:',
-        icon: 'question',
-        input: 'radio',
-        inputOptions: {
-          'today': 'Hết hôm nay',
-          '2h': '2 tiếng',
-          '4h': '4 tiếng',
-          'indefinite': 'Vô thời hạn'
-        },
-        inputValidator: (value) => {
-          if (!value) return 'Bạn cần chọn thời gian ẩn!';
-        },
-        showCancelButton: true,
-        confirmButtonColor: '#ef4444',
-        cancelButtonColor: '#9ca3af',
-        confirmButtonText: 'Vâng, ẩn',
-        cancelButtonText: 'Huỷ'
-      });
-
+      const hideOption = await askOffMode({ kind: 'choice', name: itemForm.name, choice: newOptions[optIndex].choices[choiceIndex] });
       if (!hideOption) return;
-
-      if (hideOption === 'indefinite') {
-        newOptions[optIndex].hiddenChoices[choiceIndex] = true;
-      } else if (hideOption === 'today') {
-        const endOfDay = new Date();
-        endOfDay.setHours(23, 59, 59, 999);
-        newOptions[optIndex].hiddenChoices[choiceIndex] = endOfDay.toISOString();
-      } else if (hideOption === '2h') {
-        const time = new Date(Date.now() + 2 * 60 * 60 * 1000);
-        newOptions[optIndex].hiddenChoices[choiceIndex] = time.toISOString();
-      } else if (hideOption === '4h') {
-        const time = new Date(Date.now() + 4 * 60 * 60 * 1000);
-        newOptions[optIndex].hiddenChoices[choiceIndex] = time.toISOString();
-      }
+      newOptions[optIndex].hiddenChoices[choiceIndex] = offUntilISO(hideOption) || true;
     } else {
       const result = await Swal.fire({
         title: 'Hiện lựa chọn này?',
