@@ -1339,7 +1339,8 @@ export default function TablesPage() {
           setConfirmPayment({ table, totalAmount: Number(result.total), transactionCode: null });
         }
         await fetchTables(snapshot.groupTableIds);
-        Swal.fire('Bill đã thay đổi', 'Có món hoặc trạng thái bill thay đổi lúc thanh toán. Vui lòng kiểm tra lại toàn bộ món và số tiền trước khi chốt.', 'warning');
+        if (result.reason === 'voucher_min_bill') Swal.fire('Voucher chưa đủ điều kiện', result.error, 'warning');
+        else Swal.fire('Bill đã thay đổi', 'Có món hoặc trạng thái bill thay đổi lúc thanh toán. Vui lòng kiểm tra lại toàn bộ món và số tiền trước khi chốt.', 'warning');
         return;
       }
       if (!response.ok) throw new Error(result.error || 'Chưa đóng được bàn. Kiểm tra mạng rồi thử lại.');
@@ -5071,6 +5072,7 @@ export default function TablesPage() {
                   tableNumber={selectedTable?.table_number}
                   orderIds={voucherBills.map(o => o.id)}
                   discountBase={adjustDiscountBase()}
+                  billTotal={sumOrderItems(voucherBills)}
                   vouchers={tableVouchers}
                   onClose={() => setVoucherOpen(false)}
                   onApplied={async r => {

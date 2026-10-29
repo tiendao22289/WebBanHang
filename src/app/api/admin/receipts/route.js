@@ -28,7 +28,7 @@ import { NextResponse } from 'next/server';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { FINANCE_START_DATE, vnDate } from '@/lib/ownerFinance.mjs';
 import { purgeOldReceiptImages, receiptImageProblem, removeReceiptImages, signReceiptImages, uploadReceiptImage } from '@/lib/receiptImages.mjs';
-import { issueNextVisitVoucher, sendVoucherZalo } from '@/lib/voucherServer.mjs';
+import { issueNextVisitVoucher, sendVoucherZalo, voucherPayProblem } from '@/lib/voucherServer.mjs';
 import { voucherValueText } from '@/lib/voucher.mjs';
 import { sendOaText } from '@/lib/zaloOa';
 
@@ -53,6 +53,17 @@ async function giveNextVisitVoucher(db, orderIds) {
     return { code: voucher.code, valueText: voucherValueText(voucher), name: voucher.customer_name || null };
   } catch (error) {
     console.error('[receipts] next voucher', error);
+    return null;
+  }
+}
+
+// Bill có voucher mà tiền món giờ dưới mức tối thiểu của mã (áp mã rồi bỏ bớt món) → chưa cho đóng bàn.
+// Lỗi khi kiểm thì không chặn thanh toán.
+async function voucherBlocksPay(db, orderIds) {
+  try {
+    return await voucherPayProblem(db, orderIds);
+  } catch (error) {
+    console.error('[receipts] voucher check', error);
     return null;
   }
 }
@@ -292,6 +303,8 @@ export async function POST(request) {
       } else if (method === 'transfer' && skipReason.length < 3) {
         return fail('Chụp màn hình chuyển khoản của khách trước khi đóng bàn.');
       }
+      const voucherProblem = await voucherBlocksPay(db, orderIds);
+      if (voucherProblem) return NextResponse.json({ error: voucherProblem, reason: 'voucher_min_bill' }, { status: 409, headers });
       // Lưu ảnh trước: bàn chỉ được đóng khi ảnh đã nằm trong kho.
       const path = hasImage ? await uploadReceiptImage(db, image, method === 'cash' ? 'cash' : 'ck') : null;
       const { data, error } = await db.rpc('complete_table_payment_atomic', {

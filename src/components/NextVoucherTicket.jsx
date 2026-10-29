@@ -10,6 +10,37 @@ import { voucherValueText, shortDay, firstUseDay, lastUseDay, money, normalizeVo
 //    (/api/voucher/redeem, cùng SQL redeem_voucher với trang Bàn).
 
 const SAVED_KEY = 'my_vouchers';
+const DEVICE_KEY = 'voucher_device_key';
+let memoryKey = null;
+
+// Chìa khoá riêng của máy khách: đăng ký cho mỗi bill TRƯỚC khi gửi món, sau này chỉ máy này
+// xem được mã "lần sau" của bill (mã bill đọc được bằng khoá công khai nên không bí mật).
+function newDeviceKey() {
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+export function deviceVoucherKey() {
+  try {
+    let key = localStorage.getItem(DEVICE_KEY);
+    if (!/^[A-Za-z0-9_-]{32,128}$/.test(key || '')) { key = newDeviceKey(); localStorage.setItem(DEVICE_KEY, key); }
+    return key;
+  } catch {
+    return (memoryKey ||= newDeviceKey());
+  }
+}
+/** Gọi trước khi gửi món. Lỗi / chậm thì bỏ qua: chỉ mất vé trên máy, mã vẫn qua Zalo / nhân viên. */
+export async function bindOrderToDevice(orderId, tableId) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 1500);
+  try {
+    await fetch('/api/voucher/bind', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', signal: ctrl.signal,
+      body: JSON.stringify({ orderId, tableId, key: deviceVoucherKey() }),
+    });
+  } catch { /* bỏ qua */ } finally {
+    clearTimeout(timer);
+  }
+}
 const KEEP = ['code', 'discount_type', 'discount_value', 'max_discount', 'min_bill', 'valid_from', 'valid_until'];
 
 /** Mã đã lưu trong máy khách, còn hạn. Bộ nhớ bị chặn thì coi như không có. */
@@ -42,7 +73,7 @@ export function useNextVoucher({ orderId, spinId }) {
       tries++;
       try {
         const q = spinId ? `spinId=${encodeURIComponent(spinId)}` : `orderId=${encodeURIComponent(orderId)}`;
-        const res = await fetch(`/api/voucher/mine?${q}`, { cache: 'no-store' });
+        const res = await fetch(`/api/voucher/mine?${q}`, { cache: 'no-store', headers: { 'x-voucher-key': deviceVoucherKey() } });
         const data = await res.json().catch(() => ({}));
         if (!alive) return;
         if (data.voucher) { setVoucher(data.voucher); return; }
@@ -119,7 +150,7 @@ export function CustomerVoucherBox({ tableId, orderId, onApplied }) {
     setBusy(normal); setProblem('');
     try {
       const res = await fetch('/api/voucher/redeem', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store',
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-voucher-key': deviceVoucherKey() }, cache: 'no-store',
         body: JSON.stringify({ code: normal, tableId, orderId }),
       });
       const r = await res.json().catch(() => ({}));
@@ -164,6 +195,7 @@ export function CustomerVoucherBox({ tableId, orderId, onApplied }) {
         </button>
       </form>
       {problem && <div role="alert" style={{ marginTop: 8, color: '#b91c1c', fontSize: '0.84rem', fontWeight: 600 }}>{problem}</div>}
+      <div style={{ marginTop: 6, fontSize: '0.72rem', color: '#a16207' }}>Voucher giảm % tính trên món đã gọi lúc nhập mã — gọi xong rồi hãy nhập nhé.</div>
     </div>
   );
 }

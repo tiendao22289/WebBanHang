@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   issueNextVisitVoucher, issueWheelVoucher, sendVoucherZalo, sendPendingVouchers, activeVouchersForPhones,
-  voucherMessage, zaloSendErrorText,
+  voucherMessage, zaloSendErrorText, voucherPayProblem,
 } from '../src/lib/voucherServer.mjs';
 
 // DB giả kiểu supabase-js, đủ cho src/lib/voucherServer.mjs. Ràng buộc UNIQUE như vouchers.sql.
@@ -17,6 +17,8 @@ function fakeDb(state) {
       eq(k, v) { conds.push(r => r[k] === v); return q; },
       in(k, vs) { conds.push(r => vs.includes(r[k])); return q; },
       is(k, v) { conds.push(r => (r[k] ?? null) === v); return q; },
+      neq(k, v) { conds.push(r => r[k] !== v); return q; },
+      lt(k, v) { conds.push(r => r[k] < v); return q; },
       gt(k, v) { conds.push(r => r[k] > v); return q; },
       lte(k, v) { conds.push(r => r[k] <= v); return q; },
       contains(k, vs) { conds.push(r => vs.every(v => (r[k] || []).includes(v))); return q; },
@@ -32,6 +34,11 @@ function fakeDb(state) {
       if (op === 'insert') {
         if ((UNIQUE[table] || []).some(k => values[k] != null && state[table].some(r => r[k] === values[k]))) {
           return { data: null, error: { code: '23505', message: 'duplicate key' } };
+        }
+        // UNIQUE (customer_phone, valid_from) WHERE source = 'next_visit'
+        if (table === 'vouchers' && values.source === 'next_visit' && state.vouchers.some(r => r.source === 'next_visit'
+          && r.customer_phone === values.customer_phone && r.valid_from === values.valid_from)) {
+          return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "vouchers_next_visit_once"' } };
         }
         const row = { id: `v-${++seq}`, status: 'active', sent_at: null, send_error: null, message: null, ...values };
         state[table].push(row);
@@ -97,8 +104,12 @@ test('mã lần sau cũ đã hết hạn / đã dùng thì vẫn tặng mã mớ
   ];
   const state = { settings: settings(), orders: paidBills(), vouchers: structuredClone(old) };
   assert.equal((await issueNextVisitVoucher(fakeDb(state), { orderIds: ['o1', 'o2'], nowMs: NOW })).created, true);
-  const noRepeat = { settings: settings({ voucher_next_repeat: 'false' }), orders: paidBills(), vouchers: structuredClone(old) };
+  const noRepeat = { settings: settings({ voucher_next_repeat: 'false' }), orders: paidBills(), vouchers: structuredClone(old),
+    order_items: [{ order_id: 'o2', item_name: 'Voucher BK-USEDUS', unit_price: -30000 }] }; // dòng đã chuyển sang bill chính o2
   assert.equal((await issueNextVisitVoucher(fakeDb(noRepeat), { orderIds: ['o1', 'o2'], nowMs: NOW })).skipped, 'used_voucher');
+  const manualOnly = { settings: settings({ voucher_next_repeat: 'false' }), orders: paidBills(), vouchers: [],
+    order_items: [{ order_id: 'o2', item_name: 'Giảm giá: khách quen', unit_price: -20000 }] };
+  assert.equal((await issueNextVisitVoucher(fakeDb(manualOnly), { orderIds: ['o1', 'o2'], nowMs: NOW })).created, true, 'giảm tay không tính là voucher');
 });
 
 test('mã trùng (hiếm) thì tự đổi mã khác', async () => {
@@ -175,6 +186,20 @@ test('khách nhắn SĐT cho OA → gửi mã chưa nhắn được; người l�
   assert.equal(await sendPendingVouchers(fakeDb(stranger), '0905555555', 'uid-stranger', { send, nowMs: NOW }), 0);
   assert.equal(sent.length, 0);
 
+  // Người lạ nhắn SĐT của khách SAU khi khách thật đã nhắn SĐT cho OA (chưa có hồ sơ khách):
+  // webhook đã ghi SĐT vào dòng của người lạ, nhưng dòng của khách thật vẫn còn → không gửi.
+  sent.length = 0;
+  const strangerAfterOwner = { vouchers: vouchers(), customers: [], zalo_followers: [
+    { zalo_user_id: 'uid-owner', phone: '0905555555' }, { zalo_user_id: 'uid-stranger', phone: '0905555555' }] };
+  assert.equal(await sendPendingVouchers(fakeDb(strangerAfterOwner), '0905555555', 'uid-stranger', { send, nowMs: NOW }), 0);
+  assert.equal(sent.length, 0);
+  // Chỉ có dòng của chính người nhắn (webhook vừa ghi) → nối lần đầu, được gửi.
+  const ownRowOnly = { vouchers: vouchers(), customers: [], zalo_followers: [{ zalo_user_id: 'uid-own', phone: '0905555555' }] };
+  assert.equal(await sendPendingVouchers(fakeDb(ownRowOnly), '0905555555', 'uid-own', { send, nowMs: NOW }), 3);
+  // Gửi sau thanh toán (không biết ai đang nhắn): nhiều Zalo cùng SĐT → không đoán, không gửi.
+  const ambiguous = { vouchers: vouchers(), customers: [], zalo_followers: strangerAfterOwner.zalo_followers };
+  assert.equal((await sendVoucherZalo(fakeDb(ambiguous), ambiguous.vouchers[0], { send })).reason, 'no_zalo');
+
   const firstLink = { vouchers: vouchers(), customers: [], zalo_followers: [] };
   assert.equal(await sendPendingVouchers(fakeDb(firstLink), '0905555555', 'uid-new', { send, nowMs: NOW }), 3, 'SĐT chưa nối Zalo nào → nối lần đầu');
   assert.equal(await sendPendingVouchers(fakeDb(firstLink), null, 'uid-new', { send, nowMs: NOW }), 0);
@@ -196,4 +221,52 @@ test('trang Bàn: chỉ hiện mã đang dùng được của SĐT trên bill, k
   assert.deepEqual(list.map(v => v.code), ['BK-OKOKOK']);
   assert.equal(list[0].customer.name, 'Giang');
   assert.deepEqual(await activeVouchersForPhones(fakeDb(state), [], NOW), []);
+});
+
+test('2 bàn cùng SĐT thanh toán cùng lúc → chỉ 1 mã lần sau', async () => {
+  const state = { settings: settings({ voucher_next_min_bill: '0' }), vouchers: [], orders: [
+    { id: 'a1', customer_phone: '0908888888', total_amount: 100000, status: 'paid' },
+    { id: 'b1', customer_phone: '0908888888', total_amount: 100000, status: 'paid' },
+  ] };
+  const [a, b] = await Promise.all([
+    issueNextVisitVoucher(fakeDb(state), { orderIds: ['a1'], nowMs: NOW }),
+    issueNextVisitVoucher(fakeDb(state), { orderIds: ['b1'], nowMs: NOW }),
+  ]);
+  assert.equal(state.vouchers.length, 1);
+  assert.deepEqual([a.created || false, b.created || false].sort(), [false, true]);
+  assert.equal((a.created ? b : a).skipped, 'has_active');
+});
+
+test('trước khi đóng bàn: bill bỏ bớt món sau khi áp mã → báo nhân viên, không cho đóng', async () => {
+  const state = { order_items: [
+    { id: 'i1', order_id: 'o1', unit_price: 90000, quantity: 1, is_gift: false, menu_item_id: 'm' },
+    { id: 'i2', order_id: 'o1', unit_price: 0, quantity: 1, is_gift: true, menu_item_id: 'm' },
+    { id: 'v1', order_id: 'o1', item_name: 'Voucher BK-AAAAAA', unit_price: -30000, quantity: 1, is_gift: false, menu_item_id: null },
+  ], vouchers: [{ code: 'BK-AAAAAA', discount_type: 'amount', discount_value: 30000, max_discount: 0, min_bill: 200000, used_item_id: 'v1' }] };
+  assert.match(await voucherPayProblem(fakeDb(state), ['o1']), /BK-AAAAAA.*200\.000đ.*90\.000đ/);
+  state.order_items.push({ id: 'i3', order_id: 'o2', unit_price: 120000, quantity: 1, is_gift: false, menu_item_id: 'm' });
+  assert.equal(await voucherPayProblem(fakeDb(state), ['o1', 'o2']), null, 'gộp bàn đủ tiền món thì ổn');
+  assert.equal(await voucherPayProblem(fakeDb({ order_items: [state.order_items[0]], vouchers: [] }), ['o1']), null, 'không có voucher');
+});
+
+test('trước khi đóng bàn: voucher % hoặc voucher tiền giảm quá mức được giảm sau khi bớt món → báo nhân viên', async () => {
+  const pct = { order_items: [
+    { id: 'a', order_id: 'o', unit_price: 100000, quantity: 1, is_gift: false, menu_item_id: 'm' },
+    { id: 'v', order_id: 'o', item_name: 'Voucher BK-PCTPCT', unit_price: -50000, quantity: 1, is_gift: false, menu_item_id: null },
+  ], vouchers: [{ code: 'BK-PCTPCT', discount_type: 'percent', discount_value: 10, max_discount: 0, min_bill: 0, used_item_id: 'v' }] };
+  // Áp lúc bill 500.000đ (giảm 50.000đ), sau đó bớt còn 100.000đ: 10% chỉ còn 10.000đ.
+  assert.match(await voucherPayProblem(fakeDb(pct), ['o']), /BK-PCTPCT đang giảm 50\.000đ.*chỉ được giảm 10\.000đ/);
+
+  const amount = { order_items: [
+    { id: 'a', order_id: 'o', unit_price: 21000, quantity: 1, is_gift: false, menu_item_id: 'm' },
+    { id: 'v', order_id: 'o', item_name: 'Voucher BK-AMTAMT', unit_price: -30000, quantity: 1, is_gift: false, menu_item_id: null },
+  ], vouchers: [{ code: 'BK-AMTAMT', discount_type: 'amount', discount_value: 30000, max_discount: 0, min_bill: 0, used_item_id: 'v' }] };
+  assert.match(await voucherPayProblem(fakeDb(amount), ['o']), /BK-AMTAMT đang giảm 30\.000đ.*chỉ được giảm 20\.000đ/, 'bill âm thì không cho đóng');
+
+  const fine = { order_items: [
+    { id: 'a', order_id: 'o', unit_price: 300000, quantity: 1, is_gift: false, menu_item_id: 'm' },
+    { id: 'g', order_id: 'o', item_name: 'Giảm giá', unit_price: -20000, quantity: 1, is_gift: false, menu_item_id: null },
+    { id: 'v', order_id: 'o', item_name: 'Voucher BK-OKOKOK', unit_price: -30000, quantity: 1, is_gift: false, menu_item_id: null },
+  ], vouchers: [{ code: 'BK-OKOKOK', discount_type: 'percent', discount_value: 10, max_discount: 0, min_bill: 0, used_item_id: 'v' }] };
+  assert.equal(await voucherPayProblem(fakeDb(fine), ['o']), null, 'không đổi món thì không báo (kể cả có giảm tay)');
 });

@@ -116,14 +116,14 @@ test('bill chưa đủ mức tối thiểu thì không dùng được (quà và 
   assert.equal((await row('BK-MINBIL')).status, 'active');
 });
 
-test('voucher %: làm tròn xuống 1.000đ, chặn trần; voucher tiền không giảm quá tiền món', async () => {
+test('voucher %: làm tròn xuống 1.000đ, chặn trần; voucher tiền không giảm quá bill', async () => {
   await voucher('BK-PCTPCT', { discount_type: 'percent', discount_value: 15, max_discount: 30000 });
   await voucher('BK-PCTSML', { discount_type: 'percent', discount_value: 7 });
   await voucher('BK-BIGBIG', { discount_value: 500000 });
   assert.equal((await redeem('BK-PCTPCT', [id(10), id(11)])).discount, 30000); // 15% × 280.000 = 42.000 → trần 30.000
   assert.equal((await redeem('BK-PCTSML', [id(12)])).discount, 10000); // 7% × 150.000 = 10.500 → 10.000
   await db.query('DELETE FROM order_items WHERE order_id = $1 AND unit_price < 0', [id(12)]);
-  assert.equal((await redeem('BK-BIGBIG', [id(12)])).discount, 150000, 'bill không âm tiền');
+  assert.equal((await redeem('BK-BIGBIG', [id(12)])).discount, 149000, 'bill còn 1.000đ để thanh toán được, không về 0 / âm');
 });
 
 test('bill đã thanh toán / khác nhóm bàn / thiếu bill → không trừ', async () => {

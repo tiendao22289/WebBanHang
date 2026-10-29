@@ -2,14 +2,16 @@
  * GET /api/voucher/mine?orderId=… | ?spinId=… — trang gọi món hỏi "voucher lần sau"
  * của chính khách: mã tặng khi bill của mình vừa thanh toán, hoặc mã trúng vòng xoay.
  *
- * Bảng vouchers khoá với khoá công khai, nên trang khách đi qua route này. Chỉ trả
- * mã gắn đúng bill / lượt quay mà máy khách đang giữ id (UUID khó đoán), không tra
- * theo SĐT — tránh người lạ gõ SĐT của khách khác để lấy mã. Bàn gộp nhiều người:
- * chỉ máy có bill mang đúng SĐT nhận mã mới thấy mã.
+ * Bảng vouchers khoá với khoá công khai, nên trang khách đi qua route này. Không tra theo SĐT.
+ *  - orderId: bảng orders đọc được bằng khoá công khai nên mã bill KHÔNG bí mật → phải kèm
+ *    chìa khoá máy (header x-voucher-key) đã đăng ký cho bill trước khi gửi món (/api/voucher/bind).
+ *    Bàn gộp nhiều người: chỉ máy có bill mang đúng SĐT nhận mã mới thấy mã.
+ *  - spinId: mã lượt quay chỉ máy khách quay mới biết (lucky_spins không mở cho khoá công khai).
  */
 import { NextResponse } from 'next/server';
 import { statusDatabase } from '@/lib/statusAuth';
 import { normalizePhone } from '@/lib/voucher.mjs';
+import { hashVoucherKey } from '@/lib/voucherServer.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,11 +32,15 @@ export async function GET(request) {
       if (error) throw error;
       voucher = data?.[0] || null;
     } else {
-      const [{ data, error }, { data: order, error: orderError }] = await Promise.all([
+      const key = String(request.headers?.get?.('x-voucher-key') || '');
+      if (!key) return NextResponse.json({ voucher: null }, { headers });
+      const [{ data, error }, { data: order, error: orderError }, { data: bound, error: boundError }] = await Promise.all([
         db.from('vouchers').select(COLS).eq('source', 'next_visit').contains('issued_order_ids', [orderId]).limit(1),
         db.from('orders').select('customer_phone').eq('id', orderId).maybeSingle(),
+        db.from('voucher_order_keys').select('key_hash').eq('order_id', orderId).maybeSingle(),
       ]);
-      if (error || orderError) throw error || orderError;
+      if (error || orderError || boundError) throw error || orderError || boundError;
+      if (!bound || bound.key_hash !== hashVoucherKey(key)) return NextResponse.json({ voucher: null }, { headers });
       voucher = data?.[0] || null;
       if (voucher && normalizePhone(order?.customer_phone) !== voucher.customer_phone) voucher = null;
     }

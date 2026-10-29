@@ -153,3 +153,10 @@ test('lời cho khách: chỉ cách tự nhập mã, không lộ bàn / giờ ng
   assert.match(customerRedeemText({ reason: 'too_many' }), /nhân viên/);
   assert.match(customerRedeemText({ reason: 'bill_changed' }), /gọi món trước/);
 });
+
+test('xem trước ở trang Bàn khớp SQL: bill luôn còn ít nhất 1.000đ', () => {
+  const v = { discount_type: 'amount', discount_value: 50000 };
+  assert.equal(calcVoucherDiscount(100000, v, 20000), 19000, 'bill 100k đã giảm tay 80k');
+  assert.equal(calcVoucherDiscount(100000, v, 1000), 0);
+  assert.equal(calcVoucherDiscount(100000, v), 50000, 'không truyền tổng bill → như cũ');
+});
