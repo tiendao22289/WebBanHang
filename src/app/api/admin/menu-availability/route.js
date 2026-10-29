@@ -2,8 +2,8 @@
  * POST /api/admin/menu-availability — tắt / bật nhanh món và lựa chọn của món (LOẠI, KHẨU VỊ…) từ
  * trang Bàn, nhiều món một lần.
  *
- * body: { mode: 'today' | 'off', dishes: [{ id, off }], choices: [{ id, option, optIndex, choice, index, off }] }
- *   mode 'today' = tắt đến 5h sáng mai rồi tự bán lại · 'off' = tắt luôn đến khi bật lại.
+ * body: { mode: 'today' | '2h' | '4h' | 'off', dishes: [{ id, off }], choices: [{ id, option, optIndex, choice, index, off }] }
+ *   mode 'today' = tắt đến 5h sáng mai rồi tự bán lại · '2h' / '4h' = tắt 2 / 4 tiếng · 'off' = tắt luôn đến khi bật lại.
  *
  * Chạy ở máy chủ để mỗi món được đọc lại ngay trước khi ghi và chỉ đổi cờ ẩn (xem menuAvailability.mjs):
  * trình duyệt không gửi cả danh sách lựa chọn nên không ghi đè được giá / danh mục in người khác vừa sửa.

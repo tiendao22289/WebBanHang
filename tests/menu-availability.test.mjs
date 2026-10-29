@@ -5,7 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import vm from 'node:vm';
 import * as lib from '../src/lib/menuAvailability.mjs';
 
-const { isDishOff, isChoiceOff, shiftEndISO, offLabel, dishChoices, cleanAvailabilityChanges, patchMenuItem, saveAvailability } = lib;
+const { isDishOff, isChoiceOff, shiftEndISO, offUntilISO, offLabel, dishChoices, cleanAvailabilityChanges, patchMenuItem, saveAvailability } = lib;
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const CAT = id(900);
 const NOW = Date.parse('2026-10-29T15:00:00Z'); // 22:00 giờ VN
@@ -45,9 +45,17 @@ test('"hết hôm nay" lasts until 5 am Vietnam time, because the shop sells pas
   assert.equal(shiftEndISO(Date.parse('2026-10-29T18:30:00Z')), TONIGHT, '01:30 after midnight → 5:00 the same morning');
   assert.equal(shiftEndISO(Date.parse('2026-10-29T22:00:00Z')), '2026-10-30T22:00:00.000Z', 'at 5:00 sharp → the next morning');
   assert.equal(shiftEndISO(Date.parse('2026-10-29T03:00:00Z')), TONIGHT, '10:00 in the morning → 5:00 tomorrow');
-  assert.equal(offLabel(TONIGHT, NOW), 'tắt đến 5:00 30/10');
+  assert.equal(offLabel(TONIGHT, NOW), 'tắt đến 05:00 30/10');
   assert.equal(offLabel(true, NOW), 'tắt luôn');
   assert.equal(offLabel(false, NOW), '');
+});
+
+test('the four ways to turn off match the menu page: end of day, 2 hours, 4 hours, until turned back on', () => {
+  assert.equal(offUntilISO('today', NOW), TONIGHT);
+  assert.equal(offUntilISO('2h', NOW), '2026-10-29T17:00:00.000Z');
+  assert.equal(offUntilISO('4h', NOW), '2026-10-29T19:00:00.000Z');
+  assert.equal(offUntilISO('off', NOW), null);
+  assert.equal(offLabel(offUntilISO('2h', NOW), NOW), 'tắt đến 00:00 30/10');
 });
 
 test('the panel lists every choice with its place in options, skipping the promo row', () => {
@@ -58,7 +66,7 @@ test('the panel lists every choice with its place in options, skipping the promo
     ['LOẠI', 0, 'Sò long', 0, false], ['LOẠI', 0, 'Ghẹ', 1, true], ['LOẠI', 0, 'Móng tay', 2, false],
     ['LOẠI', 0, 'Răng mực', 3, false], ['KHẨU VỊ', 1, 'Bình Thường', 0, false], ['KHẨU VỊ', 1, 'Làm Cay', 1, false],
   ]);
-  assert.equal(list[1].label, 'tắt đến 5:00 30/10');
+  assert.equal(list[1].label, 'tắt đến 05:00 30/10');
 });
 
 test('turning choices off changes only their hidden flag; prices, print categories and the promo row stay', () => {
@@ -110,7 +118,7 @@ test('the browser body is cleaned: bad ids dropped, changes grouped per dish', (
   });
   assert.equal(c.mode, 'today');
   assert.deepEqual(c.items, [{ id: id(1), dish: true, choices: [{ option: 'LOẠI', choice: 'Ghẹ', off: true, optIndex: 0, index: 1 }] }]);
-  assert.equal(cleanAvailabilityChanges({ mode: 'off' }).mode, 'off');
+  assert.deepEqual(['off', '2h', '4h', 'today', '3h'].map(mode => cleanAvailabilityChanges({ mode }).mode), ['off', '2h', '4h', 'today', 'today']);
 });
 
 // DB giả cho menu_items: eq('options', json) so sánh như jsonb (theo nội dung).
@@ -159,6 +167,20 @@ test('saving several dishes and choices at once writes each dish once', async ()
   assert.deepEqual(rows[0].options[0].hiddenChoices, [TONIGHT, TONIGHT, false, false]);
   assert.deepEqual([rows[1].is_available, rows[1].hidden_until], [true, TONIGHT]);
   assert.equal(db.writes.length, 2);
+});
+
+test('"2 tiếng" hides a dish and a choice for two hours from the moment of saving', async () => {
+  const rows = [ghe()];
+  const r = await saveAvailability(menuDb(rows), cleanAvailabilityChanges({
+    mode: '2h', dishes: [{ id: id(1), off: true }],
+    choices: [{ id: id(1), option: 'LOẠI', optIndex: 0, choice: 'Ghẹ', index: 1, off: true }],
+  }), NOW);
+  const twoHours = '2026-10-29T17:00:00.000Z';
+  assert.equal(r.until, twoHours);
+  assert.deepEqual([rows[0].is_available, rows[0].hidden_until], [true, twoHours]);
+  assert.equal(rows[0].options[0].hiddenChoices[1], twoHours);
+  assert.equal(isDishOff(rows[0], Date.parse(twoHours) - 1), true);
+  assert.equal(isDishOff(rows[0], Date.parse(twoHours) + 1), false, 'back on sale by itself after two hours');
 });
 
 test('when someone edits the dish between read and write, the save reads again and keeps their edit', async () => {

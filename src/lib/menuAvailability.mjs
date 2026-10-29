@@ -35,7 +35,17 @@ export function shiftEndISO(nowMs = Date.now()) {
   return new Date(end).toISOString();
 }
 
-/** Cờ ẩn → "tắt luôn" (true) / "tắt đến 5:00 30/10" (giờ VN chưa qua); còn lại ''. */
+// Các cách tắt — như nút ẩn của trang Thực đơn: hết hôm nay, 2 tiếng, 4 tiếng, tắt luôn.
+export const OFF_MODES = ['today', '2h', '4h', 'off'];
+
+/** Tắt đến giờ nào (ISO), null = tắt luôn. */
+export function offUntilISO(mode, nowMs = Date.now()) {
+  if (mode === 'off') return null;
+  if (mode === '2h' || mode === '4h') return new Date(nowMs + parseInt(mode, 10) * 3600000).toISOString();
+  return shiftEndISO(nowMs);
+}
+
+/** Cờ ẩn → "tắt luôn" (true) / "tắt đến 05:00 30/10" (giờ VN chưa qua); còn lại ''. */
 export function offLabel(until, now = Date.now()) {
   if (until === true) return 'tắt luôn';
   if (typeof until !== 'string') return '';
@@ -43,7 +53,7 @@ export function offLabel(until, now = Date.now()) {
   if (!(t > now)) return '';
   const vn = new Date(t + VN_OFFSET_MS);
   const pad = n => String(n).padStart(2, '0');
-  return `tắt đến ${vn.getUTCHours()}:${pad(vn.getUTCMinutes())} ${pad(vn.getUTCDate())}/${pad(vn.getUTCMonth() + 1)}`;
+  return `tắt đến ${pad(vn.getUTCHours())}:${pad(vn.getUTCMinutes())} ${pad(vn.getUTCDate())}/${pad(vn.getUTCMonth() + 1)}`;
 }
 
 /** Nhãn tắt của một món: tắt luôn khi is_available=false, không thì giờ hidden_until. */
@@ -70,10 +80,10 @@ const str = (v, max) => String(v ?? '').slice(0, max);
 
 /**
  * Dữ liệu trình duyệt gửi → danh sách thay đổi theo từng món.
- * body: { mode: 'today'|'off', dishes: [{ id, off }], choices: [{ id, option, optIndex, choice, index, off }] }
+ * body: { mode: 'today'|'2h'|'4h'|'off', dishes: [{ id, off }], choices: [{ id, option, optIndex, choice, index, off }] }
  */
 export function cleanAvailabilityChanges(body) {
-  const mode = body?.mode === 'off' ? 'off' : 'today';
+  const mode = OFF_MODES.includes(body?.mode) ? body.mode : 'today';
   const byId = new Map();
   const get = id => byId.get(id) || byId.set(id, { id, dish: undefined, choices: [] }).get(id);
   const list = v => (Array.isArray(v) ? v : []).slice(0, MAX_CHANGES);
@@ -133,7 +143,7 @@ async function writeRow(db, id, update, guard) {
  * → { until, saved: [{id,name}], skipped: [{id,name,option,choice}], missing: [id], failed: [{id,name}] }
  */
 export async function saveAvailability(db, { mode, items }, nowMs = Date.now()) {
-  const until = mode === 'today' ? shiftEndISO(nowMs) : null;
+  const until = offUntilISO(mode, nowMs);
   const saved = [], skipped = [], missing = [], failed = [];
   for (const change of items) {
     let name = '', done = false;
