@@ -79,35 +79,39 @@ export function dishChoices(item, now = Date.now()) {
 const str = (v, max) => String(v ?? '').slice(0, max);
 
 /**
- * Dữ liệu trình duyệt gửi → danh sách thay đổi theo từng món.
- * body: { mode: 'today'|'2h'|'4h'|'off', dishes: [{ id, off }], choices: [{ id, option, optIndex, choice, index, off }] }
+ * Dữ liệu trình duyệt gửi → danh sách thay đổi theo từng món. Mỗi món / lựa chọn tắt có thời gian
+ * riêng (mode: 'today'|'2h'|'4h'|'off', người bấm chọn lúc gạt); thiếu thì lấy body.mode, rồi 'today'.
+ * body: { mode?, dishes: [{ id, off, mode }], choices: [{ id, option, optIndex, choice, index, off, mode }] }
  */
 export function cleanAvailabilityChanges(body) {
-  const mode = OFF_MODES.includes(body?.mode) ? body.mode : 'today';
+  const fallback = OFF_MODES.includes(body?.mode) ? body.mode : 'today';
+  const modeOf = v => (OFF_MODES.includes(v?.mode) ? v.mode : fallback);
   const byId = new Map();
   const get = id => byId.get(id) || byId.set(id, { id, dish: undefined, choices: [] }).get(id);
   const list = v => (Array.isArray(v) ? v : []).slice(0, MAX_CHANGES);
   for (const d of list(body?.dishes)) {
-    if (UUID.test(String(d?.id))) get(d.id).dish = !!d.off;
+    if (!UUID.test(String(d?.id))) continue;
+    Object.assign(get(d.id), { dish: !!d.off, dishMode: modeOf(d) });
   }
   for (const c of list(body?.choices)) {
     if (!UUID.test(String(c?.id)) || !str(c.option, 100) || !str(c.choice, 100)) continue;
     get(c.id).choices.push({
-      option: str(c.option, 100), choice: str(c.choice, 100), off: !!c.off,
+      option: str(c.option, 100), choice: str(c.choice, 100), off: !!c.off, mode: modeOf(c),
       optIndex: Number.isInteger(c.optIndex) ? c.optIndex : -1, index: Number.isInteger(c.index) ? c.index : -1,
     });
   }
-  return { mode, items: [...byId.values()] };
+  return { items: [...byId.values()] };
 }
 
 /**
  * Món (đọc mới từ DB) + thay đổi → { update, skipped }. update chỉ có is_available/hidden_until khi đổi
  * món, và options khi đổi lựa chọn — options là bản sao chỉ khác ở cờ hiddenChoices được chọn.
- * until: giờ ISO (tắt hết hôm nay) hoặc null (tắt luôn).
+ * Giờ tắt của từng món / lựa chọn tính từ nowMs theo mode của nó (offUntilISO).
  */
-export function patchMenuItem(row, change, until) {
+export function patchMenuItem(row, change, nowMs = Date.now()) {
   const update = {}, skipped = [];
   if (change.dish !== undefined) {
+    const until = offUntilISO(change.dishMode, nowMs);
     if (!change.dish) Object.assign(update, { is_available: true, hidden_until: null });
     else if (until) Object.assign(update, { is_available: true, hidden_until: until });
     else Object.assign(update, { is_available: false, hidden_until: null });
@@ -122,7 +126,7 @@ export function patchMenuItem(row, change, until) {
       const index = opt.choices[c.index] === c.choice ? c.index : opt.choices.indexOf(c.choice);
       const hidden = Array.isArray(opt.hiddenChoices) ? opt.hiddenChoices : [];
       while (hidden.length < opt.choices.length) hidden.push(false);
-      hidden[index] = c.off ? (until || true) : false;
+      hidden[index] = c.off ? (offUntilISO(c.mode, nowMs) || true) : false;
       opt.hiddenChoices = hidden;
       touched = true;
     }
@@ -140,10 +144,9 @@ async function writeRow(db, id, update, guard) {
 /**
  * Ghi tất cả thay đổi. Mỗi món: đọc lại → sửa cờ → ghi, và khi đổi lựa chọn thì chỉ ghi nếu options
  * vẫn y như lúc đọc (có người vừa sửa món thì đọc lại và làm lại, tối đa 3 lần).
- * → { until, saved: [{id,name}], skipped: [{id,name,option,choice}], missing: [id], failed: [{id,name}] }
+ * → { saved: [{id,name}], skipped: [{id,name,option,choice}], missing: [id], failed: [{id,name}] }
  */
-export async function saveAvailability(db, { mode, items }, nowMs = Date.now()) {
-  const until = offUntilISO(mode, nowMs);
+export async function saveAvailability(db, { items }, nowMs = Date.now()) {
   const saved = [], skipped = [], missing = [], failed = [];
   for (const change of items) {
     let name = '', done = false;
@@ -154,7 +157,7 @@ export async function saveAvailability(db, { mode, items }, nowMs = Date.now()) 
         if (error) throw error;
         if (!row) { missing.push(change.id); done = true; break; }
         name = row.name || '';
-        const { update, skipped: notFound } = patchMenuItem(row, change, until);
+        const { update, skipped: notFound } = patchMenuItem(row, change, nowMs);
         if (attempt === 0) skipped.push(...notFound.map(c => ({ id: change.id, name, option: c.option, choice: c.choice })));
         if (!Object.keys(update).length) { done = true; break; }
         let guard = null;
@@ -173,5 +176,5 @@ export async function saveAvailability(db, { mode, items }, nowMs = Date.now()) 
     }
     if (!done) failed.push({ id: change.id, name });
   }
-  return { until, saved, skipped, missing, failed };
+  return { saved, skipped, missing, failed };
 }
