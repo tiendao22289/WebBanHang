@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 
 const db = new PGlite();
 after(() => db.close());
-await db.exec('CREATE ROLE anon; CREATE ROLE authenticated;');
+await db.exec('CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;');
 await db.exec(readFileSync(new URL('../supabase/migrations/custom_cash_receipts.sql', import.meta.url), 'utf8'));
 const id = '00000000-0000-4000-8000-000000000001';
 
