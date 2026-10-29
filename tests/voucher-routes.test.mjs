@@ -11,12 +11,13 @@ const strip = file => readFileSync(new URL(file, import.meta.url), 'utf8')
   .replace(/^import [\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
 const adminSource = strip('../src/app/api/admin/vouchers/route.js');
 const mineSource = strip('../src/app/api/voucher/mine/route.js');
+const redeemSource = strip('../src/app/api/voucher/redeem/route.js');
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 function fakeDb(state) {
   let seq = 0;
   return {
-    async rpc(name, args) { (state.rpc ||= []).push([name, args]); return { data: { ok: true, discount: 30000, order_id: args.p_order_ids[0] }, error: null }; },
+    async rpc(name, args) { (state.rpc ||= []).push([name, args]); return { data: state.rpcResult ? state.rpcResult(args) : { ok: true, discount: 30000, order_id: args.p_order_ids[0] }, error: null }; },
     from(table) {
       let op = 'read', values, maybe = false, max = Infinity;
       const conds = [];
@@ -26,6 +27,7 @@ function fakeDb(state) {
         in(k, vs) { conds.push(r => vs.includes(r[k])); return q; },
         is(k, v) { conds.push(r => (r[k] ?? null) === v); return q; },
         not(k, _op, v) { conds.push(r => (r[k] ?? null) !== v); return q; },
+        or(expr) { const parts = expr.split(',').map(e => e.split('.')); conds.push(r => parts.some(([k, , v]) => String(r[k]) === v)); return q; },
         gt(k, v) { conds.push(r => r[k] > v); return q; },
         gte(k, v) { conds.push(r => r[k] >= v); return q; },
         lte(k, v) { conds.push(r => r[k] <= v); return q; },
@@ -183,4 +185,87 @@ test('trang khách chỉ thấy mã của chính mình, không lộ SĐT', async
   assert.equal((await ask(`spinId=${id(70)}`)).body.voucher.code, 'BK-WHEELA');
   assert.equal((await ask(`orderId=${id(99)}`)).body.voucher, null);
   assert.equal((await ask('orderId=0904444444')).status, 400, 'không tra theo SĐT');
+});
+
+// ── Khách tự nhập mã ở trang gọi món (/api/voucher/redeem) ──
+function loadRedeem(state) {
+  return vm.runInNewContext(`${redeemSource}\n({ POST })`, {
+    NextResponse: { json: (body, init = {}) => ({ status: init.status || 200, body }) },
+    statusDatabase: () => fakeDb(state), ...voucher, URL, Promise, Date, console: { log() {}, error() {} },
+  });
+}
+const ask = (POST, body, ip = '1.1.1.1') => POST({ json: async () => body, headers: { get: k => (k === 'x-forwarded-for' ? ip : null) } });
+const ago = h => new Date(Date.now() - h * 3600000).toISOString();
+function shop() {
+  return {
+    tables: [{ id: id(1), merged_with: null, table_type: 'normal' }, { id: id(2), merged_with: id(1), table_type: 'normal' },
+      { id: id(3), merged_with: null, table_type: 'normal' }, { id: id(9), merged_with: null, table_type: 'takeaway' }],
+    orders: [
+      { id: id(10), table_id: id(1), status: 'pending', customer_phone: '0901111111', created_at: ago(1) },
+      { id: id(11), table_id: id(2), status: 'completed', customer_phone: null, created_at: ago(1) },
+      { id: id(12), table_id: id(1), status: 'pending', customer_phone: 'BAO_BEP', created_at: ago(1) },
+      { id: id(13), table_id: id(3), status: 'pending', customer_phone: '0903333333', created_at: ago(1) },
+      { id: id(14), table_id: id(1), status: 'cancelled', customer_phone: '0904444444', created_at: ago(2) },
+      { id: id(15), table_id: id(1), status: 'cancelled', customer_phone: '0904444444', created_at: ago(20) },
+      { id: id(90), table_id: id(9), status: 'pending', customer_phone: '0905555555', created_at: ago(1) },
+      { id: id(91), table_id: id(9), status: 'pending', customer_phone: '0906666666', created_at: ago(1) },
+      { id: id(92), table_id: id(9), status: 'completed', customer_phone: '+84905555555', created_at: ago(1) },
+    ],
+  };
+}
+
+test('khách tự nhập mã: máy chủ tự lấy mọi bill mở của bàn gộp, ghi "Khách tự nhập mã"', async () => {
+  const state = shop();
+  const { POST } = loadRedeem(state);
+  const r = await ask(POST, { code: 'bk-7k3p9x', tableId: id(2), orderId: id(10) });
+  assert.equal(r.body.ok, true);
+  const [name, args] = JSON.parse(JSON.stringify(state.rpc[0]));
+  assert.equal(name, 'redeem_voucher');
+  assert.deepEqual([args.p_code, args.p_staff_id, args.p_staff_name], ['BK-7K3P9X', null, 'Khách tự nhập mã']);
+  assert.deepEqual(args.p_order_ids.sort(), [id(10), id(11)], 'cả bàn gộp, bỏ đơn "Gọi nhân viên"');
+});
+
+test('khách tự nhập mã: phải có bill của chính mình ở đúng bàn', async () => {
+  const state = shop();
+  const { POST } = loadRedeem(state);
+  for (const body of [
+    { code: 'BK-7K3P9X', tableId: id(3), orderId: id(10) },     // bill bàn khác
+    { code: 'BK-7K3P9X', tableId: id(1), orderId: id(99) },     // bill không có
+    { code: 'BK-7K3P9X', tableId: id(1), orderId: id(15) },     // bill bị huỷ / gộp từ hôm trước
+    { code: 'BK-7K3P9X', tableId: 'abc', orderId: id(10) },
+  ]) {
+    const r = await ask(POST, body, `ip-${body.orderId}`);
+    assert.equal(r.body.ok, false, JSON.stringify(body));
+  }
+  assert.equal(state.rpc, undefined, 'không gọi trừ tiền');
+  assert.equal((await ask(POST, { code: 'BK-7K3P9X', tableId: id(1), orderId: id(14) })).body.ok, true, 'bill vừa gộp vào bill khác vẫn được');
+});
+
+test('mang về: khách chỉ trừ vào bill của chính SĐT mình', async () => {
+  const state = shop();
+  const { POST } = loadRedeem(state);
+  await ask(POST, { code: 'BK-7K3P9X', tableId: id(9), orderId: id(90) });
+  assert.deepEqual(JSON.parse(JSON.stringify(state.rpc[0][1].p_order_ids)).sort(), [id(90), id(92)]);
+});
+
+test('nhập sai nhiều lần thì khoá — không dò được mã; khách không biết mã đã dùng ở bàn nào', async () => {
+  const state = { ...shop(), rpcResult: () => ({ ok: false, reason: 'not_found' }) };
+  const { POST } = loadRedeem(state);
+  for (let i = 0; i < 6; i++) {
+    const r = await ask(POST, { code: `BK-AAAAA${'23456789'[i]}`, tableId: id(3), orderId: id(13) }, '9.9.9.9');
+    assert.equal(r.body.reason, 'not_found');
+  }
+  state.rpcResult = () => ({ ok: true, discount: 30000 });
+  const locked = await ask(POST, { code: 'BK-7K3P9X', tableId: id(3), orderId: id(13) }, '9.9.9.9');
+  assert.deepEqual([locked.status, locked.body.reason], [429, 'too_many']);
+  const otherIp = await ask(POST, { code: 'BK-7K3P9X', tableId: id(3), orderId: id(13) }, '8.8.8.8');
+  assert.equal(otherIp.status, 429, 'đổi máy vẫn bị khoá theo bàn');
+  const otherTable = await ask(POST, { code: 'BK-7K3P9X', tableId: id(1), orderId: id(10) }, '9.9.9.9');
+  assert.equal(otherTable.status, 429, 'đổi bàn cùng máy vẫn bị khoá');
+  assert.equal((await ask(POST, { code: 'BK-7K3P9X', tableId: id(1), orderId: id(10) }, '7.7.7.7')).body.ok, true, 'bàn khác, máy khác vẫn dùng bình thường');
+
+  const usedState = { ...shop(), rpcResult: () => ({ ok: false, reason: 'used', table_number: 5, used_at: '2026-10-29T12:40:00Z' }) };
+  const used = await ask(loadRedeem(usedState).POST, { code: 'BK-7K3P9X', tableId: id(1), orderId: id(10) }, '6.6.6.6');
+  assert.equal(used.body.message, 'Mã này đã được dùng rồi ạ.');
+  assert.ok(!JSON.stringify(used.body).includes('12:40') && !/bàn 5/.test(JSON.stringify(used.body)));
 });

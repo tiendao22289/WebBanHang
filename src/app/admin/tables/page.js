@@ -53,6 +53,7 @@ import './tables.css';
 import LongOpenTables from './LongOpenTables';
 import DishQuickToggle from './DishQuickToggle';
 import VoucherRedeemDialog, { useTableVouchers, VoucherBanner } from './VoucherRedeem';
+import { CUSTOMER_REDEEM_NAME } from '@/lib/voucher.mjs';
 
 // ─── Nhận diện nước ngọt / bia / khăn (không dựa vào category vì DB để trống) ───
 const DRINK_KEYWORDS = ['bia', 'coca', 'pepsi', '7 up', '7up', 'xa xi', 'sa xi', 'sting', 'siting', '0 do', 'nuoc', 'tra', 'khan', 'sprite', 'fanta', 'mirinda', 'aquafina', 'lavie', 'la vie', 'red bull', 'redbull', 'revive'];
@@ -4630,7 +4631,7 @@ export default function TablesPage() {
                               </div>
                               {item.added_by_name && (
                                 <div style={{ fontSize: '0.72rem', color: '#3b82f6', marginTop: 2 }}>
-                                  Duyệt bởi NV: {item.added_by_name}
+                                  {item.added_by_name === CUSTOMER_REDEEM_NAME ? '🙋 Khách tự nhập mã' : `Duyệt bởi NV: ${item.added_by_name}`}
                                 </div>
                               )}
                             </div>
@@ -6440,7 +6441,7 @@ export default function TablesPage() {
                             </div>
                             {item.added_by_name && (
                               <div style={{ fontSize: '0.78rem', color: '#3b82f6', marginTop: 2 }}>
-                                Duyệt bởi NV: {item.added_by_name}
+                                {item.added_by_name === CUSTOMER_REDEEM_NAME ? '🙋 Khách tự nhập mã' : `Duyệt bởi NV: ${item.added_by_name}`}
                               </div>
                             )}
                           </div>

@@ -141,3 +141,15 @@ test('lời nhắn Zalo điền đủ thông tin', () => {
   assert.ok(!/\{\w+\}/.test(text), 'không sót chỗ trống');
   assert.match(fillVoucherMessage('{ten}', { customer_name: '' }), /^bạn$/);
 });
+
+test('lời cho khách: chỉ cách tự nhập mã, không lộ bàn / giờ người khác đã dùng', async () => {
+  const { customerRedeemText, HOW_TO_USE, NEXT_VISIT_MESSAGE_TEMPLATE } = await import('../src/lib/voucher.mjs');
+  assert.match(HOW_TO_USE, /📋 Đã gọi.*nhập mã/);
+  assert.ok(NEXT_VISIT_MESSAGE_TEMPLATE.includes(HOW_TO_USE));
+  const used = customerRedeemText({ reason: 'used', table_number: 5, used_at: '2026-10-29T12:40:00Z' });
+  assert.equal(used, 'Mã này đã được dùng rồi ạ.');
+  assert.match(customerRedeemText({ reason: 'min_bill', min_bill: 200000, base: 120000 }), /200\.000đ.*120\.000đ/);
+  assert.match(customerRedeemText({ reason: 'not_yet', valid_from: '2026-10-31T05:00:00+07:00' }), /31\/10/);
+  assert.match(customerRedeemText({ reason: 'too_many' }), /nhân viên/);
+  assert.match(customerRedeemText({ reason: 'bill_changed' }), /gọi món trước/);
+});

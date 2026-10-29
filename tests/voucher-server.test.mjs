@@ -158,7 +158,7 @@ test('khách nhắn SĐT cho OA → gửi mã chưa nhắn được; người l�
   const vouchers = () => [
     { ...base, id: 'a', code: 'BK-AAAAAA' },
     { ...base, id: 'b', code: 'BK-BBBBBB', source: 'gift' },
-    { ...base, id: 'c', code: 'BK-CCCCCC', source: 'wheel' },                       // có tin chúc mừng riêng
+    { ...base, id: 'c', code: 'BK-CCCCCC', source: 'wheel' },                       // khách bấm Mở Zalo, chưa biết Zalo nào
     { ...base, id: 'd', code: 'BK-DDDDDD', status: 'used' },
     { ...base, id: 'e', code: 'BK-EEEEEE', valid_until: new Date(NOW - 1000).toISOString() },
     { ...base, id: 'f', code: 'BK-FFFFFF', sent_at: '2026-10-29T15:00:00Z' },
@@ -167,8 +167,8 @@ test('khách nhắn SĐT cho OA → gửi mã chưa nhắn được; người l�
   const send = async (_db, uid, text) => { sent.push([uid, text.match(/BK-\w+/)[0]]); return { ok: true }; };
 
   const owner = { vouchers: vouchers(), customers: [{ phone: '0905555555', zalo_user_id: 'uid-e' }], zalo_followers: [] };
-  assert.equal(await sendPendingVouchers(fakeDb(owner), '0905555555', 'uid-e', { send, nowMs: NOW }), 2);
-  assert.deepEqual(sent.map(s => s[1]).sort(), ['BK-AAAAAA', 'BK-BBBBBB']);
+  assert.equal(await sendPendingVouchers(fakeDb(owner), '0905555555', 'uid-e', { send, nowMs: NOW }), 3);
+  assert.deepEqual(sent.map(s => s[1]).sort(), ['BK-AAAAAA', 'BK-BBBBBB', 'BK-CCCCCC'], 'cả mã vòng xoay chưa nhắn được');
 
   sent.length = 0;
   const stranger = { vouchers: vouchers(), customers: [{ phone: '0905555555', zalo_user_id: 'uid-e' }], zalo_followers: [] };
@@ -176,7 +176,7 @@ test('khách nhắn SĐT cho OA → gửi mã chưa nhắn được; người l�
   assert.equal(sent.length, 0);
 
   const firstLink = { vouchers: vouchers(), customers: [], zalo_followers: [] };
-  assert.equal(await sendPendingVouchers(fakeDb(firstLink), '0905555555', 'uid-new', { send, nowMs: NOW }), 2, 'SĐT chưa nối Zalo nào → nối lần đầu');
+  assert.equal(await sendPendingVouchers(fakeDb(firstLink), '0905555555', 'uid-new', { send, nowMs: NOW }), 3, 'SĐT chưa nối Zalo nào → nối lần đầu');
   assert.equal(await sendPendingVouchers(fakeDb(firstLink), null, 'uid-new', { send, nowMs: NOW }), 0);
 });
 

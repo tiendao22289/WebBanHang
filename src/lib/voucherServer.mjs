@@ -8,7 +8,7 @@
 import {
   NEXT_VOUCHER_KEYS, parseNextVoucherConfig, nextVisitWindow, newVoucherCode,
   pickVoucherPhone, normalizePhone, fillVoucherMessage, GIFT_MESSAGE_TEMPLATE,
-  NEXT_VISIT_MESSAGE_TEMPLATE, voucherValueText, shortDay, firstUseDay, lastUseDay, money,
+  NEXT_VISIT_MESSAGE_TEMPLATE, voucherValueText, shortDay, firstUseDay, lastUseDay, money, HOW_TO_USE,
 } from './voucher.mjs';
 
 export async function loadNextVoucherConfig(db) {
@@ -103,8 +103,7 @@ export function wheelVoucherMessage(v) {
   return `🎉 Chúc mừng Quý khách trúng voucher giảm ${voucherValueText(v)} cho lần ghé tới!\n`
     + `Mã: ${v.code}\nDùng từ ${shortDay(firstUseDay(v.valid_from))} đến hết ${shortDay(lastUseDay(v.valid_until))}`
     + `${Number(v.min_bill) > 0 ? `, cho bill từ ${money(v.min_bill)}` : ''}.\n`
-    + 'Lần sau khi tính tiền, Quý khách đưa mã hoặc đọc số điện thoại cho nhân viên nha. '
-    + 'Cảm ơn Quý khách đã ủng hộ Ốc Bảo Khang ạ!';
+    + `${HOW_TO_USE}\nCảm ơn Quý khách đã ủng hộ Ốc Bảo Khang ạ!`;
 }
 
 /** Lời nhắn Zalo của 1 mã. */
@@ -162,8 +161,8 @@ export async function sendVoucherZalo(db, voucher, { send, zaloUserId = null, fo
 }
 
 /**
- * Khách vừa nhắn SĐT cho OA (khung nhắn tin đang mở) → gửi các mã "lần sau" /
- * tặng tay còn hạn mà chưa nhắn được. Mã vòng xoay có tin chúc mừng riêng.
+ * Khách vừa nhắn SĐT cho OA (khung nhắn tin đang mở) → gửi mọi mã còn hạn của SĐT
+ * mà chưa nhắn được (lần sau / tặng tay / vòng xoay). Cùng cờ sent_at nên không gửi 2 lần.
  */
 export async function sendPendingVouchers(db, phone, zaloUserId, { send, nowMs = Date.now(), log = () => {} }) {
   if (!phone || !zaloUserId) return 0;
@@ -172,7 +171,7 @@ export async function sendPendingVouchers(db, phone, zaloUserId, { send, nowMs =
   if (linked && linked !== zaloUserId) return 0;
   const { data, error } = await db.from('vouchers').select('*')
     .eq('customer_phone', phone).eq('status', 'active').is('sent_at', null)
-    .in('source', ['next_visit', 'gift']).gt('valid_until', new Date(nowMs).toISOString());
+    .gt('valid_until', new Date(nowMs).toISOString());
   if (error) throw error;
   let sent = 0;
   for (const v of data || []) {

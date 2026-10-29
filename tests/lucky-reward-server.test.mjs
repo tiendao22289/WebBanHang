@@ -82,7 +82,7 @@ function database(spin = spinTemplate) {
   const sendOaText = async (_sb, userId, text) => { sentMessages.push({ userId, text }); return { ok: true }; };
   const funcs = vm.runInNewContext(`${source}\n({ finalizeGiftItem, completeLuckySpin, applyLuckySpin, pickGiftItem, tryApplyLuckyByTiming, tryApplyLuckyForSpin, grantLuckySpinManually, removeLuckyGiftItem, listAdminLuckySpins, markFollowTapped, autoApproveTappedSpin, moveLuckySpinsWithBill })`, {
     ...wheel, sendGiftItemPrintJob: print, sendOaText, console: { log() {}, error() {} }, Date, Set,
-    issueWheelVoucher: voucherServer.issueWheelVoucher, wheelVoucherMessage: voucherServer.wheelVoucherMessage,
+    issueWheelVoucher: voucherServer.issueWheelVoucher, sendVoucherZalo: voucherServer.sendVoucherZalo,
   });
   return { state, fail, db, sentMessages, ...funcs };
 }
@@ -517,4 +517,21 @@ test('trúng "Voucher lần sau": không trừ bill hôm nay, tạo đúng 1 mã
   assert.equal(row.voucherCode, v.code);
   assert.equal(row.voucherSent, true);
   assert.notEqual(row.adminState, 'auto_pending', 'không báo nhầm "chưa vào bill"');
+});
+
+test('khách bấm "Mở Zalo" (tự duyệt, không biết Zalo nào): SĐT đã nối Zalo thì vẫn nhắn mã; chưa nối thì mã chờ', async () => {
+  const spin = { ...spinTemplate, prize_type: 'voucher_next', prize_value: 30000, discount_amount: 0, gift_menu_item_id: null,
+    zalo_user_id: null, auto_approved_at: now, follow_prompt_at: now };
+  const linked = database(spin);
+  linked.state.customers.push({ phone: '0900000000', zalo_user_id: 'zalo-cu' });
+  await linked.completeLuckySpin(linked.db, spin);
+  assert.equal(linked.sentMessages.length, 1);
+  assert.equal(linked.sentMessages[0].userId, 'zalo-cu');
+  assert.match(linked.sentMessages[0].text, /Đã gọi/);
+
+  const unknown = database(spin);
+  await unknown.completeLuckySpin(unknown.db, spin);
+  assert.equal(unknown.state.vouchers.length, 1, 'mã vẫn được tạo, khách thấy trên điện thoại');
+  assert.equal(unknown.sentMessages.length, 0);
+  assert.equal(unknown.state.vouchers[0].sent_at, null, 'khách nhắn SĐT cho OA sau thì được gửi');
 });

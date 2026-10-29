@@ -198,14 +198,37 @@ export function pickVoucherPhone(orders) {
 }
 
 // ── Lời nhắn Zalo ─────────────────────────────────────────────
+// Cách dùng mã — khách tự nhập trên trang gọi món, hoặc nhờ nhân viên.
+export const HOW_TO_USE = 'Lần tới ghé quán, gọi món xong bạn bấm "📋 Đã gọi" → nhập mã là bill tự giảm '
+  + '(hoặc đưa mã / đọc số điện thoại cho nhân viên).';
+
 export const GIFT_MESSAGE_TEMPLATE = '🎁 Ốc Bảo Khang tặng {ten} voucher giảm {giam}!\n'
   + 'Mã: {ma}\nDùng từ {tu} đến hết {den}{dieukien}.\n'
-  + 'Khi tính tiền, bạn đưa mã hoặc đọc số điện thoại cho nhân viên nha. Mời bạn ghé quán! 🦪';
+  + `${HOW_TO_USE} Mời bạn ghé quán! 🦪`;
 
 export const NEXT_VISIT_MESSAGE_TEMPLATE = 'Cảm ơn {ten} đã ghé Ốc Bảo Khang hôm nay! 🥰\n'
   + '🎁 Quán tặng bạn voucher giảm {giam} cho lần ghé tới.\n'
   + 'Mã: {ma}\nDùng từ {tu} đến hết {den}{dieukien}.\n'
-  + 'Khi tính tiền, bạn đưa mã hoặc đọc số điện thoại cho nhân viên nha.';
+  + HOW_TO_USE;
+
+/** Khách tự nhập mã ở trang gọi món: dòng voucher ghi người thêm là tên này (không có mã nhân viên). */
+export const CUSTOMER_REDEEM_NAME = 'Khách tự nhập mã';
+
+/** Lý do không dùng được mã → câu cho KHÁCH (không lộ bàn / giờ người khác đã dùng). */
+export function customerRedeemText(r) {
+  switch (r?.reason) {
+    case 'not_found': return 'Mã chưa đúng, Quý khách kiểm tra lại giúp quán nhé.';
+    case 'used': return 'Mã này đã được dùng rồi ạ.';
+    case 'cancelled': return 'Mã này không còn dùng được ạ.';
+    case 'not_yet': return `Mã dùng được từ ngày ${shortDay(firstUseDay(r.valid_from))} ạ — hẹn Quý khách lần ghé tới!`;
+    case 'expired': return `Mã đã hết hạn (hạn đến hết ${shortDay(lastUseDay(r.valid_until))}) ạ.`;
+    case 'min_bill': return `Voucher dành cho bill từ ${money(r.min_bill)} (bill hiện ${money(r.base)}). Quý khách gọi thêm chút nữa rồi nhập lại nhé 😋`;
+    case 'bill_has_voucher': return 'Bill này đã dùng 1 voucher rồi ạ (mỗi bill 1 voucher).';
+    case 'too_many': return 'Nhập sai nhiều lần quá, Quý khách nhờ nhân viên giúp nhé.';
+    case 'zero': return 'Quý khách gọi món trước rồi nhập mã nhé.';
+    default: return 'Bàn chưa có bill đang mở để trừ voucher — Quý khách gọi món trước rồi nhập mã nhé.';
+  }
+}
 
 /** Điền {ten} {giam} {ma} {tu} {den} {dieukien} vào lời nhắn. */
 export function fillVoucherMessage(template, v) {
