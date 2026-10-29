@@ -4,15 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Swal from 'sweetalert2';
 import { supabase } from '@/lib/supabase';
 import { removeVietnameseTones } from '@/lib/utils';
-import { OFF_MODES, dishChoices, dishOffLabel, isDishOff } from '@/lib/menuAvailability.mjs';
+import { dishChoices, dishOffLabel, isDishOff, offModeChoices } from '@/lib/menuAvailability.mjs';
+import { askOffMode } from '@/lib/offModeDialog';
 
 // Khung "Tắt / bật món" ở trang Bàn: gạt nhiều món / nhiều lựa chọn (LOẠI, KHẨU VỊ…) rồi bấm Lưu một lần.
 // Dùng đúng cờ của trang Thực đơn (xem lib/menuAvailability.mjs); ghi qua /api/admin/menu-availability.
-const MODE_KEY = 'dishQuickToggleMode';
-// Bấm tắt món / loại thì hỏi tắt bao lâu — giống hộp "Ẩn món ăn?" của trang Thực đơn.
-const MODES = [['today', 'Hết hôm nay'], ['2h', '2 tiếng'], ['4h', '4 tiếng'], ['off', 'Vô thời hạn']];
-const MODE_LABEL = Object.fromEntries(MODES);
-const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+// Bấm tắt món / loại thì hỏi tắt bao lâu (lib/offModeDialog — cùng hộp với trang Thực đơn).
+const MODE_LABEL = Object.fromEntries(offModeChoices().map(o => [o.mode, o.label]));
 const choiceKey = (id, c) => `${id}|${c.optIndex}|${c.index}`;
 const norm = s => removeVietnameseTones(String(s || '').toLowerCase());
 
@@ -32,38 +30,11 @@ export default function DishQuickToggle({ onClose, onSaved }) {
   const [loading, setLoading] = useState(true);
   const [pendingDish, setPendingDish] = useState({});     // { id: { off, mode } } — chưa lưu
   const [pendingChoice, setPendingChoice] = useState({}); // { "id|opt|idx": { id, option, optIndex, choice, index, off, mode } }
-  const [lastMode, setLastMode] = useState('today');      // chọn sẵn trong hộp hỏi lần sau
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState('on');                   // 'on' = Đang bán, 'off' = Đã tắt
   const [closedCats, setClosedCats] = useState({});
   const [openDishes, setOpenDishes] = useState({});
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    try { const saved = localStorage.getItem(MODE_KEY); if (OFF_MODES.includes(saved)) setLastMode(saved); } catch { }
-  }, []);
-
-  // Hỏi tắt bao lâu → 'today' | '2h' | '4h' | 'off', hoặc null nếu bấm Huỷ.
-  async function askOffMode(title, name) {
-    const { value } = await Swal.fire({
-      title, icon: 'question',
-      html: `<b>${esc(name)}</b><div style="font-size:.85rem;color:#64748b;margin-top:6px">Chọn thời gian tắt (Hết hôm nay = 5 giờ sáng mai tự bán lại):</div>`,
-      input: 'radio', inputOptions: MODE_LABEL, inputValue: lastMode,
-      inputValidator: v => (v ? undefined : 'Chọn thời gian tắt giúp ạ!'),
-      showCancelButton: true, confirmButtonColor: '#ef4444', cancelButtonColor: '#9ca3af',
-      confirmButtonText: 'Vâng, tắt', cancelButtonText: 'Huỷ',
-      didOpen: popup => {
-        const radios = popup.querySelector('.swal2-radio');
-        if (!radios) return;
-        Object.assign(radios.style, { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 10px', justifyItems: 'start', padding: '0 14px' });
-        radios.querySelectorAll('label').forEach(l => Object.assign(l.style, { margin: '0', whiteSpace: 'nowrap' }));
-      },
-    });
-    if (!value) return null;
-    setLastMode(value);
-    try { localStorage.setItem(MODE_KEY, value); } catch { }
-    return value;
-  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -97,7 +68,7 @@ export default function DishQuickToggle({ onClose, onSaved }) {
   // Gạt về như cũ thì bỏ thay đổi; gạt sang TẮT thì hỏi tắt bao lâu trước.
   async function toggleDish(m) {
     const next = !dishOffNow(m);
-    const mode = next && next !== m.off ? await askOffMode('Tắt món này?', m.name) : null;
+    const mode = next && next !== m.off ? await askOffMode({ kind: 'dish', name: m.name }) : null;
     if (next && next !== m.off && !mode) return;
     setPendingDish(p => {
       const copy = { ...p };
@@ -107,7 +78,7 @@ export default function DishQuickToggle({ onClose, onSaved }) {
   }
   async function toggleChoice(m, c) {
     const next = !choiceOffNow(m, c);
-    const mode = next && next !== c.off ? await askOffMode('Tắt loại này?', `${m.name} — ${c.choice}`) : null;
+    const mode = next && next !== c.off ? await askOffMode({ kind: 'choice', name: m.name, choice: c.choice }) : null;
     if (next && next !== c.off && !mode) return;
     const key = choiceKey(m.id, c);
     setPendingChoice(p => {
