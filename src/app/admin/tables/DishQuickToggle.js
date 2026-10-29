@@ -9,9 +9,10 @@ import { OFF_MODES, dishChoices, dishOffLabel, isDishOff } from '@/lib/menuAvail
 // Khung "Tắt / bật món" ở trang Bàn: gạt nhiều món / nhiều lựa chọn (LOẠI, KHẨU VỊ…) rồi bấm Lưu một lần.
 // Dùng đúng cờ của trang Thực đơn (xem lib/menuAvailability.mjs); ghi qua /api/admin/menu-availability.
 const MODE_KEY = 'dishQuickToggleMode';
-// Giống nút ẩn món của trang Thực đơn (Hết hôm nay / 2 tiếng / 4 tiếng / Vô thời hạn).
-const MODES = [['today', 'Hết hôm nay'], ['2h', '2 tiếng'], ['4h', '4 tiếng'], ['off', 'Tắt luôn']];
-const clockIn = hours => new Date(Date.now() + hours * 3600000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+// Bấm tắt món / loại thì hỏi tắt bao lâu — giống hộp "Ẩn món ăn?" của trang Thực đơn.
+const MODES = [['today', 'Hết hôm nay'], ['2h', '2 tiếng'], ['4h', '4 tiếng'], ['off', 'Vô thời hạn']];
+const MODE_LABEL = Object.fromEntries(MODES);
+const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
 const choiceKey = (id, c) => `${id}|${c.optIndex}|${c.index}`;
 const norm = s => removeVietnameseTones(String(s || '').toLowerCase());
 
@@ -29,9 +30,9 @@ const chip = { fontSize: '0.6rem', fontWeight: 800, color: '#ea580c', background
 export default function DishQuickToggle({ onClose, onSaved }) {
   const [data, setData] = useState(null);           // { items, cats, offIds } — món thuộc tab nào tính lúc tải
   const [loading, setLoading] = useState(true);
-  const [pendingDish, setPendingDish] = useState({});     // { id: tắt? } — chưa lưu
-  const [pendingChoice, setPendingChoice] = useState({}); // { "id|opt|idx": { id, option, optIndex, choice, index, off } }
-  const [mode, setMode] = useState('today');
+  const [pendingDish, setPendingDish] = useState({});     // { id: { off, mode } } — chưa lưu
+  const [pendingChoice, setPendingChoice] = useState({}); // { "id|opt|idx": { id, option, optIndex, choice, index, off, mode } }
+  const [lastMode, setLastMode] = useState('today');      // chọn sẵn trong hộp hỏi lần sau
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState('on');                   // 'on' = Đang bán, 'off' = Đã tắt
   const [closedCats, setClosedCats] = useState({});
@@ -39,12 +40,30 @@ export default function DishQuickToggle({ onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    try { const saved = localStorage.getItem(MODE_KEY); if (OFF_MODES.includes(saved)) setMode(saved); } catch { }
+    try { const saved = localStorage.getItem(MODE_KEY); if (OFF_MODES.includes(saved)) setLastMode(saved); } catch { }
   }, []);
-  const pickMode = m => {
-    setMode(m);
-    try { localStorage.setItem(MODE_KEY, m); } catch { }
-  };
+
+  // Hỏi tắt bao lâu → 'today' | '2h' | '4h' | 'off', hoặc null nếu bấm Huỷ.
+  async function askOffMode(title, name) {
+    const { value } = await Swal.fire({
+      title, icon: 'question',
+      html: `<b>${esc(name)}</b><div style="font-size:.85rem;color:#64748b;margin-top:6px">Chọn thời gian tắt (Hết hôm nay = 5 giờ sáng mai tự bán lại):</div>`,
+      input: 'radio', inputOptions: MODE_LABEL, inputValue: lastMode,
+      inputValidator: v => (v ? undefined : 'Chọn thời gian tắt giúp ạ!'),
+      showCancelButton: true, confirmButtonColor: '#ef4444', cancelButtonColor: '#9ca3af',
+      confirmButtonText: 'Vâng, tắt', cancelButtonText: 'Huỷ',
+      didOpen: popup => {
+        const radios = popup.querySelector('.swal2-radio');
+        if (!radios) return;
+        Object.assign(radios.style, { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 10px', justifyItems: 'start', padding: '0 14px' });
+        radios.querySelectorAll('label').forEach(l => Object.assign(l.style, { margin: '0', whiteSpace: 'nowrap' }));
+      },
+    });
+    if (!value) return null;
+    setLastMode(value);
+    try { localStorage.setItem(MODE_KEY, value); } catch { }
+    return value;
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -72,24 +91,29 @@ export default function DishQuickToggle({ onClose, onSaved }) {
   useEffect(() => { load(); }, [load]);
 
   const nPending = Object.keys(pendingDish).length + Object.keys(pendingChoice).length;
-  const dishOffNow = m => (Object.prototype.hasOwnProperty.call(pendingDish, m.id) ? pendingDish[m.id] : m.off);
+  const dishOffNow = m => pendingDish[m.id]?.off ?? m.off;
   const choiceOffNow = (m, c) => pendingChoice[choiceKey(m.id, c)]?.off ?? c.off;
 
-  function toggleDish(m) {
+  // Gạt về như cũ thì bỏ thay đổi; gạt sang TẮT thì hỏi tắt bao lâu trước.
+  async function toggleDish(m) {
     const next = !dishOffNow(m);
+    const mode = next && next !== m.off ? await askOffMode('Tắt món này?', m.name) : null;
+    if (next && next !== m.off && !mode) return;
     setPendingDish(p => {
       const copy = { ...p };
-      if (next === m.off) delete copy[m.id]; else copy[m.id] = next;
+      if (next === m.off) delete copy[m.id]; else copy[m.id] = { off: next, mode };
       return copy;
     });
   }
-  function toggleChoice(m, c) {
+  async function toggleChoice(m, c) {
     const next = !choiceOffNow(m, c);
+    const mode = next && next !== c.off ? await askOffMode('Tắt loại này?', `${m.name} — ${c.choice}`) : null;
+    if (next && next !== c.off && !mode) return;
     const key = choiceKey(m.id, c);
     setPendingChoice(p => {
       const copy = { ...p };
       if (next === c.off) delete copy[key];
-      else copy[key] = { id: m.id, option: c.option, optIndex: c.optIndex, choice: c.choice, index: c.index, off: next };
+      else copy[key] = { id: m.id, option: c.option, optIndex: c.optIndex, choice: c.choice, index: c.index, off: next, mode };
       return copy;
     });
   }
@@ -112,8 +136,7 @@ export default function DishQuickToggle({ onClose, onSaved }) {
       const res = await fetch('/api/admin/menu-availability', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          mode,
-          dishes: Object.entries(pendingDish).map(([id, off]) => ({ id, off })),
+          dishes: Object.entries(pendingDish).map(([id, d]) => ({ id, off: d.off, mode: d.mode })),
           choices: Object.values(pendingChoice),
         }),
       });
@@ -166,6 +189,7 @@ export default function DishQuickToggle({ onClose, onSaved }) {
         <span style={{ flex: 1, minWidth: 0, fontSize: '0.82rem', fontWeight: 600, color: off ? '#b91c1c' : '#374151' }}>
           {c.choice}
           {off && !changed && c.label && <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 600, color: '#ef4444' }}>{c.label}</span>}
+          {off && changed && <span style={{ display: 'block', fontSize: '0.66rem', fontWeight: 600, color: '#ea580c' }}>sẽ tắt: {MODE_LABEL[pendingChoice[choiceKey(m.id, c)].mode]}</span>}
         </span>
         {changed && <span style={chip}>chưa lưu</span>}
         <span style={{ fontSize: '0.68rem', fontWeight: 800, color: off ? '#dc2626' : '#16a34a', flexShrink: 0 }}>{off ? 'TẮT' : 'BẬT'}</span>
@@ -175,7 +199,7 @@ export default function DishQuickToggle({ onClose, onSaved }) {
 
   function renderDish(m, onlyOffChoices = false) {
     const off = dishOffNow(m);
-    const changed = Object.prototype.hasOwnProperty.call(pendingDish, m.id);
+    const changed = !!pendingDish[m.id];
     const searchHit = q && !norm(m.name).includes(q);
     const expanded = !!openDishes[m.id] || !!searchHit;
     const shown = onlyOffChoices ? m.choices.filter(c => c.off) : searchHit ? m.choices.filter(c => norm(c.choice).includes(q)) : m.choices;
@@ -193,6 +217,7 @@ export default function DishQuickToggle({ onClose, onSaved }) {
             <span style={{ flex: 1, minWidth: 0, fontSize: '0.86rem', fontWeight: 700, color: off ? '#b91c1c' : '#15803d' }}>
               {m.name}
               {off && !changed && m.label && <span style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#ef4444' }}>{m.label}</span>}
+              {off && changed && <span style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#ea580c' }}>sẽ tắt: {MODE_LABEL[pendingDish[m.id].mode]}</span>}
               {!off && nOffChoices > 0 && !expanded && !onlyOffChoices && <span style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#b45309' }}>{nOffChoices} lựa chọn đang tắt</span>}
             </span>
             {changed && <span style={chip}>chưa lưu</span>}
@@ -236,17 +261,8 @@ export default function DishQuickToggle({ onClose, onSaved }) {
             </button>
             <button onClick={close} aria-label="Đóng" style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>✕</button>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5, marginTop: 9 }}>
-            {MODES.map(([k, label]) => (
-              <button key={k} type="button" onClick={() => pickMode(k)}
-                style={{ padding: '6px 2px', borderRadius: 8, cursor: 'pointer', fontSize: '0.74rem', fontWeight: 800, whiteSpace: 'nowrap',
-                  border: `1.5px solid ${mode === k ? '#dc2626' : '#e5e7eb'}`, background: mode === k ? '#dc2626' : 'white', color: mode === k ? 'white' : '#475569' }}>
-                {label}
-              </button>
-            ))}
-          </div>
           <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginTop: 5, lineHeight: 1.4 }}>
-            <b>Khi tắt:</b> {{ today: '5 giờ sáng mai tự bán lại.', '2h': `tự bán lại lúc ${clockIn(2)}.`, '4h': `tự bán lại lúc ${clockIn(4)}.`, off: 'tắt đến khi bật lại.' }[mode]} Gạt nhiều món rồi bấm <b>Lưu</b> một lần.
+            Bấm tắt sẽ hỏi tắt bao lâu. Gạt nhiều món rồi bấm <b>Lưu</b> một lần.
           </div>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Tìm món hoặc loại (vd: ghẹ)…"
             style={{ width: '100%', marginTop: 8, padding: '8px 11px', border: '1.5px solid #e5e7eb', borderRadius: 10, fontSize: '0.86rem', boxSizing: 'border-box', background: 'white' }} />
