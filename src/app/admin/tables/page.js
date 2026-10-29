@@ -52,6 +52,7 @@ import {
 import './tables.css';
 import LongOpenTables from './LongOpenTables';
 import DishQuickToggle from './DishQuickToggle';
+import VoucherRedeemDialog, { useTableVouchers, VoucherBanner } from './VoucherRedeem';
 
 // ─── Nhận diện nước ngọt / bia / khăn (không dựa vào category vì DB để trống) ───
 const DRINK_KEYWORDS = ['bia', 'coca', 'pepsi', '7 up', '7up', 'xa xi', 'sa xi', 'sting', 'siting', '0 do', 'nuoc', 'tra', 'khan', 'sprite', 'fanta', 'mirinda', 'aquafina', 'lavie', 'la vie', 'red bull', 'redbull', 'revive'];
@@ -154,7 +155,7 @@ function ringBell() {
  * discountBase = tiền món dương, không tính quà (cha tính sẵn, truyền xuống) để
  * xem trước mức giảm % ngay lập tức mà không phải đọc lại đơn.
  */
-function BillAdjustDialog({ tableNumber, discountBase, busy, onApply, onClose }) {
+function BillAdjustDialog({ tableNumber, discountBase, busy, onApply, onClose, onVoucher }) {
   const [mode, setMode] = useState('sub'); // 'add' | 'sub' | 'pct'
   const [amount, setAmount] = useState('');
   const [percent, setPercent] = useState('');
@@ -194,6 +195,12 @@ function BillAdjustDialog({ tableNumber, discountBase, busy, onApply, onClose })
             </button>
           ))}
         </div>
+        {/* Voucher khách đưa (mã tặng qua Zalo / hẹn lần sau / vòng xoay) — bảng riêng */}
+        <button onClick={onVoucher} disabled={busy}
+          style={{ width: '100%', marginBottom: 14, padding: '9px', borderRadius: 10, fontSize: '0.84rem', fontWeight: 800, cursor: 'pointer',
+            border: '1.5px dashed #f59e0b', background: '#fffbeb', color: '#b45309' }}>
+          🎟️ Khách có voucher? Nhập mã
+        </button>
 
         {mode === 'pct' ? (
           <>
@@ -322,6 +329,12 @@ export default function TablesPage() {
   // Ô nhập của bảng điều chỉnh bill giờ nằm trong BillAdjustDialog (state cục bộ,
   // tránh re-render cả trang khi gõ). Cha chỉ giữ mở/đóng + đang lưu.
   const [adjustBusy, setAdjustBusy] = useState(false);
+  // Voucher: mã của SĐT trên bill đang mở hiện sẵn ("Khách có voucher"), hoặc gõ mã khách đưa.
+  const [voucherOpen, setVoucherOpen] = useState(false);
+  const [voucherRefresh, setVoucherRefresh] = useState(0);
+  const voucherBills = selectedTable ? getSelectedTableOrders().filter(o => o.customer_phone !== 'BAO_BEP'
+    && ['pending', 'preparing', 'completed'].includes(o.status)) : [];
+  const tableVouchers = useTableVouchers(voucherBills.map(o => o.customer_phone), voucherRefresh);
   const [tableNote, setTableNote] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null); // { orderId, itemId, itemName }
   const [editItemPrice, setEditItemPrice] = useState(null); // { orderId, itemId, value } — LEGACY, replaced by showPriceModal
@@ -1334,6 +1347,14 @@ export default function TablesPage() {
       fetchTables(snapshot.groupTableIds);
       proof.onDone?.();
       if (blob && !result.photoSaved) Swal.fire('Đã đóng bàn', 'Bàn đã thanh toán xong nhưng chưa lưu được ảnh. Thêm ảnh ở Sổ thu chi hoặc tab Bill giấy (trang Mã QR).', 'warning');
+      else if (result.nextVoucher) {
+        // Máy vừa tặng mã "hẹn lần sau" → nhân viên báo khách một câu.
+        const v = result.nextVoucher;
+        Swal.fire({ icon: 'success', title: '🎁 Đã tặng voucher lần sau',
+          html: `Khách${v.name ? ` <b>${String(v.name).replace(/[<>&]/g, '')}</b>` : ''} được giảm <b>${v.valueText}</b> lần ghé tới.<br/>`
+            + `Mã: <b style="letter-spacing:1px">${v.code}</b><br/><span style="color:#64748b;font-size:0.85em">Nhắc khách: lần sau đọc số điện thoại là dùng được.</span>`,
+          confirmButtonText: 'OK' });
+      }
     } catch (error) {
       console.error('[settleTable]', error);
       Swal.fire('Chưa thể thanh toán', error?.message || 'Không kiểm tra được đầy đủ bill. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
@@ -5041,10 +5062,31 @@ export default function TablesPage() {
                   busy={adjustBusy}
                   onApply={applyBillAdjustment}
                   onClose={() => setAdjustOpen(false)}
+                  onVoucher={() => { setAdjustOpen(false); setVoucherOpen(true); }}
+                />
+              )}
+              {voucherOpen && (
+                <VoucherRedeemDialog
+                  tableNumber={selectedTable?.table_number}
+                  orderIds={voucherBills.map(o => o.id)}
+                  discountBase={adjustDiscountBase()}
+                  vouchers={tableVouchers}
+                  onClose={() => setVoucherOpen(false)}
+                  onApplied={async r => {
+                    setVoucherOpen(false);
+                    setVoucherRefresh(n => n + 1);
+                    await fetchOrdersForBills([r.order_id]);
+                    Swal.fire({ icon: 'success', title: `Đã trừ voucher ${Number(r.discount).toLocaleString('vi-VN')}đ`, toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
+                  }}
                 />
               )}
 
               <div className="modal-footer" style={{ padding: '8px 12px', gap: 6, flexDirection: 'column', alignItems: 'stretch' }}>
+                {/* Bill đã có dòng voucher thì thôi nhắc (mỗi bill 1 voucher). */}
+                {!voucherBills.some(o => (o.order_items || []).some(i => i.menu_item_id == null
+                  && (Number(i.unit_price) || 0) < 0 && String(i.item_name || '').startsWith('Voucher BK-'))) && (
+                  <VoucherBanner vouchers={tableVouchers} onOpen={() => setVoucherOpen(true)} />
+                )}
                 {/* Total summary row */}
                 {getSelectedTableOrders()?.length > 0 && (() => {
                   const total = sumOrderItems(getSelectedTableOrders());
@@ -7239,6 +7281,7 @@ export default function TablesPage() {
                       {s.autoApprovedAt && <div style={{ marginTop: 6, fontSize: '0.82rem', lineHeight: 1.6 }}>
                         {s.prizeType === 'percent' && <div>Giảm <b>{s.prizeValue}%</b> theo tổng bill.</div>}
                         {['percent', 'amount'].includes(s.prizeType) && s.appliedItemId && <div>Đã trừ: <b>{Number(s.discountAmount).toLocaleString('vi-VN')}đ</b></div>}
+                        {s.voucherCode && <div>Voucher lần sau: <b>{s.voucherCode}</b> {s.voucherSent ? '(đã nhắn Zalo)' : '(chưa nhắn được Zalo)'} — không trừ bill hôm nay.</div>}
                         {s.giftName && <div>Quà trên bill: <b>{s.quantity} × {s.giftName}</b>{s.itemOptions?.length > 0 && ` (${s.itemOptions.map(o => o.choice).join(', ')})`}</div>}
                         {s.printStatus && <div style={{ color: ['failed', 'missing', 'cancelled'].includes(s.printStatus) ? '#dc2626' : '#475569' }}>
                           Phiếu {s.prizeType === 'gift_drink' ? 'nước' : 'món'}: {s.printStatus === 'done' ? 'Máy in báo hoàn tất' : s.printStatus === 'failed' ? 'In lỗi — kiểm tra máy in' : s.printStatus === 'missing' ? 'Chưa tạo được lệnh in, hệ thống sẽ thử lại' : s.printStatus === 'cancelled' ? 'Lệnh in đã bị huỷ' : 'Đã gửi lệnh, đang chờ máy in'}

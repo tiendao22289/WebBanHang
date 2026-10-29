@@ -28,7 +28,7 @@ test('the PIN is stored only as a salted hash and 5 wrong tries lock it for 5 mi
   assert.equal(pinLib.lockWait(r, 1000), 300, '5th wrong try: 5 minutes');
   assert.equal(pinLib.lockWait(r, 1000 + 300000), 0);
 
-  assert.deepEqual(['/admin/payroll', '/admin/stats', '/admin/customers', '/admin/settings', '/admin/finance', '/admin/finance/x'].map(isLockedPath), [true, true, true, true, true, true]);
+  assert.deepEqual(['/admin/payroll', '/admin/stats', '/admin/customers', '/admin/settings', '/admin/finance', '/admin/finance/x', '/admin/vouchers'].map(isLockedPath), [true, true, true, true, true, true, true]);
   assert.deepEqual(['/admin/tables', '/admin/notes', '/admin/qr', '/admin/statsx'].map(isLockedPath), [false, false, false, false]);
   assert.equal(lockedSection('/admin/payroll'), 'payroll');
 });

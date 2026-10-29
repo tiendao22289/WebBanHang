@@ -10,7 +10,7 @@
  */
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { isGiftPrizeType } from '@/lib/luckyWheel';
+import { isGiftPrizeType, isVoucherPrizeType } from '@/lib/luckyWheel';
 import { requireStatusAdmin } from '@/lib/statusAuth';
 
 function getServiceClient() {
@@ -77,6 +77,7 @@ export async function PATCH(request) {
     const numValue = Number(value);
     if (!(numValue >= 1)) return fail('Số lượng tặng phải từ 1 trở lên');
   }
+  if (isVoucherPrizeType(type) && !(Number(value) >= 1000)) return fail('Giá trị voucher phải từ 1.000đ');
 
   const { error } = await supabase.from('lucky_prizes').update({
     label: trimmedLabel,

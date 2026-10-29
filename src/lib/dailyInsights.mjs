@@ -64,7 +64,9 @@ export function lossData({ ledgerDay = [], printed = new Map(), movedIds = new S
   for (const bill of ledgerDay) for (const i of bill.items || []) {
     const amount = (Number(i.unit_price) || 0) * (Number(i.quantity) || 0);
     if (amount >= 0) continue;
-    const kind = /vòng xoay/i.test(i.name || '') ? 'Vòng xoay' : String(i.name || 'Giảm giá').split(':')[0].trim();
+    // 'Voucher BK-XXXXXX': mỗi mã một tên → gom chung một nhóm.
+    const kind = /vòng xoay/i.test(i.name || '') ? 'Vòng xoay' : /^voucher /i.test(i.name || '') ? 'Voucher'
+      : String(i.name || 'Giảm giá').split(':')[0].trim();
     const d = discounts.get(kind) || { count: 0, amount: 0 };
     discounts.set(kind, { count: d.count + 1, amount: d.amount - amount });
   }

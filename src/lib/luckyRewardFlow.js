@@ -41,6 +41,7 @@ export function luckyPrizeTitle(prize) {
   const value = Number(prize?.prize_value ?? prize?.prizeValue);
   if (type === 'percent' && value > 0) return `Giảm ${value}% hoá đơn`;
   if (type === 'gift_drink' && value > 0) return `Tặng ${value} nước tuỳ chọn`;
+  if (type === 'voucher_next' && value > 0) return `Voucher ${value.toLocaleString('vi-VN')}đ cho lần ghé tới`;
   return prize?.prize_label || prize?.prizeLabel || 'Phần quà của Quý khách';
 }
 
