@@ -1569,7 +1569,7 @@ function OrderContent() {
     const [{ data: cats }, { data: items }, { data: tableData }] = await Promise.all([
       supabase.from('categories').select('*').order('sort_order'),
       supabase.from('menu_items').select('*, category:categories(name)').eq('is_available', true).order('sort_order').order('created_at'),
-      activeTableId ? supabase.from('tables').select('table_number, status, table_type, table_name').eq('id', activeTableId).single() : { data: null },
+      activeTableId ? supabase.from('tables').select('id, table_number, status, table_type, table_name, merged_with').eq('id', activeTableId).single() : { data: null },
     ]);
     // Lọc client-side: loại các món đang trong thời gian ẩn tạm thời
     // (an toàn ngay cả khi cột hidden_until chưa tồn tại trong DB)
@@ -1599,10 +1599,8 @@ function OrderContent() {
       setTableNumber(isTW ? (tableData.table_name || 'Mang về') : tableData.table_number);
       setIsTakeaway(isTW);
       isTakeawayRef.current = isTW; // update ref đồng bộ, không đợi useEffect
-      if (tableData.merged_with) {
-        setActiveTableId(tableData.merged_with);
-      }
-      // Lấy danh sách tất cả bàn trong nhóm gộp để tính khuyến mãi chung
+      // Bàn phụ của nhóm gộp: món vẫn ghi vào bàn đã quét (trang Bàn và thanh toán gộp theo nhóm);
+      // lấy cả nhóm để khách thấy món cả nhóm đã gọi và tính khuyến mãi chung.
       const hostId = tableData.merged_with || tableData.id;
       const { data: groupTables } = await supabase
         .from('tables')

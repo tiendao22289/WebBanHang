@@ -391,14 +391,15 @@ async function lossInputs(db, { from, to, range }) {
     for (const orderId of new Set([job.order_id, ...(job.order_ids || [])].filter(Boolean))) {
       const own = snap.filter(i => !i.order_id || i.order_id === orderId);
       printed.set(orderId, [...(printed.get(orderId) || []), own]);
-      for (const i of own) if (i.id) printedIn.set(i.id, orderId);
+      for (const i of own) if (i.id) printedIn.set(i.id, (printedIn.get(i.id) || new Set()).add(orderId));
     }
   }
-  // Món đang nằm ở bill khác (chuyển / gộp bàn) thì không phải bị bớt.
+  // Món đang nằm ở bill khác bill đã in nó (chuyển / gộp bàn) thì không phải bị bớt. Một món có thể in
+  // dưới nhiều bill (bill phụ trước khi gộp, rồi hoá đơn bill chính) nên nhớ mọi bill đã in.
   const movedIds = new Set();
   for (const part of inChunks([...printedIn.keys()])) {
     const { data } = await db.from('order_items').select('id, order_id').in('id', part);
-    for (const row of data || []) if (printedIn.get(row.id) && row.order_id !== printedIn.get(row.id)) movedIds.add(row.id);
+    for (const row of data || []) if ([...(printedIn.get(row.id) || [])].some(id => id !== row.order_id)) movedIds.add(row.id);
   }
   const tables = new Map(((await db.from('tables').select('id, table_number')).data || []).map(t => [t.id, t.table_number]));
   const cancelled = ((await db.from('orders').select('id, table_id, total_amount, cancelled_by_name, cancelled_at, created_at').eq('status', 'cancelled')

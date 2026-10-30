@@ -26,12 +26,17 @@ const pct = (now, before) => (before > 0 ? `${now >= before ? '+' : '−'}${Math
  * Trả về từng loại thất thoát (số lần / số món, tiền, từng dòng) và tổng tiền ước tính.
  */
 export function lossData({ ledgerDay = [], printed = new Map(), movedIds = new Set(), cancelled = [], menuPrice = new Map() }) {
-  // Bill huỷ — kèm món đã in bếp (đã làm mà không thu tiền).
-  const cancelRows = cancelled.map(o => {
-    const snap = latestByItem(printed.get(o.id) || []);
-    const printedValue = [...snap.values()].reduce((a, i) => a + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0);
-    const printedCount = [...snap.values()].reduce((a, i) => a + (Number(i.quantity) || 0), 0);
-    return { at: o.cancelled_at || null, table: o.table_number ?? null, printedCount, printedValue, amount: Number(o.total_amount) || 0, by: o.cancelled_by_name || null };
+  // Bill huỷ — kèm món đã in bếp (đã làm mà không thu tiền). Món đã sang bill khác (gộp bill / chuyển bàn)
+  // vẫn được thu ở bill đó nên không tính.
+  const cancelRows = cancelled.flatMap(o => {
+    const snap = [...latestByItem(printed.get(o.id) || []).values()].filter(i => !movedIds.has(i.id));
+    const printedValue = snap.reduce((a, i) => a + (Number(i.unit_price) || 0) * (Number(i.quantity) || 0), 0);
+    const printedCount = snap.reduce((a, i) => a + (Number(i.quantity) || 0), 0);
+    const amount = Number(o.total_amount) || 0;
+    // Bill phụ còn lại sau khi gộp bill (merge_bills_atomic): 0đ, không giờ huỷ, không người huỷ — món đã sang
+    // bill chính (bill chính ngoài thống kê bị dọn thì không còn món để đối chiếu). Nút huỷ luôn ghi giờ huỷ.
+    if (!o.cancelled_at && !o.cancelled_by_name && !amount) return [];
+    return [{ at: o.cancelled_at || null, table: o.table_number ?? null, printedCount, printedValue, amount, by: o.cancelled_by_name || null }];
   });
   const cancelTotal = cancelRows.reduce((a, r) => a + (r.printedValue || r.amount), 0);
   // Món đã in bếp nhưng bill lúc thu không còn (hoặc ít hơn).
