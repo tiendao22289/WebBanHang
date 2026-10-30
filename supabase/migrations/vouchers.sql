@@ -161,7 +161,10 @@ BEGIN
   reduction := LEAST(reduction, floor(base)::integer, floor(bill_now)::integer - 1000);
   IF reduction <= 0 THEN RETURN jsonb_build_object('ok', false, 'reason', 'zero'); END IF;
 
-  SELECT id INTO target FROM public.orders WHERE id = ANY(wanted) ORDER BY created_at, id LIMIT 1;
+  -- Bill hệ thống "Gọi nhân viên" (BAO_BEP) không vào Sổ thu chi: dòng giảm ở đó làm lệch sổ.
+  SELECT id INTO target FROM public.orders WHERE id = ANY(wanted) AND customer_phone IS DISTINCT FROM 'BAO_BEP'
+  ORDER BY created_at, id LIMIT 1;
+  IF target IS NULL THEN RETURN jsonb_build_object('ok', false, 'reason', 'bill_changed'); END IF;
   INSERT INTO public.order_items (order_id, menu_item_id, item_name, quantity, unit_price, is_gift,
                                   added_by_id, added_by_name)
   VALUES (target, NULL, 'Voucher ' || v.code, 1, -reduction, false, p_staff_id, p_staff_name)
