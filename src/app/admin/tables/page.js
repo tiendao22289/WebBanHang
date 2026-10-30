@@ -15,7 +15,7 @@ import {
   isReviewDiscountItem,
 } from '@/lib/reviewReward';
 import { getMenuCached, fetchMenuFromServer } from '@/lib/menuCache';
-import { getTableGroupOrders, OPEN_BILL_STATUSES } from '@/lib/tableGroupOrders';
+import { getTableGroupOrders, OPEN_BILL_STATUSES, representativeBill } from '@/lib/tableGroupOrders';
 import { promoGiftStatus } from '@/lib/promoGifts.mjs';
 import { isPrintJobBad, isUnresolvedBadJob } from '@/lib/printJobStatus.mjs';
 import { NO_DRAFT, updateDraftOf, addDraftLine, decreaseDraftLine, setDraftItemTotal, removeSentLines } from '@/lib/draftCart.mjs';
@@ -2150,9 +2150,9 @@ export default function TablesPage() {
         Swal.fire('Hết lượt', 'Bàn này không còn lượt chọn quà miễn phí nào ạ.', 'warning');
         return;
       }
-      // Ghi vào bill CŨ NHẤT của nhóm — cùng quy ước với các chỗ khác trong code
-      // (Zalo, vòng xoay...) khi cần chọn 1 bill đại diện cho cả nhóm bàn gộp.
-      const targetOrderId = [...groupBills].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))[0]?.id;
+      // Ghi vào bill CŨ NHẤT của nhóm (không phải bill "Gọi nhân viên") — cùng quy ước với
+      // Zalo, vòng xoay... khi cần chọn 1 bill đại diện cho cả nhóm bàn gộp.
+      const targetOrderId = representativeBill(groupBills)?.id;
       if (!targetOrderId) return;
 
       const { data: gift, error } = await supabase.from('order_items').insert({
@@ -2333,9 +2333,9 @@ export default function TablesPage() {
   // không đụng dòng quà vòng xoay. Nhận payload từ BillAdjustDialog (state cục bộ).
   async function applyBillAdjustment(payload = {}) {
     if (adjustBusy) return;
-    const bills = (getSelectedTableOrders() || [])
-      .filter(o => ['pending', 'preparing', 'completed'].includes(o.status));
-    if (bills.length === 0) { Swal.fire({ icon: 'warning', title: 'Bàn chưa có bill để điều chỉnh' }); return; }
+    // Bill cũ nhất, bỏ bill "Gọi nhân viên": dòng ghi vào bill đó không vào Sổ thu chi.
+    const target = representativeBill(getSelectedTableOrders());
+    if (!target) { Swal.fire({ icon: 'warning', title: 'Bàn chưa có bill để điều chỉnh' }); return; }
     const reason = (payload.reason || '').trim();
 
     let unitPrice = 0, label = '';
@@ -2362,7 +2362,7 @@ export default function TablesPage() {
       unitPrice = -reduction; label = `Giảm ${pct}%`;
     }
     const itemName = reason ? `${label}: ${reason}` : label;
-    const targetOrderId = bills[0].id;
+    const targetOrderId = target.id;
     setAdjustBusy(true);
     try {
       const { data: item, error } = await supabase.from('order_items').insert({

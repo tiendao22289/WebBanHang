@@ -726,7 +726,7 @@ export default function StaffNotesPage() {
       setPayingItem(null); setPayItemInput('');
       // Directly update notes state so card turns green immediately
       setNotes(prev => prev.map(n => n.id === note.id ? { ...n, ...updated } : n));
-      setViewingNote(prev => prev ? { ...prev, ...updated } : null);
+      setViewingNote(prev => prev?.id === note.id ? { ...prev, ...updated } : prev);
       fetchNotes();
     } catch (err) { alert(err?.message || 'Lỗi cập nhật!'); }
   };
@@ -849,7 +849,7 @@ export default function StaffNotesPage() {
                 const paidAmt = item.paid_amount || 0;
                 const debtBase = item.debtAmount ? Math.min(parseVal(item.debtAmount.replace(/\./g, '')), total) : (isDebt ? total : 0);
                 const remaining = debtBase > 0 ? Math.max(0, debtBase - paidAmt) : 0;
-                const isThisPaying = payingItem?.idx === idx;
+                const isThisPaying = payingItem?.noteId === noteId && payingItem?.idx === idx;
                 const hasPayHistory = item.payment_logs?.length > 0;
                 // FIX #3: Cũng đánh dấu đã trả đủ nếu paymentStatus đã cập nhật thành 'full'
                 const debtFullyPaid = (remaining <= 0 && (hasPayHistory || !isDebt && paidAmt > 0)) || (!isDebt && paidAmt > 0);
@@ -865,7 +865,7 @@ export default function StaffNotesPage() {
                       <div style={{ paddingLeft: 10 }}>
                         {isDebt && remaining > 0 ? (
                           <button
-                            onClick={e => { e.stopPropagation(); setPayingItem(isThisPaying ? null : { idx }); setPayItemInput(''); }}
+                            onClick={e => { e.stopPropagation(); setPayingItem(isThisPaying ? null : { noteId, idx }); setPayItemInput(''); }}
                             style={{ fontSize: '0.78rem', background: '#dc2626', color: 'white', border: 'none', borderRadius: 7, padding: '4px 10px', cursor: 'pointer', fontWeight: 700 }}
                           >
                             Trả nợ
@@ -894,7 +894,7 @@ export default function StaffNotesPage() {
 
                     {/* Debt inline pay input + history — inside dashed section */}
                     {(isDebt || item.payment_logs?.length > 0) && (() => {
-                      const histKey = `${viewingNote.id}-${idx}`;
+                      const histKey = `${noteId}-${idx}`;
                       const isExpanded = !!expandedHistory[histKey];
                       const borderColor = isDebt ? '#fca5a5' : '#d1fae5';
                       return (
@@ -902,7 +902,7 @@ export default function StaffNotesPage() {
                           {item.payment_logs?.length > 0 && (
                             <div style={{ marginBottom: isThisPaying ? 6 : 0 }}>
                               <button
-                                onClick={e => { e.stopPropagation(); toggleHistory(viewingNote.id, idx); }}
+                                onClick={e => { e.stopPropagation(); toggleHistory(noteId, idx); }}
                                 style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.72rem', color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 3, padding: '0 0 4px 0' }}
                               >
                                 🕐 {isExpanded ? 'Ẩn lịch sử' : `Lịch sử (${item.payment_logs.length})`}
@@ -950,7 +950,8 @@ export default function StaffNotesPage() {
                             <button
                               onClick={() => {
                                 const num = Number(payItemInput.replace(/\./g, ''));
-                                handleItemPayment(viewingNote, idx, num);
+                                // Thẻ ở danh sách cũng có nút trả nợ: lấy đúng phiếu theo mã, không theo phiếu đang mở.
+                                handleItemPayment(notes.find(n => n.id === noteId) || viewingNote, idx, num);
                               }}
                               style={{ padding: '6px 14px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 7, fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}
                             >

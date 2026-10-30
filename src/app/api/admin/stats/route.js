@@ -95,7 +95,7 @@ async function fetchAllOrdersInRange(supabase, startDate, endDate) {
     const { data, error } = await supabase
       .from('orders')
       .select(`
-        id, created_at, total_amount, payment_method, status,
+        id, created_at, total_amount, payment_method, status, customer_phone,
         order_items (
           quantity, unit_price, menu_item_id, item_name,
           menu_item:menu_items(name, category:categories(name))
@@ -120,7 +120,9 @@ async function fetchAllOrdersInRange(supabase, startDate, endDate) {
 }
 
 function buildStats(ordersData) {
+  // Bill "Gọi nhân viên" (BAO_BEP, 0đ) được thanh toán cùng bàn nhưng không phải bill bán.
   const validOrders = ordersData.filter(o =>
+    o.customer_phone !== 'BAO_BEP' &&
     (o.status === 'completed' || o.status === 'paid') &&
     (o.payment_method === 'cash' || o.payment_method === 'transfer')
   );

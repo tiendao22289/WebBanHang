@@ -353,6 +353,8 @@ REVOKE ALL ON FUNCTION public.prepare_stats_payment(uuid, uuid[], numeric, text)
 GRANT EXECUTE ON FUNCTION public.prepare_stats_payment(uuid, uuid[], numeric, text) TO anon, authenticated;
 REVOKE ALL ON FUNCTION public.get_stats_quota_summary() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.get_stats_quota_summary() TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.complete_table_payment_atomic(uuid, uuid[], numeric, text, uuid, boolean, uuid, text, text) TO anon, authenticated;
+-- Chỉ máy chủ (/api/admin/receipts) đóng bàn; khoá công khai trong trang web không gọi được (bill_money_guard.sql).
+REVOKE ALL ON FUNCTION public.complete_table_payment_atomic(uuid, uuid[], numeric, text, uuid, boolean, uuid, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.complete_table_payment_atomic(uuid, uuid[], numeric, text, uuid, boolean, uuid, text, text) TO service_role;
 NOTIFY pgrst, 'reload schema';
 COMMIT;

@@ -32,5 +32,7 @@ BEGIN
   RETURN jsonb_build_object('success', true, 'already_completed', false);
 END $$;
 
-GRANT EXECUTE ON FUNCTION public.confirm_custom_qr_payment(text, numeric, uuid) TO anon, authenticated;
+-- Chỉ máy chủ (/api/admin/receipts) xác nhận; khoá công khai không gọi được (bill_money_guard.sql).
+REVOKE ALL ON FUNCTION public.confirm_custom_qr_payment(text, numeric, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.confirm_custom_qr_payment(text, numeric, uuid) TO service_role;
 NOTIFY pgrst, 'reload schema';
