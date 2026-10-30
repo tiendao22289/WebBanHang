@@ -35,6 +35,20 @@ test('a cancelled bill shows what had already gone to the kitchen', () => {
   assert.match(lossBlock({}), /không có bill huỷ/);
 });
 
+test('bills merged into another bill are not reported as cancelled', () => {
+  // Gộp bill: bill phụ thành "cancelled" 0đ (không người huỷ), món đã in bếp chuyển sang bill chính.
+  const printed = new Map([['merged', [[{ id: 'm1', name: 'Tôm', quantity: 1, unit_price: 80000 }, { id: 'm2', name: 'Mực', quantity: 2, unit_price: 50000 }]]],
+    ['x', [[{ id: 'p', name: 'Tôm', quantity: 2, unit_price: 80000 }, { id: 'q', name: 'Sò', quantity: 1, unit_price: 60000 }]]]]);
+  // m1, m2 không nằm trong movedIds: bill chính ngoài thống kê đã bị dọn nên không còn món để đối chiếu.
+  const text = lossBlock({ printed, movedIds: new Set(['q']), cancelled: [
+    { id: 'merged', table_number: 58, cancelled_at: null, cancelled_by_name: null, total_amount: 0 },
+    // Bill huỷ thật, 1 món đã chuyển sang bàn khác trước khi huỷ: chỉ tính món còn lại.
+    { id: 'x', table_number: 7, cancelled_at: '2026-10-23T14:05:00Z', cancelled_by_name: 'Lan', total_amount: 220000 },
+  ] });
+  assert.match(text, /Bill huỷ: 1 — 160\.000đ\n• 21:05 Bàn 7 · 2 món đã in bếp \(160\.000đ\) · huỷ bởi Lan/);
+  assert.doesNotMatch(text, /Bàn 58/);
+});
+
 test('staff hours, forgotten clock-outs and pending requests', () => {
   const text = staffBlock({ staffNames: { a: 'Phát', b: 'Lan' }, sessions: [
     { staff_id: 'a', clock_in: '2026-10-23T09:00:00Z', clock_out: '2026-10-23T12:00:00Z' },
