@@ -136,6 +136,19 @@ test('bill đã thanh toán / khác nhóm bàn / thiếu bill → không trừ',
   assert.equal((await row('BK-AAAAAA')).status, 'active');
 });
 
+test('bill "Gọi nhân viên" (BAO_BEP) cũ nhất bàn: dòng voucher không rơi vào đó (bill đó không vào Sổ thu chi)', async () => {
+  await db.query(`INSERT INTO orders(id, table_id, status, customer_phone, created_at)
+    VALUES ($1,$2,'completed','BAO_BEP',now() - interval '1 hour')`, [id(13), id(1)]);
+  await voucher('BK-AAAAAA');
+  assert.equal((await redeem('BK-AAAAAA', [id(13)])).reason, 'bill_changed');
+  assert.equal((await items(id(13))).length, 0);
+  assert.equal((await row('BK-AAAAAA')).status, 'active');
+  const r = await redeem('BK-AAAAAA', [id(13), id(10), id(11)]);
+  assert.equal(r.ok, true);
+  assert.equal(r.order_id, id(10));
+  assert.equal((await items(id(13))).length, 0);
+});
+
 test('xoá dòng voucher khỏi bill đang mở → mã dùng lại được', async () => {
   await voucher('BK-AAAAAA');
   const r = await redeem('BK-AAAAAA', [id(12)]);
