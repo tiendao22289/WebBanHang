@@ -4,6 +4,7 @@ import {
   newVoucherCode, normalizeVoucherCode, VOUCHER_ALPHABET, nextVisitWindow, giftWindow, lastUseDay, firstUseDay,
   calcVoucherDiscount, voucherState, voucherValueText, redeemFailText, parseNextVoucherConfig, checkNextVoucherConfig,
   pickVoucherPhone, fillVoucherMessage, GIFT_MESSAGE_TEMPLATE, normalizePhone, isVoucherSwitchOn,
+  sendInBatches, canAutoSendVoucher, SEND_BATCH, SEND_MAX_IDS,
 } from '../src/lib/voucher.mjs';
 
 // Giờ VN → mốc ms (UTC+7).
@@ -163,4 +164,47 @@ test('xem trước ở trang Bàn khớp SQL: bill luôn còn ít nhất 1.000đ
   assert.equal(calcVoucherDiscount(100000, v, 20000), 19000, 'bill 100k đã giảm tay 80k');
   assert.equal(calcVoucherDiscount(100000, v, 1000), 0);
   assert.equal(calcVoucherDiscount(100000, v), 50000, 'không truyền tổng bill → như cũ');
+});
+
+test('gửi Zalo nhiều mã: chia đợt nhỏ đủ hết 487 mã, hiện tiến độ, đợt lỗi mạng thử lại 1 lần rồi mới dừng', async () => {
+  assert.ok(SEND_BATCH < SEND_MAX_IDS);
+  const ids = Array.from({ length: 487 }, (_, i) => `v${i}`);
+  const calls = [];
+  const progress = [];
+  const all = await sendInBatches(ids, async batch => { calls.push(batch.length); return batch.map(id => ({ id, ok: true })); },
+    { onProgress: (done, total) => progress.push(`${done}/${total}`) });
+  assert.equal(all.error, null);
+  assert.equal(all.results.length, 487);
+  assert.deepEqual(new Set(all.results.map(r => r.id)).size, 487, 'mỗi mã đúng 1 lần');
+  assert.ok(calls.every(n => n <= SEND_BATCH));
+  assert.equal(calls.length, Math.ceil(487 / SEND_BATCH));
+  assert.equal(progress.at(-1), '487/487');
+
+  // Đợt 2 lỗi mạng 1 lần → thử lại được, vẫn đủ.
+  let flaky = 0;
+  const retried = await sendInBatches(ids.slice(0, 60), async batch => {
+    if (batch[0] === 'v20' && flaky++ === 0) throw new Error('mạng chập chờn');
+    return batch.map(id => ({ id, ok: true }));
+  });
+  assert.deepEqual([retried.error, retried.results.length], [null, 60]);
+
+  // Đợt 3 lỗi mãi → dừng, trả phần đã xong (2 đợt đầu) để bấm lại gửi tiếp.
+  const stopped = await sendInBatches(ids.slice(0, 100), async batch => {
+    if (batch[0] === 'v40') throw new Error('máy chủ lỗi');
+    return batch.map(id => ({ id, ok: true }));
+  });
+  assert.equal(stopped.results.length, 40);
+  assert.match(stopped.error.message, /máy chủ lỗi/);
+});
+
+test('"Gửi tất cả" chỉ lấy mã còn dùng, có SĐT, chưa nhắn, chưa báo lỗi', () => {
+  const at = ms => new Date(Date.now() + ms).toISOString();
+  const base = { status: 'active', customer_phone: '0900000001', sent_at: null, send_error: null, valid_from: at(-3600000), valid_until: at(86400000) };
+  assert.equal(canAutoSendVoucher(base), true);
+  assert.equal(canAutoSendVoucher({ ...base, valid_from: at(3600000) }), true, 'mã lần sau chưa tới ngày vẫn nhắn trước được');
+  assert.equal(canAutoSendVoucher({ ...base, customer_phone: null }), false);
+  assert.equal(canAutoSendVoucher({ ...base, sent_at: at(-1000) }), false);
+  assert.equal(canAutoSendVoucher({ ...base, send_error: 'Khách chưa nối Zalo' }), false);
+  assert.equal(canAutoSendVoucher({ ...base, status: 'used' }), false);
+  assert.equal(canAutoSendVoucher({ ...base, valid_until: at(-1000) }), false);
 });

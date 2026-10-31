@@ -5,7 +5,7 @@ import Swal from 'sweetalert2';
 import { removeVietnameseTones } from '@/lib/utils';
 import {
   voucherValueText, voucherState, VOUCHER_STATE_TEXT, VOUCHER_SOURCES, shortDay, firstUseDay, lastUseDay, money,
-  GIFT_MESSAGE_TEMPLATE, NEXT_VISIT_MESSAGE_TEMPLATE, fillVoucherMessage,
+  GIFT_MESSAGE_TEMPLATE, NEXT_VISIT_MESSAGE_TEMPLATE, fillVoucherMessage, canAutoSendVoucher, sendInBatches,
 } from '@/lib/voucher.mjs';
 
 // Trang Voucher của chủ quán (xem lib/voucher.mjs, api/admin/vouchers):
@@ -49,6 +49,37 @@ async function copyText(text) {
 
 const messageOf = v => v.message || fillVoucherMessage(v.source === 'next_visit' ? NEXT_VISIT_MESSAGE_TEMPLATE : GIFT_MESSAGE_TEMPLATE, v);
 const toast = (title, icon = 'success') => Swal.fire({ icon, title, toast: true, position: 'top-end', showConfirmButton: false, timer: 1800 });
+
+/**
+ * Nhắn Zalo nhiều mã: chia đợt nhỏ (mỗi lần gọi máy chủ xong nhanh, không bị ngắt giữa chừng),
+ * hiện tiến độ, cuối cùng tổng kết. onDone(results) để trang cập nhật danh sách.
+ */
+function useBulkZaloSend(onDone) {
+  const [progress, setProgress] = useState(null); // { done, total } khi đang gửi
+  async function run(ids) {
+    if (!ids.length) { toast('Không còn mã nào chờ nhắn Zalo', 'info'); return; }
+    setProgress({ done: 0, total: ids.length });
+    try {
+      const { results, error } = await sendInBatches(ids, async batch => (await api({ action: 'send', ids: batch })).results || [],
+        { onProgress: (done, total) => setProgress({ done, total }) });
+      const ok = results.filter(r => r.ok).length;
+      const noZalo = results.filter(r => r.reason === 'no_zalo').length;
+      const refused = results.filter(r => !r.ok && r.reason !== 'no_zalo');
+      onDone(results);
+      Swal.fire(ok ? 'Đã gửi Zalo' : 'Chưa gửi được', [
+        `Gửi được ${ok}/${ids.length} khách.`,
+        noZalo ? `${noZalo} khách chưa nối Zalo với quán.` : '',
+        refused.length ? `${refused.length} khách Zalo chưa cho gửi: ${refused[0].message}` : '',
+        error ? `Dừng ở ${results.length}/${ids.length} mã vì mạng / máy chủ lỗi. Bấm gửi lần nữa để gửi tiếp — mã đã nhắn không nhắn lại.` : '',
+        ok < ids.length ? 'Khách chưa nhận thì bấm "Chép tin" rồi dán vào Zalo để gửi tay.' : '',
+      ].filter(Boolean).join('\n'), ok ? 'success' : 'warning');
+    } finally {
+      setProgress(null);
+    }
+  }
+  const label = idle => (progress ? `Đang gửi ${progress.done}/${progress.total}…` : idle);
+  return { sending: !!progress, label, run };
+}
 
 function Stats({ vouchers }) {
   const since = Date.now() - 30 * DAY_MS;
@@ -144,7 +175,14 @@ function GiftTab({ onCreated }) {
   const [picked, setPicked] = useState({});
   const [saving, setSaving] = useState(false);
   const [created, setCreated] = useState([]);
-  const [sending, setSending] = useState(false);
+  const bulk = useBulkZaloSend(results => {
+    const byId = new Map(results.map(r => [r.id, r]));
+    setCreated(list => list.map(v => {
+      const r = byId.get(v.id);
+      return r ? { ...v, sent_at: r.ok ? new Date().toISOString() : null, send_error: r.ok ? null : r.message } : v;
+    }));
+    onCreated();
+  });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   useEffect(() => { getView('customers').then(d => setCustomers(d.customers || [])).catch(() => setCustomers([])); }, []);
@@ -184,25 +222,8 @@ function GiftTab({ onCreated }) {
     } catch (e) { Swal.fire('Chưa tạo được', e.message, 'error'); } finally { setSaving(false); }
   }
 
-  async function sendAll() {
-    const ids = created.filter(v => v.customer_phone).map(v => v.id);
-    if (!ids.length) return;
-    setSending(true);
-    try {
-      const { results } = await api({ action: 'send', ids });
-      const ok = results.filter(r => r.ok).length;
-      const noZalo = results.filter(r => r.reason === 'no_zalo').length;
-      const refused = results.filter(r => !r.ok && r.reason !== 'no_zalo');
-      setCreated(list => list.map(v => { const r = results.find(x => x.id === v.id); return r ? { ...v, sent_at: r.ok ? new Date().toISOString() : null, send_error: r.ok ? null : r.message } : v; }));
-      onCreated();
-      Swal.fire(ok ? 'Đã gửi Zalo' : 'Chưa gửi được', [
-        `Gửi được ${ok}/${results.length} khách.`,
-        noZalo ? `${noZalo} khách chưa nối Zalo với quán.` : '',
-        refused.length ? `${refused.length} khách chưa gửi được: ${refused[0].message}` : '',
-        ok < results.length ? 'Khách chưa nhận thì bấm "Chép tin" rồi dán vào Zalo để gửi tay.' : '',
-      ].filter(Boolean).join('\n'), ok ? 'success' : 'warning');
-    } catch (e) { Swal.fire('Lỗi', e.message, 'error'); } finally { setSending(false); }
-  }
+  // Chỉ mã chưa nhắn / chưa báo lỗi: bấm lại sau khi bị ngắt thì gửi tiếp phần còn lại.
+  const sendAll = () => bulk.run(created.filter(canAutoSendVoucher).map(v => v.id));
 
   return (
     <>
@@ -300,7 +321,7 @@ function GiftTab({ onCreated }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
             <b>✅ Vừa tạo {created.length} mã</b>
             {created.some(v => v.customer_phone) && (
-              <button style={btn('#0d9488')} disabled={sending} onClick={sendAll}>{sending ? 'Đang gửi…' : '💬 Gửi Zalo tất cả'}</button>
+              <button style={{ ...btn('#0d9488'), opacity: bulk.sending ? 0.7 : 1 }} disabled={bulk.sending} onClick={sendAll}>{bulk.label('💬 Gửi Zalo tất cả')}</button>
             )}
           </div>
           {created.map(v => <VoucherRow key={v.id} v={v} onChanged={onCreated} />)}
@@ -426,6 +447,9 @@ function ListTab({ vouchers, onChanged }) {
     if (source !== 'all' && v.source !== source) return false;
     return !q || norm(`${v.code} ${v.customer_name || ''} ${v.customer_phone || ''} ${v.batch_name || ''}`).includes(q);
   });
+  // Mã trong danh sách đang lọc mà chưa nhắn Zalo (vd vừa tạo xong, tải lại trang thì gửi từ đây).
+  const pending = list.filter(canAutoSendVoucher);
+  const bulk = useBulkZaloSend(() => onChanged());
   return (
     <div style={card}>
       <input style={input} value={search} onChange={e => setSearch(e.target.value)} placeholder="Tìm mã, tên khách, SĐT" />
@@ -436,6 +460,12 @@ function ListTab({ vouchers, onChanged }) {
         {[['all', 'Mọi nguồn'], ...Object.entries(VOUCHER_SOURCES)].map(([k, t]) => <button key={k} style={chip(source === k)} onClick={() => setSource(k)}>{t}</button>)}
       </div>
       <div style={{ fontSize: '0.76rem', color: '#64748b', margin: '4px 0' }}>{list.length} mã</div>
+      {pending.length > 0 && (
+        <button style={{ ...btn('#0d9488'), width: '100%', margin: '4px 0 8px', opacity: bulk.sending ? 0.7 : 1 }} disabled={bulk.sending}
+          onClick={() => bulk.run(pending.map(v => v.id))}>
+          {bulk.label(`💬 Gửi Zalo ${pending.length} mã chưa nhắn`)}
+        </button>
+      )}
       {list.slice(0, 200).map(v => <VoucherRow key={v.id} v={v} onChanged={onChanged} />)}
       {list.length > 200 && <div style={{ fontSize: '0.74rem', color: '#94a3b8', textAlign: 'center', padding: 8 }}>Đang hiện 200 mã đầu — gõ tìm để lọc</div>}
     </div>

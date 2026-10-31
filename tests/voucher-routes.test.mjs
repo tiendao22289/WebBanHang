@@ -335,3 +335,14 @@ test('công tắc voucher: chỉ chủ quán bật / tắt; tắt thì trang Bà
   });
   assert.deepEqual(JSON.parse(JSON.stringify(await broken.GET())), { status: 200, body: { on: false } });
 });
+
+test('gửi Zalo: quá 200 mã một lần thì báo lỗi rõ, không cắt bớt âm thầm', async () => {
+  const state = { vouchers: [], customers: [], zalo_followers: [] };
+  const api = loadAdmin(state, ADMIN);
+  const ids = Array.from({ length: 201 }, (_, i) => id(1000 + i));
+  const r = await api.POST(post({ action: 'send', ids }));
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /tối đa 200/);
+  assert.equal(api.sent.length, 0);
+  assert.equal((await api.POST(post({ action: 'send', ids: ids.slice(0, 200) }))).status, 200);
+});
