@@ -41,6 +41,24 @@ export async function bindOrderToDevice(orderId, tableId) {
     clearTimeout(timer);
   }
 }
+/** Công tắc voucher chung (Admin > Voucher). Lỗi mạng → coi như tắt (ẩn ô nhập mã). */
+export async function fetchVoucherSwitch() {
+  try {
+    const res = await fetch('/api/voucher/status', { cache: 'no-store' });
+    return !!(await res.json()).on;
+  } catch { return false; }
+}
+/** refreshKey đổi → hỏi lại (mở bảng "Món đã gọi" là thấy ngay chủ quán vừa bật / tắt). */
+export function useVoucherSwitch(refreshKey) {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    fetchVoucherSwitch().then(v => { if (alive) setOn(v); });
+    return () => { alive = false; };
+  }, [refreshKey]);
+  return on;
+}
+
 const KEEP = ['code', 'discount_type', 'discount_value', 'max_discount', 'min_bill', 'valid_from', 'valid_until'];
 
 /** Mã đã lưu trong máy khách, còn hạn. Bộ nhớ bị chặn thì coi như không có. */

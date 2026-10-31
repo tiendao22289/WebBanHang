@@ -9,6 +9,7 @@ import {
 } from '@/lib/voucher.mjs';
 
 // Trang Voucher của chủ quán (xem lib/voucher.mjs, api/admin/vouchers):
+//  - Công tắc chung: tắt thì khách / nhân viên không dùng mã, vòng xoay không ra voucher, không phát mã mới.
 //  - Tặng khách: tạo mã có hạn cho từng khách (hoặc N mã không tên), nhắn qua Zalo OA hoặc chép tin để gửi tay.
 //  - Hẹn lần sau: thanh toán xong máy tự tặng mã cho SĐT của bill.
 //  - Danh sách + số liệu: đã tặng / đã dùng / tiền giảm / doanh thu bill có voucher.
@@ -309,7 +310,46 @@ function GiftTab({ onCreated }) {
   );
 }
 
-function NextVisitTab({ vouchers }) {
+/** Công tắc chung bật / tắt cả tính năng voucher. Mã đã phát không bị đụng tới. */
+function VoucherSwitch({ on, onChange }) {
+  const [busy, setBusy] = useState(false);
+  if (on == null) return <div style={card}>Đang tải…</div>;
+  async function flip() {
+    if (on) {
+      const ok = await Swal.fire({
+        icon: 'question', title: 'Tắt voucher?', showCancelButton: true, confirmButtonText: 'Tắt voucher', cancelButtonText: 'Không',
+        confirmButtonColor: '#dc2626',
+        text: 'Khách không nhập mã được, nhân viên không áp mã được, vòng xoay không ra voucher, không tặng / gửi mã mới. Mã đã phát vẫn giữ, bật lại là dùng tiếp.',
+      });
+      if (!ok.isConfirmed) return;
+    }
+    setBusy(true);
+    try {
+      const d = await api({ action: 'switch', on: !on });
+      onChange(d.on);
+      toast(d.on ? 'Đã bật voucher' : 'Đã tắt voucher');
+    } catch (e) { Swal.fire('Chưa đổi được', e.message, 'error'); } finally { setBusy(false); }
+  }
+  return (
+    <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 12, background: on ? '#f0fdf4' : '#f8fafc', borderColor: on ? '#86efac' : '#e5e7eb' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 900, color: on ? '#15803d' : '#475569' }}>{on ? 'Voucher đang BẬT' : 'Voucher đang TẮT'}</div>
+        <div style={{ fontSize: '0.78rem', color: '#475569', marginTop: 3, lineHeight: 1.4 }}>
+          {on ? 'Khách tự nhập mã khi gọi món, nhân viên áp mã ở trang Bàn, vòng xoay ra được ô voucher (nếu đã thêm).'
+            : 'Khách không thấy ô nhập mã, nhân viên không áp được mã, vòng xoay không ra voucher, không tặng / gửi mã mới. Mã đã phát vẫn giữ.'}
+        </div>
+      </div>
+      <button role="switch" aria-checked={on} aria-label={on ? 'Tắt voucher' : 'Bật voucher'} disabled={busy} onClick={flip}
+        style={{ width: 54, height: 30, flexShrink: 0, borderRadius: 999, border: 'none', padding: 3, cursor: 'pointer',
+          background: on ? '#16a34a' : '#cbd5e1', opacity: busy ? 0.6 : 1, transition: 'background .15s' }}>
+        <span style={{ display: 'block', width: 24, height: 24, borderRadius: '50%', background: 'white', boxShadow: '0 1px 3px rgba(0,0,0,.25)',
+          transform: on ? 'translateX(24px)' : 'none', transition: 'transform .15s' }} />
+      </button>
+    </div>
+  );
+}
+
+function NextVisitTab({ vouchers, voucherOn }) {
   const [cfg, setCfg] = useState(null);
   const [saving, setSaving] = useState(false);
   useEffect(() => { getView('config').then(d => setCfg(d.config)).catch(e => Swal.fire('Lỗi', e.message, 'error')); }, []);
@@ -326,6 +366,11 @@ function NextVisitTab({ vouchers }) {
   return (
     <div style={card}>
       <div style={{ fontWeight: 800, color: '#0f172a' }}>🔁 Hẹn lần sau</div>
+      {voucherOn === false && (
+        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#b45309', marginTop: 4 }}>
+          Voucher đang tắt (công tắc đầu trang) — Hẹn lần sau chỉ chạy khi bật lại.
+        </div>
+      )}
       <div style={{ fontSize: '0.8rem', color: '#475569', margin: '4px 0 10px' }}>
         Nhân viên bấm thanh toán như thường. Bill đủ mức và có SĐT khách thì máy tự tặng 1 mã cho lần ghé tới, nhắn Zalo nếu khách đã nối Zalo, và hiện trên điện thoại khách.
       </div>
@@ -401,10 +446,12 @@ export default function VouchersPage() {
   const [tab, setTab] = useState('gift');
   const [vouchers, setVouchers] = useState([]);
   const [notInstalled, setNotInstalled] = useState(false);
+  const [voucherOn, setVoucherOn] = useState(null);
   const load = useCallback(() => getView('list')
     .then(d => { setVouchers(d.vouchers || []); setNotInstalled(!!d.notInstalled); })
     .catch(e => Swal.fire('Lỗi', e.message, 'error')), []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { getView('config').then(d => setVoucherOn(!!d.config?.on)).catch(() => setVoucherOn(false)); }, []);
 
   return (
     <div style={{ maxWidth: 560, margin: '0 auto', padding: '12px 12px 40px' }}>
@@ -414,6 +461,7 @@ export default function VouchersPage() {
           Máy chủ chưa cài bảng voucher. Cần chạy cài đặt dữ liệu (migration vouchers.sql) trước khi dùng.
         </div>
       )}
+      <VoucherSwitch on={voucherOn} onChange={setVoucherOn} />
       <Stats vouchers={vouchers} />
       <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
         {[['gift', '🎁 Tặng khách'], ['next', '🔁 Hẹn lần sau'], ['list', '📋 Danh sách']].map(([k, t]) => (
@@ -421,7 +469,7 @@ export default function VouchersPage() {
         ))}
       </div>
       {tab === 'gift' && <GiftTab onCreated={load} />}
-      {tab === 'next' && <NextVisitTab vouchers={vouchers} />}
+      {tab === 'next' && <NextVisitTab vouchers={vouchers} voucherOn={voucherOn} />}
       {tab === 'list' && <ListTab vouchers={vouchers} onChanged={load} />}
     </div>
   );

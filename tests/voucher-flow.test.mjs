@@ -43,7 +43,7 @@ await db.exec(`
 `);
 for (const f of ['order_total_follows_items.sql', 'protect_settled_order_items.sql', 'complete_table_payment_atomic.sql',
   'merge_bills_preserve_live_items.sql', 'vouchers.sql']) await db.exec(sql(f));
-await db.exec(`UPDATE settings SET value = 'true' WHERE key = 'voucher_next_enabled'`);
+await db.exec(`UPDATE voucher_settings SET value = 'true' WHERE key IN ('voucher_enabled', 'voucher_next_enabled')`);
 
 const strip = f => readFileSync(new URL(f, import.meta.url), 'utf8').replace(/^import [\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
 const zalo = [];
@@ -283,4 +283,36 @@ test('đăng ký chìa khoá: bàn không có / chìa khoá ngắn bị từ ch�
   for (let i = 0; i < 301; i++) last = await bind(600 + i, 5, PHONE_KEY, '203.0.113.9');
   assert.equal(last.status, 429);
   assert.equal((await bind(950, 5, PHONE_KEY, '198.51.100.7')).body.ok, true);
+});
+
+test('chủ quán tắt voucher: nhân viên / khách không dùng được mã (không tính là dò mã), thanh toán không tặng mã; bật lại là dùng tiếp', async () => {
+  const setSwitch = on => db.query("UPDATE voucher_settings SET value = $1 WHERE key = 'voucher_enabled'", [on ? 'true' : 'false']);
+  const nextCodes = async () => (await db.query("SELECT count(*)::int AS n FROM vouchers WHERE source = 'next_visit'")).rows[0].n;
+  await table(30);
+  await order(300, 30, '0907777777', [[2, 150000]], 'Khách');
+  await db.query(`INSERT INTO vouchers(code, source, discount_type, discount_value, customer_phone, valid_from, valid_until)
+    VALUES ('BK-SWTCHB', 'gift', 'amount', 30000, '0907777777', now() - interval '1 day', now() + interval '5 days')`);
+  await table(31);
+  await order(310, 31, '0908888888', [[4, 100000]], 'Khách');
+  await setSwitch(false);
+  try {
+    const look = json(await staffApi.POST({ json: async () => ({ action: 'lookup', phones: ['0907777777'] }) })).body;
+    assert.deepEqual([look.on, look.vouchers.length], [false, 0]);
+    assert.equal((await staffRedeem('BK-SWTCHB', 30)).reason, 'disabled');
+    for (let i = 0; i < 8; i++) assert.equal((await customerRedeem('BK-SWTCHB', 30, 300)).reason, 'disabled');
+    assert.equal((await v('BK-SWTCHB')).status, 'active');
+    assert.equal(await billTotal(await openBills(30)), 300000, 'không ghi dòng giảm nào');
+
+    const before = await nextCodes();
+    const paid = await pay(31);
+    assert.equal(paid.body.ok, true, 'thanh toán vẫn chạy bình thường');
+    assert.equal(paid.body.nextVoucher, undefined);
+    assert.equal(await nextCodes(), before, 'tắt thì không tặng mã lần sau');
+  } finally {
+    await setSwitch(true);
+  }
+  // Bật lại: mã dùng được ngay, 8 lần bị từ chối lúc tắt không bị tính là dò mã.
+  const ok = await customerRedeem('BK-SWTCHB', 30, 300);
+  assert.deepEqual([ok.ok, ok.discount], [true, 30000]);
+  assert.equal(await billTotal(await openBills(30)), 270000);
 });

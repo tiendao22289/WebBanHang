@@ -77,6 +77,31 @@ CREATE INDEX IF NOT EXISTS voucher_order_keys_table_idx ON public.voucher_order_
 ALTER TABLE public.voucher_order_keys ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.voucher_order_keys FROM anon, authenticated;
 
+-- ── Cài đặt voucher (Admin > Voucher sửa được) ──────────────
+-- Bảng riêng chỉ máy chủ đọc / ghi: bảng settings chung ghi được bằng khoá công khai (trang
+-- Cài đặt ghi thẳng), để ở đó thì ai cũng tự bật "Hẹn lần sau" giảm 100% được.
+-- voucher_enabled = công tắc chung, mặc định TẮT: tắt thì không dùng mã, không tặng / gửi mã
+-- mới, vòng xoay không ra voucher. Mã đã phát giữ nguyên, bật lại là dùng tiếp.
+-- Hạn dùng + bill tối thiểu lúc dùng của "Hẹn lần sau" cũng áp cho voucher trúng vòng xoay.
+CREATE TABLE IF NOT EXISTS public.voucher_settings (
+  key text PRIMARY KEY,
+  value text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.voucher_settings ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.voucher_settings FROM anon, authenticated;
+INSERT INTO public.voucher_settings (key, value) VALUES
+  ('voucher_enabled',           'false'),
+  ('voucher_next_enabled',      'false'),
+  ('voucher_next_min_bill',     '300000'),  -- bill từ bao nhiêu thì được tặng
+  ('voucher_next_type',         'amount'),  -- amount | percent
+  ('voucher_next_value',        '30000'),
+  ('voucher_next_max',          '0'),       -- trần cho voucher %
+  ('voucher_next_use_min_bill', '200000'),  -- lần sau bill từ bao nhiêu mới dùng được
+  ('voucher_next_days',         '14'),      -- dùng trong bao nhiêu ngày (từ 5h sáng hôm sau)
+  ('voucher_next_repeat',       'true')     -- bill đã dùng voucher vẫn được tặng mã mới
+ON CONFLICT (key) DO NOTHING;
+
 -- ── Dùng mã vào bill ─────────────────────────────────────────
 -- p_order_ids: các bill đang mở của bàn (nhóm gộp) mà trang Bàn đang thấy.
 -- Trả { ok, reason?, ... } — không RAISE cho lỗi thường gặp để trang Bàn báo rõ.
@@ -96,6 +121,9 @@ DECLARE
   reduction integer;
   line_id uuid;
 BEGIN
+  IF COALESCE((SELECT value FROM public.voucher_settings WHERE key = 'voucher_enabled'), 'false') <> 'true' THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'disabled');
+  END IF;
   SELECT * INTO v FROM public.vouchers WHERE code = upper(btrim(p_code)) FOR UPDATE;
   IF NOT FOUND THEN RETURN jsonb_build_object('ok', false, 'reason', 'not_found'); END IF;
   IF v.status = 'used' THEN
@@ -252,18 +280,5 @@ EXECUTE FUNCTION public.voucher_guard_bill_reopen();
 REVOKE ALL ON FUNCTION public.release_voucher_on_line_delete() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.release_voucher_on_bill_cancel() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.voucher_guard_bill_reopen() FROM PUBLIC, anon, authenticated;
-
--- ── Cấu hình "Hẹn lần sau" (Admin > Voucher sửa được) ───────
--- Hạn dùng + bill tối thiểu lúc dùng cũng áp cho voucher trúng vòng xoay.
-INSERT INTO public.settings (key, value) VALUES
-  ('voucher_next_enabled',      'false'),
-  ('voucher_next_min_bill',     '300000'),  -- bill từ bao nhiêu thì được tặng
-  ('voucher_next_type',         'amount'),  -- amount | percent
-  ('voucher_next_value',        '30000'),
-  ('voucher_next_max',          '0'),       -- trần cho voucher %
-  ('voucher_next_use_min_bill', '200000'),  -- lần sau bill từ bao nhiêu mới dùng được
-  ('voucher_next_days',         '14'),      -- dùng trong bao nhiêu ngày (từ 5h sáng hôm sau)
-  ('voucher_next_repeat',       'true')     -- bill đã dùng voucher vẫn được tặng mã mới
-ON CONFLICT (key) DO NOTHING;
 
 NOTIFY pgrst, 'reload schema';

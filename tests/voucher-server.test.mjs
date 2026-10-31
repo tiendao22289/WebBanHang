@@ -7,8 +7,11 @@ import {
 
 // DB giả kiểu supabase-js, đủ cho src/lib/voucherServer.mjs. Ràng buộc UNIQUE như vouchers.sql.
 const UNIQUE = { vouchers: ['code', 'issue_key'] };
+// Mặc định voucher đang BẬT (công tắc chung); ca nào cần tắt thì truyền voucher_settings riêng.
+const SWITCH_ON = [{ key: 'voucher_enabled', value: 'true' }];
 function fakeDb(state) {
   let seq = 0;
+  if (!('voucher_settings' in state)) state.voucher_settings = structuredClone(SWITCH_ON);
   return { from(table) {
     let op = 'read', values, maybe = false, max = Infinity;
     const conds = [];
@@ -57,7 +60,7 @@ function fakeDb(state) {
 }
 
 const NOW = Date.parse('2026-10-29T22:00:00+07:00');
-const settings = (extra = {}) => Object.entries({ voucher_next_enabled: 'true', voucher_next_min_bill: '300000',
+const settings = (extra = {}) => Object.entries({ voucher_enabled: 'true', voucher_next_enabled: 'true', voucher_next_min_bill: '300000',
   voucher_next_value: '30000', voucher_next_use_min_bill: '200000', voucher_next_days: '14', ...extra }).map(([key, value]) => ({ key, value }));
 const paidBills = () => [
   { id: 'o2', customer_phone: '0901111111', customer_name: 'An', total_amount: 150000, status: 'paid', created_at: '2026-10-29T13:00:00Z' },
@@ -66,7 +69,7 @@ const paidBills = () => [
 const seqRandom = () => { let i = 0; return () => ((i++ * 7) % 31) / 31; };
 
 test('thanh toán xong: tặng 1 mã lần sau cho SĐT gọi nhiều nhất, dùng từ 5h sáng mai', async () => {
-  const state = { settings: settings(), orders: paidBills(), vouchers: [] };
+  const state = { voucher_settings: settings(), orders: paidBills(), vouchers: [] };
   const db = fakeDb(state);
   const r = await issueNextVisitVoucher(db, { orderIds: ['o2', 'o1'], nowMs: NOW });
   assert.equal(r.created, true);
@@ -86,12 +89,12 @@ test('thanh toán xong: tặng 1 mã lần sau cho SĐT gọi nhiều nhất, d�
 
 test('không tặng khi: tắt, bill nhỏ, chưa thanh toán, không có SĐT, đang giữ mã lần sau còn hạn', async () => {
   const run = async (state, ids = ['o1', 'o2']) => (await issueNextVisitVoucher(fakeDb(state), { orderIds: ids, nowMs: NOW })).skipped;
-  assert.equal(await run({ settings: settings({ voucher_next_enabled: 'false' }), orders: paidBills() }), 'off');
-  assert.equal(await run({ settings: settings({ voucher_next_min_bill: '500000' }), orders: paidBills() }), 'small_bill');
-  assert.equal(await run({ settings: settings(), orders: paidBills().map(o => ({ ...o, status: 'pending' })) }), 'not_paid');
-  assert.equal(await run({ settings: settings(), orders: paidBills().map(o => ({ ...o, customer_phone: 'BAO_BEP' })) }), 'no_phone');
-  assert.equal(await run({ settings: settings(), orders: paidBills() }, []), 'no_bill');
-  const holding = { settings: settings(), orders: paidBills(), vouchers: [{ id: 'old', code: 'BK-OLDOLD', source: 'next_visit',
+  assert.equal(await run({ voucher_settings: settings({ voucher_next_enabled: 'false' }), orders: paidBills() }), 'off');
+  assert.equal(await run({ voucher_settings: settings({ voucher_next_min_bill: '500000' }), orders: paidBills() }), 'small_bill');
+  assert.equal(await run({ voucher_settings: settings(), orders: paidBills().map(o => ({ ...o, status: 'pending' })) }), 'not_paid');
+  assert.equal(await run({ voucher_settings: settings(), orders: paidBills().map(o => ({ ...o, customer_phone: 'BAO_BEP' })) }), 'no_phone');
+  assert.equal(await run({ voucher_settings: settings(), orders: paidBills() }, []), 'no_bill');
+  const holding = { voucher_settings: settings(), orders: paidBills(), vouchers: [{ id: 'old', code: 'BK-OLDOLD', source: 'next_visit',
     status: 'active', customer_phone: '0902222222', valid_until: new Date(NOW + 86400000).toISOString() }] };
   assert.equal(await run(holding), 'has_active');
   assert.equal(holding.vouchers.length, 1, 'không cộng dồn nhiều mã lần sau');
@@ -102,18 +105,18 @@ test('mã lần sau cũ đã hết hạn / đã dùng thì vẫn tặng mã mớ
     { id: 'exp', code: 'BK-EXPEXP', source: 'next_visit', status: 'active', customer_phone: '0902222222', valid_until: new Date(NOW - 1000).toISOString() },
     { id: 'used', code: 'BK-USEDUS', source: 'next_visit', status: 'used', customer_phone: '0902222222', used_order_id: 'o1', valid_until: new Date(NOW + 86400000).toISOString() },
   ];
-  const state = { settings: settings(), orders: paidBills(), vouchers: structuredClone(old) };
+  const state = { voucher_settings: settings(), orders: paidBills(), vouchers: structuredClone(old) };
   assert.equal((await issueNextVisitVoucher(fakeDb(state), { orderIds: ['o1', 'o2'], nowMs: NOW })).created, true);
-  const noRepeat = { settings: settings({ voucher_next_repeat: 'false' }), orders: paidBills(), vouchers: structuredClone(old),
+  const noRepeat = { voucher_settings: settings({ voucher_next_repeat: 'false' }), orders: paidBills(), vouchers: structuredClone(old),
     order_items: [{ order_id: 'o2', item_name: 'Voucher BK-USEDUS', unit_price: -30000 }] }; // dòng đã chuyển sang bill chính o2
   assert.equal((await issueNextVisitVoucher(fakeDb(noRepeat), { orderIds: ['o1', 'o2'], nowMs: NOW })).skipped, 'used_voucher');
-  const manualOnly = { settings: settings({ voucher_next_repeat: 'false' }), orders: paidBills(), vouchers: [],
+  const manualOnly = { voucher_settings: settings({ voucher_next_repeat: 'false' }), orders: paidBills(), vouchers: [],
     order_items: [{ order_id: 'o2', item_name: 'Giảm giá: khách quen', unit_price: -20000 }] };
   assert.equal((await issueNextVisitVoucher(fakeDb(manualOnly), { orderIds: ['o1', 'o2'], nowMs: NOW })).created, true, 'giảm tay không tính là voucher');
 });
 
 test('mã trùng (hiếm) thì tự đổi mã khác', async () => {
-  const state = { settings: settings({ voucher_next_min_bill: '0' }), orders: paidBills(), vouchers: [{ id: 'x', code: 'BK-222222', source: 'gift', status: 'used' }] };
+  const state = { voucher_settings: settings({ voucher_next_min_bill: '0' }), orders: paidBills(), vouchers: [{ id: 'x', code: 'BK-222222', source: 'gift', status: 'used' }] };
   const r = await issueNextVisitVoucher(fakeDb(state), { orderIds: ['o1'], nowMs: NOW, random: () => 0 })
     .catch(e => e);
   assert.ok(r instanceof Error, 'random luôn ra cùng mã → báo lỗi sau vài lần, không ghi đè mã cũ');
@@ -122,7 +125,7 @@ test('mã trùng (hiếm) thì tự đổi mã khác', async () => {
 });
 
 test('trúng vòng xoay: 1 lượt quay = 1 mã, gọi lại trả đúng mã', async () => {
-  const state = { settings: settings({ voucher_next_days: '7' }), vouchers: [] };
+  const state = { voucher_settings: settings({ voucher_next_days: '7' }), vouchers: [] };
   const spin = { id: 'spin-1', prize_value: 50000, customer_phone: '0903333333', customer_name: 'Chi', applied_order_id: 'o9' };
   const a = await issueWheelVoucher(fakeDb(state), spin, { nowMs: NOW });
   const b = await issueWheelVoucher(fakeDb(state), spin, { nowMs: NOW });
@@ -205,6 +208,26 @@ test('khách nhắn SĐT cho OA → gửi mã chưa nhắn được; người l�
   assert.equal(await sendPendingVouchers(fakeDb(firstLink), null, 'uid-new', { send, nowMs: NOW }), 0);
 });
 
+test('voucher tắt (công tắc chung): không tặng mã lần sau, không nhắn mã còn treo; bật lại thì nhắn', async () => {
+  const off = { voucher_settings: settings({ voucher_enabled: 'false' }), orders: paidBills(), vouchers: [] };
+  assert.equal((await issueNextVisitVoucher(fakeDb(off), { orderIds: ['o1', 'o2'], nowMs: NOW })).skipped, 'off');
+  assert.equal(off.vouchers.length, 0);
+
+  const sent = [];
+  const send = async (_db, uid, text) => { sent.push([uid, text]); return { ok: true }; };
+  const pending = { voucher_settings: settings({ voucher_enabled: 'false' }), customers: [], zalo_followers: [], vouchers: [
+    { id: 'p', code: 'BK-PPPPPP', source: 'gift', status: 'active', sent_at: null, customer_phone: '0905555555', discount_type: 'amount',
+      discount_value: 30000, valid_from: '2026-10-29T00:00:00Z', valid_until: new Date(NOW + 5 * 86400000).toISOString() }] };
+  assert.equal(await sendPendingVouchers(fakeDb(pending), '0905555555', 'uid-p', { send, nowMs: NOW }), 0);
+  assert.equal(sent.length, 0);
+  assert.equal(pending.vouchers[0].sent_at, null, 'chưa gửi thì lần sau còn gửi');
+  pending.voucher_settings = settings();
+  assert.equal(await sendPendingVouchers(fakeDb(pending), '0905555555', 'uid-p', { send, nowMs: NOW }), 1);
+  // Chưa cài bảng / chưa có dòng công tắc → coi như tắt.
+  const missing = { voucher_settings: [], customers: [], zalo_followers: [], vouchers: [{ ...pending.vouchers[0], sent_at: null }] };
+  assert.equal(await sendPendingVouchers(fakeDb(missing), '0905555555', 'uid-p', { send, nowMs: NOW }), 0);
+});
+
 test('trang Bàn: chỉ hiện mã đang dùng được của SĐT trên bill, kèm thông tin khách để đối chiếu', async () => {
   const at = ms => new Date(NOW + ms).toISOString();
   const state = {
@@ -224,7 +247,7 @@ test('trang Bàn: chỉ hiện mã đang dùng được của SĐT trên bill, k
 });
 
 test('2 bàn cùng SĐT thanh toán cùng lúc → chỉ 1 mã lần sau', async () => {
-  const state = { settings: settings({ voucher_next_min_bill: '0' }), vouchers: [], orders: [
+  const state = { voucher_settings: settings({ voucher_next_min_bill: '0' }), vouchers: [], orders: [
     { id: 'a1', customer_phone: '0908888888', total_amount: 100000, status: 'paid' },
     { id: 'b1', customer_phone: '0908888888', total_amount: 100000, status: 'paid' },
   ] };

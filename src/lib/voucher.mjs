@@ -147,11 +147,16 @@ export function redeemFailText(r) {
     case 'bill_has_voucher': return 'Bill này đã dùng 1 voucher rồi — mỗi bill chỉ 1 voucher.';
     case 'min_bill': return `Voucher dành cho bill từ ${money(r.min_bill)} (tiền món hiện ${money(r.base)}).`;
     case 'zero': return 'Bill chưa có món, hoặc đã được giảm gần hết — không trừ thêm được.';
+    case 'disabled': return 'Voucher đang tắt (Admin > Voucher). Mã vẫn giữ nguyên, bật lại là dùng được.';
     default: return r?.message || 'Chưa dùng được voucher, thử lại giúp nhé.';
   }
 }
 
-// ── Cấu hình "Hẹn lần sau" (bảng settings) ─────────────────────
+// ── Cài đặt voucher (bảng voucher_settings — chỉ máy chủ đọc / ghi) ─────
+// Công tắc chung: tắt thì không dùng mã, không tặng / gửi mã mới, vòng xoay không ra voucher.
+export const VOUCHER_SWITCH_KEY = 'voucher_enabled';
+export const isVoucherSwitchOn = rows => (rows || []).some(r => r.key === VOUCHER_SWITCH_KEY && r.value === 'true');
+
 export const NEXT_VOUCHER_KEYS = [
   'voucher_next_enabled', 'voucher_next_min_bill', 'voucher_next_type', 'voucher_next_value',
   'voucher_next_max', 'voucher_next_use_min_bill', 'voucher_next_days', 'voucher_next_repeat',
@@ -161,6 +166,7 @@ export function parseNextVoucherConfig(rows) {
   const map = Object.fromEntries((rows || []).map(r => [r.key, r.value]));
   const num = (k, d) => (map[k] == null || map[k] === '' ? d : Math.max(0, Math.round(Number(map[k]) || 0)));
   return {
+    on: map[VOUCHER_SWITCH_KEY] === 'true', // công tắc chung
     enabled: map.voucher_next_enabled === 'true',
     minBill: num('voucher_next_min_bill', 300000),
     type: map.voucher_next_type === 'percent' ? 'percent' : 'amount',
@@ -230,6 +236,7 @@ export function customerRedeemText(r) {
     case 'too_many': return 'Nhập sai nhiều lần quá, Quý khách nhờ nhân viên giúp nhé.';
     case 'no_key': return 'Điện thoại này chưa gửi món ở bàn — Quý khách nhờ nhân viên áp mã giúp nhé.';
     case 'zero': return 'Bill chưa có món (hoặc đã được giảm gần hết) nên chưa trừ thêm được ạ.';
+    case 'disabled': return 'Quán đang tạm ngưng nhận voucher. Mã của Quý khách vẫn giữ nguyên ạ.';
     default: return 'Bàn chưa có bill đang mở để trừ voucher — Quý khách gọi món trước rồi nhập mã nhé.';
   }
 }

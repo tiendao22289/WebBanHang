@@ -7,16 +7,22 @@
 // ============================================================
 import { createHash } from 'node:crypto';
 import {
-  NEXT_VOUCHER_KEYS, parseNextVoucherConfig, nextVisitWindow, newVoucherCode,
+  NEXT_VOUCHER_KEYS, VOUCHER_SWITCH_KEY, isVoucherSwitchOn, parseNextVoucherConfig, nextVisitWindow, newVoucherCode,
   pickVoucherPhone, normalizePhone, fillVoucherMessage, GIFT_MESSAGE_TEMPLATE,
   NEXT_VISIT_MESSAGE_TEMPLATE, voucherValueText, shortDay, firstUseDay, lastUseDay, money, HOW_TO_USE,
   calcVoucherDiscount,
 } from './voucher.mjs';
 
 export async function loadNextVoucherConfig(db) {
-  const { data, error } = await db.from('settings').select('key, value').in('key', NEXT_VOUCHER_KEYS);
+  const { data, error } = await db.from('voucher_settings').select('key, value').in('key', [VOUCHER_SWITCH_KEY, ...NEXT_VOUCHER_KEYS]);
   if (error) throw error;
   return parseNextVoucherConfig(data);
+}
+
+/** Công tắc chung đang bật? Chưa cài bảng / lỗi đọc → coi như tắt. */
+export async function loadVoucherSwitch(db) {
+  const { data, error } = await db.from('voucher_settings').select('key, value').eq('key', VOUCHER_SWITCH_KEY);
+  return !error && isVoucherSwitchOn(data);
 }
 
 /** Chèn 1 mã mới; trùng mã (rất hiếm) thì đổi mã. Trùng issue_key = gọi lại → trả mã đã có. */
@@ -44,7 +50,7 @@ export async function insertVoucher(db, row, random = Math.random) {
  */
 export async function issueNextVisitVoucher(db, { orderIds, nowMs = Date.now(), random = Math.random }) {
   const cfg = await loadNextVoucherConfig(db);
-  if (!cfg.enabled) return { skipped: 'off' };
+  if (!cfg.on || !cfg.enabled) return { skipped: 'off' };
   const ids = [...new Set((orderIds || []).filter(Boolean))].sort();
   if (!ids.length) return { skipped: 'no_bill' };
 
@@ -178,6 +184,8 @@ export async function sendVoucherZalo(db, voucher, { send, zaloUserId = null, fo
  */
 export async function sendPendingVouchers(db, phone, zaloUserId, { send, nowMs = Date.now(), log = () => {} }) {
   if (!phone || !zaloUserId) return 0;
+  // Voucher đang tắt: không nhắn mã (khách chưa dùng được). Bật lại thì lần nhắn SĐT sau sẽ gửi.
+  if (!(await loadVoucherSwitch(db))) return 0;
   // SĐT đã nối với một tài khoản Zalo KHÁC (hồ sơ khách, hoặc người khác đã nhắn SĐT này cho OA)
   // → có thể là người lạ nhắn SĐT của khách: không gửi mã. (Webhook đã ghi SĐT vào dòng của
   // chính người nhắn trước khi gọi hàm này, nên phải loại dòng đó ra.)

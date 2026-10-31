@@ -15,9 +15,10 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import {
-  drawLuckyPrize, calcLuckyDiscount, normalizePrize,
+  drawLuckyPrize, calcLuckyDiscount, normalizePrize, withVoucherSwitch,
   LUCKY_SETTING_KEYS, parseLuckyConfig,
 } from '@/lib/luckyWheel';
+import { loadVoucherSwitch } from '@/lib/voucherServer.mjs';
 
 export const dynamic = 'force-dynamic';
 
@@ -177,7 +178,8 @@ export async function POST(request) {
     const { data: prizeRows, error: prizeError } = await supabase.from('lucky_prizes')
       .select('*').eq('is_active', true).order('sort_order', { ascending: true });
     if (prizeError) throw prizeError;
-    const prizes = (prizeRows || []).map(normalizePrize);
+    // Voucher tắt (Admin > Voucher) thì ô "Voucher lần sau" không quay ra.
+    const prizes = withVoucherSwitch((prizeRows || []).map(normalizePrize), await loadVoucherSwitch(supabase));
     const prize = drawLuckyPrize(prizes);
     if (!prize) return fail('Quán chưa cài phần quà nào, Quý khách gọi nhân viên giúp ạ!');
     const discount = calcLuckyDiscount(total, prize, cfg.max);

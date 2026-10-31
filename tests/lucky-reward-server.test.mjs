@@ -266,7 +266,7 @@ test('repeating a spin request after a lost response returns the original prize'
   const routeSource = read('../src/app/api/lucky/spin/route.js')
     .replace(/^import[\s\S]*?;\r?\n/gm, '').replace(/export /g, '');
   const post = vm.runInNewContext(`${routeSource}\nPOST`, {
-    ...wheel, NextResponse: { json: data => data }, createClient: () => h.db,
+    ...wheel, NextResponse: { json: data => data }, createClient: () => h.db, loadVoucherSwitch: voucherServer.loadVoucherSwitch,
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'mock', SUPABASE_SERVICE_ROLE_KEY: 'mock' } },
   });
   const request = { json: async () => ({ tableId: 'table', name: 'Khách thử', phone: '0900000000', requestId }) };
@@ -534,4 +534,31 @@ test('khách bấm "Mở Zalo" (tự duyệt, không biết Zalo nào): SĐT đ�
   assert.equal(unknown.state.vouchers.length, 1, 'mã vẫn được tạo, khách thấy trên điện thoại');
   assert.equal(unknown.sentMessages.length, 0);
   assert.equal(unknown.state.vouchers[0].sent_at, null, 'khách nhắn SĐT cho OA sau thì được gửi');
+});
+
+test('voucher tắt (Admin > Voucher): ô "Voucher lần sau" không hiện trên vòng, không quay ra', async () => {
+  const prizes = [{ id: 'v', type: 'voucher_next', value: 50000, weight: 1000 }, { id: 'p', type: 'percent', value: 3, weight: 1 }];
+  assert.deepEqual(wheel.withVoucherSwitch(prizes, false).map(p => p.id), ['p']);
+  assert.deepEqual(wheel.withVoucherSwitch(prizes, true).map(p => p.id), ['v', 'p']);
+
+  // Route quay thật: vòng chỉ có ô voucher → tắt thì không quay ra gì, bật thì ra voucher.
+  const spinOnce = async on => {
+    const h = database();
+    h.state.lucky_spins = [];
+    h.state.lucky_prizes = [{ id: 'pv', label: 'Voucher 50K', type: 'voucher_next', value: 50000, weight: 10, is_active: true, sort_order: 1 }];
+    h.state.voucher_settings = [{ key: 'voucher_enabled', value: on ? 'true' : 'false' }];
+    const routeSource = read('../src/app/api/lucky/spin/route.js').replace(/^import[\s\S]*?;\r?\n/gm, '').replace(/export /g, '');
+    const post = vm.runInNewContext(`${routeSource}\nPOST`, {
+      ...wheel, NextResponse: { json: data => data }, createClient: () => h.db, loadVoucherSwitch: voucherServer.loadVoucherSwitch,
+      process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'mock', SUPABASE_SERVICE_ROLE_KEY: 'mock' } },
+    });
+    const r = await post({ json: async () => ({ tableId: 'table', name: 'Khách thử', phone: '0911111111' }) });
+    return { r, spins: h.state.lucky_spins };
+  };
+  const off = await spinOnce(false);
+  assert.match(String(off.r.error || off.r.message || ''), /chưa cài phần quà/);
+  assert.equal(off.spins.length, 0);
+  const on = await spinOnce(true);
+  assert.equal(on.spins.length, 1);
+  assert.equal(on.spins[0].prize_type, 'voucher_next');
 });

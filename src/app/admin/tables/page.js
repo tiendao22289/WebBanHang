@@ -156,7 +156,7 @@ function ringBell() {
  * discountBase = tiền món dương, không tính quà (cha tính sẵn, truyền xuống) để
  * xem trước mức giảm % ngay lập tức mà không phải đọc lại đơn.
  */
-function BillAdjustDialog({ tableNumber, discountBase, busy, onApply, onClose, onVoucher }) {
+function BillAdjustDialog({ tableNumber, discountBase, busy, onApply, onClose, onVoucher, voucherOn }) {
   const [mode, setMode] = useState('sub'); // 'add' | 'sub' | 'pct'
   const [amount, setAmount] = useState('');
   const [percent, setPercent] = useState('');
@@ -196,12 +196,14 @@ function BillAdjustDialog({ tableNumber, discountBase, busy, onApply, onClose, o
             </button>
           ))}
         </div>
-        {/* Voucher khách đưa (mã tặng qua Zalo / hẹn lần sau / vòng xoay) — bảng riêng */}
-        <button onClick={onVoucher} disabled={busy}
-          style={{ width: '100%', marginBottom: 14, padding: '9px', borderRadius: 10, fontSize: '0.84rem', fontWeight: 800, cursor: 'pointer',
-            border: '1.5px dashed #f59e0b', background: '#fffbeb', color: '#b45309' }}>
-          🎟️ Khách có voucher? Nhập mã
-        </button>
+        {/* Voucher khách đưa (mã tặng qua Zalo / hẹn lần sau / vòng xoay) — bảng riêng. Ẩn khi chủ quán tắt voucher. */}
+        {voucherOn && (
+          <button onClick={onVoucher} disabled={busy}
+            style={{ width: '100%', marginBottom: 14, padding: '9px', borderRadius: 10, fontSize: '0.84rem', fontWeight: 800, cursor: 'pointer',
+              border: '1.5px dashed #f59e0b', background: '#fffbeb', color: '#b45309' }}>
+            🎟️ Khách có voucher? Nhập mã
+          </button>
+        )}
 
         {mode === 'pct' ? (
           <>
@@ -335,7 +337,7 @@ export default function TablesPage() {
   const [voucherRefresh, setVoucherRefresh] = useState(0);
   const voucherBills = selectedTable ? getSelectedTableOrders().filter(o => o.customer_phone !== 'BAO_BEP'
     && ['pending', 'preparing', 'completed'].includes(o.status)) : [];
-  const tableVouchers = useTableVouchers(voucherBills.map(o => o.customer_phone), voucherRefresh);
+  const { on: voucherOn, list: tableVouchers } = useTableVouchers(voucherBills.map(o => o.customer_phone), voucherRefresh, !!selectedTable);
   const [tableNote, setTableNote] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null); // { orderId, itemId, itemName }
   const [editItemPrice, setEditItemPrice] = useState(null); // { orderId, itemId, value } — LEGACY, replaced by showPriceModal
@@ -5065,6 +5067,7 @@ export default function TablesPage() {
                   onApply={applyBillAdjustment}
                   onClose={() => setAdjustOpen(false)}
                   onVoucher={() => { setAdjustOpen(false); setVoucherOpen(true); }}
+                  voucherOn={voucherOn}
                 />
               )}
               {voucherOpen && (
