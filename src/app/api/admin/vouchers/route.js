@@ -9,6 +9,7 @@
  *   POST { action: 'create', ... }             tạo mã tặng khách (mỗi khách 1 mã, hoặc N mã không tên)
  *   POST { action: 'send', ids, force? }       nhắn mã qua Zalo OA
  *   POST { action: 'cancel', id }              huỷ mã chưa dùng
+ *   POST { action: 'cancel', ids }             huỷ hàng loạt (tối đa 500 mã / lần) → results [{ id, ok }]
  *   POST { action: 'config', config }          lưu cài đặt "Hẹn lần sau"
  *   POST { action: 'switch', on }              công tắc chung: bật / tắt cả tính năng voucher
  *
@@ -19,7 +20,7 @@ import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { sendOaText } from '@/lib/zaloOa';
 import {
   normalizeVoucherCode, normalizePhone, giftWindow, fillVoucherMessage, GIFT_MESSAGE_TEMPLATE,
-  NEXT_VOUCHER_KEYS, VOUCHER_SWITCH_KEY, SEND_MAX_IDS, checkNextVoucherConfig, parseNextVoucherConfig,
+  NEXT_VOUCHER_KEYS, VOUCHER_SWITCH_KEY, SEND_MAX_IDS, CANCEL_MAX_IDS, checkNextVoucherConfig, parseNextVoucherConfig,
 } from '@/lib/voucher.mjs';
 import {
   activeVouchersForPhones, insertVoucher, loadNextVoucherConfig, loadVoucherSwitch, sendVoucherZalo,
@@ -192,6 +193,17 @@ export async function POST(request) {
     }
 
     if (action === 'cancel') {
+      if (Array.isArray(body.ids)) {
+        // Huỷ hàng loạt: chỉ đổi mã còn dùng (mã vừa được dùng / đã huỷ giữ nguyên, báo ok: false).
+        const ids = body.ids.filter(id => UUID.test(id || ''));
+        if (!ids.length) return fail('Chọn mã cần huỷ.');
+        if (ids.length > CANCEL_MAX_IDS) return fail(`Mỗi lần huỷ tối đa ${CANCEL_MAX_IDS} mã — tải lại trang rồi bấm lại.`);
+        const { data, error } = await db.from('vouchers').update({ status: 'cancelled' })
+          .in('id', ids).eq('status', 'active').select('id');
+        if (error) throw error;
+        const done = new Set((data || []).map(r => r.id));
+        return NextResponse.json({ results: ids.map(id => ({ id, ok: done.has(id) })) }, { headers });
+      }
       if (!UUID.test(body.id || '')) return fail('Thiếu mã cần huỷ.');
       const { data, error } = await db.from('vouchers').update({ status: 'cancelled' })
         .eq('id', body.id).eq('status', 'active').select('id').maybeSingle();

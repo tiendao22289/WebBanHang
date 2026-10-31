@@ -220,10 +220,17 @@ export const NEXT_VISIT_MESSAGE_TEMPLATE = 'Cảm ơn {ten} đã ghé Ốc Bảo
   + 'Mã: {ma}\nDùng từ {tu} đến hết {den}{dieukien}.\n'
   + HOW_TO_USE;
 
-// ── Nhắn Zalo nhiều mã một lúc (trang Voucher) ─────────────────
+// ── Nhắn Zalo / huỷ nhiều mã một lúc (trang Voucher) ───────────
 /** Máy chủ nhận tối đa chừng này mã mỗi lần gọi; trang chia đợt nhỏ hơn để mỗi lần xong nhanh. */
 export const SEND_MAX_IDS = 200;
 export const SEND_BATCH = 20;
+export const CANCEL_MAX_IDS = 500;
+export const CANCEL_BATCH = 200;
+
+/** Mã còn huỷ được: chưa dùng, chưa huỷ, chưa hết hạn (hết hạn thì huỷ cũng như không). */
+export function canCancelVoucher(v) {
+  return ['active', 'not_yet'].includes(voucherState(v));
+}
 
 /** Mã còn tự nhắn Zalo được: còn dùng, gắn SĐT, chưa nhắn, chưa bị báo lỗi (lỗi thì chép tin gửi tay). */
 export function canAutoSendVoucher(v) {
@@ -231,20 +238,20 @@ export function canAutoSendVoucher(v) {
 }
 
 /**
- * Gửi nhiều mã theo từng đợt, lần lượt. sendBatch(ids) → [{ id, ok, reason?, message? }].
- * Đợt lỗi mạng thì thử lại 1 lần (mã đã nhắn có cờ sent_at, không nhắn trùng); vẫn lỗi thì dừng
- * và trả phần đã xong + lỗi, bấm gửi lần nữa là đi tiếp.
+ * Gửi / huỷ nhiều mã theo từng đợt, lần lượt. runBatch(ids) → [{ id, ok, reason?, message? }].
+ * Đợt lỗi mạng thì thử lại 1 lần (gửi có cờ sent_at, huỷ chỉ đổi mã còn dùng — làm lại không sao);
+ * vẫn lỗi thì dừng và trả phần đã xong + lỗi, bấm lần nữa là đi tiếp.
  */
-export async function sendInBatches(ids, sendBatch, { size = SEND_BATCH, onProgress = () => {} } = {}) {
+export async function runInBatches(ids, runBatch, { size = SEND_BATCH, onProgress = () => {} } = {}) {
   const results = [];
   for (let i = 0; i < ids.length; i += size) {
     const batch = ids.slice(i, i + size);
     let got;
     try {
-      got = await sendBatch(batch);
+      got = await runBatch(batch);
     } catch {
       try {
-        got = await sendBatch(batch);
+        got = await runBatch(batch);
       } catch (error) {
         return { results, error };
       }
