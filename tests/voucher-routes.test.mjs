@@ -14,8 +14,10 @@ const mineSource = strip('../src/app/api/voucher/mine/route.js');
 const redeemSource = strip('../src/app/api/voucher/redeem/route.js');
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
+// Mặc định voucher đang BẬT (công tắc chung); ca nào cần tắt thì truyền voucher_settings riêng.
 function fakeDb(state) {
   let seq = 0;
+  if (!('voucher_settings' in state)) state.voucher_settings = [{ key: 'voucher_enabled', value: 'true' }];
   return {
     async rpc(name, args) { (state.rpc ||= []).push([name, args]); return { data: state.rpcResult ? state.rpcResult(args) : { ok: true, discount: 30000, order_id: args.p_order_ids[0] }, error: null }; },
     from(table) {
@@ -86,13 +88,13 @@ const plusDays = n => new Date(Date.now() + 7 * 3600000 + n * 86400000).toISOStr
 test('chưa đăng nhập: mọi thao tác bị chặn', async () => {
   const api = loadAdmin({}, null);
   assert.equal((await api.GET(get('list'))).status, 401);
-  for (const action of ['lookup', 'redeem', 'create', 'send', 'cancel', 'config']) {
+  for (const action of ['lookup', 'redeem', 'create', 'send', 'cancel', 'config', 'switch']) {
     assert.equal((await api.POST(post({ action }))).status, 401, action);
   }
 });
 
 test('nhân viên dùng được mã (ghi tên người bấm), không tạo / gửi / huỷ / cài đặt / xem danh sách được', async () => {
-  const state = { vouchers: [], settings: [] };
+  const state = { vouchers: [] };
   const api = loadAdmin(state, STAFF);
   const r = await api.POST(post({ action: 'redeem', code: 'bk 7k3p9x', orderIds: [id(10), 'không-phải-id', id(11)] }));
   assert.equal(r.status, 200);
@@ -100,7 +102,7 @@ test('nhân viên dùng được mã (ghi tên người bấm), không tạo / g
   assert.equal((await api.POST(post({ action: 'redeem', code: 'BK-12', orderIds: [id(10)] }))).status, 400);
   assert.equal((await api.POST(post({ action: 'redeem', code: 'BK-7K3P9X', orderIds: [] }))).status, 400);
   assert.equal(state.rpc.length, 1, 'mã / bill sai thì không gọi DB');
-  for (const action of ['create', 'send', 'cancel', 'config']) {
+  for (const action of ['create', 'send', 'cancel', 'config', 'switch']) {
     assert.equal((await api.POST(post({ action }))).status, 403, action);
   }
   assert.equal((await api.GET(get('list'))).status, 403);
@@ -109,7 +111,7 @@ test('nhân viên dùng được mã (ghi tên người bấm), không tạo / g
 });
 
 test('chủ quán tạo mã cho từng khách: SĐT chuẩn hoá, bỏ trùng, lời nhắn điền sẵn mã', async () => {
-  const state = { vouchers: [], settings: [] };
+  const state = { vouchers: [] };
   const api = loadAdmin(state, ADMIN);
   const r = await api.POST(post({ action: 'create', batchName: 'Tháng 11', type: 'amount', value: 30000, minBill: 200000,
     fromDay: today(), toDay: plusDays(14), recipients: [{ phone: '+84 901 111 111', name: 'An' }, { phone: '0901111111', name: 'An' }, { phone: 'abc' }, { phone: '0902222222', name: '' }] }));
@@ -153,14 +155,15 @@ test('huỷ mã chỉ khi chưa dùng; gửi Zalo bỏ qua mã không tên / đ�
   assert.equal(state.vouchers[0].status, 'cancelled');
 });
 
-test('lưu cài đặt "Hẹn lần sau": kiểm số trước khi lưu', async () => {
-  const state = { settings: [] };
+test('lưu cài đặt "Hẹn lần sau": kiểm số trước khi lưu, lưu vào bảng riêng của voucher', async () => {
+  const state = { voucher_settings: [] };
   const api = loadAdmin(state, ADMIN);
   assert.equal((await api.POST(post({ action: 'config', config: { enabled: true, type: 'percent', value: 300, days: 14 } }))).status, 400);
-  assert.equal(state.settings.length, 0);
+  assert.equal(state.voucher_settings.length, 0);
+  assert.equal(state.settings, undefined, 'không ghi bảng settings chung (khoá công khai ghi được)');
   const ok = await api.POST(post({ action: 'config', config: { enabled: true, minBill: 250000, type: 'amount', value: 20000, useMinBill: 150000, days: 10, repeat: false } }));
   assert.equal(ok.status, 200);
-  const map = Object.fromEntries(state.settings.map(s => [s.key, s.value]));
+  const map = Object.fromEntries(state.voucher_settings.map(s => [s.key, s.value]));
   assert.deepEqual(map, { voucher_next_enabled: 'true', voucher_next_min_bill: '250000', voucher_next_type: 'amount', voucher_next_value: '20000',
     voucher_next_max: '0', voucher_next_use_min_bill: '150000', voucher_next_days: '10', voucher_next_repeat: 'false' });
 });
@@ -287,4 +290,48 @@ test('dò mã: mỗi máy / bill sai 6 lần là khoá; người ngoài không k
   const used = await ask(loadRedeem(usedState).POST, { code: 'BK-7K3P9X', tableId: id(1), orderId: id(10) });
   assert.equal(used.body.message, 'Mã này đã được dùng rồi ạ.');
   assert.ok(!JSON.stringify(used.body).includes('12:40') && !/bàn 5/.test(JSON.stringify(used.body)));
+});
+
+test('công tắc voucher: chỉ chủ quán bật / tắt; tắt thì trang Bàn ẩn mã, không tạo / gửi mã mới; trang khách hỏi được trạng thái', async () => {
+  const at = ms => new Date(Date.now() + ms).toISOString();
+  const state = { voucher_settings: [{ key: 'voucher_enabled', value: 'true' }], customers: [{ phone: '0907777777', zalo_user_id: 'uid-7' }],
+    zalo_followers: [], vouchers: [{ id: id(60), code: 'BK-SWTCHA', source: 'gift', status: 'active', customer_phone: '0907777777',
+      discount_type: 'amount', discount_value: 30000, valid_from: at(-3600000), valid_until: at(86400000) }] };
+  const staffApi = loadAdmin(state, STAFF);
+  const admin = loadAdmin(state, ADMIN);
+  const statusApi = vm.runInNewContext(`${strip('../src/app/api/voucher/status/route.js')}\n({ GET })`, {
+    NextResponse: { json: (body, init = {}) => ({ status: init.status || 200, body }) },
+    statusDatabase: () => fakeDb(state), loadVoucherSwitch: voucherServer.loadVoucherSwitch, console: { error() {} },
+  });
+  const lookup = async phones => (await staffApi.POST(post({ action: 'lookup', phones }))).body;
+
+  assert.deepEqual(JSON.parse(JSON.stringify(await lookup(['0907777777']))).vouchers.map(v => v.code), ['BK-SWTCHA']);
+  assert.equal((await lookup([])).on, true, 'bàn chưa có SĐT vẫn biết voucher đang bật (nút nhập mã)');
+  assert.equal((await staffApi.POST(post({ action: 'switch', on: false }))).status, 403, 'nhân viên không tắt được');
+  assert.equal((await statusApi.GET()).body.on, true);
+
+  const off = await admin.POST(post({ action: 'switch', on: false }));
+  assert.deepEqual([off.status, off.body.on], [200, false]);
+  assert.deepEqual(JSON.parse(JSON.stringify(await lookup(['0907777777']))), { on: false, vouchers: [] });
+  assert.equal((await statusApi.GET()).body.on, false);
+  assert.equal((await admin.GET(get('config'))).body.config.on, false);
+  const create = await admin.POST(post({ action: 'create', type: 'amount', value: 30000, fromDay: today(), toDay: plusDays(7), count: 1 }));
+  assert.equal(create.status, 409);
+  assert.match(create.body.error, /Voucher đang tắt/);
+  assert.equal((await admin.POST(post({ action: 'send', ids: [id(60)] }))).status, 409);
+  assert.equal(admin.sent.length, 0);
+  assert.equal(state.vouchers.length, 1);
+  assert.equal(state.vouchers[0].status, 'active', 'mã đã phát giữ nguyên');
+
+  assert.equal((await admin.POST(post({ action: 'switch', on: true }))).body.on, true);
+  assert.equal((await statusApi.GET()).body.on, true);
+  assert.equal((await admin.POST(post({ action: 'send', ids: [id(60)] }))).status, 200);
+  assert.equal(admin.sent.length, 1);
+
+  // Chưa cài bảng / lỗi DB → trang khách coi như tắt, không vỡ trang.
+  const broken = vm.runInNewContext(`${strip('../src/app/api/voucher/status/route.js')}\n({ GET })`, {
+    NextResponse: { json: (body, init = {}) => ({ status: init.status || 200, body }) },
+    statusDatabase: () => { throw new Error('no env'); }, loadVoucherSwitch: voucherServer.loadVoucherSwitch, console: { error() {} },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(await broken.GET())), { status: 200, body: { on: false } });
 });

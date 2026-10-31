@@ -19,19 +19,22 @@ async function postVoucher(body) {
   return data;
 }
 
-/** Mã còn dùng được của các SĐT trên bill đang mở. refreshKey đổi → hỏi lại. */
-export function useTableVouchers(phones, refreshKey) {
+/**
+ * Công tắc voucher (Admin > Voucher) + mã còn dùng được của các SĐT trên bill đang mở.
+ * Tắt thì trang Bàn ẩn thanh "Khách có voucher" và nút nhập mã. refreshKey đổi → hỏi lại.
+ */
+export function useTableVouchers(phones, refreshKey, active = true) {
   const key = [...new Set((phones || []).filter(Boolean))].sort().join(',');
-  const [list, setList] = useState([]);
+  const [state, setState] = useState({ on: false, list: [] });
   useEffect(() => {
-    if (!key) { setList([]); return undefined; }
+    if (!active) { setState(s => ({ ...s, list: [] })); return undefined; }
     let alive = true;
-    postVoucher({ action: 'lookup', phones: key.split(',') })
-      .then(d => { if (alive) setList(d.vouchers || []); })
-      .catch(() => { if (alive) setList([]); });
+    postVoucher({ action: 'lookup', phones: key ? key.split(',') : [] })
+      .then(d => { if (alive) setState({ on: !!d.on, list: d.vouchers || [] }); })
+      .catch(() => { if (alive) setState(s => ({ ...s, list: [] })); }); // mạng lỗi: giữ trạng thái công tắc
     return () => { alive = false; };
-  }, [key, refreshKey]);
-  return list;
+  }, [key, refreshKey, active]);
+  return state;
 }
 
 const visitText = c => {

@@ -12,7 +12,7 @@ import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, fetchGroupBillTotal, startOfTodayISO, isReviewDiscountItem } from '@/lib/reviewReward';
-import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem } from '@/lib/luckyWheel';
+import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem, withVoucherSwitch } from '@/lib/luckyWheel';
 import { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, newLuckyRequestId, fetchLuckyNudgeConfig, wheelGiftGate } from '@/lib/luckyRewardFlow';
 import {
   Search,
@@ -32,7 +32,9 @@ import {
   Star,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
-import PaidNextVoucher, { WheelVoucher, CustomerVoucherBox, savedVouchers, bindOrderToDevice } from '@/components/NextVoucherTicket';
+import PaidNextVoucher, {
+  WheelVoucher, CustomerVoucherBox, savedVouchers, bindOrderToDevice, fetchVoucherSwitch, useVoucherSwitch,
+} from '@/components/NextVoucherTicket';
 // import ChatOrderButton from '@/components/ChatOrderButton'; // TẮT TÍNH NĂNG CHAT AI
 import './order.css';
 
@@ -617,6 +619,8 @@ function OrderContent() {
     .flatMap(o => o.order_items || [])
     .find(i => i.menu_item_id == null && Number(i.unit_price) < 0 && String(i.item_name || '').startsWith('Voucher BK-')) || null;
   useEffect(() => { setMySavedVoucher(savedVouchers().find(v => Date.parse(v.valid_from) <= Date.now()) || null); }, [paidVoucherOrderId]);
+  // Chủ quán tắt voucher (Admin > Voucher) → ẩn nút "🎟️ Voucher" và ô nhập mã.
+  const voucherOn = useVoucherSwitch(showOrdered);
   const [locationWarning, setLocationWarning] = useState(false); // khách không ở nhà hàng
   // ── Ưu đãi đánh giá Google Maps ──
   const [channelCfgs, setChannelCfgs] = useState([]);    // cấu hình mọi kênh, lấy từ settings
@@ -2343,7 +2347,9 @@ function OrderContent() {
       setWheelOpen(true);
       // Cơ cấu quà + danh sách món tặng do Admin cấu hình → luôn đọc lại khi mở
       // để khách nhận NGAY thay đổi admin vừa lưu (bật/tắt món tặng).
-      fetchLuckyPrizes(supabase).then(setWheelPrizes);
+      // Voucher tắt (Admin > Voucher) → bỏ ô "Voucher lần sau" khỏi vòng (máy chủ cũng không quay ra).
+      Promise.all([fetchLuckyPrizes(supabase), fetchVoucherSwitch()])
+        .then(([list, on]) => setWheelPrizes(withVoucherSwitch(list, on)));
       refreshGiftItems();
       setWheelErr('');
       setWheelPrize(null);
@@ -4717,7 +4723,7 @@ function OrderContent() {
                 🎁 Vòng xoay
               </button>
             )}
-            {currentOrderId && !billVoucherLine && previousOrders.some(o => ['pending', 'preparing', 'completed'].includes(o.status)) && (
+            {voucherOn && currentOrderId && !billVoucherLine && previousOrders.some(o => ['pending', 'preparing', 'completed'].includes(o.status)) && (
               <button className="co-promo-pill" style={{ background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: 'white' }}
                 onClick={() => { setShowOrdered(true); fetchPreviousOrders(); }}>
                 🎟️ {mySavedVoucher ? `Dùng voucher −${Math.round(Number(mySavedVoucher.discount_value) / 1000)}${mySavedVoucher.discount_type === 'percent' ? '%' : 'K'}` : 'Voucher'}
@@ -6648,7 +6654,7 @@ function OrderContent() {
                   <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 12, padding: '9px 12px', marginBottom: 12, color: '#166534', fontWeight: 700, fontSize: '0.88rem' }}>
                     🎟️ Bill đã dùng voucher {String(billVoucherLine.item_name).replace('Voucher ', '')} — giảm {formatPrice(-billVoucherLine.unit_price * billVoucherLine.quantity)}
                   </div>
-                ) : previousOrders.some(o => ['pending', 'preparing', 'completed'].includes(o.status)) && (
+                ) : voucherOn && previousOrders.some(o => ['pending', 'preparing', 'completed'].includes(o.status)) && (
                   <CustomerVoucherBox tableId={urlTableId} orderId={currentOrderId}
                     onApplied={() => { setMySavedVoucher(null); fetchPreviousOrders(); }} />
                 )}

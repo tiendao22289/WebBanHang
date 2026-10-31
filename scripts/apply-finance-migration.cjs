@@ -143,19 +143,20 @@ async function main() {
   if (!draft.lines || !draft.fn_updated || !draft.web_can_call || !draft.anon_blocked) throw new Error('Chưa cài được bản gửi món an toàn.');
 
   // Voucher tặng khách (vouchers.sql): bảng mã, dùng mã vào bill, trả mã khi xoá dòng / huỷ bill.
-  // "Hẹn lần sau" mặc định TẮT — chủ quán bật ở Admin > Voucher.
+  // Công tắc voucher + "Hẹn lần sau" mặc định TẮT — chủ quán bật ở Admin > Voucher.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'vouchers.sql'), 'utf8'));
   const [vouchers] = await query(`SELECT
     to_regclass('public.vouchers') IS NOT NULL AS table_ok,
     to_regprocedure('public.redeem_voucher(text,uuid[],uuid,text)') IS NOT NULL AS redeem_ok,
     to_regclass('public.voucher_order_keys') IS NOT NULL AS keys_ok,
     (SELECT count(*)::int FROM pg_trigger WHERE tgname IN ('release_voucher_on_line_delete', 'release_voucher_on_bill_cancel', 'voucher_guard_bill_reopen') AND NOT tgisinternal) AS voucher_triggers,
-    (SELECT count(*)::int FROM public.settings WHERE key LIKE 'voucher_next_%') AS settings,
+    (SELECT count(*)::int FROM public.voucher_settings) AS settings,
     NOT has_table_privilege('anon', 'public.vouchers', 'SELECT') AS anon_blocked,
     NOT has_table_privilege('anon', 'public.voucher_order_keys', 'SELECT') AS keys_hidden,
+    NOT has_table_privilege('anon', 'public.voucher_settings', 'UPDATE') AS settings_locked,
     NOT has_function_privilege('anon', 'public.redeem_voucher(text,uuid[],uuid,text)', 'EXECUTE') AS anon_cannot_redeem`);
   console.log(JSON.stringify(vouchers));
-  if (!vouchers.table_ok || !vouchers.redeem_ok || !vouchers.keys_ok || vouchers.voucher_triggers !== 3 || vouchers.settings !== 8
+  if (!vouchers.table_ok || !vouchers.redeem_ok || !vouchers.keys_ok || vouchers.voucher_triggers !== 3 || vouchers.settings < 9 || !vouchers.settings_locked
     || !vouchers.anon_blocked || !vouchers.keys_hidden || !vouchers.anon_cannot_redeem) throw new Error('Chưa cài đủ phần voucher.');
 
   // Băm mã PIN còn lưu chữ thường (web đang chạy ở 127.0.0.1:3000 làm việc này).

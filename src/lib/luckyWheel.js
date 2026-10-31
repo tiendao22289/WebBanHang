@@ -41,6 +41,11 @@ export function isVoucherPrizeType(type) {
   return type === 'voucher_next';
 }
 
+/** Voucher đang tắt (Admin > Voucher) → bỏ ô "Voucher lần sau": không hiện trên vòng, không quay ra. */
+export function withVoucherSwitch(prizes, voucherOn) {
+  return voucherOn ? prizes : (prizes || []).filter(p => !isVoucherPrizeType(p.type));
+}
+
 /** Đọc cơ cấu quà đang bật, đã sắp thứ tự. */
 export async function fetchLuckyPrizes(supabase) {
   try {

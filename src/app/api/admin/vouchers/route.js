@@ -10,6 +10,7 @@
  *   POST { action: 'send', ids, force? }       nhắn mã qua Zalo OA
  *   POST { action: 'cancel', id }              huỷ mã chưa dùng
  *   POST { action: 'config', config }          lưu cài đặt "Hẹn lần sau"
+ *   POST { action: 'switch', on }              công tắc chung: bật / tắt cả tính năng voucher
  *
  * Bảng vouchers chỉ service role đọc/ghi; route kiểm cookie đăng nhập do máy chủ ký.
  */
@@ -18,10 +19,10 @@ import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { sendOaText } from '@/lib/zaloOa';
 import {
   normalizeVoucherCode, normalizePhone, giftWindow, fillVoucherMessage, GIFT_MESSAGE_TEMPLATE,
-  NEXT_VOUCHER_KEYS, checkNextVoucherConfig, parseNextVoucherConfig,
+  NEXT_VOUCHER_KEYS, VOUCHER_SWITCH_KEY, checkNextVoucherConfig, parseNextVoucherConfig,
 } from '@/lib/voucher.mjs';
 import {
-  activeVouchersForPhones, insertVoucher, loadNextVoucherConfig, sendVoucherZalo,
+  activeVouchersForPhones, insertVoucher, loadNextVoucherConfig, loadVoucherSwitch, sendVoucherZalo,
 } from '@/lib/voucherServer.mjs';
 
 export const runtime = 'nodejs';
@@ -32,6 +33,7 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const fail = (error, status = 400) => NextResponse.json({ error }, { status, headers });
 const missingTable = error => ['PGRST205', '42P01', '42883', 'PGRST202'].includes(error?.code);
 const NOT_INSTALLED = 'Chưa cài bảng voucher trên máy chủ (migration vouchers.sql).';
+const SWITCHED_OFF = 'Voucher đang tắt — bật công tắc ở đầu trang Voucher trước.';
 const log = m => console.log('[vouchers]', m);
 
 async function staff(request) {
@@ -96,12 +98,15 @@ export async function POST(request) {
   const action = body.action;
   try {
     if (action === 'lookup') {
+      // Voucher tắt: trang Bàn ẩn thanh "Khách có voucher" và nút Voucher.
+      const on = await loadVoucherSwitch(db);
+      if (!on) return NextResponse.json({ on, vouchers: [] }, { headers });
       const phones = Array.isArray(body.phones) ? body.phones : [];
       const vouchers = await activeVouchersForPhones(db, phones).catch(error => {
         if (missingTable(error)) return [];
         throw error;
       });
-      return NextResponse.json({ vouchers }, { headers });
+      return NextResponse.json({ on, vouchers }, { headers });
     }
 
     if (action === 'redeem') {
@@ -120,6 +125,16 @@ export async function POST(request) {
     }
 
     if (user.role !== 'admin') return fail('Chỉ chủ quán làm được thao tác này.', 403);
+
+    if (action === 'switch') {
+      const { error } = await db.from('voucher_settings').upsert(
+        [{ key: VOUCHER_SWITCH_KEY, value: body.on ? 'true' : 'false', updated_at: new Date().toISOString() }], { onConflict: 'key' });
+      if (error) throw error;
+      return NextResponse.json({ on: await loadVoucherSwitch(db) }, { headers });
+    }
+
+    // Tắt rồi thì không phát / nhắn mã mới (khách nhận mã mà không dùng được).
+    if ((action === 'create' || action === 'send') && !(await loadVoucherSwitch(db))) return fail(SWITCHED_OFF, 409);
 
     if (action === 'create') {
       const type = body.type === 'percent' ? 'percent' : 'amount';
@@ -199,10 +214,11 @@ export async function POST(request) {
         voucher_next_use_min_bill: String(cfg.useMinBill), voucher_next_days: String(cfg.days),
         voucher_next_repeat: String(cfg.repeat),
       };
-      const { error } = await db.from('settings')
-        .upsert(NEXT_VOUCHER_KEYS.map(key => ({ key, value: rows[key] })), { onConflict: 'key' });
+      const updatedAt = new Date().toISOString();
+      const { error } = await db.from('voucher_settings')
+        .upsert(NEXT_VOUCHER_KEYS.map(key => ({ key, value: rows[key], updated_at: updatedAt })), { onConflict: 'key' });
       if (error) throw error;
-      return NextResponse.json({ config: cfg }, { headers });
+      return NextResponse.json({ config: { ...cfg, on: await loadVoucherSwitch(db) } }, { headers });
     }
 
     return fail('Thao tác không hợp lệ.');

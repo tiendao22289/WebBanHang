@@ -1083,7 +1083,7 @@ export default function SettingsPage() {
                       )}
                       {isVoucherPrizeType(prize.type) && (
                         <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>
-                          Mã dùng ở lần ghé sau, hạn dùng chỉnh ở trang Voucher
+                          Mã dùng ở lần ghé sau. Chỉ quay ra khi voucher đang bật; hạn dùng chỉnh ở trang Voucher
                         </span>
                       )}
                     </div>

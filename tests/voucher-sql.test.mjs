@@ -16,7 +16,6 @@ await db.exec(`
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role; END IF;
   END $$;
-  CREATE TABLE settings(key text PRIMARY KEY, value text);
   CREATE TABLE tables(id uuid PRIMARY KEY, table_number integer, merged_with uuid, table_type text);
   CREATE TABLE orders(id uuid PRIMARY KEY, table_id uuid REFERENCES tables, status text, total_amount numeric DEFAULT 0,
     customer_phone text, created_at timestamptz DEFAULT now());
@@ -26,6 +25,8 @@ await db.exec(`
 `);
 await db.exec(sql);
 await db.exec(sql); // chạy lại không lỗi
+const DEFAULT_SWITCH = (await db.query("SELECT value FROM voucher_settings WHERE key = 'voucher_enabled'")).rows[0]?.value;
+await db.exec("UPDATE voucher_settings SET value = 'true' WHERE key = 'voucher_enabled'");
 
 const NOW = Date.now();
 const iso = ms => new Date(ms).toISOString();
@@ -203,15 +204,35 @@ test('khoá công khai không đọc được bảng mã, không gọi được 
     has_function_privilege('anon', 'public.redeem_voucher(text,uuid[],uuid,text)', 'EXECUTE') AS anon_exec,
     has_function_privilege('authenticated', 'public.redeem_voucher(text,uuid[],uuid,text)', 'EXECUTE') AS auth_exec,
     has_function_privilege('service_role', 'public.redeem_voucher(text,uuid[],uuid,text)', 'EXECUTE') AS server_exec,
-    (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.vouchers'::regclass) AS rls`);
-  assert.deepEqual(p, { anon_read: false, auth_write: false, anon_exec: false, auth_exec: false, server_exec: true, rls: true });
+    (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.vouchers'::regclass) AS rls,
+    has_table_privilege('anon', 'public.voucher_settings', 'SELECT') AS anon_cfg_read,
+    has_table_privilege('anon', 'public.voucher_settings', 'UPDATE') AS anon_cfg_write,
+    has_table_privilege('authenticated', 'public.voucher_settings', 'INSERT') AS auth_cfg_write`);
+  assert.deepEqual(p, { anon_read: false, auth_write: false, anon_exec: false, auth_exec: false, server_exec: true, rls: true,
+    anon_cfg_read: false, anon_cfg_write: false, auth_cfg_write: false });
 });
 
-test('cài đặt "Hẹn lần sau" mặc định TẮT, chạy lại migration không ghi đè lựa chọn của chủ quán', async () => {
-  await db.query("UPDATE settings SET value = 'true' WHERE key = 'voucher_next_enabled'");
+test('cài đặt voucher: công tắc chung + "Hẹn lần sau" mặc định TẮT, chạy lại migration không ghi đè lựa chọn của chủ quán', async () => {
+  assert.equal(DEFAULT_SWITCH, 'false');
+  await db.query("UPDATE voucher_settings SET value = 'true' WHERE key = 'voucher_next_enabled'");
   await db.exec(sql);
-  const { rows } = await db.query("SELECT key, value FROM settings WHERE key LIKE 'voucher_next_%' ORDER BY key");
-  assert.equal(rows.length, 8);
+  const { rows } = await db.query('SELECT key, value FROM voucher_settings ORDER BY key');
+  assert.equal(rows.length, 9);
   assert.equal(rows.find(r => r.key === 'voucher_next_enabled').value, 'true');
-  await db.query("UPDATE settings SET value = 'false' WHERE key = 'voucher_next_enabled'");
+  assert.equal(rows.find(r => r.key === 'voucher_enabled').value, 'true');
+  await db.query("UPDATE voucher_settings SET value = 'false' WHERE key = 'voucher_next_enabled'");
+});
+
+test('công tắc tắt: không dùng được mã nào, không ghi gì vào bill; bật lại là dùng được', async () => {
+  await voucher('BK-AAAAAA');
+  await db.exec("UPDATE voucher_settings SET value = 'false' WHERE key = 'voucher_enabled'");
+  try {
+    assert.equal((await redeem('BK-AAAAAA', [id(12)])).reason, 'disabled');
+    assert.equal((await redeem('BK-ZZZZZZ', [id(12)])).reason, 'disabled', 'tắt thì không cho dò mã');
+    assert.equal((await items(id(12))).length, 1);
+    assert.equal((await row('BK-AAAAAA')).status, 'active');
+  } finally {
+    await db.exec("UPDATE voucher_settings SET value = 'true' WHERE key = 'voucher_enabled'");
+  }
+  assert.equal((await redeem('BK-AAAAAA', [id(12)])).ok, true);
 });

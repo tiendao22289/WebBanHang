@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   newVoucherCode, normalizeVoucherCode, VOUCHER_ALPHABET, nextVisitWindow, giftWindow, lastUseDay, firstUseDay,
   calcVoucherDiscount, voucherState, voucherValueText, redeemFailText, parseNextVoucherConfig, checkNextVoucherConfig,
-  pickVoucherPhone, fillVoucherMessage, GIFT_MESSAGE_TEMPLATE, normalizePhone,
+  pickVoucherPhone, fillVoucherMessage, GIFT_MESSAGE_TEMPLATE, normalizePhone, isVoucherSwitchOn,
 } from '../src/lib/voucher.mjs';
 
 // Giờ VN → mốc ms (UTC+7).
@@ -109,7 +109,11 @@ test('chữ hiển thị mức giảm + lý do từ chối cho nhân viên', () 
 
 test('cài đặt "Hẹn lần sau": mặc định tắt, đọc số an toàn, kiểm lỗi trước khi lưu', () => {
   const d = parseNextVoucherConfig([]);
-  assert.deepEqual(d, { enabled: false, minBill: 300000, type: 'amount', value: 30000, max: 0, useMinBill: 200000, days: 14, repeat: true });
+  assert.deepEqual(d, { on: false, enabled: false, minBill: 300000, type: 'amount', value: 30000, max: 0, useMinBill: 200000, days: 14, repeat: true });
+  assert.equal(parseNextVoucherConfig([{ key: 'voucher_enabled', value: 'true' }]).on, true, 'công tắc chung');
+  assert.equal(isVoucherSwitchOn([{ key: 'voucher_enabled', value: 'false' }]), false);
+  assert.equal(isVoucherSwitchOn([{ key: 'voucher_enabled', value: 'true' }]), true);
+  assert.equal(isVoucherSwitchOn(null), false);
   const c = parseNextVoucherConfig([{ key: 'voucher_next_enabled', value: 'true' }, { key: 'voucher_next_type', value: 'percent' },
     { key: 'voucher_next_value', value: '10' }, { key: 'voucher_next_days', value: '-5' }, { key: 'voucher_next_repeat', value: 'false' }]);
   assert.equal(c.enabled, true); assert.equal(c.type, 'percent'); assert.equal(c.days, 1); assert.equal(c.repeat, false);
