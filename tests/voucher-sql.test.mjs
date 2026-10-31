@@ -158,6 +158,21 @@ test('xoá dòng voucher khỏi bill đang mở → mã dùng lại được', a
   assert.equal((await redeem('BK-AAAAAA', [id(12)])).ok, true);
 });
 
+test('trang Bàn xoá dòng voucher / huỷ bill bằng khoá công khai (anon) → vẫn trả mã', async () => {
+  await db.exec('GRANT SELECT, INSERT, UPDATE, DELETE ON orders, order_items, tables TO anon');
+  const asAnon = async (text, params) => {
+    await db.exec('SET ROLE anon');
+    try { await db.query(text, params); } finally { await db.exec('RESET ROLE'); }
+  };
+  await voucher('BK-AAAAAA');
+  const r = await redeem('BK-AAAAAA', [id(12)]);
+  await asAnon('DELETE FROM order_items WHERE id = $1', [r.item_id]);
+  assert.equal((await row('BK-AAAAAA')).status, 'active');
+  assert.equal((await redeem('BK-AAAAAA', [id(12)])).ok, true);
+  await asAnon("UPDATE orders SET status = 'cancelled' WHERE id = $1", [id(12)]);
+  assert.equal((await row('BK-AAAAAA')).status, 'active');
+});
+
 test('bill đã thanh toán bị dọn khỏi DB → mã vẫn là đã dùng (không hồi sinh)', async () => {
   await voucher('BK-AAAAAA');
   await redeem('BK-AAAAAA', [id(12)]);
