@@ -19,7 +19,7 @@ import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { sendOaText } from '@/lib/zaloOa';
 import {
   normalizeVoucherCode, normalizePhone, giftWindow, fillVoucherMessage, GIFT_MESSAGE_TEMPLATE,
-  NEXT_VOUCHER_KEYS, VOUCHER_SWITCH_KEY, checkNextVoucherConfig, parseNextVoucherConfig,
+  NEXT_VOUCHER_KEYS, VOUCHER_SWITCH_KEY, SEND_MAX_IDS, checkNextVoucherConfig, parseNextVoucherConfig,
 } from '@/lib/voucher.mjs';
 import {
   activeVouchersForPhones, insertVoucher, loadNextVoucherConfig, loadVoucherSwitch, sendVoucherZalo,
@@ -175,8 +175,10 @@ export async function POST(request) {
     }
 
     if (action === 'send') {
-      const ids = (Array.isArray(body.ids) ? body.ids : []).filter(id => UUID.test(id)).slice(0, 200);
+      const ids = (Array.isArray(body.ids) ? body.ids : []).filter(id => UUID.test(id));
       if (!ids.length) return fail('Chọn mã cần gửi.');
+      // Không cắt bớt âm thầm (mã sau số này sẽ không bao giờ được gửi); trang tự chia đợt nhỏ.
+      if (ids.length > SEND_MAX_IDS) return fail(`Mỗi lần gửi tối đa ${SEND_MAX_IDS} mã — tải lại trang rồi bấm gửi lại.`);
       const { data, error } = await db.from('vouchers').select('*').in('id', ids);
       if (error) throw error;
       const results = [];

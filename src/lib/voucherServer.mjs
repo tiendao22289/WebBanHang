@@ -158,7 +158,13 @@ export function zaloSendErrorText(detail) {
  */
 export async function sendVoucherZalo(db, voucher, { send, zaloUserId = null, force = false, log = () => {} }) {
   const uid = zaloUserId || await zaloUserOfPhone(db, voucher.customer_phone);
-  if (!uid) return { ok: false, reason: 'no_zalo', message: 'Khách chưa nối Zalo với quán.' };
+  if (!uid) {
+    // Ghi lý do dưới mã (trang Voucher) và để "gửi tất cả" lần sau bỏ qua. Khách nối Zalo sau này
+    // (nhắn SĐT cho OA) thì sendPendingVouchers vẫn gửi: nó xét sent_at, không xét lỗi.
+    const message = 'Khách chưa nối Zalo với quán — chép tin để gửi tay.';
+    await db.from('vouchers').update({ send_error: message }).eq('id', voucher.id).is('sent_at', null);
+    return { ok: false, reason: 'no_zalo', message };
+  }
   const stamp = new Date().toISOString();
   let claim = db.from('vouchers').update({ sent_at: stamp, send_error: null }).eq('id', voucher.id);
   if (!force) claim = claim.is('sent_at', null);

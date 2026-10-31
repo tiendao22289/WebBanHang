@@ -293,3 +293,19 @@ test('trước khi đóng bàn: voucher % hoặc voucher tiền giảm quá mứ
   ], vouchers: [{ code: 'BK-OKOKOK', discount_type: 'percent', discount_value: 10, max_discount: 0, min_bill: 0, used_item_id: 'v' }] };
   assert.equal(await voucherPayProblem(fakeDb(fine), ['o']), null, 'không đổi món thì không báo (kể cả có giảm tay)');
 });
+
+test('khách chưa nối Zalo: ghi lý do dưới mã; sau này khách nhắn SĐT cho OA thì vẫn được gửi', async () => {
+  const state = { customers: [], zalo_followers: [], vouchers: [{ id: 'n', code: 'BK-NNNNNN', source: 'gift', status: 'active', sent_at: null,
+    send_error: null, customer_phone: '0907777777', discount_type: 'amount', discount_value: 30000,
+    valid_from: '2026-10-29T00:00:00Z', valid_until: new Date(NOW + 5 * 86400000).toISOString() }] };
+  const sent = [];
+  const send = async (_db, uid) => { sent.push(uid); return { ok: true }; };
+  const r = await sendVoucherZalo(fakeDb(state), state.vouchers[0], { send });
+  assert.equal(r.reason, 'no_zalo');
+  assert.match(state.vouchers[0].send_error, /chưa nối Zalo/);
+  assert.equal(state.vouchers[0].sent_at, null);
+  assert.equal(await sendPendingVouchers(fakeDb(state), '0907777777', 'uid-7', { send, nowMs: NOW }), 1);
+  assert.deepEqual(sent, ['uid-7']);
+  assert.ok(state.vouchers[0].sent_at);
+  assert.equal(state.vouchers[0].send_error, null);
+});
