@@ -12,7 +12,7 @@ import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
 import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, fetchGroupBillTotal, startOfTodayISO, isReviewDiscountItem } from '@/lib/reviewReward';
-import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem } from '@/lib/luckyWheel';
+import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem, withVoucherSwitch } from '@/lib/luckyWheel';
 import { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, newLuckyRequestId, fetchLuckyNudgeConfig, wheelGiftGate } from '@/lib/luckyRewardFlow';
 import {
   Search,
@@ -32,6 +32,9 @@ import {
   Star,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
+import PaidNextVoucher, {
+  WheelVoucher, CustomerVoucherBox, savedVouchers, bindOrderToDevice, fetchVoucherSwitch, useVoucherSwitch,
+} from '@/components/NextVoucherTicket';
 // import ChatOrderButton from '@/components/ChatOrderButton'; // TẮT TÍNH NĂNG CHAT AI
 import './order.css';
 
@@ -608,6 +611,16 @@ function OrderContent() {
   const [userScrolling, setUserScrolling] = useState(false);
   const [orderCancelled, setOrderCancelled] = useState(false); // admin cancelled
   const [orderPaid, setOrderPaid] = useState(null); // { total } khi admin thanh toán
+  // Bill vừa thanh toán → hỏi máy chủ có tặng voucher "lần sau" không (vé giữ tới khi khách đóng).
+  const [paidVoucherOrderId, setPaidVoucherOrderId] = useState(null);
+  // Mã đã lưu trong máy (vé lần trước) — hiện trên nút "🎟️ Voucher".
+  const [mySavedVoucher, setMySavedVoucher] = useState(null);
+  const billVoucherLine = previousOrders.filter(o => ['pending', 'preparing', 'completed'].includes(o.status))
+    .flatMap(o => o.order_items || [])
+    .find(i => i.menu_item_id == null && Number(i.unit_price) < 0 && String(i.item_name || '').startsWith('Voucher BK-')) || null;
+  useEffect(() => { setMySavedVoucher(savedVouchers().find(v => Date.parse(v.valid_from) <= Date.now()) || null); }, [paidVoucherOrderId]);
+  // Chủ quán tắt voucher (Admin > Voucher) → ẩn nút "🎟️ Voucher" và ô nhập mã.
+  const voucherOn = useVoucherSwitch(showOrdered);
   const [locationWarning, setLocationWarning] = useState(false); // khách không ở nhà hàng
   // ── Ưu đãi đánh giá Google Maps ──
   const [channelCfgs, setChannelCfgs] = useState([]);    // cấu hình mọi kênh, lấy từ settings
@@ -884,6 +897,8 @@ function OrderContent() {
 
   /** reason: 'paid' | 'cancelled' | 'stale' (khách mới đã ngồi / phiên hết hạn) | 'silent' */
   function endSession(reason, paidTotal = 0) {
+    const endedOrderId = getSavedSession()?.orderId || currentOrderIdRef.current;
+    if (reason === 'paid' && endedOrderId) setPaidVoucherOrderId(endedOrderId);
     setCart([]);
     setNotes({});
     setPreviousOrders([]);
@@ -1367,6 +1382,7 @@ function OrderContent() {
         } else if (payload.new?.status === 'paid' && isMyOrder) {
           justPaidRef.current = true;
           setOrderPaid({ total: payload.new.total_amount });
+          setPaidVoucherOrderId(payload.new.id);
           setTimeout(() => setOrderPaid(null), 5000);
         } else {
           // Bất kỳ thay đổi nào khác (tổng tiền, status) → re-fetch
@@ -2329,7 +2345,9 @@ function OrderContent() {
       setWheelOpen(true);
       // Cơ cấu quà + danh sách món tặng do Admin cấu hình → luôn đọc lại khi mở
       // để khách nhận NGAY thay đổi admin vừa lưu (bật/tắt món tặng).
-      fetchLuckyPrizes(supabase).then(setWheelPrizes);
+      // Voucher tắt (Admin > Voucher) → bỏ ô "Voucher lần sau" khỏi vòng (máy chủ cũng không quay ra).
+      Promise.all([fetchLuckyPrizes(supabase), fetchVoucherSwitch()])
+        .then(([list, on]) => setWheelPrizes(withVoucherSwitch(list, on)));
       refreshGiftItems();
       setWheelErr('');
       setWheelPrize(null);
@@ -3797,6 +3815,8 @@ function OrderContent() {
       const orderId = previousAttempt?.signature === signature && previousAttempt?.orderId
         ? previousAttempt.orderId : newLuckyRequestId();
       sessionStorage.setItem(attemptKey, JSON.stringify({ signature, orderId }));
+      // Đăng ký chìa khoá máy cho bill này TRƯỚC khi bill tồn tại (để sau thanh toán chỉ máy này thấy vé voucher).
+      await bindOrderToDevice(orderId, activeTableId);
       const { data: savedOrder, error: orderErr } = await supabase.rpc('submit_customer_order_atomic', {
         p_order_id: orderId,
         p_table_id: activeTableId,
@@ -4701,6 +4721,12 @@ function OrderContent() {
                 🎁 Vòng xoay
               </button>
             )}
+            {voucherOn && currentOrderId && !billVoucherLine && previousOrders.some(o => ['pending', 'preparing', 'completed'].includes(o.status)) && (
+              <button className="co-promo-pill" style={{ background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: 'white' }}
+                onClick={() => { setShowOrdered(true); fetchPreviousOrders(); }}>
+                🎟️ {mySavedVoucher ? `Dùng voucher −${Math.round(Number(mySavedVoucher.discount_value) / 1000)}${mySavedVoucher.discount_type === 'percent' ? '%' : 'K'}` : 'Voucher'}
+              </button>
+            )}
             {activeChannels.length > 0 && (
               <button className="co-promo-pill gmap" onClick={openReviewOverlay}>
                 {activeChannels.length === 1
@@ -5398,7 +5424,13 @@ function OrderContent() {
                     <div className="co-wheel-prize">
                       {!wheelFollowPending && <div style={{ fontSize: '2.2rem' }}>🎉</div>}
                       <div className="co-wheel-prize-name">{luckyPrizeTitle(wheelSpin || wheelPrize)}</div>
-                      {wheelDone ? (
+                      {wheelDone && wheelSpin.prize_type === 'voucher_next' ? (
+                        <div role="status" style={{ fontWeight: 800, color: '#0f766e' }}>
+                          <div>Nhận quà thành công! 🎉</div>
+                          <div style={{ fontWeight: 600, marginBottom: 8 }}>Voucher dùng cho lần ghé tới — không trừ vào bill hôm nay.</div>
+                          <WheelVoucher spinId={wheelSpin.id} />
+                        </div>
+                      ) : wheelDone ? (
                         <div role="status" style={{ fontWeight: 800, color: '#0f766e' }}>
                           <div>Nhận quà thành công! 🎉</div>
                           {wheelSpin.prize_type === 'percent' && <div>Chúc mừng Quý khách được giảm {wheelSpin.prize_value}% hoá đơn.</div>}
@@ -5417,6 +5449,7 @@ function OrderContent() {
                         <div style={{ fontWeight: 700, color: '#0f766e' }}>
                           {wheelIsGiftPrize && wheelGiftChosen
                             ? '🎁 Quà đã chọn xong! Mở Zalo để hệ thống tự duyệt quà nha 👇'
+                            : wheelPrize.prizeType === 'voucher_next' ? 'Mở Zalo để nhận mã voucher cho lần ghé tới nha 👇'
                             : 'Mở Zalo để hệ thống tự duyệt ưu đãi vào hoá đơn nha 👇'}
                         </div>
                       ) : wheelNeedsGiftPick ? (
@@ -6092,6 +6125,9 @@ function OrderContent() {
           </div>
         )}
 
+        {/* ─── Voucher "lần sau" tặng khi thanh toán xong ─── */}
+        {paidVoucherOrderId && <PaidNextVoucher orderId={paidVoucherOrderId} onClose={() => setPaidVoucherOrderId(null)} />}
+
         {/* ─── Order Cancelled Banner ─── */}
         {orderCancelled && (
           <div className="co-cancelled-banner">
@@ -6611,6 +6647,15 @@ function OrderContent() {
                 <button onClick={() => setShowOrdered(false)}><X size={20} /></button>
               </div>
               <div className="co-sheet-body">
+                {/* Voucher: khách tự nhập mã → máy chủ trừ thẳng vào bill (mỗi bill 1 voucher) */}
+                {billVoucherLine ? (
+                  <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 12, padding: '9px 12px', marginBottom: 12, color: '#166534', fontWeight: 700, fontSize: '0.88rem' }}>
+                    🎟️ Bill đã dùng voucher {String(billVoucherLine.item_name).replace('Voucher ', '')} — giảm {formatPrice(-billVoucherLine.unit_price * billVoucherLine.quantity)}
+                  </div>
+                ) : voucherOn && previousOrders.some(o => ['pending', 'preparing', 'completed'].includes(o.status)) && (
+                  <CustomerVoucherBox tableId={urlTableId} orderId={currentOrderId}
+                    onApplied={() => { setMySavedVoucher(null); fetchPreviousOrders(); }} />
+                )}
                 {/* Banner địa chỉ giao hàng (chỉ takeaway) */}
                 {isTakeaway && deliveryAddress && (
                   <div style={{

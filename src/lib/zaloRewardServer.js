@@ -13,9 +13,10 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { parseChannelConfig, calcReviewDiscount, getChannel } from '@/lib/reviewReward';
-import { luckyItemName, calcLuckyDiscount, LUCKY_SETTING_KEYS, parseLuckyConfig, isGiftPrizeType } from '@/lib/luckyWheel';
+import { luckyItemName, calcLuckyDiscount, LUCKY_SETTING_KEYS, parseLuckyConfig, isGiftPrizeType, isVoucherPrizeType } from '@/lib/luckyWheel';
 import { sendGiftItemPrintJob } from '@/lib/print';
 import { sendOaText } from '@/lib/zaloOa';
+import { issueWheelVoucher, sendPendingVouchers, sendVoucherZalo } from '@/lib/voucherServer.mjs';
 
 // Yêu cầu quá 30 phút không hoàn tất thì bỏ qua (khách đã rời quán / thử nghịch)
 export const CLAIM_FRESH_MINUTES = 30;
@@ -520,6 +521,20 @@ export async function pickGiftItem(supabase, spinId, menuItemId, itemOptions, lo
  * là thông báo — mọi lỗi gửi tin đều nuốt và ghi log.
  */
 async function notifyLuckyPrizeApplied(supabase, spin, log = () => {}) {
+  // Trúng "Voucher lần sau": gửi mã qua cùng đường "nhắn đúng 1 lần" (vouchers.sent_at) với mọi mã.
+  // Khách bấm "Mở Zalo" được tự duyệt nhưng Zalo không cho biết tài khoản → tìm Zalo đã nối với SĐT;
+  // chưa nối thì mã chờ, khách nhắn SĐT cho OA là được gửi (sendPendingVouchers).
+  if (isVoucherPrizeType(spin?.prize_type)) {
+    try {
+      const { data: fresh } = await supabase.from('lucky_spins').select('applied_item_id').eq('id', spin.id).maybeSingle();
+      if (!fresh?.applied_item_id) return;
+      const { data: voucher } = await supabase.from('vouchers').select('*').eq('id', fresh.applied_item_id).maybeSingle();
+      if (voucher) await sendVoucherZalo(supabase, voucher, { send: sendOaText, zaloUserId: spin.zalo_user_id || null, log });
+    } catch (err) {
+      log(`chua gui duoc ma voucher vong xoay: ${err.message}`);
+    }
+    return;
+  }
   if (!spin?.zalo_user_id) return; // cấp tay / chưa gắn Zalo thì không có ai để nhắn
   // claimedNotify = ta đã CHIẾM quyền gửi (set notified_at) nhưng chưa gửi xong;
   // nếu gửi hỏng phải nhả cờ ở finally để lần sau còn thử lại, khỏi mất tin.
@@ -581,6 +596,16 @@ async function finishLuckyReward(supabase, spin, log = () => {}) {
     if (error) throw new Error(`Chưa cập nhật được giảm giá theo tổng bill: ${error.message || 'vui lòng thử lại'}`);
     if (!data) throw new Error('Bill nhận quà đã đóng. Vui lòng gọi nhân viên.');
     return data;
+  }
+  if (isVoucherPrizeType(spin.prize_type)) {
+    // Không ghi gì vào bill hôm nay: tạo mã (1 lượt quay = 1 mã, gọi lại trả mã cũ).
+    // applied_item_id trỏ tới mã voucher = dấu "đã nhận quà xong" như các loại quà khác.
+    const voucher = await issueWheelVoucher(supabase, spin);
+    if (spin.applied_item_id !== voucher.id) {
+      const { error } = await supabase.from('lucky_spins').update({ applied_item_id: voucher.id }).eq('id', spin.id);
+      if (error) throw error;
+    }
+    return voucher;
   }
   const bills = await getSpinBills(supabase, spin);
   const targetOrderId = spin.applied_order_id;
@@ -677,7 +702,7 @@ export async function applyLuckySpin(supabase, spin, zaloUserId, log = () => {})
   const total = bills.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
   const isGift = isGiftPrizeType(prize.type);
   const discount = calcLuckyDiscount(total, prize, cfg.max);
-  if (!isGift && discount <= 0) {
+  if (!isGift && !isVoucherPrizeType(prize.type) && discount <= 0) {
     return blockSpin(supabase, spin.id, 'Quan chua tinh duoc muc giam, Quy khach goi nhan vien giup a!');
   }
 
@@ -755,7 +780,7 @@ export async function grantLuckySpinManually(supabase, spinId, log = () => {}) {
   if (bills.length === 0) return { ok: false, message: 'Hoá đơn của bàn đã đóng nên không cấp được quà.' };
   const total = bills.reduce((sum, o) => sum + (Number(o.total_amount) || 0), 0);
   const discount = calcLuckyDiscount(total, prize, cfg.max);
-  if (!isGift && discount <= 0) return { ok: false, message: 'Chưa tính được mức giảm cho bill này.' };
+  if (!isGift && !isVoucherPrizeType(prize.type) && discount <= 0) return { ok: false, message: 'Chưa tính được mức giảm cho bill này.' };
 
   const targetOrderId = bills[0].id;
   const { data: claimed, error: claimError } = await supabase.rpc('claim_lucky_wheel_slot', {
@@ -895,7 +920,15 @@ export async function listAdminLuckySpins(supabase, { reconcile = false } = {}) 
     }
   }
   const visible = currentRows.filter(s => !s.applied_item_id || s.auto_approved_at);
-  const itemIds = visible.filter(s => s.auto_approved_at && s.applied_item_id).map(s => s.applied_item_id);
+  // Quà voucher: applied_item_id là mã voucher, không phải dòng bill.
+  const voucherIds = visible.filter(s => isVoucherPrizeType(s.prize_type) && s.applied_item_id).map(s => s.applied_item_id);
+  let vouchers = [];
+  if (voucherIds.length) {
+    const { data } = await supabase.from('vouchers').select('id, code, sent_at').in('id', voucherIds);
+    vouchers = data || [];
+  }
+  const itemIds = visible.filter(s => s.auto_approved_at && s.applied_item_id && !isVoucherPrizeType(s.prize_type))
+    .map(s => s.applied_item_id);
   let items = [], jobs = [];
   if (itemIds.length) {
     const itemResult = await supabase.from('order_items')
@@ -919,8 +952,10 @@ export async function listAdminLuckySpins(supabase, { reconcile = false } = {}) 
       else printError = printed.error;
     }
     const mapped = mapLuckySpinRow(s);
-    if (s.status !== 'blocked' && s.auto_approved_at && s.applied_item_id && !item) mapped.adminState = 'auto_pending';
+    const voucher = vouchers.find(v => v.id === s.applied_item_id) || null;
+    if (s.status !== 'blocked' && s.auto_approved_at && s.applied_item_id && !item && !voucher) mapped.adminState = 'auto_pending';
     result.push({ ...mapped, giftName: item?.menu_item?.name || item?.item_name || null,
+      voucherCode: voucher?.code || null, voucherSent: !!voucher?.sent_at,
       quantity: item?.quantity || Number(s.prize_value) || 1,
       itemOptions: item?.item_options || [],
       discountAmount: item && !isGiftPrizeType(s.prize_type) ? Math.max(0, -Number(item.unit_price) * Number(item.quantity)) : mapped.discountAmount,
@@ -1085,6 +1120,11 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
     // Wheel rewards require an explicit phone message for this interaction.
     if (existing?.phone) {
       await tryApplyReward(supabase, uid, existing.phone, log);
+      try {
+        await sendPendingVouchers(supabase, existing.phone, uid, { send: sendOaText, log });
+      } catch (err) {
+        log(`chua gui duoc voucher cho khach: ${err.message}`);
+      }
       return;
     }
     // Chưa biết SĐT → khớp theo thời gian: khách chỉ cần bấm Quan tâm
@@ -1146,6 +1186,13 @@ export async function handleZaloEvent(supabase, ev, log = () => {}) {
         if (bound?.zalo_user_id === uid) await applyLuckySpin(supabase, bound, uid, log);
       }
       await tryApplyReward(supabase, uid, phone, log);
+      // Khách vừa nhắn SĐT (vd quét QR Zalo cuối bill) → gửi voucher "lần sau" /
+      // voucher chủ quán tặng mà trước đó chưa nhắn được (chưa nối Zalo).
+      try {
+        await sendPendingVouchers(supabase, phone, uid, { send: sendOaText, log });
+      } catch (err) {
+        log(`chua gui duoc voucher cho khach: ${err.message}`);
+      }
       return;
     }
     // Tin nhắn bất kỳ (“chào quán”, sticker chữ...) → khớp theo thời gian

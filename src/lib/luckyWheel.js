@@ -22,6 +22,8 @@ export const PRIZE_TYPES = [
   { value: 'amount', label: 'Giảm số tiền' },
   { value: 'gift_drink', label: 'Tặng nước' },
   { value: 'gift_dish', label: 'Tặng món' },
+  // Không trừ vào bill hôm nay: tặng 1 mã voucher (số tiền = value) dùng ở lần ghé sau.
+  { value: 'voucher_next', label: 'Voucher lần sau' },
 ];
 
 /**
@@ -32,6 +34,16 @@ export const PRIZE_TYPES = [
  */
 export function isGiftPrizeType(type) {
   return type === 'gift_drink' || type === 'gift_dish' || type === 'gift';
+}
+
+/** Quà 'Voucher lần sau': không ghi dòng nào vào bill, tạo mã voucher cho SĐT khách (lib/voucherServer.mjs). */
+export function isVoucherPrizeType(type) {
+  return type === 'voucher_next';
+}
+
+/** Voucher đang tắt (Admin > Voucher) → bỏ ô "Voucher lần sau": không hiện trên vòng, không quay ra. */
+export function withVoucherSwitch(prizes, voucherOn) {
+  return voucherOn ? prizes : (prizes || []).filter(p => !isVoucherPrizeType(p.type));
 }
 
 /** Đọc cơ cấu quà đang bật, đã sắp thứ tự. */
