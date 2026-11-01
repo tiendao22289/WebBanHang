@@ -346,3 +346,25 @@ test('gửi Zalo: quá 200 mã một lần thì báo lỗi rõ, không cắt b�
   assert.equal(api.sent.length, 0);
   assert.equal((await api.POST(post({ action: 'send', ids: ids.slice(0, 200) }))).status, 200);
 });
+
+test('huỷ hàng loạt: chỉ chủ quán; chỉ đổi mã còn dùng, mã đã dùng / đã huỷ giữ nguyên; quá 500 mã thì báo lỗi', async () => {
+  const mk = (n, status) => ({ id: id(800 + n), code: `BK-HUY${'ABCDEFGHJK'[n]}AA`, status, customer_phone: '0901000000' });
+  const state = { vouchers: [mk(0, 'active'), mk(1, 'active'), mk(2, 'used'), mk(3, 'cancelled'), mk(4, 'active')] };
+  assert.equal((await loadAdmin(state, STAFF).POST(post({ action: 'cancel', ids: [id(800)] }))).status, 403);
+  assert.equal(state.vouchers[0].status, 'active');
+
+  const api = loadAdmin(state, ADMIN);
+  const r = await api.POST(post({ action: 'cancel', ids: [id(800), id(801), id(802), id(803), id(999), 'không-phải-id'] }));
+  assert.equal(r.status, 200);
+  assert.deepEqual(JSON.parse(JSON.stringify(r.body.results)), [
+    { id: id(800), ok: true }, { id: id(801), ok: true }, { id: id(802), ok: false }, { id: id(803), ok: false }, { id: id(999), ok: false }]);
+  assert.deepEqual(state.vouchers.map(v => v.status), ['cancelled', 'cancelled', 'used', 'cancelled', 'active'], 'mã không chọn giữ nguyên');
+
+  const tooMany = await api.POST(post({ action: 'cancel', ids: Array.from({ length: 501 }, (_, i) => id(2000 + i)) }));
+  assert.equal(tooMany.status, 400);
+  assert.match(tooMany.body.error, /tối đa 500/);
+  assert.equal((await api.POST(post({ action: 'cancel', ids: [] }))).status, 400);
+  // Nút "Huỷ mã" từng mã vẫn như cũ.
+  assert.equal((await api.POST(post({ action: 'cancel', id: id(804) }))).status, 200);
+  assert.equal(state.vouchers[4].status, 'cancelled');
+});

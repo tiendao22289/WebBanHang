@@ -5,7 +5,8 @@ import Swal from 'sweetalert2';
 import { removeVietnameseTones } from '@/lib/utils';
 import {
   voucherValueText, voucherState, VOUCHER_STATE_TEXT, VOUCHER_SOURCES, shortDay, firstUseDay, lastUseDay, money,
-  GIFT_MESSAGE_TEMPLATE, NEXT_VISIT_MESSAGE_TEMPLATE, fillVoucherMessage, canAutoSendVoucher, sendInBatches,
+  GIFT_MESSAGE_TEMPLATE, NEXT_VISIT_MESSAGE_TEMPLATE, fillVoucherMessage, canAutoSendVoucher, runInBatches,
+  canCancelVoucher, CANCEL_BATCH,
 } from '@/lib/voucher.mjs';
 
 // Trang Voucher của chủ quán (xem lib/voucher.mjs, api/admin/vouchers):
@@ -60,7 +61,7 @@ function useBulkZaloSend(onDone) {
     if (!ids.length) { toast('Không còn mã nào chờ nhắn Zalo', 'info'); return; }
     setProgress({ done: 0, total: ids.length });
     try {
-      const { results, error } = await sendInBatches(ids, async batch => (await api({ action: 'send', ids: batch })).results || [],
+      const { results, error } = await runInBatches(ids, async batch => (await api({ action: 'send', ids: batch })).results || [],
         { onProgress: (done, total) => setProgress({ done, total }) });
       const ok = results.filter(r => r.ok).length;
       const noZalo = results.filter(r => r.reason === 'no_zalo').length;
@@ -79,6 +80,45 @@ function useBulkZaloSend(onDone) {
   }
   const label = idle => (progress ? `Đang gửi ${progress.done}/${progress.total}…` : idle);
   return { sending: !!progress, label, run };
+}
+
+/**
+ * Huỷ nhiều mã một lần (vd tạo nhầm cả đợt). Hỏi lại kèm số mã theo nguồn và số mã đã nhắn khách,
+ * huỷ theo đợt 200 mã, cuối cùng tổng kết. Mã vừa được dùng trong lúc đó thì giữ nguyên.
+ */
+function useBulkCancel(onDone) {
+  const [progress, setProgress] = useState(null);
+  async function run(list) {
+    if (!list.length) return;
+    const bySource = Object.entries(VOUCHER_SOURCES).map(([k, t]) => [t, list.filter(v => v.source === k).length]).filter(([, n]) => n);
+    const sent = list.filter(v => v.sent_at).length;
+    const { isConfirmed } = await Swal.fire({
+      icon: 'warning', title: `Huỷ ${list.length} mã?`, showCancelButton: true, reverseButtons: true, focusCancel: true,
+      confirmButtonText: `Huỷ ${list.length} mã`, cancelButtonText: 'Không', confirmButtonColor: '#dc2626',
+      text: [
+        `Gồm ${bySource.map(([t, n]) => `${n} mã ${t.toLowerCase()}`).join(', ')}.`,
+        sent ? `${sent} mã đã nhắn Zalo cho khách — khách nhập sẽ báo mã không còn dùng được.` : '',
+        'Huỷ rồi không mở lại được.',
+      ].filter(Boolean).join('\n'),
+    });
+    if (!isConfirmed) return;
+    setProgress({ done: 0, total: list.length });
+    try {
+      const { results, error } = await runInBatches(list.map(v => v.id), async batch => (await api({ action: 'cancel', ids: batch })).results || [],
+        { size: CANCEL_BATCH, onProgress: (done, total) => setProgress({ done, total }) });
+      const done = results.filter(r => r.ok).length;
+      onDone(results);
+      Swal.fire(error ? 'Chưa huỷ hết' : 'Đã huỷ', [
+        `Đã huỷ ${done}/${list.length} mã.`,
+        done < results.length ? `${results.length - done} mã vừa được dùng hoặc đã huỷ trước đó nên giữ nguyên.` : '',
+        error ? 'Mạng / máy chủ lỗi giữa chừng — bấm huỷ lần nữa để huỷ nốt.' : '',
+      ].filter(Boolean).join('\n'), error ? 'warning' : 'success');
+    } finally {
+      setProgress(null);
+    }
+  }
+  const label = idle => (progress ? `Đang huỷ ${progress.done}/${progress.total}…` : idle);
+  return { busy: !!progress, label, run };
 }
 
 function Stats({ vouchers }) {
@@ -181,6 +221,11 @@ function GiftTab({ onCreated }) {
       const r = byId.get(v.id);
       return r ? { ...v, sent_at: r.ok ? new Date().toISOString() : null, send_error: r.ok ? null : r.message } : v;
     }));
+    onCreated();
+  });
+  const bulkCancel = useBulkCancel(results => {
+    const done = new Set(results.filter(r => r.ok).map(r => r.id));
+    setCreated(list => list.map(v => (done.has(v.id) ? { ...v, status: 'cancelled' } : v)));
     onCreated();
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -324,6 +369,14 @@ function GiftTab({ onCreated }) {
               <button style={{ ...btn('#0d9488'), opacity: bulk.sending ? 0.7 : 1 }} disabled={bulk.sending} onClick={sendAll}>{bulk.label('💬 Gửi Zalo tất cả')}</button>
             )}
           </div>
+          {created.some(canCancelVoucher) && (
+            <div style={{ textAlign: 'right', marginTop: 6 }}>
+              <button style={{ ...btn('#fef2f2', '#dc2626'), padding: '7px 12px', fontSize: '0.8rem', opacity: bulkCancel.busy ? 0.7 : 1 }}
+                disabled={bulkCancel.busy} onClick={() => bulkCancel.run(created.filter(canCancelVoucher))}>
+                {bulkCancel.label(`Huỷ ${created.filter(canCancelVoucher).length} mã vừa tạo`)}
+              </button>
+            </div>
+          )}
           {created.map(v => <VoucherRow key={v.id} v={v} onChanged={onCreated} />)}
         </div>
       )}
@@ -450,9 +503,12 @@ function ListTab({ vouchers, onChanged }) {
   // Mã trong danh sách đang lọc mà chưa nhắn Zalo (vd vừa tạo xong, tải lại trang thì gửi từ đây).
   const pending = list.filter(canAutoSendVoucher);
   const bulk = useBulkZaloSend(() => onChanged());
+  // Huỷ hàng loạt theo bộ lọc đang chọn (gõ tên đợt / chọn nguồn để khoanh lại).
+  const cancellable = list.filter(canCancelVoucher);
+  const bulkCancel = useBulkCancel(() => onChanged());
   return (
     <div style={card}>
-      <input style={input} value={search} onChange={e => setSearch(e.target.value)} placeholder="Tìm mã, tên khách, SĐT" />
+      <input style={input} value={search} onChange={e => setSearch(e.target.value)} placeholder="Tìm mã, tên khách, SĐT, tên đợt" />
       <div style={{ display: 'flex', gap: 6, overflowX: 'auto', padding: '8px 0' }}>
         {[['active', 'Còn dùng'], ['used', 'Đã dùng'], ['expired', 'Hết hạn'], ['cancelled', 'Đã huỷ'], ['all', 'Tất cả']].map(([k, t]) => <button key={k} style={chip(state === k)} onClick={() => setState(k)}>{t}</button>)}
       </div>
@@ -464,6 +520,12 @@ function ListTab({ vouchers, onChanged }) {
         <button style={{ ...btn('#0d9488'), width: '100%', margin: '4px 0 8px', opacity: bulk.sending ? 0.7 : 1 }} disabled={bulk.sending}
           onClick={() => bulk.run(pending.map(v => v.id))}>
           {bulk.label(`💬 Gửi Zalo ${pending.length} mã chưa nhắn`)}
+        </button>
+      )}
+      {cancellable.length > 0 && (
+        <button style={{ ...btn('#fef2f2', '#dc2626'), width: '100%', margin: '0 0 8px', opacity: bulkCancel.busy ? 0.7 : 1 }}
+          disabled={bulkCancel.busy} onClick={() => bulkCancel.run(cancellable)}>
+          {bulkCancel.label(`Huỷ ${cancellable.length} mã đang lọc`)}
         </button>
       )}
       {list.slice(0, 200).map(v => <VoucherRow key={v.id} v={v} onChanged={onChanged} />)}
