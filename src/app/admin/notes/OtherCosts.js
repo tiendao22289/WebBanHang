@@ -13,7 +13,7 @@ const lineMoney = i => Math.round(parsePrice(i.price) * parseQty(i.qty));
 const items = note => { try { const d = JSON.parse(note.content); return d?.type === 'structured_expense' ? d.items || [] : []; } catch { return []; } };
 const ddmm = iso => new Date(iso).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit', month: '2-digit' });
 
-export default function OtherCosts({ notes, categories, filterLabel, onCategories }) {
+export default function OtherCosts({ notes, categories, filterLabel, onCategories, canEdit = true }) {
   const [draft, setDraft] = useState(categories);
   const [adding, setAdding] = useState('');
   const [saving, setSaving] = useState(false);
@@ -66,7 +66,7 @@ export default function OtherCosts({ notes, categories, filterLabel, onCategorie
       </div>)}
     </section>
 
-    <section className="oc-card">
+    {canEdit && <section className="oc-card">
       <div className="oc-head"><b>Các loại chi khác</b><span>{categories.length}/{MAX_CATEGORIES}</span></div>
       <p className="oc-sub">Nhân viên chọn loại cho từng dòng. Đổi tên thì các dòng đã ghi vẫn giữ loại; xoá loại thì các dòng đó thành "Khác".</p>
       {draft.map((c, i) => <div key={c.id || i} className="oc-edit">
@@ -81,6 +81,6 @@ export default function OtherCosts({ notes, categories, filterLabel, onCategorie
       </div>
       <p className="oc-sub">Luôn có sẵn loại "Khác" cho thứ chưa rõ loại.</p>
       {changed && <button type="button" className="oc-save" disabled={saving} onClick={() => save(draft)}>{saving ? 'Đang lưu…' : 'Lưu tên loại'}</button>}
-    </section>
+    </section>}
   </div>;
 }

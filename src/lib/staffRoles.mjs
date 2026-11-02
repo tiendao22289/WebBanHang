@@ -16,5 +16,7 @@ export const canOpenPath = (role, pathname) => {
   const paths = allowedPaths(role);
   return !paths || paths.some(p => pathname === p || pathname?.startsWith(`${p}/`));
 };
+/** Sổ tay: quản lý và admin xem phiếu của cả quán (xoá phiếu, sửa loại "Khác" vẫn chỉ admin). */
+export const seesAllNotes = role => role === 'admin' || role === 'manager';
 /** Quản lý và admin xem được Đánh giá khách hàng. */
 export const canSeeReviews = role => role === 'admin' || role === 'manager';

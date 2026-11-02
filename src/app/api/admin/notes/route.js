@@ -8,7 +8,7 @@
  * trigger trong DB ghi vào staff_data_audit. Mỗi thao tác ghi một lần qua hàm
  * staff_notes_commit (cả giao dịch, kiểm tra phiếu chưa bị đổi từ lúc đọc).
  *
- * GET  → { notes (kèm staff), payments, categories }  (admin: tất cả; nhân viên: của mình)
+ * GET  → { notes (kèm staff), payments, categories }  (admin, quản lý: tất cả; nhân viên: của mình)
  *       categories: các loại "Khác" chủ quán tạo (dòng hàng tab Khác có category = id loại)
  * POST {action}: create (kèm pay_debts: [{ note_id, item_index|null, amount }] — trả đúng các khoản
  *       nợ cũ đã chọn; from_note_id = lấy từ tiền thừa của phiếu trước, bỏ trống = tiền phiếu mới;
@@ -22,6 +22,7 @@ import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
 import { noteLeftover, noteMoney, openDebtLines } from '@/lib/notesDebts.mjs';
 import { categoryName, cleanCategories, lineCategory } from '@/lib/noteCategories.mjs';
+import { seesAllNotes } from '@/lib/staffRoles.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -191,7 +192,7 @@ export async function GET(request) {
     if (s.code !== 200) return fail(s.code === 503 ? 'Không kiểm tra được đăng nhập.' : 'Cần đăng nhập.', s.code);
     const db = staffDatabase(s.user.id);
     let q = db.from('staff_notes').select('*, staff ( full_name, phone )').order('created_at', { ascending: false });
-    if (s.user.role !== 'admin') q = q.eq('staff_id', s.user.id);
+    if (!seesAllNotes(s.user.role)) q = q.eq('staff_id', s.user.id);
     const { data: notes, error } = await q;
     if (error) throw error;
     let payments = [];
@@ -211,7 +212,8 @@ export async function POST(request) {
   try {
     const s = await getStaffSession(request);
     if (s.code !== 200) return fail(s.code === 503 ? 'Không kiểm tra được đăng nhập.' : 'Cần đăng nhập.', s.code);
-    const user = s.user, isAdmin = user.role === 'admin';
+    // Quản lý làm được như chủ quán trên phiếu (ghi, sửa, trả nợ phiếu của ai cũng được), trừ xoá phiếu và sửa loại.
+    const user = s.user, isAdmin = user.role === 'admin', canManage = seesAllNotes(user.role);
     const db = staffDatabase(user.id);
     const body = await request.json().catch(() => ({}));
     const changes = changeSet();
@@ -233,7 +235,7 @@ export async function POST(request) {
         const target = byId.get(r?.note_id);
         const pay = money(r?.amount);
         if (!target || !pay) return fail('Khoản nợ cần trả không hợp lệ.');
-        if (!isAdmin && target.staff_id !== user.id) return fail('Không trả được nợ trên phiếu của người khác.', 403);
+        if (!canManage && target.staff_id !== user.id) return fail('Không trả được nợ trên phiếu của người khác.', 403);
         const idx = r.item_index === null || r.item_index === undefined ? null : Number(r.item_index);
         const line = openDebtLines(target).find(l => l.item_index === idx);
         const key = `${target.id}:${idx}`;
@@ -257,7 +259,7 @@ export async function POST(request) {
         for (const id of sourceIds) {
           const source = byId.get(id);
           if (!source) return fail('Phiếu lấy tiền thừa không hợp lệ.');
-          if (!isAdmin && source.staff_id !== user.id) return fail('Không dùng được tiền thừa trên phiếu của người khác.', 403);
+          if (!canManage && source.staff_id !== user.id) return fail('Không dùng được tiền thừa trên phiếu của người khác.', 403);
           const want = plan.filter(x => x.from === id).reduce((a, x) => a + x.pay, 0) + carry.filter(c => c.id === id).reduce((a, c) => a + c.amount, 0);
           const left = noteLeftover(source, sourcePays || []);
           if (want > left) return fail(`Tiền thừa phiếu ${dm(source.created_at)} chỉ còn ${vnd(left)}.`);
@@ -308,7 +310,7 @@ export async function POST(request) {
     if (noteErr) throw noteErr;
     if (!note) return fail('Không tìm thấy phiếu.', 404);
     const own = note.staff_id === user.id;
-    if (!isAdmin && !own) return fail('Không phải phiếu của bạn.', 403);
+    if (!canManage && !own) return fail('Không phải phiếu của bạn.', 403);
 
     if (body.action === 'delete') {
       if (!isAdmin) return fail('Chỉ admin được xoá phiếu.', 403);
@@ -364,8 +366,8 @@ export async function POST(request) {
     }
 
     if (body.action === 'edit') {
-      // Nhân viên chỉ sửa phiếu của mình trong ngày ghi; admin sửa được mọi phiếu (có nhật ký).
-      if (!isAdmin && vnDay(note.created_at) !== vnDay(new Date().toISOString())) return fail('Chỉ sửa được phiếu trong ngày ghi.', 403);
+      // Nhân viên chỉ sửa phiếu của mình trong ngày ghi; admin, quản lý sửa được mọi phiếu (có nhật ký).
+      if (!canManage && vnDay(note.created_at) !== vnDay(new Date().toISOString())) return fail('Chỉ sửa được phiếu trong ngày ghi.', 403);
       const type = TYPES.includes(body.note_type) ? body.note_type : note.note_type;
       const stored = parseContent(note.content);
       const storedItems = stored?.type === 'structured_expense' && Array.isArray(stored.items) ? stored.items : [];
