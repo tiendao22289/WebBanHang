@@ -36,6 +36,7 @@ import { loadPayrollMonth, monthRange, readPayrollSettings, reviewsFor } from '@
 import { AUTO_CLOSE_BY, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
 import { DEFAULT_OT_RATE, computeSalary, monthKey, monthTallies, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
+import { normalizeRole } from '@/lib/staffRoles.mjs';
 import { applyClock, latestSession, sessionsOfDay } from '@/lib/clockApply.mjs';
 import { ENROLL_MAX, ENROLL_MIN, ENROLL_SELF_MIN, FACE_LEVELS, FACE_MODEL, FACE_STREAK_MS, FACE_TRIES, FACE_WAIT_MS, bestScore, enrollConsistency, faceHolds, faceNeeded,
   faceThreshold, faceVector, faceVectors, markFaceHolds, missingTable, readFaceSettings, wrongStreak } from '@/lib/faceCheck.mjs';
@@ -982,7 +983,7 @@ export async function POST(request) {
 
     if (body.action === 'create_account') {
       const fullName = text(body.full_name, 80), phone = text(body.phone, 20);
-      const role = body.role === 'admin' ? 'admin' : 'staff';
+      const role = normalizeRole(body.role);
       if (!fullName || !/^[\d+ ]{8,15}$/.test(phone)) return fail('Vui lòng điền đầy đủ tên và số điện thoại!');
       if (!validPin(body.pin)) return fail('PIN gồm 4–8 chữ số!');
       const { data: dup } = await db.from('staff').select('id').eq('phone', phone).limit(1);
@@ -997,6 +998,15 @@ export async function POST(request) {
       if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
       if (!validPin(body.pin)) return fail('PIN gồm 4–8 chữ số!');
       const r = await db.from('staff').update({ pin: hashPin(body.staff_id, body.pin, secret()) }).eq('id', body.staff_id).select('id');
+      if (r.error) throw r.error;
+      if (!r.data?.length) return fail('Không tìm thấy nhân viên.', 404);
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    if (body.action === 'set_role') {
+      if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
+      if (body.staff_id === user.id) return fail('Không tự đổi vai trò của tài khoản đang đăng nhập.');
+      const r = await db.from('staff').update({ role: normalizeRole(body.role) }).eq('id', body.staff_id).select('id');
       if (r.error) throw r.error;
       if (!r.data?.length) return fail('Không tìm thấy nhân viên.', 404);
       return NextResponse.json({ ok: true }, { headers });

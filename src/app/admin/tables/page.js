@@ -52,6 +52,7 @@ import {
 import './tables.css';
 import LongOpenTables from './LongOpenTables';
 import DishQuickToggle from './DishQuickToggle';
+import { canSeeReviews } from '@/lib/staffRoles.mjs';
 import VoucherRedeemDialog, { useTableVouchers, VoucherBanner } from './VoucherRedeem';
 import { CUSTOMER_REDEEM_NAME } from '@/lib/voucher.mjs';
 
@@ -319,7 +320,7 @@ export default function TablesPage() {
   const [adjustOpen, setAdjustOpen] = useState(false);      // bảng Cộng/Trừ tiền, Giảm % vào bill
   // Tab "Quà hôm nay": xem quà đã tặng hôm nay + món tặng nào đang bật/tắt.
   const [showGiftsToday, setShowGiftsToday] = useState(false);
-  // Khung trượt "Đánh giá khách hàng" (nút nhỏ ★ ở mép phải, chỉ admin) — thay cho mục Đánh giá trong menu.
+  // Khung trượt "Đánh giá khách hàng" (nút nhỏ ★ ở mép phải, admin và quản lý) — thay cho mục Đánh giá trong menu.
   const [showReviews, setShowReviews] = useState(false);
   const [giftsTodayData, setGiftsTodayData] = useState(null);   // { given:[{name,qty}], items:[{id,name,on}] }
   const [giftsTodayLoading, setGiftsTodayLoading] = useState(false);
@@ -7088,8 +7089,8 @@ export default function TablesPage() {
         </button>
       )}
 
-      {/* ─── Tab nhỏ "Đánh giá" (★) ngay dưới tab Quà hôm nay — chỉ admin, chỉ khi xem lưới bàn ─── */}
-      {!selectedTable && currentStaff?.role === 'admin' && (
+      {/* ─── Tab nhỏ "Đánh giá" (★) ngay dưới tab Quà hôm nay — admin và quản lý, chỉ khi xem lưới bàn ─── */}
+      {!selectedTable && canSeeReviews(currentStaff?.role) && (
         <button
           onClick={() => setShowReviews(true)}
           title="Đánh giá khách hàng"

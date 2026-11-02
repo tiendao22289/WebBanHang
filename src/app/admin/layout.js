@@ -25,6 +25,7 @@ import { unlockSpeech } from '@/lib/speak';
 import './admin.css';
 import AdminPinGate from './AdminPinGate';
 import { lockedSection } from '@/lib/adminLockPaths.mjs';
+import { allowedPaths, canOpenPath, roleLabel } from '@/lib/staffRoles.mjs';
 
 const ALL_NAV = [
   { href: '/admin/tables', label: 'Quản lý bàn', icon: LayoutGrid },
@@ -40,8 +41,8 @@ const ALL_NAV = [
   { href: '/admin/logs', label: 'Lịch sử bàn', icon: History, adminOnly: true },
 ];
 
-const STAFF_ALLOWED_HREFS = ['/admin/tables', '/admin/payroll', '/admin/qr', '/admin/receipts'];
-const STAFF_NAV = ALL_NAV.filter(n => STAFF_ALLOWED_HREFS.some(a => n.href.startsWith(a)));
+// Nhân viên / quản lý chỉ thấy các trang vai trò của mình được mở (src/lib/staffRoles.mjs).
+const navFor = role => (allowedPaths(role) ? ALL_NAV.filter(n => canOpenPath(role, n.href)) : ALL_NAV);
 
 export default function AdminLayout({ children }) {
   const pathname = usePathname();
@@ -100,10 +101,7 @@ export default function AdminLayout({ children }) {
   // Redirect staff away from restricted pages
   useEffect(() => {
     if (!mounted || !user) return;
-    if (user.role !== 'admin') {
-      const allowed = STAFF_ALLOWED_HREFS.some(a => pathname.startsWith(a));
-      if (!allowed) router.replace('/admin/notes');
-    }
+    if (!canOpenPath(user.role, pathname)) router.replace('/admin/notes');
   }, [user, pathname, mounted, router]);
 
   const handleLogin = async (e) => {
@@ -217,7 +215,7 @@ export default function AdminLayout({ children }) {
 
   // ── Logged in — render layout ─────────────────────────────────────────────
   if (user.role !== 'admin' && (pathname.startsWith('/admin/logs') || pathname.startsWith('/admin/finance'))) return null;
-  const navItems = user.role === 'admin' ? ALL_NAV : STAFF_NAV;
+  const navItems = navFor(user.role);
 
   return (
     <div className={`admin-layout ${collapsed ? 'sidebar-collapsed' : ''}`}>
@@ -275,8 +273,8 @@ export default function AdminLayout({ children }) {
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user.full_name}</div>
-                <div style={{ fontSize: '0.7rem', color: user.role === 'admin' ? '#92400e' : '#0369a1', fontWeight: 600 }}>
-                  {user.role === 'admin' ? '👑 Admin' : '👤 Nhân viên'}
+                <div style={{ fontSize: '0.7rem', color: user.role === 'admin' ? '#92400e' : user.role === 'manager' ? '#6d28d9' : '#0369a1', fontWeight: 600 }}>
+                  {roleLabel(user.role)}
                 </div>
               </div>
               <button onClick={handleLogout} title="Đăng xuất"

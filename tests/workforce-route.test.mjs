@@ -11,6 +11,7 @@ import * as payrollMonth from '../src/lib/payrollMonth.mjs';
 import * as clockApply from '../src/lib/clockApply.mjs';
 import * as faceCheck from '../src/lib/faceCheck.mjs';
 import * as departure from '../src/lib/staffDeparture.mjs';
+import * as roles from '../src/lib/staffRoles.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
 
 const source = readFileSync(new URL('../src/app/api/admin/workforce/route.js', import.meta.url), 'utf8')
@@ -36,7 +37,7 @@ function load(state, user, { now, internetAhead = 0 } = {}) {
     static now() { return at; }
   }
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...pin, ...token, ...rules, ...payroll, ...payrollMonth, ...clockApply, ...faceCheck, ...departure, createHmac, randomUUID, timingSafeEqual, Buffer, URL, Number, Math, String, JSON, Promise,
+    NextResponse, ...pin, ...token, ...rules, ...payroll, ...payrollMonth, ...clockApply, ...faceCheck, ...departure, ...roles, createHmac, randomUUID, timingSafeEqual, Buffer, URL, Number, Math, String, JSON, Promise,
     Date: now ? FixedDate : Date,
     readKioskQrToken: (t, s, n) => token.readKioskQrToken(t, s, n ?? at),
     onKioskNetwork: (ip, k, n) => rules.onKioskNetwork(ip, k, n ?? at),
@@ -390,6 +391,12 @@ test('PINs are stored hashed and plain old PINs can be hashed by the server job'
   assert.ok(pin.isHashedPin(lan.pin) && pin.pinMatches(lan.pin, lan.id, '4321', SECRET));
   assert.equal((await post(admin, { action: 'create_account', full_name: 'Lan 2', phone: '0922222222', pin: '4321' })).status, 409, 'phone must be unique');
   assert.equal((await post(admin, { action: 'set_pin', staff_id: lan.id, pin: '12' })).status, 400, 'PIN is 4–8 digits');
+  assert.equal((await post(admin, { action: 'set_role', staff_id: lan.id, role: 'manager' })).status, 200);
+  assert.equal(lan.role, 'manager', 'owner can make someone a manager');
+  assert.equal((await post(admin, { action: 'set_role', staff_id: lan.id, role: 'owner' })).status, 200);
+  assert.equal(lan.role, 'staff', 'unknown roles fall back to staff');
+  assert.equal((await post(admin, { action: 'set_role', staff_id: ADMIN.id, role: 'staff' })).status, 400, 'no changing your own role');
+  assert.equal((await post(load(state, STAFF), { action: 'set_role', staff_id: lan.id, role: 'admin' })).status, 403, 'staff cannot change roles');
 
   const nobody = load(state, null);
   assert.equal((await post(nobody, { action: 'hash_all_pins' })).status, 401);
