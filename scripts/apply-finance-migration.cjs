@@ -182,6 +182,13 @@ async function main() {
   if (!vouchers.table_ok || !vouchers.redeem_ok || !vouchers.keys_ok || vouchers.voucher_triggers !== 3 || vouchers.settings < 9 || !vouchers.settings_locked
     || !vouchers.anon_blocked || !vouchers.keys_hidden || !vouchers.anon_cannot_redeem) throw new Error('Chưa cài đủ phần voucher.');
 
+  // Vai trò Quản lý (staff_manager_role.sql): cột staff.role nhận thêm 'manager'.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'staff_manager_role.sql'), 'utf8'));
+  const [roles] = await query(`SELECT position('manager' in pg_get_constraintdef(oid)) > 0 AS manager_ok
+    FROM pg_constraint WHERE conname = 'staff_role_check' AND conrelid = 'public.staff'::regclass`);
+  console.log(JSON.stringify(roles));
+  if (!roles?.manager_ok) throw new Error('Chưa thêm được vai trò Quản lý.');
+
   // Băm mã PIN còn lưu chữ thường (web đang chạy ở 127.0.0.1:3000 làm việc này).
   const crypto = require('node:crypto');
   const serverKey = crypto.createHmac('sha256', key).update('staff-maintenance').digest('hex');

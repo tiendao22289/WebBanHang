@@ -8,6 +8,7 @@ import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeS
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
 import { unlockSpeech } from '@/lib/speak';
+import { ROLES, normalizeRole, roleLabel } from '@/lib/staffRoles.mjs';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users } from 'lucide-react';
 import './payroll.css';
 
@@ -661,6 +662,13 @@ export default function PayrollPage() {
     alert('Đã cập nhật PIN!');
   };
 
+  const handleSetRole = async (s, role) => {
+    if (role === normalizeRole(s.role)) return;
+    if (!confirm(`Đổi ${s.full_name} thành ${roleLabel(role)}?`)) return;
+    try { await workforce('set_role', { staff_id: s.id, role }); } catch (err) { return alert(err.message); }
+    fetchAll();
+  };
+
   const handleDeleteAccount = async (staffId, name) => {
     if (!confirm(`Xoá tài khoản "${name}"? Hành động này không thể hoàn tác.`)) return;
     try { await workforce('delete_account', { staff_id: staffId }); }
@@ -1104,7 +1112,7 @@ export default function PayrollPage() {
       </div>
       {currentUser && (
         <div className="payroll-who">
-          <span>{currentUser.role === 'admin' ? '👑' : '👤'} {currentUser.full_name} · {currentUser.role === 'admin' ? 'Admin' : 'Nhân viên'}</span>
+          <span>{roleLabel(currentUser.role)} · {currentUser.full_name}</span>
           {loading ? <span>· đang cập nhật…</span> : lastSyncedAt && <span>· cập nhật {lastSyncedAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>}
           <button onClick={logout} title="Đăng xuất">🚪 Thoát</button>
         </div>
@@ -1995,6 +2003,7 @@ export default function PayrollPage() {
                     <label>Vai trò</label>
                     <select value={accForm.role} onChange={e => setAccForm(p => ({ ...p, role: e.target.value }))}>
                       <option value="staff">Nhân viên</option>
+                      <option value="manager">Quản lý</option>
                       <option value="admin">Admin</option>
                     </select>
                   </div>
@@ -2009,9 +2018,12 @@ export default function PayrollPage() {
                     <div style={{ minWidth: 140 }}>
                       <div style={{ fontWeight: 700 }}>{s.full_name}</div>
                       <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div>
-                      <span style={{ display: 'inline-block', marginTop: 4, fontSize: '0.7rem', fontWeight: 700, padding: '1px 7px', borderRadius: 4, background: s.role === 'admin' ? '#fef9c3' : '#f0f9ff', color: s.role === 'admin' ? '#92400e' : '#0369a1' }}>
-                        {s.role === 'admin' ? '👑 Admin' : '👤 NV'}
-                      </span>
+                      {s.id === currentUser?.id
+                        ? <span style={{ display: 'inline-block', marginTop: 4, fontSize: '0.7rem', fontWeight: 700, padding: '1px 7px', borderRadius: 4, background: '#fef9c3', color: '#92400e' }}>{roleLabel(s.role)}</span>
+                        : <select value={normalizeRole(s.role)} onChange={e => handleSetRole(s, e.target.value)} aria-label={`Vai trò của ${s.full_name}`}
+                            style={{ display: 'block', marginTop: 4, fontSize: '0.75rem', fontWeight: 700, padding: '2px 6px', borderRadius: 6, border: '1px solid #cbd5e1', background: s.role === 'admin' ? '#fef9c3' : s.role === 'manager' ? '#f5f3ff' : '#f0f9ff', color: s.role === 'admin' ? '#92400e' : s.role === 'manager' ? '#6d28d9' : '#0369a1' }}>
+                            {ROLES.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
+                          </select>}
                     </div>
                     <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 140 }}>
                       <label>Đổi PIN mới</label>
