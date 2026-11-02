@@ -13,6 +13,7 @@ import { KindTag, isOtherLine, newOtherLine } from './NoteKinds';
 import OtherCosts from './OtherCosts';
 import { MoneyInput, NoteItemsList, Section, TripSummary, vnd } from './NewNoteParts';
 import { allOpenDebts, fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
+import { seesAllNotes } from '@/lib/staffRoles.mjs';
 
 // Chỉ tính tiền thừa của phiếu từ tháng 10/2026 (khớp ô "Trả lại chủ" của tháng; phiếu cũ hơn đã trả chủ).
 const LEFTOVER_SINCE = '2026-10-01';
@@ -1201,11 +1202,11 @@ export default function StaffNotesPage() {
 
   // ── Logged In ──
   const filteredByDate = filterNotesByDate(
-    notes.filter(n => currentUser.role !== 'admin' || selectedStaff === 'ALL' || n.staff?.full_name === selectedStaff)
+    notes.filter(n => !seesAllNotes(currentUser.role) || selectedStaff === 'ALL' || n.staff?.full_name === selectedStaff)
   );
   // Thống kê theo khoảng ngày đang lọc: trả nợ tính vào ngày trả (không phải ngày mua),
   // "Còn nợ" là tổng nợ còn lại tính tới cuối khoảng (cả nợ cũ).
-  const staffNotes = notes.filter(n => currentUser.role !== 'admin' || selectedStaff === 'ALL' || n.staff?.full_name === selectedStaff);
+  const staffNotes = notes.filter(n => !seesAllNotes(currentUser.role) || selectedStaff === 'ALL' || n.staff?.full_name === selectedStaff);
   const summary = notesSummary(staffNotes, payments, filterRange(filterDay, filterMonth, filterYear));
   const totalInputAmount = summary.given;
   const totalSpent = summary.cash;
@@ -1297,8 +1298,8 @@ export default function StaffNotesPage() {
         </button>
         </div>
 
-        {/* ── Staff Filter (admin only) — gộp trong date filter bar ── */}
-        {currentUser.role === 'admin' && (
+        {/* ── Staff Filter (admin, quản lý) — gộp trong date filter bar ── */}
+        {seesAllNotes(currentUser.role) && (
           <div style={{ display: 'flex', gap: 8, overflowX: 'auto', scrollbarWidth: 'none' }}>
             {['ALL', ...Array.from(new Set(notes.map(n => n.staff?.full_name).filter(Boolean)))].map(name => (
               <button
@@ -1317,7 +1318,7 @@ export default function StaffNotesPage() {
       </div>
 
       {/* ══ BẢNG CÔNG (employee only) ══ */}
-      {activeNotesTab === 'cong' && currentUser.role !== 'admin' && (
+      {activeNotesTab === 'cong' && !seesAllNotes(currentUser.role) && (
         <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
           {/* Chấm công */}
           <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
@@ -1383,8 +1384,8 @@ export default function StaffNotesPage() {
       )}
 
       {/* ══ NOTES content ══ */}
-      {/* ── Chủ quán: tab Phiếu / Chi khác ── */}
-      {currentUser.role === 'admin' && (
+      {/* ── Chủ quán, quản lý: tab Phiếu / Chi khác ── */}
+      {seesAllNotes(currentUser.role) && (
         <div className="kind-tabs notes-admin-tabs" role="tablist" aria-label="Sổ tay">
           {[['notes', '📋 Phiếu đi chợ', `${filteredByDate.length} phiếu`], ['other', '📦 Chi khác', `${noteCategories.length} loại`]].map(([key, label, sub]) => (
             <button key={key} type="button" role="tab" aria-selected={adminTab === key} className={adminTab === key ? 'on' : ''} onClick={() => setAdminTab(key)}>
@@ -1392,11 +1393,11 @@ export default function StaffNotesPage() {
             </button>))}
         </div>
       )}
-      {currentUser.role === 'admin' && adminTab === 'other' && (
-        <OtherCosts notes={filteredByDate} categories={noteCategories} filterLabel={filterLabel} onCategories={setNoteCategories} />
+      {seesAllNotes(currentUser.role) && adminTab === 'other' && (
+        <OtherCosts notes={filteredByDate} categories={noteCategories} filterLabel={filterLabel} onCategories={setNoteCategories} canEdit={currentUser.role === 'admin'} />
       )}
 
-      {(currentUser.role === 'admin' ? adminTab === 'notes' : activeNotesTab === 'notes') && (<>
+      {(seesAllNotes(currentUser.role) ? adminTab === 'notes' : activeNotesTab === 'notes') && (<>
 
 
 
@@ -1408,7 +1409,7 @@ export default function StaffNotesPage() {
             <FileText size={14} style={{ color: '#4f46e5' }} />
             <span style={{ fontWeight: 700, fontSize: 12, color: '#1e1b4b' }}>Thống kê · {filterLabel}</span>
           </div>
-          {selectedStaff !== 'ALL' && currentUser.role === 'admin' && (
+          {selectedStaff !== 'ALL' && seesAllNotes(currentUser.role) && (
             <span style={{ fontSize: 10, background: '#e0e7ff', color: '#4338ca', padding: '2px 7px', borderRadius: 6, fontWeight: 600 }}>{selectedStaff}</span>
           )}
         </div>
@@ -1462,7 +1463,7 @@ export default function StaffNotesPage() {
         ) : (
           <div className="notes-masonry">
             {filteredByDate.map(note => {
-              const staffName = currentUser.role === 'admin' ? (note.staff?.full_name || 'Không rõ') : 'Báo cáo của bạn';
+              const staffName = seesAllNotes(currentUser.role) ? (note.staff?.full_name || 'Không rõ') : 'Báo cáo của bạn';
               const debtRemaining = (note.debt || 0) - (note.paid_debt || 0);
               const hasDebt = debtRemaining > 0;
               const debtCleared = note.paid_debt > 0 && debtRemaining === 0;
@@ -1591,7 +1592,7 @@ export default function StaffNotesPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <h3 style={{ fontWeight: 700, fontSize: 16, color: '#111827', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {currentUser.role === 'admin' ? (viewingNote.staff?.full_name || 'Không rõ') : 'Báo cáo của bạn'}
+                    {seesAllNotes(currentUser.role) ? (viewingNote.staff?.full_name || 'Không rõ') : 'Báo cáo của bạn'}
                   </h3>
                   <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{formatDate(viewingNote.created_at)}</div>
                 </div>
@@ -1863,8 +1864,8 @@ export default function StaffNotesPage() {
         </div>
       )}
 
-      {/* ── FAB: nút Ghi chú cố định (không kéo thả) ── */}
-      {currentUser.role === 'admin' && (
+      {/* ── FAB: nút Ghi chú cố định (không kéo thả) — admin, quản lý ── */}
+      {seesAllNotes(currentUser.role) && (
         <button
           onClick={() => setShowAddModal(true)}
           aria-label="Thêm mới"

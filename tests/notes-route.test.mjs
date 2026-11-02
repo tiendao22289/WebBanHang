@@ -6,6 +6,7 @@ import * as math from '../src/lib/notesMath.mjs';
 import { noteLeftover, noteMoney, openDebtLines } from '../src/lib/notesDebts.mjs';
 import * as categoriesLib from '../src/lib/noteCategories.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
+import { seesAllNotes } from '../src/lib/staffRoles.mjs';
 
 const source = readFileSync(new URL('../src/app/api/admin/notes/route.js', import.meta.url), 'utf8')
   .replace(/^import [\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
@@ -15,7 +16,7 @@ const STAFF = { id: '00000000-0000-4000-8000-00000000bbbb', full_name: 'Thy', ro
 function load(state, user = ADMIN) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...math, ...categoriesLib, openDebtLines, noteLeftover, noteMoney, crypto: globalThis.crypto, Object, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
+    NextResponse, ...math, ...categoriesLib, seesAllNotes, openDebtLines, noteLeftover, noteMoney, crypto: globalThis.crypto, Object, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
     getStaffSession: async () => ({ code: 200, user }), staffDatabase: () => fakeDb(state),
   });
 }
@@ -110,6 +111,23 @@ test('staff only touch their own notes on the day; only admins delete', async ()
   assert.deepEqual(list.body.notes.map(n => n.staff_id), [STAFF.id], 'staff only see their own notes');
   assert.equal((await post(load(state), { action: 'delete', id: state.staff_notes[1].id })).status, 200);
   assert.equal(state.staff_notes.length, 1);
+});
+
+test('managers see and edit all notes, but cannot delete notes or change kinds', async () => {
+  const MANAGER = { id: '00000000-0000-4000-8000-00000000cccc', full_name: 'Thùy', role: 'manager' };
+  const state = { staff_notes: [
+    { id: '00000000-0000-4000-8000-000000000001', staff_id: ADMIN.id, note_type: 'other', content: 'x', amount: 0, debt: 0, created_at: new Date().toISOString() },
+    { id: '00000000-0000-4000-8000-000000000002', staff_id: STAFF.id, note_type: 'other', content: 'cũ', amount: 0, debt: 0, created_at: new Date(Date.now() - 3 * 86400000).toISOString() },
+  ], staff_note_payments: [] };
+  const manager = load(state, MANAGER);
+  const list = plain(await manager.GET({}));
+  assert.equal(list.body.notes.length, 2, 'managers see the whole shop');
+  assert.equal((await post(manager, { action: 'edit', id: state.staff_notes[1].id, note_type: 'other', note: 'sửa' })).status, 200);
+  assert.equal(state.staff_notes[1].content, 'sửa');
+  assert.equal((await post(manager, { action: 'delete', id: state.staff_notes[1].id })).status, 403);
+  assert.equal((await post(manager, { action: 'set_categories', categories: [{ name: 'Xăng' }] })).status, 403);
+  assert.equal((await post(manager, { action: 'create', note_type: 'other', note: 'mua đá' })).status, 200);
+  assert.equal(state.staff_notes.at(-1).staff_id, MANAGER.id);
 });
 
 test('leftover money from an earlier trip can pay old debts, and can be marked as handed back', async () => {
