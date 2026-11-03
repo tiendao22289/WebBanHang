@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
-import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, workDayOf } from '@/lib/attendanceRules.mjs';
+import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
 import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
@@ -39,6 +39,58 @@ const baseText = c => (hourOnly(c) ? rateText(c) : [formatMoney(c.base), rateTex
 const daysText = c => (c.rule !== 'days' ? `${c.workDays} ngày`
   : hourOnly(c) ? `${durationText(c.hourly.minutes)} trong ca (${fmtNum(c.workUnits)} ngày)`
     : `${fmtNum(c.dayUnits ?? c.workUnits)} / ${c.standardDays || STANDARD_DAYS} ngày${c.hourly?.minutes ? ` + ${durationText(c.hourly.minutes)} theo giờ` : ''}`);
+// Giờ trong ngày: 00:00 là nửa đêm, 12:00 là trưa (ô giờ của trình duyệt có máy hiện SA/CH, dễ chọn nhầm 12:00 trưa thay 00:00).
+const partOfDay = t => {
+  if (!validTime(t)) return '';
+  const [h, m] = t.split(':').map(Number);
+  if (!h && !m) return 'nửa đêm';
+  return h < 5 ? 'đêm' : h < 11 ? 'sáng' : h < 13 ? 'trưa' : h < 18 ? 'chiều' : 'tối';
+};
+// Ca dài bao lâu: giờ hết ca trước (hoặc đúng) giờ vào ca là sang hôm sau. 14:00 → 00:00 = 10 tiếng.
+const shiftSpan = (start, end) => {
+  if (!validTime(start) || !validTime(end) || start === end) return null;
+  const min = t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
+  const minutes = (min(end) - min(start) + 1440) % 1440, h = Math.floor(minutes / 60), m = minutes % 60;
+  const night = end < start ? (end === '00:00' ? ', hết ca lúc nửa đêm' : `, qua nửa đêm, hết ca ${end} hôm sau`) : '';
+  return { minutes, long: minutes > 14 * 60, text: `${h} tiếng${m ? ` ${m} phút` : ''}${night}` };
+};
+function SpanNote({ start, end, label = 'Ca dài' }) {
+  const span = shiftSpan(start, end);
+  if (!span) return null;
+  return <span style={{ fontSize: '0.78rem', fontWeight: 600, color: span.long ? '#dc2626' : '#475569' }}>
+    {span.long ? '⚠ ' : ''}{label} {span.text}{span.long ? ' — kiểm tra lại giờ hết ca' : ''}
+  </span>;
+}
+// Ô giờ 24 giờ (giờ 00–23, phút 5 phút một nấc) kèm chữ sáng / trưa / chiều / tối / nửa đêm.
+const pad2 = n => String(n).padStart(2, '0');
+function Time24({ value, onChange, step = 5 }) {
+  const [h, m] = (validTime(value) ? value : '00:00').split(':');
+  const minutes = [...new Set([...Array.from({ length: 60 / step }, (_, i) => pad2(i * step)), m])].sort();
+  const box = { padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.86rem', background: 'white', fontVariantNumeric: 'tabular-nums' };
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
+      <select aria-label="Giờ" value={h} onChange={e => onChange(`${e.target.value}:${m}`)} style={box}>
+        {Array.from({ length: 24 }, (_, i) => <option key={i} value={pad2(i)}>{pad2(i)}</option>)}
+      </select>
+      <strong>:</strong>
+      <select aria-label="Phút" value={m} onChange={e => onChange(`${h}:${e.target.value}`)} style={box}>
+        {minutes.map(x => <option key={x} value={x}>{x}</option>)}
+      </select>
+      <span style={{ fontSize: '0.76rem', color: '#64748b' }}>{partOfDay(value)}</span>
+    </span>
+  );
+}
+// Ngày + giờ 24h ('YYYY-MM-DDTHH:MM', giờ trên máy) cho ô sửa / thêm ca, thay ô datetime-local (có máy hiện SA/CH).
+function DateTime24({ value, onChange }) {
+  const [d, t] = String(value || '').split('T');
+  return (
+    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+      <input type="date" value={d || ''} onChange={e => onChange(`${e.target.value}T${t || '00:00'}`)}
+        style={{ padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem' }} />
+      <Time24 value={t || '00:00'} step={1} onChange={v => onChange(`${d || vnToday()}T${v}`)} />
+    </span>
+  );
+}
 const typedMoney = v => { const raw = String(v ?? '').replace(/\./g, '').replace(/\D/g, ''); return raw ? Number(raw).toLocaleString('vi-VN') : ''; };
 const shownMoney = n => (Number(n) > 0 ? Number(n).toLocaleString('vi-VN') : '');
 const smallBtn = { fontSize: '0.75rem', padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, whiteSpace: 'nowrap' };
@@ -660,6 +712,190 @@ export default function PayrollPage() {
     alert(pay.changed ? `Đã lưu! Từ ${ddmm(pay.from)} ${pay.type === 'hour' ? `trả theo giờ ${formatMoney(pay.rate)}/giờ` : 'trả theo tháng'}.` : 'Đã lưu cấu hình!');
   };
 
+  // --- Hộp "Sửa" của một người trong Bảng lương: sửa mọi thứ làm nên số lương, máy tự tính lại ---
+  const [drafts, setDrafts] = useState({});
+  const draftOf = (key, init) => drafts[key] ?? init;
+  const setDraft = (key, value) => setDrafts(d => ({ ...d, [key]: value }));
+  const dropDrafts = prefix => setDrafts(d => Object.fromEntries(Object.entries(d).filter(([k]) => !k.startsWith(prefix))));
+  const editAction = async (action, body, confirmText, prefix) => {
+    if (confirmText && !confirm(confirmText)) return false;
+    try { await workforce(action, body); } catch (err) { alert(err.message); return false; }
+    if (prefix) dropDrafts(prefix);
+    fetchAll();
+    return true;
+  };
+  const localDT = ts => (ts ? new Date(new Date(ts) - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
+  const isoOf = v => (v ? new Date(v).toISOString() : null);
+  const payEditor = s => {
+    const live = calcSalary(s.id), closed = closeOf(s.id), pay = hourlyEditOf(s.id);
+    const edit = configEdits[s.id] || { base_salary: 0, overtime_rate: 25000, pay_day: 5 };
+    const atts = attendance.filter(a => a.staff_id === s.id);
+    const mine = requests.filter(r => r.staff_id === s.id && r.month === selMonth && r.year === selYear && r.status !== 'rejected');
+    const advances = mine.filter(r => r.request_type === 'advance'), absences = mine.filter(r => r.request_type === 'absent');
+    const fines = violations.filter(v => v.staff_id === s.id);
+    const bonus = approvedBonusOf(s.id);
+    const leaveOf = id => (payrollMonth.leaveDays || []).find(l => l.request_id === id);
+    const fineDate = id => payrollMonth.violationMeta.find(m => m.violation_id === id)?.fine_date || null;
+    // Ngày mặc định khi thêm: hôm nay nếu đang xem tháng này, không thì ngày 1 của tháng đang xem.
+    const day = vnToday().slice(0, 7) === `${selYear}-${fmt(selMonth)}` ? vnToday() : `${selYear}-${fmt(selMonth)}-01`;
+    const shift = shiftOf(rules, s.id, day);
+    const nextDay = d => new Date(Date.parse(`${d}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+    const box = { padding: '5px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', background: 'white' };
+    const section = { background: 'white', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px', marginBottom: 8 };
+    const row = { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '6px 0', borderTop: '1px solid #f1f5f9', fontSize: '0.82rem' };
+    const label = { display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.75rem', fontWeight: 600, color: '#475569' };
+    const head = t => <div style={{ fontWeight: 800, fontSize: '0.85rem', marginBottom: 4 }}>{t}</div>;
+    const btn = (text, onClick, kind) => (
+      <button onClick={onClick} style={{ ...smallBtn, ...(kind === 'dark' ? { background: '#111827', borderColor: '#111827', color: 'white' } : kind === 'red' ? { color: '#dc2626', borderColor: '#fecaca', background: '#fff5f5' } : {}) }}>{text}</button>
+    );
+    const moneyIn = (key, init, placeholder = 'Số tiền') => (
+      <input style={{ ...box, width: 110 }} inputMode="numeric" placeholder={placeholder} value={typedMoney(draftOf(key, init))} onChange={e => setDraft(key, e.target.value.replace(/\D/g, ''))} />
+    );
+    const textIn = (key, placeholder, width = 180) => <input style={{ ...box, width }} placeholder={placeholder} value={draftOf(key, '')} onChange={e => setDraft(key, e.target.value)} />;
+    const dateIn = (key, init) => <input type="date" style={box} value={draftOf(key, init)} onChange={e => setDraft(key, e.target.value)} />;
+    const newIn = draftOf(`att:${s.id}:in`, `${day}T${shift.start}`), newOut = draftOf(`att:${s.id}:out`, `${shift.end <= shift.start ? nextDay(day) : day}T${shift.end}`);
+    return (
+      <div style={{ background: '#f8fafc', borderTop: '1px solid #e2e8f0', padding: '10px 12px' }}>
+        <div style={{ fontSize: '0.8rem', color: '#334155', marginBottom: 8, lineHeight: 1.6 }}>
+          ✏️ <strong>Sửa lương tháng {selMonth}/{selYear} — {s.full_name}</strong>. Sửa ở đây thì ngày công, giờ làm, tăng ca và thực lĩnh tự tính lại.
+          {' '}Hiện tính ra: <strong>{daysText(live)}</strong> → {formatMoney(live.basePay)}, tăng ca {formatMoney(live.otAmt)}, thực lĩnh <strong>{formatMoney(live.net)}</strong>.
+          {closed && <div style={{ color: '#b45309' }}>🔒 Tháng này đã chốt lương cho người này: sửa xong thì bấm Mở chốt rồi chốt lại để lấy số mới.</div>}
+        </div>
+
+        <div style={section}>
+          {head('💰 Lương')}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <label style={label}>Trả lương
+              <select style={box} value={pay.type} onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, type: e.target.value } }))}>
+                <option value="month">Theo tháng</option>
+                <option value="hour">Theo giờ</option>
+              </select>
+            </label>
+            {pay.type === 'hour'
+              ? <label style={label}>Lương 1 giờ<input style={{ ...box, width: 110 }} inputMode="numeric" placeholder="25.000" value={typedMoney(pay.rate)} onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, rate: e.target.value.replace(/\D/g, '') } }))} /></label>
+              : <label style={label}>Lương cơ bản<input style={{ ...box, width: 120 }} inputMode="numeric" placeholder="5.000.000" value={typedMoney(edit.base_salary)} onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, base_salary: e.target.value.replace(/\D/g, '') || 0 } }))} /></label>}
+            {pay.changed && <label style={label}>Áp dụng từ<input type="date" style={box} value={pay.from} min={`${vnToday().slice(0, 7)}-01`} onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, from: e.target.value } }))} /></label>}
+            <label style={label}>Giá tăng ca/giờ<input style={{ ...box, width: 90 }} inputMode="numeric" value={edit.overtime_rate ?? 25000} onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value.replace(/\D/g, '') } }))} /></label>
+            {btn('Lưu lương', () => handleSaveConfig(s.id), 'dark')}
+          </div>
+        </div>
+
+        <div style={section}>
+          {head(`🕒 Chấm công (${atts.length} lượt)`)}
+          {atts.length === 0 && <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Chưa có lượt chấm công nào trong tháng.</div>}
+          {atts.map(a => {
+            const isEd = editingAtt?.id === a.id, h = hoursOf(a), outside = h.earlyMs + h.stayMs, review = reviewMap[a.id];
+            const flags = [...rowFlags(a)].filter(Boolean);
+            return (
+              <div key={a.id} style={{ ...row, background: isEd ? '#eff6ff' : undefined }}>
+                <strong style={{ minWidth: 92 }}>{dateLabel(a)}</strong>
+                <span>{a.clock_in ? hhmm(a.clock_in) : '—'} → {a.clock_out ? hhmm(a.clock_out) : 'chưa ra'}</span>
+                <span style={{ color: '#16a34a', fontWeight: 600 }}>{a.clock_out ? hoursText(Date.parse(a.clock_out) - Date.parse(a.clock_in)) : 'đang làm'}</span>
+                <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                  {isEd ? btn('Huỷ', () => setEditingAtt(null)) : btn('✏️ Sửa giờ', () => setEditingAtt({ ...a, clock_in: localDT(a.clock_in), clock_out: localDT(a.clock_out) }))}
+                  {btn('🗑 Xoá', () => editAction('delete_attendance', { id: a.id }, `Xoá lượt ${dateLabel(a)} ${a.clock_in ? hhmm(a.clock_in) : ''} → ${a.clock_out ? hhmm(a.clock_out) : 'chưa ra'}? Giờ làm của lượt này sẽ không tính lương.`), 'red')}
+                </span>
+                {flags.length > 0 && <div style={{ flexBasis: '100%', fontSize: '0.75rem', color: '#c2410c' }}>⚠ {flags.join(' · ')}</div>}
+                {outside > 0 && a.clock_out && (
+                  <div style={{ flexBasis: '100%', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.78rem' }}>
+                    <span>Ngoài ca {durationText(outside / 60000)}: <strong>{review ? (review.status === 'approved' ? 'đã cho tính' : 'không tính') : 'chờ duyệt'}</strong></span>
+                    {review?.status !== 'approved' && btn('Cho tính', () => editAction('decide_extra', { attendance_id: a.id, status: 'approved' }))}
+                    {review?.status !== 'rejected' && btn('Không tính', () => editAction('decide_extra', { attendance_id: a.id, status: 'rejected' }))}
+                  </div>
+                )}
+                {isEd && (
+                  <div style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    <label style={label}>Giờ vào<DateTime24 value={editingAtt.clock_in || ''} onChange={v => setEditingAtt(p => ({ ...p, clock_in: v }))} /></label>
+                    <label style={label}>Giờ ra<DateTime24 value={editingAtt.clock_out || ''} onChange={v => setEditingAtt(p => ({ ...p, clock_out: v }))} /></label>
+                    <label style={label}>Ghi chú<input style={{ ...box, width: 160 }} value={editingAtt.note || ''} placeholder="Lý do sửa…" onChange={e => setEditingAtt(p => ({ ...p, note: e.target.value }))} /></label>
+                    {btn('💾 Lưu giờ', handleSaveAttEdit, 'dark')}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div style={{ ...row, alignItems: 'flex-end' }}>
+            <strong style={{ flexBasis: '100%', fontSize: '0.78rem' }}>+ Thêm lượt (nhân viên quên quét cả lúc vào)</strong>
+            <label style={label}>Vào<DateTime24 value={newIn} onChange={v => setDraft(`att:${s.id}:in`, v)} /></label>
+            <label style={label}>Ra<DateTime24 value={newOut} onChange={v => setDraft(`att:${s.id}:out`, v)} /></label>
+            {textIn(`att:${s.id}:note`, 'Ghi chú (vd: quên quét mã)', 170)}
+            {btn('Thêm lượt', () => editAction('add_attendance', { staff_id: s.id, clock_in: isoOf(newIn), clock_out: isoOf(newOut), note: draftOf(`att:${s.id}:note`, '') }, null, `att:${s.id}:`), 'dark')}
+          </div>
+        </div>
+
+        <div style={section}>
+          {head(`💵 Ứng lương (${formatMoney(advances.filter(r => r.status === 'approved').reduce((t, r) => t + Number(r.amount || 0), 0))})`)}
+          {advances.map(r => {
+            const key = `adv:${r.id}`, changed = drafts[key] !== undefined && Number(drafts[key]) !== Number(r.amount);
+            return (
+              <div key={r.id} style={row}>
+                <span style={{ minWidth: 42, color: '#64748b' }}>{ddmm(new Date(Date.parse(r.created_at) + 7 * 3600000).toISOString().slice(0, 10))}</span>
+                <span style={{ flex: 1, minWidth: 120 }}>{r.reason}{r.status === 'pending' ? <strong style={{ color: '#b45309' }}> · chờ duyệt</strong> : ''}</span>
+                {moneyIn(key, String(r.amount || ''))}
+                {changed && btn('Lưu', () => editAction('edit_request', { id: r.id, amount: drafts[key] }, null, key), 'dark')}
+                {r.status === 'pending' && btn('Duyệt', () => editAction('decide_request', { id: r.id, status: 'approved' }))}
+                {btn('Xoá', () => editAction('delete_request', { id: r.id }, `Xoá khoản ứng ${formatMoney(r.amount)} (${r.reason})?`), 'red')}
+              </div>
+            );
+          })}
+          <div style={row}>
+            {moneyIn(`newadv:${s.id}:amount`, '')}
+            {dateIn(`newadv:${s.id}:date`, day)}
+            {textIn(`newadv:${s.id}:reason`, 'Lý do (vd: ứng tiền mặt)', 160)}
+            {btn('+ Ghi ứng lương', () => (draftOf(`newadv:${s.id}:amount`, '') ? editAction('add_advance', { staff_id: s.id, amount: draftOf(`newadv:${s.id}:amount`, ''), date: draftOf(`newadv:${s.id}:date`, day), reason: draftOf(`newadv:${s.id}:reason`, '') }, null, `newadv:${s.id}:`) : alert('Nhập số tiền ứng.')), 'dark')}
+          </div>
+        </div>
+
+        <div style={section}>
+          {head(`⚠️ Phạt (${formatMoney(fines.reduce((t, v) => t + Number(v.amount || 0), 0))})`)}
+          {fines.map(v => {
+            const key = `fine:${v.id}`, changed = drafts[key] !== undefined && Number(drafts[key]) !== Number(v.amount);
+            return (
+              <div key={v.id} style={row}>
+                <span style={{ minWidth: 42, color: '#64748b' }}>{fineDate(v.id) ? ddmm(fineDate(v.id)) : ''}</span>
+                <span style={{ flex: 1, minWidth: 120 }}>{v.reason}</span>
+                {moneyIn(key, String(v.amount || ''))}
+                {changed && btn('Lưu', () => editAction('edit_violation', { id: v.id, amount: drafts[key] }, null, key), 'dark')}
+                {btn('Xoá', () => editAction('delete_violation', { id: v.id }, `Xoá khoản phạt ${formatMoney(v.amount)} (${v.reason})?`), 'red')}
+              </div>
+            );
+          })}
+          <div style={row}>
+            {moneyIn(`newfine:${s.id}:amount`, '')}
+            {dateIn(`newfine:${s.id}:date`, day)}
+            {textIn(`newfine:${s.id}:reason`, 'Lý do phạt', 160)}
+            {btn('+ Ghi phạt', () => (draftOf(`newfine:${s.id}:amount`, '') && draftOf(`newfine:${s.id}:reason`, '').trim()
+              ? editAction('add_violation', { staff_id: s.id, amount: draftOf(`newfine:${s.id}:amount`, ''), date: draftOf(`newfine:${s.id}:date`, day), reason: draftOf(`newfine:${s.id}:reason`, '') }, null, `newfine:${s.id}:`)
+              : alert('Nhập số tiền và lý do phạt.')), 'dark')}
+          </div>
+        </div>
+
+        <div style={section}>
+          {head('⭐ Thưởng chuyên cần')}
+          {bonus || payrollMonth.monthOver ? (
+            <div style={{ ...row, borderTop: 'none' }}>
+              {moneyIn(`bonus:${s.id}`, bonus ? String(bonus.amount) : '')}
+              {btn(bonus ? 'Lưu' : 'Thưởng', () => (draftOf(`bonus:${s.id}`, bonus ? String(bonus.amount) : '') ? editAction('decide_bonus', { staff_id: s.id, year: selYear, month: selMonth, amount: draftOf(`bonus:${s.id}`, bonus ? String(bonus.amount) : '') }, null, `bonus:${s.id}`) : alert('Nhập số tiền thưởng.')), 'dark')}
+              {bonus && btn('Bỏ thưởng', () => editAction('remove_bonus', { staff_id: s.id, year: selYear, month: selMonth }, `Bỏ thưởng chuyên cần của ${s.full_name}?`, `bonus:${s.id}`), 'red')}
+            </div>
+          ) : <div style={{ fontSize: '0.8rem', color: '#64748b' }}>Hết tháng mới duyệt thưởng chuyên cần được.</div>}
+        </div>
+
+        {absences.length > 0 && (
+          <div style={section}>
+            {head('🛌 Đơn báo nghỉ')}
+            {absences.map(r => (
+              <div key={r.id} style={row}>
+                <span style={{ flex: 1, minWidth: 140 }}>{fmtNum(r.days)} ngày{leaveText(leaveOf(r.id))} — {r.reason}{r.status === 'pending' ? <strong style={{ color: '#b45309' }}> · chờ duyệt</strong> : ''}</span>
+                {btn('Xoá đơn', () => editAction('delete_request', { id: r.id }, 'Xoá đơn báo nghỉ này?'), 'red')}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // --- Delete violation ---
   const handleDeleteViolation = async (id, fromHint = false) => {
     if (!confirm(fromHint ? 'Xoá khoản phạt này? Gợi ý phạt sẽ hiện lại để bạn xử lý lại.' : 'Xoá khoản phạt này?')) return;
@@ -801,9 +1037,9 @@ export default function PayrollPage() {
             const fixFormFor = s => fixForm?.attendance_id === s.id && (
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: 10, margin: '6px 0 8px', display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.8rem' }}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>Giờ vào đúng
-                  <input type="datetime-local" value={fixForm.clock_in} onChange={e => setFixForm(p => ({ ...p, clock_in: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} /></label>
+                  <DateTime24 value={fixForm.clock_in} onChange={v => setFixForm(p => ({ ...p, clock_in: v }))} /></label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>Giờ ra đúng
-                  <input type="datetime-local" value={fixForm.clock_out} onChange={e => setFixForm(p => ({ ...p, clock_out: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} /></label>
+                  <DateTime24 value={fixForm.clock_out} onChange={v => setFixForm(p => ({ ...p, clock_out: v }))} /></label>
                 <input type="text" value={fixForm.reason} placeholder="Lý do (vd: quên bấm ra ca, về lúc 23:30)" onChange={e => setFixForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} />
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button onClick={handleSubmitFix} disabled={sending === 'fix'} style={{ flex: 1, padding: 8, background: '#111827', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer', opacity: sending === 'fix' ? 0.6 : 1 }}>{sending === 'fix' ? 'Đang gửi…' : 'Gửi chủ quán duyệt'}</button>
@@ -1323,55 +1559,10 @@ export default function PayrollPage() {
                           <button
                             onClick={() => setExpandedSalaryStaff(expandedSalaryStaff === s.id ? null : s.id)}
                             style={{ width: '100%', marginTop: 4, padding: '7px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f8fafc', border: '1px solid #e2e8f0', borderBottomLeftRadius: 12, borderBottomRightRadius: 12, fontSize: '0.8rem', fontWeight: 700, color: '#1d4ed8', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                            {expandedSalaryStaff === s.id ? '▴ Ẩn chấm công' : '✏️ Sửa chấm công'}
+                            {expandedSalaryStaff === s.id ? '▴ Đóng' : '✏️ Sửa lương & chấm công'}
                           </button>
                         )}
-                        {/* Inline attendance panel for mobile */}
-                        {isAdmin && expandedSalaryStaff === s.id && (() => {
-                          const staffAtts = attendance.filter(a => a.staff_id === s.id);
-                          const toLocalDT = ts => ts ? new Date(new Date(ts) - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
-                          return (
-                            <div style={{ background: '#f8fafc', borderTop: '1px solid #e2e8f0', borderRadius: '0 0 12px 12px', padding: '10px 14px' }}>
-                              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', marginBottom: 8 }}>Chấm công tháng {selMonth}/{selYear}</div>
-                              {staffAtts.length === 0 && <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Chưa có bản ghi chấm công</div>}
-                              {staffAtts.map(a => {
-                                const isEd = editingAtt?.id === a.id;
-                                const tIn  = a.clock_in  ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
-                                const tOut = a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'Chưa ra';
-                                return (
-                                  <div key={a.id} style={{ background: isEd ? '#eff6ff' : 'white', border: `1.5px solid ${isEd ? '#3b82f6' : '#e2e8f0'}`, borderRadius: 8, padding: '8px 10px', marginBottom: 6 }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isEd ? 8 : 0 }}>
-                                      <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>{dateLabel(a)}</span>
-                                       <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{tIn} → {tOut} · {a.clock_out ? `${Math.round(((new Date(a.clock_out) - new Date(a.clock_in)) / 3600000) * 10) / 10}h` : '0h'}</span>
-                                      {!isEd
-                                        ? <button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })} style={{ fontSize: '0.72rem', padding: '2px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 5, cursor: 'pointer' }}>✏️ Sửa</button>
-                                        : <button onClick={() => setEditingAtt(null)} style={{ fontSize: '0.72rem', padding: '2px 8px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 5, cursor: 'pointer', color: '#dc2626' }}>✕ Huỷ</button>
-                                      }
-                                    </div>
-                                    {!isEd && [...rowFlags(a), extraText(a)].some(Boolean) && (
-                                      <div style={{ fontSize: '0.72rem', color: '#c2410c', marginTop: 3 }}>⚠ {[...rowFlags(a), extraText(a)].filter(Boolean).join(' · ')}</div>
-                                    )}
-                                    {isEd && (
-                                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                        {[{label:'Giờ vào',key:'clock_in',type:'datetime-local'},{label:'Giờ ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
-                                          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <span style={{ width: 65, fontSize: '0.76rem', fontWeight: 600, color: '#475569', flexShrink: 0 }}>{label}</span>
-                                            <input type={type} value={editingAtt[key]||''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{ flex:1, padding:'4px 7px', border:'1.5px solid #cbd5e1', borderRadius:6, fontSize:'0.8rem' }}/>
-                                          </div>
-                                        ))}
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                          <span style={{ width: 65, fontSize: '0.76rem', fontWeight: 600, color: '#475569', flexShrink: 0 }}>Ghi chú</span>
-                                          <input type="text" value={editingAtt.note||''} placeholder="Lý do sửa..." onChange={e=>setEditingAtt(p=>({...p,note:e.target.value}))} style={{ flex:1, padding:'4px 7px', border:'1.5px solid #cbd5e1', borderRadius:6, fontSize:'0.8rem' }}/>
-                                        </div>
-                                        <button onClick={handleSaveAttEdit} style={{ padding:'7px', background:'#0f172a', color:'white', border:'none', borderRadius:7, fontWeight:700, fontSize:'0.82rem', cursor:'pointer' }}>💾 Lưu thay đổi</button>
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          );
-                        })()}
+                        {isAdmin && expandedSalaryStaff === s.id && payEditor(s)}
                       </div>
                     );
                   })}
@@ -1413,59 +1604,9 @@ export default function PayrollPage() {
                               style={{ fontSize: '0.75rem', padding: '3px 10px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#1d4ed8', whiteSpace: 'nowrap' }}>{expandedSalaryStaff === s.id ? '▴ Ẩn' : '✏️ Sửa'}</button>
                               <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} compact /></td>}
                           </tr>
-                          {/* Inline attendance sub-panel for desktop */}
-                          {isAdmin && expandedSalaryStaff === s.id && (() => {
-                            const staffAtts = attendance.filter(a => a.staff_id === s.id);
-                            const toLocalDT = ts => ts ? new Date(new Date(ts) - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
-                            return (
-                              <tr><td colSpan="11" style={{ padding: 0, background: '#f8fafc', borderBottom: '2px solid #3b82f6' }}>
-                                <div style={{ padding: '12px 16px' }}>
-                                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b', marginBottom: 8 }}>Chấm công tháng {selMonth}/{selYear} — {s.full_name}</div>
-                                  {staffAtts.length === 0 && <div style={{ color: '#94a3b8', fontSize: '0.82rem' }}>Chưa có bản ghi chấm công</div>}
-                                  {staffAtts.map(a => {
-                                    const isEd = editingAtt?.id === a.id;
-                                    const tIn  = a.clock_in  ? new Date(a.clock_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
-                                    const tOut = a.clock_out ? new Date(a.clock_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : 'Chưa ra';
-                                    return (
-                                      <div key={a.id} style={{ background: isEd ? '#eff6ff' : 'white', border: `1px solid ${isEd ? '#3b82f6' : '#e2e8f0'}`, borderRadius: 8, padding: '8px 12px', marginBottom: 6 }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                                          <span style={{ fontWeight: 700, fontSize: '0.82rem', minWidth: 90 }}>{dateLabel(a)}</span>
-                                          <span style={{ fontSize: '0.8rem', color: '#64748b' }}>{tIn} → {tOut}</span>
-                                          <span style={{ fontSize: '0.8rem', color: '#16a34a', fontWeight: 600 }}>{a.clock_out ? `${Math.round(((new Date(a.clock_out) - new Date(a.clock_in)) / 3600000) * 10) / 10}h làm` : 'Đang làm...'}</span>
-
-                                          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-                                            {!isEd
-                                              ? <button onClick={() => setEditingAtt({ ...a, clock_in: toLocalDT(a.clock_in), clock_out: toLocalDT(a.clock_out) })} style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}>✏️ Sửa</button>
-                                              : <button onClick={() => setEditingAtt(null)} style={{ fontSize: '0.75rem', padding: '3px 10px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, cursor: 'pointer', color: '#dc2626' }}>✕ Huỷ</button>
-                                            }
-                                          </div>
-                                        </div>
-                                        {!isEd && [...rowFlags(a), extraText(a)].some(Boolean) && (
-                                          <div style={{ fontSize: '0.75rem', color: '#c2410c', marginTop: 4 }}>⚠ {[...rowFlags(a), extraText(a)].filter(Boolean).join(' · ')}</div>
-                                        )}
-                                        {isEd && (
-                                          <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
-                                            {[{label:'Giờ vào',key:'clock_in',type:'datetime-local'},{label:'Giờ ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
-                                              <label key={key} style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
-                                                {label}<input type={type} value={editingAtt[key]||''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.8rem'}}/>
-                                              </label>
-                                            ))}
-
-                                            <label style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
-                                              Ghi chú<input type="text" value={editingAtt.note||''} placeholder="Lý do sửa..." onChange={e=>setEditingAtt(p=>({...p,note:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.8rem'}}/>
-                                            </label>
-                                            <div style={{display:'flex',gap:6,alignItems:'flex-end'}}>
-                                              <button onClick={handleSaveAttEdit} style={{padding:'5px 16px',background:'#0f172a',color:'white',border:'none',borderRadius:7,fontWeight:700,fontSize:'0.8rem',cursor:'pointer'}}>💾 Lưu</button>
-                                            </div>
-                                          </div>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </td></tr>
-                            );
-                          })()}
+                          {isAdmin && expandedSalaryStaff === s.id && (
+                            <tr><td colSpan="11" style={{ padding: 0, borderBottom: '2px solid #3b82f6' }}>{payEditor(s)}</td></tr>
+                          )}
                           </React.Fragment>
                         );
                       })}
@@ -1751,8 +1892,7 @@ export default function PayrollPage() {
                                   ].map(({ label, key, type }) => (
                                     <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                       <span style={{ width: 70, fontSize: '0.78rem', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>{label}</span>
-                                      <input type={type} value={editingAtt[key] || ''} onChange={e => setEditingAtt(p => ({ ...p, [key]: e.target.value }))}
-                                        style={{ flex: 1, padding: '5px 8px', border: '1.5px solid #cbd5e1', borderRadius: 7, fontSize: '0.82rem' }} />
+                                      <DateTime24 value={editingAtt[key] || ''} onChange={v => setEditingAtt(p => ({ ...p, [key]: v }))} />
                                     </div>
                                   ))}
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1799,7 +1939,7 @@ export default function PayrollPage() {
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, padding: '8px 4px' }}>
                                       {[{label:'Giờ vào',key:'clock_in',type:'datetime-local'},{label:'Giờ ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
                                         <label key={key} style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
-                                          {label}<input type={type} value={editingAtt[key]||''} onChange={e=>setEditingAtt(p=>({...p,[key]:e.target.value}))} style={{padding:'5px 8px',border:'1.5px solid #cbd5e1',borderRadius:6,fontSize:'0.82rem'}}/>
+                                          {label}<DateTime24 value={editingAtt[key]||''} onChange={v=>setEditingAtt(p=>({...p,[key]:v}))} />
                                         </label>
                                       ))}
                                       <label style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
@@ -1880,9 +2020,9 @@ export default function PayrollPage() {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: '0.86rem' }}>
                     <span>Quán mở</span>
-                    <input type="time" value={hoursEdit.opening_time} onChange={e => setHoursEdit(p => ({ ...p, opening_time: e.target.value }))} style={timeInput} />
+                    <Time24 value={hoursEdit.opening_time} onChange={v => setHoursEdit(p => ({ ...p, opening_time: v }))} />
                     <span>đóng</span>
-                    <input type="time" value={hoursEdit.closing_time} onChange={e => setHoursEdit(p => ({ ...p, closing_time: e.target.value }))} style={timeInput} />
+                    <Time24 value={hoursEdit.closing_time} onChange={v => setHoursEdit(p => ({ ...p, closing_time: v }))} />
                     <span>· cho lệch</span>
                     <input type="number" min="0" max="60" value={hoursEdit.grace_minutes} onChange={e => setHoursEdit(p => ({ ...p, grace_minutes: e.target.value }))} style={{ ...timeInput, width: 64 }} />
                     <span>phút</span>
@@ -1891,12 +2031,13 @@ export default function PayrollPage() {
                         onClick={() => checkinAction('save_checkin_settings', { opening_time: hoursEdit.opening_time, closing_time: hoursEdit.closing_time, grace_minutes: Number(hoursEdit.grace_minutes) })}>Lưu</button>
                     )}
                   </div>
+                  <div style={{ marginTop: 6 }}><SpanNote start={hoursEdit.opening_time} end={hoursEdit.closing_time} label="Quán mở" /></div>
                   <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 8 }}>
                     Tính giờ theo ca từ ngày <strong>{st.hours_from.split('-').reverse().join('/')}</strong>; những ngày trước đó vẫn tính như cũ. Đổi giờ hay đổi ca thì áp dụng từ hôm nay, ngày đã làm giữ giờ cũ.
                   </div>
 
                   <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>Ca riêng từng người</div>
-                  <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 6 }}>Ai làm khác giờ quán (ví dụ 17:00–23:00) thì đặt riêng. Giờ hết ca trước giờ vào ca nghĩa là làm qua nửa đêm.</div>
+                  <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 6 }}>Ai làm khác giờ quán (ví dụ 17:00–23:00) thì đặt riêng. Giờ chọn theo 24 giờ: 00:00 là nửa đêm, 12:00 là trưa. Giờ hết ca trước giờ vào ca nghĩa là làm qua nửa đêm (ví dụ 14:00 → 00:00 là ca 10 tiếng).</div>
                   {staffList.filter(s => !departureOf(s.id) || departureOf(s.id).last_day >= vnToday()).map(s => {
                     const shift = shiftOf(st, s.id, vnToday()), own = shift.own, editing = shiftEdit?.staff_id === s.id;
                     return (
@@ -1904,20 +2045,22 @@ export default function PayrollPage() {
                         <strong style={{ minWidth: 110 }}>{s.full_name}</strong>
                         {editing ? (
                           <>
-                            <input type="time" value={shiftEdit.start} onChange={e => setShiftEdit(p => ({ ...p, start: e.target.value }))} style={timeInput} />
-                            <span>–</span>
-                            <input type="time" value={shiftEdit.end} onChange={e => setShiftEdit(p => ({ ...p, end: e.target.value }))} style={timeInput} />
+                            <Time24 value={shiftEdit.start} onChange={v => setShiftEdit(p => ({ ...p, start: v }))} />
+                            <span>→</span>
+                            <Time24 value={shiftEdit.end} onChange={v => setShiftEdit(p => ({ ...p, end: v }))} />
                             <button className="btn-primary" style={{ marginTop: 0, padding: '5px 12px' }}
                               onClick={async () => { if (await checkinAction('save_shift', { staff_id: s.id, start_time: shiftEdit.start, end_time: shiftEdit.end })) setShiftEdit(null); }}>Lưu</button>
                             <button style={{ fontSize: '0.78rem', padding: '4px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }} onClick={() => setShiftEdit(null)}>Huỷ</button>
+                            <div style={{ flexBasis: '100%' }}><SpanNote start={shiftEdit.start} end={shiftEdit.end} /></div>
                           </>
                         ) : (
                           <>
-                            <span style={{ color: own ? '#1d4ed8' : '#64748b' }}>{shift.start} – {shift.end}{own ? ' (ca riêng)' : ' (giờ quán)'}</span>
+                            <span style={{ color: own ? '#1d4ed8' : '#64748b' }}>{shift.start} {partOfDay(shift.start)} → {shift.end} {partOfDay(shift.end)}{own ? ' (ca riêng)' : ' (giờ quán)'}</span>
                             <button style={{ fontSize: '0.78rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}
                               onClick={() => setShiftEdit({ staff_id: s.id, start: shift.start, end: shift.end })}>Đặt ca riêng</button>
                             {own && <button style={{ fontSize: '0.78rem', padding: '3px 10px', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', textDecoration: 'underline' }}
                               onClick={() => checkinAction('save_shift', { staff_id: s.id, clear: true })}>Dùng giờ quán</button>}
+                            <div style={{ flexBasis: '100%' }}><SpanNote start={shift.start} end={shift.end} /></div>
                           </>
                         )}
                       </div>
