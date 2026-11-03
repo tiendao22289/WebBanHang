@@ -223,7 +223,10 @@ function StaffReport({ date, monthRevenue }) {
     {people.length ? <ul className="tk-people">{people.map(p => {
       const c = p.salary;
       const meta = [
-        c.rule === 'days' ? `${num(c.workUnits)}/${c.standardDays} ngày công` : `${c.workDays} ngày`,
+        // Người trả theo giờ: số giờ trong ca được tính lương thay cho ngày công.
+        c.rule !== 'days' ? `${c.workDays} ngày`
+          : c.hourly && !(c.dayUnits > 0) ? `${minutesText(c.hourly.minutes)} theo giờ (${num(c.workUnits)} ngày)`
+            : `${num(c.dayUnits ?? c.workUnits)}/${c.standardDays} ngày công${c.hourly?.minutes ? ` + ${minutesText(c.hourly.minutes)} theo giờ` : ''}`,
         `${num(c.totalWorkH)} giờ`,
         p.late.count ? <span className="warn">trễ {p.late.count} lần ({minutesText(p.late.minutes)})</span> : null,
         p.leftEarly.count ? `về sớm ${p.leftEarly.count} lần` : null,

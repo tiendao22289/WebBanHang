@@ -31,6 +31,14 @@ async function readAllRows(build) {
   }
 }
 // Ô nhập tiền: chỉ giữ số, chấm hàng nghìn (50.000).
+// Người trả theo giờ (c.hourly): lương "25.000đ/giờ", giờ tính lương "52 giờ 30 phút". Tháng có cả ngày trả theo
+// tháng lẫn theo giờ thì hiện cả hai. Số chốt trước khi có lương theo giờ không có dayUnits / hourly.
+const rateText = c => (c.hourly?.rates?.length ? `${c.hourly.rates.map(formatMoney).join(' / ')}/giờ` : '');
+const hourOnly = c => !!c.hourly && !(c.dayUnits > 0);
+const baseText = c => (hourOnly(c) ? rateText(c) : [formatMoney(c.base), rateText(c)].filter(Boolean).join(' + '));
+const daysText = c => (c.rule !== 'days' ? `${c.workDays} ngày`
+  : hourOnly(c) ? `${durationText(c.hourly.minutes)} trong ca (${fmtNum(c.workUnits)} ngày)`
+    : `${fmtNum(c.dayUnits ?? c.workUnits)} / ${c.standardDays || STANDARD_DAYS} ngày${c.hourly?.minutes ? ` + ${durationText(c.hourly.minutes)} theo giờ` : ''}`);
 const typedMoney = v => { const raw = String(v ?? '').replace(/\./g, '').replace(/\D/g, ''); return raw ? Number(raw).toLocaleString('vi-VN') : ''; };
 const shownMoney = n => (Number(n) > 0 ? Number(n).toLocaleString('vi-VN') : '');
 const smallBtn = { fontSize: '0.75rem', padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, whiteSpace: 'nowrap' };
@@ -368,13 +376,13 @@ export default function PayrollPage() {
   }, []);
   // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
   // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
-  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], monthOver: false });
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], monthOver: false });
   const fetchPayrollMonth = useCallback(async () => {
     try {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   // So khuôn mặt ở máy quầy (app): cài đặt, ai có mặt mẫu, ca sai mặt 3 lần chờ duyệt.
@@ -535,12 +543,14 @@ export default function PayrollPage() {
     requests: requests.filter(r => r.staff_id === staffId),
     violations: violations.filter(v => v.staff_id === staffId),
     bonuses: payrollMonth.bonuses.filter(b => b.staff_id === staffId),
-    rules, reviews: reviewList,
+    rules, reviews: reviewList, hourlyRates: payrollMonth.hourlyRates.filter(r => r.staff_id === staffId),
   });
   // Trễ / quên ra ca trong tháng (theo ngày làm) → xét thưởng chuyên cần và gợi ý phạt.
   const talliesOf = staffId => monthTallies({ sessions: attendance.filter(a => a.staff_id === staffId), rules, key: `${selYear}-${fmt(selMonth)}`, autoClosed: payrollMonth.autoClosed });
   const bonusOf = staffId => bonusCheck({ year: selYear, month: selMonth, salary: calcSalary(staffId), tallies: talliesOf(staffId), departure: departureOf(staffId), settings: payrollMonth.bonusSettings });
   const approvedBonusOf = staffId => payrollMonth.bonuses.find(b => b.staff_id === staffId) || null;
+  // Đã có lương: lương cơ bản, hoặc lương 1 giờ áp dụng trong tháng đang xem.
+  const hasPay = staffId => (configs[staffId]?.base_salary || 0) > 0 || !!calcSalary(staffId).hourly;
   // Tháng đã chốt: hiện số đã chốt, kèm số tính lại bây giờ để thấy có gì thay đổi sau khi chốt.
   const closeOf = id => payrollMonth.closes.find(c => c.staff_id === id);
   const salaryOf = id => {
@@ -560,11 +570,12 @@ export default function PayrollPage() {
   // Tải bảng lương tháng đang xem ra file Excel (để in / lưu / chuyển khoản).
   const exportPayroll = async rows => {
     const XLSX = await import('xlsx');
-    const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Trừ về sớm', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
+    const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Lương 1 giờ', 'Giờ theo giờ', 'Lương theo giờ', 'Trừ về sớm', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
       'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Thực lĩnh', 'Trạng thái', 'Nghỉ việc'];
     const data = rows.map(({ s, c }) => {
       const d = departureOf(s.id);
-      return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.workUnits : c.workDays, c.basePay, c.earlyAmt || 0, c.totalWorkH, c.otHours, c.otAmt,
+      return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.dayUnits ?? c.workUnits : c.workDays, c.dayAmt ?? c.basePay,
+        c.hourly?.rates?.join(' / ') || '', c.hourly ? Math.round(c.hourly.minutes / 6) / 10 : '', c.hourly?.amount || '', c.earlyAmt || 0, c.totalWorkH, c.otHours, c.otAmt,
         c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.net, c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
         d ? `Làm đến ${d.last_day.split('-').reverse().join('/')}` : ''];
     });
@@ -582,7 +593,7 @@ export default function PayrollPage() {
     const waiting = requests.filter(r => r.status === 'pending' && r.month === selMonth && r.year === selYear).length
       + (checkin?.fixes || []).filter(f => f.status === 'pending' && attendance.some(a => a.id === f.attendance_id)).length;
     const bonusWaiting = payrollMonth.monthOver && payrollMonth.bonusSettings?.bonus_amount > 0
-      ? rows.filter(r => !r.c.locked && (configs[r.s.id]?.base_salary || 0) > 0 && !approvedBonusOf(r.s.id) && bonusOf(r.s.id).eligible).length : 0;
+      ? rows.filter(r => !r.c.locked && hasPay(r.s.id) && !approvedBonusOf(r.s.id) && bonusOf(r.s.id).eligible).length : 0;
     const notes = reopen ? [] : [
       vnToday() <= lastDay && `• Tháng ${label} chưa hết: những ngày còn lại sẽ không có trong số chốt.`,
       pendingH > 0 && `• Còn ${fmtNum(pendingH)} giờ ngoài ca chưa duyệt (chưa được tính lương).`,
@@ -625,13 +636,28 @@ export default function PayrollPage() {
   };
 
   // --- Save config ---
+  // Trả theo giờ: lương 1 giờ đang áp dụng hôm nay (payroll_hourly_rates), ô đang sửa, và có đổi so với hiện tại không.
+  const [hourlyEdits, setHourlyEdits] = useState({});
+  const hourlyEditOf = staffId => {
+    const rows = payrollMonth.hourlyRates.filter(r => r.staff_id === staffId && String(r.valid_from) <= vnToday());
+    const last = rows.sort((a, b) => String(a.valid_from).localeCompare(String(b.valid_from))).pop();
+    const current = Number(last?.hourly_rate) > 0 ? last : null;
+    const e = hourlyEdits[staffId] || {};
+    const type = e.type || (current ? 'hour' : 'month'), rate = e.rate ?? String(current?.hourly_rate || '');
+    const changed = type !== (current ? 'hour' : 'month') || (type === 'hour' && Number(rate) !== Number(current?.hourly_rate || 0));
+    return { type, rate, from: e.from || vnToday(), current, changed };
+  };
   const handleSaveConfig = async (staffId) => {
-    const edit = configEdits[staffId];
-    if (!edit) return;
-    try { await workforce('save_config', { staff_id: staffId, base_salary: edit.base_salary, overtime_rate: edit.overtime_rate, pay_day: edit.pay_day }); }
-    catch (err) { return alert(err.message); }
+    const edit = configEdits[staffId] || { base_salary: 0, overtime_rate: 25000, pay_day: 5 };
+    const pay = hourlyEditOf(staffId);
+    if (pay.type === 'hour' && !(Number(pay.rate) > 0)) return alert('Nhập lương 1 giờ.');
+    try {
+      await workforce('save_config', { staff_id: staffId, base_salary: edit.base_salary, overtime_rate: edit.overtime_rate, pay_day: edit.pay_day });
+      if (pay.changed) await workforce('save_hourly', { staff_id: staffId, hourly_rate: pay.type === 'hour' ? Number(pay.rate) : 0, valid_from: pay.from });
+    } catch (err) { return alert(err.message); }
+    setHourlyEdits(p => { const { [staffId]: _done, ...rest } = p; return rest; });
     fetchAll();
-    alert('Đã lưu cấu hình!');
+    alert(pay.changed ? `Đã lưu! Từ ${ddmm(pay.from)} ${pay.type === 'hour' ? `trả theo giờ ${formatMoney(pay.rate)}/giờ` : 'trả theo tháng'}.` : 'Đã lưu cấu hình!');
   };
 
   // --- Delete violation ---
@@ -974,9 +1000,12 @@ export default function PayrollPage() {
                     {c.paid_at ? `✅ Đã nhận lương ${ddmm(new Date(Date.parse(c.paid_at) + 7 * 3600000).toISOString().slice(0, 10))}` : c.locked ? '🔒 Đã chốt' : '⏳ Tạm tính đến hôm nay'}
                   </span>
                 </div>
-                {!c.base && <div style={{ fontSize: '0.8rem', color: '#b45309', marginBottom: 6 }}>Chủ quán chưa nhập lương cơ bản của bạn.</div>}
+                {!c.base && !c.hourly && <div style={{ fontSize: '0.8rem', color: '#b45309', marginBottom: 6 }}>Chủ quán chưa nhập lương cơ bản của bạn.</div>}
                 {c.rule === 'days'
-                  ? row('Ngày công', `${fmtNum(c.workUnits)} / ${c.standardDays} ngày → ${formatMoney(c.basePay)}`)
+                  ? <>
+                      {!hourOnly(c) && row('Ngày công', `${fmtNum(c.dayUnits ?? c.workUnits)} / ${c.standardDays} ngày → ${formatMoney(c.dayAmt ?? c.basePay)}`)}
+                      {c.hourly && row('Giờ trong ca', `${durationText(c.hourly.minutes)} × ${rateText(c)} → ${formatMoney(c.hourly.amount)}`)}
+                    </>
                   : <>{row('Lương cơ bản', formatMoney(c.base))}{row('Ngày công', `${c.workDays} ngày`)}</>}
                 {c.earlyAmt > 0 && row(`Trừ về sớm (${c.earlyList?.length || 0} lần)`, `−${formatMoney(c.earlyAmt)}`, '#dc2626')}
                 {c.earlyAmt > 0 && (
@@ -1011,7 +1040,9 @@ export default function PayrollPage() {
                 )}
                 <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: 6, lineHeight: 1.5 }}>
                   {c.rule === 'days'
-                    ? `Lương = lương cơ bản ÷ ${c.standardDays} × số ngày đi làm (ngày làm dưới nửa ca tính nửa ngày). Về sớm từ 30 phút bị trừ lương theo giờ về sớm. Tăng ca là giờ ngoài ca chủ quán đã đồng ý.`
+                    ? hourOnly(c)
+                      ? 'Lương = số giờ có mặt trong ca × lương 1 giờ (đi trễ / về sớm thì không tính phần đó). Tăng ca là giờ ngoài ca chủ quán đã đồng ý.'
+                      : `Lương = lương cơ bản ÷ ${c.standardDays} × số ngày đi làm (ngày làm dưới nửa ca tính nửa ngày). Về sớm từ 30 phút bị trừ lương theo giờ về sớm.${c.hourly ? ' Ngày làm theo giờ: số giờ trong ca × lương 1 giờ.' : ''} Tăng ca là giờ ngoài ca chủ quán đã đồng ý.`
                     : 'Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca là giờ làm quá 8 tiếng mỗi ngày.'}
                   {!c.locked && ' Số còn thay đổi tới khi chủ quán chốt lương cuối tháng.'}
                 </div>
@@ -1156,8 +1187,6 @@ export default function PayrollPage() {
             const closes = payrollMonth.closes, closedAt = closes[0]?.closed_at, closedBy = closes[0]?.closed_by;
             const changed = rows.filter(x => x.c.locked && x.c.liveNet !== x.c.net);
             const leftThisMonth = s => { const d = departureOf(s.id); return d && d.last_day.slice(0, 7) === thisMonth ? d : null; };
-            // Ngày công: "24 / 26" (theo ngày công) hoặc "24 ngày" (cách cũ).
-            const daysText = c => (c.rule === 'days' ? `${fmtNum(c.workUnits)} / ${c.standardDays || STANDARD_DAYS} ngày` : `${c.workDays} ngày`);
             return (
               <div>
                 {/* Filter bar */}
@@ -1178,7 +1207,7 @@ export default function PayrollPage() {
                 <div style={{ background: closes.length ? '#f0fdf4' : 'white', border: `1px solid ${closes.length ? '#bbf7d0' : '#e5e7eb'}`, borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155', lineHeight: 1.6 }}>
                   <div>
                     {dayPay
-                      ? <>📐 <strong>Tính theo ngày công:</strong> lương cơ bản ÷ {STANDARD_DAYS} × số ngày đi làm (làm dư thì cộng thêm, ngày làm dưới nửa ca tính nửa ngày). Về sớm từ 30 phút: trừ lương theo giờ về sớm (lương ngày ÷ số giờ của ca). Tăng ca = giờ ngoài ca bạn đã bấm "Cho tính". Đơn báo nghỉ không trừ thêm.</>
+                      ? <>📐 <strong>Tính theo ngày công:</strong> lương cơ bản ÷ {STANDARD_DAYS} × số ngày đi làm (làm dư thì cộng thêm, ngày làm dưới nửa ca tính nửa ngày). Về sớm từ 30 phút: trừ lương theo giờ về sớm (lương ngày ÷ số giờ của ca). Tăng ca = giờ ngoài ca bạn đã bấm "Cho tính". Đơn báo nghỉ không trừ thêm. Người trả theo giờ: số giờ trong ca × lương 1 giờ (trễ / về sớm mất đúng số phút đó), giờ ngoài ca bạn cho tính trả theo giá tăng ca.</>
                       : <>📐 Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày, trừ ngày nghỉ có đơn.</>}
                   </div>
                   {isAdmin && (
@@ -1208,7 +1237,7 @@ export default function PayrollPage() {
 
                 {isAdmin && dayPay && (
                   <BonusBox year={selYear} month={selMonth} settings={payrollMonth.bonusSettings} monthOver={payrollMonth.monthOver} onAction={payrollAction}
-                    people={activeStaff.filter(s => (configs[s.id]?.base_salary || 0) > 0).map(s => ({ s, c: calcSalary(s.id), check: bonusOf(s.id), approved: approvedBonusOf(s.id) }))} />
+                    people={activeStaff.filter(s => hasPay(s.id)).map(s => ({ s, c: calcSalary(s.id), check: bonusOf(s.id), approved: approvedBonusOf(s.id) }))} />
                 )}
 
                 {/* Mobile cards */}
@@ -1231,11 +1260,11 @@ export default function PayrollPage() {
                         </button>
                         {cardOpen && <div className="salary-card-body">
                           <div className="salary-card-row">
-                            <span className="salary-card-label">Lương cơ bản</span>
-                            <span className="salary-card-value">{formatMoney(c.base)}</span>
+                            <span className="salary-card-label">{hourOnly(c) ? 'Lương 1 giờ' : 'Lương cơ bản'}</span>
+                            <span className="salary-card-value">{baseText(c)}</span>
                           </div>
                           <div className="salary-card-row">
-                            <span className="salary-card-label">Ngày công</span>
+                            <span className="salary-card-label">{hourOnly(c) ? 'Giờ tính lương' : 'Ngày công'}</span>
                             <span className="salary-card-value">{daysText(c)}{c.rule === 'days' && <> → {formatMoney(c.basePay)}</>}</span>
                           </div>
                           {c.earlyAmt > 0 && (
@@ -1364,7 +1393,7 @@ export default function PayrollPage() {
                           <React.Fragment key={s.id}>
                             <tr>
                             <td><div style={{fontWeight:700}}>{c.locked ? '🔒 ' : ''}{s.full_name}</div><div style={{fontSize:'0.73rem',color:'#94a3b8'}}>{s.phone}</div></td>
-                            <td>{formatMoney(c.base)}</td>
+                            <td>{baseText(c)}</td>
                             <td>{daysText(c)}{c.rule === 'days' && <div style={{fontSize:'0.72rem',color:'#94a3b8'}}>= {formatMoney(c.basePay)}</div>}
                               {c.earlyAmt > 0 && <div style={{fontSize:'0.72rem',color:'#ef4444'}}>−{formatMoney(c.earlyAmt)} về sớm ({c.earlyList?.length || 0} lần)</div>}</td>
                             <td>{fmtNum(c.totalWorkH)} giờ{c.pendingH > 0 && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>+{fmtNum(c.pendingH)} giờ ngoài ca chờ duyệt</div>}</td>
@@ -2082,20 +2111,43 @@ export default function PayrollPage() {
           {activeTab === 'config' && (
             <div>
               <div className="payroll-form" style={{ marginBottom: 8 }}>
-                <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>💡 Thiết lập lương cơ bản (lương đủ {STANDARD_DAYS} ngày công), giá tăng ca mỗi giờ (để 0 nếu không trả tăng ca) và ngày phát lương cho từng nhân viên.</p>
+                <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>💡 Thiết lập lương cơ bản (lương đủ {STANDARD_DAYS} ngày công) hoặc lương 1 giờ (người trả theo giờ), giá tăng ca mỗi giờ (để 0 nếu không trả tăng ca) và ngày phát lương cho từng nhân viên.</p>
               </div>
               <div className="config-list config-salary">
                 {staffList.map(s => {
                   const edit = configEdits[s.id] || { base_salary: 0, overtime_rate: 25000, pay_day: 5 };
+                  const pay = hourlyEditOf(s.id);
+                  const shift = rules ? shiftOf(rules, s.id, vnToday()) : null;
                   return (
                     <div key={s.id} className="config-row">
                       <div className="staff-name">{s.full_name}<div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div></div>
                       <div className="form-group" style={{ margin: 0 }}>
-                        <label>Lương cơ bản</label>
-                        <input type="text" inputMode="numeric" value={edit.base_salary ? Number(edit.base_salary).toLocaleString('vi-VN') : ''}
-                          onChange={e => { const raw = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setConfigEdits(p => ({ ...p, [s.id]: { ...edit, base_salary: raw || 0 } })); }}
-                          placeholder="5.000.000" />
+                        <label>Trả lương</label>
+                        <select value={pay.type} onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, type: e.target.value } }))}>
+                          <option value="month">Theo tháng</option>
+                          <option value="hour">Theo giờ</option>
+                        </select>
                       </div>
+                      {pay.type === 'hour' ? (
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label>Lương 1 giờ</label>
+                          <input type="text" inputMode="numeric" value={typedMoney(pay.rate)} placeholder="25.000"
+                            onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, rate: e.target.value.replace(/\D/g, '') } }))} />
+                        </div>
+                      ) : (
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label>Lương cơ bản</label>
+                          <input type="text" inputMode="numeric" value={edit.base_salary ? Number(edit.base_salary).toLocaleString('vi-VN') : ''}
+                            onChange={e => { const raw = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setConfigEdits(p => ({ ...p, [s.id]: { ...edit, base_salary: raw || 0 } })); }}
+                            placeholder="5.000.000" />
+                        </div>
+                      )}
+                      {pay.changed && (
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label>Áp dụng từ</label>
+                          <input type="date" value={pay.from} min={`${vnToday().slice(0, 7)}-01`} onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, from: e.target.value } }))} />
+                        </div>
+                      )}
                       <div className="form-group" style={{ margin: 0 }}>
                         <label>Giá tăng ca/h</label>
                         <input type="number" min="0" value={edit.overtime_rate ?? 25000}
@@ -2107,6 +2159,12 @@ export default function PayrollPage() {
                           onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, pay_day: e.target.value } }))} />
                       </div>
                       <button className="btn-primary" style={{ marginTop: 18 }} onClick={() => handleSaveConfig(s.id)}>Lưu</button>
+                      {(pay.type === 'hour' || pay.current) && (
+                        <div className="config-note">
+                          {pay.current ? `Đang trả theo giờ: ${formatMoney(pay.current.hourly_rate)}/giờ từ ${ddmm(String(pay.current.valid_from))}. ` : 'Đang trả theo tháng. '}
+                          {pay.type === 'hour' && shift && `Chỉ tính giờ có mặt trong ca ${shift.start}–${shift.end}${shift.own ? '' : ' (giờ quán)'}; đổi ca ở tab Cài chấm công. Giờ ngoài ca bạn cho tính trả theo giá tăng ca.`}
+                        </div>
+                      )}
                     </div>
                   );
                 })}

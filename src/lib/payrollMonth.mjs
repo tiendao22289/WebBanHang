@@ -2,7 +2,7 @@
 // Thống kê (api/admin/workforce) và Sổ thu chi (lương mỗi ngày theo chấm công). Chỉ phía server.
 import { readCheckinSettings } from './attendanceRules.mjs';
 import { BONUS_MIN_DAYS, activeFineKinds } from './payroll.mjs';
-import { faceHolds, markFaceHolds } from './faceCheck.mjs';
+import { faceHolds, markFaceHolds, missingTable } from './faceCheck.mjs';
 
 export const monthRange = (year, month) => {
   const pad = n => String(n).padStart(2, '0');
@@ -27,6 +27,16 @@ export async function readPayrollSettings(db) {
   return { bonus_amount: Number(data?.bonus_amount) || 0, bonus_min_days: data?.bonus_min_days === undefined || data?.bonus_min_days === null ? BONUS_MIN_DAYS : Number(data.bonus_min_days) };
 }
 
+// Lương 1 giờ của người trả theo giờ (một người hoặc cả quán). Bảng chưa tạo (web lên trước migration): coi như chưa ai trả theo giờ.
+export async function readHourlyRates(db, staffId = null) {
+  let query = db.from('payroll_hourly_rates').select('*');
+  if (staffId) query = query.eq('staff_id', staffId);
+  const { data, error } = await query.order('valid_from');
+  if (missingTable(error)) return [];
+  if (error) throw error;
+  return data || [];
+}
+
 // Lần chủ duyệt giờ ngoài ca của đúng các ca đang tính (bảng này chỉ lớn dần, không đọc hết được).
 export async function reviewsFor(db, sessionIds) {
   const rows = [];
@@ -40,7 +50,7 @@ export async function reviewsFor(db, sessionIds) {
 
 export async function loadPayrollMonth(db, year, month) {
   const { start, end } = monthRange(year, month);
-  const [staff, configs, sessions, requests, violations, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules] = await Promise.all([
+  const [staff, configs, sessions, requests, violations, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules, hourlyRates] = await Promise.all([
     db.from('staff').select('id, full_name, role'),
     db.from('payroll_config').select('*'),
     // Cả ngày 1 tháng sau (ca đêm cuối tháng); đọc từng trang.
@@ -54,6 +64,7 @@ export async function loadPayrollMonth(db, year, month) {
     readPayrollSettings(db),
     db.from('payroll_fine_reviews').select('*').gte('work_day', start).lt('work_day', end),
     db.from('payroll_fine_rules').select('kind, active'),
+    readHourlyRates(db),
   ]);
   for (const r of [staff, configs, requests, violations, closes, departures, bonuses, fineReviews, fineRules]) if (r.error) throw r.error;
   const reviews = await reviewsFor(db, sessions.map(x => x.id));
@@ -61,5 +72,5 @@ export async function loadPayrollMonth(db, year, month) {
   const held = await faceHolds(db, sessions.map(x => x.id));
   return { start, end, staff: staff.data || [], configs: configs.data || [], sessions: markFaceHolds(sessions, held), requests: requests.data || [],
     violations: violations.data || [], reviews, closes: closes.data || [], departures: departures.data || [], rules,
-    bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data) };
+    bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data), hourlyRates };
 }

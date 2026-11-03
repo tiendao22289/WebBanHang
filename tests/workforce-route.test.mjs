@@ -576,3 +576,37 @@ test('reopening a month keeps whoever is already paid; editing at minute precisi
   assert.deepEqual([reopened.status, reopened.body.reopened, reopened.body.keptPaid], [200, 1, 1]);
   assert.deepEqual(state.payroll_closes.map(c => [c.staff_id, !!c.paid_at]), [[STAFF.id, true]], 'the paid slip is kept');
 });
+
+test('owner pays someone by the hour from a chosen day; staff see their hourly pay; closing the month keeps it', async () => {
+  const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10), first = `${today.slice(0, 7)}-01`;
+  const later = new Date(Date.parse(`${today}T00:00:00Z`) + 5 * 86400000).toISOString().slice(0, 10);
+  const state = shop({ payroll_hourly_rates: [], payroll_config: [], payroll_requests: [], payroll_violations: [], attendance_extra_reviews: [], payroll_closes: [],
+    staff_shifts: [{ staff_id: STAFF.id, valid_from: '2026-01-01', start_time: '14:30', end_time: '00:00' }],
+    attendance_sessions: [{ id: 'h1', staff_id: STAFF.id, date: first, clock_in: `${first}T07:30:00Z`, clock_out: `${first}T17:00:00Z` }] });
+  state.checkin_settings[0] = { id: 1, enforce: false, hours_from: '2026-10-25' };
+  const admin = load(state, ADMIN);
+  assert.equal((await post(load(state, STAFF), { action: 'save_hourly', staff_id: STAFF.id, hourly_rate: 25000 })).status, 403);
+  assert.equal((await post(admin, { action: 'save_hourly', staff_id: STAFF.id, hourly_rate: 'abc' })).status, 400);
+  assert.equal((await post(admin, { action: 'save_hourly', staff_id: STAFF.id, hourly_rate: 25000, valid_from: '2026-01-01' })).status, 400, 'not before this month');
+  assert.equal((await post(admin, { action: 'save_hourly', staff_id: STAFF.id, hourly_rate: '30.000', valid_from: later })).status, 200);
+  assert.equal((await post(admin, { action: 'save_hourly', staff_id: STAFF.id, hourly_rate: '25.000', valid_from: first })).status, 200);
+  assert.deepEqual(plain(state.payroll_hourly_rates.map(r => [r.valid_from, r.hourly_rate, r.updated_by])), [[first, 25000, 'Chủ quán']], 'a rate from an earlier day replaces the later one');
+  assert.deepEqual(plain(await admin.GET({ url: `http://x/api/admin/workforce?payroll=1&year=${first.slice(0, 4)}&month=${Number(first.slice(5, 7))}` })).body.hourlyRates.length, 1);
+
+  const me = plain(await load(state, STAFF).GET({ url: 'http://x/api/admin/workforce?me=1' })).body;
+  if (payroll.usesDayPay(Number(first.slice(0, 4)), Number(first.slice(5, 7)))) {
+    assert.deepEqual(me.salary.hourly, { minutes: 570, amount: 237500, rates: [25000] });
+    assert.equal(me.salary.net, 237500);
+    await post(admin, { action: 'close_month', year: Number(first.slice(0, 4)), month: Number(first.slice(5, 7)) });
+    assert.deepEqual(plain(state.payroll_closes[0].snapshot.hourly), { minutes: 570, amount: 237500, rates: [25000] });
+  }
+  assert.equal((await post(admin, { action: 'save_hourly', staff_id: STAFF.id, hourly_rate: 0, valid_from: today })).status, 200, 'back to monthly pay');
+  assert.equal(state.payroll_hourly_rates.length, today === first ? 1 : 2);
+});
+
+test('before the hourly table exists the payroll still loads with nobody paid by the hour', async () => {
+  const query = { eq: () => query, order: async () => ({ data: null, error: { code: '42P01', message: 'relation "payroll_hourly_rates" does not exist' } }) };
+  assert.deepEqual(await payrollMonth.readHourlyRates({ from: () => ({ select: () => query }) }), []);
+  const broken = { eq: () => broken, order: async () => ({ data: null, error: { code: '57014', message: 'timeout' } }) };
+  await assert.rejects(payrollMonth.readHourlyRates({ from: () => ({ select: () => broken }) }));
+});
