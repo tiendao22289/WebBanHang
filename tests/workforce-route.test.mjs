@@ -610,3 +610,57 @@ test('before the hourly table exists the payroll still loads with nobody paid by
   const broken = { eq: () => broken, order: async () => ({ data: null, error: { code: '57014', message: 'timeout' } }) };
   await assert.rejects(payrollMonth.readHourlyRates({ from: () => ({ select: () => broken }) }));
 });
+
+test('from the pay slip the owner adds a forgotten shift, deletes a mis-scan, records and edits advances and fines', async () => {
+  const S = id => `00000000-0000-4000-8000-0000000005${id}`;
+  const state = shop({
+    attendance_sessions: [
+      { id: S('01'), staff_id: STAFF.id, date: '2026-11-02', clock_in: '2026-11-02T09:18:00Z', clock_out: '2026-11-02T09:45:00Z' },
+      { id: S('02'), staff_id: STAFF.id, date: '2026-11-03', clock_in: '2026-11-02T17:25:00Z', clock_out: null },
+    ],
+    attendance_extra_reviews: [{ attendance_id: S('02'), staff_id: STAFF.id, status: 'approved', minutes: 30 }],
+    payroll_fine_reviews: [{ attendance_id: S('02'), kind: 'forgot', staff_id: STAFF.id, work_day: '2026-11-02', status: 'skipped', violation_id: null }],
+    payroll_requests: [{ id: S('a1'), staff_id: STAFF.id, request_type: 'absent', days: 1, reason: 'ốm', status: 'approved', month: 11, year: 2026 }],
+    payroll_leave_days: [{ request_id: S('a1'), staff_id: STAFF.id, from_date: '2026-11-05', to_date: '2026-11-05' }],
+    payroll_violations: [{ id: S('f1'), staff_id: STAFF.id, amount: 50000, reason: 'Đi trễ', month: 11, year: 2026 }],
+  });
+  const admin = load(state, ADMIN), staff = load(state, STAFF);
+  for (const body of [{ action: 'add_attendance', staff_id: STAFF.id, clock_in: '2026-11-02T09:45:00Z', clock_out: '2026-11-02T17:25:00Z' },
+    { action: 'delete_attendance', id: S('02') }, { action: 'add_advance', staff_id: STAFF.id, amount: 100000 },
+    { action: 'edit_request', id: S('a1'), reason: 'x' }, { action: 'delete_request', id: S('a1') }, { action: 'edit_violation', id: S('f1'), amount: 1 }]) {
+    assert.equal((await post(staff, body)).status, 403, body.action);
+  }
+
+  const add = body => post(admin, { action: 'add_attendance', staff_id: STAFF.id, ...body });
+  assert.equal((await add({ clock_in: '2026-11-02T17:25:00Z', clock_out: '2026-11-02T09:45:00Z' })).status, 400, 'out before in');
+  assert.equal((await add({ clock_in: '2026-11-01T09:00:00Z', clock_out: '2026-11-02T10:00:00Z' })).status, 400, 'longer than a day');
+  assert.equal((await add({ clock_in: '2026-11-02T09:30:00Z', clock_out: '2026-11-02T12:00:00Z' })).status, 409, 'overlaps 16:18–16:45');
+  assert.equal((await add({ clock_in: '2026-11-02T10:00:00Z', clock_out: '2026-11-02T17:30:00Z' })).status, 409, 'overlaps the mis-scan still open');
+
+  // Lượt 00:25 quét nhầm (đang mở): xoá; lần duyệt ngoài ca và gợi ý phạt chưa phạt của lượt đó đi theo.
+  assert.equal((await post(admin, { action: 'delete_attendance', id: S('02') })).status, 200);
+  assert.deepEqual(state.attendance_sessions.map(s => s.id), [S('01')]);
+  assert.deepEqual([state.attendance_extra_reviews.length, state.payroll_fine_reviews.length], [0, 0]);
+  const r = await add({ clock_in: '2026-11-02T09:45:00Z', clock_out: '2026-11-02T17:25:00Z', note: 'quét nhầm, làm tới 00:25' });
+  assert.equal(r.status, 200);
+  const added = state.attendance_sessions.find(s => s.id === r.body.id);
+  assert.deepEqual([added.date, added.clock_in, added.clock_out], ['2026-11-02', '2026-11-02T09:45:00.000Z', '2026-11-02T17:25:00.000Z']);
+  assert.deepEqual(plain(state.attendance_changes.map(c => [c.field_name, c.changed_by, c.note])),
+    [['deleted', 'Chủ quán', 'Chủ xoá ca'], ['created', 'Chủ quán', 'quét nhầm, làm tới 00:25']]);
+  assert.equal((await add({ clock_in: new Date(Date.now() + 3600000).toISOString(), clock_out: new Date(Date.now() + 7200000).toISOString() })).status, 400, 'not in the future');
+
+  // Ứng lương chủ tự ghi: duyệt luôn, tháng theo ngày ứng; sửa số tiền; xoá.
+  assert.equal((await post(admin, { action: 'add_advance', staff_id: STAFF.id, amount: '0' })).status, 400);
+  const adv = await post(admin, { action: 'add_advance', staff_id: STAFF.id, amount: '1.500.000', date: '2026-11-02', reason: 'ứng tiền mặt' });
+  const row = state.payroll_requests.find(x => x.id === adv.body.id);
+  assert.deepEqual([row.request_type, row.amount, row.status, row.month, row.year, row.reason], ['advance', 1500000, 'approved', 11, 2026, 'ứng tiền mặt']);
+  assert.equal((await post(admin, { action: 'edit_request', id: row.id, amount: '500.000' })).status, 200);
+  assert.equal(row.amount, 500000);
+  assert.equal((await post(admin, { action: 'edit_request', id: S('a1'), amount: 1000 })).status, 400, 'a leave request has no amount');
+  assert.equal((await post(admin, { action: 'delete_request', id: S('a1') })).status, 200);
+  assert.deepEqual([state.payroll_requests.map(x => x.id), state.payroll_leave_days.length], [[row.id], 0], 'the leave days go with the request');
+
+  assert.equal((await post(admin, { action: 'edit_violation', id: S('f1'), amount: '30.000', reason: 'Đi trễ 20 phút' })).status, 200);
+  assert.deepEqual([state.payroll_violations[0].amount, state.payroll_violations[0].reason], [30000, 'Đi trễ 20 phút']);
+  assert.equal((await post(admin, { action: 'edit_violation', id: S('f9'), amount: 1000 })).status, 404);
+});

@@ -17,7 +17,9 @@
  *   request {type, amount | from_date, to_date, reason} → ứng lương / báo nghỉ (có ngày nghỉ) của chính mình
  *   request_fix {attendance_id, clock_in, clock_out, reason} → xin sửa giờ một ca của mình
  *   cancel_request {id, kind}  → huỷ đơn của mình khi còn chờ duyệt (kind 'fix' = đơn xin sửa giờ)
- *   edit_attendance, decide_request, decide_fix, decide_extra, close_month, reopen_month, mark_paid,
+ *   edit_attendance, add_attendance {staff_id, clock_in, clock_out, note}, delete_attendance {id},
+ *   add_advance {staff_id, amount, date, reason}, edit_request {id, amount?, reason?}, delete_request {id},
+ *   edit_violation {id, amount?, reason?}, decide_request, decide_fix, decide_extra, close_month, reopen_month, mark_paid,
  *   staff_depart, staff_return, add_violation {staff_id, date, rule_id?, reason, amount}, delete_violation,
  *   decide_fine {attendance_id, kind, status, amount, reason} / reopen_fine → gợi ý phạt từ chấm công,
  *   save_fine_rule, save_bonus_settings, decide_bonus {staff_id, year, month, amount} / remove_bonus,
@@ -569,6 +571,100 @@ export async function POST(request) {
       if (!UUID.test(body.id || '')) return fail('Thiếu ca cần sửa.');
       const changed = await editAttendance(body.id, body, user.full_name || null);
       return typeof changed === 'number' ? NextResponse.json({ ok: true, changed }, { headers }) : changed;
+    }
+
+    // Chủ thêm một ca (nhân viên quên quét cả lúc vào) hoặc xoá ca quét nhầm; ghi vào nhật ký sửa giờ.
+    if (body.action === 'add_attendance') {
+      const start = new Date(body.clock_in ?? ''), end = new Date(body.clock_out ?? '');
+      if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return fail('Giờ ra phải sau giờ vào.');
+      if (end - start > 24 * 3600000) return fail('Một ca không dài quá 24 tiếng.');
+      if (end.getTime() > nowMs() + 5 * 60000) return fail('Giờ ra chưa tới.');
+      const date = new Date(start.getTime() + 7 * 3600000).toISOString().slice(0, 10);
+      // Ca đêm có thể ghi ngày hôm trước / hôm sau: so với các ca từ hôm trước tới hôm sau.
+      const dayAfter = new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+      const { data: near, error } = await db.from('attendance_sessions').select('*').eq('staff_id', body.staff_id).gte('date', dayBefore(date)).lte('date', dayAfter);
+      if (error) throw error;
+      const overlap = (near || []).find(s => Date.parse(s.clock_in) < end.getTime() && (s.clock_out ? Date.parse(s.clock_out) : nowMs()) > start.getTime());
+      if (overlap) return fail(`Trùng giờ với ca ${hhmm(overlap.clock_in)}–${overlap.clock_out ? hhmm(overlap.clock_out) : 'đang mở'}. Sửa ca đó thay vì thêm ca mới.`, 409);
+      const r = await db.from('attendance_sessions').insert({ staff_id: body.staff_id, date, clock_in: start.toISOString(), clock_out: end.toISOString() }).select('id').single();
+      if (r.error) throw r.error;
+      await db.from('attendance_changes').insert({ attendance_id: r.data.id, staff_id: body.staff_id, field_name: 'created', old_value: '', new_value: `${start.toISOString()} → ${end.toISOString()}`,
+        changed_by: user.full_name || null, changed_at: isoNow(), note: text(body.note) || 'Chủ thêm ca' }).then(({ error: e }) => { if (e) console.error('[workforce] add log', e); });
+      return NextResponse.json({ ok: true, id: r.data.id }, { headers });
+    }
+
+    if (body.action === 'delete_attendance') {
+      if (!UUID.test(body.id || '')) return fail('Thiếu ca cần xoá.');
+      const { data: ses, error } = await db.from('attendance_sessions').select('*').eq('id', body.id).maybeSingle();
+      if (error) throw error;
+      if (!ses) return fail('Không tìm thấy ca.', 404);
+      const r = await db.from('attendance_sessions').delete().eq('id', ses.id);
+      if (r.error) throw r.error;
+      // Lần duyệt giờ ngoài ca và gợi ý phạt của ca này không còn ý nghĩa; khoản phạt đã ghi thì chủ tự xoá nếu muốn.
+      const cleanup = await Promise.all([
+        db.from('attendance_extra_reviews').delete().eq('attendance_id', ses.id),
+        db.from('payroll_fine_reviews').delete().eq('attendance_id', ses.id).is('violation_id', null),
+        db.from('attendance_changes').insert({ attendance_id: ses.id, staff_id: ses.staff_id, field_name: 'deleted', old_value: `${ses.clock_in} → ${ses.clock_out || ''}`, new_value: '',
+          changed_by: user.full_name || null, changed_at: isoNow(), note: text(body.note) || 'Chủ xoá ca' }),
+      ]);
+      for (const x of cleanup) if (x.error) console.error('[workforce] delete attendance', x.error);
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Ứng lương chủ tự ghi (đưa tiền rồi ghi lại): duyệt luôn, tính vào tháng của ngày ứng.
+    if (body.action === 'add_advance') {
+      const amount = money(body.amount);
+      const date = DATE.test(body.date || '') ? body.date : today;
+      if (!UUID.test(body.staff_id || '') || !amount) return fail('Nhập số tiền ứng.');
+      const r = await db.from('payroll_requests').insert({ staff_id: body.staff_id, request_type: 'advance', amount, reason: text(body.reason) || 'Chủ ghi ứng lương',
+        status: 'approved', admin_note: `Ghi bởi ${user.full_name || 'admin'} (${ddmm(date)})`, month: Number(date.slice(5, 7)), year: Number(date.slice(0, 4)), created_at: isoNow(), updated_at: isoNow() }).select('id').single();
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true, id: r.data.id }, { headers });
+    }
+
+    // Sửa số tiền / lý do một khoản ứng lương; xoá hẳn một đơn (ứng lương / báo nghỉ) kể cả đã duyệt.
+    if (body.action === 'edit_request') {
+      if (!UUID.test(body.id || '')) return fail('Thiếu đơn.');
+      const { data: req, error } = await db.from('payroll_requests').select('*').eq('id', body.id).maybeSingle();
+      if (error) throw error;
+      if (!req) return fail('Không tìm thấy đơn.', 404);
+      const patch = { updated_at: isoNow() };
+      if ('amount' in body) {
+        if (req.request_type !== 'advance') return fail('Chỉ sửa được số tiền của đơn ứng lương.');
+        const amount = money(body.amount);
+        if (!amount) return fail('Số tiền ứng không hợp lệ.');
+        patch.amount = amount;
+      }
+      if ('reason' in body && text(body.reason)) patch.reason = text(body.reason);
+      const r = await db.from('payroll_requests').update(patch).eq('id', req.id);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    if (body.action === 'delete_request') {
+      if (!UUID.test(body.id || '')) return fail('Thiếu đơn.');
+      const r = await db.from('payroll_requests').delete().eq('id', body.id);
+      if (r.error) throw r.error;
+      await db.from('payroll_leave_days').delete().eq('request_id', body.id).then(({ error: e }) => { if (e) console.error('[workforce] leave days', e); });
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Sửa số tiền / lý do một khoản phạt đã ghi.
+    if (body.action === 'edit_violation') {
+      if (!UUID.test(body.id || '')) return fail('Thiếu khoản phạt.');
+      const patch = {};
+      if ('amount' in body) {
+        const amount = money(body.amount);
+        if (!amount) return fail('Số tiền phạt không hợp lệ.');
+        patch.amount = amount;
+      }
+      if ('reason' in body && text(body.reason, 200)) patch.reason = text(body.reason, 200);
+      if (!Object.keys(patch).length) return fail('Không có gì để sửa.');
+      const r = await db.from('payroll_violations').update(patch).eq('id', body.id).select('id');
+      if (r.error) throw r.error;
+      if (!r.data?.length) return fail('Không tìm thấy khoản phạt.', 404);
+      return NextResponse.json({ ok: true }, { headers });
     }
 
     if (body.action === 'decide_fix') {
