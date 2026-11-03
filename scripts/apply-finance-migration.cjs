@@ -135,6 +135,13 @@ async function main() {
   console.log(JSON.stringify(bonusFines));
   if (bonusFines.tables !== 5 || bonusFines.settings !== 1 || bonusFines.auto_rules !== 2 || !bonusFines.anon_blocked) throw new Error('Chưa cài đủ bảng thưởng / phạt.');
 
+  // Nhân viên trả lương theo giờ (payroll_hourly.sql): lương 1 giờ có ngày áp dụng.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_hourly.sql'), 'utf8'));
+  const [hourly] = await query(`SELECT to_regclass('public.payroll_hourly_rates') IS NOT NULL AS table_ok,
+    NOT has_table_privilege('anon', 'public.payroll_hourly_rates', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(hourly));
+  if (!hourly.table_ok || !hourly.anon_blocked) throw new Error('Chưa cài được bảng lương theo giờ.');
+
   // So khuôn mặt ở máy quầy (checkin_face.sql): chỉ dấu mặt mẫu, không ảnh — cài TRƯỚC khi dùng app máy quầy.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_face.sql'), 'utf8'));
   const [face] = await query(`SELECT

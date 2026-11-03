@@ -183,3 +183,49 @@ test('the shop wage cost per day adds everyone; bonus minus fines go to the mont
     violations: [{ staff_id: 'a', amount: 50000 }], closes: [{ staff_id: 'a', snapshot: { vioAmt: 70000, bonusAmt: 10000 } }] });
   assert.equal(closed.monthExtra, 10000 - 70000, 'a closed month uses the closed numbers');
 });
+
+// Người trả theo giờ: ca riêng 14:30–00:00 (07:30Z–17:00Z), 25.000đ/giờ.
+const HOURLY_RULES = normalizeRules({ hours_from: '2026-10-25' }, [{ staff_id: 'a', valid_from: '2026-11-01', start_time: '14:30', end_time: '00:00' }],
+  [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }]);
+const HOURLY = [{ staff_id: 'a', valid_from: '2026-11-01', hourly_rate: 25000 }];
+const HOUR_DAYS = [
+  ses('h1', '2026-11-02', '07:30', '17:00'), // đủ ca 9 giờ 30 phút
+  ses('h2', '2026-11-03', '07:45', '17:05'), // trễ 15 phút; ra trễ 5 phút trong số phút cho lệch → hết ca
+  ses('h3', '2026-11-04', '07:25', '14:30'), // vào sớm 5 phút (cho lệch) → từ 14:30; về 21:30
+  ses('h4', '2026-11-05', '07:30', '18:00'), // ở lại tới 01:00, chủ cho tính 60 phút → giá tăng ca
+];
+
+test('paid by the hour: minutes inside the own shift × hourly rate, late / early cost exactly those minutes, extra time at the overtime rate', () => {
+  const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: HOUR_DAYS, config: { base_salary: 0, overtime_rate: 30000 }, rules: HOURLY_RULES,
+    reviews: [{ attendance_id: 'h4', status: 'approved', minutes: 60 }], hourlyRates: HOURLY });
+  assert.deepEqual(c.hourly, { minutes: 570 + 555 + 420 + 570, amount: 881250, rates: [25000] });
+  assert.deepEqual([c.dayUnits, c.dayAmt, c.workUnits, c.earlyAmt, c.earlyList], [0, 0, 4, 0, []], 'no day pay, no extra early-leave cut');
+  assert.deepEqual([c.basePay, c.otHours, c.otAmt, c.net], [881250, 1, 30000, 911250]);
+  assert.deepEqual(c.byDay, { '2026-11-02': 237500, '2026-11-03': 231250, '2026-11-04': 175000, '2026-11-05': 237500 + 30000 });
+  assert.deepEqual(bonusCheck({ year: 2026, month: 11, salary: c, tallies: monthTallies({ sessions: HOUR_DAYS, rules: HOURLY_RULES, key: '2026-11' }) }).reasons,
+    ['trễ 1 lần', '4/22 ngày công'], 'an hourly person has a salary for the attendance bonus');
+});
+
+test('paid by the hour: seconds round up to the minute so the paid time matches "late 11 minutes"', () => {
+  const s = { id: 'x', staff_id: 'a', date: '2026-11-06', clock_in: '2026-11-06T07:41:23Z', clock_out: '2026-11-06T17:00:00Z' };
+  const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: [s], config: null, rules: HOURLY_RULES, hourlyRates: HOURLY });
+  assert.equal(dayFlags([s], HOURLY_RULES).late, 11);
+  assert.deepEqual([c.hourly.minutes, c.hourly.amount], [570 - 11, Math.round(559 / 60 * 25000)]);
+});
+
+test('switching to or from hourly pay applies from its day: earlier days keep the day pay', () => {
+  const days = [ses('m1', '2026-11-02', '07:30', '17:00'), ses('m2', '2026-11-03', '07:30', '17:00'), ses('m3', '2026-11-04', '07:30', '17:00')];
+  const rates = [{ staff_id: 'a', valid_from: '2026-11-03', hourly_rate: 20000 }, { staff_id: 'a', valid_from: '2026-11-04', hourly_rate: 0 }, { staff_id: 'b', valid_from: '2026-11-01', hourly_rate: 99000 }];
+  const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: days, config: CONFIG, rules: HOURLY_RULES, hourlyRates: rates });
+  assert.deepEqual([c.dayUnits, c.dayAmt, c.hourly], [2, 400000, { minutes: 570, amount: 190000, rates: [20000] }]);
+  assert.deepEqual(c.byDay, { '2026-11-02': 200000, '2026-11-03': 190000, '2026-11-04': 200000 });
+  assert.equal(c.basePay, 590000);
+  assert.equal(computeSalary({ year: 2026, month: 12, staffId: 'a', sessions: [], config: CONFIG, rules: HOURLY_RULES, hourlyRates: rates }).hourly, null, 'back to monthly pay');
+  assert.deepEqual(computeSalary({ year: 2026, month: 12, staffId: 'a', sessions: [], config: null, rules: HOURLY_RULES, hourlyRates: HOURLY }).hourly,
+    { minutes: 0, amount: 0, rates: [25000] }, 'a rate set from an earlier month still applies');
+});
+
+test('the shop wage cost per day includes people paid by the hour', () => {
+  const cost = payrollCost({ year: 2026, month: 11, staff: [{ id: 'a' }], rules: HOURLY_RULES, sessions: HOUR_DAYS.slice(0, 2), configs: [], hourlyRates: HOURLY });
+  assert.deepEqual(cost.byDay, { '2026-11-02': 237500, '2026-11-03': 231250 });
+});
