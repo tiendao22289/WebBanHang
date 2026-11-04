@@ -26,6 +26,7 @@
  * daily — từng ngày làm: giờ vào / ra, vào sớm, vào trễ, ở lại (ra dư), về sớm (phút) và tiền của ngày đó.
  */
 import { dayFlags, groupByWorkDay, sessionHours, shiftOf, shiftWindow, workDayOf } from './attendanceRules.mjs';
+import { lunarDaysBetween } from './lunar.mjs';
 
 export const STANDARD_DAYS = 26;
 export const DAY_PAY_FROM = '2026-11';
@@ -67,6 +68,29 @@ export function lateRuleOn(rules, staffId, day) {
 }
 
 const vnDay = iso => (iso ? new Date(Date.parse(iso) + 7 * 3600000).toISOString().slice(0, 10) : null);
+const dayBefore = d => new Date(Date.parse(`${d}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+
+/**
+ * Ngày quán nghỉ từ `from` tới `to`: theo lịch âm lịch mỗi tháng (shop_closed_rules, mỗi dòng áp dụng từ valid_from tới
+ * dòng sau) + ngày chủ thêm tay (shop_closed_days), bỏ ngày chủ bấm mở cửa (skip). withSkipped: giữ ngày mở cửa (skipped).
+ * → [{ day, source: 'lunar' | 'manual', lunar?, note?, skipped? }] theo thứ tự ngày.
+ */
+export function shopClosedDays({ rules = [], rows = [], from, to, withSkipped = false }) {
+  const out = new Map(), list = [...(rules || [])].sort((a, b) => String(a.valid_from).localeCompare(String(b.valid_from)));
+  list.forEach((r, i) => {
+    const start = String(r.valid_from) > from ? String(r.valid_from) : from;
+    const stop = list[i + 1] ? dayBefore(String(list[i + 1].valid_from)) : to, end = stop < to ? stop : to;
+    if (start <= end) for (const x of lunarDaysBetween(start, end, r.lunar_days)) out.set(x.date, { day: x.date, source: 'lunar', lunar: x.lunar });
+  });
+  for (const r of rows || []) {
+    const day = String(r.day).slice(0, 10);
+    if (day < from || day > to) continue;
+    if (!r.skip) out.set(day, { day, source: 'manual', note: r.note || null });
+    else if (withSkipped && out.has(day)) out.set(day, { ...out.get(day), skipped: true });
+    else out.delete(day);
+  }
+  return [...out.values()].sort((a, b) => a.day.localeCompare(b.day));
+}
 
 /**
  * Tham số ngày quán nghỉ cho computeSalary của một người: các ngày quán nghỉ, người đó có được nhận lương ngày nghỉ

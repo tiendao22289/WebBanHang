@@ -12,15 +12,21 @@
  * POST {action: 'face_verify', id, embeddings | reason} → app gửi dấu mặt vừa chụp (hoặc lý do không
  *                           so được): đúng mặt → ghi giờ; sai → lượt đó không tính; sai 3 lần liền →
  *                           ghi giờ, ca chờ chủ duyệt.
+ * GET  ?tap=1            → người được chấm công bằng nút (không có điện thoại): tên trên nút + ảnh.
+ *                           Mỗi lần hỏi mã, máy chủ đưa thêm tap {version, open}: danh sách đổi thì tải lại,
+ *                           ai đang trong ca (nút hiện "Ra ca").
+ * POST {action: 'tap_clock', staff_id, expect} → bấm nút tên trên máy quầy = quét mã thành công (chỉ người chủ
+ *                           đã cho dùng nút). expect 'in' | 'out': máy quầy đang hiện vào hay ra, khác thì báo bấm lại.
  */
 import { NextResponse } from 'next/server';
 import { getStaffSession, statusDatabase, staffDatabase } from '@/lib/statusAuth';
 import { STATUS_COOKIE } from '@/lib/statusSession.mjs';
 import { CHECKIN_SHOW_MS, KIOSK_COOKIE, KIOSK_COOKIE_SECONDS, kioskQrToken, readKioskCookie, readKioskQrToken, signKioskCookie } from '@/lib/checkinToken.mjs';
-import { clientIp, closeForgottenSessions, readCheckinSettings, rememberIp } from '@/lib/attendanceRules.mjs';
+import { MIN_TOGGLE_MS, clientIp, closeForgottenSessions, hhmm, onKioskNetwork, readCheckinSettings, rememberIp } from '@/lib/attendanceRules.mjs';
 import { clockStatus, nowMs, refreshClock } from '@/lib/trueTime.mjs';
-import { applyClock } from '@/lib/clockApply.mjs';
-import { FACE_MISS_TEXT, FACE_STREAK_MS, FACE_TRIES, FACE_WAIT_MS, bestScore, faceOutcome, faceThreshold, faceVector, faceVectors, readFaceSettings, wrongStreak } from '@/lib/faceCheck.mjs';
+import { applyClock, latestSession, sessionsOfDay } from '@/lib/clockApply.mjs';
+import { punctuality } from '@/lib/clockMessages.mjs';
+import { FACE_MISS_TEXT, FACE_STREAK_MS, FACE_TRIES, FACE_WAIT_MS, bestScore, faceOutcome, faceThreshold, faceVector, faceVectors, missingTable, readFaceSettings, wrongStreak } from '@/lib/faceCheck.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,11 +41,50 @@ const FAIL_SHOW_MS = 15000;
 // App máy quầy: ghi "đang chạy app" tối đa 30 giây một lần cho mỗi máy.
 const appSeen = new Map();
 const APP_NOTE_MS = 30000;
+const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i;
+// Lúc máy chủ web khởi động (mỗi lần đưa bản mới lên đều khởi động lại): máy quầy thấy đổi thì tự tải lại trang
+// để có giao diện mới (app iPhone ở quầy giữ trang đã mở rất lâu).
+const SERVER_BOOT = String(Date.now());
+const vnToday = () => new Date(nowMs() + 7 * 3600000).toISOString().slice(0, 10);
+
+// Người được chấm công bằng nút, trừ người đã nghỉ việc (ngày làm cuối đã qua). Bảng chưa tạo: chưa có ai.
+// columns: lúc máy quầy hỏi mã (2,5 giây một lần) chỉ lấy mã + giờ sửa, không kéo theo ảnh.
+async function tapPeople(db, columns = '*') {
+  const [{ data: rows, error }, { data: left, error: le }] = await Promise.all([
+    db.from('checkin_tap_staff').select(columns),
+    db.from('staff_departures').select('staff_id, last_day'),
+  ]);
+  if (missingTable(error)) return [];
+  if (error) throw error;
+  if (le) throw le;
+  const gone = new Set((left || []).filter(d => String(d.last_day) < vnToday()).map(d => d.staff_id));
+  return (rows || []).filter(r => !gone.has(r.staff_id));
+}
+
+// Máy quầy hỏi mã: version (đổi khi chủ thêm / bớt / sửa nút → tải lại danh sách kèm ảnh) + ai đang trong ca.
+async function tapState(db) {
+  const people = await tapPeople(db, 'staff_id, updated_at');
+  if (!people.length) return { version: '0', open: [] };
+  const { data: open, error } = await db.from('attendance_sessions').select('staff_id').in('staff_id', people.map(p => p.staff_id)).is('clock_out', null);
+  if (error) throw error;
+  const latest = people.map(p => String(p.updated_at || '')).sort().pop();
+  return { version: `${people.length}:${latest}`, open: [...new Set((open || []).map(o => o.staff_id))] };
+}
+
+// Máy quầy hợp lệ (cookie máy quầy, chưa bị tắt) → dòng máy quầy, không thì null.
+async function activeKiosk(request, db) {
+  const kioskId = readKioskCookie(request.cookies?.get?.(KIOSK_COOKIE)?.value, secret(), nowMs());
+  if (!kioskId) return null;
+  const { data: kiosk, error } = await db.from('checkin_kiosks').select('id, revoked_at, recent_ips').eq('id', kioskId).maybeSingle();
+  if (error) throw error;
+  return kiosk && !kiosk.revoked_at ? kiosk : null;
+}
 
 export async function GET(request) {
   try {
     // Mã QR, giờ vào / ra theo giờ internet (đồng hồ máy tính ở quán có thể sai).
     await refreshClock();
+    if (new URL(request.url).searchParams.get('tap')) return await tapList(request);
     const kioskId = readKioskCookie(request.cookies?.get?.(KIOSK_COOKIE)?.value, secret(), nowMs());
     if (!kioskId) return fail('Máy này chưa được bật làm máy quầy.', 401, { kiosk: false });
     const db = statusDatabase();
@@ -93,7 +138,9 @@ export async function GET(request) {
     const age = keep ? shown.ageMs : 0;
     // computerClockMs: đồng hồ máy tính chạy web lệch bao nhiêu so với internet (máy quầy báo chủ chỉnh giờ máy).
     const clock = clockStatus();
-    return NextResponse.json({ token, name: kiosk.name, refreshInMs: Math.max(1000, CHECKIN_SHOW_MS - age), lastScan, lastFail, faceCheck, serverTime: new Date(now).toISOString(),
+    // Nút chấm công cho người không có điện thoại (lỗi phần này không làm máy quầy mất mã QR).
+    const tap = await tapState(db).catch(e => { console.error('[kiosk] tap', e); return null; });
+    return NextResponse.json({ token, name: kiosk.name, refreshInMs: Math.max(1000, CHECKIN_SHOW_MS - age), lastScan, lastFail, faceCheck, tap, boot: SERVER_BOOT, serverTime: new Date(now).toISOString(),
       computerClockMs: clock.synced ? -clock.offsetMs : null }, { headers });
   } catch (error) {
     console.error('[kiosk] GET', error);
@@ -131,6 +178,7 @@ export async function POST(request) {
     const body = await request.json().catch(() => ({}));
     action = body.action;
     if (body.action === 'face_verify') return await faceVerify(request, body);
+    if (body.action === 'tap_clock') return await tapClock(request, body);
     if (body.action !== 'activate') return fail('Thao tác không hợp lệ.');
     await refreshClock();
     const s = await getStaffSession(request);
@@ -148,7 +196,7 @@ export async function POST(request) {
     return response;
   } catch (error) {
     console.error('[kiosk] POST', error);
-    return fail(action === 'face_verify' ? 'Không so được mặt, quét lại mã.' : 'Không bật được máy quầy, thử lại.', 500);
+    return fail(action === 'face_verify' ? 'Không so được mặt, quét lại mã.' : action === 'tap_clock' ? 'Chưa chấm công được, bấm lại.' : 'Không bật được máy quầy, thử lại.', 500);
   }
 }
 
@@ -204,4 +252,61 @@ async function faceVerify(request, body) {
   await db.from('checkin_face_checks').update({ attendance_id: done.session.id, clocked: done.clocked }).eq('id', c.id)
     .then(({ error: e }) => { if (e) console.error('[kiosk] face check link', e); });
   return reply(outcome, { clocked: done.clocked, at });
+}
+
+// Danh sách nút trên máy quầy: tên hiện trên nút (chủ đặt, không thì tên tài khoản) + ảnh nhỏ.
+async function tapList(request) {
+  const db = statusDatabase();
+  if (!(await activeKiosk(request, db))) return fail('Máy này chưa được bật làm máy quầy.', 401, { kiosk: false });
+  const people = await tapPeople(db);
+  if (!people.length) return NextResponse.json({ people: [] }, { headers });
+  const { data: staff, error } = await db.from('staff').select('id, full_name').in('id', people.map(p => p.staff_id));
+  if (error) throw error;
+  const nameOf = new Map((staff || []).map(p => [p.id, p.full_name]));
+  return NextResponse.json({ people: people.filter(p => nameOf.has(p.staff_id))
+    .map(p => ({ id: p.staff_id, name: p.label || nameOf.get(p.staff_id), photo: p.photo || null }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'vi')) }, { headers });
+}
+
+// Bấm nút tên trên máy quầy (người không có điện thoại): như quét mã thành công — vào ca nếu chưa vào, không thì
+// ra ca; ghi lượt chấm method = 'tap'. Chỉ máy quầy đang bật và chỉ người chủ đã cho dùng nút.
+async function tapClock(request, body) {
+  await refreshClock();
+  const db = statusDatabase();
+  const kiosk = await activeKiosk(request, db);
+  if (!kiosk) return fail('Máy này chưa được bật làm máy quầy.', 401, { kiosk: false });
+  const kioskId = kiosk.id;
+  // Bấm nút phải từ đúng mạng máy quầy đang dùng (như quét mã phải ở wifi quán).
+  if (!onKioskNetwork(clientIp(request.headers), kiosk, nowMs())) return fail('Máy quầy không ở wifi quán. Kiểm tra mạng của máy quầy.', 403);
+  const staffId = UUID.test(body.staff_id || '') ? String(body.staff_id).toLowerCase() : '';
+  const allowed = staffId ? (await tapPeople(db)).find(p => p.staff_id === staffId) : null;
+  if (!allowed) return fail('Người này chưa được chấm công bằng nút. Nhờ chủ quán cho phép trong trang Lương.', 403);
+  const { data: person, error } = await db.from('staff').select('id, full_name').eq('id', staffId).maybeSingle();
+  if (error) throw error;
+  if (!person) return fail('Không tìm thấy nhân viên này.', 404);
+  const name = allowed.label || person.full_name;
+  const settings = await readCheckinSettings(db);
+  await closeForgottenSessions(db, settings, staffId, nowMs());
+  const last = await latestSession(db, staffId);
+  const open = last && !last.clock_out ? last : null;
+  // Máy quầy đang hiện "Vào ca" mà người đó đã vào (vừa bấm ở chỗ khác...) thì không tự đảo chiều.
+  if ((body.expect === 'in' && open) || (body.expect === 'out' && !open)) {
+    return fail(`${name} đang ${open ? 'trong ca' : 'ngoài ca'} — bấm lại tên để ${open ? 'ra' : 'vào'} ca.`, 409, { name });
+  }
+  const lastAt = open ? open.clock_in : last?.clock_out;
+  if (lastAt && nowMs() - Date.parse(lastAt) < MIN_TOGGLE_MS) {
+    return fail(`${name} vừa ${open ? 'vào' : 'ra'} ca lúc ${hhmm(lastAt)}. Đợi 3 phút rồi bấm lại nếu muốn ${open ? 'ra' : 'vào'} ca.`, 409, { name });
+  }
+  const at = new Date(nowMs()).toISOString();
+  let done;
+  try {
+    done = await applyClock(db, { staffId, at, scan: { kiosk_id: kioskId, method: 'tap', warnings: [], enforced: !!settings.enforce, ip: clientIp(request.headers),
+      user_agent: String(request.headers?.get?.('user-agent') || '').slice(0, 200) } });
+  } catch (error) {
+    // Hai lần bấm cùng lúc: lần sau gặp ca đang mở do lần trước vừa tạo.
+    if (error?.code === 'already_open') return fail(`${name} vừa vào ca. Đợi 3 phút rồi bấm lại nếu muốn ra ca.`, 409, { name });
+    throw error;
+  }
+  const sessions = await sessionsOfDay(db, staffId, done.session, settings);
+  return NextResponse.json({ ok: true, name, clocked: done.clocked, at, note: punctuality(done.clocked, done.session, sessions, settings, staffId) }, { headers });
 }

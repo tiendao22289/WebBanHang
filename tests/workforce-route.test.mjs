@@ -721,8 +721,30 @@ test('the owner sets shop closed days and who is paid for them; staff see the pa
     assert.equal((await post(admin, { action: 'save_holiday_pay', staff_id: STAFF.id, paid: null })).status, 200, 'back to the default');
     assert.equal(state.payroll_holiday_pay.length, 0);
     const month = plain(await admin.GET({ url: `http://x/api/admin/workforce?payroll=1&year=${today.slice(0, 4)}&month=${Number(today.slice(5, 7))}` })).body;
-    assert.deepEqual([month.closedDays.length, month.holidayPay.length], [1, 0]);
+    assert.deepEqual([month.closedRows.length, month.holidayPay.length], [1, 0]);
+    // Lịch âm lịch: lưu từ hôm nay; ngày theo lịch mà quán mở được đánh dấu, bỏ dấu được.
+    assert.equal((await post(admin, { action: 'save_closed_rule', lunar_days: [31] })).status, 400);
+    assert.equal((await post(admin, { action: 'save_closed_rule', lunar_days: [15, 1, 1] })).status, 200);
+    assert.deepEqual(plain(state.shop_closed_rules.map(r => [r.valid_from, r.lunar_days])), [[today, [1, 15]]]);
+    assert.equal((await post(admin, { action: 'skip_closed_day', day: '2026-11-23' })).status, 200);
+    assert.deepEqual(plain(state.shop_closed_days.filter(d => d.day === '2026-11-23').map(d => d.skip)), [true]);
+    assert.equal((await post(staff, { action: 'save_closed_rule', lunar_days: [1] })).status, 403);
     assert.equal((await post(admin, { action: 'delete_closed_day', day: work })).status, 200);
-    assert.equal(state.shop_closed_days.length, 0);
+    assert.deepEqual(plain(state.shop_closed_days.map(d => d.day)), ['2026-11-23'], 'only the open-day mark is left');
   }
+});
+
+test('the owner lets people without a phone clock with a button on the kiosk: label, small photo, take it back', async () => {
+  const state = shop({ checkin_tap_staff: [] });
+  const admin = load(state, ADMIN);
+  assert.equal((await post(load(state, STAFF), { action: 'save_tap_staff', staff_id: STAFF.id, enabled: true })).status, 403);
+  assert.equal((await post(admin, { action: 'save_tap_staff', staff_id: STAFF.id, enabled: true, photo: 'javascript:alert(1)' })).status, 400);
+  assert.equal((await post(admin, { action: 'save_tap_staff', staff_id: STAFF.id, enabled: true, photo: `data:image/jpeg;base64,${'A'.repeat(160000)}` })).status, 400, 'too large');
+  assert.equal((await post(admin, { action: 'save_tap_staff', staff_id: STAFF.id.toUpperCase(), enabled: true, label: 'Phát bếp', photo: 'data:image/jpeg;base64,QUJD' })).status, 200);
+  assert.equal((await post(admin, { action: 'save_tap_staff', staff_id: LAN.id, enabled: true })).status, 200, 'several people can have a button');
+  assert.equal((await post(admin, { action: 'save_tap_staff', staff_id: STAFF.id, enabled: true, label: 'Phát' })).status, 200, 'renaming keeps the photo');
+  assert.deepEqual(plain(state.checkin_tap_staff.map(r => [r.staff_id, r.label, r.photo])), [[STAFF.id, 'Phát', 'data:image/jpeg;base64,QUJD'], [LAN.id, null, null]]);
+  assert.equal(plain(await admin.GET({ url: 'http://x/api/admin/workforce?checkin=1' })).body.tapStaff.length, 2);
+  assert.equal((await post(admin, { action: 'save_tap_staff', staff_id: LAN.id, enabled: false })).status, 200);
+  assert.deepEqual(state.checkin_tap_staff.map(r => r.staff_id), [STAFF.id]);
 });
