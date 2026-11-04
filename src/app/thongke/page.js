@@ -223,10 +223,11 @@ function StaffReport({ date, monthRevenue }) {
     {people.length ? <ul className="tk-people">{people.map(p => {
       const c = p.salary;
       const meta = [
-        // Người trả theo giờ: số giờ trong ca được tính lương thay cho ngày công.
+        // Người trả theo giờ: số giờ trong ca được tính lương thay cho ngày công. Người trả theo ngày: số ngày công.
         c.rule !== 'days' ? `${c.workDays} ngày`
-          : c.hourly && !(c.dayUnits > 0) ? `${minutesText(c.hourly.minutes)} theo giờ (${num(c.workUnits)} ngày)`
-            : `${num(c.dayUnits ?? c.workUnits)}/${c.standardDays} ngày công${c.hourly?.minutes ? ` + ${minutesText(c.hourly.minutes)} theo giờ` : ''}`,
+          : c.hourly && !(c.dayUnits > 0) && !(c.dayWage?.days > 0) ? `${minutesText(c.hourly.minutes)} theo giờ (${num(c.workUnits)} ngày)`
+            : [(!(c.hourly || c.dayWage) || c.dayUnits > 0) && `${num(c.dayUnits ?? c.workUnits)}/${c.standardDays} ngày công`,
+              c.dayWage && `${num(c.dayWage.days)} ngày công (theo ngày)`, c.hourly?.minutes && `${minutesText(c.hourly.minutes)} theo giờ`].filter(Boolean).join(' + '),
         `${num(c.totalWorkH)} giờ`,
         p.late.count ? <span className="warn">trễ {p.late.count} lần ({minutesText(p.late.minutes)})</span> : null,
         p.leftEarly.count ? `về sớm ${p.leftEarly.count} lần` : null,

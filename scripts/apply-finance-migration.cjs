@@ -142,6 +142,14 @@ async function main() {
   console.log(JSON.stringify(hourly));
   if (!hourly.table_ok || !hourly.anon_blocked) throw new Error('Chưa cài được bảng lương theo giờ.');
 
+  // Nhân viên trả lương theo ngày (payroll_daily_rates.sql): cột unit của bảng lương theo giờ.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_daily_rates.sql'), 'utf8'));
+  const [daily] = await query(`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
+      AND table_name = 'payroll_hourly_rates' AND column_name = 'unit') AS unit_col,
+    (SELECT count(*)::int FROM public.payroll_hourly_rates WHERE unit = 'day') AS day_rows`);
+  console.log(JSON.stringify(daily));
+  if (!daily.unit_col) throw new Error('Chưa cài được phần lương theo ngày.');
+
   // Luật đi trễ (payroll_late_rules.sql): mặc định cả quán + luật riêng từng người.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_late_rules.sql'), 'utf8'));
   const [late] = await query(`SELECT to_regclass('public.payroll_late_rules') IS NOT NULL AS table_ok,
