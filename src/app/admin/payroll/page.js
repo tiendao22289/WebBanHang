@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
-import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
+import { currentWorkDay, dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
 import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthTallies, shopClosedDays, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
@@ -567,7 +567,15 @@ export default function PayrollPage() {
   const [salarySearch,  setSalarySearch]  = useState('');
   const [attSearch,     setAttSearch]     = useState('');
   const [attDateFilter, setAttDateFilter] = useState('');
-  const [attDayFilter,  setAttDayFilter]  = useState('');
+  // Tab Chấm công: mặc định xem ngày làm hôm nay ('auto', tự sang ngày mới); '' = cả tháng; 'DD' = ngày chủ chọn.
+  const [attDayFilter,  setAttDayFilter]  = useState('auto');
+  const [attNow, setAttNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (activeTab !== 'attendance' || attDayFilter !== 'auto') return undefined;
+    setAttNow(Date.now());
+    const timer = setInterval(() => setAttNow(Date.now()), 60000);
+    return () => clearInterval(timer);
+  }, [activeTab, attDayFilter]);
 
   // Attendance edit state
   const [editingAtt, setEditingAtt] = useState(null); // { id, staff_id, date, clock_in, clock_out, work_hours, overtime_hours, note }
@@ -2056,10 +2064,14 @@ export default function PayrollPage() {
 
           {/* === CHẤM CÔNG === */}
           {activeTab === 'attendance' && (() => {
+            // Ngày làm hôm nay (dọn quán sau nửa đêm vẫn là ca hôm trước); xem tháng khác thì "hôm nay" là cả tháng đó.
+            const today = currentWorkDay(rules, null, attNow);
+            const thisMonth = today.slice(0, 7) === `${selYear}-${fmt(selMonth)}`;
+            const dayFilter = attDayFilter === 'auto' ? (thisMonth ? today.slice(8, 10) : '') : attDayFilter;
             const filtered = attendance.filter(a => {
               const staff = staffList.find(s => s.id === a.staff_id);
               const nameOk = !attSearch || (staff?.full_name || '') === attSearch;
-              const dayOk  = !attDayFilter || workDayOf(a, rules).slice(8, 10) === attDayFilter;
+              const dayOk  = !dayFilter || workDayOf(a, rules).slice(8, 10) === dayFilter;
               return nameOk && dayOk;
             });
             return (
@@ -2071,8 +2083,9 @@ export default function PayrollPage() {
                     {staffList.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
                   </select>
                   <select value={attDayFilter} onChange={e => setAttDayFilter(e.target.value)}>
-                    <option value="">Ngày</option>
-                    {Array.from({length: 31}, (_, i) => i + 1).map(d => <option key={d} value={String(d).padStart(2,'0')}>{d}</option>)}
+                    <option value="auto">Hôm nay</option>
+                    <option value="">Cả tháng</option>
+                    {Array.from({length: 31}, (_, i) => i + 1).map(d => <option key={d} value={String(d).padStart(2,'0')}>Ngày {d}</option>)}
                   </select>
                   <select value={selMonth} onChange={e => setSelMonth(Number(e.target.value))}>
                     {months.map(m => <option key={m} value={m}>Tháng {m}</option>)}
@@ -2080,14 +2093,16 @@ export default function PayrollPage() {
                   <select value={selYear} onChange={e => setSelYear(Number(e.target.value))}>
                     {years.map(y => <option key={y} value={y}>{y}</option>)}
                   </select>
-                  {(attSearch || attDayFilter) && (
-                    <button onClick={() => { setAttSearch(''); setAttDayFilter(''); }}
+                  {(attSearch || attDayFilter !== 'auto') && (
+                    <button onClick={() => { setAttSearch(''); setAttDayFilter('auto'); }}
                       style={{ fontSize: '0.8rem', color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0 }}>✕ Xoá</button>
                   )}
                 </div>
 
                 {filtered.length === 0
-                  ? <div className="empty-state">Không có dữ liệu chấm công tháng {selMonth}/{selYear}</div>
+                  ? <div className="empty-state">{dayFilter
+                      ? `Chưa có ai chấm công ngày ${Number(dayFilter)}/${selMonth}/${selYear}${attDayFilter === 'auto' ? ' (hôm nay)' : ''}.`
+                      : `Không có dữ liệu chấm công tháng ${selMonth}/${selYear}`}</div>
                   : <>
                       {/* Mobile cards */}
                       <div className="mobile-cards">
