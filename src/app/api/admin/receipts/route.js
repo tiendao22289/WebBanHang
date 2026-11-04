@@ -16,6 +16,7 @@
  *                    image | skip_reason — trang Bàn: đóng bàn (complete_table_payment_atomic). Chuyển khoản
  *                    chỉ khi có ảnh màn hình CK của khách, hoặc lý do không chụp được (máy lỗi...).
  *                    Tiền mặt không cần ảnh (chủ quán bỏ bước chụp tiền 2026-10-27); có ảnh thì vẫn lưu.
+ *                    Sổ thu chi ghi bill chuyển khoản vào đúng thẻ đã chọn khi đóng bàn.
  *
  * source = 'qr:<mã>' / 'cash:<id phiếu>': bill giấy DB tự ghi khi thu ở trang
  * Mã QR (owner_finance.sql, capture_qr_page_receipt). qr_confirm / qr_cash bắt
@@ -323,8 +324,11 @@ export async function POST(request) {
       const nextVoucher = await giveNextVisitVoucher(db, orderIds);
       // Tiền mặt không ảnh, không lý do: không có gì gắn vào Sổ thu chi.
       if (!hasImage && skipReason.length < 3) return NextResponse.json({ ok: true, photoSaved: false, ...(nextVoucher ? { nextVoucher } : {}) }, { headers });
-      const patch = !hasImage ? { photo_skip_reason: skipReason, photo_by: by }
-        : method === 'cash' ? { cash_image_path: path, photo_by: by } : { transfer_image_path: path, transfer_image_by: by, photo_by: by };
+      // Chuyển khoản: trigger ghi sổ lấy thẻ từ mã QR của bàn lúc còn chờ (có thể là thẻ khác) → ghi lại
+      // đúng thẻ nhận tiền của lần đóng bàn này (hàm đóng bàn trả về thẻ đã cộng tiền).
+      const card = method === 'transfer' ? { account_id: UUID.test(data.account_id || '') ? data.account_id : accountId } : {};
+      const patch = !hasImage ? { photo_skip_reason: skipReason, photo_by: by, ...card }
+        : method === 'cash' ? { cash_image_path: path, photo_by: by } : { transfer_image_path: path, transfer_image_by: by, photo_by: by, ...card };
       // Sổ thu chi đã ghi bill (trigger capture_finance_revenue, cùng giao dịch đóng bàn).
       const update = await db.from('finance_revenue_ledger').update(patch).in('order_id', orderIds).select('order_id');
       const photoSaved = !update.error && (update.data || []).length > 0;

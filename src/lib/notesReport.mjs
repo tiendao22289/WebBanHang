@@ -7,6 +7,7 @@
  */
 import { lineWarnings, noteTotals, parsePrice, parseQty } from './notesMath.mjs';
 import { notesSummary } from './notesSummary.mjs';
+import { paymentItemIndex } from './notesDebts.mjs';
 
 export const ZALO_TEXT_LIMIT = 1900;
 const vnd = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;
@@ -16,6 +17,8 @@ const dayMonth = iso => { const d = vnIso(iso); return `${d.slice(8, 10)}/${d.sl
 const readContent = content => { try { const d = JSON.parse(content); return d && typeof d === 'object' ? d : null; } catch { return null; } };
 const TYPE_LABEL = { stock: '📦 Báo thiếu', repair: '🔧 Sửa chữa', other: '📝 Ghi chú' };
 const named = items => (items || []).filter(i => String(i?.name || '').trim());
+// Dòng hàng đã nhận một lần trả nợ: tìm theo lịch sử trả của dòng, không theo vị trí (phiếu có thể đã bị sửa).
+const paidItem = (note, p) => { const items = readContent(note?.content)?.items; return Array.isArray(items) ? items[paymentItemIndex(items, p)] || null : null; };
 const lineTotal = item => Math.round(parsePrice(item.price) * parseQty(item.qty));
 const debtBase = item => {
   const total = lineTotal(item);
@@ -119,7 +122,7 @@ export function notesReportMessages({ date, dayNotes = [], allNotes = [], paymen
   if (paidToday.length) {
     blocks.push(['💰 Trả nợ trong ngày:', ...paidToday.map(p => {
       const note = byId.get(p.note_id);
-      const item = p.item_index !== null && p.item_index !== undefined ? readContent(note?.content)?.items?.[p.item_index] || null : null;
+      const item = paidItem(note, p);
       const creditor = String(item?.creditor || '').trim();
       return `• ${clock(p.paid_at)} ${vnd(p.amount)}${item ? ` cho ${item.name}` : ''}${creditor ? ` (${creditor})` : ''}${note ? ` — phiếu ${dayMonth(note.created_at)}` : ''}${p.paid_from_note_id ? ' — lấy từ tiền đi chợ' : ''}${p.created_by_name ? ` · ${p.created_by_name}` : ''}`;
     })].join('\n'));
@@ -237,7 +240,7 @@ export function notesDayData({ date, dayNotes = [], allNotes = [], payments = []
 
   const paid = payments.filter(p => inDay(p.paid_at)).sort((a, b) => String(a.paid_at).localeCompare(String(b.paid_at))).map(p => {
     const note = byId.get(p.note_id);
-    const item = p.item_index !== null && p.item_index !== undefined ? readContent(note?.content)?.items?.[p.item_index] || null : null;
+    const item = paidItem(note, p);
     return { at: p.paid_at, amount: Number(p.amount) || 0, item: item?.name || null, creditor: String(item?.creditor || '').trim() || null,
       noteDay: note ? dayMonth(note.created_at) : null, fromNote: !!p.paid_from_note_id, by: p.created_by_name || null };
   });

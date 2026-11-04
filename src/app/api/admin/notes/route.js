@@ -10,17 +10,19 @@
  *
  * GET  → { notes (kèm staff), payments, categories }  (admin, quản lý: tất cả; nhân viên: của mình)
  *       categories: các loại "Khác" chủ quán tạo (dòng hàng tab Khác có category = id loại)
- * POST {action}: create (kèm pay_debts: [{ note_id, item_index|null, amount }] — trả đúng các khoản
- *       nợ cũ đã chọn; from_note_id = lấy từ tiền thừa của phiếu trước, bỏ trống = tiền phiếu mới;
+ * POST {action}: create (kèm pay_debts: [{ note_id, item_id, item_index|null, amount }] — trả đúng các khoản
+ *       nợ cũ đã chọn (tìm dòng theo item_id = _id của dòng, dòng cũ chưa có mã thì theo item_index);
+ *       from_note_id = lấy từ tiền thừa của phiếu trước, bỏ trống = tiền phiếu mới;
  *       carry_leftovers [{ note_id, amount }] = cộng tiền dư phiếu cũ vào phiếu mới),
- *       edit, pay_item (item_index null = cả phiếu), return_leftover (đã trả tiền thừa cho chủ),
+ *       edit (kèm updated_at của phiếu lúc mở ô sửa: phiếu đã đổi từ đó thì không ghi đè),
+ *       pay_item (item_id / item_index; item_index null = cả phiếu), return_leftover (đã trả tiền thừa cho chủ),
  *       delete (admin; hoàn lại nợ đã trả / tiền dư đã chuyển bằng phiếu đó),
  *       set_categories (admin; { categories: [{ id?, name }] } — tạo / đổi tên / xoá loại Khác)
  */
 import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
-import { noteLeftover, noteMoney, openDebtLines } from '@/lib/notesDebts.mjs';
+import { findDebtLine, noteLeftover, noteMoney, openDebtLines, paymentItemIndex } from '@/lib/notesDebts.mjs';
 import { categoryName, cleanCategories, lineCategory } from '@/lib/noteCategories.mjs';
 import { seesAllNotes } from '@/lib/staffRoles.mjs';
 
@@ -139,16 +141,23 @@ function changeSet() {
   return set;
 }
 
-/** Ghi trả nợ vào bản sao phiếu (dòng hàng, lịch sử, số đã trả) và thêm vào sổ trả nợ. */
+/**
+ * Ghi trả nợ vào bản sao phiếu (dòng hàng, lịch sử, số đã trả) và thêm vào sổ trả nợ.
+ * Lịch sử trả của dòng ghi phiếu bỏ tiền (from_note_id): xoá phiếu đó thì tìm lại đúng dòng
+ * này dù phiếu đã bị sửa (sổ trả nợ chỉ lưu vị trí dòng lúc trả).
+ */
 function payInto(changes, note, itemIndex, amount, { user, fromNoteId, logText }) {
   const row = changes.note(note);
   const data = parseContent(row.content);
   const ts = stamp();
-  const item = data?.type === 'structured_expense' && Array.isArray(data.items) && itemIndex !== null ? data.items[itemIndex] : null;
+  const items = data?.type === 'structured_expense' && Array.isArray(data.items) ? data.items : [];
+  // Dòng cũ chưa có mã: đặt "#vị trí" như trang Sổ tay khi mở sửa, để từ nay tìm dòng theo mã.
+  items.forEach((it, i) => { if (it && typeof it === 'object' && !it._id) it._id = `#${i}`; });
+  const item = itemIndex !== null ? items[itemIndex] || null : null;
   if (item) {
     item.paid_amount = (Number(item.paid_amount) || 0) + amount;
     if (item.paid_amount >= debtBase(item)) item.paymentStatus = 'full';
-    item.payment_logs = [...(item.payment_logs || []), { amount, ts }];
+    item.payment_logs = [...(item.payment_logs || []), { amount, ts, from_note_id: fromNoteId || null }];
   }
   if (data) data.history = [...(data.history || []), { ts, by: user.full_name || 'Không rõ', changes: logText(item || { name: '' }) }];
   row.paid_debt = Math.min(Number(row.debt) || 0, (Number(row.paid_debt) || 0) + amount);
@@ -156,16 +165,23 @@ function payInto(changes, note, itemIndex, amount, { user, fromNoteId, logText }
   changes.payments.push({ note_id: note.id, item_index: itemIndex, amount, paid_from_note_id: fromNoteId || null, staff_id: user.id, created_by_name: user.full_name || null });
 }
 
-/** Huỷ một lần trả nợ (khi xoá phiếu đã dùng để trả): mở lại nợ của dòng đó. */
+/**
+ * Huỷ một lần trả nợ (khi xoá phiếu đã dùng để trả): mở lại nợ của đúng dòng đã nhận tiền
+ * (paymentItemIndex — không theo vị trí, vì phiếu có thể đã bị sửa xoá / thêm dòng).
+ */
 function unpayInto(changes, note, payment, { user, why }) {
   const row = changes.note(note);
   const data = parseContent(row.content);
   const ts = stamp(), amount = Number(payment.amount) || 0;
-  const item = data?.type === 'structured_expense' && Array.isArray(data.items) && payment.item_index !== null ? data.items[payment.item_index] : null;
+  const items = data?.type === 'structured_expense' && Array.isArray(data.items) ? data.items : [];
+  const item = items[paymentItemIndex(items, payment)] || null;
   if (item) {
+    const from = payment.paid_from_note_id || null;
+    // Ghi lần huỷ cùng kiểu lần trả (lần trả cũ không có from_note_id) để các lần huỷ sau tìm đúng dòng còn lại.
+    const tagged = (item.payment_logs || []).some(l => l && typeof l === 'object' && 'from_note_id' in l && (l.from_note_id || null) === from && Number(l.amount) > 0);
     item.paid_amount = Math.max(0, (Number(item.paid_amount) || 0) - amount);
     if (item.paid_amount < debtBase(item)) item.paymentStatus = 'debt';
-    item.payment_logs = [...(item.payment_logs || []), { amount: -amount, ts, note: why }];
+    item.payment_logs = [...(item.payment_logs || []), { amount: -amount, ts, note: why, ...(tagged ? { from_note_id: from } : {}) }];
   }
   const text = `↩ Huỷ trả nợ ${vnd(amount)}${item?.name ? ` cho "${item.name}"` : ''} (${why})`;
   if (data) data.history = [...(data.history || []), { ts, by: user.full_name || 'Không rõ', changes: text }];
@@ -237,13 +253,14 @@ export async function POST(request) {
         if (!target || !pay) return fail('Khoản nợ cần trả không hợp lệ.');
         if (!canManage && target.staff_id !== user.id) return fail('Không trả được nợ trên phiếu của người khác.', 403);
         const idx = r.item_index === null || r.item_index === undefined ? null : Number(r.item_index);
-        const line = openDebtLines(target).find(l => l.item_index === idx);
-        const key = `${target.id}:${idx}`;
+        // Tìm dòng theo mã: phiếu nợ có thể vừa bị sửa (xoá / thêm dòng) nên vị trí trình duyệt thấy đã khác.
+        const line = findDebtLine(openDebtLines(target), typeof r.item_id === 'string' ? r.item_id : null, idx);
+        const key = `${target.id}:${line ? line.item_index : idx}`;
         const already = used.get(key) || 0;
         if (!line || pay + already > line.left) return fail(`Số trả vượt số còn nợ${line ? ` (${line.name}: còn ${vnd(line.left - already)})` : ' — khoản này đã trả hết'}.`);
         used.set(key, already + pay);
         const from = UUID.test(r.from_note_id || '') ? r.from_note_id : null;
-        plan.push({ target, idx, pay, line, from });
+        plan.push({ target, idx: line.item_index, pay, line, from });
       }
       const carry = [];
       for (const c of carryReq) {
@@ -357,10 +374,10 @@ export async function POST(request) {
 
     if (body.action === 'pay_item') {
       const idx = body.item_index === null || body.item_index === undefined ? null : Number(body.item_index), amount = money(body.amount);
-      const line = openDebtLines(note).find(l => l.item_index === idx);
+      const line = findDebtLine(openDebtLines(note), typeof body.item_id === 'string' ? body.item_id : null, idx);
       if (!line) return fail('Dòng này không còn nợ.');
       if (!amount || amount > line.left) return fail('Số tiền không hợp lệ!');
-      payInto(changes, note, idx, amount, { user, logText: item => `💰 Trả nợ ${vnd(amount)}${item?.name ? ` cho "${item.name}"` : ''}` });
+      payInto(changes, note, line.item_index, amount, { user, logText: item => `💰 Trả nợ ${vnd(amount)}${item?.name ? ` cho "${item.name}"` : ''}` });
       await changes.commit(db);
       return NextResponse.json({ ok: true, note: await fresh(db, note.id) }, { headers });
     }
@@ -368,6 +385,12 @@ export async function POST(request) {
     if (body.action === 'edit') {
       // Nhân viên chỉ sửa phiếu của mình trong ngày ghi; admin, quản lý sửa được mọi phiếu (có nhật ký).
       if (!canManage && vnDay(note.created_at) !== vnDay(new Date().toISOString())) return fail('Chỉ sửa được phiếu trong ngày ghi.', 403);
+      // Trang gửi updated_at của phiếu lúc mở ô sửa: phiếu đã đổi từ đó (máy khác sửa, trả nợ…) thì
+      // không ghi đè bản mới hơn bằng màn hình cũ. Đổi sau lúc đọc này thì staff_notes_commit chặn.
+      const expect = body.updated_at ?? null, current = note.updated_at ?? null;
+      if ('updated_at' in body && expect !== current && Date.parse(expect) !== Date.parse(current)) {
+        return fail('Phiếu này vừa được sửa / trả nợ ở máy khác. Tải lại trang để xem bản mới rồi sửa lại.', 409);
+      }
       const type = TYPES.includes(body.note_type) ? body.note_type : note.note_type;
       const stored = parseContent(note.content);
       const storedItems = stored?.type === 'structured_expense' && Array.isArray(stored.items) ? stored.items : [];

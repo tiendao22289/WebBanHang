@@ -93,6 +93,13 @@ export function noteTotals(items = []) {
   return { total, paid, debt, debtPaid, debtLeft: debt - debtPaid, lines, warnings: lines.flatMap(l => l.warnings) };
 }
 
+/**
+ * Dòng hàng đã lưu → dòng của ô sửa phiếu. Dòng cũ chưa có mã: "#vị trí" để máy chủ so đúng dòng.
+ * "Số tiền nợ" trống giữ trống (= nợ cả dòng): điền sẵn tổng cũ thì sửa giá / số lượng sẽ đẩy
+ * phần chênh sang "trả ngay".
+ */
+export const editRows = items => (Array.isArray(items) ? items : []).map((item, idx) => ({ ...item, _id: item?._id || `#${idx}` }));
+
 /** Ô giá khi bấm ra ngoài: số nhỏ không có chữ k thì thêm "k" (250 → 250k), số lớn giữ nguyên. */
 export function normalizePriceInput(value) {
   const v = String(value ?? '').trim();

@@ -377,6 +377,26 @@ test('when the camera is broken a transfer table closes only with a written reas
   assert.deepEqual(plain(state.finance_revenue_ledger).map(r => [r.photo_skip_reason, r.photo_by]), [['Máy lỗi camera', 'Thu ngân'], ['Máy lỗi camera', 'Thu ngân']]);
 });
 
+test('a transfer table is booked to the card that got the money, not the card of a QR code still waiting on the table', async () => {
+  const QR_CARD = '00000000-0000-0000-0000-0000000000dd';
+  // Như DB thật: trigger ghi sổ lấy thẻ từ mã QR của bàn còn 'pending' (khách quét QR thẻ khác rồi chuyển vào ACC).
+  const pendingQrDb = () => ({ ...base(), rpc: { complete_table_payment_atomic: (args, state) => {
+    for (const id of args.p_expected_order_ids) {
+      state.finance_revenue_ledger.push({ order_id: id, business_date: today, payment_method: args.p_payment_method, account_id: args.p_payment_method === 'transfer' ? QR_CARD : null, amount: 1 });
+    }
+    return { data: { success: true, account_id: args.p_payment_method === 'transfer' ? args.p_account_id : null }, error: null };
+  } } });
+  for (const fields of [{ image: image() }, { image: undefined, skip_reason: 'Máy lỗi camera' }]) {
+    const state = pendingQrDb();
+    const res = await payTable(load({ state }).api, { method: 'transfer', account_id: ACC, ...fields });
+    assert.deepEqual([res.status, res.body.photoSaved], [200, true]);
+    assert.deepEqual(plain(state.finance_revenue_ledger).map(r => r.account_id), [ACC, ACC], JSON.stringify(Object.keys(fields)));
+  }
+  const cash = pendingQrDb();
+  await payTable(load({ state: cash }).api);
+  assert.deepEqual(plain(cash.finance_revenue_ledger).map(r => r.account_id), [null, null], 'cash has no card');
+});
+
 test('a bill that changed while paying keeps the table open and drops the photo', async () => {
   const state = tableDb();
   const staff = load({ state });
