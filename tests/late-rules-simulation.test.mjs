@@ -142,7 +142,9 @@ test('late rules and automatic overtime over four real days: every slip and ever
   assert.equal(closed.status, 200);
   const slip = p => state.payroll_closes.find(c => c.staff_id === p.id)?.snapshot;
   const show = s => ({ units: s.workUnits, basePay: s.basePay, lateAmt: s.lateAmt, earlyAmt: s.earlyAmt, otAmt: s.otAmt, pendingH: s.pendingH, net: s.net });
-  assert.equal('daily' in slip(HOA) || 'byDay' in slip(HOA), false, 'per-day details are not stored in the closed slip');
+  // Chi tiết từng ngày không lưu; tiền từng ngày (cho Sổ thu chi) lưu cùng số đã chốt và cộng đúng bằng phiếu.
+  assert.equal('daily' in slip(HOA), false, 'per-day details are not stored in the closed slip');
+  assert.equal(Object.values(slip(HOA).byDay).reduce((a, x) => a + x, 0), 1154500, 'the day pay kept for the finance book adds up to the slip');
   // Hoa: 4 ngày = 1.200.000đ; trễ 11 phút 5/11 = 50.000 + 5.500; trễ 10 phút 7/11 không trừ; về sớm 40 phút = 20.000; sớm 30 + ở lại 30 = 30.000.
   assert.deepEqual(show(slip(HOA)), { units: 4, basePay: 1200000, lateAmt: 55500, earlyAmt: 20000, otAmt: 30000, pendingH: 0, net: 1154500 });
   assert.deepEqual(slip(HOA).lateList, [{ day: '2026-11-05', minutes: 11, amount: 55500, perMinute: 5500, fixed: 50000 }]);

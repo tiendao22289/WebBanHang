@@ -175,6 +175,13 @@ async function main() {
   console.log(JSON.stringify(closedRules));
   if (!closedRules.rules_ok || !closedRules.skip_col || closedRules.rules < 1 || !closedRules.anon_blocked) throw new Error('Chưa cài được lịch quán nghỉ.');
 
+  // Nghỉ việc rồi đi làm lại (staff_returns.sql): khoảng đã nghỉ không có lương ngày quán nghỉ.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'staff_returns.sql'), 'utf8'));
+  const [returns] = await query(`SELECT to_regclass('public.staff_returns') IS NOT NULL AS table_ok,
+    NOT has_table_privilege('anon', 'public.staff_returns', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(returns));
+  if (!returns.table_ok || !returns.anon_blocked) throw new Error('Chưa cài được bảng đi làm lại.');
+
   // Chấm công bằng nút trên máy quầy cho người không có điện thoại (checkin_tap.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_tap.sql'), 'utf8'));
   const [tap] = await query(`SELECT to_regclass('public.checkin_tap_staff') IS NOT NULL AS table_ok,

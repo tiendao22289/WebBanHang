@@ -56,6 +56,8 @@ export function fakeDb(state) {
       then(ok, bad) { return new Promise(run).then(ok, bad); },
     };
     function run(resolve) {
+      // state.__noTable ['bảng']: như DB chưa tạo bảng đó (chưa chạy migration).
+      if (state.__noTable?.includes(table)) return resolve({ data: null, error: { code: '42P01', message: `relation "public.${table}" does not exist` } });
       state[table] ||= [];
       // state.__noColumn { bảng: 'cột' }: như DB chưa thêm cột đó (chưa chạy migration) — ghi cột đó thì lỗi.
       const noColumn = state.__noColumn?.[table];

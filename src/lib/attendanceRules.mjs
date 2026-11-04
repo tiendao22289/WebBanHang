@@ -159,13 +159,15 @@ export function sessionHours(session, rules, review = null) {
   const s = Date.parse(session?.clock_in), e = Date.parse(session?.clock_out);
   if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return out;
   out.totalMs = e - s;
-  if (!rules || !(String(session.date) >= rules.hours_from)) { out.countedMs = out.totalMs; return out; }
+  // span: khoảng trong ca của lượt này [từ, tới] (ms) — dayInShiftMs gộp các lượt của một ngày.
+  if (!rules || !(String(session.date) >= rules.hours_from)) { out.countedMs = out.totalMs; out.span = [s, e]; return out; }
   out.byShift = true;
   const w = windowFor(session, rules);
   const ws = w.start.getTime(), we = w.end.getTime(), grace = w.grace;
   let cs = Math.max(s, ws); if (cs - ws <= grace) cs = ws;
   let ce = Math.min(e, we); if (we - ce <= grace) ce = we;
   const inShift = Math.max(0, ce - cs);
+  if (inShift) out.span = [cs, ce];
   out.earlyMs = s < ws - grace ? Math.max(0, Math.min(e, ws) - s) : 0;
   out.stayMs = e > we + grace ? Math.max(0, e - Math.max(s, we)) : 0;
   const outside = out.earlyMs + out.stayMs;
@@ -174,6 +176,22 @@ export function sessionHours(session, rules, review = null) {
   else if (!review) out.pendingMs = outside;
   out.countedMs = inShift + out.approvedMs;
   return out;
+}
+
+/**
+ * Giờ trong ca của cả một ngày làm (các lượt của ngày đó): gộp khoảng trong ca của từng lượt, nên quét nhầm rồi vào
+ * lại (18:00–18:05 rồi 18:09) hay về rồi quay lại dọn quán không tính một khoảng hai lần; không quá độ dài ca. Vẫn
+ * cho lệch như từng lượt: vào lại hay về trong số phút cho lệch không làm ngày đó ít hơn lúc chỉ có một lượt.
+ */
+export function dayInShiftMs(sessions, rules) {
+  const spans = (sessions || []).map(x => sessionHours(x, rules).span).filter(Boolean).sort((a, b) => a[0] - b[0]);
+  let total = 0, reached = -Infinity;
+  for (const [from, to] of spans) {
+    if (to <= reached) continue;
+    total += to - Math.max(from, reached);
+    reached = to;
+  }
+  return total;
 }
 
 /** Vào trễ / vào sớm / về sớm / ở lại (phút, chỉ khi quá số phút cho lệch) của một người trong một ngày. */

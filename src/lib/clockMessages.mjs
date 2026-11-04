@@ -112,18 +112,24 @@ Quét lại mã trên máy quầy.`;
 }
 
 // Đúng giờ / trễ / sớm so với ca của người đó, báo ngay sau khi quét (chỉ từ ngày tính giờ theo ca).
-export function punctuality(clocked, session, sessions, rules, staffId) {
+// closedDays: ngày quán nghỉ (máy quầy truyền vào; điện thoại lấy từ giờ làm ?me=1 gửi kèm) — chủ gọi vào làm hôm quán
+// nghỉ thì không báo trễ / về sớm, không nhắc trừ lương.
+export function punctuality(clocked, session, sessions, rules, staffId, closedDays = rules?.closedDays) {
   if (!rules || !session || !(String(session.date) >= rules.hours_from)) return '';
   const day = (sessions || []).some(s => s.id === session.id) ? sessions : [session];
   // Ca của ngày làm: vào lại sau nửa đêm để dọn quán vẫn so với ca hôm trước.
   const workDay = workDayOf(session, rules), f = dayFlags(day, rules), shift = shiftOf(rules, staffId, workDay);
+  const closed = (closedDays || []).some(d => String(d?.day ?? d).slice(0, 10) === workDay);
+  if (closed) { f.late = 0; f.leftEarly = 0; }
   // Từ tháng 11 giờ ngoài ca tự tính tăng ca. Đi trễ bị trừ theo luật đi trễ của từng người (máy chủ tính).
   const autoExtra = workDay >= AUTO_EXTRA_FROM;
   if (clocked === 'in') {
     if (f.late) return `⏰ Trễ ${durationText(f.late)} so với ca ${shift.start}.${autoExtra ? ' Đi trễ có thể bị trừ lương.' : ''}`;
     if (f.early) return `🌅 Vào sớm ${durationText(f.early)}: giờ trước ${shift.start} ${autoExtra ? 'được tính tăng ca' : 'chỉ được tính khi chủ quán đồng ý'}.`;
+    if (closed) return '✅ Hôm nay quán nghỉ: không tính trễ / về sớm.';
     return `✅ Đúng giờ (ca ${shift.start} – ${shift.end}).`;
   }
+  if (closed && !f.stayed) return '✅ Hôm nay quán nghỉ: không tính trễ / về sớm.';
   if (f.leftEarly) {
     // Từ tháng 11 về sớm từ 30 phút bị trừ lương theo giờ về sớm.
     const cut = f.leftEarly >= EARLY_CUT_MINUTES && workDay.slice(0, 7) >= DAY_PAY_FROM;

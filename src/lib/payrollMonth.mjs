@@ -45,16 +45,25 @@ export async function readLateRules(db) {
   return data || [];
 }
 
-// Ngày quán nghỉ (lịch âm lịch mỗi tháng + ngày thêm tay / mở cửa bù) + từng người có nhận lương ngày nghỉ không.
-// Bảng chưa tạo: chưa có ngày nghỉ nào.
+// Ngày quán nghỉ (lịch âm lịch mỗi tháng + ngày thêm tay / mở cửa bù) + từng người có nhận lương ngày nghỉ không
+// + các lần nghỉ việc rồi đi làm lại (returns: khoảng đã nghỉ không có lương ngày quán nghỉ).
+// Bảng chưa tạo: chưa có ngày nghỉ / lần đi làm lại nào.
 export async function readHolidays(db) {
-  const [days, rules, pay] = await Promise.all([
+  const [days, rules, pay, returns] = await Promise.all([
     db.from('shop_closed_days').select('*').order('day'),
     db.from('shop_closed_rules').select('*').order('valid_from'),
     db.from('payroll_holiday_pay').select('*'),
+    db.from('staff_returns').select('*').order('return_day'),
   ]);
-  for (const r of [days, rules, pay]) if (r.error && !missingTable(r.error)) throw r.error;
-  return { closedRows: days.error ? [] : days.data || [], closedRules: rules.error ? [] : rules.data || [], holidayPay: pay.error ? [] : pay.data || [] };
+  for (const r of [days, rules, pay, returns]) if (r.error && !missingTable(r.error)) throw r.error;
+  return { closedRows: days.error ? [] : days.data || [], closedRules: rules.error ? [] : rules.data || [], holidayPay: pay.error ? [] : pay.data || [],
+    returns: returns.error ? [] : returns.data || [] };
+}
+
+// Các ngày quán nghỉ từ `from` tới `to` (['2026-11-09', …]) — câu báo khi chấm công không nhắc trễ / về sớm hôm quán nghỉ.
+export async function readClosedDays(db, from, to) {
+  const { closedRows, closedRules } = await readHolidays(db);
+  return shopClosedDays({ rules: closedRules, rows: closedRows, from, to }).map(d => d.day);
 }
 
 // Ngày quán nghỉ của tháng tới hôm nay (ngày chưa tới thì chưa tính lương — lương tạm tính đến hôm nay, như Sổ thu chi).
@@ -103,5 +112,5 @@ export async function loadPayrollMonth(db, year, month, today) {
   return { start, end, staff: staff.data || [], configs: configs.data || [], sessions: markFaceHolds(sessions, held), requests: requests.data || [],
     violations: violations.data || [], reviews, closes: closes.data || [], departures: departures.data || [], rules,
     bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data), hourlyRates, lateRules,
-    closedDays: closedDaysToDate(holidays, start, end, today), holidayPay: holidays.holidayPay };
+    closedDays: closedDaysToDate(holidays, start, end, today), holidayPay: holidays.holidayPay, returns: holidays.returns };
 }
