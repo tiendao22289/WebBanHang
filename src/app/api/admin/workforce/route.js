@@ -174,7 +174,7 @@ async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
     const closedDays = closedDaysToDate(holidays, start, end, vnToday());
     const live = computeSalary({ year, month, staffId, sessions: mine, config: config.data, requests: requests.data || [],
       violations: violations.data || [], bonuses: bonuses.data || [], rules: settings, reviews, hourlyRates, lateRules: lateRulesOf(lateRules, staffId),
-      ...holidayArgs(me.data || { id: staffId }, { closedDays, holidayPay: holidays.holidayPay, departures: left.data || [], returns: holidays.returns }) });
+      ...holidayArgs(me.data || { id: staffId }, { closedDays, holidayPay: holidays.holidayPay, departures: left.data || [], returns: holidays.returns, asOf: vnToday() }) });
     const salary = closed.data
       ? { bonusAmt: 0, ...closed.data.snapshot, year, month, locked: true, closed_at: closed.data.closed_at, paid_at: closed.data.paid_at || null }
       : { ...live, year, month, locked: false };

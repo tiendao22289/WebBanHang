@@ -112,5 +112,7 @@ export async function loadPayrollMonth(db, year, month, today) {
   return { start, end, staff: staff.data || [], configs: configs.data || [], sessions: markFaceHolds(sessions, held), requests: requests.data || [],
     violations: violations.data || [], reviews, closes: closes.data || [], departures: departures.data || [], rules,
     bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data), hourlyRates, lateRules,
-    closedDays: closedDaysToDate(holidays, start, end, today), holidayPay: holidays.holidayPay, returns: holidays.returns };
+    closedDays: closedDaysToDate(holidays, start, end, today), holidayPay: holidays.holidayPay, returns: holidays.returns,
+    // Hôm nay: tháng đang chạy chỉ tính phần chỉnh theo số ngày của tháng tới hôm nay (computeSalary asOf qua holidayArgs).
+    asOf: today || new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10) };
 }

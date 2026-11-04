@@ -41,6 +41,8 @@ const wageText = c => (c.dayWage?.rates?.length ? `${c.dayWage.rates.map(formatM
 const monthPart = c => !(c.hourly || c.dayWage) || c.dayUnits > 0;
 const hourOnly = c => !!c.hourly && !monthPart(c) && !(c.dayWage?.days > 0);
 const baseText = c => [monthPart(c) && formatMoney(c.base), wageText(c), rateText(c)].filter(Boolean).join(' + ');
+// Phần chỉnh lương tháng theo số ngày của tháng (tháng 31 ngày trừ 1 ngày, tháng 2 cộng 2 ngày) để đi làm đủ tháng = lương cơ bản.
+const adjustText = c => (c.monthAdjust ? `tháng ${c.standardDays} ngày ${c.monthAdjust > 0 ? '+' : '−'}${formatMoney(Math.abs(c.monthAdjust))}` : '');
 const daysText = c => (c.rule !== 'days' ? `${c.workDays} ngày`
   : hourOnly(c) ? `${durationText(c.hourly.minutes)} trong ca (${fmtNum(c.workUnits)} ngày)`
     : [monthPart(c) && `${fmtNum(c.dayUnits ?? c.workUnits)} / ${c.standardDays || STANDARD_DAYS} ngày`, c.dayWage && `${fmtNum(c.dayWage.days)} ngày công`,
@@ -749,7 +751,7 @@ export default function PayrollPage() {
     // Ngày quán nghỉ chưa tới thì chưa tính (lương tạm tính đến hôm nay).
     // Nghỉ việc rồi đi làm lại (returns): khoảng đã nghỉ không có lương ngày quán nghỉ.
     ...holidayArgs(staffList.find(x => x.id === staffId) || { id: staffId }, { closedDays: monthClosedDays, holidayPay: payrollMonth.holidayPay, departures: checkin?.departures || [],
-      returns: payrollMonth.returns || [] }),
+      returns: payrollMonth.returns || [], asOf: vnToday() }),
   });
   // Trễ / quên ra ca trong tháng (theo ngày làm; hôm quán nghỉ không tính trễ / về sớm) → xét thưởng chuyên cần và gợi ý phạt.
   const talliesOf = staffId => monthTallies({ sessions: attendance.filter(a => a.staff_id === staffId), rules, key: `${selYear}-${fmt(selMonth)}`, autoClosed: payrollMonth.autoClosed,
@@ -798,11 +800,11 @@ export default function PayrollPage() {
   // Tải bảng lương tháng đang xem ra file Excel (để in / lưu / chuyển khoản).
   const exportPayroll = async rows => {
     const XLSX = await import('xlsx');
-    const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Lương 1 ngày', 'Ngày theo ngày', 'Lương theo ngày', 'Lương 1 giờ', 'Giờ theo giờ', 'Lương theo giờ', 'Trừ vào trễ', 'Trừ về sớm', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
+    const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Chỉnh theo số ngày của tháng', 'Lương 1 ngày', 'Ngày theo ngày', 'Lương theo ngày', 'Lương 1 giờ', 'Giờ theo giờ', 'Lương theo giờ', 'Trừ vào trễ', 'Trừ về sớm', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
       'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Thực lĩnh', 'Đã trả theo kỳ', 'Còn phải trả', 'Trạng thái', 'Nghỉ việc'];
     const data = rows.map(({ s, c }) => {
       const d = departureOf(s.id);
-      return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.dayUnits ?? c.workUnits : c.workDays, c.dayAmt ?? c.basePay,
+      return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.dayUnits ?? c.workUnits : c.workDays, c.dayAmt ?? c.basePay, c.monthAdjust || 0,
         c.dayWage?.rates?.join(' / ') || '', c.dayWage ? c.dayWage.days : '', c.dayWage?.amount || '',
         c.hourly?.rates?.join(' / ') || '', c.hourly ? Math.round(c.hourly.minutes / 6) / 10 : '', c.hourly?.amount || '', c.lateAmt || 0, c.earlyAmt || 0, c.totalWorkH, c.otHours, c.otAmt,
         c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.net, cyclePaidOf(s.id), c.net - cyclePaidOf(s.id), c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
@@ -1615,6 +1617,7 @@ export default function PayrollPage() {
                 {c.rule === 'days'
                   ? <>
                       {monthPart(c) && row('Ngày công', `${fmtNum(c.dayUnits ?? c.workUnits)} / ${c.standardDays} ngày → ${formatMoney(c.dayAmt ?? c.basePay)}`)}
+                      {c.monthAdjust ? row(`Tháng ${c.standardDays} ngày`, `${c.monthAdjust > 0 ? '+' : '−'}${formatMoney(Math.abs(c.monthAdjust))}`) : null}
                       {c.dayWage && row('Ngày công', `${fmtNum(c.dayWage.days)} ngày × ${wageText(c)} → ${formatMoney(c.dayWage.amount)}`)}
                       {c.hourly && row('Giờ trong ca', `${durationText(c.hourly.minutes)} × ${rateText(c)} → ${formatMoney(c.hourly.amount)}`)}
                     </>
@@ -1660,7 +1663,7 @@ export default function PayrollPage() {
                   {c.rule === 'days'
                     ? hourOnly(c)
                       ? 'Lương = số giờ có mặt trong ca × lương 1 giờ (đi trễ / về sớm thì không tính phần đó). Tăng ca là giờ vào sớm / ở lại ngoài ca.'
-                      : `Lương = ${monthPart(c) ? `lương cơ bản ÷ ${c.standardDays} ngày` : 'lương 1 ngày'} × số ngày công (ngày làm dưới nửa ca tính nửa ngày${monthPart(c) ? (c.standardDays === 26 ? '' : '; ngày quán nghỉ cũng được tính công, đi làm đủ tháng = đúng lương cơ bản') : '; ngày không chấm công là nghỉ, không lương'}). Đi trễ bị trừ theo luật đi trễ của quán; về sớm từ 30 phút bị trừ theo số phút về sớm.${monthPart(c) && c.dayWage ? ' Ngày trả theo ngày: lương 1 ngày mỗi ngày công.' : ''}${c.hourly ? ' Ngày làm theo giờ: số giờ trong ca × lương 1 giờ.' : ''} Tăng ca là giờ vào sớm / ở lại ngoài ca.`
+                      : `Lương = ${monthPart(c) ? `lương cơ bản ÷ ${c.dayBase || c.standardDays}` : 'lương 1 ngày'} × số ngày công (ngày làm dưới nửa ca tính nửa ngày${monthPart(c) ? (c.dayBase ? '; ngày quán nghỉ cũng được tính công; tháng 31 ngày trừ bớt 1 ngày, tháng 2 cộng thêm, nên đi làm đủ tháng = đúng lương cơ bản' : '') : '; ngày không chấm công là nghỉ, không lương'}). Đi trễ bị trừ theo luật đi trễ của quán; về sớm từ 30 phút bị trừ theo số phút về sớm.${monthPart(c) && c.dayWage ? ' Ngày trả theo ngày: lương 1 ngày mỗi ngày công.' : ''}${c.hourly ? ' Ngày làm theo giờ: số giờ trong ca × lương 1 giờ.' : ''} Tăng ca là giờ vào sớm / ở lại ngoài ca.`
                     : 'Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca là giờ làm quá 8 tiếng mỗi ngày.'}
                   {!c.locked && ' Số còn thay đổi tới khi chủ quán chốt lương cuối tháng.'}
                 </div>
@@ -1852,7 +1855,7 @@ export default function PayrollPage() {
                 <div style={{ background: closes.length ? '#f0fdf4' : 'white', border: `1px solid ${closes.length ? '#bbf7d0' : '#e5e7eb'}`, borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155', lineHeight: 1.6 }}>
                   <div>
                     {dayPay
-                      ? <>📐 <strong>Tính theo ngày công:</strong> 1 ngày công = lương cơ bản ÷ số ngày của tháng (tháng này {monthDays(selYear, selMonth)} ngày) × số ngày công (ngày làm dưới nửa ca tính nửa ngày; ngày quán nghỉ cũng được 1 công, nên đi làm đủ tháng = đúng lương cơ bản). Đi trễ: trừ theo luật đi trễ (mặc định của quán hoặc riêng từng người — tiền cố định mỗi lần và / hoặc theo phút trễ); về sớm từ 30 phút: trừ số phút về sớm (lương ngày ÷ số phút của ca). Vào sớm / ra dư quá số phút cho lệch: tự tính tăng ca (bấm "Sửa" để bỏ một ca nếu không trả). Đơn báo nghỉ không trừ thêm. Người trả theo ngày: lương 1 ngày × số ngày đi làm (cách tính ngày, trễ / về sớm như trên; ngày không chấm công là nghỉ, không lương). Người trả theo giờ: số giờ trong ca × lương 1 giờ (trễ / về sớm mất đúng số phút đó), giờ ngoài ca trả theo giá tăng ca.</>
+                      ? <>📐 <strong>Tính theo ngày công:</strong> 1 ngày công = lương cơ bản ÷ 30 (tháng nào cũng vậy) × số ngày công (ngày làm dưới nửa ca tính nửa ngày; ngày quán nghỉ cũng được 1 công). Tháng 31 ngày trừ bớt 1 ngày, tháng 2 cộng thêm 2 ngày (năm nhuận 1 ngày), nên đi làm đủ tháng = đúng lương cơ bản và mỗi ngày nghỉ tháng nào cũng trừ bằng nhau{monthDays(selYear, selMonth) !== 30 ? ` (tháng này ${monthDays(selYear, selMonth)} ngày)` : ''}. Đi trễ: trừ theo luật đi trễ (mặc định của quán hoặc riêng từng người — tiền cố định mỗi lần và / hoặc theo phút trễ); về sớm từ 30 phút: trừ số phút về sớm (lương ngày ÷ số phút của ca). Vào sớm / ra dư quá số phút cho lệch: tự tính tăng ca (bấm "Sửa" để bỏ một ca nếu không trả). Đơn báo nghỉ không trừ thêm. Người trả theo ngày: lương 1 ngày × số ngày đi làm (cách tính ngày, trễ / về sớm như trên; ngày không chấm công là nghỉ, không lương). Người trả theo giờ: số giờ trong ca × lương 1 giờ (trễ / về sớm mất đúng số phút đó), giờ ngoài ca trả theo giá tăng ca.</>
                       : <>📐 Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày, trừ ngày nghỉ có đơn.</>}
                   </div>
                   {isAdmin && (
@@ -1910,7 +1913,7 @@ export default function PayrollPage() {
                           </div>
                           <div className="salary-card-row">
                             <span className="salary-card-label">{hourOnly(c) ? 'Giờ tính lương' : 'Ngày công'}</span>
-                            <span className="salary-card-value">{daysText(c)}{c.rule === 'days' && <> → {formatMoney(c.basePay)}</>}</span>
+                            <span className="salary-card-value">{daysText(c)}{c.rule === 'days' && <> → {formatMoney(c.basePay)}</>}{c.monthAdjust ? <small style={{ display: 'block', fontWeight: 400, color: '#94a3b8' }}>gồm {adjustText(c)}</small> : null}</span>
                           </div>
                           <div className="salary-card-row">
                             <span className="salary-card-label">Tổng giờ làm</span>
@@ -2008,7 +2011,7 @@ export default function PayrollPage() {
                             <tr>
                             <td><div style={{fontWeight:700}}>{c.locked ? '🔒 ' : ''}{s.full_name}</div><div style={{fontSize:'0.73rem',color:'#94a3b8'}}>{s.phone}</div></td>
                             <td>{baseText(c)}</td>
-                            <td>{daysText(c)}{c.rule === 'days' && <div style={{fontSize:'0.72rem',color:'#94a3b8'}}>= {formatMoney(c.basePay)}</div>}</td>
+                            <td>{daysText(c)}{c.rule === 'days' && <div style={{fontSize:'0.72rem',color:'#94a3b8'}}>= {formatMoney(c.basePay)}{c.monthAdjust ? ` (gồm ${adjustText(c)})` : ''}</div>}</td>
                             <td>{fmtNum(c.totalWorkH)} giờ{c.pendingH > 0 && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>+{fmtNum(c.pendingH)} giờ ngoài ca chờ duyệt</div>}</td>
                             <td>{tally(talliesOf(s.id).early)}</td>
                             <td>{tally(lateTallyOf(s.id), c.lateAmt)}</td>
@@ -2735,7 +2738,7 @@ export default function PayrollPage() {
           {activeTab === 'config' && (
             <div>
               <div className="payroll-form" style={{ marginBottom: 8 }}>
-                <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>💡 Thiết lập lương cơ bản (đi làm đủ tháng thì nhận đúng số này; mỗi ngày công = lương cơ bản ÷ số ngày của tháng, ngày quán nghỉ cũng được tính công), lương 1 ngày (người trả theo ngày) hoặc lương 1 giờ (người trả theo giờ), có tính tăng ca không (chọn Không thì giờ vào sớm / ở lại không được trả) và giá tăng ca mỗi giờ và ngày phát lương cho từng nhân viên.</p>
+                <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>💡 Thiết lập lương cơ bản (đi làm đủ tháng thì nhận đúng số này, ngày quán nghỉ cũng được tính công; mỗi ngày nghỉ trừ lương cơ bản ÷ 30, tháng nào cũng vậy), lương 1 ngày (người trả theo ngày) hoặc lương 1 giờ (người trả theo giờ), có tính tăng ca không (chọn Không thì giờ vào sớm / ở lại không được trả) và giá tăng ca mỗi giờ và ngày phát lương cho từng nhân viên.</p>
               </div>
               <div className="config-list config-salary">
                 {staffList.map(s => {

@@ -179,7 +179,8 @@ function datesBetween(from, toInclusive) {
  * revenue: dòng finance_revenue_ledger; notes: staff_notes; entries: finance_entries;
  * categories: finance_categories (để biết tab tự tạo nhập theo ngày hay theo tháng);
  * paperBills: finance_manual_receipts (bill giấy nhập tay, cộng vào doanh thu).
- * wages: payrollCost() — lương mỗi ngày theo chấm công (byDay) + thưởng − phạt cả tháng (monthExtra).
+ * wages: payrollCost() — lương mỗi ngày theo chấm công (byDay) + thưởng − phạt cả tháng và phần chỉnh lương tháng theo số ngày
+ *   của tháng (monthExtra).
  * checks: finance_day_checks (máy tự kiểm tra) → day.check { ok, problems, checkedAt, by }.
  * Dòng tab "Khác" của phiếu Sổ tay (xăng xe, sửa chữa…) vẫn nằm trong purchases, tách riêng ở
  *   day.notesOther = { [id loại]: tiền } (shoppingParts() chia ra để hiện), day.notesOtherItems = từng khoản theo tên dòng (tiền nhà,
