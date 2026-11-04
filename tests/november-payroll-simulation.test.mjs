@@ -2,7 +2,7 @@
 // ứng / phạt / thưởng, kết toán người nghỉ, chốt lương), rồi so từng phiếu, số tính lại, trang Lương, Thống kê và
 // Sổ thu chi với số tính tay.
 // Quán 14:00 → 00:00, cho lệch 10 phút. Luật trễ của quán (như migration) từ 4/11: cho 10 phút, quá thì 50.000đ + theo phút.
-// Lương tháng 7.800.000đ = 300.000đ/ngày = 500đ/phút; tăng ca 30.000đ/giờ = 500đ/phút.
+// Lương tháng 9.000.000đ ÷ 30 ngày của tháng 11 = 300.000đ/ngày = 500đ/phút; tăng ca 30.000đ/giờ = 500đ/phút.
 // Quán nghỉ âm lịch mùng 1 (9/11) và rằm (23/11, chủ bấm mở cửa 20/11); chủ thêm tay 17/11.
 //   An    — lương tháng, quét mã: trễ 35' trước khi có luật (2/11), trễ 8' (4/11), trễ 25' (5/11), về sớm 20' (6/11),
 //           về sớm 45' (7/11), vào sớm + ở lại (8/11), quán nghỉ 9/11 được gọi vào 16–20h, quét đúp (10/11),
@@ -15,14 +15,14 @@
 //   Em    — lương tháng tới 15/11, từ 16/11 theo ngày 260.000đ; trễ 30' ngày 19/11.
 //   Hoa   — lương tháng, mẫu mực: thưởng chuyên cần 300.000, phạt làm vỡ ly 50.000.
 //   Phát  — vào làm 12/11 (chủ tạo tài khoản), lương tháng, ứng 300.000.
-//   Giang — lương 7.000.000đ (số lẻ), trễ 15' (12/11), ứng 2.000.000, nghỉ việc sau 15/11, kết toán sáng 16/11.
+//   Giang — lương 8.076.923đ (÷ 30 = 269.230,77đ/ngày, số lẻ), trễ 15' (12/11), ứng 2.000.000, nghỉ việc sau 15/11, kết toán sáng 16/11.
 //   Khoa  — tài khoản cũ, nghỉ việc 20/10, chủ bấm "Đi làm lại" 19/11; chủ sửa một lượt quét nhầm 24/11 thành ca 22/11.
 // Số mong đợi là số ĐÚNG theo luật chủ chọn. Các lỗi giả lập này tìm ra (đã sửa 2026-11-04):
 //   - An: ngày quán nghỉ 9/11 được gọi vào 16:00 từng bị tính "trễ 2 giờ" → gợi ý phạt + mất thưởng chuyên cần.
 //   - Cường: 10/11 quét nhầm 18:00–18:05 rồi vào lại 18:09 → từng tính 485 phút (đếm 18:00–18:05 hai lần), dư 2.500đ.
 //   - Khoa: từng được 2 ngày quán nghỉ (9/11, 17/11) trước khi đi làm lại; ca sửa sang 22/11 từng giữ date 24/11 → tính
 //     vào 23/11 thành 10 giờ tăng ca, mất 1 ngày công.
-//   - Sổ thu chi của Giang (lương 7.000.000đ) từng dư 3đ so với phiếu (làm tròn từng ngày).
+//   - Sổ thu chi của Giang (lương số lẻ) từng dư 3đ so với phiếu (làm tròn từng ngày).
 // Chạy riêng: node --test tests/november-payroll-simulation.test.mjs   (SIM_DUMP=1 để in số từng người)
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -97,7 +97,7 @@ const check = (label, actual, expected) => {
 test('November 2026, nine people, every case: slips, live numbers, pay page, stats and finance book all match the hand count', async () => {
   const state = {
     staff: [OWNER, ...STAFF].map(({ phone, ...p }) => p),
-    payroll_config: STAFF.map(p => ({ staff_id: p.id, base_salary: p === CUONG || p === DUNG ? 0 : p === GIANG ? 7000000 : 7800000, overtime_rate: p === KHOA ? null : 30000, pay_day: 5 })),
+    payroll_config: STAFF.map(p => ({ staff_id: p.id, base_salary: p === CUONG || p === DUNG ? 0 : p === GIANG ? 8076923 : 9000000, overtime_rate: p === KHOA ? null : 30000, pay_day: 5 })),
     checkin_settings: [{ id: 1, enforce: true, hours_from: '2026-10-25' }],
     checkin_hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '00:00', grace_minutes: 10 }],
     payroll_fine_rules: [
@@ -163,7 +163,7 @@ test('November 2026, nine people, every case: slips, live numbers, pay page, sta
   add(T(12, '10:00'), async () => {
     const r = await ownerPost(T(12, '10:00'), { action: 'create_account', full_name: 'Phat', phone: '0901234567', pin: '1234', role: 'staff' });
     PHAT.id = r.id;
-    await ownerPost(T(12, '10:01'), { action: 'save_config', staff_id: PHAT.id, base_salary: '7.800.000', overtime_rate: '30.000', pay_day: 5 });
+    await ownerPost(T(12, '10:01'), { action: 'save_config', staff_id: PHAT.id, base_salary: '9.000.000', overtime_rate: '30.000', pay_day: 5 });
   });
   // Cường quên quét cả ca 11/11: chủ thêm ca 18:00 → 02:00.
   add(T(12, '10:05'), () => ownerPost(T(12, '10:05'), { action: 'add_attendance', staff_id: CUONG.id, clock_in: iso(T(11, '18:00')), clock_out: iso(T(11, '02:00+1')), note: 'quên quét' }));
@@ -311,7 +311,7 @@ test('November 2026, nine people, every case: slips, live numbers, pay page, sta
     Em: { workUnits: 26, holidayDays: 1, dayUnits: 14, basePay: 14 * W + 12 * 260000, lateAmt: 63000, earlyAmt: 0, otAmt: 0, bonusAmt: 0, advAmt: 0, vioAmt: 0, net: 14 * W + 12 * 260000 - 63000 },
     Hoa: { workUnits: 27, holidayDays: 2, dayUnits: 27, basePay: 27 * W, lateAmt: 0, earlyAmt: 0, otAmt: 0, bonusAmt: 300000, advAmt: 0, vioAmt: 50000, net: 27 * W + 300000 - 50000 },
     Phat: { workUnits: 16, holidayDays: 1, dayUnits: 16, basePay: 16 * W, lateAmt: 0, earlyAmt: 0, otAmt: 0, bonusAmt: 0, advAmt: 300000, vioAmt: 0, net: 16 * W - 300000 },
-    // 7.000.000 × 14 / 26 = 3.769.231; trễ 15' = 6.731 + 50.000.
+    // 8.076.923 × 14 / 30 = 3.769.231; trễ 15' = 6.731 + 50.000.
     // Khoa: 20–28/11 = 9 ngày (22/11 do chủ sửa lượt); không có 9/11, 17/11 (lúc đó chưa đi làm lại).
     Khoa: { workUnits: 9, holidayDays: 0, dayUnits: 9, basePay: 9 * W, lateAmt: 0, earlyAmt: 0, otAmt: 0, bonusAmt: 0, advAmt: 0, vioAmt: 0, net: 9 * W },
     Giang: { workUnits: 14, holidayDays: 1, dayUnits: 14, basePay: 3769231, lateAmt: 56731, earlyAmt: 0, otAmt: 0, bonusAmt: 0, advAmt: 2000000, vioAmt: 0, net: 3769231 - 56731 - 2000000 },
