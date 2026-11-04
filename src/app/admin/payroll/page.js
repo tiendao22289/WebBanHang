@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
 import { currentWorkDay, dayFlags, dayInShiftMs, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { LATE_FINE_MINUTES, MAX_CYCLE_DAYS, STANDARD_DAYS, activeFineKinds, addDays, bonusCheck, computeSalary, cycleDueTo, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthDays, monthTallies,
+import { DEFAULT_OT_RATE, LATE_FINE_MINUTES, MAX_CYCLE_DAYS, STANDARD_DAYS, activeFineKinds, addDays, bonusCheck, computeSalary, cycleDueTo, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthDays, monthTallies,
   payoutPartOfMonth, shopClosedDays, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
@@ -881,6 +881,20 @@ export default function PayrollPage() {
   // Đổi cách trả lương: ô lương để trống (lương 1 giờ không thành lương 1 ngày), quay lại cách đang trả thì hiện lại số cũ.
   const setPayType = (staffId, pay, type) => setHourlyEdits(p => ({ ...p, [staffId]: { ...pay, type, rate: type === pay.currentType ? String(pay.current?.hourly_rate || '') : '' } }));
   const payUnitText = { hour: 'giờ', day: 'ngày' };
+  // Tăng ca từng người: tắt = giá tăng ca 0đ (giờ vào sớm / ở lại ngoài ca không được trả); bật lại = 25.000đ/giờ, sửa giá
+  // rồi bấm Lưu. Đổi là lưu ngay (theo số lương đã lưu của người đó).
+  const overtimeOn = staffId => { const r = configs[staffId]?.overtime_rate; return r === null || r === undefined || Number(r) > 0; };
+  const saveOvertime = async (staffId, on) => {
+    const cfg = configs[staffId] || {};
+    try { await workforce('save_config', { staff_id: staffId, base_salary: cfg.base_salary || 0, overtime_rate: on ? DEFAULT_OT_RATE : 0, pay_day: cfg.pay_day || 5 }); }
+    catch (err) { return alert(err.message); }
+    fetchAll();
+  };
+  // Lương 1 ngày / 1 giờ dưới 1.000đ: gần như chắc gõ thiếu số 0 (120 thay vì 120.000).
+  const tinyWage = r => Number(r) > 0 && Number(r) < 1000;
+  const tinyWageNote = (rate, unit) => (tinyWage(rate)
+    ? <div style={{ color: '#dc2626', fontSize: '0.75rem', fontWeight: 600 }}>⚠ Đang là {formatMoney(rate)}/{unit}. Lương {rate} nghìn thì nhập {typedMoney(Number(rate) * 1000)}.</div>
+    : null);
   const handleSaveConfig = async (staffId) => {
     const edit = configEdits[staffId] || { base_salary: 0, overtime_rate: 25000, pay_day: 5 };
     const pay = hourlyEditOf(staffId);
@@ -1106,9 +1120,16 @@ export default function PayrollPage() {
               ? <label style={label}>Lương 1 {payUnitText[pay.type]}<input style={{ ...box, width: 110 }} inputMode="numeric" placeholder={pay.type === 'day' ? '120.000' : '25.000'} value={typedMoney(pay.rate)} onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, rate: e.target.value.replace(/\D/g, '') } }))} /></label>
               : <label style={label}>Lương cơ bản<input style={{ ...box, width: 120 }} inputMode="numeric" placeholder="5.000.000" value={typedMoney(edit.base_salary)} onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, base_salary: e.target.value.replace(/\D/g, '') || 0 } }))} /></label>}
             {pay.changed && <label style={label}>Áp dụng từ<input type="date" style={box} value={pay.from} min={`${vnToday().slice(0, 7)}-01`} onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, from: e.target.value } }))} /></label>}
-            <label style={label}>Giá tăng ca/giờ<input style={{ ...box, width: 90 }} inputMode="numeric" value={edit.overtime_rate ?? 25000} onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value.replace(/\D/g, '') } }))} /></label>
+            <label style={label}>Tăng ca
+              <select style={box} value={overtimeOn(s.id) ? 'on' : 'off'} onChange={e => saveOvertime(s.id, e.target.value === 'on')}>
+                <option value="on">Có</option>
+                <option value="off">Không</option>
+              </select>
+            </label>
+            {overtimeOn(s.id) && <label style={label}>Giá tăng ca/giờ<input style={{ ...box, width: 90 }} inputMode="numeric" value={edit.overtime_rate ?? 25000} onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value.replace(/\D/g, '') } }))} /></label>}
             {btn('Lưu lương', () => handleSaveConfig(s.id), 'dark')}
           </div>
+          {pay.type !== 'month' && <div style={{ marginTop: 4 }}>{tinyWageNote(pay.rate, payUnitText[pay.type])}</div>}
           {showCycle(s.id, pay) && (
             <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #e2e8f0' }}>
               <div style={{ ...label, marginBottom: 4 }}>Kỳ trả lương</div>
@@ -1909,7 +1930,9 @@ export default function PayrollPage() {
                           )}
                           <div className="salary-card-row">
                             <span className="salary-card-label">Tăng ca</span>
-                            <span className="salary-card-value green">+{formatMoney(c.otAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({fmtNum(c.otHours)} giờ)</small></span>
+                            {!c.otAmt && !overtimeOn(s.id)
+                              ? <span className="salary-card-value muted">Không tính{c.otHours ? ` (${fmtNum(c.otHours)} giờ ngoài ca)` : ''}</span>
+                              : <span className="salary-card-value green">+{formatMoney(c.otAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({fmtNum(c.otHours)} giờ)</small></span>}
                           </div>
                           {c.bonusAmt > 0 && (
                             <div className="salary-card-row">
@@ -1991,7 +2014,7 @@ export default function PayrollPage() {
                             <td>{tally(lateTallyOf(s.id), c.lateAmt)}</td>
                             <td>{tally(talliesOf(s.id).stayed)}</td>
                             <td>{tally(talliesOf(s.id).leftEarly, c.earlyAmt)}</td>
-                            <td><span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.otHours)} giờ</div></td>
+                            <td>{!c.otAmt && !overtimeOn(s.id) ? <span style={{color:'#94a3b8'}}>Không tính</span> : <span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span>}<div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.otHours)} giờ</div></td>
                             <td>{c.bonusAmt > 0 ? <span style={{color:'#16a34a'}}>+{formatMoney(c.bonusAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}</td>
                             <td><span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span></td>
                             <td>{c.rule === 'days'
@@ -2712,7 +2735,7 @@ export default function PayrollPage() {
           {activeTab === 'config' && (
             <div>
               <div className="payroll-form" style={{ marginBottom: 8 }}>
-                <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>💡 Thiết lập lương cơ bản (đi làm đủ tháng thì nhận đúng số này; mỗi ngày công = lương cơ bản ÷ số ngày của tháng, ngày quán nghỉ cũng được tính công), lương 1 ngày (người trả theo ngày) hoặc lương 1 giờ (người trả theo giờ), giá tăng ca mỗi giờ (để 0 nếu không trả tăng ca) và ngày phát lương cho từng nhân viên.</p>
+                <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>💡 Thiết lập lương cơ bản (đi làm đủ tháng thì nhận đúng số này; mỗi ngày công = lương cơ bản ÷ số ngày của tháng, ngày quán nghỉ cũng được tính công), lương 1 ngày (người trả theo ngày) hoặc lương 1 giờ (người trả theo giờ), có tính tăng ca không (chọn Không thì giờ vào sớm / ở lại không được trả) và giá tăng ca mỗi giờ và ngày phát lương cho từng nhân viên.</p>
               </div>
               <div className="config-list config-salary">
                 {staffList.map(s => {
@@ -2751,16 +2774,26 @@ export default function PayrollPage() {
                         </div>
                       )}
                       <div className="form-group" style={{ margin: 0 }}>
-                        <label>Giá tăng ca/h</label>
-                        <input type="number" min="0" value={edit.overtime_rate ?? 25000}
-                          onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value } }))} />
+                        <label>Tăng ca</label>
+                        <select value={overtimeOn(s.id) ? 'on' : 'off'} onChange={e => saveOvertime(s.id, e.target.value === 'on')}>
+                          <option value="on">Có</option>
+                          <option value="off">Không</option>
+                        </select>
                       </div>
+                      {overtimeOn(s.id) && (
+                        <div className="form-group" style={{ margin: 0 }}>
+                          <label>Giá tăng ca/h</label>
+                          <input type="number" min="0" value={edit.overtime_rate ?? 25000}
+                            onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value } }))} />
+                        </div>
+                      )}
                       <div className="form-group" style={{ margin: 0 }}>
                         <label>Ngày phát</label>
                         <input type="number" min="1" max="31" value={edit.pay_day || 5}
                           onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, pay_day: e.target.value } }))} />
                       </div>
                       <button className="btn-primary" style={{ marginTop: 18 }} onClick={() => handleSaveConfig(s.id)}>Lưu</button>
+                      {pay.type !== 'month' && tinyWage(pay.rate) && <div className="config-note">{tinyWageNote(pay.rate, payUnitText[pay.type])}</div>}
                       <div className="config-note" style={{ borderTop: '1px dashed #e2e8f0', paddingTop: 6 }}>
                         <strong>⏰ Đi trễ</strong> {lateRuleEditor(s.id)}
                       </div>
@@ -2777,9 +2810,13 @@ export default function PayrollPage() {
                           {pay.current
                             ? `Đang trả theo ${payUnitText[pay.currentType]}: ${formatMoney(pay.current.hourly_rate)}/${payUnitText[pay.currentType]} từ ${ddmm(String(pay.current.valid_from))}. `
                             : 'Đang trả theo tháng. '}
-                          {pay.type === 'hour' && shift && `Chỉ tính giờ có mặt trong ca ${shift.start}–${shift.end}${shift.own ? '' : ' (giờ quán)'}; đổi ca ở tab Cài chấm công. Giờ ngoài ca bạn cho tính trả theo giá tăng ca.`}
-                          {pay.type === 'day' && `Ngày có chấm công được đủ lương 1 ngày (làm dưới nửa ca tính nửa ngày, đi trễ / về sớm trừ như lương tháng); ngày không chấm công là nghỉ, không lương.${shift ? ` Ca ${shift.start}–${shift.end}${shift.own ? '' : ' (giờ quán)'}.` : ''} Giờ ngoài ca trả theo giá tăng ca.`}
+                          {pay.current && tinyWage(pay.current.hourly_rate) && <strong style={{ color: '#dc2626' }}>⚠ Số này rất nhỏ, có thể gõ thiếu số 0. </strong>}
+                          {pay.type === 'hour' && shift && `Chỉ tính giờ có mặt trong ca ${shift.start}–${shift.end}${shift.own ? '' : ' (giờ quán)'}; đổi ca ở tab Cài chấm công.${overtimeOn(s.id) ? ' Giờ ngoài ca bạn cho tính trả theo giá tăng ca.' : ''}`}
+                          {pay.type === 'day' && `Ngày có chấm công được đủ lương 1 ngày (làm dưới nửa ca tính nửa ngày, đi trễ / về sớm trừ như lương tháng); ngày không chấm công là nghỉ, không lương.${shift ? ` Ca ${shift.start}–${shift.end}${shift.own ? '' : ' (giờ quán)'}.` : ''}${overtimeOn(s.id) ? ' Giờ ngoài ca trả theo giá tăng ca.' : ''}`}
                         </div>
+                      )}
+                      {!overtimeOn(s.id) && (
+                        <div className="config-note">⏱ Không tính tăng ca cho người này: giờ vào sớm / ở lại ngoài ca không được trả tiền.</div>
                       )}
                     </div>
                   );
