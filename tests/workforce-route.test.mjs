@@ -778,3 +778,75 @@ test('the owner lets people without a phone clock with a button on the kiosk: la
   assert.equal((await post(admin, { action: 'save_tap_staff', staff_id: LAN.id, enabled: false })).status, 200);
   assert.deepEqual(state.checkin_tap_staff.map(r => r.staff_id), [STAFF.id]);
 });
+
+test('"Sửa giờ" that moves a shift to another day moves its date too, also when approving a fix request', async () => {
+  const id = '00000000-0000-4000-8000-000000000881', other = '00000000-0000-4000-8000-000000000882';
+  const R = rules.normalizeRules(HOURS.checkin_settings[0], [], HOURS.checkin_hours);
+  // 24/11 lỡ quét 10:00–10:05; chủ sửa lượt đó thành ca 22/11 14:00 → 23:00 (quên quét hôm đó).
+  const state = shop({ ...HOURS, attendance_extra_reviews: [], attendance_fix_requests: [], attendance_sessions: [
+    { id, staff_id: STAFF.id, date: '2026-11-24', clock_in: '2026-11-24T03:00:00.000Z', clock_out: '2026-11-24T03:05:00.000Z' },
+    { id: other, staff_id: STAFF.id, date: '2026-11-25', clock_in: '2026-11-25T07:00:00.000Z', clock_out: '2026-11-25T16:00:00.000Z' }] });
+  const now = Date.parse('2026-11-26T03:00:00Z'), admin = load(state, ADMIN, { now });
+  assert.equal((await post(admin, { action: 'edit_attendance', id, clock_in: '2026-11-22T07:00:00.000Z', clock_out: '2026-11-22T16:00:00.000Z', note: 'quên quét 22/11' })).status, 200);
+  const moved = state.attendance_sessions.find(s => s.id === id);
+  assert.deepEqual([moved.date, rules.workDayOf(moved, R)], ['2026-11-22', '2026-11-22']);
+  const pay = payroll.computeSalary({ year: 2026, month: 11, staffId: STAFF.id, sessions: [moved], config: { base_salary: 5200000, overtime_rate: 30000 }, rules: R });
+  assert.deepEqual([Object.keys(pay.byDay), pay.workUnits, pay.otAmt], [['2026-11-22'], 1, 0], 'a normal day, not 24 hours early on the 23rd');
+  assert.deepEqual(plain(state.attendance_changes.map(l => l.field_name)), ['clock_in', 'clock_out']);
+  assert.equal((await post(admin, { action: 'edit_attendance', id, clock_out: '2026-11-22T15:30:00.000Z' })).status, 200);
+  assert.equal(moved.date, '2026-11-22', 'only the clock-out changed: same day');
+  // Nhân viên xin sửa lượt 25/11 thành ca 24/11, chủ duyệt.
+  assert.equal((await post(load(state, STAFF, { now }), { action: 'request_fix', attendance_id: other, clock_in: '2026-11-24T07:00:00.000Z', clock_out: '2026-11-24T16:00:00.000Z',
+    reason: 'quét nhầm ngày' })).status, 200);
+  assert.equal((await post(admin, { action: 'decide_fix', id: state.attendance_fix_requests[0].id, status: 'approved' })).status, 200);
+  assert.equal(state.attendance_sessions.find(s => s.id === other).date, '2026-11-24');
+});
+
+test('going back to work ("Đi làm lại") keeps the time away: closed days in between are not paid', async () => {
+  const old = '2025-06-01T00:00:00Z';
+  const state = shop({ ...HOURS, staff: [{ ...STAFF, created_at: old }, { ...LAN, created_at: old }], staff_returns: [],
+    staff_departures: [{ staff_id: STAFF.id, last_day: '2026-10-20' }, { staff_id: LAN.id, last_day: '2026-11-30' }],
+    shop_closed_days: [{ day: '2026-11-09' }, { day: '2026-11-17' }, { day: '2026-11-23' }],
+    payroll_config: [{ staff_id: STAFF.id, base_salary: 7800000, overtime_rate: 30000 }], payroll_requests: [], payroll_violations: [], payroll_closes: [],
+    attendance_sessions: [{ id: 'k20', staff_id: STAFF.id, date: '2026-11-20', clock_in: '2026-11-20T07:00:00.000Z', clock_out: '2026-11-20T16:00:00.000Z' }] });
+  const admin = load(state, ADMIN, { now: Date.parse('2026-11-19T03:00:00Z') });
+  assert.equal((await post(admin, { action: 'staff_return', staff_id: STAFF.id })).status, 200);
+  assert.deepEqual(plain(state.staff_returns.map(r => [r.staff_id, r.left_day, r.return_day, r.decided_by])), [[STAFF.id, '2026-10-20', '2026-11-19', 'Chủ quán']]);
+  // Huỷ cho nghỉ khi chưa tới ngày làm cuối: không có khoảng nghỉ nào.
+  assert.equal((await post(admin, { action: 'staff_return', staff_id: LAN.id })).status, 200);
+  assert.deepEqual([state.staff_returns.length, state.staff_departures.length], [1, 0]);
+  // Phát tự xem lương 25/11: chỉ 23/11 (sau khi đi làm lại), không có 9/11, 17/11; điện thoại biết các ngày quán nghỉ.
+  const me = plain(await load(state, STAFF, { now: Date.parse('2026-11-25T03:00:00Z') }).GET({ url: 'http://x/api/admin/workforce?me=1' })).body;
+  assert.deepEqual([me.salary.holidayDays, me.salary.workUnits, me.rules.closedDays], [1, 2, ['2026-11-09', '2026-11-17', '2026-11-23']]);
+  const month = load(state, ADMIN, { now: Date.parse('2026-12-01T03:00:00Z') });
+  assert.equal(plain(await month.GET({ url: 'http://x/api/admin/workforce?payroll=1&year=2026&month=11' })).body.returns.length, 1, 'the pay page gets it too');
+  assert.equal((await post(month, { action: 'close_month', year: 2026, month: 11 })).status, 200);
+  const slip = state.payroll_closes.find(c => c.staff_id === STAFF.id).snapshot;
+  assert.deepEqual([slip.holidayDays, slip.workUnits, slip.basePay], [1, 2, 600000]);
+});
+
+test('before staff_returns.sql has run, going back to work still works and pay still loads', async () => {
+  const state = shop({ staff_departures: [{ staff_id: STAFF.id, last_day: '2026-10-20' }], __noTable: ['staff_returns'] });
+  const admin = load(state, ADMIN, { now: Date.parse('2026-11-19T03:00:00Z') });
+  assert.equal((await post(admin, { action: 'staff_return', staff_id: STAFF.id })).status, 200);
+  assert.equal(state.staff_departures.length, 0);
+  const month = plain(await admin.GET({ url: 'http://x/api/admin/workforce?payroll=1&year=2026&month=11' }));
+  assert.deepEqual([month.status, month.body.returns], [200, []]);
+  assert.notEqual(plain(await load(state, STAFF, { now: Date.parse('2026-11-19T03:00:00Z') }).GET({ url: 'http://x/api/admin/workforce?me=1' })).body.salary, null);
+});
+
+test('closing a month keeps each day\'s pay with the slip: the finance book does not move when attendance is edited later', async () => {
+  const id = '00000000-0000-4000-8000-000000000891';
+  const state = shop({ ...HOURS, payroll_config: [{ staff_id: STAFF.id, base_salary: 5200000, overtime_rate: 30000 }], payroll_requests: [], payroll_violations: [], payroll_closes: [],
+    attendance_extra_reviews: [], attendance_sessions: [{ id, staff_id: STAFF.id, date: '2026-11-02', clock_in: '2026-11-02T07:00:00.000Z', clock_out: '2026-11-02T16:00:00.000Z' }] });
+  const admin = load(state, ADMIN, { now: Date.parse('2026-12-01T03:00:00Z') });
+  assert.equal((await post(admin, { action: 'close_month', year: 2026, month: 11 })).status, 200);
+  const snap = state.payroll_closes[0].snapshot;
+  assert.deepEqual([snap.byDay, 'daily' in snap], [{ '2026-11-02': 200000 }, false]);
+  // Sau khi chốt, chủ sửa giờ ra thành 01:00 (ở lại 2 giờ): Sổ thu chi vẫn theo phiếu đã chốt; mở chốt thì theo chấm công.
+  assert.equal((await post(admin, { action: 'edit_attendance', id, clock_out: '2026-11-02T18:00:00.000Z' })).status, 200);
+  const book = async () => payroll.payrollCost({ year: 2026, month: 11, ...await payrollMonth.loadPayrollMonth(fakeDb(state), 2026, 11, '2026-12-01') }).byDay;
+  assert.deepEqual(await book(), { '2026-11-02': 200000 });
+  assert.equal((await post(admin, { action: 'reopen_month', year: 2026, month: 11 })).status, 200);
+  assert.deepEqual(await book(), { '2026-11-02': 200000 + 60000 });
+});

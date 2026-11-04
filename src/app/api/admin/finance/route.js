@@ -33,7 +33,7 @@ import { dayAudit } from '@/lib/dayAudit.mjs';
 import { LINK_CODE_MINUTES, REPORT_SECTIONS, readReportSettings, reportPlan, reportSections, reportStatus, saveReportSettings, validSendAt } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
-import { loadPayrollMonth } from '@/lib/payrollMonth.mjs';
+import { loadPayrollMonth, readClosedDays } from '@/lib/payrollMonth.mjs';
 import { payrollCost } from '@/lib/payroll.mjs';
 import { addCosts } from '@/lib/noteCategories.mjs';
 import { FINANCE_START_DATE, FIXED_CATEGORIES, billHasStaff, billStaff, checkoutKey, closeDifferences, dailyReportText, dailyWarnings, groupPaidBills, isMonthKey, itemKey, shoppingParts, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, plainName, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
@@ -201,26 +201,29 @@ async function repairMissingBills(db) {
 }
 
 // Bill chuyển khoản trong khoảng ngày: chưa có ảnh CK / chưa đối chiếu.
+// Chưa có ảnh = không ảnh CK và không ghi lý do lúc đóng bàn (như máy tự kiểm tra 5 giờ sáng: đóng bàn
+// có lý do được chấp nhận, báo riêng ở "Đóng bàn không chụp ảnh").
 // byDay: thêm số đếm của từng ngày (tab Hôm nay / danh sách ngày của tab Tháng).
 async function transferAlerts(db, from, to, today, { byDay = false } = {}) {
   const keepFrom = photoKeepFrom(today);
   const [bills, paper] = await Promise.all([
-    readAll(() => db.from('finance_revenue_ledger').select('order_id, business_date, transfer_image_path, verified_at')
+    readAll(() => db.from('finance_revenue_ledger').select('order_id, business_date, transfer_image_path, photo_skip_reason, verified_at')
       .eq('payment_method', 'transfer').gte('business_date', from).lt('business_date', addDays(to, 1)).order('order_id')),
     readAll(() => db.from('finance_manual_receipts').select('id, business_date, transfer_image_path, verified_at')
       .eq('payment_method', 'transfer').gte('business_date', from).lt('business_date', addDays(to, 1)).order('id'))
       .catch(error => { if (missingTable(error)) return []; throw error; }),
   ]);
   const rows = [...bills, ...paper];
+  const noPhoto = r => !r.transfer_image_path && !r.photo_skip_reason && r.business_date >= keepFrom;
   const out = {
-    missingPhoto: rows.filter(r => !r.transfer_image_path && r.business_date >= keepFrom).length,
+    missingPhoto: rows.filter(noPhoto).length,
     unchecked: rows.filter(r => !r.verified_at).length,
   };
   if (byDay) {
     out.byDay = {};
     for (const r of rows) {
       const d = out.byDay[r.business_date] ||= { missingPhoto: 0, unchecked: 0 };
-      if (!r.transfer_image_path && r.business_date >= keepFrom) d.missingPhoto += 1;
+      if (noPhoto(r)) d.missingPhoto += 1;
       if (!r.verified_at) d.unchecked += 1;
     }
   }
@@ -412,12 +415,14 @@ async function lossInputs(db, { from, to, range }) {
 // Chấm công các ngày from..to (lấy dư 1 ngày hai đầu: lượt dọn quán sau nửa đêm thuộc ca hôm trước), lần quét
 // bị cảnh báo / chặn, giờ làm, ca quên ra ca, lần chủ duyệt giờ ngoài ca.
 async function staffInputs(db, { from, to, range }) {
-  const [sessions, scans, settings, shifts, hours] = await Promise.all([
+  const [sessions, scans, settings, shifts, hours, closedDays] = await Promise.all([
     readAll(() => db.from('attendance_sessions').select('*').gte('date', addDays(from, -1)).lte('date', addDays(to, 1)).order('clock_in')),
     readAll(() => db.from('checkin_scans').select('staff_id, action, warnings, created_at').gte('created_at', range.start.toISOString()).lt('created_at', range.end.toISOString()).order('created_at')),
     db.from('checkin_settings').select('*').eq('id', 1).maybeSingle().then(r => r.data || null),
     db.from('staff_shifts').select('*').then(r => r.data || []),
     db.from('checkin_hours').select('*').then(r => r.data || []),
+    // Ngày quán nghỉ: chủ gọi vào làm thì không báo trễ / về sớm (như trang Lương). Lỗi đọc thì báo như thường.
+    readClosedDays(db, from, to).catch(error => { console.error('[admin/finance] closed days', error); return []; }),
   ]);
   const ids = sessions.map(s => s.id);
   const autoRows = [], reviews = [];
@@ -431,7 +436,7 @@ async function staffInputs(db, { from, to, range }) {
   }
   const autoIds = new Set(autoRows.map(r => r.attendance_id));
   sessions.forEach(s => { s.auto_closed = autoIds.has(s.id); });
-  return { sessions, alerts: scans.filter(s => s.action === 'blocked' || s.warnings?.length), settings, shifts, hours, reviews };
+  return { sessions, alerts: scans.filter(s => s.action === 'blocked' || s.warnings?.length), settings, shifts, hours, reviews, closedDays };
 }
 
 // Phiếu Sổ tay tới hết khoảng (để tính nợ), các lần trả nợ, phiếu bị xoá trong khoảng, tên nhân viên.
@@ -524,10 +529,12 @@ async function buildDailyReport(db, { date, today, title, sections, forZalo = tr
   const day = summary.days.find(d => d.date === date);
   if (!day) return { ok: false, error: 'Không có số liệu ngày này.' };
   const upTo = summary.days.filter(d => d.date <= date);
-  const monthTotals = { revenue: upTo.reduce((s, d) => s + d.revenue, 0), profit: upTo.reduce((s, d) => s + d.profit, 0) };
+  // Tháng tới nay như Sổ thu chi xem tháng: thưởng − phạt lương cả tháng (không thuộc ngày nào) cũng trừ vào lãi.
+  const monthTotals = { revenue: upTo.reduce((s, d) => s + d.revenue, 0), profit: upTo.reduce((s, d) => s + d.profit, 0) - (Number(summary.totals.salaryExtra) || 0) };
   const alerts = await transferAlerts(db, monthBounds(date.slice(0, 7)).start, date, today).catch(() => ({}));
   const check = await readCheck(db, date).catch(error => { console.error('[admin/finance] read check', error); return null; });
-  const text = dailyReportText({ day, monthTotals, accounts, alerts, check, today, noteCategories, title, forZalo });
+  const wagesReady = summary.wagesReady;
+  const text = dailyReportText({ day, monthTotals, accounts, alerts, check, today, noteCategories, title, forZalo, wagesReady });
   // Các tin sau: thất thoát / nhân viên / so sánh, rồi Sổ tay của ngày (lỗi ở đây không chặn tin tổng kết).
   const range = { start: new Date(vnDayStartIso(date)), end: new Date(vnDayStartIso(addDays(date, 1))) };
   let insights = [];
@@ -547,7 +554,7 @@ async function buildDailyReport(db, { date, today, title, sections, forZalo = tr
   } catch (error) { console.error('[admin/finance] notes report', error); }
   return { ok: true, text, details: [...insightMessages, ...notesMessages],
     // Dữ liệu cho trang /thongke vẽ thẻ số, biểu đồ.
-    view: { day, monthTotals, accounts, noteCategories, warnings: dailyWarnings({ day, accounts, alerts, today }), insights, notes: notesMessages, notesData, check } };
+    view: { day, monthTotals, accounts, noteCategories, warnings: dailyWarnings({ day, accounts, alerts, today, wagesReady }), insights, notes: notesMessages, notesData, check } };
 }
 
 const REPORT_PAGE = 'https://ocbaokhang.online/thongke';
@@ -648,7 +655,7 @@ export async function GET(request) {
       const amount = Number(String(params.get('amount') || '').replace(/\D/g, '')) || null;
       const type = ['transfer', 'cash', 'paper'].includes(params.get('type')) ? params.get('type') : 'all';
       const onlyWithImage = params.get('image') === '1';
-      // Bill CK chưa có ảnh (ảnh còn giữ được) — để chụp bổ sung.
+      // Bill CK chưa có ảnh, không ghi lý do lúc đóng bàn (ảnh còn giữ được) — để chụp bổ sung; khớp số "chưa có ảnh".
       const missingImage = params.get('image') === 'missing';
       const account = UUID.test(params.get('account') || '') ? params.get('account') : null;
       const check = ['checked', 'unchecked'].includes(params.get('check')) ? params.get('check') : null;
@@ -678,7 +685,7 @@ export async function GET(request) {
           if (onlyWithImage) q = q.not('transfer_image_path', 'is', null);
           if (transferOnly) q = q.eq('payment_method', 'transfer');
           if (account) q = q.eq('account_id', account);
-          if (missingImage) q = q.is('transfer_image_path', null).gte('business_date', keepFrom);
+          if (missingImage) q = q.is('transfer_image_path', null).is('photo_skip_reason', null).gte('business_date', keepFrom);
           if (check === 'unchecked') q = q.is('verified_at', null);
           if (check === 'checked') q = q.not('verified_at', 'is', null);
           return q;
@@ -764,7 +771,11 @@ export async function GET(request) {
       const accounts = loaded[0]?.accounts || [];
       const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
       const within = (a, b) => [...allDays.values()].filter(d => d.date >= a && d.date <= b).sort((x, y) => x.date.localeCompare(y.date));
-      const sum = list => {
+      // Thưởng − phạt lương cả tháng không thuộc ngày nào: kỳ tháng tính như Sổ thu chi xem tháng — cộng vào
+      // lương, trừ vào lãi — khi kỳ phủ hết các ngày đã có số của tháng đó (kỳ tuần thì không).
+      const monthExtra = (a, b) => (period !== 'month' ? 0 : loaded.map(l => l.summary)
+        .filter(s => s.days.length && a <= s.from && b >= s.to).reduce((total, s) => total + (Number(s.totals.salaryExtra) || 0), 0));
+      const sum = (list, extra = 0) => {
         const t = { revenue: 0, bills: 0, paperBills: 0, cash: 0, byAccount: {}, purchases: 0, notesOther: {}, drinks: 0, salary: 0, fixedShare: 0, customTotal: 0, profit: 0, closedDays: 0 };
         for (const d of list) {
           for (const k of ['revenue', 'bills', 'paperBills', 'cash', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit']) t[k] += Number(d[k]) || 0;
@@ -772,12 +783,15 @@ export async function GET(request) {
           addCosts(t.notesOther, d.notesOther);
           if (d.close || d.check) t.closedDays += 1;
         }
+        t.salary += extra;
+        t.profit -= extra;
         t.cost = t.purchases + t.drinks + t.salary + t.fixedShare + t.customTotal;
         return t;
       };
       const current = within(p.start, p.end);
-      const t = sum(current);
-      const before = p.prevEnd >= FINANCE_START_DATE ? sum(within(p.prevStart < FINANCE_START_DATE ? FINANCE_START_DATE : p.prevStart, p.prevEnd)) : null;
+      const t = sum(current, monthExtra(p.start, p.end));
+      const prevStart = p.prevStart < FINANCE_START_DATE ? FINANCE_START_DATE : p.prevStart;
+      const before = p.prevEnd >= FINANCE_START_DATE ? sum(within(prevStart, p.prevEnd), monthExtra(prevStart, p.prevEnd)) : null;
       const range = { start: new Date(vnDayStartIso(p.start)), end: new Date(vnDayStartIso(addDays(p.end, 1))) };
       const safe = async (name, run) => { try { return await run(); } catch (error) { console.error(`[admin/finance] period ${name}`, error); return null; } };
       const [lossIn, staffIn, notesIn] = await Promise.all([
@@ -802,6 +816,8 @@ export async function GET(request) {
         totals: { revenue: t.revenue, bills: t.bills, paperBills: t.paperBills, cash: t.cash, cost: t.cost, profit: t.profit, days: current.length, closedDays: t.closedDays,
           transfers: Object.entries(t.byAccount).map(([id, amount]) => ({ name: accountName(id), amount })),
           costs: costList(t, loaded[0]?.noteCategories || []) },
+        // Đọc chấm công lỗi (tháng nào của kỳ) → lãi chưa trừ lương: trang báo như Sổ thu chi.
+        wagesMissing: loaded.some(l => !l.summary.wagesReady && l.summary.days.some(d => d.date >= p.start && d.date <= p.end)),
         prev: before && { revenue: before.revenue, cost: before.cost, profit: before.profit, bills: before.bills + before.paperBills },
         sales: { hours: sales.hours, peak: sales.peak, top: sales.top, slow: sales.slow, avgBill: t.bills ? t.revenue / t.bills : 0 }, weekdays,
         loss: lossIn ? lossData(lossIn) : null,

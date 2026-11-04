@@ -64,14 +64,10 @@ export function noteCost(note) {
 }
 
 /**
- * Đọc giá một dòng hàng Sổ tay giống trang Sổ tay: "250k" = 250.000, còn
- * "250" là 250đ.
+ * Đọc giá một dòng hàng Sổ tay đúng như trang Sổ tay và máy chủ (notesMath.parsePrice):
+ * "250k" = "250.000" = 250.000 · "1tr2" = 1.200.000 · còn "250" là 250đ.
  */
-export function parseNotePrice(value) {
-  const s = String(value ?? '').toLowerCase().trim();
-  const num = parseFloat(s.replace(/[^0-9.]/g, '')) || 0;
-  return s.includes('k') ? num * 1000 : num;
-}
+export const parseNotePrice = linePrice;
 
 // Hàng chợ không có món nào dưới 1.000đ → nhiều khả năng gõ thiếu chữ "k".
 export const SUSPICIOUS_PRICE_BELOW = 1000;
@@ -306,8 +302,9 @@ const signed = n => `${n < 0 ? '-' : '+'}${vnd(Math.abs(n))}`;
  * Tin Zalo báo cáo một ngày cho chủ quán. `day` là một phần tử của
  * summarizeMonth().days, `monthTotals` là totals của tháng (tới ngày đó),
  * `alerts` = { missingPhoto, unchecked } của bill chuyển khoản trong tháng.
+ * wagesReady = false: không đọc được chấm công → lãi chưa trừ lương, báo để chủ quán biết.
  */
-export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, check = null, today = null, noteCategories = [], title = 'Báo cáo', forZalo = true }) {
+export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, check = null, today = null, noteCategories = [], title = 'Báo cáo', forZalo = true, wagesReady = true }) {
   const [y, m, d] = day.date.split('-');
   const weekday = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][new Date(`${day.date}T00:00:00Z`).getUTCDay()];
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
@@ -322,7 +319,7 @@ export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, 
   lines.push(`${day.profit < 0 ? 'Lỗ' : 'Lãi'} ngày: ${signed(day.profit)}`);
   if (monthTotals) lines.push(`Tháng ${m} tới nay: thu ${vnd(monthTotals.revenue)} · ${monthTotals.profit < 0 ? 'lỗ' : 'lãi'} ${vnd(Math.abs(monthTotals.profit))}`);
 
-  const warnings = dailyWarnings({ day, accounts, alerts, today });
+  const warnings = dailyWarnings({ day, accounts, alerts, today, wagesReady });
   lines.push('');
   if (warnings.length) lines.push(...warnings.map(w => `⚠ ${w}`));
   else lines.push('✓ Không có gì bất thường');
@@ -334,9 +331,11 @@ export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, 
 }
 
 /** Cảnh báo của một ngày (chưa chốt sổ, lệch két, bill CK thiếu ảnh...) — dùng cho Zalo và /thongke. */
-export function dailyWarnings({ day, accounts = [], alerts = {}, today = null }) {
+export function dailyWarnings({ day, accounts = [], alerts = {}, today = null, wagesReady = true }) {
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
   const warnings = [];
+  // Như Sổ thu chi: đọc chấm công lỗi thì lãi đang hiện là lãi chưa trừ lương.
+  if (!wagesReady) warnings.push('Chưa đọc được chấm công — lãi chưa trừ lương');
   if (!day.close && !day.check && !(today && day.date >= today)) warnings.push('Máy chưa kiểm tra ngày này');
   if (day.close) {
     if (day.close.cashDiff) warnings.push(`Tiền mặt ${day.close.cashDiff < 0 ? 'thiếu' : 'dư'} ${vnd(Math.abs(day.close.cashDiff))}`);

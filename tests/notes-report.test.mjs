@@ -78,3 +78,16 @@ test('Sổ tay of a day and of a week come as data for the stats page', async ()
   const w = notesRangeData({ allNotes: [day], payments: [], range });
   assert.deepEqual([w.summary.count, w.byStaff[0].who, w.top[0].name], [1, 'Thy', 'Ốc hương']);
 });
+
+test('a debt payment is reported on the line that got the money, even after an earlier line was removed', async () => {
+  const { notesDayData } = await import('../src/lib/notesReport.mjs');
+  // Phiếu nợ đã bị sửa bỏ dòng đầu: sổ trả nợ ghi vị trí 1 (lúc trả), nay Ốc ở vị trí 0, Rau ở vị trí 1.
+  const old = note('old', '2026-10-20T01:00:00Z', [
+    { name: 'Ốc', price: '200k', paymentStatus: 'full', creditor: 'Hoa', paid_amount: 200000, payment_logs: [{ amount: 200000, ts: '10:30 23/10/2026', from_note_id: 'new' }] },
+    { name: 'Rau', price: '50k', paymentStatus: 'full' }], { amount: 50000, debt: 200000, paidDebt: 200000 });
+  const today = note('new', '2026-10-23T03:00:00Z', [{ name: 'Bia', price: '100k' }], { given: 400000, amount: 100000 });
+  const payments = [{ note_id: 'old', item_index: 1, amount: 200000, paid_at: '2026-10-23T03:30:00Z', paid_from_note_id: 'new', created_by_name: 'Thy' }];
+  const args = { date: '2026-10-23', dayNotes: [today], allNotes: [old, today], payments, range };
+  assert.match(all(notesReportMessages(args)), /• 10:30 200\.000đ cho Ốc \(Hoa\) — phiếu 20\/10/);
+  assert.deepEqual([notesDayData(args).payments[0].item, notesDayData(args).payments[0].creditor], ['Ốc', 'Hoa']);
+});

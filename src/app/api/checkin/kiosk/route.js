@@ -22,10 +22,11 @@ import { NextResponse } from 'next/server';
 import { getStaffSession, statusDatabase, staffDatabase } from '@/lib/statusAuth';
 import { STATUS_COOKIE } from '@/lib/statusSession.mjs';
 import { CHECKIN_SHOW_MS, KIOSK_COOKIE, KIOSK_COOKIE_SECONDS, kioskQrToken, readKioskCookie, readKioskQrToken, signKioskCookie } from '@/lib/checkinToken.mjs';
-import { MIN_TOGGLE_MS, clientIp, closeForgottenSessions, hhmm, onKioskNetwork, readCheckinSettings, rememberIp } from '@/lib/attendanceRules.mjs';
+import { MIN_TOGGLE_MS, clientIp, closeForgottenSessions, hhmm, onKioskNetwork, readCheckinSettings, rememberIp, workDayOf } from '@/lib/attendanceRules.mjs';
 import { clockStatus, nowMs, refreshClock } from '@/lib/trueTime.mjs';
 import { applyClock, latestSession, sessionsOfDay } from '@/lib/clockApply.mjs';
 import { punctuality } from '@/lib/clockMessages.mjs';
+import { readClosedDays } from '@/lib/payrollMonth.mjs';
 import { FACE_MISS_TEXT, FACE_STREAK_MS, FACE_TRIES, FACE_WAIT_MS, bestScore, faceOutcome, faceThreshold, faceVector, faceVectors, missingTable, readFaceSettings, wrongStreak } from '@/lib/faceCheck.mjs';
 
 export const runtime = 'nodejs';
@@ -308,5 +309,8 @@ async function tapClock(request, body) {
     throw error;
   }
   const sessions = await sessionsOfDay(db, staffId, done.session, settings);
-  return NextResponse.json({ ok: true, name, clocked: done.clocked, at, note: punctuality(done.clocked, done.session, sessions, settings, staffId) }, { headers });
+  // Hôm quán nghỉ (chủ gọi vào làm) không báo trễ / về sớm. Không đọc được ngày nghỉ thì vẫn báo như thường (giờ đã ghi).
+  const workDay = workDayOf(done.session, settings);
+  const closed = await readClosedDays(db, workDay, workDay).catch(e => { console.error('[kiosk] closed days', e); return []; });
+  return NextResponse.json({ ok: true, name, clocked: done.clocked, at, note: punctuality(done.clocked, done.session, sessions, settings, staffId, closed) }, { headers });
 }

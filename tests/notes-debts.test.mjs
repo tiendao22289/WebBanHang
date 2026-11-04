@@ -1,6 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { allOpenDebts, allocateToDebts, debtKey, openDebtLines } from '../src/lib/notesDebts.mjs';
+import { allOpenDebts, allocateToDebts, debtKey, findDebtLine, openDebtLines, paymentItemIndex } from '../src/lib/notesDebts.mjs';
+
+test('a debt payment is matched to the line that holds it, not to the position saved in the payment book', () => {
+  const paid = (amount, from) => ({ paymentStatus: 'full', paid_amount: amount, payment_logs: [{ amount, ts: '10:00 01/11/2026', ...(from !== undefined ? { from_note_id: from } : {}) }] });
+  const cash = { name: 'Rau', price: '50k', paymentStatus: 'full' };
+  // Lần trả mới: dòng ghi phiếu bỏ tiền → phiếu bị sửa (Ốc lên vị trí 0) vẫn tìm đúng.
+  assert.equal(paymentItemIndex([{ name: 'Ốc', ...paid(200000, 'B') }, cash], { item_index: 1, amount: 200000, paid_from_note_id: 'B' }), 0);
+  // Hai dòng cùng phiếu bỏ tiền: dòng giữ đúng số tiền đó.
+  const two = [{ name: 'X', ...paid(100000, 'B') }, { name: 'Y', ...paid(50000, 'B') }];
+  assert.equal(paymentItemIndex(two, { item_index: 2, amount: 50000, paid_from_note_id: 'B' }), 1);
+  assert.equal(paymentItemIndex(two, { item_index: 1, amount: 100000, paid_from_note_id: 'B' }), 0);
+  // Lần trả cũ (chưa ghi phiếu bỏ tiền): vị trí đã ghi nếu dòng đó thật sự nhận tiền, không thì dòng đã nhận.
+  assert.equal(paymentItemIndex([cash, { name: 'Ốc', ...paid(200000) }], { item_index: 1, amount: 200000, paid_from_note_id: 'B' }), 1);
+  assert.equal(paymentItemIndex([{ name: 'Ốc', ...paid(200000) }, cash], { item_index: 1, amount: 200000, paid_from_note_id: 'B' }), 0);
+  assert.equal(paymentItemIndex([{ name: 'Ốc', paid_amount: 200000 }, cash], { item_index: 1, amount: 200000 }), 0, 'very old lines without a payment history');
+  // Dòng đã nhận tiền bị xoá khỏi phiếu: không đụng dòng trả tiền mặt nào.
+  assert.equal(paymentItemIndex([cash], { item_index: 0, amount: 200000, paid_from_note_id: 'B' }), -1);
+  assert.equal(paymentItemIndex([cash], { item_index: null, amount: 200000 }), -1, 'whole-note payments have no line');
+  // Chọn khoản trả: theo mã dòng, dòng cũ chưa có mã thì theo vị trí.
+  const lines = [{ item_index: 0, item_id: 'a' }, { item_index: 1, item_id: null }];
+  assert.equal(findDebtLine(lines, 'a', 5), lines[0]);
+  assert.equal(findDebtLine(lines, null, 1), lines[1]);
+  assert.equal(findDebtLine(lines, 'gone', 0), undefined);
+});
 
 const note = (id, at, items, extra = {}) => ({ id, created_at: at, staff: { full_name: 'Thy' }, debt: extra.debt || 0, paid_debt: extra.paid || 0,
   content: items ? JSON.stringify({ type: 'structured_expense', items }) : 'ghi chú' });

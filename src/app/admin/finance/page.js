@@ -362,7 +362,8 @@ async function sendReceipt(fields, image) {
 function DayTasks({ date, detail, spend, checking, onSearch, onOpenNotes, onOpenCheck, onCheck }) {
   const transfer = detail.bills.filter(b => b.payment_method === 'transfer');
   const paperTransfer = (detail.paperBills || []).filter(b => b.paymentMethod === 'transfer');
-  const noPhoto = transfer.filter(b => !b.transfer_image_url).length + paperTransfer.filter(b => !b.transferImageUrl && !b.imagesPurged).length;
+  // Đóng bàn có ghi lý do không chụp được thì không tính "chưa có ảnh" (như máy tự kiểm tra 5 giờ sáng).
+  const noPhoto = transfer.filter(b => !b.transfer_image_url && !b.photo_skip_reason).length + paperTransfer.filter(b => !b.transferImageUrl && !b.imagesPurged).length;
   const unchecked = transfer.filter(b => !b.verified_at).length + paperTransfer.filter(b => !b.verified).length;
   const badNotes = detail.notes.filter(n => (n.mismatch && n.mismatch !== 0) || n.lineWarnings?.length || n.suspicious?.length).length;
   const paperCount = (detail.paperBills || []).length;

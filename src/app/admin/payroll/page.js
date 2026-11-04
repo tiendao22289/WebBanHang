@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
-import { currentWorkDay, dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
+import { currentWorkDay, dayFlags, dayInShiftMs, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
 import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthTallies, shopClosedDays, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
@@ -481,13 +481,13 @@ export default function PayrollPage() {
   }, []);
   // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
   // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
-  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], monthOver: false });
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], monthOver: false });
   const fetchPayrollMonth = useCallback(async () => {
     try {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   // So khuôn mặt ở máy quầy (app): cài đặt, ai có mặt mẫu, ca sai mặt 3 lần chờ duyệt.
@@ -539,7 +539,9 @@ export default function PayrollPage() {
     const wd = workDayOf(a, rules);
     const day = attendance.filter(x => x.staff_id === a.staff_id && workDayOf(x, rules) === wd).sort((x, y) => String(x.clock_in).localeCompare(String(y.clock_in)));
     const f = dayFlags(day, rules), first = day[0]?.id === a.id, last = day[day.length - 1]?.id === a.id;
-    const texts = flagTexts({ late: first ? f.late : 0, early: first ? f.early : 0, leftEarly: last ? f.leftEarly : 0, stayed: last ? f.stayed : 0 });
+    // Hôm quán nghỉ (chủ gọi vào làm) không có trễ / về sớm.
+    const closed = monthClosedDays.some(d => d.day === wd);
+    const texts = flagTexts({ late: first && !closed ? f.late : 0, early: first ? f.early : 0, leftEarly: last && !closed ? f.leftEarly : 0, stayed: last ? f.stayed : 0 });
     // Vào trễ / về sớm bị trừ lương: ghi số tiền bị trừ của ngày đó.
     const lateCut = first ? lateCutOf(a.staff_id, wd) : null, cut = last ? earlyCutOf(a.staff_id, wd) : null;
     if (lateCut) texts.push(`trừ lương ${formatMoney(lateCut.amount)} vì vào trễ`);
@@ -668,10 +670,13 @@ export default function PayrollPage() {
     rules, reviews: reviewList, hourlyRates: payrollMonth.hourlyRates.filter(r => r.staff_id === staffId),
     lateRules: lateRulesOf(payrollMonth.lateRules, staffId),
     // Ngày quán nghỉ chưa tới thì chưa tính (lương tạm tính đến hôm nay).
-    ...holidayArgs(staffList.find(x => x.id === staffId) || { id: staffId }, { closedDays: monthClosedDays, holidayPay: payrollMonth.holidayPay, departures: checkin?.departures || [] }),
+    // Nghỉ việc rồi đi làm lại (returns): khoảng đã nghỉ không có lương ngày quán nghỉ.
+    ...holidayArgs(staffList.find(x => x.id === staffId) || { id: staffId }, { closedDays: monthClosedDays, holidayPay: payrollMonth.holidayPay, departures: checkin?.departures || [],
+      returns: payrollMonth.returns || [] }),
   });
-  // Trễ / quên ra ca trong tháng (theo ngày làm) → xét thưởng chuyên cần và gợi ý phạt.
-  const talliesOf = staffId => monthTallies({ sessions: attendance.filter(a => a.staff_id === staffId), rules, key: `${selYear}-${fmt(selMonth)}`, autoClosed: payrollMonth.autoClosed });
+  // Trễ / quên ra ca trong tháng (theo ngày làm; hôm quán nghỉ không tính trễ / về sớm) → xét thưởng chuyên cần và gợi ý phạt.
+  const talliesOf = staffId => monthTallies({ sessions: attendance.filter(a => a.staff_id === staffId), rules, key: `${selYear}-${fmt(selMonth)}`, autoClosed: payrollMonth.autoClosed,
+    closedDays: monthClosedDays });
   // Vào trễ theo từng ngày đã tính lương (gồm cả ngày luật riêng cho trễ ít hơn số phút cho lệch của quán).
   const lateTallyOf = staffId => {
     const late = (calcSalary(staffId).daily || []).filter(d => d.late > 0);
@@ -1370,8 +1375,10 @@ export default function PayrollPage() {
                       {histDays.map(([date, daySessions]) => {
                         const dayMs = daySessions.filter(s => s.clock_out).reduce((a, s) =>
                           a + (new Date(s.clock_out) - new Date(s.clock_in)), 0);
-                        const dayCounted = daySessions.reduce((a, s) => a + myHours(s).countedMs, 0);
-                        const dayWarn = flagTexts(dayFlags(daySessions, myRules));
+                        // Giờ trong ca gộp cả ngày (quét nhầm rồi vào lại không tính trùng) + giờ ngoài ca được tính.
+                        const dayCounted = dayInShiftMs(daySessions, myRules) + daySessions.reduce((a, s) => a + myHours(s).approvedMs, 0);
+                        // Hôm quán nghỉ (chủ gọi vào làm) không có trễ / về sớm.
+                        const dayWarn = flagTexts({ ...dayFlags(daySessions, myRules), ...((myRules?.closedDays || []).includes(date) ? { late: 0, leftEarly: 0 } : {}) });
                         return (
                           <div key={date} style={{ marginBottom: 10 }}>
                             <div style={{ fontSize: '0.79rem', fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>

@@ -132,6 +132,16 @@ test('losses, staff of a day and staff of a week come as data for the stats page
   ], alerts: [{ staff_id: 'a', action: 'blocked' }] });
   assert.deepEqual([w.people[0].days, w.people[0].late.count, w.people[0].late.minutes, w.people[0].forgot, w.people[0].blocked], [2, 1, 20, 1, 1]);
   assert.equal(w.totals.people, 1);
+
+  // Ngày quán nghỉ chủ gọi vào làm: không báo trễ / về sớm ở thẻ ngày lẫn thẻ cả tuần.
+  const off = staffData({ staffNames: { a: 'Phát' }, settings, hours, date: '2026-10-23', closedDays: ['2026-10-23'],
+    sessions: [{ id: 's1', staff_id: 'a', date: '2026-10-23', clock_in: '2026-10-23T09:00:00Z', clock_out: '2026-10-23T11:00:00Z' }] });
+  assert.deepEqual([off.people[0].flags.late, off.people[0].flags.leftEarly, off.people[0].cut], [0, 0, false]);
+  const offWeek = staffRangeData({ staffNames: { a: 'Phát' }, settings, hours, from: '2026-10-19', to: '2026-10-25', closedDays: ['2026-10-20'], sessions: [
+    { id: 'x1', staff_id: 'a', date: '2026-10-20', clock_in: '2026-10-20T07:20:00Z', clock_out: '2026-10-20T12:00:00Z' },
+    { id: 'x4', staff_id: 'a', date: '2026-10-22', clock_in: '2026-10-22T07:20:00Z', clock_out: '2026-10-22T16:00:00Z' },
+  ] });
+  assert.deepEqual([offWeek.people[0].days, offWeek.people[0].late.count, offWeek.people[0].late.minutes, offWeek.people[0].leftEarly.count], [2, 1, 20, 0]);
 });
 
 test('báo cáo ngày gom mọi dòng "Voucher BK-…" thành một nhóm Voucher', async () => {

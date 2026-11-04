@@ -2,6 +2,7 @@
  * Các khoản Sổ tay đang còn nợ — dùng chung cho trang Sổ tay (chọn khoản trả) và
  * máy chủ (kiểm tra số trả). Một khoản = một dòng hàng còn nợ; phiếu không có
  * dòng hàng (chỉ ghi số nợ) thì cả phiếu là một khoản (item_index = null).
+ * item_id = mã _id của dòng: sửa phiếu (xoá / thêm dòng) đổi vị trí chứ không đổi mã.
  */
 import { parsePrice, parseQty } from './notesMath.mjs';
 
@@ -25,12 +26,39 @@ export function openDebtLines(note) {
   items.forEach((item, index) => {
     if (!String(item?.name || '').trim()) return;
     const left = lineDebtBase(item) - (Number(item.paid_amount) || 0);
-    if (left > 0) lines.push({ ...base, item_index: index, name: item.name, creditor: String(item.creditor || '').trim(), left });
+    if (left > 0) lines.push({ ...base, item_index: index, item_id: item._id || null, name: item.name, creditor: String(item.creditor || '').trim(), left });
   });
   // Phiếu chỉ ghi số nợ (không có dòng hàng còn nợ) → trả theo cả phiếu.
   const noteLeft = (Number(note?.debt) || 0) - (Number(note?.paid_debt) || 0);
-  if (!lines.length && noteLeft > 0) lines.push({ ...base, item_index: null, name: 'Nợ của phiếu', creditor: '', left: noteLeft });
+  if (!lines.length && noteLeft > 0) lines.push({ ...base, item_index: null, item_id: null, name: 'Nợ của phiếu', creditor: '', left: noteLeft });
   return lines;
+}
+
+/** Khoản trình duyệt chọn trả: theo mã dòng (_id); dòng cũ chưa có mã thì theo vị trí. */
+export const findDebtLine = (lines, itemId, itemIndex) => lines.find(l => (itemId ? l.item_id === itemId : l.item_index === itemIndex));
+
+/**
+ * Vị trí dòng hàng đã nhận một lần trả nợ (staff_note_payments), -1 = không thấy dòng nào.
+ * Lần trả mới ghi phiếu bỏ tiền (from_note_id) vào lịch sử trả của dòng → tìm theo đó, nên
+ * sửa phiếu (xoá / thêm dòng phía trên) không làm lệch. Lần trả cũ chưa ghi phiếu bỏ tiền thì
+ * dựa vào item_index, nhưng chỉ nhận dòng thật sự còn giữ số tiền đã trả ấy.
+ */
+export function paymentItemIndex(items, payment) {
+  if (!Array.isArray(items) || payment?.item_index === null || payment?.item_index === undefined) return -1;
+  const amount = Number(payment.amount) || 0, at = Number(payment.item_index);
+  const from = payment.paid_from_note_id || null;
+  const logs = item => (Array.isArray(item?.payment_logs) ? item.payment_logs.filter(l => l && typeof l === 'object') : []);
+  const sum = (item, keep) => logs(item).filter(keep).reduce((a, l) => a + (Number(l.amount) || 0), 0);
+  // Dòng còn giữ đủ số tiền đó; ưu tiên dòng giữ đúng số tiền, rồi dòng ở vị trí đã ghi.
+  const pick = held => {
+    const fits = items.map((item, i) => ({ i, net: held(item) })).filter(x => x.net >= amount);
+    const best = list => list.find(x => x.i === at) || list[0];
+    return (best(fits.filter(x => x.net === amount)) || best(fits))?.i ?? -1;
+  };
+  const tagged = pick(item => sum(item, l => 'from_note_id' in l && (l.from_note_id || null) === from));
+  if (tagged >= 0) return tagged;
+  // Lần trả cũ: lịch sử trả chưa có from_note_id (dòng không có lịch sử thì xem số đã trả).
+  return pick(item => (logs(item).length ? sum(item, l => !('from_note_id' in l)) : Number(item?.paid_amount) || 0));
 }
 
 /** Mọi khoản đang nợ, phiếu cũ nhất trước. */

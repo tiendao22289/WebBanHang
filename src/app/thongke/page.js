@@ -671,6 +671,7 @@ export default function ThongKePage() {
 
       {ready && period !== 'day' && <div className={loading ? 'tk-content dim' : 'tk-content'}>
         <PeriodHero data={report} onPick={openDay} />
+        {report.wagesMissing && <div className="tk-alert" role="status">Chưa đọc được chấm công — lãi chưa trừ lương<button onClick={() => load(date, period)}>Tải lại</button></div>}
         <PeriodKpis data={report} />
         <Payments summary={report.totals} />
         <Costs summary={report.totals} />

@@ -85,8 +85,14 @@ function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFai
     statusDatabase: () => fakeDb(state, { failTable }),
     signReceiptImages: async (_db, paths) => Object.fromEntries(paths.filter(Boolean).map(p => [p, `signed:${p}`])),
     // Dữ liệu trang Lương (chấm công) của tháng; mặc định chưa ai đi làm.
-    loadPayrollMonth: async () => ({ staff: [], configs: [], sessions: [], requests: [], violations: [], bonuses: [], rules: null, reviews: [], closes: [], ...state.payroll }),
+    // state.payrollFails: như đọc chấm công bị lỗi (mạng / DB).
+    loadPayrollMonth: async () => {
+      if (state.payrollFails) throw new Error('attendance read failed');
+      return { staff: [], configs: [], sessions: [], requests: [], violations: [], bonuses: [], rules: null, reviews: [], closes: [], ...state.payroll };
+    },
     payrollCost,
+    // Ngày quán nghỉ (thẻ nhân viên không báo trễ ngày đó); state.closedDays: các ngày nghỉ của bài test.
+    readClosedDays: async () => state.closedDays || [],
   });
 }
 
@@ -809,4 +815,81 @@ test('the day audit run by the shop machine reads one day and writes nothing; it
   assert.equal((state.finance_day_checks || []).length, 0, 'read-only: no day check saved');
   assert.equal((await call(cron, { action: 'day_audit', date: '2099-01-01' }, key('finance-day-audit'))).status, 400);
   assert.equal((await call(cron, { action: 'day_audit', date: today }, key('finance-day-audit'))).status, 200, 'today so far is allowed');
+});
+
+test('Sổ tay prices like "250.000" or "1tr2" do not make the 05:00 check report the day', async () => {
+  const today = finance.vnDate(Date.now());
+  const state = empty();
+  state.staff_notes.push({ id: 'p1', created_at: later(-5), note_type: 'expense', amount: 1450000, debt: 0, staff: { full_name: 'Lan' },
+    content: JSON.stringify({ type: 'structured_expense', items: [{ name: 'Ốc hương', price: '250.000', qty: '1' }, { name: 'Cua', price: '1tr2', qty: '1' }] }) });
+  const api = load({ state });
+  const res = await post(api, { action: 'check_day', date: today });
+  assert.equal(res.status, 200);
+  assert.deepEqual([res.body.check.ok, res.body.check.issues.map(i => i.key)], [true, []]);
+  assert.deepEqual((await get(api, `date=${today}`)).body.notes[0].suspicious, []);
+  assert.equal((await get(api, `month=${today.slice(0, 7)}`)).body.days.find(d => d.date === today).suspiciousNotes, 0);
+});
+
+test('month bonus − fines count in the /thongke month and in the Zalo "month so far", like the finance book', async () => {
+  const today = finance.vnDate(Date.now());
+  const month = today.slice(0, 7);
+  const state = empty();
+  state.finance_settings = [{ key: 'zalo_report', value: { ownerIds: ['owner-zalo'] } }];
+  state.finance_revenue_ledger.push({ order_id: 'r1', business_date: today, paid_at: later(-5), table_number: '4', amount: 5000000, payment_method: 'cash', items: [] });
+  // Trang Lương: tháng đã chốt thưởng 500.000đ, phạt 200.000đ → thưởng − phạt +300.000đ (không thuộc ngày nào).
+  state.payroll = { staff: [{ id: 'a' }], configs: [{ staff_id: 'a', base_salary: 0 }], closes: [{ staff_id: 'a', snapshot: { bonusAmt: 500000, vioAmt: 200000 } }] };
+  const sent = [];
+  const env = { SUPABASE_SERVICE_ROLE_KEY: 'k'.repeat(40) };
+  const api = load({ state, sent, env });
+  const book = (await get(api, `month=${month}`)).body.totals;
+  assert.deepEqual([book.salaryExtra, book.profit], [300000, 4700000]);
+  const period = (await get(api, `period=month&date=${today}`)).body.totals;
+  assert.deepEqual([period.profit, period.cost], [book.profit, 300000], '/thongke month = finance book month');
+  assert.deepEqual(plain(period.costs), [{ label: 'Lương', amount: 300000 }]);
+  assert.equal((await get(api, `period=week&date=${today}`)).body.totals.profit, 5000000, 'a week does not take the whole month bonus');
+  assert.equal((await get(api, `report=${today}`)).body.summary.month.profit, book.profit, 'month so far on /thongke');
+  const key = createHmac('sha256', 'k'.repeat(40)).update('finance-daily-report').digest('hex');
+  const cron = load({ state, sent, code: 401, env });
+  await cron.POST({ json: async () => ({ action: 'daily_report', date: today }), headers: new Map([['x-finance-report-key', key]]) });
+  assert.match(sent[0].text, new RegExp(`Tháng ${month.slice(5)} tới nay: thu 5\\.000\\.000đ · lãi 4\\.700\\.000đ`));
+});
+
+test('when attendance cannot be read, Zalo and /thongke say profit has no wages yet', async () => {
+  const today = finance.vnDate(Date.now());
+  const state = empty();
+  state.finance_settings = [{ key: 'zalo_report', value: { ownerIds: ['owner-zalo'] } }];
+  state.finance_revenue_ledger.push({ order_id: 'r1', business_date: today, paid_at: later(-5), table_number: '4', amount: 80000, payment_method: 'cash', items: [] });
+  state.payrollFails = true;
+  const sent = [];
+  const env = { SUPABASE_SERVICE_ROLE_KEY: 'k'.repeat(40) };
+  const api = load({ state, sent, env });
+  assert.equal((await get(api, `month=${today.slice(0, 7)}`)).body.wagesReady, false, 'the finance book already says so');
+  assert.ok((await get(api, `report=${today}`)).body.summary.warnings.includes('Chưa đọc được chấm công — lãi chưa trừ lương'));
+  assert.equal((await get(api, `period=month&date=${today}`)).body.wagesMissing, true);
+  assert.equal((await get(api, `period=week&date=${today}`)).body.wagesMissing, true);
+  const key = createHmac('sha256', 'k'.repeat(40)).update('finance-daily-report').digest('hex');
+  await load({ state, sent, code: 401, env }).POST({ json: async () => ({ action: 'daily_report', date: today }), headers: new Map([['x-finance-report-key', key]]) });
+  assert.match(sent[0].text, /⚠ Chưa đọc được chấm công — lãi chưa trừ lương/);
+  state.payrollFails = false;
+  assert.equal((await get(api, `period=month&date=${today}`)).body.wagesMissing, false);
+  assert.ok(!(await get(api, `report=${today}`)).body.summary.warnings.some(w => /chấm công/.test(w)));
+});
+
+test('"bill CK chưa có ảnh" counts only transfers with neither a photo nor a reason, like the 05:00 check', async () => {
+  const today = finance.vnDate(Date.now());
+  const state = empty();
+  const id = n => `00000000-0000-0000-0000-00000000000${n}`;
+  state.finance_revenue_ledger.push(
+    { order_id: id(1), business_date: today, paid_at: later(-30), table_number: '1', amount: 50000, payment_method: 'transfer', transfer_image_path: 'ck.jpg', items: [] },
+    { order_id: id(2), business_date: today, paid_at: later(-20), table_number: '2', amount: 70000, payment_method: 'transfer', transfer_image_path: null, items: [] },
+    // Đóng bàn chuyển khoản không chụp được ảnh, có ghi lý do (được phép).
+    { order_id: id(3), business_date: today, paid_at: later(-10), table_number: '3', amount: 90000, payment_method: 'transfer', transfer_image_path: null, photo_skip_reason: 'Máy hỏng camera', items: [] });
+  const api = load({ state });
+  const search = (await get(api, `search=1&from=${today}&to=${today}`)).body;
+  assert.equal(search.alerts.missingPhoto, 1);
+  assert.deepEqual((await get(api, `search=1&from=${today}&to=${today}&image=missing`)).body.results.map(r => r.id), [id(2)], 'the list behind the warning matches its count');
+  const month = (await get(api, `month=${today.slice(0, 7)}`)).body;
+  assert.deepEqual([month.transferAlerts.missingPhoto, month.transferByDay[today].missingPhoto], [1, 1]);
+  const check = (await post(api, { action: 'check_day', date: today })).body.check;
+  assert.equal(check.issues.find(i => i.key === 'ck_no_photo').count, 1, 'same count as the machine check');
 });

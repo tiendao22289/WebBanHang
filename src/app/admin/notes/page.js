@@ -5,14 +5,14 @@ import { supabase } from '@/lib/supabase';
 import { ChefHat, FileText, CheckCircle, XCircle, LogOut, Plus, Clock, Trash2, User, CornerDownRight } from 'lucide-react';
 import './notes.css';
 import MenuNameInput from '@/lib/MenuNameInput';
-import { normalizePriceInput, noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
+import { editRows, normalizePriceInput, noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
 import { notesApi, workforce } from '@/lib/staffApi';
 import { filterRange, notesSummary } from './notesStats';
 import DebtPicker from './DebtPicker';
 import { KindTag, isOtherLine, newOtherLine } from './NoteKinds';
 import OtherCosts from './OtherCosts';
 import { MoneyInput, NoteItemsList, Section, TripSummary, vnd } from './NewNoteParts';
-import { allOpenDebts, fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
+import { allOpenDebts, debtKey, fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
 import { seesAllNotes } from '@/lib/staffRoles.mjs';
 
 // Chỉ tính tiền thừa của phiếu từ tháng 10/2026 (khớp ô "Trả lại chủ" của tháng; phiếu cũ hơn đã trả chủ).
@@ -103,6 +103,8 @@ export default function StaffNotesPage() {
   const [editDebtAmount, setEditDebtAmount] = useState('');
   const [editInputAmount, setEditInputAmount] = useState(''); // Tiền được giao (sửa)
   const [editOriginalItems, setEditOriginalItems] = useState([]);
+  // updated_at của phiếu lúc mở ô sửa: máy chủ từ chối lưu nếu phiếu đã đổi từ đó (máy khác sửa / trả nợ).
+  const [editUpdatedAt, setEditUpdatedAt] = useState(null);
   const toggleHistory = (noteId, idx) => setExpandedHistory(prev => ({ ...prev, [`${noteId}-${idx}`]: !prev[`${noteId}-${idx}`] }));
 
   // Employee self-service — Bảng Công
@@ -356,10 +358,12 @@ export default function StaffNotesPage() {
     // Các khoản nợ cũ đã chọn trả (máy chủ kiểm lại số còn nợ từng khoản).
     // Nguồn tiền: tiền thừa phiếu trước (nếu tích dùng) trước, rồi tiền của phiếu này.
     const leftovers = useLeftoverForDebt && !carryLeftover ? openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ id: l.note_id, left: l.left })) : [];
+    // Gửi kèm mã dòng (_id): máy chủ tìm dòng theo mã, phiếu nợ vừa bị sửa thì không trả nhầm dòng khác.
+    const debtLines = new Map(allOpenDebts(notes).map(l => [debtKey(l), l]));
     const payDebts = fundDebtPayments(Object.entries(debtPays).filter(([, v]) => Number(v) > 0).map(([key, amount]) => ({ key, amount })), leftovers)
       .map(({ key, amount, from_note_id }) => {
         const [noteId, index] = key.split(':');
-        return { note_id: noteId, item_index: index === 'note' ? null : Number(index), amount, from_note_id };
+        return { note_id: noteId, item_id: debtLines.get(key)?.item_id || null, item_index: index === 'note' ? null : Number(index), amount, from_note_id };
       });
 
     const filled = expenseItems.filter(i => i.name.trim() && !(i.preset && !String(i.price || '').trim()));
@@ -425,20 +429,12 @@ export default function StaffNotesPage() {
   const openEditNote = (note) => {
     setEditingNoteId(note.id);
     setEditNoteType(note.note_type || 'other');
+    setEditUpdatedAt(note.updated_at ?? null);
     if (note.note_type === 'expense' && note.content?.includes('structured_expense')) {
       try {
         const data = JSON.parse(note.content);
-        const items = (data.items?.length ? data.items : []).map((item, idx) => {
-          // Dòng cũ chưa có mã: dùng "#vị trí" để máy chủ so đúng dòng khi ghi lịch sử.
-          const stableId = item._id || `#${idx}`;
-          if (item.paymentStatus === 'debt' && !item.debtAmount) {
-            const p = parseVal(item.price);
-            const q = parseVal(item.qty, true) || 1;
-            const total = p * q;
-            return { ...item, _id: stableId, debtAmount: total > 0 ? total.toLocaleString('vi-VN') : '' };
-          }
-          return { ...item, _id: stableId };
-        });
+        // Dòng cũ chưa có mã → "#vị trí"; dòng nợ chưa ghi "Số tiền nợ" giữ trống (= nợ cả dòng).
+        const items = editRows(data.items);
         // Append preset items if not already present
         const presets = ['Tiền rau', 'Tiền gia vị'];
         const existingNames = items.map(i => i.name.trim().toLowerCase());
@@ -633,6 +629,7 @@ export default function StaffNotesPage() {
       saved = (await notesApi('edit', {
         id: note.id, note_type: editNoteType, items: validItems, note: editNoteContent,
         input_amount: editInputAmount, debt: editNoteType !== 'expense' ? finalDebtToSave : undefined,
+        updated_at: editUpdatedAt,
       })).note;
     } catch (err) { error = err; }
     setIsSavingEdit(false);
@@ -723,7 +720,7 @@ export default function StaffNotesPage() {
       const remaining = debtBase - alreadyPaid;
       if (payAmount <= 0 || payAmount > remaining) return alert('Số tiền không hợp lệ!');
       // Máy chủ ghi lần trả nợ (ngày trả, ai trả) và cập nhật dòng hàng + lịch sử.
-      const updated = (await notesApi('pay_item', { id: note.id, item_index: itemIdx, amount: payAmount })).note;
+      const updated = (await notesApi('pay_item', { id: note.id, item_id: item._id || null, item_index: itemIdx, amount: payAmount })).note;
       setPayingItem(null); setPayItemInput('');
       // Directly update notes state so card turns green immediately
       setNotes(prev => prev.map(n => n.id === note.id ? { ...n, ...updated } : n));

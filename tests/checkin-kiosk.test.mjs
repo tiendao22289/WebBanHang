@@ -7,6 +7,7 @@ import * as rules from '../src/lib/attendanceRules.mjs';
 import * as clockApply from '../src/lib/clockApply.mjs';
 import * as faceCheck from '../src/lib/faceCheck.mjs';
 import { punctuality } from '../src/lib/clockMessages.mjs';
+import { readClosedDays } from '../src/lib/payrollMonth.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
 
 const SECRET = 'service-role-test-key'.repeat(2);
@@ -121,17 +122,18 @@ test('late, early, left early and stayed flags per person per day', () => {
 const source = readFileSync(new URL('../src/app/api/checkin/kiosk/route.js', import.meta.url), 'utf8')
   .replace(/^import [\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
 
-function load(state, user) {
+// now: chạy ở một giờ cố định (mặc định giờ thật).
+function load(state, user, now = null) {
   const NextResponse = { json: (body, init = {}) => {
     const res = { status: init.status || 200, body };
     Object.defineProperty(res, 'cookies', { value: { set: (k, v) => { res.setCookies = { ...res.setCookies, [k]: v }; } }, enumerable: false });
     return res;
   } };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...token, ...rules, ...clockApply, ...faceCheck, punctuality, URL, Number, Math, String, JSON, Date, Promise, STATUS_COOKIE: 'local_admin_session',
+    NextResponse, ...token, ...rules, ...clockApply, ...faceCheck, punctuality, readClosedDays, URL, Number, Math, String, JSON, Date, Promise, STATUS_COOKIE: 'local_admin_session',
     console: { error() {} }, process: { env: { SUPABASE_SERVICE_ROLE_KEY: SECRET } },
     getStaffSession: async () => (user ? { code: 200, user } : { code: 401 }),
-    nowMs: () => Date.now(), refreshClock: async () => {}, clockStatus: () => ({ offsetMs: 0, synced: true, checkedAt: null, source: 'test' }),
+    nowMs: () => now ?? Date.now(), refreshClock: async () => {}, clockStatus: () => ({ offsetMs: 0, synced: true, checkedAt: null, source: 'test' }),
     statusDatabase: () => fakeDb(state), staffDatabase: () => fakeDb(state),
   });
 }
@@ -247,4 +249,25 @@ test('a person without a phone clocks by tapping their name on the kiosk, only i
   state.staff_departures.push({ staff_id: STAFF.id, last_day: '2026-01-01' });
   assert.equal((await tap(STAFF.id, 'in')).status, 403, 'someone who left cannot be clocked');
   assert.deepEqual((await list()).body.people, []);
+});
+
+test('tapping the kiosk on a shop closed day: no "late" or "left early" warning, no talk of pay cuts', async () => {
+  // Quán nghỉ 9/11 (chủ thêm tay); Phát được gọi vào dọn 16:00 → 20:00. Hôm sau 10/11 quán mở, vào 16:00 là trễ.
+  const at = (day, hm) => Date.parse(`2026-11-${day}T${hm}:00+07:00`);
+  const state = { checkin_kiosks: [{ id: KIOSK, name: 'Quầy', revoked_at: null, recent_ips: [] }], checkin_nonces: [], checkin_scans: [], attendance_sessions: [], attendance_changes: [],
+    staff: [STAFF], staff_departures: [], staff_shifts: [], checkin_settings: [{ id: 1, enforce: true, hours_from: '2026-10-25' }], checkin_hours: [SHOP_HOURS],
+    checkin_tap_staff: [{ staff_id: STAFF.id, label: 'Phát', updated_at: '2026-11-04T01:00:00Z' }], shop_closed_days: [{ day: '2026-11-09', note: 'sửa điện' }] };
+  const tap = async (time, expect) => {
+    state.checkin_kiosks[0].recent_ips = [{ ip: '113.161.1.2', at: new Date(time).toISOString() }];
+    const cookie = token.signKioskCookie(KIOSK, SECRET, time);
+    return plain(await load(state, null, time).POST({ json: async () => ({ action: 'tap_clock', staff_id: STAFF.id, expect }), headers: new Map([['cf-connecting-ip', '113.161.1.2']]),
+      cookies: { get: k => (k === token.KIOSK_COOKIE ? { value: cookie } : undefined) } })).body;
+  };
+  const closedNote = '✅ Hôm nay quán nghỉ: không tính trễ / về sớm.';
+  assert.deepEqual([(await tap(at('09', '16:00'), 'in')).note, (await tap(at('09', '20:00'), 'out')).note], [closedNote, closedNote], '2 hours "late", 3 hours "early"');
+  assert.equal((await tap(at('10', '16:00'), 'in')).note, '⏰ Trễ 2 giờ so với ca 14:00. Đi trễ có thể bị trừ lương.', 'an open day still warns');
+  // Trước khi có các bảng ngày nghỉ (chưa chạy migration): vẫn ghi giờ, báo như thường.
+  state.attendance_sessions[1].clock_out = new Date(at('10', '23:00')).toISOString();
+  state.__noTable = ['shop_closed_days', 'shop_closed_rules', 'payroll_holiday_pay', 'staff_returns'];
+  assert.equal((await tap(at('11', '14:00'), 'in')).note, '✅ Đúng giờ (ca 14:00 – 23:00).');
 });

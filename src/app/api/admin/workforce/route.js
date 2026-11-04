@@ -40,7 +40,7 @@ import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { hashPin, isHashedPin, validPin } from '@/lib/staffPin.mjs';
 import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, KIOSK_COOKIE, newDeviceId, readKioskCookie, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
-import { closedDaysToDate, loadPayrollMonth, monthRange, readHolidays, readHourlyRates, readLateRules, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
+import { closedDaysToDate, loadPayrollMonth, monthRange, readClosedDays, readHolidays, readHourlyRates, readLateRules, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
 import { AUTO_CLOSE_BY, AUTO_EXTRA_FROM, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
 import { DEFAULT_OT_RATE, computeSalary, holidayArgs, lateRulesOf, monthKey, monthTallies, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
@@ -130,9 +130,11 @@ async function myStatus(db, staffId) {
     db.from('payroll_leave_days').select('*').eq('staff_id', staffId).limit(500),
   ]);
   for (const r of [today, fixes, reviews, leaveDays]) if (r.error) throw r.error;
-  // Giờ làm để tự tính trễ / ngoài ca; không cho nhân viên biết đang chạy thử hay chặn thật.
-  const rules = { hours_from: settings.hours_from, hours: settings.hours, shifts: settings.shifts[staffId] ? { [staffId]: settings.shifts[staffId] } : {} };
   const day = currentWorkDay(settings, staffId, nowMs());
+  // Ngày quán nghỉ của tháng này (và hôm qua): điện thoại không báo trễ / về sớm hôm quán nghỉ. Lỗi thì báo như thường.
+  const closedDays = await readClosedDays(db, `${dayBefore(day).slice(0, 7)}-01`, vnToday()).catch(e => { console.error('[workforce] closed days', e); return []; });
+  // Giờ làm để tự tính trễ / ngoài ca; không cho nhân viên biết đang chạy thử hay chặn thật.
+  const rules = { hours_from: settings.hours_from, hours: settings.hours, shifts: settings.shifts[staffId] ? { [staffId]: settings.shifts[staffId] } : {}, closedDays };
   // Ca ghi sau 3 lần sai mặt (45 ngày gần đây): chưa tính lương, chờ chủ duyệt.
   const { data: held, error: he } = await db.from('attendance_face_reviews').select('attendance_id').eq('staff_id', staffId).eq('status', 'pending').gte('created_at', new Date(nowMs() - 45 * 86400000).toISOString());
   if (he && !missingTable(he)) throw he;
@@ -165,15 +167,16 @@ async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
     ]);
     for (const r of [sessions, config, requests, violations, closed, bonuses, meta]) if (r.error) throw r.error;
     const mine = markFaceHolds(sessions.data || [], await faceHolds(db, (sessions.data || []).map(x => x.id)));
+    const closedDays = closedDaysToDate(holidays, start, end, vnToday());
     const live = computeSalary({ year, month, staffId, sessions: mine, config: config.data, requests: requests.data || [],
       violations: violations.data || [], bonuses: bonuses.data || [], rules: settings, reviews, hourlyRates, lateRules: lateRulesOf(lateRules, staffId),
-      ...holidayArgs(me.data || { id: staffId }, { closedDays: closedDaysToDate(holidays, start, end, vnToday()), holidayPay: holidays.holidayPay, departures: left.data || [] }) });
+      ...holidayArgs(me.data || { id: staffId }, { closedDays, holidayPay: holidays.holidayPay, departures: left.data || [], returns: holidays.returns }) });
     const salary = closed.data
       ? { bonusAmt: 0, ...closed.data.snapshot, year, month, locked: true, closed_at: closed.data.closed_at, paid_at: closed.data.paid_at || null }
       : { ...live, year, month, locked: false };
     delete salary.name;
-    // Thưởng chuyên cần (khi chủ có dùng): tới hôm nay đã trễ / quên ra ca chưa. Không đưa mức thưởng gợi ý.
-    const t = monthTallies({ sessions: mine, rules: settings, key: monthKey(year, month), autoClosed });
+    // Thưởng chuyên cần (khi chủ có dùng): tới hôm nay đã trễ / quên ra ca chưa (hôm quán nghỉ không tính). Không đưa mức thưởng gợi ý.
+    const t = monthTallies({ sessions: mine, rules: settings, key: monthKey(year, month), autoClosed, closedDays });
     const bonus = payroll.bonus_amount > 0 && usesDayPay(year, month) ? { late: t.late.count, forgot: t.forgot, minDays: payroll.bonus_min_days, units: live.workUnits, approved: bonuses.data?.[0]?.amount || null } : null;
     const dateOf = new Map((meta.data || []).map(m => [m.violation_id, m.fine_date]));
     return { salary, bonus, violations: (violations.data || []).map(v => ({ amount: v.amount, reason: v.reason, date: dateOf.get(v.id) || null })) };
@@ -585,6 +588,9 @@ export async function POST(request) {
         if (Number.isFinite(start) && Number.isFinite(end) && end <= start) return fail('Giờ ra phải sau giờ vào.');
         if (Number.isFinite(start) && Number.isFinite(end) && end - start > 24 * 3600000) return fail('Một ca không dài quá 24 tiếng.');
       }
+      // Sửa giờ vào sang ngày khác (lượt quét nhầm sửa thành ca hôm trước…): ngày ghi theo giờ vào mới như lúc thêm ca,
+      // không thì ca vẫn tính vào ngày cũ (thành giờ ngoài ca / mất ngày công).
+      if (updates.clock_in) updates.date = new Date(Date.parse(updates.clock_in) + 7 * 3600000).toISOString().slice(0, 10);
       const r = await db.from('attendance_sessions').update(updates).eq('id', orig.id);
       if (r.error) throw r.error;
       // Giờ đổi thì giờ ngoài ca đổi theo: bỏ lần duyệt cũ. Từ khi giờ ngoài ca tự tính (AUTO_EXTRA_FROM) giữ lại lần chủ
@@ -792,8 +798,9 @@ export async function POST(request) {
         const of = rows => rows.filter(x => x.staff_id === p.id);
         const config = of(m.configs)[0] || null, mine = of(m.sessions), reqs = of(m.requests), vios = of(m.violations);
         if (!config && !mine.length && !reqs.length && !vios.length) return null;
-        // Tiền từng ngày (Sổ thu chi) và chi tiết từng ngày (trang Lương tự tính lại) — không lưu vào bảng đã chốt.
-        const { byDay, daily, ...salary } = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, bonuses: of(m.bonuses), rules: m.rules, reviews: m.reviews, hourlyRates: of(m.hourlyRates), lateRules: lateRulesOf(m.lateRules, p.id),
+        // Tiền từng ngày (byDay) lưu cùng số đã chốt: Sổ thu chi theo đúng phiếu đã trả dù sau đó có sửa giờ. Chi tiết từng
+        // ngày (trang Lương tự tính lại) không lưu.
+        const { daily, ...salary } = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, bonuses: of(m.bonuses), rules: m.rules, reviews: m.reviews, hourlyRates: of(m.hourlyRates), lateRules: lateRulesOf(m.lateRules, p.id),
           ...holidayArgs(p, m) });
         return { year, month, staff_id: p.id, snapshot: { name: p.full_name, ...salary }, closed_by: user.full_name || null, closed_at: closedAt };
       }).filter(Boolean);
@@ -813,6 +820,16 @@ export async function POST(request) {
       if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
       if (body.staff_id === user.id) return fail('Không tự cho mình nghỉ việc được.');
       if (body.action === 'staff_return') {
+        // Đã qua ngày làm cuối: ghi lần nghỉ (ngày làm cuối → hôm nay đi làm lại) để lương ngày quán nghỉ không tính khoảng
+        // đã nghỉ. Huỷ cho nghỉ trước ngày làm cuối thì không có khoảng nghỉ. Bảng chưa tạo (chưa chạy staff_returns.sql):
+        // chỉ bỏ dòng nghỉ việc như cũ.
+        const { data: left, error: le } = await db.from('staff_departures').select('*').eq('staff_id', body.staff_id).maybeSingle();
+        if (le) throw le;
+        if (left && String(left.last_day).slice(0, 10) < today) {
+          const back = await db.from('staff_returns').insert({ staff_id: body.staff_id, left_day: String(left.last_day).slice(0, 10), return_day: today,
+            decided_by: user.full_name || null, created_at: isoNow() });
+          if (back.error && !missingTable(back.error)) throw back.error;
+        }
         const r = await db.from('staff_departures').delete().eq('staff_id', body.staff_id);
         if (r.error) throw r.error;
         return NextResponse.json({ ok: true }, { headers });

@@ -244,7 +244,7 @@ test('a failed request does not lock the scheduler', async () => {
 test('initial page load starts bill and table reads concurrently and hydrates cached options', async () => {
   const page = readFileSync(new URL('../src/app/admin/tables/page.js', import.meta.url), 'utf8');
   const section = page.slice(page.indexOf('  const fetchTables = useCallback('), page.indexOf('  // ─── Danh sách máy in'));
-  const callback = section.match(/useCallback\(([\s\S]*), \[\]\);/)[1];
+  const callback = section.match(/useCallback\(([\s\S]*), \[applyMenu\]\);/)[1];
   let releaseTables;
   let releaseOrders;
   const calls = [];
@@ -266,7 +266,7 @@ test('initial page load starts bill and table reads concurrently and hydrates ca
     },
     expandTableRefreshScope, withCachedMenuOptions,
     fetchLuckyStatusRef: { current: null },
-    setTables() {}, setMenuItems() {}, setCategories() {},
+    setTables() {}, applyMenu() {},
     setOrders(updater) { state = updater(state); },
     setLoading(value) { loading = value; },
     console,

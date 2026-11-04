@@ -40,6 +40,26 @@ async function postQrPayment(fields, blob, kind) {
 
 const TRANSFER_SHOTS = [{ key: 'ck', label: 'Màn hình khách' }, { key: 'bill', label: 'Tờ bill' }];
 
+// Mã phiếu thu tiền mặt của MỘT lần thu: bấm lại sau lỗi mạng thì dùng lại đúng mã (máy chủ không ghi
+// trùng). Chỉ dùng lại khi cùng số tiền và trong CASH_RETRY_MS kể từ lần bấm đầu; ghi xong, gõ số tiền
+// mới hay quá hạn đều ra mã mới. Trước đây mã chỉ gắn với số tiền: lần trước mất phản hồi mà nhân viên
+// không bấm lại thì khoản tiền mặt kế tiếp cùng số tiền dùng lại mã cũ và bị máy chủ bỏ qua.
+const CASH_ATTEMPT_KEY = 'custom-cash-receipt';
+const CASH_RETRY_MS = 5 * 60 * 1000;
+
+function cashReceiptId(amount, now = Date.now()) {
+  let previous = null;
+  try { previous = JSON.parse(sessionStorage.getItem(CASH_ATTEMPT_KEY) || 'null'); } catch { /* stale cache */ }
+  const reuse = previous?.id && previous.amount === amount && now - Number(previous.at) >= 0 && now - Number(previous.at) < CASH_RETRY_MS;
+  const attempt = reuse ? previous : { id: newLuckyRequestId(), amount, at: now };
+  sessionStorage.setItem(CASH_ATTEMPT_KEY, JSON.stringify(attempt));
+  return attempt.id;
+}
+
+function forgetCashAttempt() {
+  try { sessionStorage.removeItem(CASH_ATTEMPT_KEY); } catch { /* storage bị chặn */ }
+}
+
 export default function QrGeneratorPage() {
   const [amount, setAmount] = useState('');
   const [qrAccount, setQrAccount] = useState(null);
@@ -118,18 +138,34 @@ export default function QrGeneratorPage() {
   const saveCash = async (numAmount, blob) => {
     setIsGenerating(true);
     try {
-      const attemptKey = 'custom-cash-receipt';
-      let previous = null;
-      try { previous = JSON.parse(sessionStorage.getItem(attemptKey) || 'null'); } catch { /* stale cache */ }
-      const receiptId = previous?.amount === numAmount ? previous.id : newLuckyRequestId();
-      sessionStorage.setItem(attemptKey, JSON.stringify({ id: receiptId, amount: numAmount }));
-      await postQrPayment({ action: 'qr_cash', receipt_id: receiptId, amount: numAmount }, blob, 'bill');
-      sessionStorage.removeItem(attemptKey);
+      const money = `${numAmount.toLocaleString('vi-VN')}đ`;
+      const result = await postQrPayment({ action: 'qr_cash', receipt_id: cashReceiptId(numAmount), amount: numAmount }, blob, 'bill');
+      forgetCashAttempt();
+      if (result.alreadyDone) {
+        // Máy chủ đã có phiếu này (lần bấm trước mạng chậm, tiền đã vào sổ). Nếu thật ra là tiền của
+        // khách khác cùng số tiền thì ghi bằng mã mới — không để khoản mới bị bỏ qua mà không ai biết.
+        const { isConfirmed } = await Swal.fire({
+          icon: 'warning',
+          title: 'Khoản này đã ghi từ lần bấm trước',
+          html: `<b>${money}</b> tiền mặt đã được ghi vào sổ ở lần bấm trước (lúc đó mạng chậm nên chưa báo).<br><br>`
+            + `Nếu đây là tiền của <b>khách khác</b>, bấm <b>Ghi khoản mới</b>.`,
+          showCancelButton: true,
+          confirmButtonText: 'Ghi khoản mới',
+          cancelButtonText: 'Đúng, cùng khoản đó',
+          reverseButtons: true,
+        });
+        if (isConfirmed) {
+          // Mã mới cũng là 1 lần thu: mạng lỗi rồi bấm lại thì không ghi 2 lần.
+          const again = await postQrPayment({ action: 'qr_cash', receipt_id: cashReceiptId(numAmount), amount: numAmount }, blob, 'bill');
+          forgetCashAttempt();
+          if (again.alreadyDone) throw new Error('Máy chủ vẫn báo đã ghi. Vui lòng báo chủ quán kiểm tra Sổ thu chi.');
+        }
+      }
 
       Swal.fire({
         icon: 'success',
         title: '✅ Nhận tiền mặt!',
-        html: `Đã nhận <b style="color:#16a34a">${numAmount.toLocaleString('vi-VN')}đ</b> tiền mặt.`,
+        html: `Đã nhận <b style="color:#16a34a">${money}</b> tiền mặt.`,
         timer: 3000,
         timerProgressBar: true,
         showConfirmButton: false,
@@ -191,6 +227,7 @@ export default function QrGeneratorPage() {
 
   // Format số tiền khi nhập
   const handleAmountChange = (e) => {
+    forgetCashAttempt(); // gõ số tiền = lần thu mới → mã phiếu tiền mặt mới
     let val = e.target.value.replace(/\D/g, '');
     if (!val) { setAmount(''); return; }
     setAmount(parseInt(val, 10).toLocaleString('vi-VN'));
@@ -228,7 +265,8 @@ export default function QrGeneratorPage() {
     }, blob, kind);
     setPaymentStatus('completed');
     Swal.fire({
-      title: result.photoSaved ? 'Đã xác nhận và lưu ảnh' : 'Đã xác nhận (chưa lưu được ảnh)',
+      title: result.alreadyDone ? 'Mã QR này đã xác nhận từ lần bấm trước (không ghi thêm)'
+        : result.photoSaved ? 'Đã xác nhận và lưu ảnh' : 'Đã xác nhận (chưa lưu được ảnh)',
       icon: result.photoSaved ? 'success' : 'warning', toast: true, position: 'top-end', showConfirmButton: false, timer: 3000,
     });
   };

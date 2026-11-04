@@ -69,3 +69,19 @@ test('face check results are read aloud at the kiosk and shown on the phone', ()
   assert.match(faceWaitText({ status: 'wrong', tries_left: 2 }), /Sai mặt — lượt này không tính[\s\S]*Sai thêm 2 lần/);
   assert.match(faceWaitText({ status: 'expired', reason: 'timeout' }), /chưa so được mặt \(hết 1 phút chờ so mặt\)/);
 });
+
+test('on a shop closed day the staff are not told they are late or left early, nor that pay is cut', () => {
+  // Quán nghỉ 9/11; chủ gọi vào dọn 16:00 → 20:00 (ca 14:00 → 23:00).
+  const R = normalizeRules({ hours_from: '2026-10-25' }, [], [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }]);
+  const s = { id: 's', staff_id: 'a', date: '2026-11-09', clock_in: '2026-11-09T09:00:00Z', clock_out: '2026-11-09T13:00:00Z' };
+  const closed = '✅ Hôm nay quán nghỉ: không tính trễ / về sớm.';
+  assert.equal(punctuality('in', s, [s], R, 'a'), '⏰ Trễ 2 giờ so với ca 14:00. Đi trễ có thể bị trừ lương.', 'an open day');
+  assert.deepEqual([punctuality('in', s, [s], R, 'a', ['2026-11-09']), punctuality('out', s, [s], R, 'a', [{ day: '2026-11-09' }])], [closed, closed]);
+  // Điện thoại: ngày quán nghỉ đi kèm giờ làm của ?me=1.
+  assert.equal(punctuality('in', s, [s], { ...R, closedDays: ['2026-11-09'] }, 'a'), closed);
+  assert.equal(punctuality('in', s, [s], { ...R, closedDays: ['2026-11-10'] }, 'a').startsWith('⏰ Trễ'), true, 'another closed day');
+  // Vào sớm / ở lại hôm quán nghỉ vẫn báo tăng ca.
+  const long = { ...s, clock_in: '2026-11-09T06:30:00Z', clock_out: '2026-11-09T16:40:00Z' };
+  assert.equal(punctuality('in', long, [long], R, 'a', ['2026-11-09']), '🌅 Vào sớm 30 phút: giờ trước 14:00 được tính tăng ca.');
+  assert.equal(punctuality('out', long, [long], R, 'a', ['2026-11-09']), '🌙 Ở lại 40 phút sau ca: được tính tăng ca.');
+});

@@ -183,10 +183,27 @@ test('Sổ tay prices are read like the Sổ tay page and prices under 1.000đ a
   assert.equal(parseNotePrice('250k'), 250000);
   assert.equal(parseNotePrice('1.5k'), 1500);
   assert.equal(parseNotePrice('250'), 250);
-  assert.equal(parseNotePrice('250.000'), 250, 'the Sổ tay page reads a dotted price as 250đ too');
+  // Như trang Sổ tay / máy chủ (notesMath): giá có dấu chấm nghìn, "tr" là giá thật, không phải dưới 1.000đ.
+  for (const [price, value] of [['250.000', 250000], ['1.200.000', 1200000], ['1tr2', 1200000], ['1,5tr', 1500000], ['85k/kg', 85000]]) {
+    assert.equal(parseNotePrice(price), value, price);
+  }
   assert.deepEqual(suspiciousNoteItems([
     { name: 'Ốc', price: '250' }, { name: 'Hàu', price: '300k' }, { name: 'Tiền rau', price: '' }, { name: 'Mực', price: '250.000' },
-  ]).map(i => i.name), ['Ốc', 'Mực']);
+    { name: 'Cua', price: '1.200.000' }, { name: 'Tôm', price: '1tr2' }, { name: 'Ghẹ', price: '1,5tr' },
+  ]).map(i => i.name), ['Ốc']);
+});
+
+test('a normal "250.000" price in Sổ tay does not make the day look wrong in the book or the 05:00 check', async () => {
+  const { dayCheck } = await import('../src/lib/dayCheck.mjs');
+  const note = { id: 'n', note_type: 'expense', amount: 1450000, debt: 0, created_at: '2026-11-03T03:00:00Z',
+    content: JSON.stringify({ type: 'structured_expense', items: [{ name: 'Ốc hương', price: '250.000', qty: '1' }, { name: 'Cua', price: '1tr2', qty: '1' }] }) };
+  const s = summarizeMonth({ month: '2026-11', today: '2026-11-03', notes: [note] });
+  assert.equal(s.days.find(d => d.date === '2026-11-03').suspiciousNotes, 0);
+  // Như noteView của máy chủ (route sổ thu chi) đưa vào máy tự kiểm tra.
+  const view = { createdAt: note.created_at, cost: noteCost(note), mismatch: finance.noteMismatch(note), lineWarnings: finance.noteLineWarnings(note),
+    suspicious: finance.suspiciousNoteItems(finance.noteItems(note)).map(i => `${i.name}: ${i.price}`) };
+  const check = dayCheck({ date: '2026-11-03', notes: [view] });
+  assert.deepEqual([check.ok, check.problems], [true, 0]);
 });
 
 test('a day close compares counted cash and bank money with the ledger', () => {
@@ -255,6 +272,9 @@ test('the daily Zalo report lists money per card, costs, profit and anything tha
     check: { ok: false, problems: 1, issues: [{ key: 'ck_no_photo', title: 'Bill chuyển khoản chưa có ảnh', count: 2, amount: 300000 }] } });
   assert.doesNotMatch(checked, /chưa kiểm tra|chốt sổ|⚠ 1 phiếu Sổ tay/i);
   assert.match(checked, /🤖 Máy tự kiểm tra: 1 việc cần xem\n• Bill chuyển khoản chưa có ảnh: 2 \(300\.000đ\)/);
+  // Đọc chấm công lỗi: lãi chưa trừ lương → báo, như Sổ thu chi.
+  assert.match(finance.dailyReportText({ day: { ...day, close: null, check: { ok: true, problems: 0 } }, wagesReady: false }), /⚠ Chưa đọc được chấm công — lãi chưa trừ lương/);
+  assert.doesNotMatch(quiet, /chấm công/);
 });
 
 test('a day of spending splits into: during the day, shopping, wages, fixed (shared out per day)', () => {

@@ -62,6 +62,18 @@ async function main() {
   }
   console.log('Đã cài sổ thu chi vào DB thật.');
 
+  // Sổ thu chi = đúng tiền thu mỗi lần đóng bàn (finance_ledger_checkout_sum.sql): bill âm vì dòng giảm giá
+  // ghi 0đ, phần âm trừ vào bill lớn nhất cùng lần thu; sửa luôn các lần thu cũ. Chạy SAU owner_finance.sql.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'finance_ledger_checkout_sum.sql'), 'utf8'));
+  const [balance] = await query(`SELECT
+    to_regprocedure('public.balance_finance_checkout(timestamptz)') IS NOT NULL AS fn_ok,
+    EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'capture_finance_revenue_balance' AND tgrelid = 'public.orders'::regclass AND tgenabled = 'O') AS trigger_on,
+    (SELECT count(*)::int FROM (SELECT 1 FROM public.finance_revenue_ledger GROUP BY paid_at, payment_method, account_id
+      HAVING bool_or(public.finance_ledger_bill_total(items, amount) < 0)
+        AND sum(amount) <> GREATEST(sum(public.finance_ledger_bill_total(items, amount)), 0)) x) AS unbalanced`);
+  console.log(JSON.stringify(balance));
+  if (!balance.fn_ok || !balance.trigger_on || balance.unbalanced !== 0) throw new Error('Chưa cài được phần chia giảm giá trong sổ thu chi.');
+
   // Khoá phần tiền (bill_money_guard.sql): khoá công khai trong trang web không còn đóng bàn "đã thu",
   // sửa / xoá bill đã thu, xác nhận mã QR hay cộng tiền vào thẻ. Chạy SAU confirm_custom_qr_payment.sql.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'bill_money_guard.sql'), 'utf8'));
@@ -84,6 +96,15 @@ async function main() {
   // Hàm thuộc supabase_admin thì postgres không thu được quyền: chỉ báo, trigger vẫn chặn mọi chỗ chúng ghi tiền.
   if (money.web_still_calls) console.log(`Lưu ý: khoá công khai vẫn gọi được ${money.web_still_calls} — trigger chặn khi ghi tiền.`);
   console.log('Đã khoá phần tiền: khoá công khai không còn chốt / sửa bill đã thu.');
+
+  // "Nhận tiền mặt" ở trang Mã QR báo lại khi mã phiếu đã ghi trước đó (custom_cash_receipt_once.sql).
+  // Hàm thuộc supabase_admin thì không thay được: chỉ báo, trang Mã QR vẫn không dùng lại mã cũ.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'custom_cash_receipt_once.sql'), 'utf8'));
+  const [cashOnce] = await query(`SELECT
+    position('already_completed' in pg_get_functiondef('public.record_custom_cash_receipt(uuid,numeric)'::regprocedure)) > 0 AS fn_updated,
+    NOT has_function_privilege('anon', 'public.record_custom_cash_receipt(uuid,numeric)', 'EXECUTE') AS anon_blocked`);
+  console.log(JSON.stringify(cashOnce));
+  if (!cashOnce.fn_updated) console.log('Lưu ý: chưa thay được record_custom_cash_receipt (không phải chủ hàm) — trang Mã QR chưa báo được "đã ghi".');
 
   // Khoá ghi trực tiếp từ trình duyệt + nhật ký + sổ trả nợ Sổ tay (staff_security.sql).
   // Chạy SAU khi web mới đã deploy (Sổ tay / Lương / Chấm công đã ghi qua máy chủ).
@@ -175,6 +196,13 @@ async function main() {
   console.log(JSON.stringify(closedRules));
   if (!closedRules.rules_ok || !closedRules.skip_col || closedRules.rules < 1 || !closedRules.anon_blocked) throw new Error('Chưa cài được lịch quán nghỉ.');
 
+  // Nghỉ việc rồi đi làm lại (staff_returns.sql): khoảng đã nghỉ không có lương ngày quán nghỉ.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'staff_returns.sql'), 'utf8'));
+  const [returns] = await query(`SELECT to_regclass('public.staff_returns') IS NOT NULL AS table_ok,
+    NOT has_table_privilege('anon', 'public.staff_returns', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(returns));
+  if (!returns.table_ok || !returns.anon_blocked) throw new Error('Chưa cài được bảng đi làm lại.');
+
   // Chấm công bằng nút trên máy quầy cho người không có điện thoại (checkin_tap.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_tap.sql'), 'utf8'));
   const [tap] = await query(`SELECT to_regclass('public.checkin_tap_staff') IS NOT NULL AS table_ok,
@@ -214,6 +242,16 @@ async function main() {
   console.log(JSON.stringify(draft));
   if (!draft.lines || !draft.fn_updated || !draft.web_can_call || !draft.anon_blocked) throw new Error('Chưa cài được bản gửi món an toàn.');
 
+  // Khách gửi món: giá theo thực đơn, từ chối món / lựa chọn đang tắt và quà không đủ suất
+  // (submit_customer_order_menu_check.sql). Cài cùng lúc deploy trang gọi món mới (trang biết sửa giỏ khi bị từ chối).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'submit_customer_order_menu_check.sql'), 'utf8'));
+  const [menuCheck] = await query(`SELECT
+    position('price_changed' in pg_get_functiondef('public.submit_customer_order_atomic(uuid,uuid,uuid,text,text,text,text,jsonb)'::regprocedure)) > 0 AS fn_updated,
+    has_function_privilege('anon', 'public.submit_customer_order_atomic(uuid,uuid,uuid,text,text,text,text,jsonb)', 'EXECUTE') AS web_can_call,
+    NOT has_function_privilege('anon', 'public.menu_promo_divisor(jsonb,jsonb)', 'EXECUTE') AS helpers_hidden`);
+  console.log(JSON.stringify(menuCheck));
+  if (!menuCheck.fn_updated || !menuCheck.web_can_call || !menuCheck.helpers_hidden) throw new Error('Chưa cài được phần kiểm món khách gửi.');
+
   // Voucher tặng khách (vouchers.sql): bảng mã, dùng mã vào bill, trả mã khi xoá dòng / huỷ bill.
   // Công tắc voucher + "Hẹn lần sau" mặc định TẮT — chủ quán bật ở Admin > Voucher.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'vouchers.sql'), 'utf8'));
@@ -230,6 +268,14 @@ async function main() {
   console.log(JSON.stringify(vouchers));
   if (!vouchers.table_ok || !vouchers.redeem_ok || !vouchers.keys_ok || vouchers.voucher_triggers !== 3 || vouchers.settings < 9 || !vouchers.settings_locked
     || !vouchers.anon_blocked || !vouchers.keys_hidden || !vouchers.anon_cannot_redeem) throw new Error('Chưa cài đủ phần voucher.');
+
+  // Voucher mang về chỉ trừ vào bill hôm nay (từ 05:00) chưa giao (voucher_takeaway_today.sql). Chạy SAU vouchers.sql.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'voucher_takeaway_today.sql'), 'utf8'));
+  const [takeawayVoucher] = await query(`SELECT
+    position('day_start' in pg_get_functiondef('public.redeem_voucher(text,uuid[],uuid,text)'::regprocedure)) > 0 AS fn_updated,
+    NOT has_function_privilege('anon', 'public.redeem_voucher(text,uuid[],uuid,text)', 'EXECUTE') AS anon_cannot_redeem`);
+  console.log(JSON.stringify(takeawayVoucher));
+  if (!takeawayVoucher.fn_updated || !takeawayVoucher.anon_cannot_redeem) throw new Error('Chưa cài được phần voucher mang về.');
 
   // Vai trò Quản lý (staff_manager_role.sql): cột staff.role nhận thêm 'manager'.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'staff_manager_role.sql'), 'utf8'));

@@ -202,7 +202,7 @@ function nudgeHarness(configs) {
     localStorage: { getItem: () => null, setItem: () => { seen.stored = true; } },
     fetchSessionStart: async () => '2026-09-07T09:13:55.494Z',
     luckyNudgeStorageKey: session => `nudge_${session}`, wheelStorageKey: () => 'spin',
-    fetchGroupBillTotal: async () => { seen.billReads++; return 200000; },
+    fetchOpenGroupTotal: async () => { seen.billReads++; return 200000; },
     reviewGroupIds: () => ['table'], reviewPhoneFilter: () => null,
     groupOrders: [], previousOrders: [], isLuckyWheelItem: () => false,
     fetchLuckyPrizes: async () => [], setLuckyNudgeMaxPercent: () => {},
@@ -260,7 +260,7 @@ test('the invitation marker is scoped to the current occupied table session', as
     luckyNudgeStorageKey: session => `nudge_${session}`, wheelStorageKey: () => 'spin',
     localStorage: { getItem: key => key === 'nudge_previous-session' ? '1' : null,
       setItem: key => seenKeys.push(key) },
-    fetchGroupBillTotal: async () => 200000, reviewGroupIds: () => ['table'], reviewPhoneFilter: () => null,
+    fetchOpenGroupTotal: async () => 200000, reviewGroupIds: () => ['table'], reviewPhoneFilter: () => null,
     groupOrders: [], previousOrders: [], isLuckyWheelItem: () => false,
     fetchLuckyPrizes: async () => [], setLuckyNudgeMaxPercent: () => {},
   });

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as math from '../src/lib/notesMath.mjs';
+import * as debts from '../src/lib/notesDebts.mjs';
 import { noteLeftover, noteMoney, openDebtLines } from '../src/lib/notesDebts.mjs';
 import * as categoriesLib from '../src/lib/noteCategories.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
@@ -16,7 +17,7 @@ const STAFF = { id: '00000000-0000-4000-8000-00000000bbbb', full_name: 'Thy', ro
 function load(state, user = ADMIN) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...math, ...categoriesLib, seesAllNotes, openDebtLines, noteLeftover, noteMoney, crypto: globalThis.crypto, Object, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
+    NextResponse, ...math, ...categoriesLib, ...debts, seesAllNotes, crypto: globalThis.crypto, Object, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
     getStaffSession: async () => ({ code: 200, user }), staffDatabase: () => fakeDb(state),
   });
 }
@@ -260,4 +261,102 @@ test('the owner makes the "Khác" kinds; staff put lines like petrol or repairs 
 
   const list = plain(await staff.GET({}));
   assert.deepEqual(list.body.categories.map(c => c.name), ['Xăng / đi lại', 'Sửa chữa'], 'staff get the kinds to pick from');
+});
+
+test('deleting the note that paid a debt reopens that same line, even after an earlier line was removed from the debt note', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  const A = (await post(api, { action: 'create', note_type: 'expense', items: [
+    { name: 'Đá', price: '10k', paymentStatus: 'full' },
+    { name: 'Ốc', price: '200k', paymentStatus: 'debt', creditor: 'Hoa' },
+    { name: 'Rau', price: '50k', paymentStatus: 'full' }] })).body.note.id;
+  const B = (await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Bia', price: '100k' }], input_amount: 400000,
+    pay_debts: [{ note_id: A, item_index: 1, amount: 200000 }] })).body.note.id;
+  const noteA = () => state.staff_notes.find(n => n.id === A);
+  assert.equal(openDebtLines(noteA()).length, 0, 'Ốc is paid');
+  // Bỏ dòng "Đá": Ốc lên vị trí 0, Rau (trả tiền mặt) xuống vị trí 1 — đúng vị trí sổ trả nợ đã ghi.
+  assert.equal((await post(api, { action: 'edit', id: A, note_type: 'expense', items: JSON.parse(noteA().content).items.slice(1), note: '' })).status, 200);
+  assert.deepEqual(plain(state.staff_note_payments.map(p => p.item_index)), [1]);
+  assert.equal((await post(api, { action: 'delete', id: B })).status, 200);
+  const items = JSON.parse(noteA().content).items;
+  assert.deepEqual(plain(items.map(i => [i.name, i.paymentStatus, i.paid_amount || 0])), [['Ốc', 'debt', 0], ['Rau', 'full', 0]], 'the cash line stays paid');
+  assert.deepEqual(plain(openDebtLines(noteA()).map(l => [l.name, l.left])), [['Ốc', 200000]], 'the real debt is back');
+  assert.equal(noteA().paid_debt, 0);
+  assert.match(JSON.parse(noteA().content).history.at(-1).changes, /Huỷ trả nợ 200\.000 đ cho "Ốc"/);
+});
+
+test('payments recorded before lines kept their payer still undo the right line, and never turn a cash line into a debt', async () => {
+  const A = '00000000-0000-4000-8000-0000000000a2';
+  const B = '00000000-0000-4000-8000-0000000000b2';
+  const at = new Date().toISOString();
+  // Dữ liệu cũ: dòng chưa có _id, lịch sử trả không ghi phiếu bỏ tiền; phiếu đã bị sửa bỏ dòng đầu (sổ trả nợ vẫn ghi vị trí 1).
+  const content = JSON.stringify({ type: 'structured_expense', items: [
+    { name: 'Ốc', price: '200k', paymentStatus: 'full', creditor: 'Hoa', paid_amount: 200000, payment_logs: [{ amount: 200000, ts: '10:00 01/11/2026' }] },
+    { name: 'Rau', price: '50k', paymentStatus: 'full' }] });
+  const state = { staff_notes: [
+    { id: A, staff_id: ADMIN.id, note_type: 'expense', content, amount: 50000, debt: 200000, paid_debt: 200000, created_at: at, updated_at: at },
+    { id: B, staff_id: ADMIN.id, note_type: 'expense', content: JSON.stringify({ type: 'structured_expense', items: [{ name: 'Bia', price: '100k' }] }), amount: 100000, debt: 0, created_at: at, updated_at: at },
+  ], staff_note_payments: [{ id: '10000000-0000-4000-8000-000000000001', note_id: A, item_index: 1, amount: 200000, paid_from_note_id: B, paid_at: at }] };
+  assert.equal((await post(load(state), { action: 'delete', id: B })).status, 200);
+  const items = JSON.parse(state.staff_notes[0].content).items;
+  assert.deepEqual(plain(items.map(i => [i.name, i.paymentStatus, i.paid_amount || 0])), [['Ốc', 'debt', 0], ['Rau', 'full', 0]]);
+});
+
+test('a debt is paid on the line the owner picked, found by its id when the debt note was edited meanwhile', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  await post(api, { action: 'create', note_type: 'expense', items: [
+    { name: 'Đá', price: '10k', paymentStatus: 'debt', creditor: 'Ba' },
+    { name: 'Ốc', price: '200k', paymentStatus: 'debt', creditor: 'Hoa' },
+    { name: 'Sò', price: '80k', paymentStatus: 'debt', creditor: 'Lan' }] });
+  const note = state.staff_notes[0];
+  // Màn hình chọn trả nợ mở trước khi phiếu bị sửa (bỏ dòng "Đá").
+  const [, oc, so] = openDebtLines(note);
+  assert.ok(oc.item_id && so.item_id, 'open debts carry the line id');
+  await post(api, { action: 'edit', id: note.id, note_type: 'expense', items: JSON.parse(note.content).items.slice(1), note: '' });
+  const r = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Bia', price: '10k' }],
+    pay_debts: [{ note_id: note.id, item_id: oc.item_id, item_index: oc.item_index, amount: 200000 }] });
+  assert.equal(r.status, 200);
+  assert.equal((await post(api, { action: 'pay_item', id: note.id, item_id: so.item_id, item_index: so.item_index, amount: 30000 })).status, 200);
+  const items = JSON.parse(state.staff_notes[0].content).items;
+  assert.deepEqual(plain(items.map(i => [i.name, i.paid_amount || 0])), [['Ốc', 200000], ['Sò', 30000]], 'not the line now standing at the old position');
+  assert.deepEqual(plain(state.staff_note_payments.map(p => p.item_index)), [0, 1], 'the payment book keeps the position at payment time');
+  assert.equal((await post(api, { action: 'pay_item', id: note.id, item_id: oc.item_id, amount: 1000 })).status, 400, 'a line already paid off cannot be paid again');
+});
+
+test('an edit made on an out-of-date screen is refused instead of overwriting a newer edit', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Ốc hương', price: '200k', qty: '2' }] });
+  const id = state.staff_notes[0].id;
+  // Hai máy cùng mở ô sửa một bản phiếu.
+  const view = { items: JSON.parse(state.staff_notes[0].content).items, updated_at: state.staff_notes[0].updated_at };
+  const first = await post(api, { action: 'edit', id, note_type: 'expense', items: [...view.items, { name: 'Mực', price: '300k' }], note: '', updated_at: view.updated_at });
+  assert.equal(first.status, 200);
+  const stale = await post(api, { action: 'edit', id, note_type: 'expense', items: view.items.map(i => ({ ...i, qty: '3' })), note: '', updated_at: view.updated_at });
+  assert.equal(stale.status, 409);
+  assert.match(stale.body.error, /Tải lại trang/);
+  assert.deepEqual(plain(JSON.parse(state.staff_notes[0].content).items.map(i => i.name)), ['Ốc hương', 'Mực'], 'the newer edit is kept');
+  assert.equal(state.staff_notes[0].amount, 700000);
+  // Mở lại bản mới thì sửa được.
+  const fresh = JSON.parse(state.staff_notes[0].content).items.map(i => (i.name === 'Ốc hương' ? { ...i, qty: '3' } : i));
+  assert.equal((await post(api, { action: 'edit', id, note_type: 'expense', items: fresh, note: '', updated_at: first.body.note.updated_at })).status, 200);
+  assert.equal(state.staff_notes[0].amount, 900000);
+});
+
+test('changing the quantity of a debt line keeps the whole line as debt (the edit box leaves "Số tiền nợ" empty)', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  await post(api, { action: 'create', note_type: 'expense', input_amount: 500000, items: [{ name: 'Sò điệp', price: '90k', qty: '3 ký', paymentStatus: 'debt', creditor: 'Chị Lan' }] });
+  const note = state.staff_notes[0];
+  // Như trang Sổ tay mở ô sửa (editRows), sửa 3 → 4 ký rồi lưu.
+  const rows = math.editRows(JSON.parse(note.content).items);
+  assert.equal(rows[0].debtAmount, '', 'no hidden debt amount is filled in');
+  const r = await post(api, { action: 'edit', id: note.id, note_type: 'expense', items: rows.map(i => ({ ...i, qty: '4 ký' })), note: '', input_amount: 500000, updated_at: note.updated_at });
+  assert.equal(r.status, 200);
+  const saved = state.staff_notes[0];
+  assert.deepEqual([saved.amount, saved.debt], [0, 360000], 'nothing moves to "paid now"');
+  assert.deepEqual(plain(openDebtLines(saved).map(l => l.left)), [360000]);
+  assert.equal(noteLeftover(saved, state.staff_note_payments), 500000, 'the cash handed out is all still left');
+  assert.deepEqual(plain(math.editRows([{ name: 'Cũ', price: '10k' }, { _id: 'x', name: 'Mới' }]).map(i => i._id)), ['#0', 'x'], 'old lines get "#position"');
 });
