@@ -135,14 +135,20 @@ function CostItems({ cost }) {
   </ul>;
 }
 
+// Nơi nhập chi cố định theo tháng (tiền nhà, điện, nước…): Sổ thu chi → tab Chi phí.
+const FIXED_COSTS_LINK = '/admin/finance?view=costs';
 function Costs({ summary }) {
   const max = Math.max(1, ...summary.costs.map(c => c.amount));
   return <Card icon={Wallet} title="Các khoản chi" aside={money(summary.cost)}>
     {summary.costs.length ? <ul className="tk-bars">{summary.costs.map(c => <li key={c.label}>
-      <div className="tk-bar-line"><span>{c.label}</span><b>{money(c.amount)}</b></div>
+      <div className="tk-bar-line"><span>{c.label}{c.label === 'Chi cố định' && <a className="tk-cost-edit" href={FIXED_COSTS_LINK}>Sửa</a>}</span><b>{money(c.amount)}</b></div>
       <span className="tk-bar-track"><span className="tk-bar-fill cost" style={{ width: `${c.amount / max * 100}%` }} /></span>
       <CostItems cost={c} />
     </li>)}</ul> : <p className="tk-empty">Chưa có khoản chi.</p>}
+    {!summary.costs.some(c => c.label === 'Chi cố định') && <p className="tk-cost-hint">
+      Chưa có tiền nhà, điện, nước… của tháng này. Nhập 1 lần cho cả tháng ở <a href={FIXED_COSTS_LINK}>Sổ thu chi → Chi phí</a>,
+      máy tự chia đều vào từng ngày.
+    </p>}
   </Card>;
 }
 
@@ -662,7 +668,7 @@ export default function ThongKePage() {
   return <main className="tk-page">
     <header className="tk-bar">
       <div className="tk-bar-inner">
-        <div className="tk-brand"><span className="tk-brand-logo"><BarChart3 size={18} /></span><div><b>Thống kê</b><small>{user.full_name || 'Admin'}</small></div></div>
+        <div className="tk-brand"><span className="tk-brand-logo"><BarChart3 size={18} /></span><div><b>Thống kê nhanh</b><small>{user.full_name || 'Admin'}</small></div></div>
         <div className="tk-bar-actions">
           <button className="tk-icon" onClick={() => load(date, period)} disabled={loading} aria-label="Tải lại"><RefreshCw size={19} className={loading ? 'spin' : ''} /></button>
           <button className="tk-icon" onClick={logout} aria-label="Đăng xuất"><LogOut size={19} /></button>

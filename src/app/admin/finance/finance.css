@@ -1,4 +1,10 @@
 .finance { max-width: 760px; margin: 0 auto; padding: 20px 24px 40px; color: #111827; background: #f8fafc; min-height: 100%; }
+/* Ngày đang mở trong "Các ngày trong tháng" (tab Hôm nay); dòng dẫn sang Thống kê ở tab Chi phí. */
+.fin-day.current { border-color: #2563eb; background: #eff6ff; }
+.fin-costs-more { margin-top: 12px; }
+.fin-costs-more a { color: #1d4ed8; font-weight: 600; }
+/* Phần của Sổ thu chi đặt trong trang khác (Báo cáo Zalo ở Cài đặt): giữ chữ / nút, bỏ lề và nền của trang. */
+.finance.fin-embed { max-width: none; margin: 24px 0 0; padding: 0; background: transparent; min-height: 0; }
 .finance button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 .finance button:disabled { cursor: wait; opacity: .6; }
 

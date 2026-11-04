@@ -9,6 +9,7 @@
  * POST {action:'save_item_group'|'delete_item_group'} → nhóm so bán / nhập.
  * POST {action:'add'|'delete'} → thêm/xoá khoản tự nhập (nước ngọt, lương, cố định).
  * POST {action:'close'}       → chốt sổ ngày (tiền mặt đếm được, tiền thật từng tài khoản).
+ * GET  ?zalo=1               → trạng thái báo cáo Zalo hằng ngày (trang Cài đặt).
  * POST {action:'copy_fixed'}  → chép chi cố định của tháng trước sang tháng đang xem.
  * POST {action:'verify'}      → đánh dấu bill chuyển khoản đã / chưa đối chiếu.
  * POST {action:'check_day', date} → máy kiểm tra ngay một ngày (bill thiếu, CK chưa ảnh, đóng bàn không ảnh,
@@ -203,7 +204,7 @@ async function repairMissingBills(db) {
 // Bill chuyển khoản trong khoảng ngày: chưa có ảnh CK / chưa đối chiếu.
 // Chưa có ảnh = không ảnh CK và không ghi lý do lúc đóng bàn (như máy tự kiểm tra 5 giờ sáng: đóng bàn
 // có lý do được chấp nhận, báo riêng ở "Đóng bàn không chụp ảnh").
-// byDay: thêm số đếm của từng ngày (tab Hôm nay / danh sách ngày của tab Tháng).
+// byDay: thêm số đếm của từng ngày (tab Hôm nay và danh sách "Các ngày trong tháng" ở cuối tab đó).
 async function transferAlerts(db, from, to, today, { byDay = false } = {}) {
   const keepFrom = photoKeepFrom(today);
   const [bills, paper] = await Promise.all([
@@ -624,6 +625,9 @@ export async function GET(request) {
     const params = new URL(request.url).searchParams;
     const db = statusDatabase();
     const today = vnDate(Date.now());
+
+    // Trạng thái báo cáo Zalo hằng ngày (trang Cài đặt).
+    if (params.get('zalo')) return NextResponse.json({ zaloReport: reportStatus(await readReportSettings(db).catch(() => null)) }, { headers });
 
     // Bán ra theo món / nhập vào theo Sổ tay trong khoảng ngày.
     if (params.get('items')) {
