@@ -3,22 +3,23 @@
  * lương" trên máy chủ và test.
  *
  * Từ tháng 11/2026 (DAY_PAY_FROM):
- *   lương ngày công = lương cơ bản ÷ 26 × số ngày đi làm (làm dư thì cộng thêm;
- *   ngày có giờ trong ca dưới nửa ca tính nửa ngày), tăng ca = giờ ngoài ca (vào sớm / ở lại,
+ *   lương ngày công = lương cơ bản ÷ số ngày của tháng (28 / 29 / 30 / 31) × số ngày công (ngày có giờ trong ca dưới
+ *   nửa ca tính nửa ngày; ngày quán nghỉ người lương tháng cũng được 1 công, nên đi làm đủ tháng = đúng lương cơ bản —
+ *   chủ chọn 2026-11-05 thay cho ÷ 26: quán chỉ nghỉ 2 ngày một tháng, chia 26 thì đi làm đủ được 30–31 công), tăng ca = giờ ngoài ca (vào sớm / ở lại,
  *   tự tính từ AUTO_EXTRA_FROM trừ ca chủ bấm không tính) × giá tăng ca. Đơn báo nghỉ chỉ để ghi
  *   lý do, không trừ thêm.
  *   Đi trễ theo luật đi trễ (payroll_late_rules: mặc định cả quán hoặc riêng từng người): trễ quá số phút
  *   cho phép thì trừ số tiền cố định mỗi lần và / hoặc trừ đúng số phút trễ; về sớm từ 30 phút: trừ số phút
  *   về sớm — phần theo phút tính theo lương ngày ÷ số phút của ca, không trừ quá số tiền ngày đó được tính.
  *   Ngày quán nghỉ (shop_closed_days) mà người đó không đi làm: người được nhận lương ngày nghỉ được đủ 1 ngày công
- *   (lương cơ bản ÷ 26; theo giờ: số giờ của ca × lương 1 giờ), tính cả vào số ngày công. Mặc định lương tháng có,
+ *   (lương cơ bản ÷ số ngày của tháng; theo giờ: số giờ của ca × lương 1 giờ), tính cả vào số ngày công. Mặc định lương tháng có,
  *   theo giờ không; chủ đổi từng người (payroll_holiday_pay). Chỉ tính ngày từ lúc vào làm tới ngày nghỉ việc (người
  *   nghỉ rồi đi làm lại: không tính khoảng đã nghỉ). Ngày quán nghỉ có đi làm không tính trễ / về sớm.
  *   Người trả theo giờ (payroll_hourly_rates, có ngày áp dụng): ngày đó được số phút trong ca
  *   × lương 1 giờ — trễ / về sớm mất đúng số phút đó, không nửa ngày, không trừ về sớm thêm;
  *   giờ ngoài ca chủ cho tính vẫn trả theo giá tăng ca.
  *   Người trả theo ngày (cùng bảng, unit = 'day'): như lương tháng nhưng một ngày công = lương 1 ngày chủ nhập
- *   (thay cho lương cơ bản ÷ 26); ngày không chấm công là nghỉ, không lương. Ngày quán nghỉ mặc định không lương.
+ *   (thay cho lương cơ bản ÷ số ngày của tháng); ngày không chấm công là nghỉ, không lương. Ngày quán nghỉ mặc định không lương.
  * Tháng trước đó giữ cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày,
  *   trừ ngày nghỉ có đơn × lương cơ bản ÷ 26.
  * Thưởng chuyên cần chủ đã duyệt cộng vào thực lĩnh; phạt trừ ra.
@@ -32,7 +33,9 @@
 import { dayFlags, dayInShiftMs, groupByWorkDay, sessionHours, shiftOf, shiftWindow, workDayOf } from './attendanceRules.mjs';
 import { lunarDaysBetween } from './lunar.mjs';
 
+// Ngày công chuẩn của cách tính cũ (tháng trước 11/2026). Từ 11/2026 một ngày công = lương cơ bản ÷ số ngày của tháng (monthDays).
 export const STANDARD_DAYS = 26;
+export const monthDays = (year, month) => new Date(Date.UTC(year, month, 0)).getUTCDate();
 export const DAY_PAY_FROM = '2026-11';
 export const DEFAULT_OT_RATE = 25000;
 // Thưởng chuyên cần: mặc định phải đủ 22 ngày công; gợi ý phạt khi trễ quá 30 phút.
@@ -154,7 +157,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
     // ngày công mới; ngày làm nằm ngoài tháng (ca đêm cuối tháng trước) không tính vào tháng này.
     const days = [...groupByWorkDay(sessions, rules).entries()].filter(([day]) => day.slice(0, 7) === key);
     const workDays = days.filter(([, list]) => list.some(s => s.clock_out)).length;
-    const dayRate = base / STANDARD_DAYS;
+    const standardDays = monthDays(year, month), dayRate = base / standardDays;
     const earlyList = [], lateList = [], daily = [];
     let otMs = 0, dayUnits = 0, hourMin = 0, hourPay = 0, wageUnits = 0, wagePay = 0;
     // Ngày quán nghỉ: người được nhận lương ngày nghỉ (trong thời gian làm việc, trừ lúc đã nghỉ rồi đi làm lại; mặc định
@@ -195,7 +198,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
         hourMin += minutes;
         hourPay += earned;
       } else {
-        // Lương 1 ngày: trả theo ngày thì đúng số chủ nhập, theo tháng thì lương cơ bản ÷ 26.
+        // Lương 1 ngày: trả theo ngày thì đúng số chủ nhập, theo tháng thì lương cơ bản ÷ số ngày của tháng.
         const oneDay = wage || dayRate;
         if (wage) { wageUnits += unit; wagePay += wage * unit; } else dayUnits += unit;
         // Trễ quá số phút cho phép (luật trừ theo phút): trừ đúng số phút trễ; về sớm từ 30 phút: trừ số phút về sớm.
@@ -247,7 +250,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
     otHours = round1(otMs / HOUR);
     // dayAmt: lương ngày công (trả theo tháng); hourly: phần trả theo giờ (có khi người đó có lương 1 giờ trong tháng);
     // dayWage: phần trả theo ngày (số ngày công × lương 1 ngày).
-    const dayAmt = Math.round(base * dayUnits / STANDARD_DAYS);
+    const dayAmt = Math.round(base * dayUnits / standardDays);
     const rates = ratesIn(hourlyRates, staffId, key, 'hour'), wages = ratesIn(hourlyRates, staffId, key, 'day');
     const hourly = rates.length || hourMin ? { minutes: hourMin, amount: Math.round(hourPay), rates } : null;
     const dayWage = wages.length || wageUnits ? { days: wageUnits, amount: Math.round(wagePay), rates: wages } : null;
@@ -263,7 +266,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
       byDay[lastDay] += rest;
       daily.find(d => d.day === lastDay).pay = byDay[lastDay];
     }
-    return { rule: 'days', base, standardDays: STANDARD_DAYS, workDays, workUnits, holidayDays, dayUnits, dayAmt, hourly, dayWage, basePay, earlyAmt, earlyList, lateAmt, lateList,
+    return { rule: 'days', base, standardDays, workDays, workUnits, holidayDays, dayUnits, dayAmt, hourly, dayWage, basePay, earlyAmt, earlyList, lateAmt, lateList,
       totalWorkH: round1(totalWorkH), otHours, otAmt, bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, pendingH: round1(pendingMs / HOUR),
       net: basePay - lateAmt - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt, byDay, daily };
   }

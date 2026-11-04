@@ -258,7 +258,7 @@ test('owner sets a shift per person from today, or goes back to the shop hours',
 
 test('closing a month saves each person\'s salary; closing again replaces it; reopening clears it', async () => {
   const state = shop({
-    payroll_config: [{ staff_id: STAFF.id, base_salary: 5200000, overtime_rate: 30000 }],
+    payroll_config: [{ staff_id: STAFF.id, base_salary: 6000000, overtime_rate: 30000 }],
     attendance_sessions: [{ id: 's1', staff_id: STAFF.id, date: '2026-11-02', clock_in: '2026-11-02T07:00:00Z', clock_out: '2026-11-02T16:00:00Z' }],
     payroll_requests: [], payroll_violations: [], attendance_extra_reviews: [], payroll_closes: [],
   });
@@ -487,7 +487,7 @@ test('fine suggestions: the owner fines with an amount or skips, once; deleting 
 test('attendance bonus: the owner sets the amount, approves once the month is over, and it goes into the closed pay', async () => {
   const state = shop({
     ...HOURS,
-    payroll_config: [{ staff_id: STAFF.id, base_salary: 5200000, overtime_rate: 30000 }],
+    payroll_config: [{ staff_id: STAFF.id, base_salary: 6000000, overtime_rate: 30000 }],
     attendance_sessions: [{ id: 's1', staff_id: STAFF.id, date: '2026-11-02', clock_in: '2026-11-02T07:00:00.000Z', clock_out: '2026-11-02T16:00:00.000Z' }],
     payroll_settings: [], payroll_bonuses: [], payroll_closes: [], payroll_requests: [], payroll_violations: [], attendance_fix_requests: [],
   });
@@ -807,7 +807,7 @@ test('going back to work ("Đi làm lại") keeps the time away: closed days in 
   const state = shop({ ...HOURS, staff: [{ ...STAFF, created_at: old }, { ...LAN, created_at: old }], staff_returns: [],
     staff_departures: [{ staff_id: STAFF.id, last_day: '2026-10-20' }, { staff_id: LAN.id, last_day: '2026-11-30' }],
     shop_closed_days: [{ day: '2026-11-09' }, { day: '2026-11-17' }, { day: '2026-11-23' }],
-    payroll_config: [{ staff_id: STAFF.id, base_salary: 7800000, overtime_rate: 30000 }], payroll_requests: [], payroll_violations: [], payroll_closes: [],
+    payroll_config: [{ staff_id: STAFF.id, base_salary: 9000000, overtime_rate: 30000 }], payroll_requests: [], payroll_violations: [], payroll_closes: [],
     attendance_sessions: [{ id: 'k20', staff_id: STAFF.id, date: '2026-11-20', clock_in: '2026-11-20T07:00:00.000Z', clock_out: '2026-11-20T16:00:00.000Z' }] });
   const admin = load(state, ADMIN, { now: Date.parse('2026-11-19T03:00:00Z') });
   assert.equal((await post(admin, { action: 'staff_return', staff_id: STAFF.id })).status, 200);
@@ -837,7 +837,7 @@ test('before staff_returns.sql has run, going back to work still works and pay s
 
 test('closing a month keeps each day\'s pay with the slip: the finance book does not move when attendance is edited later', async () => {
   const id = '00000000-0000-4000-8000-000000000891';
-  const state = shop({ ...HOURS, payroll_config: [{ staff_id: STAFF.id, base_salary: 5200000, overtime_rate: 30000 }], payroll_requests: [], payroll_violations: [], payroll_closes: [],
+  const state = shop({ ...HOURS, payroll_config: [{ staff_id: STAFF.id, base_salary: 6000000, overtime_rate: 30000 }], payroll_requests: [], payroll_violations: [], payroll_closes: [],
     attendance_extra_reviews: [], attendance_sessions: [{ id, staff_id: STAFF.id, date: '2026-11-02', clock_in: '2026-11-02T07:00:00.000Z', clock_out: '2026-11-02T16:00:00.000Z' }] });
   const admin = load(state, ADMIN, { now: Date.parse('2026-12-01T03:00:00Z') });
   assert.equal((await post(admin, { action: 'close_month', year: 2026, month: 11 })).status, 200);

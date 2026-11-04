@@ -63,7 +63,7 @@ const get = async (api, query) => plain(await api.GET({ url: `http://x/api/admin
 test('the whole flow: scan, late, forgot, fix, approvals, requests, pay, close, paid, stats, leaving', async () => {
   const state = {
     staff: [{ ...ADMIN }, { ...PHAT }],
-    payroll_config: [{ staff_id: PHAT.id, base_salary: 5200000, overtime_rate: 30000 }],
+    payroll_config: [{ staff_id: PHAT.id, base_salary: 6000000, overtime_rate: 30000 }], // 6.000.000đ ÷ 30 ngày của tháng 11 = 200.000đ/ngày
     checkin_settings: [{ id: 1, enforce: false, hours_from: '2026-10-25' }],
     checkin_hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }],
   };

@@ -1,7 +1,7 @@
 // Giả lập tháng 11/2026 qua đúng code máy chủ: người không có điện thoại chấm công bằng nút trên máy quầy, quán nghỉ
 // theo âm lịch (mùng 1 = 9/11, rằm = 23/11 nhưng chủ bấm "Mở cửa"), ngày nghỉ thêm tay 30/11, người theo giờ được bật
 // lương ngày nghỉ giữa tháng; chốt lương 1/12 rồi so từng phiếu và tiền từng ngày Sổ thu chi với số tính tay.
-// Quán 14:00 → 00:00, cho lệch 10 phút; lương 7.800.000đ = 300.000đ/ngày = 500đ/phút; tăng ca 30.000đ/giờ.
+// Quán 14:00 → 00:00, cho lệch 10 phút; lương 9.000.000đ ÷ 30 ngày của tháng 11 = 300.000đ/ngày = 500đ/phút; tăng ca 30.000đ/giờ.
 //   An    — lương tháng, quét mã bằng điện thoại.
 //   Bình  — lương tháng, không có điện thoại: bấm nút "Chú Bình" trên máy quầy (trễ 20 phút 1 lần, vào sớm 30 phút 1 lần).
 //   Cường — theo giờ 30.000đ, mặc định không có lương ngày nghỉ; chủ bật "có lương" ngày 25/11.
@@ -61,7 +61,7 @@ function compile(file, state) {
 test('a month with kiosk buttons and lunar closed days: every slip and every day of the finance book match the hand count', async () => {
   const state = {
     staff: [OWNER, ...STAFF].map(({ phone, ...p }) => p),
-    payroll_config: STAFF.map(p => ({ staff_id: p.id, base_salary: p === CUONG ? 0 : 7800000, overtime_rate: 30000 })),
+    payroll_config: STAFF.map(p => ({ staff_id: p.id, base_salary: p === CUONG ? 0 : 9000000, overtime_rate: 30000 })),
     checkin_settings: [{ id: 1, enforce: true, hours_from: '2026-10-25' }],
     checkin_hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '00:00', grace_minutes: 10 }],
     payroll_late_rules: [{ scope: 'shop', valid_from: '2026-11-04', allowed_minutes: 10, per_minute: true, fixed_amount: 50000, use_shop: false }],

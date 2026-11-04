@@ -1,6 +1,6 @@
 // Giả lập 4–7/11/2026 qua đúng code máy chủ (máy quầy, quét mã, sửa giờ, chốt lương) với luật đi trễ và giờ
 // ngoài ca tự tính, rồi so lương từng người, tiền từng ngày (Sổ thu chi) với số tính tay.
-// Quán 14:00 → 00:00, cho lệch 10 phút. Lương 7.800.000đ = 300.000đ/ngày = 500đ/phút ca 10 tiếng; tăng ca 30.000đ/giờ.
+// Quán 14:00 → 00:00, cho lệch 10 phút. Lương 9.000.000đ ÷ 30 ngày của tháng 11 = 300.000đ/ngày = 500đ/phút ca 10 tiếng; tăng ca 30.000đ/giờ.
 // Luật đi trễ của quán từ 4/11: cho trễ 10 phút; quá thì trừ 50.000đ mỗi lần + trừ theo phút.
 //   Hoa   — theo luật quán: trễ 11 phút, trễ đúng 10 phút, vào sớm + ở lại, về sớm 40 phút.
 //   Khánh — luật riêng từ 4/11 (cho trễ 30 phút, chỉ trừ 50.000đ), từ 6/11 quay về theo quán.
@@ -62,7 +62,7 @@ function compile(file, state) {
 test('late rules and automatic overtime over four real days: every slip and every day of the finance book match the hand count', async () => {
   const state = {
     staff: [OWNER, ...STAFF].map(({ phone, ...p }) => p),
-    payroll_config: STAFF.map(p => ({ staff_id: p.id, base_salary: 7800000, overtime_rate: 30000 })),
+    payroll_config: STAFF.map(p => ({ staff_id: p.id, base_salary: 9000000, overtime_rate: 30000 })),
     checkin_settings: [{ id: 1, enforce: false, hours_from: '2026-10-25' }],
     checkin_hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '00:00', grace_minutes: 10 }],
     payroll_fine_rules: [

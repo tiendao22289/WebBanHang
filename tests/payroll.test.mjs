@@ -6,7 +6,9 @@ import { LATE_FINE_MINUTES, activeFineKinds, bonusCheck, computeSalary, dailyRat
 
 // Quán 14:00–23:00 giờ VN = 07:00Z–16:00Z, cho lệch 10 phút, tính giờ theo ca từ 25/10/2026.
 const RULES = normalizeRules({ hours_from: '2026-10-25' }, [], [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }]);
-const CONFIG = { base_salary: 5200000, overtime_rate: 30000 };
+// Từ 11/2026 một ngày công = lương cơ bản ÷ số ngày của tháng: 6.000.000đ ÷ 30 (tháng 11) = 200.000đ. Tháng 10 tính cách cũ (÷ 26).
+const CONFIG = { base_salary: 6000000, overtime_rate: 30000 };
+const OLD_CONFIG = { base_salary: 5200000, overtime_rate: 30000 };
 const ses = (id, date, from, to) => ({ id, staff_id: 'a', date, clock_in: `${date}T${from}:00Z`, clock_out: to ? `${date}T${to}:00Z` : null });
 
 test('from November: pay by days worked, half a day under half a shift, outside time paid as overtime without approval', () => {
@@ -28,7 +30,7 @@ test('from November: pay by days worked, half a day under half a shift, outside 
     ],
     violations: [{ amount: 50000 }] });
   assert.equal(c.rule, 'days');
-  assert.deepEqual([c.workUnits, c.basePay], [4.5, 900000], '5.200.000 ÷ 26 × 4,5');
+  assert.deepEqual([c.workUnits, c.basePay], [4.5, 900000], '6.000.000 ÷ 30 × 4,5');
   assert.deepEqual([c.otHours, c.otAmt, c.pendingH], [2.2, 65000, 0], '90 approved + 40 automatic minutes × 30.000đ');
   assert.deepEqual([c.absDays, c.absAmt], [1, 0], 'a leave request is not deducted again');
   assert.equal(c.totalWorkH, 42.2);
@@ -37,12 +39,18 @@ test('from November: pay by days worked, half a day under half a shift, outside 
   assert.equal(c.net, 900000 - 11111 + 65000 - 200000 - 50000);
 });
 
-test('working more than 26 days adds pay, and an overtime rate of 0 pays no overtime', () => {
-  const sessions = Array.from({ length: 27 }, (_, i) => ses(`d${i}`, `2026-12-${String(i + 1).padStart(2, '0')}`, '06:00', '16:00'));
+test('one day of monthly pay is the base ÷ the days of that month, so a full month is exactly the base; an overtime rate of 0 pays no overtime', () => {
+  const month = (y, m, n) => Array.from({ length: n }, (_, i) => ses(`d${i}`, `${y}-${String(m).padStart(2, '0')}-${String(i + 1).padStart(2, '0')}`, '06:00', '16:00'));
+  const sessions = month(2026, 12, 27);
   const reviews = sessions.map(s => ({ attendance_id: s.id, status: 'approved', minutes: 60 }));
-  const c = computeSalary({ year: 2026, month: 12, staffId: 'a', sessions, config: { base_salary: 5200000, overtime_rate: 0 }, rules: RULES, reviews });
-  assert.deepEqual([c.workUnits, c.basePay], [27, 5400000]);
+  // Tháng 12 có 31 ngày: 6.200.000đ ÷ 31 = 200.000đ một ngày công.
+  const c = computeSalary({ year: 2026, month: 12, staffId: 'a', sessions, config: { base_salary: 6200000, overtime_rate: 0 }, rules: RULES, reviews });
+  assert.deepEqual([c.workUnits, c.standardDays, c.basePay], [27, 31, 5400000]);
   assert.deepEqual([c.otHours, c.otAmt], [27, 0]);
+  for (const [y, m, n] of [[2026, 11, 30], [2026, 12, 31], [2027, 2, 28], [2028, 2, 29]]) {
+    const full = computeSalary({ year: y, month: m, staffId: 'a', sessions: month(y, m, n), config: { base_salary: 7800000, overtime_rate: 0 }, rules: RULES });
+    assert.deepEqual([full.workUnits, full.standardDays, full.basePay], [n, n, 7800000], `${m}/${y}: every day worked = the base`);
+  }
   assert.equal(computeSalary({ year: 2026, month: 12, staffId: 'a', sessions: [], config: { base_salary: 1 }, rules: RULES }).basePay, 0, 'no days, no base pay');
 });
 
@@ -51,7 +59,7 @@ test('October keeps the old formula: full base, overtime above 8 hours a day, le
     ses('o20', '2026-10-20', '07:00', '16:30'), // trước ngày tính theo ca: 9,5 giờ → tăng ca 1,5
     ses('o26', '2026-10-26', '06:00', '16:30'), // theo ca: chỉ 9 giờ trong ca → tăng ca 1
   ];
-  const c = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions, config: CONFIG, rules: RULES,
+  const c = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions, config: OLD_CONFIG, rules: RULES,
     requests: [{ status: 'approved', request_type: 'absent', days: 2, month: 10, year: 2026 }] });
   assert.equal(c.rule, 'hours');
   assert.deepEqual([c.basePay, c.workDays, c.totalWorkH, c.otHours, c.otAmt, c.absAmt, c.pendingH], [5200000, 2, 18.5, 2.5, 75000, 400000, 1.5]);
@@ -85,7 +93,7 @@ test('an approved attendance bonus is added to the pay of its own month only', (
   const bonuses = [{ staff_id: 'a', year: 2026, month: 11, amount: 300000 }, { staff_id: 'a', year: 2026, month: 12, amount: 999 }];
   const nov = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions, config: CONFIG, rules: RULES, bonuses });
   assert.deepEqual([nov.bonusAmt, nov.net], [300000, 200000 + 300000]);
-  const oct = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: [], config: CONFIG, rules: RULES, bonuses: [{ year: 2026, month: 10, amount: 100000 }] });
+  const oct = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: [], config: OLD_CONFIG, rules: RULES, bonuses: [{ year: 2026, month: 10, amount: 100000 }] });
   assert.deepEqual([oct.bonusAmt, oct.net], [100000, 5200000 + 100000], 'the old formula adds it too');
   assert.equal(computeSalary({ year: 2026, month: 11, staffId: 'a', sessions, config: CONFIG, rules: RULES }).bonusAmt, 0);
 });
@@ -122,7 +130,7 @@ test('attendance bonus: no late day, no forgotten clock-out and enough work days
 });
 
 test('leaving 30 minutes or more early costs the early hours: day pay ÷ shift hours', () => {
-  // Ca 14:00–23:00 (9 giờ), lương 5.200.000đ → 200.000đ/ngày ≈ 22.222đ/giờ.
+  // Ca 14:00–23:00 (9 giờ), lương 6.000.000đ → 200.000đ/ngày ≈ 22.222đ/giờ.
   const pay = (from, to) => computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: [ses('x', '2026-11-04', from, to)], config: CONFIG, rules: RULES });
   assert.deepEqual([pay('07:00', '15:31').earlyAmt, pay('07:00', '15:31').net], [0, 200000], 'left 29 minutes early: no cut');
   assert.deepEqual([pay('07:00', '15:30').earlyAmt, pay('07:00', '15:30').net], [11111, 188889], '30 minutes early: 30 minutes cut');
@@ -132,13 +140,13 @@ test('leaving 30 minutes or more early costs the early hours: day pay ÷ shift h
   // Vào trễ không bị trừ tự động; chỉ về sớm.
   assert.equal(pay('08:00', '16:00').earlyAmt, 0);
   // Tháng cũ (tháng 10) không trừ.
-  const oct = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: [ses('o', '2026-10-27', '07:00', '13:00')], config: CONFIG, rules: RULES });
+  const oct = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: [ses('o', '2026-10-27', '07:00', '13:00')], config: OLD_CONFIG, rules: RULES });
   assert.deepEqual([oct.earlyAmt, oct.net], [0, 5200000]);
 });
 
 test('the night of 31/10 → 1/11: a clean-up after midnight is paid in October, not lost between the two formulas', () => {
   const night = [ses('o31', '2026-10-31', '07:00', '16:00'), { id: 'n1', staff_id: 'a', date: '2026-11-01', clock_in: '2026-10-31T17:30:00Z', clock_out: '2026-10-31T18:30:00Z' }];
-  const oct = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: night, config: CONFIG, rules: RULES, reviews: [{ attendance_id: 'n1', status: 'approved', minutes: 60 }] });
+  const oct = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: night, config: OLD_CONFIG, rules: RULES, reviews: [{ attendance_id: 'n1', status: 'approved', minutes: 60 }] });
   const nov = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: night, config: CONFIG, rules: RULES, reviews: [{ attendance_id: 'n1', status: 'approved', minutes: 60 }] });
   assert.deepEqual([oct.workDays, oct.totalWorkH, oct.otHours], [1, 10, 2], 'October: one day of 10 hours (9 + the approved clean-up hour), 2 hours over 8');
   assert.deepEqual([nov.workUnits, nov.totalWorkH], [0, 0], 'not a November day');
@@ -156,7 +164,7 @@ const NOV_REVIEWS = [{ attendance_id: 'n4', status: 'approved', minutes: 90 }];
 test('each day of pay for the finance book adds up to the pay slip: day pay, overtime and early cuts', () => {
   const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: NOV, config: CONFIG, rules: RULES, reviews: NOV_REVIEWS });
   assert.deepEqual(c.byDay, {
-    '2026-11-02': 200000,                // 5.200.000 ÷ 26
+    '2026-11-02': 200000,                // 6.000.000 ÷ 30
     '2026-11-03': 100000 - 11111,        // nửa ngày, về sớm còn 4/9 ngày
     '2026-11-04': 200000 + 45000,        // + 1,5 giờ tăng ca × 30.000đ
   }, 'a shift still open is not paid yet');
@@ -165,7 +173,7 @@ test('each day of pay for the finance book adds up to the pay slip: day pay, ove
 });
 
 test('October days for the finance book: base ÷ 26 for each day worked plus that day overtime', () => {
-  const c = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: [ses('o26', '2026-10-26', '06:00', '16:30')], config: CONFIG, rules: RULES });
+  const c = computeSalary({ year: 2026, month: 10, staffId: 'a', sessions: [ses('o26', '2026-10-26', '06:00', '16:30')], config: OLD_CONFIG, rules: RULES });
   assert.deepEqual(c.byDay, { '2026-10-26': 200000 + 30000 });
 });
 
@@ -173,7 +181,7 @@ test('the shop wage cost per day adds everyone; bonus minus fines go to the mont
   const staff = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
   const sessions = [...NOV, ses('b2', '2026-11-02', '07:00', '16:00')].map((x, i) => i >= NOV.length ? { ...x, staff_id: 'b' } : x);
   const cost = payrollCost({ year: 2026, month: 11, staff, rules: RULES, reviews: NOV_REVIEWS, sessions,
-    configs: [{ staff_id: 'a', ...CONFIG }, { staff_id: 'b', base_salary: 2600000 }],
+    configs: [{ staff_id: 'a', ...CONFIG }, { staff_id: 'b', base_salary: 3000000 }],
     requests: [{ staff_id: 'a', status: 'approved', request_type: 'advance', amount: 300000, month: 11, year: 2026 }],
     violations: [{ staff_id: 'a', amount: 50000 }, { staff_id: 'c', amount: 20000 }],
     bonuses: [{ staff_id: 'b', year: 2026, month: 11, amount: 300000 }] });
@@ -231,7 +239,7 @@ test('the shop wage cost per day includes people paid by the hour', () => {
   assert.deepEqual(cost.byDay, { '2026-11-02': 237500, '2026-11-03': 231250 });
 });
 
-// Ca 14:00 → 00:00 (07:00Z–17:00Z), 7.500.000đ: lương ngày 288.462đ, 10 tiếng = 600 phút.
+// Ca 14:00 → 00:00 (07:00Z–17:00Z), 8.653.846đ ÷ 30 ngày (tháng 11): lương ngày 288.462đ (số lẻ để thử làm tròn), 10 tiếng = 600 phút.
 const LATE_RULES = normalizeRules({ hours_from: '2026-10-25' }, [], [{ valid_from: '2026-11-01', opening_time: '14:00', closing_time: '00:00', grace_minutes: 10 }]);
 // Luật đi trễ mặc định của quán từ 4/11: cho trễ 10 phút; quá thì trừ 50.000đ mỗi lần + trừ theo phút.
 const SHOP_LATE = [{ scope: 'shop', valid_from: '2026-11-04', allowed_minutes: 10, per_minute: true, fixed_amount: 50000, use_shop: false }];
@@ -239,7 +247,7 @@ const PER_MINUTE = [{ scope: 'shop', valid_from: '2026-11-04', allowed_minutes: 
 const vnAt = (day, hm) => new Date(`${day}T${hm}:00+07:00`).toISOString();
 const dayOf = (day, from, to = '00:00', lateRules = PER_MINUTE, reviews = []) => {
   const out = to < from ? new Date(Date.parse(vnAt(day, to)) + 86400000).toISOString() : vnAt(day, to);
-  return computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 7500000, overtime_rate: 25000 }, rules: LATE_RULES, lateRules, reviews,
+  return computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 8653846, overtime_rate: 25000 }, rules: LATE_RULES, lateRules, reviews,
     sessions: [{ id: 'x', staff_id: 'a', date: day, clock_in: vnAt(day, from), clock_out: out }] });
 };
 
@@ -301,8 +309,8 @@ test('someone without a salary yet is not cut for being late', () => {
 });
 
 test('the fixed late cut never makes a day negative; days before shift hours are not cut', () => {
-  // 5.200.000đ, ca 14:00 → 00:00: vào 21:30 (trễ 450 phút), làm 2 giờ 30 phút → nửa ngày 100.000đ, theo phút còn 50.000đ.
-  const shortDay = computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 5200000, overtime_rate: 25000 }, rules: LATE_RULES, lateRules: SHOP_LATE,
+  // 6.000.000đ, ca 14:00 → 00:00: vào 21:30 (trễ 450 phút), làm 2 giờ 30 phút → nửa ngày 100.000đ, theo phút còn 50.000đ.
+  const shortDay = computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 6000000, overtime_rate: 25000 }, rules: LATE_RULES, lateRules: SHOP_LATE,
     sessions: [{ id: 'x', staff_id: 'a', date: '2026-11-05', clock_in: vnAt('2026-11-05', '21:30'), clock_out: new Date(Date.parse(vnAt('2026-11-05', '00:00')) + 86400000).toISOString() }] });
   assert.deepEqual([shortDay.byDay['2026-11-05'], shortDay.lateAmt, shortDay.lateList[0].fixed], [0, 100000, 50000], 'never below 0');
   assert.equal(shortDay.net, 0);
@@ -310,13 +318,13 @@ test('the fixed late cut never makes a day negative; days before shift hours are
     sessions: [{ id: 'h', staff_id: 'a', date: '2026-11-05', clock_in: vnAt('2026-11-05', '22:00'), clock_out: vnAt('2026-11-05', '23:00') }] });
   assert.deepEqual([hourly.byDay['2026-11-05'], hourly.lateAmt, hourly.net], [0, 25000, 0], '1 hour of work, the fixed cut stops at 25.000đ');
   const later = normalizeRules({ hours_from: '2027-01-01' }, [], [{ valid_from: '2026-11-01', opening_time: '14:00', closing_time: '00:00', grace_minutes: 10 }]);
-  assert.equal(computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 7500000 }, rules: later, lateRules: SHOP_LATE,
+  assert.equal(computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 8653846 }, rules: later, lateRules: SHOP_LATE,
     sessions: [{ id: 'y', staff_id: 'a', date: '2026-11-05', clock_in: vnAt('2026-11-05', '15:00'), clock_out: vnAt('2026-11-05', '23:00') }] }).lateAmt, 0, 'shift hours not used yet');
 });
 
 test('shop closed days: a full day of pay for people who get it (monthly by default, hourly not), only while employed', () => {
   const work = [{ id: 'w', staff_id: 'a', date: '2026-11-04', clock_in: vnAt('2026-11-04', '14:00'), clock_out: new Date(Date.parse(vnAt('2026-11-04', '00:00')) + 86400000).toISOString() }];
-  const pay = extra => computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 7800000, overtime_rate: 30000 }, rules: LATE_RULES, sessions: work,
+  const pay = extra => computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 9000000, overtime_rate: 30000 }, rules: LATE_RULES, sessions: work,
     closedDays: ['2026-11-03', '2026-11-04', '2026-12-01'], ...extra });
   const c = pay({});
   assert.deepEqual([c.holidayDays, c.workUnits, c.dayUnits, c.dayAmt, c.net], [1, 2, 2, 600000, 600000], '3/11 paid; 4/11 was worked, paid once; December is another month');
@@ -325,7 +333,7 @@ test('shop closed days: a full day of pay for people who get it (monthly by defa
   assert.equal(pay({ holidayPaid: false }).holidayDays, 0, 'set to not paid');
   assert.equal(pay({ employed: { from: '2026-11-04', to: null } }).holidayDays, 0, 'joined after the closed day');
   assert.equal(pay({ employed: { from: '2026-01-01', to: '2026-11-02' } }).holidayDays, 0, 'left before the closed day');
-  assert.equal(computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 7800000 }, rules: LATE_RULES, sessions: [], closedDays: ['2026-11-03'] }).holidayDays, 0,
+  assert.equal(computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 9000000 }, rules: LATE_RULES, sessions: [], closedDays: ['2026-11-03'] }).holidayDays, 0,
     'nobody is paid a closed day in a month they never worked');
   // Theo giờ (ca 14:00 → 00:00, 30.000đ/giờ): mặc định không; bật lên thì được đủ giờ của ca.
   const hourlyRates = [{ staff_id: 'a', valid_from: '2026-11-01', hourly_rate: 30000 }];
@@ -338,7 +346,7 @@ test('shop closed days: a full day of pay for people who get it (monthly by defa
 
 test('working on a shop closed day: no late / early cut, and someone paid for closed days gets at least the full day', () => {
   const at = (from, to) => [{ id: 'c', staff_id: 'a', date: '2026-11-10', clock_in: vnAt('2026-11-10', from), clock_out: vnAt('2026-11-10', to) }];
-  const pay = (sessions, extra = {}) => computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 7800000, overtime_rate: 30000 }, rules: LATE_RULES,
+  const pay = (sessions, extra = {}) => computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 9000000, overtime_rate: 30000 }, rules: LATE_RULES,
     lateRules: SHOP_LATE, sessions, closedDays: ['2026-11-10'], ...extra });
   const called = pay(at('16:00', '20:00')); // gọi vào dọn 4 tiếng: trễ 2 tiếng, về sớm 4 tiếng
   assert.deepEqual([called.byDay['2026-11-10'], called.lateAmt, called.earlyAmt, called.dayUnits, called.holidayDays], [300000, 0, 0, 1, 0], 'never less than staying home');
@@ -364,7 +372,7 @@ test('paid by the day: each day clocked earns the day wage, a day not clocked ea
     daySes('d7', '2026-11-07', '13:30', '00:30'), // vào sớm 30 + ở lại 30 phút → 1 giờ tăng ca 25.000đ
   ];
   // Lương cơ bản cũ còn trong cấu hình: ngày trả theo ngày không dùng tới.
-  const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions, config: { base_salary: 7800000, overtime_rate: 25000 }, rules: LATE_RULES, lateRules: SHOP_LATE, hourlyRates: DAILY });
+  const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions, config: { base_salary: 9000000, overtime_rate: 25000 }, rules: LATE_RULES, lateRules: SHOP_LATE, hourlyRates: DAILY });
   assert.deepEqual(c.dayWage, { days: 3.5, amount: 420000, rates: [120000] });
   assert.deepEqual([c.dayUnits, c.dayAmt, c.hourly, c.workUnits], [0, 0, null, 3.5]);
   assert.deepEqual([c.lateAmt, c.earlyAmt, c.otAmt, c.basePay, c.net], [54000, 12000, 25000, 420000, 420000 - 54000 - 12000 + 25000]);
@@ -392,7 +400,7 @@ test('switching between monthly, daily and hourly pay applies from its day', () 
   const days = ['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05'].map((d, i) => daySes(`s${i}`, d, '14:00', '00:00'));
   const rates = [{ staff_id: 'a', valid_from: '2026-11-03', hourly_rate: 120000, unit: 'day' }, { staff_id: 'a', valid_from: '2026-11-04', hourly_rate: 30000, unit: 'hour' },
     { staff_id: 'a', valid_from: '2026-11-05', hourly_rate: 0, unit: 'hour' }];
-  const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: days, config: { base_salary: 5200000, overtime_rate: 25000 }, rules: LATE_RULES, hourlyRates: rates });
+  const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: days, config: { base_salary: 6000000, overtime_rate: 25000 }, rules: LATE_RULES, hourlyRates: rates });
   assert.deepEqual([c.dayUnits, c.dayAmt, c.dayWage, c.hourly], [2, 400000, { days: 1, amount: 120000, rates: [120000] }, { minutes: 600, amount: 300000, rates: [30000] }]);
   assert.deepEqual(c.byDay, { '2026-11-02': 200000, '2026-11-03': 120000, '2026-11-04': 300000, '2026-11-05': 200000 });
   assert.equal(c.basePay, 820000);
@@ -412,7 +420,7 @@ test('left and came back ("Đi làm lại"): closed days while away are not paid
   const person = { id: 'a', created_at: '2025-06-01T00:00:00Z' };
   const args = holidayArgs(person, { closedDays, returns });
   assert.deepEqual(args.employed, { from: '2025-06-01', to: null, away: [['2026-11-05', '2026-11-19']] }, 'only their own time away');
-  const pay = extra => computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 7800000, overtime_rate: 30000 }, rules: LATE_RULES, sessions: work, ...extra });
+  const pay = extra => computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 9000000, overtime_rate: 30000 }, rules: LATE_RULES, sessions: work, ...extra });
   const c = pay(args);
   assert.deepEqual(c.daily.filter(d => d.holiday).map(d => d.day), ['2026-11-03', '2026-11-05', '2026-11-19', '2026-11-23'], 'the last day and the return day are working days');
   assert.deepEqual([c.holidayDays, c.workUnits, c.basePay], [4, 8, 2400000]);
@@ -430,13 +438,13 @@ test('called in on a shop closed day: not counted late or leaving early, so no f
   assert.deepEqual([open.late, open.leftEarly, open.lateDays.length], [{ count: 1, minutes: 120 }, { count: 1, minutes: 240 }, 1], 'an open day would count');
   const t = monthTallies({ sessions, rules: LATE_RULES, key, closedDays });
   assert.deepEqual([t.late, t.leftEarly, t.lateDays], [{ count: 0, minutes: 0 }, { count: 0, minutes: 0 }, []]);
-  const salary = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions, config: { base_salary: 7800000, overtime_rate: 30000 }, rules: LATE_RULES, lateRules: SHOP_LATE, closedDays });
+  const salary = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions, config: { base_salary: 9000000, overtime_rate: 30000 }, rules: LATE_RULES, lateRules: SHOP_LATE, closedDays });
   const day = salary.daily.find(d => d.day === '2026-11-10');
   assert.deepEqual([day.closed, day.late, day.leftEarly, day.pay, salary.workUnits, salary.lateAmt], [true, 0, 0, 300000, 23, 0], 'pay was already right; the day no longer shows late');
   assert.deepEqual(fineSuggestions({ staffId: 'a', tallies: t, autoLateDays: salary.lateList.map(x => x.day) }), []);
   assert.deepEqual(bonusCheck({ year: 2026, month: 11, salary, tallies: t }), { eligible: true, reasons: [], minDays: 22 });
   // Trang Thống kê (?stats=1) truyền ngày quán nghỉ của tháng.
-  const stats = staffMonthStats({ year: 2026, month: 11, staff: [{ id: 'a', full_name: 'A' }], configs: [{ staff_id: 'a', base_salary: 7800000, overtime_rate: 30000 }], sessions,
+  const stats = staffMonthStats({ year: 2026, month: 11, staff: [{ id: 'a', full_name: 'A' }], configs: [{ staff_id: 'a', base_salary: 9000000, overtime_rate: 30000 }], sessions,
     rules: LATE_RULES, lateRules: SHOP_LATE, closedDays: [{ day: '2026-11-10', source: 'manual' }] });
   const p = stats.people[0];
   assert.deepEqual([p.late, p.leftEarly, p.fineSuggestions, p.bonus.eligible, stats.totals.late], [{ count: 0, minutes: 0 }, { count: 0, minutes: 0 }, 0, true, 0]);
@@ -461,39 +469,42 @@ test('paid by the hour: a mis-scan then back in, or leaving then back to clean u
   assert.equal(hourly([daySes('b1', '2026-11-11', '14:00', '23:52')], LATE_RULES).hourly.minutes, 600);
   assert.equal(hourly([daySes('f1', '2026-11-12', '14:00', '14:04'), daySes('f2', '2026-11-12', '14:08', '00:00')], LATE_RULES).hourly.minutes, 600, 'mis-scan at the start');
   // Lương tháng: ngày công như cũ, giờ làm hiện đúng.
-  const monthly = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: misScan, config: { base_salary: 7800000, overtime_rate: 30000 }, rules: NIGHT });
+  const monthly = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: misScan, config: { base_salary: 9000000, overtime_rate: 30000 }, rules: NIGHT });
   assert.deepEqual([monthly.workUnits, monthly.basePay, monthly.daily[0].inShiftMin, monthly.totalWorkH], [1, 300000, 480, 8]);
   // Trước ngày tính theo ca: cả lượt, cộng như cũ.
   assert.equal(dayInShiftMs([ses('p1', '2026-10-20', '07:00', '09:00'), ses('p2', '2026-10-20', '10:00', '12:00')], RULES) / 60000, 240);
 });
 
 test('the finance book days add up to the pay slip to the đồng: the rounding goes to the last day', () => {
-  const days26 = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28];
+  // Tháng 11: đi làm 28 ngày + 2 ngày quán nghỉ (9/11, 23/11) được lương = 30 công = đúng lương cơ bản.
+  const closed = ['2026-11-09', '2026-11-23'];
+  const open28 = Array.from({ length: 30 }, (_, i) => i + 1).filter(d => d !== 9 && d !== 23);
   const full = (list, to = '00:00') => list.map(d => daySes(`g${d}`, `2026-11-${String(d).padStart(2, '0')}`, '14:00', to));
   const gross = c => c.basePay - c.lateAmt - c.earlyAmt + c.otAmt;
   const book = c => Object.values(c.byDay).reduce((a, x) => a + x, 0);
   for (const base of [7000000, 6500000, 5500000, 8000000]) {
-    const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: full(days26), config: { base_salary: base, overtime_rate: 30000 }, rules: LATE_RULES });
-    assert.deepEqual([book(c), gross(c), c.basePay], [base, base, base], `base ${base}`);
+    const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: full(open28), config: { base_salary: base, overtime_rate: 30000 }, rules: LATE_RULES, closedDays: closed });
+    assert.deepEqual([book(c), gross(c), c.basePay, c.workUnits, c.holidayDays], [base, base, base, 30, 2], `base ${base}`);
   }
-  // 7.000.000đ: 269.231đ mỗi ngày, ngày cuối 269.225đ (cả trang Lương lẫn Sổ thu chi).
-  const g = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: full(days26), config: { base_salary: 7000000, overtime_rate: 30000 }, rules: LATE_RULES });
-  assert.deepEqual([g.byDay['2026-11-02'], g.byDay['2026-11-28'], g.daily.at(-1).pay], [269231, 269225, 269225]);
+  // 7.000.000đ ÷ 30 = 233.333,33đ: mỗi ngày 233.333đ, ngày cuối 233.343đ (cả trang Lương lẫn Sổ thu chi).
+  const g = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: full(open28), config: { base_salary: 7000000, overtime_rate: 30000 }, rules: LATE_RULES, closedDays: closed });
+  assert.deepEqual([g.byDay['2026-11-02'], g.byDay['2026-11-09'], g.byDay['2026-11-30'], g.daily.at(-1).pay], [233333, 233333, 233343, 233343]);
   // Tăng ca 25.000đ/giờ mặc định, ở lại 17 phút 10 ngày; theo giờ 22.000đ, về 23:47 10 ngày; trễ + ngày quán nghỉ.
   const ten = [10, 11, 12, 13, 14, 15, 16, 18, 19, 20];
-  const ot = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: full(ten, '00:17'), config: { base_salary: 7800000, overtime_rate: null }, rules: LATE_RULES });
+  const ot = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: full(ten, '00:17'), config: { base_salary: 9000000, overtime_rate: null }, rules: LATE_RULES });
   const hr = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: full(ten, '23:47'), config: { base_salary: 0, overtime_rate: 30000 }, rules: LATE_RULES,
     hourlyRates: [{ staff_id: 'a', valid_from: '2026-11-01', hourly_rate: 22000 }] });
   const late = computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 7000000, overtime_rate: 30000 }, rules: LATE_RULES, lateRules: SHOP_LATE, closedDays: ['2026-11-09'],
     sessions: [...full([2, 3, 4, 5, 6, 7, 8, 10, 11, 13, 14, 15]), daySes('g12', '2026-11-12', '14:15', '00:00')] });
   assert.deepEqual([ot, hr, late].map(c => book(c) - gross(c)), [0, 0, 0]);
-  assert.deepEqual([gross(ot), gross(hr), gross(late)], [3070833, 2152333, 3712500], 'the slips do not change');
+  // late: 13 ngày + ngày quán nghỉ 9/11 = 14 công × 233.333,33đ = 3.266.667đ − trễ 15 phút (5.833đ) − 50.000đ.
+  assert.deepEqual([gross(ot), gross(hr), gross(late)], [3070833, 2152333, 3210834], 'the slips do not change');
 });
 
 test('a closed month: the finance book days follow the closed slip, even when attendance changes afterwards', () => {
   const staff = [{ id: 'a' }, { id: 'b' }];
   const sessions = [...NOV, { ...ses('b2', '2026-11-02', '07:00', '16:00'), staff_id: 'b' }];
-  const configs = [{ staff_id: 'a', ...CONFIG }, { staff_id: 'b', base_salary: 2600000 }];
+  const configs = [{ staff_id: 'a', ...CONFIG }, { staff_id: 'b', base_salary: 3000000 }];
   // a chốt khi mới có 2/11 và 3/11 (sau đó chủ thêm ca 4/11); b chốt từ trước khi số chốt lưu tiền từng ngày.
   const closes = [{ staff_id: 'a', snapshot: { byDay: { '2026-11-02': 200000, '2026-11-03': 88889 }, bonusAmt: 0, vioAmt: 0 } }, { staff_id: 'b', snapshot: { vioAmt: 0 } }];
   const cost = payrollCost({ year: 2026, month: 11, staff, rules: RULES, reviews: NOV_REVIEWS, sessions, configs, closes });

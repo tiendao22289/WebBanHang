@@ -73,7 +73,7 @@ function compile(file, state) {
 test('a whole month for six people: every pay slip matches the numbers worked out by hand', async () => {
   const state = {
     staff: [OWNER, ...STAFF].map(({ phone, ...p }) => p),
-    payroll_config: STAFF.map(p => ({ staff_id: p.id, base_salary: 5200000, overtime_rate: 30000 })),
+    payroll_config: STAFF.map(p => ({ staff_id: p.id, base_salary: 6000000, overtime_rate: 30000 })),
     checkin_settings: [{ id: 1, enforce: false, hours_from: '2026-10-25' }],
     checkin_hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }],
     payroll_fine_rules: [
@@ -275,7 +275,7 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
   // Không có lần quét nào bị lỗi ngoài lần Bình lỡ quét 2 lần liền.
   assert.deepEqual(results.filter(r => r.status !== 200).map(r => [r.who, r.at, r.status]), [['Binh', iso(T(11, '14:01')), 409]]);
 
-  // Số tính tay (lương cơ bản 5.200.000đ = 200.000đ/ngày công, tăng ca 30.000đ/giờ = 500đ/phút).
+  // Số tính tay (lương cơ bản 6.000.000đ ÷ 30 ngày của tháng 11 = 200.000đ/ngày công, tăng ca 30.000đ/giờ = 500đ/phút).
   assert.deepEqual(show(slip(AN)), { units: 26, basePay: 5200000, earlyAmt: 0, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 300000, advAmt: 0, vioAmt: 0, absDays: 0, net: 5500000 }, 'An: thưởng chuyên cần 300.000đ');
   assert.deepEqual(show(slip(BINH)), { units: 25, basePay: 5000000, earlyAmt: 0, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 0, advAmt: 1000000, vioAmt: 200000, absDays: 0, net: 3800000 }, 'Bình: phạt tay 100.000đ + 2 lần trễ quá 30 phút');
   assert.deepEqual(show(slip(CHI)), { units: 26, basePay: 5200000, earlyAmt: 0, otHours: 3.4, otAmt: 102500, pendingH: 0, bonusAmt: 0, advAmt: 0, vioAmt: 60000, absDays: 0, net: 5242500 }, 'Chi: 45 + 40 + 40 phút cho tính, 50 + 30 phút tự tính (4/11 chủ không tính), 2 lần quên ra ca bị phạt');
