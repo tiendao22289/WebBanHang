@@ -57,6 +57,11 @@ export function fakeDb(state) {
     };
     function run(resolve) {
       state[table] ||= [];
+      // state.__noColumn { bảng: 'cột' }: như DB chưa thêm cột đó (chưa chạy migration) — ghi cột đó thì lỗi.
+      const noColumn = state.__noColumn?.[table];
+      if (noColumn && op !== 'read' && op !== 'delete' && (Array.isArray(values) ? values : [values]).some(v => noColumn in v)) {
+        return resolve({ data: null, error: { code: 'PGRST204', message: `Could not find the '${noColumn}' column of '${table}' in the schema cache` } });
+      }
       let rows = state[table].filter(r => conditions.every(c => c(r)));
       if (op === 'insert') {
         // Cột UNIQUE / khoá chính như trong DB (chấm công: mỗi mã QR dùng 1 lần, một người một máy).

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dayFlags, groupByWorkDay, normalizeRules, sessionHours } from '../src/lib/attendanceRules.mjs';
-import { LATE_FINE_MINUTES, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, holidayArgs, lateRuleOn, monthTallies, payrollCost, usesDayPay } from '../src/lib/payroll.mjs';
+import { LATE_FINE_MINUTES, activeFineKinds, bonusCheck, computeSalary, dailyRateOn, fineSuggestions, holidayArgs, hourlyRateOn, lateRuleOn, monthTallies, payRateOn, payrollCost, usesDayPay } from '../src/lib/payroll.mjs';
 
 // Quán 14:00–23:00 giờ VN = 07:00Z–16:00Z, cho lệch 10 phút, tính giờ theo ca từ 25/10/2026.
 const RULES = normalizeRules({ hours_from: '2026-10-25' }, [], [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }]);
@@ -347,4 +347,57 @@ test('working on a shop closed day: no late / early cut, and someone paid for cl
   const noBase = computeSalary({ year: 2026, month: 11, staffId: 'a', config: null, rules: LATE_RULES, holidayPaid: true, closedDays: ['2026-11-03'],
     sessions: [{ id: 'w', staff_id: 'a', date: '2026-11-04', clock_in: vnAt('2026-11-04', '14:00'), clock_out: vnAt('2026-11-04', '23:00') }] });
   assert.deepEqual([noBase.dayUnits, noBase.workUnits, noBase.holidayDays, noBase.net], [1, 1, 0, 0]);
+});
+
+// Trả theo ngày: 120.000đ một ngày công (cùng bảng lương theo giờ, unit = 'day'), ca 14:00 → 00:00 (600 phút).
+const DAILY = [{ staff_id: 'a', valid_from: '2026-11-01', hourly_rate: 120000, unit: 'day' }];
+const daySes = (id, day, from, to) => ({ id, staff_id: 'a', date: day, clock_in: vnAt(day, from), clock_out: to === '00:00' || to < from ? new Date(Date.parse(vnAt(day, to)) + 86400000).toISOString() : vnAt(day, to) });
+
+test('paid by the day: each day clocked earns the day wage, a day not clocked earns nothing; half a day, late and early cuts as for monthly pay', () => {
+  const sessions = [
+    daySes('d2', '2026-11-02', '14:00', '00:00'), // đủ ca → 120.000đ
+    // 3/11 không chấm công → nghỉ, không lương
+    daySes('d5', '2026-11-05', '14:00', '18:00'), // 4 giờ < nửa ca → nửa ngày 60.000đ; về sớm 6 tiếng → còn 120.000 × 4/10 = 48.000đ
+    daySes('d6', '2026-11-06', '14:20', '00:00'), // trễ 20 phút: 120.000 × 20/600 = 4.000đ + 50.000đ mỗi lần
+    daySes('d7', '2026-11-07', '13:30', '00:30'), // vào sớm 30 + ở lại 30 phút → 1 giờ tăng ca 25.000đ
+  ];
+  // Lương cơ bản cũ còn trong cấu hình: ngày trả theo ngày không dùng tới.
+  const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions, config: { base_salary: 7800000, overtime_rate: 25000 }, rules: LATE_RULES, lateRules: SHOP_LATE, hourlyRates: DAILY });
+  assert.deepEqual(c.dayWage, { days: 3.5, amount: 420000, rates: [120000] });
+  assert.deepEqual([c.dayUnits, c.dayAmt, c.hourly, c.workUnits], [0, 0, null, 3.5]);
+  assert.deepEqual([c.lateAmt, c.earlyAmt, c.otAmt, c.basePay, c.net], [54000, 12000, 25000, 420000, 420000 - 54000 - 12000 + 25000]);
+  assert.deepEqual(c.byDay, { '2026-11-02': 120000, '2026-11-05': 48000, '2026-11-06': 66000, '2026-11-07': 145000 });
+  assert.deepEqual(c.daily.map(d => [d.day, d.wage, d.pay]), [['2026-11-02', 120000, 120000], ['2026-11-05', 120000, 48000], ['2026-11-06', 120000, 66000], ['2026-11-07', 120000, 145000]]);
+  assert.deepEqual(c.lateList, [{ day: '2026-11-06', minutes: 20, amount: 54000, perMinute: 4000, fixed: 50000 }]);
+  assert.deepEqual(bonusCheck({ year: 2026, month: 11, salary: c, tallies: monthTallies({ sessions, rules: LATE_RULES, key: '2026-11' }) }).reasons,
+    ['trễ 1 lần', '3,5/22 ngày công'], 'someone paid by the day has a salary for the attendance bonus');
+  const cost = payrollCost({ year: 2026, month: 11, staff: [{ id: 'a' }], rules: LATE_RULES, lateRules: SHOP_LATE, sessions, configs: [], hourlyRates: DAILY });
+  assert.deepEqual(cost.byDay, c.byDay, 'the finance book counts the same day pay');
+});
+
+test('paid by the day: shop closed days are unpaid by default; the owner can pay them; a worked closed day has no cuts', () => {
+  const work = [daySes('w', '2026-11-04', '14:00', '00:00')];
+  const pay = extra => computeSalary({ year: 2026, month: 11, staffId: 'a', config: null, rules: LATE_RULES, lateRules: SHOP_LATE, hourlyRates: DAILY, sessions: work, closedDays: ['2026-11-03'], ...extra });
+  assert.deepEqual([pay({}).holidayDays, pay({}).net], [0, 120000], 'a day not clocked is a day off');
+  const paid = pay({ holidayPaid: true });
+  assert.deepEqual([paid.holidayDays, paid.dayWage.days, paid.dayWage.amount, paid.byDay['2026-11-03'], paid.net], [1, 2, 240000, 120000, 240000]);
+  const called = computeSalary({ year: 2026, month: 11, staffId: 'a', config: null, rules: LATE_RULES, lateRules: SHOP_LATE, hourlyRates: DAILY, closedDays: ['2026-11-10'],
+    sessions: [daySes('c', '2026-11-10', '16:00', '20:00')] });
+  assert.deepEqual([called.byDay['2026-11-10'], called.lateAmt, called.earlyAmt, called.dayWage.days], [60000, 0, 0, 0.5], 'half a day worked, no late / early cut');
+});
+
+test('switching between monthly, daily and hourly pay applies from its day', () => {
+  const days = ['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05'].map((d, i) => daySes(`s${i}`, d, '14:00', '00:00'));
+  const rates = [{ staff_id: 'a', valid_from: '2026-11-03', hourly_rate: 120000, unit: 'day' }, { staff_id: 'a', valid_from: '2026-11-04', hourly_rate: 30000, unit: 'hour' },
+    { staff_id: 'a', valid_from: '2026-11-05', hourly_rate: 0, unit: 'hour' }];
+  const c = computeSalary({ year: 2026, month: 11, staffId: 'a', sessions: days, config: { base_salary: 5200000, overtime_rate: 25000 }, rules: LATE_RULES, hourlyRates: rates });
+  assert.deepEqual([c.dayUnits, c.dayAmt, c.dayWage, c.hourly], [2, 400000, { days: 1, amount: 120000, rates: [120000] }, { minutes: 600, amount: 300000, rates: [30000] }]);
+  assert.deepEqual(c.byDay, { '2026-11-02': 200000, '2026-11-03': 120000, '2026-11-04': 300000, '2026-11-05': 200000 });
+  assert.equal(c.basePay, 820000);
+  // Dòng cũ không có unit là lương theo giờ.
+  assert.deepEqual([payRateOn(HOURLY, 'a', '2026-11-02'), hourlyRateOn(HOURLY, 'a', '2026-11-02'), dailyRateOn(HOURLY, 'a', '2026-11-02')], [{ rate: 25000, unit: 'hour' }, 25000, null]);
+  assert.deepEqual([payRateOn(DAILY, 'a', '2026-11-02'), hourlyRateOn(DAILY, 'a', '2026-11-02'), dailyRateOn(DAILY, 'a', '2026-11-02')], [{ rate: 120000, unit: 'day' }, null, 120000]);
+  assert.equal(payRateOn(rates, 'a', '2026-11-06'), null, 'back to monthly pay');
+  assert.deepEqual(computeSalary({ year: 2026, month: 12, staffId: 'a', sessions: [], config: null, rules: LATE_RULES, hourlyRates: DAILY }).dayWage,
+    { days: 0, amount: 0, rates: [120000] }, 'a day wage set in an earlier month still applies');
 });

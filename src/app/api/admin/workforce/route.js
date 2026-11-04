@@ -23,7 +23,7 @@
  *   staff_depart, staff_return, add_violation {staff_id, date, rule_id?, reason, amount}, delete_violation,
  *   decide_fine {attendance_id, kind, status, amount, reason} / reopen_fine → gợi ý phạt từ chấm công,
  *   save_fine_rule, save_bonus_settings, decide_bonus {staff_id, year, month, amount} / remove_bonus,
- *   save_config, save_hourly {staff_id, hourly_rate, valid_from} (lương theo giờ),
+ *   save_config, save_hourly {staff_id, hourly_rate, unit: hour | day, valid_from} (lương theo giờ / theo ngày),
  *   save_late_rule {scope: 'shop' | staff_id, allowed_minutes, per_minute, fixed_amount, use_shop} (luật đi trễ từ hôm nay),
  *   save_closed_rule {lunar_days} (nghỉ theo âm lịch mỗi tháng, từ hôm nay), save_closed_day {day, note} (thêm ngày nghỉ),
  *   skip_closed_day {day} (ngày theo lịch nhưng quán mở), delete_closed_day {day} (bỏ ngày thêm / mở cửa đã ghi),
@@ -1187,20 +1187,28 @@ export async function POST(request) {
     }
 
     if (body.action === 'save_hourly') {
-      // Trả lương theo giờ từ ngày valid_from (sớm nhất ngày 1 tháng này); hourly_rate 0 = từ ngày đó trả theo tháng.
+      // Trả lương theo giờ (unit 'hour') hoặc theo ngày (unit 'day', hourly_rate = lương 1 ngày) từ ngày valid_from
+      // (sớm nhất ngày 1 tháng này); hourly_rate 0 = từ ngày đó trả theo tháng.
       // Mức đặt sau ngày đó bị bỏ: "từ ngày X" nghĩa là từ X trở đi cho tới khi đổi lại.
       if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
+      const unit = body.unit === 'day' ? 'day' : 'hour';
       const rate = money(body.hourly_rate);
-      if (rate === null || rate > 10_000_000) return fail('Lương 1 giờ không hợp lệ.');
+      if (rate === null || rate > 10_000_000) return fail(unit === 'day' ? 'Lương 1 ngày không hợp lệ.' : 'Lương 1 giờ không hợp lệ.');
       const from = DATE.test(body.valid_from || '') ? body.valid_from : today;
       const latest = new Date(Date.parse(`${today}T00:00:00Z`) + 62 * 86400000).toISOString().slice(0, 10);
       if (from < `${today.slice(0, 7)}-01` || from > latest) return fail('Ngày áp dụng từ ngày 1 tháng này đến 2 tháng tới.');
-      const later = await db.from('payroll_hourly_rates').delete().eq('staff_id', body.staff_id).gt('valid_from', from);
-      if (missingTable(later.error)) return fail('Web đang cập nhật phần lương theo giờ, thử lại sau ít phút.', 503);
-      if (later.error) throw later.error;
-      const r = await db.from('payroll_hourly_rates').upsert({ staff_id: body.staff_id, valid_from: from, hourly_rate: rate, updated_by: user.full_name || null, updated_at: isoNow() },
-        { onConflict: 'staff_id,valid_from' });
+      const row = { staff_id: body.staff_id, valid_from: from, hourly_rate: rate, unit, updated_by: user.full_name || null, updated_at: isoNow() };
+      let r = await db.from('payroll_hourly_rates').upsert(row, { onConflict: 'staff_id,valid_from' });
+      if (missingTable(r.error) && !/unit/.test(String(r.error.message || ''))) return fail('Web đang cập nhật phần lương theo giờ, thử lại sau ít phút.', 503);
+      // DB chưa có cột unit (chưa chạy payroll_daily_rates.sql): theo giờ / theo tháng vẫn lưu được như cũ.
+      if (r.error && /unit/.test(String(r.error.message || ''))) {
+        if (unit === 'day') return fail('Web đang cập nhật phần lương theo ngày, thử lại sau ít phút.', 503);
+        const { unit: _hour, ...old } = row;
+        r = await db.from('payroll_hourly_rates').upsert(old, { onConflict: 'staff_id,valid_from' });
+      }
       if (r.error) throw r.error;
+      const later = await db.from('payroll_hourly_rates').delete().eq('staff_id', body.staff_id).gt('valid_from', from);
+      if (later.error) throw later.error;
       return NextResponse.json({ ok: true }, { headers });
     }
 

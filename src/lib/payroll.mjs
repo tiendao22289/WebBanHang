@@ -16,6 +16,8 @@
  *   Người trả theo giờ (payroll_hourly_rates, có ngày áp dụng): ngày đó được số phút trong ca
  *   × lương 1 giờ — trễ / về sớm mất đúng số phút đó, không nửa ngày, không trừ về sớm thêm;
  *   giờ ngoài ca chủ cho tính vẫn trả theo giá tăng ca.
+ *   Người trả theo ngày (cùng bảng, unit = 'day'): như lương tháng nhưng một ngày công = lương 1 ngày chủ nhập
+ *   (thay cho lương cơ bản ÷ 26); ngày không chấm công là nghỉ, không lương. Ngày quán nghỉ mặc định không lương.
  * Tháng trước đó giữ cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày,
  *   trừ ngày nghỉ có đơn × lương cơ bản ÷ 26.
  * Thưởng chuyên cần chủ đã duyệt cộng vào thực lĩnh; phạt trừ ra.
@@ -43,13 +45,27 @@ const round1 = n => Math.round(n * 10) / 10;
 export const monthKey = (year, month) => `${year}-${String(month).padStart(2, '0')}`;
 export const usesDayPay = (year, month) => monthKey(year, month) >= DAY_PAY_FROM;
 
-/** Lương 1 giờ của một người ngày `day` (dòng mới nhất đã áp dụng); null = trả theo tháng. */
-export function hourlyRateOn(rates, staffId, day) {
+const unitOf = r => (r?.unit === 'day' ? 'day' : 'hour');
+
+/** Mức lương của một người ngày `day` (dòng mới nhất đã áp dụng): { rate, unit: 'hour' | 'day' }; null = trả theo tháng. */
+export function payRateOn(rates, staffId, day) {
   let found = null;
   for (const r of rates || []) {
     if (r.staff_id === staffId && String(r.valid_from) <= day && (!found || String(r.valid_from) > String(found.valid_from))) found = r;
   }
-  return Number(found?.hourly_rate) > 0 ? Number(found.hourly_rate) : null;
+  return Number(found?.hourly_rate) > 0 ? { rate: Number(found.hourly_rate), unit: unitOf(found) } : null;
+}
+
+/** Lương 1 giờ của một người ngày `day`; null = không trả theo giờ. */
+export function hourlyRateOn(rates, staffId, day) {
+  const p = payRateOn(rates, staffId, day);
+  return p?.unit === 'hour' ? p.rate : null;
+}
+
+/** Lương 1 ngày của một người ngày `day`; null = không trả theo ngày. */
+export function dailyRateOn(rates, staffId, day) {
+  const p = payRateOn(rates, staffId, day);
+  return p?.unit === 'day' ? p.rate : null;
 }
 
 /**
@@ -102,9 +118,9 @@ export function holidayArgs(person, { closedDays = [], holidayPay = [], departur
     employed: { from: vnDay(person?.created_at), to: (departures || []).find(d => d.staff_id === person?.id)?.last_day || null } };
 }
 
-// Các mức lương 1 giờ áp dụng trong tháng `key` (đầu tháng + các lần đổi trong tháng).
-const hourlyRatesIn = (rates, staffId, key) => [...new Set([hourlyRateOn(rates, staffId, `${key}-01`),
-  ...(rates || []).filter(r => r.staff_id === staffId && String(r.valid_from).slice(0, 7) === key).map(r => Number(r.hourly_rate) || 0)].filter(r => r > 0))];
+// Các mức lương 1 giờ / 1 ngày (unit) áp dụng trong tháng `key` (đầu tháng + các lần đổi trong tháng).
+const ratesIn = (rates, staffId, key, unit) => [...new Set([(unit === 'day' ? dailyRateOn : hourlyRateOn)(rates, staffId, `${key}-01`),
+  ...(rates || []).filter(r => r.staff_id === staffId && String(r.valid_from).slice(0, 7) === key && unitOf(r) === unit).map(r => Number(r.hourly_rate) || 0)].filter(r => r > 0))];
 
 /**
  * sessions: ca của người đó trong tháng; config: dòng payroll_config; requests: đơn của
@@ -135,29 +151,31 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
     const workDays = days.filter(([, list]) => list.some(s => s.clock_out)).length;
     const dayRate = base / STANDARD_DAYS;
     const earlyList = [], lateList = [], daily = [];
-    let otMs = 0, dayUnits = 0, hourMin = 0, hourPay = 0;
-    // Ngày quán nghỉ: người được nhận lương ngày nghỉ (trong thời gian làm việc; mặc định lương tháng có, theo giờ không).
+    let otMs = 0, dayUnits = 0, hourMin = 0, hourPay = 0, wageUnits = 0, wagePay = 0;
+    // Ngày quán nghỉ: người được nhận lương ngày nghỉ (trong thời gian làm việc; mặc định lương tháng có, theo giờ / theo
+    // ngày không).
     const closedSet = new Set(closedDays);
-    const holidayOk = (day, rate) => !(employed?.from && day < employed.from) && !(employed?.to && day > employed.to) && !!(holidayPaid ?? (!rate && base > 0));
+    const holidayOk = (day, rate, wage) => !(employed?.from && day < employed.from) && !(employed?.to && day > employed.to)
+      && !!(holidayPaid ?? (!rate && !wage && base > 0));
     for (const [day, list] of days) {
       const hs = list.map(s => sessionHours(s, rules, reviewOf.get(s.id)));
       const inShiftMs = hs.reduce((a, h) => a + h.countedMs - h.approvedMs, 0);
       const shift = shiftOf(rules, staffId, day);
       const w = shiftWindow(day, shift.start, shift.end);
       const flags = dayFlags(list, rules);
-      const rate = hourlyRateOn(hourlyRates, staffId, day);
+      const rate = hourlyRateOn(hourlyRates, staffId, day), wage = dailyRateOn(hourlyRates, staffId, day);
       // Đi làm đúng ngày quán nghỉ (chủ gọi vào dọn dẹp...): không trừ trễ / về sớm, và người được lương ngày nghỉ ít nhất
       // vẫn đủ 1 ngày công như ở nhà.
-      const closedDay = closedSet.has(day), holidayFull = closedDay && holidayOk(day, rate) && (base > 0 || !!rate);
+      const closedDay = closedSet.has(day), holidayFull = closedDay && holidayOk(day, rate, wage) && (base > 0 || !!rate || !!wage);
       const worked = inShiftMs > 0 ? (inShiftMs >= (w.end - w.start) / 2 ? 1 : 0.5) : 0, unit = holidayFull ? 1 : worked;
       // Ngày công (cả ngày trả theo giờ) để xét thưởng chuyên cần và hiện số ngày đi làm.
       workUnits += unit;
       // Đi trễ so với giờ vào ca (đủ phút, kể cả trong số phút cho lệch của quán); quá số phút luật cho phép thì bị trừ.
-      // Chỉ từ ngày tính giờ theo ca; người chưa có lương (chưa nhập lương cơ bản, không trả theo giờ) chưa trừ gì.
+      // Chỉ từ ngày tính giờ theo ca; người chưa có lương (chưa nhập lương cơ bản, không trả theo giờ / theo ngày) chưa trừ gì.
       const lateRule = lateRuleOn(lateRules, staffId, day);
       const rawLate = Math.max(0, Math.floor((Date.parse(list[0].clock_in) - w.start.getTime()) / 60000)) || 0;
       const byShift = !!rules && String(list[0].date) >= rules.hours_from;
-      const lateHit = !!(lateRule && unit && byShift && !closedDay && rawLate > lateRule.allowed && (base > 0 || rate));
+      const lateHit = !!(lateRule && unit && byShift && !closedDay && rawLate > lateRule.allowed && (base > 0 || rate || wage));
       // Tiền cố định mỗi lần trễ: không trừ quá số tiền còn lại của ngày đó (ngày làm ít giờ không thành âm).
       const fixedOf = left => (lateHit ? Math.min(lateRule.fixed, Math.max(0, Math.floor(left))) : 0);
       let pay, lateCut = 0, earlyCut = 0, lateFixed = 0;
@@ -170,15 +188,17 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
         hourMin += minutes;
         hourPay += earned;
       } else {
-        dayUnits += unit;
+        // Lương 1 ngày: trả theo ngày thì đúng số chủ nhập, theo tháng thì lương cơ bản ÷ 26.
+        const oneDay = wage || dayRate;
+        if (wage) { wageUnits += unit; wagePay += wage * unit; } else dayUnits += unit;
         // Trễ quá số phút cho phép (luật trừ theo phút): trừ đúng số phút trễ; về sớm từ 30 phút: trừ số phút về sớm.
         // Ngày đó chỉ được lương ngày × phần ca có mặt, không hơn số tiền ngày công đã tính (dưới nửa ca vẫn tối đa nửa ngày).
         const shiftMin = (w.end - w.start) / 60000;
         const late = lateHit && lateRule.perMinute ? rawLate : 0;
         const early = unit && !closedDay && flags.leftEarly >= EARLY_CUT_MINUTES ? flags.leftEarly : 0;
-        const full = dayRate * unit, kept = Math.min(full, dayRate * Math.max(0, 1 - (late + early) / shiftMin));
+        const full = oneDay * unit, kept = Math.min(full, oneDay * Math.max(0, 1 - (late + early) / shiftMin));
         const cut = Math.round(full - kept);
-        lateCut = Math.min(cut, Math.round(dayRate * late / shiftMin));
+        lateCut = Math.min(cut, Math.round(oneDay * late / shiftMin));
         earlyCut = cut - lateCut;
         if (earlyCut > 0) earlyList.push({ day, minutes: early, amount: earlyCut });
         lateFixed = fixedOf(full - cut);
@@ -191,7 +211,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
       otMs += dayOtMs;
       if (unit || dayOtMs) byDay[day] = Math.round(pay + dayOtMs / HOUR * otRate);
       const last = list[list.length - 1];
-      daily.push({ day, in: list[0].clock_in, out: last.clock_out || null, hourly: !!rate, ...(closedDay ? { closed: true } : {}),
+      daily.push({ day, in: list[0].clock_in, out: last.clock_out || null, hourly: !!rate, ...(wage ? { wage } : {}), ...(closedDay ? { closed: true } : {}),
         early: flags.early, late: lateHit ? rawLate : flags.late, stay: flags.stayed, leftEarly: flags.leftEarly,
         inShiftMin: Math.round(inShiftMs / 60000), extraMin: Math.round(dayOtMs / 60000), extraAmt: Math.round(dayOtMs / HOUR * otRate),
         pendingMin: Math.round(hs.reduce((a, h) => a + h.pendingMs, 0) / 60000), lateCut, earlyCut, pay: byDay[day] || 0 });
@@ -203,29 +223,31 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
     const workedDays = new Set(days.map(([day]) => day));
     let holidayDays = 0;
     for (const day of (workedDays.size ? [...closedSet] : []).filter(d => d.slice(0, 7) === key && !workedDays.has(d)).sort()) {
-      const rate = hourlyRateOn(hourlyRates, staffId, day);
-      if (!holidayOk(day, rate)) continue;
+      const rate = hourlyRateOn(hourlyRates, staffId, day), wage = dailyRateOn(hourlyRates, staffId, day);
+      if (!holidayOk(day, rate, wage)) continue;
       const shift = shiftOf(rules, staffId, day), w = shiftWindow(day, shift.start, shift.end), minutes = Math.round((w.end - w.start) / 60000);
-      const pay = rate ? minutes / 60 * rate : dayRate;
+      const pay = rate ? minutes / 60 * rate : wage || dayRate;
       if (!(pay > 0)) continue;
-      if (rate) { hourMin += minutes; hourPay += pay; } else dayUnits += 1;
+      if (rate) { hourMin += minutes; hourPay += pay; } else if (wage) { wageUnits += 1; wagePay += wage; } else dayUnits += 1;
       workUnits += 1;
       holidayDays += 1;
       byDay[day] = Math.round(pay);
-      daily.push({ day, in: null, out: null, hourly: !!rate, holiday: true, early: 0, late: 0, stay: 0, leftEarly: 0, inShiftMin: 0, extraMin: 0, extraAmt: 0,
+      daily.push({ day, in: null, out: null, hourly: !!rate, ...(wage ? { wage } : {}), holiday: true, early: 0, late: 0, stay: 0, leftEarly: 0, inShiftMin: 0, extraMin: 0, extraAmt: 0,
         pendingMin: 0, lateCut: 0, earlyCut: 0, pay: byDay[day] });
     }
     daily.sort((a, b) => a.day.localeCompare(b.day));
     otHours = round1(otMs / HOUR);
-    // dayAmt: lương ngày công (trả theo tháng); hourly: phần trả theo giờ (có khi người đó có lương 1 giờ trong tháng).
+    // dayAmt: lương ngày công (trả theo tháng); hourly: phần trả theo giờ (có khi người đó có lương 1 giờ trong tháng);
+    // dayWage: phần trả theo ngày (số ngày công × lương 1 ngày).
     const dayAmt = Math.round(base * dayUnits / STANDARD_DAYS);
-    const rates = hourlyRatesIn(hourlyRates, staffId, key);
+    const rates = ratesIn(hourlyRates, staffId, key, 'hour'), wages = ratesIn(hourlyRates, staffId, key, 'day');
     const hourly = rates.length || hourMin ? { minutes: hourMin, amount: Math.round(hourPay), rates } : null;
-    const basePay = dayAmt + (hourly?.amount || 0);
+    const dayWage = wages.length || wageUnits ? { days: wageUnits, amount: Math.round(wagePay), rates: wages } : null;
+    const basePay = dayAmt + (hourly?.amount || 0) + (dayWage?.amount || 0);
     const earlyAmt = earlyList.reduce((a, x) => a + x.amount, 0), lateAmt = lateList.reduce((a, x) => a + x.amount, 0);
     // Tiền tăng ca theo đúng số phút ngoài ca được tính (45 phút × 30.000đ/giờ = 22.500đ); số giờ chỉ làm tròn để hiện.
     const otAmt = Math.round(otMs / HOUR * otRate);
-    return { rule: 'days', base, standardDays: STANDARD_DAYS, workDays, workUnits, holidayDays, dayUnits, dayAmt, hourly, basePay, earlyAmt, earlyList, lateAmt, lateList,
+    return { rule: 'days', base, standardDays: STANDARD_DAYS, workDays, workUnits, holidayDays, dayUnits, dayAmt, hourly, dayWage, basePay, earlyAmt, earlyList, lateAmt, lateList,
       totalWorkH: round1(totalWorkH), otHours, otAmt, bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, pendingH: round1(pendingMs / HOUR),
       net: basePay - lateAmt - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt, byDay, daily };
   }
@@ -310,7 +332,7 @@ export function bonusCheck({ year, month, salary, tallies, departure = null, set
   const minDays = Number(settings?.bonus_min_days ?? BONUS_MIN_DAYS);
   const reasons = [];
   if (!usesDayPay(year, month)) reasons.push('tháng này chưa xét thưởng chuyên cần');
-  if (!(Number(salary?.base) > 0) && !salary?.hourly?.rates?.length) reasons.push('chưa có lương cơ bản');
+  if (!(Number(salary?.base) > 0) && !salary?.hourly?.rates?.length && !salary?.dayWage?.rates?.length) reasons.push('chưa có lương cơ bản');
   if (departure && String(departure.last_day).slice(0, 7) <= monthKey(year, month)) reasons.push('nghỉ việc');
   if (tallies?.late?.count) reasons.push(`trễ ${tallies.late.count} lần`);
   if (tallies?.forgot) reasons.push(`quên ra ca ${tallies.forgot} lần`);
