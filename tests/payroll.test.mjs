@@ -39,18 +39,40 @@ test('from November: pay by days worked, half a day under half a shift, outside 
   assert.equal(c.net, 900000 - 11111 + 65000 - 200000 - 50000);
 });
 
-test('one day of monthly pay is the base ÷ the days of that month, so a full month is exactly the base; an overtime rate of 0 pays no overtime', () => {
-  const month = (y, m, n) => Array.from({ length: n }, (_, i) => ses(`d${i}`, `${y}-${String(m).padStart(2, '0')}-${String(i + 1).padStart(2, '0')}`, '06:00', '16:00'));
+test('monthly pay: a day is the base ÷ 30 in every month, a full month is exactly the base, each missed day costs the same; overtime rate 0 pays none', () => {
+  const month = (y, m, n, from = 1) => Array.from({ length: n }, (_, i) => ses(`d${i}`, `${y}-${String(m).padStart(2, '0')}-${String(i + from).padStart(2, '0')}`, '06:00', '16:00'));
   const sessions = month(2026, 12, 27);
   const reviews = sessions.map(s => ({ attendance_id: s.id, status: 'approved', minutes: 60 }));
-  // Tháng 12 có 31 ngày: 6.200.000đ ÷ 31 = 200.000đ một ngày công.
-  const c = computeSalary({ year: 2026, month: 12, staffId: 'a', sessions, config: { base_salary: 6200000, overtime_rate: 0 }, rules: RULES, reviews });
-  assert.deepEqual([c.workUnits, c.standardDays, c.basePay], [27, 31, 5400000]);
+  // Tháng 12 có 31 ngày, 6.000.000đ: 27 công × 200.000đ − 1 ngày của tháng 31 ngày = 5.200.000đ = lương − 4 ngày nghỉ × 200.000đ.
+  const c = computeSalary({ year: 2026, month: 12, staffId: 'a', sessions, config: { base_salary: 6000000, overtime_rate: 0 }, rules: RULES, reviews });
+  assert.deepEqual([c.workUnits, c.standardDays, c.dayBase, c.dayAmt, c.monthAdjust, c.basePay], [27, 31, 30, 5400000, -200000, 5200000]);
   assert.deepEqual([c.otHours, c.otAmt], [27, 0]);
-  for (const [y, m, n] of [[2026, 11, 30], [2026, 12, 31], [2027, 2, 28], [2028, 2, 29]]) {
-    const full = computeSalary({ year: y, month: m, staffId: 'a', sessions: month(y, m, n), config: { base_salary: 7800000, overtime_rate: 0 }, rules: RULES });
-    assert.deepEqual([full.workUnits, full.standardDays, full.basePay], [n, n, 7800000], `${m}/${y}: every day worked = the base`);
+  // Lương 7.800.000đ: đi đủ tháng nào cũng 7.800.000đ; nghỉ 1 ngày tháng nào cũng trừ 260.000đ (7.800.000 ÷ 30).
+  for (const [y, m, n, adjust] of [[2026, 11, 30, 0], [2026, 12, 31, -260000], [2027, 2, 28, 520000], [2028, 2, 29, 260000]]) {
+    const pay = days => computeSalary({ year: y, month: m, staffId: 'a', sessions: month(y, m, days), config: { base_salary: 7800000, overtime_rate: 0 }, rules: RULES });
+    const full = pay(n), missed = pay(n - 1);
+    assert.deepEqual([full.workUnits, full.standardDays, full.monthAdjust, full.basePay], [n, n, adjust, 7800000], `${m}/${y}: every day worked = the base`);
+    assert.equal(missed.basePay, 7800000 - 260000, `${m}/${y}: one day missed costs 260.000đ`);
+    // Sổ thu chi: từng ngày 260.000đ, phần chỉnh của tháng tính riêng (cả tháng).
+    assert.equal(Object.values(full.byDay).reduce((a, x) => a + x, 0) + full.monthAdjust, 7800000);
   }
+  // Tháng đang chạy (tới 10/12): phần chỉnh chỉ tính 10 ngày. Vào làm 11/12, đi đủ: đúng 21/31 lương tháng.
+  const running = computeSalary({ year: 2026, month: 12, staffId: 'a', sessions: month(2026, 12, 10), config: { base_salary: 6000000, overtime_rate: 0 }, rules: RULES, asOf: '2026-12-10' });
+  assert.deepEqual([running.dayAmt, running.monthAdjust, running.basePay], [2000000, -64516, 1935484]);
+  const joined = computeSalary({ year: 2026, month: 12, staffId: 'a', sessions: month(2026, 12, 21, 11), config: { base_salary: 6000000, overtime_rate: 0 }, rules: RULES,
+    employed: { from: '2026-12-11', to: null } });
+  assert.deepEqual([joined.dayAmt, joined.monthAdjust, joined.basePay], [4200000, -135484, 4064516]);
+  // Người trả theo ngày: không có phần chỉnh.
+  const daily = computeSalary({ year: 2026, month: 12, staffId: 'a', sessions: month(2026, 12, 31), config: { base_salary: 6000000, overtime_rate: 0 }, rules: RULES,
+    hourlyRates: [{ staff_id: 'a', valid_from: '2026-12-01', hourly_rate: 200000, unit: 'day' }] });
+  assert.deepEqual([daily.monthAdjust, daily.basePay], [0, 6200000]);
+  // Sổ thu chi tháng 12: tiền từng ngày + phần chỉnh của tháng (cùng thưởng − phạt) = đúng lương; tháng đã chốt theo số chốt.
+  const all = month(2026, 12, 31).map(s => ({ ...s, staff_id: 'a' }));
+  const cost = payrollCost({ year: 2026, month: 12, staff: [{ id: 'a' }], rules: RULES, sessions: all, configs: [{ staff_id: 'a', base_salary: 7800000, overtime_rate: 0 }] });
+  assert.deepEqual([Object.values(cost.byDay).reduce((a, x) => a + x, 0), cost.monthExtra], [8060000, -260000]);
+  const closedCost = payrollCost({ year: 2026, month: 12, staff: [{ id: 'a' }], rules: RULES, sessions: [], configs: [{ staff_id: 'a', base_salary: 7800000 }],
+    closes: [{ staff_id: 'a', snapshot: { byDay: { '2026-12-01': 8060000 }, bonusAmt: 0, vioAmt: 0, monthAdjust: -260000 } }] });
+  assert.equal(closedCost.monthExtra, -260000);
   assert.equal(computeSalary({ year: 2026, month: 12, staffId: 'a', sessions: [], config: { base_salary: 1 }, rules: RULES }).basePay, 0, 'no days, no base pay');
 });
 

@@ -1177,7 +1177,7 @@ export default function FinancePage() {
       : { key: 'purchases', name: 'Đi chợ / nhập hàng (Sổ tay)', amount: p.amount })),
     { key: 'drinks', name: 'Chi trong ngày', sub: 'nước ngọt, đá, gas… nhập ở tab Hôm nay', amount: t.drinks },
     { key: 'salary', name: 'Lương (theo chấm công)', amount: t.salary,
-      sub: !data.wagesReady ? 'Chưa đọc được chấm công, thử tải lại' : t.salaryExtra ? `gồm thưởng − phạt cả tháng ${t.salaryExtra > 0 ? '+' : '-'}${money(Math.abs(t.salaryExtra))}` : '' },
+      sub: !data.wagesReady ? 'Chưa đọc được chấm công, thử tải lại' : t.salaryExtra ? `gồm thưởng − phạt và phần chỉnh theo số ngày của tháng ${t.salaryExtra > 0 ? '+' : '-'}${money(Math.abs(t.salaryExtra))}` : '' },
     { key: 'fixed', name: 'Chi cố định (chia đều mỗi ngày)', amount: t.fixedShare, sub: data.fixedMonthTotal ? `cả tháng ${money(data.fixedMonthTotal)}, đã tính tới hôm nay` : 'nhập ở mục Chi cố định bên dưới' },
     ...customTabs.map(tab => ({ key: tab.id, name: tab.name, amount: t.custom[tab.id] || 0,
       sub: tab.schedule === 'monthly' ? `cả tháng ${money(data.customMonthTotals?.[tab.id] || 0)}` : '', optional: true })),
