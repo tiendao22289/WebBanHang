@@ -98,10 +98,11 @@ export default function AdminLayout({ children }) {
     localStorage.setItem('sidebarCollapsed', String(next));
   };
 
-  // Redirect staff away from restricted pages
+  // Trang vai trò này không được mở → về trang đầu tiên được mở (Quản lý bàn). Trước đây về Sổ tay, nhưng nhân viên không
+  // được mở Sổ tay nên chỉ thấy phần chấm công cũ (trùng trang Lương).
   useEffect(() => {
     if (!mounted || !user) return;
-    if (!canOpenPath(user.role, pathname)) router.replace('/admin/notes');
+    if (!canOpenPath(user.role, pathname)) router.replace(allowedPaths(user.role)?.[0] || '/admin/tables');
   }, [user, pathname, mounted, router]);
 
   const handleLogin = async (e) => {

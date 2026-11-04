@@ -257,7 +257,7 @@ export default function StaffNotesPage() {
     setSuccessMsg('');
 
     // Tự đăng ký bị tắt: ai mở web cũng tạo được tài khoản. Admin tạo trong trang Tính Lương.
-    setErrorMsg('Liên hệ quản lý để được tạo tài khoản (trang Tính Lương → Tài khoản).');
+    setErrorMsg('Liên hệ quản lý để được tạo tài khoản (trang Tính Lương → Nhân viên).');
     setIsLoading(false);
   };
 

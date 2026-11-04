@@ -564,6 +564,9 @@ test('the owner links Zalo with a short code and gets one daily report a day', a
   const broken = async () => { throw new Error('Chưa uỷ quyền Zalo OA'); };
   assert.equal(await zaloLink.linkFinanceReport(db, msg('BC 123456'), broken), true, 'a failed reply still keeps the code message out of the wheel flow');
   assert.equal((await get(api, `month=${today.slice(0, 7)}`)).body.zaloReport.linked, 1);
+  // Trang Cài đặt đọc riêng trạng thái báo cáo Zalo (không tải cả sổ tháng).
+  const zaloOnly = await get(api, 'zalo=1');
+  assert.deepEqual([zaloOnly.status, zaloOnly.body.zaloReport.linked, Object.keys(zaloOnly.body)], [200, 1, ['zaloReport']]);
 
   const test1 = await post(api, { action: 'zalo_test' });
   assert.equal(test1.status, 200);

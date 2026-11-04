@@ -5,7 +5,7 @@ import { Banknote, Camera, ChevronDown, ChevronLeft, ChevronRight, CreditCard, P
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import { useBackClose } from '@/lib/useBackClose';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
-import { billStaff, costParts, groupPaidBills, shoppingParts, staffText } from '@/lib/ownerFinance.mjs';
+import { billStaff, costParts, groupPaidBills, staffText } from '@/lib/ownerFinance.mjs';
 import './finance.css';
 
 const money = value => `${Math.round(Number(value || 0)).toLocaleString('vi-VN')}đ`;
@@ -156,7 +156,7 @@ function DailySpend({ date, entries, history, categories: loaded, onSaved }) {
       </div>
       {adding && <NewCategory scope="tab" onCancel={() => setAdding(false)}
         onDone={category => { setCreated(prev => [...prev, category]); setAdding(false); onSaved();
-          if (category.schedule === 'monthly') alert(`"${category.name}" nhập theo tháng: nhập ở tab Tháng → Chi cố định.`); else setPick(`tab:${category.id}`); }} />}
+          if (category.schedule === 'monthly') alert(`"${category.name}" nhập theo tháng: nhập ở tab Chi phí.`); else setPick(`tab:${category.id}`); }} />}
       <div className="fin-fields">
         {pick === OTHER && <label className="fin-wide">Nội dung<input value={label} onChange={e => setLabel(e.target.value)} placeholder="VD: Than, Khăn giấy, Sửa ống nước" maxLength={120} /></label>}
         <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''}
@@ -873,91 +873,6 @@ function SearchView({ accounts, preset }) {
   </section>;
 }
 
-// Giờ gửi báo cáo Zalo: mốc 30 phút trong ngày.
-const SEND_TIMES = Array.from({ length: 48 }, (_, i) => `${String(Math.floor(i / 2)).padStart(2, '0')}:${i % 2 ? '30' : '00'}`);
-
-// Báo cáo thu chi gửi qua Zalo OA mỗi sáng tới chủ quán.
-function ZaloReportPanel({ status, onChanged }) {
-  const [state, setState] = useState(status);
-  const [busy, setBusy] = useState('');
-  const [message, setMessage] = useState('');
-  useEffect(() => { setState(status); }, [status]);
-  if (!state) return null;
-
-  async function act(action) {
-    if (action === 'zalo_unlink' && !confirm('Ngừng gửi báo cáo Zalo?')) return;
-    setBusy(action); setMessage('');
-    try {
-      const res = await post({ action });
-      setState(res.zaloReport);
-      if (action === 'zalo_test') setMessage('✓ Đã gửi, mở Zalo để xem.');
-    } catch (err) {
-      if (err.result?.zaloReport) setState(err.result.zaloReport);
-      setMessage(err.message);
-    } finally { setBusy(''); }
-  }
-  async function toggleSection(key) {
-    const sections = { ...(state.sections || {}), [key]: !(state.sections?.[key] !== false) };
-    setBusy('sections'); setMessage('');
-    try { setState((await post({ action: 'zalo_set_sections', sections })).zaloReport); }
-    catch (err) { setMessage(err.message); } finally { setBusy(''); }
-  }
-  async function setTime(time) {
-    setBusy('time'); setMessage('');
-    try { setState((await post({ action: 'zalo_set_time', time })).zaloReport); setMessage(`✓ Sẽ gửi lúc ${time} mỗi ngày.`); }
-    catch (err) { setMessage(err.message); } finally { setBusy(''); }
-  }
-  async function setEnabled(enabled) {
-    setBusy('enabled'); setMessage('');
-    try { setState((await post({ action: 'zalo_set_enabled', enabled })).zaloReport); setMessage(enabled ? '✓ Đã bật gửi Zalo.' : '✓ Đã tắt gửi Zalo. Vẫn xem được ở trang Thống kê nhanh.'); }
-    catch (err) { setMessage(err.message); } finally { setBusy(''); }
-  }
-  async function copyCode() {
-    try { await navigator.clipboard.writeText(`BC ${state.linkCode}`); setMessage('Đã chép, dán vào Zalo.'); } catch { /* trình duyệt chặn → tự gõ */ }
-  }
-
-  return <section className="fin-panel fin-zalo">
-    <h2>Báo cáo Zalo hằng ngày</h2>
-    {state.linkCode ? <>
-      <p>Mở Zalo, nhắn cho <b>OA của quán</b> đúng nội dung:</p>
-      <button className="fin-zalo-code" onClick={copyCode} aria-label="Chép mã">BC {state.linkCode}</button>
-      <p className="fin-zalo-hint">Mã dùng trong 30 phút. Nhắn xong bấm “Kiểm tra”.</p>
-      <div className="fin-zalo-actions">
-        <button className="fin-primary" onClick={onChanged}>Kiểm tra</button>
-      </div>
-    </> : state.linked > 0 ? <>
-      <label className="fin-zalo-switch"><input type="checkbox" checked={state.enabled !== false} disabled={!!busy} onChange={e => setEnabled(e.target.checked)} /> Gửi báo cáo qua Zalo mỗi ngày</label>
-      {state.enabled === false
-        ? <p className="fin-zalo-hint">Đang tắt — không gửi Zalo, Zalo đã liên kết vẫn giữ nguyên.</p>
-        : <p className="fin-zalo-ok">✓ Đang gửi tới {state.linked} Zalo · khoảng {state.sendAt || '08:00'} gửi số liệu {Number(String(state.sendAt || '08:00').slice(0, 2)) < 12 ? 'ngày hôm qua' : 'hôm nay'}.</p>}
-      <label className="fin-zalo-time">Giờ gửi
-        <select value={state.sendAt || '08:00'} disabled={!!busy} onChange={e => setTime(e.target.value)}>
-          {SEND_TIMES.map(t => <option key={t} value={t}>{t}{Number(t.slice(0, 2)) < 12 ? ' — số hôm qua' : ' — số hôm nay'}</option>)}
-        </select>
-      </label>
-      <div className="fin-zalo-sections" role="group" aria-label="Mục trong báo cáo">
-        {[['loss', '🔍 Thất thoát (bill huỷ, món bớt, giảm giá, tặng)'], ['staff', '👥 Nhân viên (chấm công, chờ duyệt)'], ['compare', '📈 So sánh, món bán chạy'], ['notes', '🛒 Sổ tay chi tiết']].map(([key, text]) => (
-          <label key={key}><input type="checkbox" checked={state.sections?.[key] !== false} disabled={!!busy} onChange={() => toggleSection(key)} /> {text}</label>
-        ))}
-      </div>
-      {state.lastSentAt && <p className="fin-zalo-hint">Lần gửi gần nhất: {stamp(state.lastSentAt)}</p>}
-      {state.lastError && <p className="fin-warn">⚠ Lần gần nhất Zalo không gửi được. Mở Zalo, nhắn “ok” cho OA của quán rồi bấm “Gửi thử”. Zalo chỉ cho OA nhắn lại người vừa nhắn mình trong vài ngày.</p>}
-      <div className="fin-zalo-actions">
-        <button className="fin-primary" onClick={() => act('zalo_test')} disabled={!!busy}>{busy === 'zalo_test' ? 'Đang gửi...' : 'Gửi thử số hôm nay'}</button>
-        <button className="fin-secondary" onClick={() => act('zalo_link_code')} disabled={!!busy}>Thêm Zalo khác</button>
-        <button className="fin-secondary danger" onClick={() => act('zalo_unlink')} disabled={!!busy}>Ngừng gửi</button>
-      </div>
-    </> : <>
-      <p>Nhận tổng kết thu chi, lệch két, bill CK chưa có ảnh / chưa đối chiếu qua Zalo mỗi sáng — không cần mở web.</p>
-      <div className="fin-zalo-actions">
-        <button className="fin-primary" onClick={() => act('zalo_link_code')} disabled={!!busy}>Liên kết Zalo</button>
-      </div>
-    </>}
-    {message && !(state.lastError && state.linked > 0 && !message.startsWith('✓')) && <p className="fin-zalo-hint" role="status">{message}</p>}
-    <p className="fin-zalo-hint"><a href="/thongke" target="_blank" rel="noopener">Mở trang Thống kê nhanh (/thongke) ↗</a> — đọc báo cáo trên điện thoại, xem lại ngày cũ.</p>
-  </section>;
-}
-
 // Bán ra theo món (bill) / nhập vào theo hàng (Sổ tay), gom theo nhóm để biết từng thứ lời lỗ.
 const pct = ratio => ratio === null || ratio === undefined ? '' : `${Math.round(ratio * 100)}%`;
 
@@ -1109,7 +1024,8 @@ function ItemsView({ month, today }) {
 
 // 4 tab theo việc: Hôm nay (việc trong ngày, chi trong ngày, chốt sổ) · Tháng (lãi lỗ, chi cố định,
 // danh sách ngày, báo cáo Zalo) · Món · Tra cứu.
-const VIEWS = [['today', 'Hôm nay'], ['month', 'Tháng'], ['items', 'Món'], ['search', 'Tra cứu']];
+// Sổ thu chi = nơi ghi và kiểm; lãi / lỗ, các khoản chi cả tháng xem ở /thongke → Tháng (trước đây tab "Tháng" ở đây lặp lại).
+const VIEWS = [['today', 'Hôm nay'], ['costs', 'Chi phí'], ['items', 'Món'], ['search', 'Tra cứu']];
 
 export default function FinancePage() {
   const [month, setMonth] = useState(vnToday().slice(0, 7));
@@ -1125,24 +1041,33 @@ export default function FinancePage() {
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('financeView');
+      // Link mở thẳng một tab (vd. /admin/finance?view=costs từ thẻ "Các khoản chi" của /thongke), không thì tab xem lần trước.
+      // Link cũ ?view=month (tab Tháng đã bỏ) mở tab Chi phí.
+      const raw = new URLSearchParams(window.location.search).get('view'), linked = raw === 'month' ? 'costs' : raw;
+      const saved = VIEWS.some(([k]) => k === linked) ? linked : localStorage.getItem('financeView');
       if (VIEWS.some(([k]) => k === saved)) setView(saved);
     } catch { /* trình duyệt chặn lưu trữ → dùng mặc định */ }
   }, []);
   function chooseView(next) {
     setView(next);
-    try { localStorage.setItem('financeView', next); } catch { /* bỏ qua */ }
+    try {
+      localStorage.setItem('financeView', next);
+      // Đã đổi tab: bỏ ?view= của link mở trang, tải lại thì mở tab vừa chọn.
+      if (window.location.search.includes('view=')) window.history.replaceState(null, '', window.location.pathname);
+    } catch { /* bỏ qua */ }
   }
+  // Trang nằm trong khung cuộn của trang quản lý (không phải cả cửa sổ): cuộn tới đầu Sổ thu chi.
+  const toTop = () => { window.scrollTo({ top: 0 }); document.querySelector('.finance')?.scrollIntoView({ block: 'start' }); };
   function openSearch(filters) {
     setSearchPreset(p => ({ key: p.key + 1, filters }));
     chooseView('search');
-    window.scrollTo({ top: 0 });
+    toTop();
   }
-  // Bấm một ngày ở tab Tháng → mở ngày đó ở tab Hôm nay.
+  // Bấm một ngày trong "Các ngày trong tháng" (cuối tab Hôm nay) → mở ngày đó, cuộn lên đầu để xem.
   function openDay(d) {
     setDate(d);
     chooseView('today');
-    window.scrollTo({ top: 0 });
+    toTop();
   }
 
   async function load() {
@@ -1163,25 +1088,8 @@ export default function FinancePage() {
   const today = data?.today || vnToday();
   const accounts = data?.accounts || [];
   const categories = data?.categories || [];
-  const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ tài khoản';
   const shortAccount = id => { const a = accounts.find(x => x.id === id); return a ? cardLabel(a) : 'Không rõ tài khoản'; };
   const days = [...(data?.days || [])].reverse();
-  // Tab tự tạo: đang dùng, hoặc đã ẩn nhưng tháng này còn tiền (để tổng vẫn khớp).
-  const customTabs = categories.filter(c => c.scope === 'tab' && (!c.archived || data?.totals?.custom?.[c.id]));
-  const totalCost = t ? t.purchases + t.drinks + t.salary + t.fixedShare + t.customTotal : 0;
-  // Các khoản chi của tháng — dòng 0đ của tab tự tạo thì ẩn cho gọn.
-  const costRows = t ? [
-    // Sổ tay: đi chợ hàng ốc, rồi từng loại tab "Khác" (xăng xe, sửa chữa…) chủ tạo ở trang Sổ tay.
-    ...shoppingParts(t, data.noteCategories || []).map(p => (p.id
-      ? { key: `note-${p.id}`, name: `📦 ${p.name}`, sub: 'Sổ tay · tab Khác', amount: p.amount }
-      : { key: 'purchases', name: 'Đi chợ / nhập hàng (Sổ tay)', amount: p.amount })),
-    { key: 'drinks', name: 'Chi trong ngày', sub: 'nước ngọt, đá, gas… nhập ở tab Hôm nay', amount: t.drinks },
-    { key: 'salary', name: 'Lương (theo chấm công)', amount: t.salary,
-      sub: !data.wagesReady ? 'Chưa đọc được chấm công, thử tải lại' : t.salaryExtra ? `gồm thưởng − phạt và phần chỉnh theo số ngày của tháng ${t.salaryExtra > 0 ? '+' : '-'}${money(Math.abs(t.salaryExtra))}` : '' },
-    { key: 'fixed', name: 'Chi cố định (chia đều mỗi ngày)', amount: t.fixedShare, sub: data.fixedMonthTotal ? `cả tháng ${money(data.fixedMonthTotal)}, đã tính tới hôm nay` : 'nhập ở mục Chi cố định bên dưới' },
-    ...customTabs.map(tab => ({ key: tab.id, name: tab.name, amount: t.custom[tab.id] || 0,
-      sub: tab.schedule === 'monthly' ? `cả tháng ${money(data.customMonthTotals?.[tab.id] || 0)}` : '', optional: true })),
-  ].filter(r => !r.optional || r.amount > 0) : [];
   const monthText = `${month.slice(5)}/${month.slice(0, 4)}`;
   const pendingCk = data?.transferAlerts;
   const byDayCk = data?.transferByDay || {};
@@ -1217,7 +1125,7 @@ export default function FinancePage() {
       <div className="fin-title"><h1><PiggyBank size={22} />Sổ thu chi</h1>
         <p>Số thật từ {data?.startDate ? `${data.startDate.slice(8)}/${data.startDate.slice(5, 7)}/${data.startDate.slice(0, 4)}` : '23/10/2026'}</p></div>
       <div className="fin-header-tools">
-        {(view === 'month' || view === 'items') && <div className="fin-month" role="group" aria-label="Chọn tháng">
+        {(view === 'costs' || view === 'items') && <div className="fin-month" role="group" aria-label="Chọn tháng">
           <button onClick={() => setMonth(shiftMonth(month, -1))} disabled={month <= FIRST_MONTH} aria-label="Tháng trước"><ChevronLeft size={18} /></button>
           <b>Tháng {monthText}</b>
           <button onClick={() => setMonth(shiftMonth(month, 1))} disabled={month >= vnToday().slice(0, 7)} aria-label="Tháng sau"><ChevronRight size={18} /></button>
@@ -1253,66 +1161,44 @@ export default function FinancePage() {
       </div>)}
     </section>}
 
+    {/* Việc cần xem lại cả tháng (tháng chứa ngày đang xem), gom 1 chỗ; bấm là mở đúng danh sách. */}
+    {view === 'today' && t && ((t.mismatchNotes > 0 || t.suspiciousNotes > 0) || (pendingCk && (pendingCk.missingPhoto > 0 || pendingCk.unchecked > 0))) && <section className="fin-pending">
+      <b>Cần xem lại tháng {monthText}</b>
+      {pendingCk?.missingPhoto > 0 && <button onClick={() => openSearch({ ...monthRange, photo: 'missing' })}>📷 {pendingCk.missingPhoto} bill chuyển khoản chưa có ảnh <ChevronRight size={16} /></button>}
+      {pendingCk?.unchecked > 0 && <button onClick={() => openSearch({ ...monthRange, check: 'unchecked' })}>☐ {pendingCk.unchecked} bill chuyển khoản chưa đối chiếu <ChevronRight size={16} /></button>}
+      {(t.mismatchNotes > 0 || t.suspiciousNotes > 0) && <button onClick={() => document.getElementById('fin-month-days')?.scrollIntoView({ behavior: 'smooth' })}>⚠ {[t.mismatchNotes > 0 && `${t.mismatchNotes} phiếu Sổ tay lệch tiền`, t.suspiciousNotes > 0 && `${t.suspiciousNotes} phiếu Sổ tay giá / số lượng đáng ngờ`].filter(Boolean).join(' · ')} — xem ngày có dấu ⚠ <ChevronRight size={16} /></button>}
+    </section>}
+
     {view === 'today' && <DayPage date={date} today={today} data={data} accounts={accounts} onDate={setDate} onChanged={load} onSearch={openSearch}
       summary={data?.days?.find(d => d.date === date)} />}
 
-    {view === 'month' && t && <section className="fin-section">
-      <section className={`fin-hero ${t.profit < 0 ? 'loss' : ''}`}>
-        <span>{t.profit < 0 ? 'Lỗ' : 'Lãi'} tháng {monthText}</span>
-        <b>{money(Math.abs(t.profit))}</b>
-        <div className="fin-hero-split">
-          <div><small>Thu</small><strong>{money(t.revenue)}</strong></div>
-          <div><small>Chi</small><strong>{money(totalCost)}</strong></div>
-        </div>
-        <p>{t.bills} bill{t.paperBills ? ` + ${t.paperBills} bill giấy (${money(t.paperRevenue)})` : ''} · Tiền mặt {money(t.cash)} · Chuyển khoản {money(t.transfer)}</p>
-      </section>
+    {/* Các ngày của tháng chứa ngày đang xem: bấm để mở ngày đó (trước đây ở tab Tháng). */}
+    {view === 'today' && days.length > 0 && <section className="fin-panel" id="fin-month-days">
+      <h2>Các ngày trong tháng {monthText} <small>bấm để mở ngày đó</small></h2>
+      <div className="fin-days">
+        {days.map(d => <button key={d.date} className={`fin-day${d.date === date ? ' current' : ''}`} onClick={() => openDay(d.date)} aria-current={d.date === date ? 'date' : undefined}>
+          <div className="fin-day-head">
+            <span className="fin-day-date"><b>{d.date === today ? 'Hôm nay' : dayLabel(d.date)}</b><small>{d.bills} bill{d.paperBills ? ` + ${d.paperBills} bill giấy` : ''}</small></span>
+            <ChevronRight size={16} />
+          </div>
+          {/* 3 cột thẳng hàng giữa các ngày để so nhanh. */}
+          <div className="fin-day-nums">
+            <span><small>Thu</small>{money(d.revenue)}</span>
+            <span><small>Chi</small>{money(dayCost(d))}</span>
+            <span className={d.profit < 0 ? 'loss' : 'gain'}><small>{d.profit < 0 ? 'Lỗ' : 'Lãi'}</small>{money(Math.abs(d.profit))}</span>
+          </div>
+          {dayCost(d) > 0 && <p className="fin-day-cost">Chi: {costLine(d, categories)}</p>}
+          <div className="fin-day-tags">{dayTags(d)}</div>
+        </button>)}
+      </div>
+    </section>}
 
-      {/* Mọi việc cần xem lại trong tháng, gom 1 chỗ; bấm là mở đúng danh sách. */}
-      {((t.mismatchNotes > 0 || t.suspiciousNotes > 0) || (pendingCk && (pendingCk.missingPhoto > 0 || pendingCk.unchecked > 0))) && <section className="fin-pending">
-        <b>Cần xem lại tháng {monthText}</b>
-        {pendingCk?.missingPhoto > 0 && <button onClick={() => openSearch({ ...monthRange, photo: 'missing' })}>📷 {pendingCk.missingPhoto} bill chuyển khoản chưa có ảnh <ChevronRight size={16} /></button>}
-        {pendingCk?.unchecked > 0 && <button onClick={() => openSearch({ ...monthRange, check: 'unchecked' })}>☐ {pendingCk.unchecked} bill chuyển khoản chưa đối chiếu <ChevronRight size={16} /></button>}
-        {(t.mismatchNotes > 0 || t.suspiciousNotes > 0) && <button onClick={() => document.getElementById('fin-month-days')?.scrollIntoView({ behavior: 'smooth' })}>⚠ {[t.mismatchNotes > 0 && `${t.mismatchNotes} phiếu Sổ tay lệch tiền`, t.suspiciousNotes > 0 && `${t.suspiciousNotes} phiếu Sổ tay giá / số lượng đáng ngờ`].filter(Boolean).join(' · ')} — xem ngày có dấu ⚠ <ChevronRight size={16} /></button>}
-      </section>}
-
-      <section className="fin-panel">
-        <h2>Các khoản chi</h2>
-        {costRows.map(r => <div key={r.key} className="fin-cost">
-          <div className="fin-cost-line"><span>{r.name}{r.sub && <small>{r.sub}</small>}</span><b>{money(r.amount)}</b></div>
-          <div className="fin-bar" aria-hidden="true"><i style={{ width: `${totalCost > 0 ? Math.min(100, (r.amount / totalCost) * 100) : 0}%` }} /></div>
-        </div>)}
-        <div className="fin-cost-total"><span>Tổng chi</span><b>{money(totalCost)}</b></div>
-      </section>
-
+    {/* Chi phí: mọi khoản chi theo tháng (tiền nhà, điện, nước, internet… và tab tự tạo nhập theo tháng), sổ tự chia đều cho
+        từng ngày. Lãi / lỗ và các khoản chi cả tháng xem ở /thongke → Tháng. */}
+    {view === 'costs' && <section className="fin-section">
       <MonthlyCosts data={data} month={month} onSaved={load} />
-
-      <section className="fin-panel" id="fin-month-days">
-        <h2>Từng ngày <small>bấm để mở ngày đó</small></h2>
-        {days.length === 0 && <p className="fin-empty">Tháng này chưa có ngày nào được tính.</p>}
-        <div className="fin-days">
-          {days.map(d => <button key={d.date} className="fin-day" onClick={() => openDay(d.date)}>
-            <div className="fin-day-head">
-              <span className="fin-day-date"><b>{d.date === today ? 'Hôm nay' : dayLabel(d.date)}</b><small>{d.bills} bill{d.paperBills ? ` + ${d.paperBills} bill giấy` : ''}</small></span>
-              <ChevronRight size={16} />
-            </div>
-            {/* 3 cột thẳng hàng giữa các ngày để so nhanh. */}
-            <div className="fin-day-nums">
-              <span><small>Thu</small>{money(d.revenue)}</span>
-              <span><small>Chi</small>{money(dayCost(d))}</span>
-              <span className={d.profit < 0 ? 'loss' : 'gain'}><small>{d.profit < 0 ? 'Lỗ' : 'Lãi'}</small>{money(Math.abs(d.profit))}</span>
-            </div>
-            {dayCost(d) > 0 && <p className="fin-day-cost">Chi: {costLine(d, categories)}</p>}
-            <div className="fin-day-tags">{dayTags(d)}</div>
-          </button>)}
-        </div>
-      </section>
-
-      {Object.keys(t.byAccount).length > 0 && <section className="fin-panel">
-        <h2>Chuyển khoản theo tài khoản</h2>
-        {Object.entries(t.byAccount).map(([id, amount]) => <div key={id} className="fin-row static"><span>{accountName(id)}</span><b>{money(amount)}</b></div>)}
-      </section>}
-
-      <ZaloReportPanel status={data.zaloReport} onChanged={load} />
+      <p className="fin-hint fin-costs-more">Lãi / lỗ và từng khoản chi của cả tháng: <a href={`/thongke?date=${month === today.slice(0, 7) ? today : `${month}-01`}&p=month`}>xem ở Thống kê nhanh → Tháng</a>.
+        Chi trong ngày (nước ngọt, đá, gas…) nhập ở tab Hôm nay.</p>
     </section>}
 
     {view === 'items' && <ItemsView month={month} today={today} />}

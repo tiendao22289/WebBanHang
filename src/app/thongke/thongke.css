@@ -112,6 +112,9 @@
 .tk-cost-items li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tk-cost-items li b { color: var(--tk-text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .tk-cost-items .tk-cost-more span { font-style: italic; }
+.tk-cost-hint { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--tk-soft); font-size: 13px; line-height: 1.5; color: var(--tk-muted); }
+.tk-cost-hint a { color: var(--tk-brand); font-weight: 600; }
+.tk-cost-edit { margin-left: 8px; font-size: 12px; font-weight: 600; color: var(--tk-brand); text-decoration: none; }
 .tk-rank em { display: inline-grid; place-items: center; width: 20px; height: 20px; margin-right: 8px; border-radius: 6px; background: var(--tk-soft); font-style: normal; font-size: 11px; font-weight: 700; color: var(--tk-muted); }
 .tk-rank li:first-child em { background: var(--tk-brand); color: white; }
 
