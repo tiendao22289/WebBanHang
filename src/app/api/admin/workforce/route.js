@@ -24,7 +24,9 @@
  *   decide_fine {attendance_id, kind, status, amount, reason} / reopen_fine → gợi ý phạt từ chấm công,
  *   save_fine_rule, save_bonus_settings, decide_bonus {staff_id, year, month, amount} / remove_bonus,
  *   save_config, save_hourly {staff_id, hourly_rate, valid_from} (lương theo giờ),
- *   save_late_rule {scope: 'shop' | staff_id, allowed_minutes, per_minute, fixed_amount, use_shop} (luật đi trễ từ hôm nay), save_checkin_settings, save_shift, revoke_kiosk, reset_device,
+ *   save_late_rule {scope: 'shop' | staff_id, allowed_minutes, per_minute, fixed_amount, use_shop} (luật đi trễ từ hôm nay),
+ *   save_closed_day {day, note} / delete_closed_day {day} (ngày quán nghỉ), save_holiday_pay {staff_id, paid: true | false | null},
+ *   save_checkin_settings, save_shift, revoke_kiosk, reset_device,
  *   create_account, set_pin, delete_account,
  *   face_enroll {staff_id, embeddings, force} (lấy mặt mẫu trên máy quầy), face_delete, save_face_settings,
  *   decide_face {attendance_id, clocked, status}   (admin)
@@ -35,9 +37,9 @@ import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { hashPin, isHashedPin, validPin } from '@/lib/staffPin.mjs';
 import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, KIOSK_COOKIE, newDeviceId, readKioskCookie, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
-import { loadPayrollMonth, monthRange, readHourlyRates, readLateRules, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
+import { loadPayrollMonth, monthRange, readHolidays, readHourlyRates, readLateRules, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
 import { AUTO_CLOSE_BY, AUTO_EXTRA_FROM, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { DEFAULT_OT_RATE, computeSalary, lateRulesOf, monthKey, monthTallies, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
+import { DEFAULT_OT_RATE, computeSalary, holidayArgs, lateRulesOf, monthKey, monthTallies, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import { normalizeRole } from '@/lib/staffRoles.mjs';
 import { applyClock, latestSession, sessionsOfDay } from '@/lib/clockApply.mjs';
@@ -143,7 +145,7 @@ async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
   try {
     const now = vnNow(), year = now.getUTCFullYear(), month = now.getUTCMonth() + 1;
     const { start, end } = monthRange(year, month);
-    const [sessions, config, requests, violations, closed, bonuses, meta, payroll, hourlyRates, lateRules] = await Promise.all([
+    const [sessions, config, requests, violations, closed, bonuses, meta, payroll, hourlyRates, lateRules, holidays, me, left] = await Promise.all([
       db.from('attendance_sessions').select('*').eq('staff_id', staffId).gte('date', start).lte('date', end), // cả ngày 1 tháng sau: lượt dọn quán sau nửa đêm của ca cuối tháng
       db.from('payroll_config').select('*').eq('staff_id', staffId).maybeSingle(),
       db.from('payroll_requests').select('*').eq('staff_id', staffId).eq('month', month).eq('year', year),
@@ -154,11 +156,15 @@ async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
       readPayrollSettings(db),
       readHourlyRates(db, staffId),
       readLateRules(db),
+      readHolidays(db),
+      db.from('staff').select('id, created_at').eq('id', staffId).maybeSingle(),
+      db.from('staff_departures').select('*').eq('staff_id', staffId),
     ]);
     for (const r of [sessions, config, requests, violations, closed, bonuses, meta]) if (r.error) throw r.error;
     const mine = markFaceHolds(sessions.data || [], await faceHolds(db, (sessions.data || []).map(x => x.id)));
     const live = computeSalary({ year, month, staffId, sessions: mine, config: config.data, requests: requests.data || [],
-      violations: violations.data || [], bonuses: bonuses.data || [], rules: settings, reviews, hourlyRates, lateRules: lateRulesOf(lateRules, staffId) });
+      violations: violations.data || [], bonuses: bonuses.data || [], rules: settings, reviews, hourlyRates, lateRules: lateRulesOf(lateRules, staffId),
+      ...holidayArgs(me.data || { id: staffId }, { ...holidays, closedDays: holidays.closedDays.filter(d => String(d.day) <= vnToday()), departures: left.data || [] }) });
     const salary = closed.data
       ? { bonusAmt: 0, ...closed.data.snapshot, year, month, locked: true, closed_at: closed.data.closed_at, paid_at: closed.data.paid_at || null }
       : { ...live, year, month, locked: false };
@@ -213,7 +219,7 @@ async function staffStats(db, year, month) {
 // cần đã duyệt, danh sách lỗi, gợi ý phạt đã xử lý, ngày / người ghi của các khoản phạt và lương 1 giờ.
 async function payrollMonth(db, year, month) {
   const { start, end } = monthRange(year, month);
-  const [closes, leaveDays, auto, bonuses, bonusSettings, fineRules, fineReviews, meta, sessionIds, hourlyRates, lateRules] = await Promise.all([
+  const [closes, leaveDays, auto, bonuses, bonusSettings, fineRules, fineReviews, meta, sessionIds, hourlyRates, lateRules, holidays] = await Promise.all([
     db.from('payroll_closes').select('*').eq('year', year).eq('month', month),
     // Ngày nghỉ của các đơn có ngày chạm tháng này.
     db.from('payroll_leave_days').select('*').lt('from_date', end).gte('to_date', start),
@@ -227,6 +233,7 @@ async function payrollMonth(db, year, month) {
     readAll(() => db.from('attendance_sessions').select('id').gte('date', start).lte('date', end).order('clock_in')),
     readHourlyRates(db),
     readLateRules(db),
+    readHolidays(db),
   ]);
   for (const r of [closes, leaveDays, bonuses, fineRules, fineReviews, meta]) if (r.error) throw r.error;
   // reviews: lần duyệt giờ ngoài ca của các ca trong tháng (trang Lương tính bằng đúng dữ liệu máy chủ chốt).
@@ -235,7 +242,7 @@ async function payrollMonth(db, year, month) {
   return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set(auto.map(r => r.attendance_id))],
     reviews: await reviewsFor(db, ids), faceHolds: [...await faceHolds(db, ids)],
     bonuses: bonuses.data || [], bonusSettings, fineRules: fineRules.data || [], fineReviews: fineReviews.data || [], violationMeta: meta.data || [],
-    hourlyRates, lateRules, monthOver: monthOver(year, month) };
+    hourlyRates, lateRules, ...holidays, monthOver: monthOver(year, month) };
 }
 
 // Ca 45 ngày gần đây có giờ ngoài ca (vào sớm / ở lại) mà chủ chưa duyệt.
@@ -774,7 +781,8 @@ export async function POST(request) {
         const config = of(m.configs)[0] || null, mine = of(m.sessions), reqs = of(m.requests), vios = of(m.violations);
         if (!config && !mine.length && !reqs.length && !vios.length) return null;
         // Tiền từng ngày (Sổ thu chi) và chi tiết từng ngày (trang Lương tự tính lại) — không lưu vào bảng đã chốt.
-        const { byDay, daily, ...salary } = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, bonuses: of(m.bonuses), rules: m.rules, reviews: m.reviews, hourlyRates: of(m.hourlyRates), lateRules: lateRulesOf(m.lateRules, p.id) });
+        const { byDay, daily, ...salary } = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, bonuses: of(m.bonuses), rules: m.rules, reviews: m.reviews, hourlyRates: of(m.hourlyRates), lateRules: lateRulesOf(m.lateRules, p.id),
+          ...holidayArgs(p, m) });
         return { year, month, staff_id: p.id, snapshot: { name: p.full_name, ...salary }, closed_by: user.full_name || null, closed_at: closedAt };
       }).filter(Boolean);
       if (only) {
@@ -1087,6 +1095,30 @@ export async function POST(request) {
       const { data: existing, error } = await db.from('payroll_config').select('id').eq('staff_id', body.staff_id).maybeSingle();
       if (error) throw error;
       const r = existing ? await db.from('payroll_config').update(payload).eq('staff_id', body.staff_id) : await db.from('payroll_config').insert(payload);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Ngày quán nghỉ (cả quán đóng cửa): thêm / sửa ghi chú, xoá. Người được nhận lương ngày nghỉ có đủ 1 ngày công.
+    if (body.action === 'save_closed_day' || body.action === 'delete_closed_day') {
+      const day = String(body.day || '');
+      if (!DATE.test(day) || new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) !== day) return fail('Chọn ngày quán nghỉ.');
+      const r = body.action === 'delete_closed_day'
+        ? await db.from('shop_closed_days').delete().eq('day', day)
+        : await db.from('shop_closed_days').upsert({ day, note: text(body.note, 120) || null, created_by: user.full_name || null, created_at: isoNow() }, { onConflict: 'day' });
+      if (missingTable(r.error)) return fail('Web đang cập nhật phần ngày quán nghỉ, thử lại sau ít phút.', 503);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Từng người có nhận lương ngày quán nghỉ không: true / false; null = theo mặc định (lương tháng có, theo giờ không).
+    if (body.action === 'save_holiday_pay') {
+      if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
+      const staffId = String(body.staff_id).toLowerCase();
+      const r = body.paid === true || body.paid === false
+        ? await db.from('payroll_holiday_pay').upsert({ staff_id: staffId, paid: body.paid, updated_by: user.full_name || null, updated_at: isoNow() }, { onConflict: 'staff_id' })
+        : await db.from('payroll_holiday_pay').delete().eq('staff_id', staffId);
+      if (missingTable(r.error)) return fail('Web đang cập nhật phần ngày quán nghỉ, thử lại sau ít phút.', 503);
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true }, { headers });
     }

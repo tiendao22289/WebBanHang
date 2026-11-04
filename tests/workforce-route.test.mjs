@@ -698,3 +698,31 @@ test('editing a shift refuses an end before its start or longer than a day', asy
   assert.equal(state.attendance_sessions[0].clock_out, '2026-11-05T17:00:00.000Z', 'nothing changed');
   assert.equal((await post(admin, { action: 'edit_attendance', id, clock_out: '2026-11-05T17:25:00.000Z' })).status, 200);
 });
+
+test('the owner sets shop closed days and who is paid for them; staff see the paid day in their pay', async () => {
+  const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10), first = `${today.slice(0, 7)}-01`;
+  const work = first === today ? null : first;
+  const state = shop({ payroll_config: [{ staff_id: STAFF.id, base_salary: 7800000, overtime_rate: 30000 }], payroll_requests: [], payroll_violations: [], attendance_extra_reviews: [],
+    staff: [{ ...STAFF, created_at: '2026-01-01T00:00:00Z' }, { ...LAN }],
+    attendance_sessions: [{ id: 'w1', staff_id: STAFF.id, date: today, clock_in: new Date(`${today}T14:00:00+07:00`).toISOString(), clock_out: new Date(`${today}T22:00:00+07:00`).toISOString() }] });
+  state.checkin_settings[0] = { id: 1, enforce: false, hours_from: '2026-10-25' };
+  const admin = load(state, ADMIN), staff = load(state, STAFF);
+  assert.equal((await post(staff, { action: 'save_closed_day', day: today })).status, 403);
+  assert.equal((await post(admin, { action: 'save_closed_day', day: '2026-02-30' })).status, 400);
+  assert.equal((await post(admin, { action: 'save_holiday_pay', staff_id: 'x', paid: true })).status, 400);
+  if (work) {
+    assert.equal((await post(admin, { action: 'save_closed_day', day: work, note: 'nghỉ định kỳ' })).status, 200);
+    assert.deepEqual(plain(state.shop_closed_days.map(d => [d.day, d.note, d.created_by])), [[work, 'nghỉ định kỳ', 'Chủ quán']]);
+    const me = plain(await staff.GET({ url: 'http://x/api/admin/workforce?me=1' })).body.salary;
+    assert.equal(me.holidayDays, 1, 'a monthly person is paid the closed day by default');
+    assert.equal((await post(admin, { action: 'save_holiday_pay', staff_id: STAFF.id.toUpperCase(), paid: false })).status, 200);
+    assert.deepEqual(plain(state.payroll_holiday_pay.map(h => [h.staff_id, h.paid])), [[STAFF.id, false]]);
+    assert.equal(plain(await staff.GET({ url: 'http://x/api/admin/workforce?me=1' })).body.salary.holidayDays, 0);
+    assert.equal((await post(admin, { action: 'save_holiday_pay', staff_id: STAFF.id, paid: null })).status, 200, 'back to the default');
+    assert.equal(state.payroll_holiday_pay.length, 0);
+    const month = plain(await admin.GET({ url: `http://x/api/admin/workforce?payroll=1&year=${today.slice(0, 4)}&month=${Number(today.slice(5, 7))}` })).body;
+    assert.deepEqual([month.closedDays.length, month.holidayPay.length], [1, 0]);
+    assert.equal((await post(admin, { action: 'delete_closed_day', day: work })).status, 200);
+    assert.equal(state.shop_closed_days.length, 0);
+  }
+});

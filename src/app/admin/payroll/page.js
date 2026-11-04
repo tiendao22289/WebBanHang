@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
 import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, lateRuleOn, lateRulesOf, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
+import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
 import { unlockSpeech } from '@/lib/speak';
@@ -38,7 +38,8 @@ const hourOnly = c => !!c.hourly && !(c.dayUnits > 0);
 const baseText = c => (hourOnly(c) ? rateText(c) : [formatMoney(c.base), rateText(c)].filter(Boolean).join(' + '));
 const daysText = c => (c.rule !== 'days' ? `${c.workDays} ngày`
   : hourOnly(c) ? `${durationText(c.hourly.minutes)} trong ca (${fmtNum(c.workUnits)} ngày)`
-    : `${fmtNum(c.dayUnits ?? c.workUnits)} / ${c.standardDays || STANDARD_DAYS} ngày${c.hourly?.minutes ? ` + ${durationText(c.hourly.minutes)} theo giờ` : ''}`);
+    : `${fmtNum(c.dayUnits ?? c.workUnits)} / ${c.standardDays || STANDARD_DAYS} ngày${c.hourly?.minutes ? ` + ${durationText(c.hourly.minutes)} theo giờ` : ''}`)
+  + (c.holidayDays ? ` (gồm ${c.holidayDays} ngày quán nghỉ)` : '');
 // Giờ trong ngày: 00:00 là nửa đêm, 12:00 là trưa (ô giờ của trình duyệt có máy hiện SA/CH, dễ chọn nhầm 12:00 trưa thay 00:00).
 const partOfDay = t => {
   if (!validTime(t)) return '';
@@ -105,7 +106,7 @@ function DayTable({ rows, first }) {
           {rows.map(({ key, label, d }) => (
             <tr key={key}>
               <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{label}</td>
-              <td style={{ whiteSpace: 'nowrap' }}>{d.in ? hhmm(d.in) : '—'} → {d.out ? hhmm(d.out) : 'chưa ra'}</td>
+              <td style={{ whiteSpace: 'nowrap' }}>{d.holiday ? '🏖 Quán nghỉ (có lương)' : <>{d.in ? hhmm(d.in) : '—'} → {d.out ? hhmm(d.out) : 'chưa ra'}{d.closed ? ' 🏖' : ''}</>}</td>
               <td>{t(d.early)}</td>
               <td style={{ color: d.late ? '#c2410c' : undefined }}>{t(d.late)}{d.lateCut > 0 && note(`−${formatMoney(d.lateCut)}`, '#dc2626')}</td>
               <td>{t(d.stay)}</td>
@@ -460,13 +461,13 @@ export default function PayrollPage() {
   }, []);
   // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
   // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
-  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], monthOver: false });
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedDays: [], holidayPay: [], monthOver: false });
   const fetchPayrollMonth = useCallback(async () => {
     try {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedDays: j.closedDays || [], holidayPay: j.holidayPay || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   // So khuôn mặt ở máy quầy (app): cài đặt, ai có mặt mẫu, ca sai mặt 3 lần chờ duyệt.
@@ -634,6 +635,9 @@ export default function PayrollPage() {
     bonuses: payrollMonth.bonuses.filter(b => b.staff_id === staffId),
     rules, reviews: reviewList, hourlyRates: payrollMonth.hourlyRates.filter(r => r.staff_id === staffId),
     lateRules: lateRulesOf(payrollMonth.lateRules, staffId),
+    // Ngày quán nghỉ chưa tới thì chưa tính (lương tạm tính đến hôm nay).
+    ...holidayArgs(staffList.find(x => x.id === staffId) || { id: staffId }, { closedDays: payrollMonth.closedDays.filter(d => String(d.day) <= vnToday()),
+      holidayPay: payrollMonth.holidayPay, departures: checkin?.departures || [] }),
   });
   // Trễ / quên ra ca trong tháng (theo ngày làm) → xét thưởng chuyên cần và gợi ý phạt.
   const talliesOf = staffId => monthTallies({ sessions: attendance.filter(a => a.staff_id === staffId), rules, key: `${selYear}-${fmt(selMonth)}`, autoClosed: payrollMonth.autoClosed });
@@ -800,6 +804,46 @@ export default function PayrollPage() {
       </div>
     );
   };
+  // Ngày quán nghỉ (cả quán đóng cửa): thêm ngày + ghi chú, xoá. Người được nhận lương ngày nghỉ có đủ 1 ngày công.
+  const weekday = d => ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][new Date(`${d}T00:00:00Z`).getUTCDay()];
+  const closedDaysEditor = () => {
+    const from = new Date(Date.parse(`${vnToday().slice(0, 7)}-01T00:00:00Z`) - 31 * 86400000).toISOString().slice(0, 10);
+    const list = (payrollMonth.closedDays || []).filter(d => String(d.day) >= from);
+    const box = { padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', background: 'white' };
+    const day = draftOf('closed:day', ''), note = draftOf('closed:note', '');
+    return (
+      <div style={{ fontSize: '0.82rem' }}>
+        {list.length === 0 && <div style={{ color: '#94a3b8' }}>Chưa có ngày quán nghỉ nào.</div>}
+        {list.map(d => (
+          <div key={d.day} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0', borderTop: '1px solid #f1f5f9' }}>
+            <strong style={{ minWidth: 92 }}>{weekday(String(d.day))} {String(d.day).split('-').reverse().join('/')}</strong>
+            <span style={{ flex: 1, color: '#64748b' }}>{d.note || ''}</span>
+            <button style={{ ...smallBtn, color: '#dc2626', borderColor: '#fecaca', background: '#fff5f5' }}
+              onClick={() => editAction('delete_closed_day', { day: d.day }, `Xoá ngày quán nghỉ ${String(d.day).split('-').reverse().join('/')}?`)}>Xoá</button>
+          </div>
+        ))}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+          <input type="date" style={box} value={day} onChange={e => setDraft('closed:day', e.target.value)} />
+          <input style={{ ...box, width: 170 }} placeholder="Ghi chú (vd: nghỉ định kỳ)" value={note} onChange={e => setDraft('closed:note', e.target.value)} />
+          <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }}
+            onClick={() => (day ? editAction('save_closed_day', { day, note }, null, 'closed:') : alert('Chọn ngày quán nghỉ.'))}>+ Thêm ngày nghỉ</button>
+        </div>
+      </div>
+    );
+  };
+  // Từng người có nhận lương ngày quán nghỉ không (mặc định: lương tháng có, theo giờ không).
+  const holidayEditor = staffId => {
+    const flag = (payrollMonth.holidayPay || []).find(h => h.staff_id === staffId);
+    const value = flag ? (flag.paid ? 'yes' : 'no') : 'default', hourly = !!hourlyEditOf(staffId).current;
+    return (
+      <select style={{ padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', background: 'white' }} value={value}
+        onChange={e => editAction('save_holiday_pay', { staff_id: staffId, paid: e.target.value === 'yes' ? true : e.target.value === 'no' ? false : null })}>
+        <option value="default">Mặc định ({hourly ? 'theo giờ: không lương' : 'lương tháng: có lương'})</option>
+        <option value="yes">Có nhận lương (đủ 1 ngày công)</option>
+        <option value="no">Không nhận lương</option>
+      </select>
+    );
+  };
   const payEditor = s => {
     const live = calcSalary(s.id), closed = closeOf(s.id), pay = hourlyEditOf(s.id);
     const edit = configEdits[s.id] || { base_salary: 0, overtime_rate: 25000, pay_day: 5 };
@@ -864,6 +908,14 @@ export default function PayrollPage() {
         <div style={section}>
           {head('⏰ Đi trễ')}
           {lateRuleEditor(s.id)}
+        </div>
+
+        <div style={section}>
+          {head('🏖 Ngày quán nghỉ')}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.82rem' }}>
+            {holidayEditor(s.id)}
+            <span style={{ color: '#64748b' }}>Ngày quán nghỉ cài ở tab Cài chấm công.{live.holidayDays ? ` Tháng này được ${live.holidayDays} ngày.` : ''}</span>
+          </div>
         </div>
 
         <div style={section}>
@@ -2153,6 +2205,9 @@ export default function PayrollPage() {
                   <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>⏰ Đi trễ — mặc định cả quán</div>
                   {lateRuleEditor('shop')}
                   <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>Từng người đặt riêng ở tab Cấu hình hoặc nút "Sửa" trong Bảng lương.</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>🏖 Ngày quán nghỉ</div>
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginBottom: 4 }}>Ngày cả quán đóng cửa. Người được nhận lương ngày nghỉ (mặc định: lương tháng có, theo giờ không — đổi từng người ở tab Cấu hình) được đủ 1 ngày công.</div>
+                  {closedDaysEditor()}
                   <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 8 }}>
                     Tính giờ theo ca từ ngày <strong>{st.hours_from.split('-').reverse().join('/')}</strong>; những ngày trước đó vẫn tính như cũ. Đổi giờ hay đổi ca thì áp dụng từ hôm nay, ngày đã làm giữ giờ cũ.
                   </div>
@@ -2425,6 +2480,9 @@ export default function PayrollPage() {
                       <button className="btn-primary" style={{ marginTop: 18 }} onClick={() => handleSaveConfig(s.id)}>Lưu</button>
                       <div className="config-note" style={{ borderTop: '1px dashed #e2e8f0', paddingTop: 6 }}>
                         <strong>⏰ Đi trễ</strong> {lateRuleEditor(s.id)}
+                      </div>
+                      <div className="config-note" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <strong>🏖 Ngày quán nghỉ</strong> {holidayEditor(s.id)}
                       </div>
                       {(pay.type === 'hour' || pay.current) && (
                         <div className="config-note">

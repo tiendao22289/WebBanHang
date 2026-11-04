@@ -150,6 +150,14 @@ async function main() {
   console.log(JSON.stringify(late));
   if (!late.table_ok || late.shop_rules < 1 || !late.anon_blocked) throw new Error('Chưa cài được bảng luật đi trễ.');
 
+  // Ngày quán nghỉ + từng người có nhận lương ngày đó không (payroll_closed_days.sql).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_closed_days.sql'), 'utf8'));
+  const [closedDays] = await query(`SELECT to_regclass('public.shop_closed_days') IS NOT NULL AS days_ok,
+    to_regclass('public.payroll_holiday_pay') IS NOT NULL AS pay_ok,
+    NOT has_table_privilege('anon', 'public.shop_closed_days', 'SELECT') AND NOT has_table_privilege('anon', 'public.payroll_holiday_pay', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(closedDays));
+  if (!closedDays.days_ok || !closedDays.pay_ok || !closedDays.anon_blocked) throw new Error('Chưa cài được bảng ngày quán nghỉ.');
+
   // So khuôn mặt ở máy quầy (checkin_face.sql): chỉ dấu mặt mẫu, không ảnh — cài TRƯỚC khi dùng app máy quầy.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_face.sql'), 'utf8'));
   const [face] = await query(`SELECT
