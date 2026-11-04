@@ -69,7 +69,8 @@ export function fakeDb(state) {
         // Cột UNIQUE / khoá chính như trong DB (chấm công: mỗi mã QR dùng 1 lần, một người một máy).
         // Mỗi phần tử là một khoá (một hay nhiều cột): gợi ý phạt / thưởng tháng là khoá ghép.
         const unique = { checkin_nonces: [['nonce']], staff_checkin_devices: [['staff_id'], ['device_id']], payroll_fine_reviews: [['attendance_id', 'kind']],
-          payroll_bonuses: [['year', 'month', 'staff_id']], payroll_closes: [['year', 'month', 'staff_id']], payroll_hourly_rates: [['staff_id', 'valid_from']] }[table] || [];
+          payroll_bonuses: [['year', 'month', 'staff_id']], payroll_closes: [['year', 'month', 'staff_id']], payroll_hourly_rates: [['staff_id', 'valid_from']],
+          payroll_payouts: [['staff_id', 'from_day']], payroll_pay_cycles: [['staff_id']] }[table] || [];
         const list = Array.isArray(values) ? values : [values];
         // Như DB thật: attendance_edit_log cũ có khoá ngoại sang attendance_logs cũ, không nhận mã ca attendance_sessions.
         if (table === 'attendance_edit_log' && list.some(v => !(state.attendance_logs || []).some(l => l.id === v.attendance_id))) {

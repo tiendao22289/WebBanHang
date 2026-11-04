@@ -9,6 +9,7 @@
  * GET  ?payroll=1&year&month → số lương đã chốt của tháng, ngày nghỉ của đơn báo nghỉ, thưởng chuyên cần,
  *                              danh sách lỗi, gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt, lương 1 giờ (admin)
  * GET  ?stats=1&year&month   → thống kê nhân sự + quỹ lương cả quán một tháng (admin, trang Thống kê)
+ * GET  ?cycles=1            → người trả lương theo kỳ: kỳ đang chạy, ngày phát, tiền từng ngày còn phải trả, ứng / phạt / thưởng chưa trừ (admin)
  * GET  ?face_check=<id>      → lượt quét đang chờ máy quầy so mặt của chính mình: chờ / đúng / sai / chờ duyệt
  * GET  ?faces=1              → so khuôn mặt: cài đặt, ai đã có mặt mẫu, ca chờ duyệt mặt, lượt so gần đây (admin)
  * POST {action}:
@@ -28,6 +29,8 @@
  *   save_closed_rule {lunar_days} (nghỉ theo âm lịch mỗi tháng, từ hôm nay), save_closed_day {day, note} (thêm ngày nghỉ),
  *   skip_closed_day {day} (ngày theo lịch nhưng quán mở), delete_closed_day {day} (bỏ ngày thêm / mở cửa đã ghi),
  *   save_holiday_pay {staff_id, paid: true | false | null},
+ *   save_pay_cycle {staff_id, every_days (0 = chốt theo tháng), start_day?} (trả lương theo kỳ N ngày),
+ *   pay_cycle {staff_id, to_day, amount} (đã thanh toán lương kỳ này tới hết to_day; amount = số trang đang hiện), undo_payout {id} (bỏ lần trả gần nhất),
  *   save_tap_staff {staff_id, enabled, label?, photo?} (người không có điện thoại chấm công bằng nút trên máy quầy),
  *   save_checkin_settings, save_shift, revoke_kiosk, reset_device,
  *   create_account, set_pin, delete_account,
@@ -42,7 +45,8 @@ import { hashPin, isHashedPin, validPin } from '@/lib/staffPin.mjs';
 import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, KIOSK_COOKIE, newDeviceId, readKioskCookie, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
 import { closedDaysToDate, loadPayrollMonth, monthRange, readClosedDays, readHolidays, readHourlyRates, readLateRules, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
 import { AUTO_CLOSE_BY, AUTO_EXTRA_FROM, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { DEFAULT_OT_RATE, computeSalary, holidayArgs, lateRulesOf, monthKey, monthTallies, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
+import { DAY_PAY_FROM, DEFAULT_OT_RATE, MAX_CYCLE_DAYS, addDays, computeSalary, cycleDue, cycleDueTo, cyclePeriod, holidayArgs, lateRulesOf, monthKey, monthTallies, payoutDetail, staffMonthStats,
+  usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import { normalizeRole } from '@/lib/staffRoles.mjs';
 import { applyClock, latestSession, sessionsOfDay } from '@/lib/clockApply.mjs';
@@ -242,13 +246,81 @@ async function payrollMonth(db, year, month) {
     readHolidays(db),
   ]);
   for (const r of [closes, leaveDays, bonuses, fineRules, fineReviews, meta]) if (r.error) throw r.error;
+  // Lần trả lương theo kỳ có thể chứa tiền ngày của tháng này (trả tới ngày trong / sau tháng này): bảng lương trừ phần đã trả.
+  const payouts = await db.from('payroll_payouts').select('*').gte('to_day', start);
+  if (payouts.error && !missingTable(payouts.error)) throw payouts.error;
   // reviews: lần duyệt giờ ngoài ca của các ca trong tháng (trang Lương tính bằng đúng dữ liệu máy chủ chốt).
   const ids = sessionIds.map(x => x.id);
   // faceHolds: ca chờ chủ duyệt mặt — trang Lương chưa tính lương các ca này.
   return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set(auto.map(r => r.attendance_id))],
     reviews: await reviewsFor(db, ids), faceHolds: [...await faceHolds(db, ids)],
     bonuses: bonuses.data || [], bonusSettings, fineRules: fineRules.data || [], fineReviews: fineReviews.data || [], violationMeta: meta.data || [],
-    hourlyRates, lateRules, ...holidays, monthOver: monthOver(year, month) };
+    hourlyRates, lateRules, ...holidays, payouts: payouts.error ? [] : payouts.data || [], monthOver: monthOver(year, month) };
+}
+
+const CYCLE_NOT_READY = 'Web đang cập nhật phần trả lương theo kỳ, thử lại sau ít phút.';
+// Tính lại tối đa chừng này tháng gần nhất cho người trả theo kỳ (lâu hơn nữa chưa trả thì xem ở bảng lương tháng đó).
+const CYCLE_MONTHS = 6;
+const nextMonthKey = k => { const [y, m] = k.split('-').map(Number); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`; };
+
+// Kỳ trả lương của từng người (một người: staffId). null = bảng chưa tạo (web lên trước migration).
+async function readCycles(db, staffId = null) {
+  let q = db.from('payroll_pay_cycles').select('*');
+  if (staffId) q = q.eq('staff_id', staffId);
+  const { data, error } = await q;
+  if (missingTable(error)) return null;
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Người trả lương theo kỳ (một người: staffId) tính tới hôm nay: kỳ đang chạy, ngày phát, tiền từng ngày còn phải trả (cả phần
+ * chênh của ngày đã trả mà sau đó sửa giờ), ứng / phạt / thưởng chưa trừ, ca đang mở, các lần trả gần đây. Tính lại từ tháng trước
+ * (hoặc từ đầu kỳ nếu kỳ bắt đầu sớm hơn), cùng công thức bảng lương; tháng đã chốt thì theo tiền từng ngày đã chốt.
+ */
+async function cycleStates(db, staffId = null) {
+  const cycles = await readCycles(db, staffId);
+  if (cycles === null) return { ready: false, people: [] };
+  if (!cycles.length) return { ready: true, people: [] };
+  const today = vnToday();
+  const { data: payouts, error } = await db.from('payroll_payouts').select('*').in('staff_id', cycles.map(c => c.staff_id)).gte('to_day', addDays(today, -400)).order('to_day');
+  if (missingTable(error)) return { ready: false, people: [] };
+  if (error) throw error;
+  let floor = `${today.slice(0, 7)}-01`;
+  for (let i = 1; i < CYCLE_MONTHS; i += 1) floor = `${addDays(floor, -1).slice(0, 7)}-01`;
+  const prevMonth = `${addDays(`${today.slice(0, 7)}-01`, -1).slice(0, 7)}-01`;
+  const plans = cycles.map(c => {
+    const mine = (payouts || []).filter(p => p.staff_id === c.staff_id);
+    const period = cyclePeriod({ cycle: c, payouts: mine, today });
+    const first = String(c.start_day).slice(0, 10);
+    let from = period.start < prevMonth ? period.start : prevMonth;
+    if (from < first) from = first;
+    if (from < floor) from = floor;
+    return { c, mine, period, from };
+  });
+  const earliest = plans.reduce((a, p) => (p.from < a ? p.from : a), today);
+  const keys = [];
+  for (let k = earliest.slice(0, 7); k <= today.slice(0, 7); k = nextMonthKey(k)) keys.push(k);
+  const loaded = new Map(await Promise.all(keys.map(async k => [k, await loadPayrollMonth(db, Number(k.slice(0, 4)), Number(k.slice(5, 7)), today)])));
+  const monthOf = (k, id) => {
+    const m = loaded.get(k), of = rows => (rows || []).filter(r => r.staff_id === id);
+    const person = m.staff.find(x => x.id === id) || { id };
+    const [year, month] = k.split('-').map(Number), reqs = of(m.requests), vios = of(m.violations), gifts = of(m.bonuses);
+    const closed = m.closes.find(x => x.staff_id === id)?.snapshot;
+    const byDay = closed?.byDay || computeSalary({ year, month, staffId: id, sessions: of(m.sessions), config: of(m.configs)[0] || null, requests: reqs, violations: vios, bonuses: gifts,
+      rules: m.rules, reviews: m.reviews, hourlyRates: of(m.hourlyRates), lateRules: lateRulesOf(m.lateRules, id), ...holidayArgs(person, m) }).byDay;
+    return { key: k, byDay, advances: reqs.filter(r => r.request_type === 'advance' && r.status === 'approved').map(r => ({ id: r.id, amount: Number(r.amount) || 0 })),
+      fines: vios.map(v => ({ id: v.id, amount: Number(v.amount) || 0 })), bonus: gifts.reduce((a, b) => a + (Number(b.amount) || 0), 0) };
+  };
+  const last = loaded.get(today.slice(0, 7));
+  return { ready: true, today, people: plans.map(({ c, mine, period, from }) => {
+    const due = cycleDue({ cycle: c, payouts: mine, months: keys.filter(k => k >= from.slice(0, 7)).map(k => monthOf(k, c.staff_id)), to: today, periodStart: period.start });
+    // Ca đang mở (chưa ra ca): tiền ngày đó chưa tính, trả tới ngày đó thì phần còn lại vào lần trả sau.
+    const open = (last?.sessions || []).find(x => x.staff_id === c.staff_id && !x.clock_out);
+    return { staff_id: c.staff_id, every_days: period.every, start_day: String(c.start_day).slice(0, 10), period: { start: period.start, payday: period.payday, daysLeft: period.daysLeft },
+      openDay: open ? workDayOf(open, last.rules) : null, days: due.days, advances: due.advances, fines: due.fines, bonuses: due.bonuses,
+      payouts: mine.slice(-6).reverse().map(({ detail: _d, ...x }) => x) };
+  }) };
 }
 
 // Ca 45 ngày gần đây có giờ ngoài ca (vào sớm / ở lại) mà chủ chưa duyệt.
@@ -365,9 +437,10 @@ export async function GET(request) {
     const params = new URL(request.url).searchParams;
     if (params.get('me')) return NextResponse.json(await myStatus(s.db, s.user.id), { headers });
     if (params.get('face_check')) return NextResponse.json(await faceCheckStatus(s.db, s.user.id, params.get('face_check')), { headers });
-    if (!params.get('checkin') && !params.get('payroll') && !params.get('stats') && !params.get('faces')) return fail('Thiếu yêu cầu.');
+    if (!params.get('checkin') && !params.get('payroll') && !params.get('stats') && !params.get('faces') && !params.get('cycles')) return fail('Thiếu yêu cầu.');
     if (!s.isAdmin) return fail('Chỉ admin xem phần này.', 403);
     if (params.get('faces')) return NextResponse.json(await faceOverview(s.db), { headers });
+    if (params.get('cycles')) return NextResponse.json(await cycleStates(s.db), { headers });
     if (params.get('payroll') || params.get('stats')) {
       const year = Number(params.get('year')), month = Number(params.get('month'));
       if (!(month >= 1 && month <= 12) || !(year >= 2024 && year <= 2100)) return fail('Tháng không hợp lệ.');
@@ -1161,6 +1234,68 @@ export async function POST(request) {
         ? await db.from('payroll_holiday_pay').upsert({ staff_id: staffId, paid: body.paid, updated_by: user.full_name || null, updated_at: isoNow() }, { onConflict: 'staff_id' })
         : await db.from('payroll_holiday_pay').delete().eq('staff_id', staffId);
       if (missingTable(r.error)) return fail('Web đang cập nhật phần ngày quán nghỉ, thử lại sau ít phút.', 503);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Kỳ trả lương của một người: mỗi every_days ngày (vd. 7, 10) tính từ start_day; every_days 0 = thôi, chốt theo tháng như cũ.
+    // Sửa số ngày của kỳ giữ nguyên ngày bắt đầu (kỳ đang chạy vẫn tính từ ngày sau lần trả gần nhất).
+    if (body.action === 'save_pay_cycle') {
+      if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
+      const staffId = String(body.staff_id).toLowerCase(), every = Math.round(Number(body.every_days) || 0);
+      if (!every) {
+        const r = await db.from('payroll_pay_cycles').delete().eq('staff_id', staffId);
+        if (missingTable(r.error)) return fail(CYCLE_NOT_READY, 503);
+        if (r.error) throw r.error;
+        return NextResponse.json({ ok: true }, { headers });
+      }
+      if (!(every >= 1 && every <= MAX_CYCLE_DAYS)) return fail(`Kỳ trả lương từ 1 tới ${MAX_CYCLE_DAYS} ngày.`);
+      const old = await readCycles(db, staffId);
+      if (old === null) return fail(CYCLE_NOT_READY, 503);
+      const start = DATE.test(body.start_day || '') ? body.start_day : old[0] ? String(old[0].start_day).slice(0, 10) : today;
+      if (start < `${DAY_PAY_FROM}-01`) return fail(`Ngày bắt đầu kỳ từ ${ddmm(`${DAY_PAY_FROM}-01`)}/${DAY_PAY_FROM.slice(0, 4)} trở đi.`);
+      if (start > addDays(today, MAX_CYCLE_DAYS)) return fail('Ngày bắt đầu kỳ quá xa hôm nay.');
+      const r = await db.from('payroll_pay_cycles').upsert({ staff_id: staffId, every_days: every, start_day: start, updated_by: user.full_name || null, updated_at: isoNow() },
+        { onConflict: 'staff_id' });
+      if (missingTable(r.error)) return fail(CYCLE_NOT_READY, 503);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Đã thanh toán lương kỳ này tới hết ngày to_day: máy chủ tính lại số phải trả (cùng cách trang Lương hiện); khác số trang đang
+    // hiện (amount) thì không lưu, bắt tải lại để chủ trả đúng số. Lưu xong, kỳ mới bắt đầu ngày sau to_day.
+    if (body.action === 'pay_cycle') {
+      if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
+      if (!DATE.test(body.to_day || '')) return fail('Chọn ngày trả tới.');
+      const st = await cycleStates(db, String(body.staff_id).toLowerCase());
+      if (!st.ready) return fail(CYCLE_NOT_READY, 503);
+      const me = st.people[0];
+      if (!me) return fail('Người này chưa cài trả lương theo kỳ.', 409);
+      if (body.to_day < me.period.start) return fail(`Kỳ này bắt đầu ngày ${ddmm(me.period.start)}: chọn trả tới từ ngày đó trở đi.`);
+      if (body.to_day > today) return fail('Chỉ trả tới hết hôm nay.');
+      const due = cycleDueTo(me, body.to_day, me.period.start);
+      const vnd = n => `${Number(n).toLocaleString('vi-VN')}đ`;
+      if (Math.round(Number(body.amount)) !== due.amount) return fail(`Số tiền vừa thay đổi, nay là ${vnd(due.amount)}. Xem lại rồi bấm lại.`, 409);
+      if (due.amount < 0) return fail(`Tiền ứng / phạt nhiều hơn tiền công ${vnd(-due.amount)} nên chưa phải trả; lần trả sau sẽ trừ tiếp.`, 409);
+      const r = await db.from('payroll_payouts').insert({ staff_id: me.staff_id, from_day: me.period.start, to_day: body.to_day, amount: due.amount, detail: payoutDetail(due),
+        paid_at: isoNow(), paid_by: user.full_name || null }).select('id').single();
+      if (r.error?.code === '23505') return fail('Kỳ này vừa được bấm đã trả rồi. Tải lại trang.', 409);
+      if (missingTable(r.error)) return fail(CYCLE_NOT_READY, 503);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true, id: r.data.id, amount: due.amount }, { headers });
+    }
+
+    // Bấm nhầm "Đã thanh toán lương": bỏ lần trả gần nhất của người đó (kỳ quay lại như trước khi bấm).
+    if (body.action === 'undo_payout') {
+      if (!UUID.test(body.id || '')) return fail('Thiếu lần trả.');
+      const { data: row, error } = await db.from('payroll_payouts').select('*').eq('id', body.id).maybeSingle();
+      if (missingTable(error)) return fail(CYCLE_NOT_READY, 503);
+      if (error) throw error;
+      if (!row) return fail('Không thấy lần trả này.', 404);
+      const later = await db.from('payroll_payouts').select('id').eq('staff_id', row.staff_id).gt('to_day', row.to_day);
+      if (later.error) throw later.error;
+      if (later.data?.length) return fail('Chỉ bỏ được lần trả gần nhất của người này.', 409);
+      const r = await db.from('payroll_payouts').delete().eq('id', row.id);
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true }, { headers });
     }
