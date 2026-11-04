@@ -1,6 +1,8 @@
 'use client';
 
 import { isPaidTableCheckout } from '@/lib/tableCheckout';
+import { fetchOpenGroupTotal, shopDayKey, shopDayStartISO } from '@/lib/tableGroupOrders';
+import { applyOrderRefusal, cartAfterSentOrder, customerOrderLines, openChoices, refreshSavedCart } from '@/lib/draftCart.mjs';
 import { removeVietnameseTones } from '@/lib/utils';
 import { createOrderRefresh } from '@/lib/orderRefresh.mjs';
 import { COOKING_WORDS, LOAI_SYNONYMS, KEYWORD_ALIASES } from '@/lib/quickMatch';
@@ -11,7 +13,7 @@ import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
 import { sendKitchenCallPrintJob, sendPrintJob } from '@/lib/print';
-import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, fetchGroupBillTotal, startOfTodayISO, isReviewDiscountItem } from '@/lib/reviewReward';
+import { REWARD_CHANNELS, ALL_SETTING_KEYS, parseAllChannelConfigs, getChannel, calcReviewDiscount, isReviewDiscountItem } from '@/lib/reviewReward';
 import { fetchLuckyPrizes, LUCKY_SETTING_KEYS, parseLuckyConfig, isLuckyWheelItem, withVoucherSwitch } from '@/lib/luckyWheel';
 import { luckyRewardState, luckyPrizeTitle, shouldResumeLucky, newLuckyRequestId, fetchLuckyNudgeConfig, wheelGiftGate } from '@/lib/luckyRewardFlow';
 import {
@@ -781,9 +783,9 @@ function OrderContent() {
   // ─── LocalStorage & Cookie helpers ───
   const STORAGE_KEY = 'order_session';
 
+  // Ngày bán hàng (05:00 → 05:00 giờ VN): khách ngồi qua nửa đêm vẫn giữ phiên, giỏ, bill.
   function getTodayStr() {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return shopDayKey();
   }
 
   function setCookieFallback(key, value) {
@@ -1116,16 +1118,12 @@ function OrderContent() {
       return;
     }
     (async () => {
-      const now = new Date();
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
-      // Fetch TẤT CẢ đơn takeaway hôm nay (no phone filter) để build code map đúng
+      // Fetch TẤT CẢ đơn takeaway hôm nay (từ 05:00, no phone filter) để build code map đúng — cùng mốc với trang Bàn
       const { data } = await supabase
         .from('orders')
         .select('id, created_at, customer_phone')
         .eq('table_id', activeTableId)
-        .gte('created_at', startOfDay)
-        .lt('created_at', endOfDay)
+        .gte('created_at', shopDayStartISO())
         .order('created_at', { ascending: true });
 
       const customerOrderMap = new Map();
@@ -1550,24 +1548,20 @@ function OrderContent() {
       return;
     }
 
-    // Nếu có giỏ hàng lưu sẵn thì nạp vào (phục hồi từ dạng nén)
+    // Nếu có giỏ hàng lưu sẵn thì nạp vào (phục hồi từ dạng nén) — theo thực đơn vừa tải:
+    // món / lựa chọn đã tắt thì bỏ, giá lấy lại từ thực đơn (giỏ có thể lưu từ trước khi quán đổi giá).
     let cartToSave = [];
     if (saved?.cart && Array.isArray(saved.cart) && saved.cart.length > 0) {
-      const expandedCart = saved.cart.map(c => {
-        const originalItem = fetchedItems?.find(m => m.id === c.id || m.id === c.i);
-        if (!originalItem) return null;
-        return {
-          ...originalItem,
-          quantity: c.quantity || c.q || 1,
-          _optionKey: c._optionKey || c.pk,
-          _options: c._options || c.po,
-          _note: c._note || c.pn,
-          price: c.price !== undefined ? c.price : (c.p !== undefined ? c.p : originalItem.price)
-        };
-      }).filter(Boolean);
+      const { cart: expandedCart, dropped, repriced } = refreshSavedCart(saved.cart, fetchedItems);
       if (expandedCart.length > 0) {
         setCart(expandedCart);
         cartToSave = expandedCart;
+      }
+      if (dropped.length || repriced.length) {
+        showFeedbackToast('warning', 'Giỏ hàng đã cập nhật', [
+          dropped.length ? `Đã bỏ món hôm nay tạm hết: ${[...new Set(dropped)].join(', ')}.` : '',
+          repriced.length ? `Giá mới theo thực đơn: ${[...new Set(repriced)].join(', ')}.` : '',
+        ].filter(Boolean).join(' '));
       }
     }
 
@@ -1649,6 +1643,7 @@ function OrderContent() {
     // hidden_until) biến mất khỏi thực đơn nhưng vẫn còn trong danh sách quà.
     setGiftItems((gifts || []).filter(g => !g.hidden_until || new Date(g.hidden_until) < now));
     setLoading(false);
+    // items gồm cả món đang ẩn tạm (để báo tên món bị bỏ); refreshSavedCart tự bỏ món / lựa chọn đang tắt.
     return { isTW, items: items || [] };
   }
 
@@ -1659,9 +1654,9 @@ function OrderContent() {
   async function loadPreviousOrders(phone = null) {
     const phoneToUse = (phone || customerPhoneRef.current || '').trim();
     if (!activeTableId) return;
-    const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
+    // Ngày bán hàng bắt đầu 05:00 (quán bán qua nửa đêm). Bill CHƯA THU của bàn ăn tại quán thì
+    // luôn hiện, dù gọi từ hôm trước — chỉ bill mang về (chung 1 bàn ảo, giao xong vẫn 'completed') mới cắt theo ngày.
+    const startOfDay = shopDayStartISO();
 
     // Dùng danh sách bàn gộp để hiển thị bill chung cho toàn nhóm
     const targetIds = mergeGroupIdsRef.current?.length > 0 ? mergeGroupIdsRef.current : [activeTableId];
@@ -1677,7 +1672,7 @@ function OrderContent() {
       const { data: myOrders } = await supabase
         .from('orders').select('id, status')
         .in('table_id', targetIds).eq('customer_phone', phoneToUse)
-        .gte('created_at', startOfDay).lt('created_at', endOfDay)
+        .gte('created_at', startOfDay)
         .in('status', ['pending', 'preparing']);
       hasMySession = (myOrders?.length || 0) > 0;
     }
@@ -1686,20 +1681,20 @@ function OrderContent() {
     // kể cả khách chưa gửi món. Takeaway vẫn yêu cầu session/SĐT để tránh lộ bill người khác.
     const canViewSharedTableBills = hasMySession || !isTakeawayRef.current;
 
-    // Nếu có quyền xem bill chung → lấy TẤT CẢ bills của toàn bộ nhóm bàn hôm nay
+    // Nếu có quyền xem bill chung → lấy TẤT CẢ bill chưa thu của toàn bộ nhóm bàn
     if (canViewSharedTableBills) {
       let bills = supabase
         .from('orders')
         .select(`*, order_items(*, menu_item:menu_items(name, price)), print_jobs(id, status, error_message)`)
         .in('table_id', targetIds)
-        .gte('created_at', startOfDay).lt('created_at', endOfDay)
         .in('status', ['pending', 'preparing', 'merged', 'completed']);
 
       // ── TAKEAWAY: filter theo SĐT để mỗi khách Mang Về chỉ thấy bill của mình ──
       // (tránh pool chung KM + privacy leak vì tất cả khách dùng chung 1 takeawayTableId)
       // Dùng ref để tránh stale closure khi gọi từ realtime listener
-      if (isTakeawayRef.current && phoneToUse) {
-        bills = bills.eq('customer_phone', phoneToUse);
+      if (isTakeawayRef.current) {
+        bills = bills.gte('created_at', startOfDay);
+        if (phoneToUse) bills = bills.eq('customer_phone', phoneToUse);
       }
 
       const { data: allTableBills } = await bills.order('created_at', { ascending: false });
@@ -1708,7 +1703,8 @@ function OrderContent() {
       setPreviousOrders(visibleBills);
       // Lớp 2: còn giữ đơn của mình mà bàn không còn bill mở nào (thanh toán xong
       // bill bị xoá / huỷ, lỡ mất event realtime) → hỏi lại bàn 1 lần để chốt phiên.
-      if (!isTakeawayRef.current && (allTableBills || []).length === 0 && hasOrderSession()) {
+      // Bill "Gọi nhân viên" (BAO_BEP) không phải bill của khách: chỉ còn nó thì coi như bàn trống.
+      if (!isTakeawayRef.current && visibleBills.length === 0 && hasOrderSession()) {
         verifyTableSession({ force: true });
       }
       // Đồng thời cập nhật groupOrders để tính KM chung cho nhóm (chỉ dine-in)
@@ -1724,7 +1720,7 @@ function OrderContent() {
         .select(`*, order_items(*, menu_item:menu_items(name, price)), print_jobs(id, status, error_message)`)
         .in('table_id', targetIds)
         .eq('customer_phone', phoneToUse)
-        .gte('created_at', startOfDay).lt('created_at', endOfDay)
+        .gte('created_at', startOfDay)
         .in('status', ['completed', 'paid', 'merged'])
         .order('created_at', { ascending: false });
       myFinished = data || [];
@@ -1881,7 +1877,7 @@ function OrderContent() {
     let q = supabase.from('review_rewards').select('id, channel, status');
     if (isTakeawayRef.current) {
       const phone = (customerPhoneRef.current || '').trim();
-      return q.eq('customer_phone', phone).gte('created_at', startOfTodayISO());
+      return q.eq('customer_phone', phone).gte('created_at', shopDayStartISO());
     }
     return q.eq('host_table_id', activeTableId).gte('created_at', sessionStart);
   }
@@ -1969,7 +1965,7 @@ function OrderContent() {
     bumpRewardView('reward_all');
 
     try {
-      const total = await fetchGroupBillTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
+      const total = await fetchOpenGroupTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
       setReviewBillTotal(total);
 
       const sessionStart = await fetchSessionStart();
@@ -1993,7 +1989,7 @@ function OrderContent() {
         let zq = supabase.from('zalo_reward_claims').select('id').eq('status', 'verified').limit(1);
         if (isTakeawayRef.current) {
           const ph = (customerPhoneRef.current || '').trim();
-          zq = ph ? zq.eq('customer_phone', ph).gte('created_at', startOfTodayISO()) : null;
+          zq = ph ? zq.eq('customer_phone', ph).gte('created_at', shopDayStartISO()) : null;
         } else {
           zq = sessionStart ? zq.eq('host_table_id', activeTableId).gte('created_at', sessionStart) : null;
         }
@@ -2205,7 +2201,7 @@ function OrderContent() {
     // Đã có lượt quay đang chờ/đã dùng cho bàn này (kể cả chưa vào bill) → thôi
     try { if (localStorage.getItem(wheelStorageKey())) return; } catch { }
 
-    const total = await fetchGroupBillTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
+    const total = await fetchOpenGroupTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
     if (total < cfg.minBill) return;
 
     // Chốt chặn cuối dựa trên chính bill — phòng trường hợp đã quay xong và
@@ -2295,7 +2291,7 @@ function OrderContent() {
   function getWheelGiftInitialOptions(item) {
     const sel = {};
     (item.options || []).forEach(opt => {
-      if (opt.name && opt.choices?.length) sel[opt.name] = opt.choices[0];
+      if (opt.name && opt.choices?.length) sel[opt.name] = openChoices(opt)[0] ?? opt.choices[0];
     });
     return sel;
   }
@@ -2605,7 +2601,7 @@ function OrderContent() {
     setReviewBlockCode(null);
 
     try {
-      const total = await fetchGroupBillTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
+      const total = await fetchOpenGroupTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
       setReviewBillTotal(total);
 
       // 1) Khôi phục yêu cầu đang treo (khách F5 / quay lại từ app Zalo)
@@ -2661,7 +2657,7 @@ function OrderContent() {
       let claimedQ = supabase.from('zalo_reward_claims').select('id').eq('status', 'verified').limit(1);
       if (isTakeawayRef.current) {
         claimedQ = claimedQ.eq('customer_phone', (customerPhoneRef.current || '').trim())
-          .gte('created_at', startOfTodayISO());
+          .gte('created_at', shopDayStartISO());
       } else {
         claimedQ = claimedQ.eq('host_table_id', activeTableId).gte('created_at', sessionStart);
       }
@@ -2958,7 +2954,7 @@ function OrderContent() {
     setReviewBlockCode(null);
 
     try {
-      const total = await fetchGroupBillTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
+      const total = await fetchOpenGroupTotal(supabase, reviewGroupIds(), reviewPhoneFilter());
       setReviewBillTotal(total);
 
       // 1) Khôi phục yêu cầu đang treo (khách F5 hoặc quay lại từ tab ngoài)
@@ -3169,25 +3165,23 @@ function OrderContent() {
   async function fetchGroupOrders(groupIds) {
     const ids = groupIds || mergeGroupIdsRef.current;
     if (!ids || ids.length === 0) return;
-    const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
 
+    // Bill chưa thu của bàn tính hết, kể cả gọi trước 00:00 (cùng cách máy chủ đếm suất quà,
+    // submit_customer_order_menu_check.sql).
     let query = supabase
       .from('orders')
       .select('id, table_id, customer_phone, order_items(id, menu_item_id, quantity, unit_price, is_gift, note, item_options, item_name, menu_item:menu_items(id, counts_for_promotion, options))')
       .in('table_id', ids)
-      .gte('created_at', startOfDay)
-      .lt('created_at', endOfDay)
       .in('status', ['pending', 'preparing', 'completed']);
 
     // ── TAKEAWAY: filter theo SĐT để KM không pool chung giữa các khách Mang Về ──
     // Chưa có SĐT thì chưa có điểm nào — trước đây lấy luôn bill của MỌI khách mang về
-    // trong ngày → khách mới được "Chọn món tặng" oan.
+    // trong ngày → khách mới được "Chọn món tặng" oan. Bill mang về giao xong vẫn 'completed'
+    // nên chỉ lấy bill hôm nay (từ 05:00).
     const phone = customerPhoneRef.current?.trim();
     if (isTakeawayRef.current) {
       if (!phone) { setGroupOrders([]); return; }
-      query = query.eq('customer_phone', phone);
+      query = query.eq('customer_phone', phone).gte('created_at', shopDayStartISO());
     }
 
     const { data } = await query;
@@ -3319,9 +3313,12 @@ function OrderContent() {
         if (!opt.name) return;
         const isMulti = opt.name.toLowerCase().includes('khẩu vị') || opt.name.toLowerCase().includes('thêm') || opt.name.toLowerCase().includes('topping');
         if (opt.choices && opt.choices.length > 0) {
-          init[opt.name] = isMulti ? [] : opt.choices[0];
-          if (!isMulti && initPrice === null && opt.prices?.[0] != null && Number(opt.prices[0]) > 0) {
-            initPrice = Number(opt.prices[0]);
+          // Chọn sẵn lựa chọn ĐANG BÁN đầu tiên — lựa chọn đã tắt bị ẩn khỏi bảng chọn.
+          const first = openChoices(opt)[0];
+          const firstPrice = first != null ? opt.prices?.[opt.choices.indexOf(first)] : null;
+          init[opt.name] = isMulti ? [] : (first ?? '');
+          if (!isMulti && initPrice === null && firstPrice != null && Number(firstPrice) > 0) {
+            initPrice = Number(firstPrice);
           }
         }
       });
@@ -3349,6 +3346,13 @@ function OrderContent() {
 
   function confirmOptionAdd() {
     if (!optionModal) return;
+    // Nhóm chọn 1 (LOẠI…) mà mọi lựa chọn đều đang tắt → món tạm hết, không thêm.
+    const soldOutOpt = (optionModal.options || []).find(opt => opt.name && typeof selectedOpts[opt.name] === 'string'
+      && Array.isArray(opt.choices) && opt.choices.length > 0 && openChoices(opt).length === 0);
+    if (soldOutOpt) {
+      setModalError(`${soldOutOpt.name} đang tạm hết, Quý khách chọn món khác giúp quán nhé.`);
+      return;
+    }
     const optionsArr = Object.keys(selectedOpts).map(k => {
       let choiceValue = selectedOpts[k];
       if (Array.isArray(choiceValue)) {
@@ -3788,30 +3792,35 @@ function OrderContent() {
         }
       }
 
-      const submittedItems = [
-        ...effectiveCart.map(item => ({
-          menu_item_id: item.id,
-          quantity: item.quantity,
-          unit_price: item.price,
-          item_options: item._options || [],
-          note: item._note || notes[item.id] || null,
-          is_gift: false,
-        })),
-        ...effectiveGifts.map(g => ({
-          menu_item_id: g.id,
-          quantity: 1,
-          unit_price: 0,
-          item_options: g._options || [],
-          note: g._note || null,
-          is_gift: true,
-        })),
-      ];
+      const submittedItems = customerOrderLines(effectiveCart, effectiveGifts, notes);
       const attemptKey = `order-submit:${activeTableId}`;
       const signature = JSON.stringify({ submittedItems, customerPhone: customerPhone.trim(),
         customerName: customerName.trim(), deliveryAddress: isTakeaway ? deliveryAddress.trim() : '',
         customerNote: isTakeaway ? customerNote.trim() : '' });
       let previousAttempt = null;
       try { previousAttempt = JSON.parse(sessionStorage.getItem(attemptKey) || 'null'); } catch { /* corrupted cache */ }
+      // Lần gửi trước mất phản hồi rồi khách sửa giỏ: đơn trước có thể ĐÃ vào quán (chưa in phiếu).
+      // Hỏi máy chủ trước khi tạo mã mới — có rồi thì coi như đã gửi (in phiếu nếu chưa in), giỏ chỉ
+      // còn phần khách thêm sau, không tạo đơn thứ hai.
+      if (previousAttempt?.orderId && previousAttempt.signature !== signature) {
+        const { data: sentBefore, error: sentError } = await supabase
+          .from('orders').select('id').eq('id', previousAttempt.orderId).maybeSingle();
+        if (sentError) throw sentError;
+        if (sentBefore) {
+          sessionStorage.removeItem(attemptKey);
+          let sentLines = [];
+          try { sentLines = JSON.parse(previousAttempt.signature)?.submittedItems || []; } catch { /* chữ ký hỏng */ }
+          const left = cartAfterSentOrder(effectiveCart, effectiveGifts, sentLines, notes);
+          setCart(left.cart);
+          setGiftCart(left.gifts);
+          setShowCart(false);
+          await finishSentOrder(sentBefore.id, left.cart);
+          if (left.cart.length || left.gifts.length) {
+            alert('Đơn trước của Quý khách đã tới quán (lúc nãy mạng chậm nên chưa báo kịp).\nMón thêm sau vẫn còn trong giỏ — Quý khách bấm Gửi đơn để gửi tiếp nhé.');
+          }
+          return;
+        }
+      }
       const orderId = previousAttempt?.signature === signature && previousAttempt?.orderId
         ? previousAttempt.orderId : newLuckyRequestId();
       sessionStorage.setItem(attemptKey, JSON.stringify({ signature, orderId }));
@@ -3827,8 +3836,21 @@ function OrderContent() {
         p_customer_note: isTakeaway ? customerNote.trim() : null,
         p_items: submittedItems,
       });
-      if (orderErr || !savedOrder?.order_id) throw orderErr || new Error('Không nhận được mã đơn hàng');
-      const order = { id: savedOrder.order_id };
+      if (orderErr) throw orderErr;
+      if (savedOrder?.rejected) {
+        // Máy chủ đối chiếu thực đơn: món / lựa chọn vừa tắt, giá đã đổi, quà chưa đủ suất → không ghi gì.
+        // Sửa giỏ theo thực đơn mới, tải lại thực đơn + suất quà, báo khách xem lại rồi gửi.
+        const fixed = applyOrderRefusal(effectiveCart, effectiveGifts, savedOrder.lines);
+        sessionStorage.removeItem(attemptKey); // mã này chưa thành đơn
+        setCart(fixed.cart);
+        setGiftCart(fixed.gifts);
+        fetchMenu();
+        fetchPreviousOrders();
+        alert(fixed.message);
+        setShowCart(fixed.cart.length > 0);
+        return;
+      }
+      if (!savedOrder?.order_id) throw new Error('Không nhận được mã đơn hàng');
       sessionStorage.removeItem(attemptKey);
 
       // Xoá giỏ NGAY sau khi món đã vào DB — TRƯỚC lệnh in (chờ ~1s).
@@ -3840,39 +3862,7 @@ function OrderContent() {
       setCustomerNote(''); // reset ghi chú takeaway sau khi gửi thành công
       setShowCart(false);
 
-      // Gửi lệnh in — retry 1 lần nếu lỗi, alert khách nếu vẫn fail
-      const { data: priorJobs, error: priorJobsError } = await supabase
-        .from('print_jobs').select('id').eq('order_id', order.id).limit(1);
-      let printResult = priorJobsError
-        ? { success: false, error: 'Không kiểm tra được phiếu in cũ' }
-        : priorJobs?.length ? { success: true } : await sendPrintJob(supabase, order.id);
-      if (!printResult?.success) {
-        console.warn('[submitOrder] sendPrintJob lần 1 fail:', printResult?.error);
-        await new Promise(r => setTimeout(r, 500));
-        // Có thể lần 1 ĐÃ chèn print_jobs thành công, chỉ là phản hồi về máy
-        // khách bị rớt mạng giữa chừng (trông như fail). Kiểm tra lại trước khi
-        // gửi lần 2 — order này vừa tạo ở trên nên có job nghĩa là lần 1 đã ăn,
-        // gửi lại mù quáng sẽ tạo thêm 1 bộ print_jobs nữa → bếp nhận 2 phiếu.
-        const { data: existingJobs } = await supabase
-          .from('print_jobs').select('id').eq('order_id', order.id).limit(1);
-        printResult = existingJobs?.length > 0
-          ? { success: true }
-          : priorJobsError ? printResult : await sendPrintJob(supabase, order.id);
-      }
-      if (!printResult?.success) {
-        console.error('[submitOrder] sendPrintJob fail sau retry:', printResult?.error);
-        alert(`⚠ Món đã gửi vào bếp nhưng KHÔNG IN BILL ĐƯỢC.\nLý do: ${printResult?.error || 'Không xác định'}\n\nVui lòng báo nhân viên kiểm tra máy in.`);
-      }
-
-      setOrderSuccess(true);
-      setTimeout(() => setOrderSuccess(false), 6000);
-      saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim(), order.id);
-      setCurrentOrderId(order.id);
-      currentOrderIdRef.current = order.id;
-      // Ghi nhớ occupied_at của bàn ngay khi có bill (dùng để nhận ra khách mới — lớp 1/3).
-      if (!isTakeawayRef.current && !getSavedSession()?.occupiedAt) verifyTableSession({ force: true });
-      fetchPreviousOrders();
-      checkLuckyNudge();
+      await finishSentOrder(savedOrder.order_id);
     } catch (err) {
       alert('Có lỗi xảy ra. Vui lòng thử lại.');
       console.error(err);
@@ -3883,6 +3873,43 @@ function OrderContent() {
       setSubmitSlow(false);
       nudgeDismissedRef.current = false; // reset để đơn tiếp theo vẫn gợi ý được
     }
+  }
+
+  // Đơn đã vào DB (vừa gửi, hoặc lần gửi trước mất phản hồi): in phiếu nếu chưa in, báo thành công, nhớ phiên.
+  async function finishSentOrder(orderId, cartLeft = null) {
+    // Gửi lệnh in — retry 1 lần nếu lỗi, alert khách nếu vẫn fail
+    const { data: priorJobs, error: priorJobsError } = await supabase
+      .from('print_jobs').select('id').eq('order_id', orderId).limit(1);
+    let printResult = priorJobsError
+      ? { success: false, error: 'Không kiểm tra được phiếu in cũ' }
+      : priorJobs?.length ? { success: true } : await sendPrintJob(supabase, orderId);
+    if (!printResult?.success) {
+      console.warn('[submitOrder] sendPrintJob lần 1 fail:', printResult?.error);
+      await new Promise(r => setTimeout(r, 500));
+      // Có thể lần 1 ĐÃ chèn print_jobs thành công, chỉ là phản hồi về máy
+      // khách bị rớt mạng giữa chừng (trông như fail). Kiểm tra lại trước khi
+      // gửi lần 2 — order này vừa tạo ở trên nên có job nghĩa là lần 1 đã ăn,
+      // gửi lại mù quáng sẽ tạo thêm 1 bộ print_jobs nữa → bếp nhận 2 phiếu.
+      const { data: existingJobs } = await supabase
+        .from('print_jobs').select('id').eq('order_id', orderId).limit(1);
+      printResult = existingJobs?.length > 0
+        ? { success: true }
+        : priorJobsError ? printResult : await sendPrintJob(supabase, orderId);
+    }
+    if (!printResult?.success) {
+      console.error('[submitOrder] sendPrintJob fail sau retry:', printResult?.error);
+      alert(`⚠ Món đã gửi vào bếp nhưng KHÔNG IN BILL ĐƯỢC.\nLý do: ${printResult?.error || 'Không xác định'}\n\nVui lòng báo nhân viên kiểm tra máy in.`);
+    }
+
+    setOrderSuccess(true);
+    setTimeout(() => setOrderSuccess(false), 6000);
+    saveSession(customerName.trim(), customerPhone.trim(), deliveryAddress.trim(), orderId, cartLeft);
+    setCurrentOrderId(orderId);
+    currentOrderIdRef.current = orderId;
+    // Ghi nhớ occupied_at của bàn ngay khi có bill (dùng để nhận ra khách mới — lớp 1/3).
+    if (!isTakeawayRef.current && !getSavedSession()?.occupiedAt) verifyTableSession({ force: true });
+    fetchPreviousOrders();
+    checkLuckyNudge();
   }
 
   // Đổi địa chỉ giao hàng — cập nhật vào tất cả đơn chưa giao + saveSession
@@ -3896,16 +3923,14 @@ function OrderContent() {
     try {
       const phone = customerPhone.trim();
       if (phone) {
-        // Update tất cả đơn takeaway hôm nay của khách CHƯA giao
-        const now = new Date();
-        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+        // Update tất cả đơn takeaway hôm nay (từ 05:00) của khách CHƯA giao
         await supabase
           .from('orders')
           .update({ delivery_address: trimmed })
           .eq('customer_phone', phone)
           .eq('table_id', activeTableId)
           .eq('kitchen_completed', false)
-          .gte('created_at', startOfDay);
+          .gte('created_at', shopDayStartISO());
       }
       setDeliveryAddress(trimmed);
       // Cập nhật session để đơn tiếp theo dùng địa chỉ mới
@@ -3977,7 +4002,8 @@ function OrderContent() {
     return new Intl.NumberFormat('vi-VN').format(item.price || 0) + 'đ';
   }
 
-  // Tính tổng giá từ tất cả lựa chọn đang được chọn trong option modal
+  // Tính tổng giá từ tất cả lựa chọn đang được chọn trong option modal — máy chủ tính lại đúng
+  // quy tắc này khi nhận đơn (menuLinePrice ở draftCart.mjs, submit_customer_order_menu_check.sql).
   function computeModalPrice(basePrice, options, opts) {
     let hasExplicitOptionPrice = false;
     let sum = 0;
@@ -3989,7 +4015,7 @@ function OrderContent() {
           const ci = opt.choices?.indexOf(selItem);
           if (ci >= 0) {
             const p = opt.prices?.[ci];
-            if (p !== null && p !== '') {
+            if (p != null && p !== '') {
               sum += Number(p);
               hasExplicitOptionPrice = true;
             }
@@ -3999,7 +4025,7 @@ function OrderContent() {
         const ci = opt.choices?.indexOf(selected);
         if (ci >= 0) {
           const p = opt.prices?.[ci];
-          if (p !== null && p !== '') {
+          if (p != null && p !== '') {
             sum += Number(p);
             hasExplicitOptionPrice = true;
           }
@@ -4084,12 +4110,15 @@ function OrderContent() {
 
       const loaiOpt = (item.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
       if (loaiOpt && Array.isArray(loaiOpt.choices) && loaiOpt.choices.length > 0) {
+        // Chỉ gợi ý LOẠI đang bán; mọi LOẠI đều tắt thì món coi như tạm hết.
+        const loaiOpen = openChoices(loaiOpt);
+        if (loaiOpen.length === 0) continue;
         const remainder = nameInQuery ? q.replace(normName, ' ').trim() : (queryInName ? '' : qWords.filter(w => !nameWords.includes(w)).join(' '));
         const words = remainder.split(/\s+/).filter(w => w.length >= 2);
         // Xếp hạng LOẠI theo SỐ TỪ khớp — loại khớp nhiều từ nhất (vd "xào lá
         // quế" khớp cả 3 từ) lên trước, không để từ chung "xào" lấn át.
         const scored = words.length > 0
-          ? loaiOpt.choices.map(c => {
+          ? loaiOpen.map(c => {
               const nc = removeVietnameseTones((c || '').toLowerCase());
               const score = words.reduce((n, w) => n + loaiWordScore(nc, w), 0);
               return { c, score };
@@ -4188,7 +4217,8 @@ function OrderContent() {
     const loaiOpt = (bestItem.options || []).find(o => o.name && o.name.toLowerCase().includes('loại'));
     if (loaiOpt && Array.isArray(loaiOpt.choices) && loaiOpt.choices.length) {
       const words = bestRemainder.split(/\s+/).filter(w => w.length >= 2);
-      const scored = words.length ? loaiOpt.choices.map(c => {
+      // Chỉ khớp LOẠI đang bán (LOẠI tắt không gọi được).
+      const scored = words.length ? openChoices(loaiOpt).map(c => {
         const nc = removeVietnameseTones((c || '').toLowerCase());
         return { c, s: words.reduce((n, w) => n + loaiWordScore(nc, w), 0) };
       }).filter(x => x.s > 0).sort((a, b) => b.s - a.s) : [];
@@ -5223,7 +5253,7 @@ function OrderContent() {
                                 setModalError('');
                                 const init = {};
                                 g.options.forEach(opt => {
-                                  if (opt.name && opt.choices && opt.choices.length > 0) init[opt.name] = opt.choices[0];
+                                  if (opt.name && opt.choices && opt.choices.length > 0) init[opt.name] = openChoices(opt)[0] ?? '';
                                 });
                                 setSelectedOpts(init);
                                 setOptionQty(1);
@@ -5479,7 +5509,7 @@ function OrderContent() {
                             <div key={opt.name} style={{ marginBottom: 10 }}>
                               <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#374151', marginBottom: 5 }}>{opt.name}</div>
                               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                {opt.choices.map(choice => {
+                                {openChoices(opt).map(choice => {
                                   const isSelected = wheelGiftSelectedOptions[opt.name] === choice;
                                   return (
                                     <button
@@ -6557,7 +6587,7 @@ function OrderContent() {
                                 <select value={row.chosenChoice} onChange={e => setParsedLines(p => p.map(r => r.id === row.id ? { ...r, chosenChoice: e.target.value } : r))}
                                   style={{ marginTop: 6, width: '100%', padding: '6px 8px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: '0.82rem', background: 'white' }}>
                                   <option value="">— Chọn loại —</option>
-                                  {loaiOpt.choices.map((c, ci) => <option key={ci} value={c}>{c}</option>)}
+                                  {openChoices(loaiOpt).map((c, ci) => <option key={ci} value={c}>{c}</option>)}
                                 </select>
                               )}
                             </div>

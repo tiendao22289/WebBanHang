@@ -11,11 +11,11 @@ import { buildQrUrl } from '@/lib/bankAccount';
 import { prepareTableStatsPayment } from '@/lib/tableStatsQuota';
 import { sendTableSummaryPrintJob, sendSmartPrintJobs, sendGiftItemPrintJob } from '@/lib/print';
 import {
-  getChannel, fetchChannelConfig, calcReviewDiscount, startOfTodayISO,
+  getChannel, fetchChannelConfig, calcReviewDiscount,
   isReviewDiscountItem,
 } from '@/lib/reviewReward';
-import { getMenuCached, fetchMenuFromServer } from '@/lib/menuCache';
-import { getTableGroupOrders, OPEN_BILL_STATUSES, representativeBill } from '@/lib/tableGroupOrders';
+import { getMenuCached, fetchMenuFromServer, watchMenuCache } from '@/lib/menuCache';
+import { getTableGroupOrders, OPEN_BILL_STATUSES, representativeBill, shopDayStartISO } from '@/lib/tableGroupOrders';
 import { promoGiftStatus } from '@/lib/promoGifts.mjs';
 import { isPrintJobBad, isUnresolvedBadJob } from '@/lib/printJobStatus.mjs';
 import { NO_DRAFT, updateDraftOf, addDraftLine, decreaseDraftLine, setDraftItemTotal, removeSentLines } from '@/lib/draftCart.mjs';
@@ -711,29 +711,40 @@ export default function TablesPage() {
     setTimeout(() => setPrintToast(''), 3500);
   };
 
+  // Danh sách thêm món theo menu trong cache admin. Chỉ nhận bản mới hơn bản đang dùng: 2 lần đọc
+  // chạy song song (poll + quay lại tab) không đè menu mới bằng menu cũ.
+  const menuSavedAtRef = useRef(-1);
+  const applyMenu = useCallback((menu) => {
+    const savedAt = Number(menu?.savedAt) || 0;
+    if (savedAt <= menuSavedAtRef.current) return;
+    menuSavedAtRef.current = savedAt;
+    // Lọc + sắp xếp menu client-side (giống filter cũ: is_available + order('name'))
+    const menuData = (menu.items || [])
+      .filter(i => i.is_available)
+      .slice()
+      .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi'));
+    setMenuItems(menuData);
+    const finalCats = [...(menu.categories || [])];
+    if (menuData.some(i => !i.category_id)) finalCats.push({ id: null, name: 'Chưa phân loại' });
+    setCategories(finalCats);
+  }, []);
+
   const lastFullFetchRef = useRef(0);
   const fetchTables = useCallback(async (affectedTableIds = null) => {
     if (affectedTableIds === null) lastFullFetchRef.current = Date.now();
-    // Menu + categories đọc từ cache admin (adminMenuCache:v1) — không request
-    // server. Cache do admin/menu ghi khi fetchData (mount + sau "Đồng bộ").
-    // Nếu cache miss (lần đầu chưa vào admin/menu) → getMenuCached() sẽ tự fetch.
+    // Menu + categories đọc từ cache admin (adminMenuCache:v1). Cache thiếu hoặc
+    // cũ hơn 3 phút → getMenuCached() tự đọc lại server (máy nhân viên không mở
+    // được admin/menu vẫn thấy giá mới, món tắt / món mới), không phải mỗi lần poll.
     // Start a full bill read alongside tables/menu; no table UUID round trip.
     const applyFullOrders = affectedTableIds === null ? orderReadGuardRef.current.begin() : null;
     const [{ data: tablesData, error: tablesError }, cachedMenu, fullOrders] = await Promise.all([
       supabase.from('tables').select('*').order('table_number'),
       getMenuCached().catch(err => {
         console.error('[fetchTables] menu cache error:', err.message);
-        return { items: [], categories: [] };
+        return { items: [], categories: [], savedAt: 0 };
       }),
       affectedTableIds === null ? readOpenTableOrders(supabase) : Promise.resolve(null),
     ]);
-
-    // Lọc + sắp xếp menu client-side (giống filter cũ: is_available + order('name'))
-    const menuData = (cachedMenu.items || [])
-      .filter(i => i.is_available)
-      .slice()
-      .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi'));
-    const catsData = cachedMenu.categories || [];
 
     // Trạng thái vòng xoay (chờ Quan tâm Zalo / lỗi chưa vào bill) — không chặn
     // render bàn; lucky_spins đã siết quyền đọc anon nên phải qua API service.
@@ -763,12 +774,9 @@ export default function TablesPage() {
         setOrders({});
       }
     }
-    setMenuItems(menuData);
-    const finalCats = [...catsData];
-    if (menuData.some(i => !i.category_id)) finalCats.push({ id: null, name: 'Chưa phân loại' });
-    setCategories(finalCats);
+    applyMenu(cachedMenu);
     setLoading(false);
-  }, []);
+  }, [applyMenu]);
 
   // ─── Danh sách máy in (tên máy khi báo lỗi in + biết món nào là món bếp) ───
   useEffect(() => {
@@ -839,10 +847,11 @@ export default function TablesPage() {
       if (ordersError) throw ordersError;
       const hydrated = withCachedMenuOptions(ordersData, cachedMenu.items);
       setOrders(prev => applyOrders(prev, hydrated));
+      applyMenu(cachedMenu); // cache vừa được làm mới (quá 3 phút) thì danh sách thêm món cũng mới
     } catch (e) {
       console.error('[fetchOrdersOnly] error:', e);
     }
-  }, []);
+  }, [applyMenu]);
 
   const fetchOrdersForBills = useCallback((orderIds) =>
     fetchOrdersOnly(getCachedOrderTableIds(ordersStateRef.current, orderIds)), [fetchOrdersOnly]);
@@ -1236,6 +1245,9 @@ export default function TablesPage() {
     };
   }, [fetchTables, scheduleRefetch]);
 
+  // Quay lại tab / có mạng lại: menu cũ hơn 1 phút thì đọc lại (giá, món tắt, món mới từ trang Thực đơn).
+  useEffect(() => watchMenuCache(applyMenu), [applyMenu]);
+
   async function addTable() {
     const num = parseInt(newTableNumber);
     if (!num || num <= 0) return;
@@ -1553,10 +1565,11 @@ export default function TablesPage() {
       if (groupError || !group?.length) return;
       const groupIds = group.map(t => t.id);
       if (groupIds.includes(keepTableId)) return;
+      // Bill "Gọi nhân viên" (BAO_BEP, 0đ, ẩn khỏi thẻ bàn) không giữ bàn: chỉ còn nó thì bàn trống.
       const hasOpenBill = async () => {
         const { data, error } = await supabase.from('orders')
-          .select('id').in('table_id', groupIds).in('status', OPEN_BILL_STATUSES).limit(1);
-        return !!error || !!data?.length;
+          .select('id, customer_phone').in('table_id', groupIds).in('status', OPEN_BILL_STATUSES);
+        return !!error || (data || []).some(o => o.customer_phone !== 'BAO_BEP');
       };
       if (await hasOpenBill()) return;
       const { error: releaseError } = await supabase.from('tables')
@@ -1829,7 +1842,7 @@ export default function TablesPage() {
       .from('review_rewards')
       .select('*')
       .eq('status', 'awaiting_staff')
-      .gte('created_at', startOfTodayISO())
+      .gte('created_at', shopDayStartISO()) // ngày bán hàng từ 05:00: yêu cầu lúc 23:50 vẫn còn sau 00:00
       .order('requested_at', { ascending: true });
     if (error) {
       // Chưa chạy migration thì im lặng bỏ qua, không làm hỏng màn hình bàn
@@ -1937,8 +1950,7 @@ export default function TablesPage() {
   async function refreshMenuAfterToggle() {
     fetchPromoAndGifts();
     try {
-      const { items } = await fetchMenuFromServer();
-      setMenuItems(items.filter(i => i.is_available).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi')));
+      applyMenu(await fetchMenuFromServer());
     } catch (e) {
       console.error('[refreshMenuAfterToggle]', e);
     }
@@ -1949,16 +1961,21 @@ export default function TablesPage() {
     return [hostId, ...tables.filter(t => t.merged_with === hostId).map(t => t.id)];
   }
 
+  // Bill CHƯA THU của nhóm bàn để tính ưu đãi đánh giá: bill mở luôn tính, dù gọi trước 00:00
+  // (bàn ngồi qua nửa đêm). Bàn mang về (bill giao xong vẫn 'completed') chỉ tính bill từ 05:00 hôm nay.
+  function reviewBillsQuery(hostId, columns) {
+    let query = supabase.from('orders').select(columns)
+      .in('table_id', groupTableIds(hostId))
+      .in('status', ['pending', 'preparing', 'completed']);
+    if (tables.find(t => t.id === hostId)?.table_type === 'takeaway') query = query.gte('created_at', shopDayStartISO());
+    return query;
+  }
+
   async function openReviewModal(reward) {
     setReviewModal(reward);
     setReviewPreview(null);
     const cfg = await fetchChannelConfig(supabase, reward.channel);
-    const { data } = await supabase
-      .from('orders')
-      .select('id, customer_phone, order_items(unit_price, quantity)')
-      .in('table_id', groupTableIds(reward.host_table_id))
-      .in('status', ['pending', 'preparing', 'completed'])
-      .gte('created_at', startOfTodayISO());
+    const { data } = await reviewBillsQuery(reward.host_table_id, 'id, customer_phone, order_items(unit_price, quantity)');
     const total = sumOrderItems((data || []).filter(o => o.customer_phone !== 'BAO_BEP'));
     setReviewPreview({ total, discount: calcReviewDiscount(total, cfg), percent: cfg.percent, cfg });
   }
@@ -1967,14 +1984,9 @@ export default function TablesPage() {
     setReviewBusy(true);
     try {
       const cfg = await fetchChannelConfig(supabase, reward.channel);
-      const ids = groupTableIds(reward.host_table_id);
 
-      const { data: groupOrders } = await supabase
-        .from('orders')
-        .select('id, customer_phone, created_at, order_items(unit_price, quantity)')
-        .in('table_id', ids)
-        .in('status', ['pending', 'preparing', 'completed'])
-        .gte('created_at', startOfTodayISO())
+      const { data: groupOrders } = await reviewBillsQuery(reward.host_table_id,
+        'id, customer_phone, created_at, order_items(unit_price, quantity)')
         .order('created_at', { ascending: true });
 
       const bills = (groupOrders || []).filter(o => o.customer_phone !== 'BAO_BEP');
@@ -2107,16 +2119,14 @@ export default function TablesPage() {
       }
       if (!promoConfig.enabled) return;
 
-      const now = new Date();
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-
-      // Lấy tất cả orders + items của bàn hôm nay
-      const { data: tableOrders } = await supabase
+      // Lấy tất cả orders CHƯA THU + items của bàn (kể cả gọi trước 00:00); bàn mang về thì chỉ từ 05:00 hôm nay.
+      let promoQuery = supabase
         .from('orders')
         .select(`id, order_items( id, quantity, is_gift, item_options, menu_items( id, counts_for_promotion, options ) )`)
         .eq('table_id', tableId)
-        .gte('created_at', startOfDay)
         .in('status', ['pending', 'preparing', 'completed']);
+      if (tables.find(t => t.id === tableId)?.table_type === 'takeaway') promoQuery = promoQuery.gte('created_at', shopDayStartISO());
+      const { data: tableOrders } = await promoQuery;
 
       if (!tableOrders) return;
 
@@ -2761,15 +2771,15 @@ export default function TablesPage() {
   async function handleUnmergeTable() {
     if (!selectedTable || !selectedTable.merged_with) return;
     const { data: openOrders, error: ordersError } = await supabase.from('orders')
-      .select('id')
+      .select('id, customer_phone')
       .eq('table_id', selectedTable.id)
-      .in('status', OPEN_BILL_STATUSES)
-      .limit(1);
+      .in('status', OPEN_BILL_STATUSES);
     if (ordersError) {
       Swal.fire('Chưa tách được bàn', 'Không kiểm tra được bill của bàn này. Vui lòng kiểm tra mạng.', 'error');
       return;
     }
-    const hasOpenBill = !!openOrders?.length;
+    // Bill "Gọi nhân viên" (BAO_BEP) không phải bill của khách: chỉ còn nó thì bàn tách ra là bàn trống.
+    const hasOpenBill = (openOrders || []).some(o => o.customer_phone !== 'BAO_BEP');
     const { data: unmerged, error: tableError } = await supabase.from('tables')
       .update({ status: hasOpenBill ? 'occupied' : 'available', merged_with: null, occupied_at: hasOpenBill ? (selectedTable.occupied_at || new Date().toISOString()) : null })
       .eq('id', selectedTable.id)
@@ -2884,17 +2894,13 @@ export default function TablesPage() {
   const fetchTakeawayOrders = async () => {
     const takeawayTable = tables.find(t => t.table_type === 'takeaway');
     if (!takeawayTable) return;
-    const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
 
-    // 1. Lấy TẤT CẢ đơn takeaway hôm nay kèm SĐT để build seq map theo khách
+    // 1. Lấy TẤT CẢ đơn takeaway hôm nay (ngày bán hàng từ 05:00, cùng mốc với trang khách) kèm SĐT để build seq map theo khách
     const { data: allToday } = await supabase
       .from('orders')
       .select('id, created_at, customer_phone')
       .eq('table_id', takeawayTable.id)
-      .gte('created_at', startOfDay)
-      .lt('created_at', endOfDay)
+      .gte('created_at', shopDayStartISO())
       .order('created_at', { ascending: true });
 
     // Group theo SĐT (giữ thứ tự xuất hiện đầu tiên), khách mỗi SĐT chia sẻ 1 base code,

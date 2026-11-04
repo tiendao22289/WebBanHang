@@ -146,3 +146,43 @@ test('a bill arriving while the table is freed reopens it with the original seat
   await h.run('table-4', 'table-5');
   assert.deepEqual(h.state.tables[0], { id: 'table-4', status: 'occupied', occupied_at: seated, merged_with: null });
 });
+
+test('a "Gọi nhân viên" call left on the old table does not keep it occupied after the bill moved', async () => {
+  const h = releaseHarness({
+    tables: [{ id: 'table-4', status: 'occupied', occupied_at: seated, merged_with: null }],
+    orders: [
+      { id: 'moved', table_id: 'table-5', status: 'pending', customer_phone: '0901234567' },
+      { id: 'call', table_id: 'table-4', status: 'completed', customer_phone: 'BAO_BEP' },
+    ],
+  });
+  await h.run('table-4', 'table-5');
+  assert.equal(h.state.tables[0].status, 'available');
+  const real = releaseHarness({
+    tables: [{ id: 'table-4', status: 'occupied', occupied_at: seated, merged_with: null }],
+    orders: [{ id: 'call', table_id: 'table-4', status: 'completed', customer_phone: 'BAO_BEP' },
+      { id: 'other', table_id: 'table-4', status: 'pending', customer_phone: '' }],
+  });
+  await real.run('table-4', 'table-5');
+  assert.equal(real.state.tables[0].status, 'occupied', 'a real bill still keeps the table');
+});
+
+test('unmerging a table whose only open bill is a staff call frees it', async () => {
+  const source = page.slice(page.indexOf('  async function handleUnmergeTable('), page.indexOf('  async function mergeBills('));
+  const run = async orders => {
+    const updates = [];
+    const q = rows => {
+      const query = { select: () => query, eq: () => query, in: () => query, update: v => { updates.push(v); return query; },
+        then: resolve => resolve({ data: rows, error: null }) };
+      return query;
+    };
+    const fn = vm.runInNewContext(`(${source.trim()})`, {
+      selectedTable: { id: 'table-6', merged_with: 'table-4', table_number: 6, occupied_at: seated },
+      supabase: { from: name => q(name === 'orders' ? orders : [{ id: 'table-6' }]) },
+      OPEN_BILL_STATUSES: ['pending', 'preparing', 'completed'], fetchTables() {}, setSelectedTable() {}, Swal: { fire() {} }, Date,
+    });
+    await fn();
+    return updates[0].status;
+  };
+  assert.equal(await run([{ id: 'call', customer_phone: 'BAO_BEP' }]), 'available');
+  assert.equal(await run([{ id: 'call', customer_phone: 'BAO_BEP' }, { id: 'bill', customer_phone: '0901' }]), 'occupied');
+});
