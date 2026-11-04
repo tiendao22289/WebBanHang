@@ -106,6 +106,12 @@
 .tk-bar-track { display: block; height: 6px; border-radius: 999px; background: var(--tk-soft); overflow: hidden; }
 .tk-bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--tk-c1); }
 .tk-bar-fill.cost { background: var(--tk-cost); }
+/* Từng khoản trong một nhóm chi (tiền nhà, tiền điện…), thụt vào dưới thanh của nhóm. */
+.tk-cost-items { list-style: none; margin: 8px 0 0; padding: 2px 0 0 12px; border-left: 2px solid var(--tk-line); display: flex; flex-direction: column; gap: 2px; }
+.tk-cost-items li { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--tk-muted); padding: 2px 0; }
+.tk-cost-items li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-cost-items li b { color: var(--tk-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.tk-cost-items .tk-cost-more span { font-style: italic; }
 .tk-rank em { display: inline-grid; place-items: center; width: 20px; height: 20px; margin-right: 8px; border-radius: 6px; background: var(--tk-soft); font-style: normal; font-size: 11px; font-weight: 700; color: var(--tk-muted); }
 .tk-rank li:first-child em { background: var(--tk-brand); color: white; }
 

@@ -4,7 +4,7 @@
 // Sổ bắt đầu tính từ ngày này; dữ liệu trước đó không đưa vào.
 import { lineWarnings, noteTotals, parsePrice as linePrice, parseQty } from './notesMath.mjs';
 import { dayCheckLines } from './dayCheck.mjs';
-import { addCosts, categoryName, lineCategory, noteOtherCosts, OTHER_ID, otherCostRows } from './noteCategories.mjs';
+import { addCosts, addItemCosts, addNamedCost, categoryName, lineCategory, noteOtherCosts, noteOtherItems, OTHER_ID, otherCostRows } from './noteCategories.mjs';
 
 export const FINANCE_START_DATE = '2026-10-23';
 
@@ -182,7 +182,9 @@ function datesBetween(from, toInclusive) {
  * wages: payrollCost() — lương mỗi ngày theo chấm công (byDay) + thưởng − phạt cả tháng (monthExtra).
  * checks: finance_day_checks (máy tự kiểm tra) → day.check { ok, problems, checkedAt, by }.
  * Dòng tab "Khác" của phiếu Sổ tay (xăng xe, sửa chữa…) vẫn nằm trong purchases, tách riêng ở
- *   day.notesOther = { [id loại]: tiền } (shoppingParts() chia ra để hiện).
+ *   day.notesOther = { [id loại]: tiền } (shoppingParts() chia ra để hiện), day.notesOtherItems = từng khoản theo tên dòng (tiền nhà,
+ *   tiền điện…) của mỗi loại. day.costItems = { drinks, fixed, custom }: từng khoản theo tên của chi trong ngày, chi cố định (phần chia
+ *   cho ngày đó) và tab tự tạo — trang Thống kê hiện từng khoản, không gộp chung.
  *   Khoản lương nhập tay cũ (finance_entries kind 'salary') không tính nữa.
  * Chỉ tính các ngày từ FINANCE_START_DATE đến hết hôm nay (giờ VN).
  */
@@ -205,11 +207,16 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     customMonthTotals[e.category] = (customMonthTotals[e.category] || 0) + (Number(e.amount) || 0);
   }
   const customDailyShare = Object.fromEntries(Object.entries(customMonthTotals).map(([id, total]) => [id, total / daysInMonth]));
+  // Chi cố định chia đều mỗi ngày, theo từng khoản (tiền nhà, điện, nước…): tên chủ ghi, không có thì tên loại.
+  const tabName = id => categories.find(c => c.id === id)?.name || FIXED_CATEGORIES.find(c => c.key === id)?.label || '';
+  const fixedItemsPerDay = {};
+  for (const e of fixedEntries) addNamedCost(fixedItemsPerDay, e.label || tabName(e.category) || 'Chi cố định', (Number(e.amount) || 0) / daysInMonth);
 
   const days = dates.map(date => ({
     date, revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {},
-    purchases: 0, purchaseNotes: 0, notesOther: {}, suspiciousNotes: 0, mismatchNotes: 0, drinks: 0, salary: Number(wages?.byDay?.[date]) || 0, fixedShare: fixedPerDay,
+    purchases: 0, purchaseNotes: 0, notesOther: {}, notesOtherItems: {}, suspiciousNotes: 0, mismatchNotes: 0, drinks: 0, salary: Number(wages?.byDay?.[date]) || 0, fixedShare: fixedPerDay,
     custom: { ...customDailyShare }, customTotal: 0, profit: 0, close: null, check: null,
+    costItems: { drinks: {}, fixed: structuredClone(fixedItemsPerDay), custom: {} },
   }));
   const byDate = new Map(days.map(d => [d.date, d]));
 
@@ -236,13 +243,17 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     day.purchases += cost;
     day.purchaseNotes += 1;
     addCosts(day.notesOther, noteOtherCosts(noteItems(note), cost, noteLineCost));
+    addItemCosts(day.notesOtherItems, noteOtherItems(noteItems(note), cost, noteLineCost));
     if (suspiciousNoteItems(noteItems(note)).length || noteLineWarnings(note).length) day.suspiciousNotes += 1;
     if (noteMismatch(note)) day.mismatchNotes += 1;
   }
   for (const entry of entries) {
     const day = byDate.get(entry.entry_date);
     if (!day) continue;
-    if (entry.kind === 'drink') day.drinks += Number(entry.amount) || 0;
+    if (entry.kind === 'drink') {
+      day.drinks += Number(entry.amount) || 0;
+      addNamedCost(day.costItems.drinks, entry.label || tabName(entry.category) || 'Chi trong ngày', Number(entry.amount) || 0);
+    }
     if (entry.kind === 'custom' && !monthlyTabs.has(entry.category)) {
       day.custom[entry.category] = (day.custom[entry.category] || 0) + (Number(entry.amount) || 0);
     }
@@ -255,15 +266,18 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     if (day) day.check = { ok: !c.problems, problems: Number(c.problems) || 0, checkedAt: c.checked_at, by: c.checked_by || null };
   }
 
-  const totals = { revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {}, purchases: 0, notesOther: {}, drinks: 0, salary: 0, fixedShare: 0,
-    custom: {}, customTotal: 0, profit: 0 };
+  const totals = { revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {}, purchases: 0, notesOther: {}, notesOtherItems: {}, drinks: 0, salary: 0, fixedShare: 0,
+    custom: {}, customTotal: 0, profit: 0, costItems: { drinks: {}, fixed: {}, custom: {} } };
   for (const day of days) {
     day.customTotal = Object.values(day.custom).reduce((sum, v) => sum + v, 0);
+    for (const [id, v] of Object.entries(day.custom)) addNamedCost(day.costItems.custom, tabName(id) || 'Khác', v);
     day.profit = day.revenue - day.purchases - day.drinks - day.salary - day.fixedShare - day.customTotal;
     for (const key of ['revenue', 'bills', 'paperBills', 'paperRevenue', 'cash', 'transfer', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit', 'suspiciousNotes', 'mismatchNotes']) totals[key] = (totals[key] || 0) + day[key];
     for (const [acc, amount] of Object.entries(day.byAccount)) totals.byAccount[acc] = (totals.byAccount[acc] || 0) + amount;
     for (const [id, amount] of Object.entries(day.custom)) totals.custom[id] = (totals.custom[id] || 0) + amount;
     addCosts(totals.notesOther, day.notesOther);
+    addItemCosts(totals.notesOtherItems, day.notesOtherItems);
+    addItemCosts(totals.costItems, day.costItems);
   }
   // Thưởng − phạt lương tính theo tháng (trang Lương), không chia vào ngày nào.
   totals.salaryExtra = Number(wages?.monthExtra) || 0;
@@ -287,10 +301,11 @@ export function costParts(day, categories = []) {
 
 /**
  * Tiền Sổ tay của một ngày (hoặc cả kỳ) tách loại: đi chợ hàng ốc, rồi từng loại Khác chủ quán tạo
- * (xăng xe, sửa chữa…). [{ id ('' = đi chợ), name, amount }]; tổng luôn bằng day.purchases.
+ * (xăng xe, sửa chữa…). [{ id ('' = đi chợ), name, amount, items? }]; tổng luôn bằng day.purchases. Loại Khác kèm items
+ * [{ name, amount }]: từng khoản theo tên dòng (tiền nhà, tiền điện…) khi day có notesOtherItems.
  */
 export function shoppingParts(day, noteCategories = []) {
-  const other = otherCostRows(day?.notesOther, noteCategories);
+  const other = otherCostRows(day?.notesOther, noteCategories, day?.notesOtherItems || null);
   const otherSum = other.reduce((s, r) => s + r.amount, 0);
   return [{ id: '', name: 'Đi chợ', amount: Math.max(0, (Number(day?.purchases) || 0) - otherSum) }, ...other];
 }
