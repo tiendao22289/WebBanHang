@@ -1,5 +1,7 @@
 'use client';
 // Máy quầy chấm công: điện thoại / máy tính bảng để cố định ở quầy, chỉ hiện mã QR.
+// Người không có điện thoại (chủ cho phép trong trang Lương): bấm nút tên / ảnh dưới mã, xác nhận một lần nữa
+// là chấm công như quét mã.
 // Mã đổi mỗi 30 giây và ngay khi có người vừa chấm; ai quét xong thì hiện tên vài giây và đọc to
 // "quét mã thành công" (hoặc "chưa thành công" khi bị chặn vì khác wifi / máy lạ).
 // Mở trong app iPhone "Chấm công" (thư mục ios/): quét xong thì máy quầy so mặt người đứng trước máy
@@ -8,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { KIOSK_FAIL_TEXT, spokenFace, spokenKiosk } from '@/lib/clockMessages.mjs';
 import { FACE_MISS_TEXT } from '@/lib/faceCheck.mjs';
-import { speak, speechSupported } from '@/lib/speak';
+import { speak, speechSupported, vietnameseVoice } from '@/lib/speak';
 import { captureFace, kioskApp, toKioskApp } from '@/lib/kioskApp';
 
 const POLL_MS = 2500;
@@ -28,8 +30,9 @@ function noticeView(n) {
     if (n.result === 'review') return { tint: '#ea580c', icon: '⏳', line: `Sai mặt 3 lần — đã ghi giờ ${n.clocked === 'out' ? 'ra' : 'vào'} ca${at}`, badge: 'Chờ chủ quán duyệt' };
     return { tint: '#b45309', icon: '⚠️', line: `Chưa so được mặt${FACE_MISS_TEXT[n.reason] ? `: ${FACE_MISS_TEXT[n.reason].toLowerCase()}` : ''}`, badge: 'Quét lại mã' };
   }
-  if (!n.ok) return { tint: '#dc2626', icon: '❌', line: KIOSK_FAIL_TEXT[n.reason] || 'Xem lại trên điện thoại', badge: 'Chưa thành công — quét lại' };
-  return { tint: n.action === 'out' ? '#2563eb' : '#16a34a', icon: n.action === 'out' ? '👋' : '✅', line: `${n.action === 'out' ? 'Ra ca' : 'Vào ca'} lúc ${hhmmVn(n.at)}`, badge: 'Quét mã thành công' };
+  if (!n.ok) return { tint: '#dc2626', icon: '❌', line: n.text || KIOSK_FAIL_TEXT[n.reason] || 'Xem lại trên điện thoại', badge: n.tap ? 'Chưa chấm công — bấm lại' : 'Chưa thành công — quét lại' };
+  return { tint: n.action === 'out' ? '#2563eb' : '#16a34a', icon: n.action === 'out' ? '👋' : '✅', line: `${n.action === 'out' ? 'Ra ca' : 'Vào ca'} lúc ${hhmmVn(n.at)}`,
+    note: n.note || '', badge: n.tap ? 'Chấm công thành công' : 'Quét mã thành công' };
 }
 
 export default function KioskPage() {
@@ -43,6 +46,7 @@ export default function KioskPage() {
   const [notice, setNotice] = useState(null); // thẻ báo đang hiện (xem noticeView) + shownAt
   const seen = useRef([]); // lượt đã báo (máy chủ trả lại vài lần, chỉ báo một lần)
   const [voice, setVoice] = useState(false); // đã chạm để bật tiếng đọc chưa (trình duyệt bắt chạm một lần)
+  const [noVietVoice, setNoVietVoice] = useState(false); // máy này không có giọng đọc tiếng Việt
   const [offline, setOffline] = useState(false);
   // Màn hình vừa tắt rồi bật lại (iPhone tự khoá): mã đang hiện có thể đã hết hạn → che đi tới khi có mã mới.
   const [stale, setStale] = useState(false);
@@ -62,6 +66,14 @@ export default function KioskPage() {
   const pressTimer = useRef(null);
   const clockTaps = useRef([]);
   const pollRef = useRef(null);
+  // Nút chấm công cho người không có điện thoại: danh sách (tải lại khi chủ đổi), ai đang trong ca, người đang xác nhận.
+  const [tapPeople, setTapPeople] = useState([]);
+  const [tapOpen, setTapOpen] = useState([]);
+  const [confirmTap, setConfirmTap] = useState(null); // { person, expect, at }
+  const [tapBusy, setTapBusy] = useState(false);
+  const tapVersion = useRef('');
+  const boot = useRef(''); // máy chủ web vừa khởi động lại (bản mới) → tải lại trang
+  const confirmRef = useRef(null);
 
   const show = useCallback(n => {
     setNotice({ ...n, shownAt: Date.now() });
@@ -98,6 +110,10 @@ export default function KioskPage() {
       if (r.status === 401 && j.kiosk === false) { setupRef.current = true; setState('setup'); return; }
       if (!r.ok || !j.token) throw new Error(j.error || 'lỗi');
       okAt.current = Date.now();
+      // Web vừa có bản mới: tải lại trang (trừ lúc có người đang xác nhận chấm công bằng nút).
+      if (j.boot && boot.current && j.boot !== boot.current) {
+        if (!confirmRef.current) { window.location.reload(); return; }
+      } else if (j.boot) boot.current = j.boot;
       setOffline(false);
       setStale(false);
       if (j.token !== tokenRef.current) { tokenRef.current = j.token; setToken(j.token); }
@@ -118,6 +134,13 @@ export default function KioskPage() {
       // Lượt quét chờ so mặt (đang lấy mặt mẫu thì để sau: lượt đó chờ được 1 phút).
       const fc = j.faceCheck;
       if (fc && !faceBusy.current && modeRef.current === 'qr' && !faceSeen.current.includes(fc.id)) runFace(fc);
+      if (j.tap) {
+        setTapOpen(j.tap.open || []);
+        if (j.tap.version !== tapVersion.current) {
+          const t = await fetch('/api/checkin/kiosk?tap=1', { cache: 'no-store' }).then(x => (x.ok ? x.json() : null)).catch(() => null);
+          if (t) { tapVersion.current = j.tap.version; setTapPeople(t.people || []); }
+        }
+      }
       setState('ready');
     } catch {
       // Mất mạng lâu thì giấu mã cũ (máy chủ cũng không nhận mã quá 2 phút).
@@ -168,12 +191,52 @@ export default function KioskPage() {
 
   useEffect(() => { modeRef.current = mode; }, [mode]);
 
+  // Trình duyệt tải danh sách giọng đọc chậm: biết máy không có giọng tiếng Việt thì báo thay cho nút bật tiếng.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return undefined;
+    const check = () => setNoVietVoice(vietnameseVoice() === false);
+    check();
+    window.speechSynthesis.addEventListener?.('voiceschanged', check);
+    return () => window.speechSynthesis.removeEventListener?.('voiceschanged', check);
+  }, []);
+
   const showScan = !!notice && (notice.stage === 'look' ? faceBusy.current : now - notice.shownAt < 8000);
+
+  useEffect(() => { confirmRef.current = confirmTap; }, [confirmTap]);
+  // Xác nhận quá 15 giây không bấm thì đóng (người khác bấm nhầm tên rồi bỏ đi).
+  useEffect(() => {
+    if (confirmTap && now - confirmTap.at > 15000) setConfirmTap(null);
+  }, [confirmTap, now]);
+
+  // Bấm nút tên → hỏi lại "Lan — VÀO CA?" → máy chủ ghi giờ như quét mã; báo và đọc kết quả.
+  const askTap = person => {
+    busyUntil.current = Date.now() + WAKE_HOLD_MS;
+    toKioskApp({ type: 'wake' });
+    setConfirmTap({ person, expect: tapOpen.includes(person.id) ? 'out' : 'in', at: Date.now() });
+  };
+  const doTap = async () => {
+    const c = confirmTap;
+    if (!c || tapBusy) return;
+    setTapBusy(true);
+    let n;
+    try {
+      const r = await fetch('/api/checkin/kiosk', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'tap_clock', staff_id: c.person.id, expect: c.expect }) });
+      const j = await r.json().catch(() => ({}));
+      n = r.ok ? { ok: true, tap: true, name: j.name || c.person.name, action: j.clocked, at: j.at, note: j.note }
+        : { ok: false, tap: true, name: j.name || c.person.name, text: j.error || 'Chưa chấm công được, bấm lại.' };
+    } catch { n = { ok: false, tap: true, name: c.person.name, text: 'Mất mạng — bấm lại.' }; }
+    setConfirmTap(null);
+    setTapBusy(false);
+    show({ kind: 'scan', ...n });
+    speak(spokenKiosk(n));
+    pollRef.current?.();
+  };
 
   // App: đang báo kết quả / so mặt / lấy mặt mẫu / vừa chạm đánh thức → không cho màn hình tối.
   useEffect(() => {
     if (!inApp) return;
-    const want = mode === 'enroll' || faceBusy.current || showScan || now < busyUntil.current;
+    const want = mode === 'enroll' || faceBusy.current || showScan || !!confirmTap || now < busyUntil.current;
     if (want !== busySent.current) { busySent.current = want; toKioskApp({ type: 'busy', on: want }); }
   }, [inApp, mode, now, showScan]);
 
@@ -186,6 +249,8 @@ export default function KioskPage() {
   const clock = `${pad(t.getUTCHours())}:${pad(t.getUTCMinutes())}:${pad(t.getUTCSeconds())}`;
   const day = `${pad(t.getUTCDate())}/${pad(t.getUTCMonth() + 1)}/${t.getUTCFullYear()}`;
   const left = Math.max(0, Math.min(1, (refreshAt - now) / 30000));
+  // Có nút chấm công cho người không có điện thoại thì thu nhỏ mã QR để đủ chỗ cho các nút.
+  const qrSize = tapPeople.length ? 'min(70vw, 42vh, 380px)' : 'min(78vw, 60vh, 420px)';
   const view = showScan ? noticeView(notice) : null;
   const turnOnVoice = () => { speak('Đã bật tiếng đọc'); setVoice(true); };
   // Chủ quán chạm nhanh 5 lần vào đồng hồ trong 3 giây, hoặc giữ tay 2 giây (chỉ trong app) → lấy mặt mẫu.
@@ -223,7 +288,7 @@ export default function KioskPage() {
         </div>
       )}
 
-      <div style={{ position: 'relative', background: 'white', borderRadius: 24, padding: 18, width: 'min(78vw, 60vh, 420px)', aspectRatio: '1 / 1', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ position: 'relative', background: 'white', borderRadius: 24, padding: 18, width: qrSize, aspectRatio: '1 / 1', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {offline || !token
           ? <div style={{ color: '#b91c1c', fontWeight: 700, textAlign: 'center' }}>Mất mạng<br />đang thử lại…</div>
           : stale ? <div style={{ color: '#475569', fontWeight: 700, textAlign: 'center' }}>Đang lấy mã mới…</div>
@@ -233,14 +298,54 @@ export default function KioskPage() {
             <div style={{ fontSize: '3.5rem' }}>{view.icon}</div>
             <div style={{ fontSize: 'clamp(1.4rem, 6vw, 2.2rem)', fontWeight: 800 }}>{notice.name}</div>
             <div style={{ fontSize: '1.15rem', marginTop: 6, lineHeight: 1.4 }}>{view.line}</div>
+            {view.note && <div style={{ fontSize: '0.95rem', marginTop: 4, opacity: 0.9 }}>{view.note}</div>}
             <div style={{ marginTop: 10, padding: '4px 12px', borderRadius: 999, background: 'rgba(255,255,255,0.2)', fontWeight: 700 }}>{view.badge}</div>
           </div>
         )}
       </div>
 
-      <div style={{ width: 'min(78vw, 60vh, 420px)', height: 6, background: '#334155', borderRadius: 3, marginTop: 14, overflow: 'hidden' }}>
+      <div style={{ width: qrSize, height: 6, background: '#334155', borderRadius: 3, marginTop: 14, overflow: 'hidden' }}>
         <div style={{ width: `${left * 100}%`, height: '100%', background: '#22c55e', transition: 'width 0.5s linear' }} />
       </div>
+
+      {/* Người không có điện thoại: bấm tên / ảnh của mình (chủ quán cho phép trong trang Lương). */}
+      {tapPeople.length > 0 && (
+        <div style={{ marginTop: 16, width: 'min(92vw, 560px)', textAlign: 'center' }}>
+          <div style={{ color: '#cbd5e1', fontSize: '0.95rem', marginBottom: 8 }}>Không có điện thoại? <strong>Bấm tên của bạn</strong></div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center' }}>
+            {tapPeople.map(p => {
+              const inShift = tapOpen.includes(p.id);
+              return (
+                <button key={p.id} type="button" onClick={() => askTap(p)}
+                  style={{ width: 96, padding: '8px 6px', borderRadius: 16, border: `2px solid ${inShift ? '#3b82f6' : '#22c55e'}`, background: '#1e293b', color: 'white', cursor: 'pointer', touchAction: 'manipulation' }}>
+                  <Avatar person={p} size={52} />
+                  <div style={{ fontWeight: 700, fontSize: '0.85rem', marginTop: 4, lineHeight: 1.2, wordBreak: 'break-word' }}>{p.name}</div>
+                  <div style={{ fontSize: '0.72rem', color: inShift ? '#93c5fd' : '#86efac', marginTop: 2 }}>{inShift ? 'Bấm để ra ca' : 'Bấm để vào ca'}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {confirmTap && (
+        <div onClick={() => setConfirmTap(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(2,6,23,0.88)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'white', color: '#0f172a', borderRadius: 24, padding: '24px 20px', width: '100%', maxWidth: 380, textAlign: 'center' }}>
+            <Avatar person={confirmTap.person} size={96} />
+            <div style={{ fontSize: '1.6rem', fontWeight: 800, marginTop: 10 }}>{confirmTap.person.name}</div>
+            <div style={{ color: '#64748b', marginTop: 4 }}>Đúng là bạn? Bấm nút dưới để chấm công lúc {clock.slice(0, 5)}.</div>
+            <button type="button" disabled={tapBusy} onClick={doTap}
+              style={{ marginTop: 16, width: '100%', padding: '18px 12px', borderRadius: 16, border: 'none', fontSize: '1.4rem', fontWeight: 800, color: 'white', cursor: 'pointer',
+                background: confirmTap.expect === 'out' ? '#2563eb' : '#16a34a' }}>
+              {tapBusy ? 'Đang chấm…' : confirmTap.expect === 'out' ? '👋 RA CA' : '✅ VÀO CA'}
+            </button>
+            <button type="button" onClick={() => setConfirmTap(null)}
+              style={{ marginTop: 10, width: '100%', padding: 12, borderRadius: 12, border: '1px solid #e2e8f0', background: '#f8fafc', color: '#334155', fontWeight: 700, fontSize: '1rem', cursor: 'pointer' }}>
+              Không phải tôi
+            </button>
+          </div>
+        </div>
+      )}
 
       <div style={{ marginTop: 22, fontSize: 'clamp(1rem, 4vw, 1.3rem)', lineHeight: 1.7, textAlign: 'center' }}>
         📶 Vào <strong>wifi quán</strong> → mở app, bấm nút <strong>📷 quét mã</strong> (hoặc dùng camera điện thoại)
@@ -248,7 +353,20 @@ export default function KioskPage() {
       </div>
       <div style={{ color: '#64748b', fontSize: '0.85rem', marginTop: 6, textAlign: 'center' }}>Mã đổi liên tục, mỗi mã chỉ dùng được 1 lần.</div>
       {/* Điện thoại / máy tính bảng chỉ cho trang đọc to sau khi có người chạm vào trang một lần (mỗi lần mở lại app). App thì tự đọc. */}
-      {!inApp && speechSupported() && !voice && (
+      {noVietVoice && (
+        <div style={{ marginTop: 14, fontSize: '0.85rem', color: '#94a3b8', textAlign: 'center', maxWidth: 360, lineHeight: 1.5 }}>
+          {inApp ? (
+            // App đọc bằng giọng của iPhone; giọng Việt tải xong phải mở lại app (app nhớ giọng từ lúc mở).
+            <>🔇 iPhone này chưa có giọng đọc tiếng Việt nên chưa đọc tên. Cài: Cài đặt → Trợ năng → Nội dung được đọc →
+              Giọng nói → Tiếng Việt → tải giọng Linh (máy tiếng Anh: Settings → Accessibility → Spoken Content → Voices →
+              Vietnamese → Linh), rồi tắt hẳn app Chấm công và mở lại.</>
+          ) : (
+            <>🔇 Máy này chưa có giọng đọc tiếng Việt nên không đọc tên. Máy tính Windows: cài giọng Tiếng Việt trong
+              Cài đặt → Thời gian và ngôn ngữ → Giọng nói, hoặc mở trang bằng Microsoft Edge.</>
+          )}
+        </div>
+      )}
+      {!inApp && !noVietVoice && speechSupported() && !voice && (
         <button type="button" onClick={turnOnVoice}
           style={{ marginTop: 14, padding: '10px 18px', borderRadius: 999, border: '1.5px solid #f59e0b', background: 'transparent', color: '#fbbf24', fontWeight: 700, fontSize: '0.95rem', cursor: 'pointer' }}>
           🔊 Chạm để bật tiếng đọc tên
@@ -256,6 +374,15 @@ export default function KioskPage() {
       )}
     </Screen>
   );
+}
+
+// Ảnh nhỏ trên nút chấm công (không có ảnh thì chữ cái đầu của tên).
+function Avatar({ person, size }) {
+  const initials = String(person.name || '?').trim().split(/\s+/).slice(-1)[0].slice(0, 2).toUpperCase();
+  const box = { width: size, height: size, borderRadius: '50%', margin: '0 auto', display: 'block', objectFit: 'cover' };
+  return person.photo
+    ? <img src={person.photo} alt="" style={box} />
+    : <div style={{ ...box, background: '#334155', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: size * 0.36 }}>{initials}</div>;
 }
 
 // still: màn mã QR không cho chọn chữ / hiện menu khi giữ tay (máy quầy không có gì để chọn; còn ô nhập

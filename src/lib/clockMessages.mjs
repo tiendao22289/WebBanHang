@@ -85,8 +85,10 @@ export const KIOSK_FAIL_TEXT = {
 };
 /** Máy quầy: {ok, name, action, at} khi chấm được, {ok: false, name, reason} khi bị chặn. */
 export function spokenKiosk(n) {
-  if (!n.ok) return `${n.name}, quét mã chưa thành công. ${KIOSK_FAIL_TEXT[n.reason] || 'Xem lại trên điện thoại'}.`;
-  return `${n.name}, quét mã thành công. ${n.action === 'out' ? 'Ra' : 'Vào'} ca lúc ${spokenTime(n.at)}.`;
+  // tap: người không có điện thoại bấm nút tên trên máy quầy.
+  const what = n.tap ? 'chấm công' : 'quét mã';
+  if (!n.ok) return `${n.name}, ${what} chưa thành công. ${n.tap ? 'Bấm lại tên của bạn' : KIOSK_FAIL_TEXT[n.reason] || 'Xem lại trên điện thoại'}.`;
+  return `${n.name}, ${what} thành công. ${n.action === 'out' ? 'Ra' : 'Vào'} ca lúc ${spokenTime(n.at)}.`;
 }
 
 // ── So mặt ở máy quầy (app): kết quả một lượt quét — máy quầy đọc to, điện thoại hiện chữ.

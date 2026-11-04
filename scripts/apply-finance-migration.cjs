@@ -158,6 +158,24 @@ async function main() {
   console.log(JSON.stringify(closedDays));
   if (!closedDays.days_ok || !closedDays.pay_ok || !closedDays.anon_blocked) throw new Error('Chưa cài được bảng ngày quán nghỉ.');
 
+  // Lịch quán nghỉ theo âm lịch mỗi tháng + ngày mở cửa bù (payroll_closed_rules.sql).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_closed_rules.sql'), 'utf8'));
+  const [closedRules] = await query(`SELECT to_regclass('public.shop_closed_rules') IS NOT NULL AS rules_ok,
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'shop_closed_days' AND column_name = 'skip') AS skip_col,
+    (SELECT count(*)::int FROM public.shop_closed_rules) AS rules,
+    NOT has_table_privilege('anon', 'public.shop_closed_rules', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(closedRules));
+  if (!closedRules.rules_ok || !closedRules.skip_col || closedRules.rules < 1 || !closedRules.anon_blocked) throw new Error('Chưa cài được lịch quán nghỉ.');
+
+  // Chấm công bằng nút trên máy quầy cho người không có điện thoại (checkin_tap.sql).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_tap.sql'), 'utf8'));
+  const [tap] = await query(`SELECT to_regclass('public.checkin_tap_staff') IS NOT NULL AS table_ok,
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'checkin_scans' AND column_name = 'method') AS method_col,
+    to_regclass('public.attendance_one_open') IS NOT NULL AS one_open_index,
+    NOT has_table_privilege('anon', 'public.checkin_tap_staff', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(tap));
+  if (!tap.table_ok || !tap.method_col || !tap.anon_blocked) throw new Error('Chưa cài được phần chấm công bằng nút.');
+
   // So khuôn mặt ở máy quầy (checkin_face.sql): chỉ dấu mặt mẫu, không ảnh — cài TRƯỚC khi dùng app máy quầy.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_face.sql'), 'utf8'));
   const [face] = await query(`SELECT

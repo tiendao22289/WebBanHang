@@ -68,7 +68,9 @@ export function fakeDb(state) {
         if (table === 'attendance_edit_log' && list.some(v => !(state.attendance_logs || []).some(l => l.id === v.attendance_id))) {
           return resolve({ data: null, error: { code: '23503', message: 'violates foreign key constraint "attendance_edit_log_attendance_id_fkey"' } });
         }
-        if (list.some(v => unique.some(keys => state[table].some(r => keys.every(k => r[k] === v[k]))))) {
+        // Như chỉ mục attendance_one_open: mỗi người một ca đang mở.
+        const twoOpen = table === 'attendance_sessions' && list.some(v => !v.clock_out && state[table].some(r => r.staff_id === v.staff_id && !r.clock_out));
+        if (twoOpen || list.some(v => unique.some(keys => state[table].some(r => keys.every(k => r[k] === v[k]))))) {
           return resolve({ data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } });
         }
         const added = list.map(v => {

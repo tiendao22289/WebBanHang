@@ -6,6 +6,7 @@ import * as token from '../src/lib/checkinToken.mjs';
 import * as rules from '../src/lib/attendanceRules.mjs';
 import * as clockApply from '../src/lib/clockApply.mjs';
 import * as faceCheck from '../src/lib/faceCheck.mjs';
+import { punctuality } from '../src/lib/clockMessages.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
 
 const SECRET = 'service-role-test-key'.repeat(2);
@@ -127,7 +128,7 @@ function load(state, user) {
     return res;
   } };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...token, ...rules, ...clockApply, ...faceCheck, URL, Number, Math, String, JSON, Date, Promise, STATUS_COOKIE: 'local_admin_session',
+    NextResponse, ...token, ...rules, ...clockApply, ...faceCheck, punctuality, URL, Number, Math, String, JSON, Date, Promise, STATUS_COOKIE: 'local_admin_session',
     console: { error() {} }, process: { env: { SUPABASE_SERVICE_ROLE_KEY: SECRET } },
     getStaffSession: async () => (user ? { code: 200, user } : { code: 401 }),
     nowMs: () => Date.now(), refreshClock: async () => {}, clockStatus: () => ({ offsetMs: 0, synced: true, checkedAt: null, source: 'test' }),
@@ -205,4 +206,45 @@ test('the work day at night: clean-up after midnight is still the shift before',
   assert.equal(rules.currentWorkDay(R, 'a', Date.parse('2026-11-28T20:30:00Z')), '2026-11-29', '03:30 is past closing + 4 hours');
   assert.equal(rules.currentWorkDay(R, 'a', Date.parse('2026-11-29T03:00:00Z')), '2026-11-29');
   assert.equal(rules.currentWorkDay(null, 'a', Date.parse('2026-11-28T17:45:00Z')), '2026-11-29', 'no rules: the calendar day');
+});
+
+test('a person without a phone clocks by tapping their name on the kiosk, only if the owner allowed it', async () => {
+  const LAN = { id: '00000000-0000-4000-8000-00000000cccc', full_name: 'Lan', role: 'staff' };
+  const state = { checkin_kiosks: [{ id: KIOSK, name: 'Quầy', revoked_at: null, recent_ips: [] }], checkin_nonces: [], checkin_scans: [], attendance_sessions: [], attendance_changes: [],
+    staff: [STAFF, LAN], staff_departures: [], staff_shifts: [], checkin_settings: [{ id: 1, enforce: true, hours_from: '2026-10-25' }], checkin_hours: [SHOP_HOURS],
+    checkin_tap_staff: [{ staff_id: STAFF.id, label: 'Phát (bếp)', photo: 'data:image/jpeg;base64,AAAA', updated_at: '2026-11-04T01:00:00Z' }] };
+  const api = load(state, null), cookie = token.signKioskCookie(KIOSK, SECRET);
+  const tap = (staffId, expect, c = cookie) => api.POST({ json: async () => ({ action: 'tap_clock', staff_id: staffId, expect }), headers: new Map([['cf-connecting-ip', '113.161.1.2']]),
+    cookies: { get: k => (k === token.KIOSK_COOKIE && c ? { value: c } : undefined) } }).then(plain);
+  const list = r => api.GET({ ...kioskReq(cookie), url: 'https://x/api/checkin/kiosk?tap=1', ...r }).then(plain);
+
+  assert.equal((await list({ cookies: { get: () => undefined } })).status, 401, 'only the kiosk sees the buttons');
+  assert.deepEqual((await list()).body.people, [{ id: STAFF.id, name: 'Phát (bếp)', photo: 'data:image/jpeg;base64,AAAA' }]);
+  assert.deepEqual(plain(await api.GET(kioskReq(cookie))).body.tap, { version: '1:2026-11-04T01:00:00Z', open: [] });
+
+  assert.equal((await tap(STAFF.id, 'in', null)).status, 401, 'not from a normal phone');
+  assert.equal((await tap(LAN.id, 'in')).status, 403, 'Lan was not allowed a button');
+  const first = await tap(STAFF.id, 'in');
+  assert.deepEqual([first.status, first.body.name, first.body.clocked], [200, 'Phát (bếp)', 'in']);
+  assert.deepEqual(plain(state.checkin_scans.map(x => [x.staff_id, x.kiosk_id, x.method, x.action, x.warnings])), [[STAFF.id, KIOSK, 'tap', 'in', []]],
+    'recorded like a scan, marked as a tap, no warning even with blocking on');
+  assert.deepEqual(plain(await api.GET(kioskReq(cookie))).body.tap.open, [STAFF.id], 'the button now offers clock-out');
+  assert.equal((await tap(STAFF.id, 'out')).status, 409, 'a second tap within 3 minutes does not clock out');
+  assert.equal((await tap(STAFF.id, 'in')).status, 409, 'the kiosk showed clock-in but the person is already in');
+  state.attendance_sessions[0].clock_in = new Date(Date.now() - 5 * 3600000).toISOString();
+  const out = await tap(STAFF.id, 'out');
+  assert.deepEqual([out.status, out.body.clocked, state.attendance_sessions[0].clock_out !== null], [200, 'out', true]);
+  // Từ mạng khác (cookie máy quầy bị mang đi nơi khác) thì không bấm được.
+  const away = await api.POST({ json: async () => ({ action: 'tap_clock', staff_id: STAFF.id, expect: 'in' }), headers: new Map([['cf-connecting-ip', '14.1.2.3']]),
+    cookies: { get: k => (k === token.KIOSK_COOKIE ? { value: cookie } : undefined) } }).then(plain);
+  assert.equal(away.status, 403, 'not from outside the kiosk network');
+  // Bấm 2 lần cùng lúc (mạng gửi lại): chỉ một lần vào ca, lần kia báo đang trong ca.
+  state.attendance_sessions[0].clock_out = new Date(Date.now() - 10 * 60000).toISOString();
+  const both = await Promise.all([tap(STAFF.id, 'in'), tap(STAFF.id, 'in')]);
+  assert.deepEqual(both.map(r => r.status).sort(), [200, 409]);
+  assert.equal(state.attendance_sessions.filter(x => x.staff_id === STAFF.id && !x.clock_out).length, 1, 'one open shift');
+  state.attendance_sessions.forEach(x => { if (!x.clock_out) x.clock_out = new Date().toISOString(); });
+  state.staff_departures.push({ staff_id: STAFF.id, last_day: '2026-01-01' });
+  assert.equal((await tap(STAFF.id, 'in')).status, 403, 'someone who left cannot be clocked');
+  assert.deepEqual((await list()).body.people, []);
 });

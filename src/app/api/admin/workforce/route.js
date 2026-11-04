@@ -25,7 +25,10 @@
  *   save_fine_rule, save_bonus_settings, decide_bonus {staff_id, year, month, amount} / remove_bonus,
  *   save_config, save_hourly {staff_id, hourly_rate, valid_from} (lương theo giờ),
  *   save_late_rule {scope: 'shop' | staff_id, allowed_minutes, per_minute, fixed_amount, use_shop} (luật đi trễ từ hôm nay),
- *   save_closed_day {day, note} / delete_closed_day {day} (ngày quán nghỉ), save_holiday_pay {staff_id, paid: true | false | null},
+ *   save_closed_rule {lunar_days} (nghỉ theo âm lịch mỗi tháng, từ hôm nay), save_closed_day {day, note} (thêm ngày nghỉ),
+ *   skip_closed_day {day} (ngày theo lịch nhưng quán mở), delete_closed_day {day} (bỏ ngày thêm / mở cửa đã ghi),
+ *   save_holiday_pay {staff_id, paid: true | false | null},
+ *   save_tap_staff {staff_id, enabled, label?, photo?} (người không có điện thoại chấm công bằng nút trên máy quầy),
  *   save_checkin_settings, save_shift, revoke_kiosk, reset_device,
  *   create_account, set_pin, delete_account,
  *   face_enroll {staff_id, embeddings, force} (lấy mặt mẫu trên máy quầy), face_delete, save_face_settings,
@@ -37,7 +40,7 @@ import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { hashPin, isHashedPin, validPin } from '@/lib/staffPin.mjs';
 import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, KIOSK_COOKIE, newDeviceId, readKioskCookie, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
-import { loadPayrollMonth, monthRange, readHolidays, readHourlyRates, readLateRules, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
+import { closedDaysToDate, loadPayrollMonth, monthRange, readHolidays, readHourlyRates, readLateRules, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
 import { AUTO_CLOSE_BY, AUTO_EXTRA_FROM, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
 import { DEFAULT_OT_RATE, computeSalary, holidayArgs, lateRulesOf, monthKey, monthTallies, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
@@ -164,7 +167,7 @@ async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
     const mine = markFaceHolds(sessions.data || [], await faceHolds(db, (sessions.data || []).map(x => x.id)));
     const live = computeSalary({ year, month, staffId, sessions: mine, config: config.data, requests: requests.data || [],
       violations: violations.data || [], bonuses: bonuses.data || [], rules: settings, reviews, hourlyRates, lateRules: lateRulesOf(lateRules, staffId),
-      ...holidayArgs(me.data || { id: staffId }, { ...holidays, closedDays: holidays.closedDays.filter(d => String(d.day) <= vnToday()), departures: left.data || [] }) });
+      ...holidayArgs(me.data || { id: staffId }, { closedDays: closedDaysToDate(holidays, start, end, vnToday()), holidayPay: holidays.holidayPay, departures: left.data || [] }) });
     const salary = closed.data
       ? { bonusAmt: 0, ...closed.data.snapshot, year, month, locked: true, closed_at: closed.data.closed_at, paid_at: closed.data.paid_at || null }
       : { ...live, year, month, locked: false };
@@ -197,7 +200,7 @@ const autoClosedInMonth = (db, start, end) => readAll(() => db.from('attendance_
 
 // Trang Thống kê: nhân sự + lương cả quán một tháng, kèm số việc đang chờ chủ duyệt.
 async function staffStats(db, year, month) {
-  const m = await loadPayrollMonth(db, year, month);
+  const m = await loadPayrollMonth(db, year, month, vnToday());
   const [auto, scans, fixes, pendingReqs, extras, faces] = await Promise.all([
     autoClosedInMonth(db, m.start, m.end),
     readAll(() => db.from('checkin_scans').select('staff_id, action, warnings').gte('created_at', new Date(`${m.start}T00:00:00+07:00`).toISOString()).lt('created_at', new Date(`${m.end}T00:00:00+07:00`).toISOString()).order('created_at')),
@@ -328,7 +331,7 @@ async function faceOverview(db) {
 
 async function checkinOverview(db) {
   const since = new Date(nowMs() - 14 * 86400000).toISOString();
-  const [settings, kiosks, devices, scans, fixes, reviews, departures] = await Promise.all([
+  const [settings, kiosks, devices, scans, fixes, reviews, departures, tap] = await Promise.all([
     readCheckinSettings(db),
     db.from('checkin_kiosks').select('*').order('created_at', { ascending: false }),
     db.from('staff_checkin_devices').select('*'),
@@ -337,15 +340,18 @@ async function checkinOverview(db) {
     // 1000 lần duyệt gần nhất (để hiện); tính lương dùng lần duyệt của đúng tháng (?payroll=1).
     db.from('attendance_extra_reviews').select('*').order('decided_at', { ascending: false }).limit(1000),
     db.from('staff_departures').select('*'),
+    // Người chấm công bằng nút trên máy quầy (bảng chưa tạo: chưa có ai).
+    db.from('checkin_tap_staff').select('*'),
   ]);
   for (const r of [kiosks, devices, scans, fixes, reviews, departures]) if (r.error) throw r.error;
+  if (tap.error && !missingTable(tap.error)) throw tap.error;
   // Giờ đang ghi của các ca có đơn xin sửa, để chủ so với giờ xin.
   const ids = [...new Set((fixes.data || []).map(f => f.attendance_id))];
   const { data: fixSessions, error } = ids.length ? await db.from('attendance_sessions').select('*').in('id', ids) : { data: [] };
   if (error) throw error;
   return { settings, kiosks: kiosks.data || [], devices: devices.data || [], scans: scans.data || [], fixes: fixes.data || [], fixSessions: fixSessions || [],
     autoClosed: await autoClosedIds(db, { ids }), reviews: reviews.data || [], extras: await pendingExtras(db, settings),
-    departures: departures.data || [], now: isoNow(), clock: clockStatus() };
+    departures: departures.data || [], tapStaff: tap.error ? [] : tap.data || [], now: isoNow(), clock: clockStatus() };
 }
 
 export async function GET(request) {
@@ -458,7 +464,13 @@ export async function POST(request) {
         return withDevice(NextResponse.json({ ok: true, face: { id: check.id, clocked: check.clocked, wait_ms: FACE_WAIT_MS }, warnings }, { headers }), request, device);
       }
 
-      const done = await applyClock(db, { staffId: user.id, at: isoNow(), scan });
+      let done;
+      try { done = await applyClock(db, { staffId: user.id, at: isoNow(), scan }); }
+      catch (error) {
+        // Hai lượt quét cùng lúc: lượt sau gặp ca vừa được lượt trước mở / đóng.
+        if (error?.code === 'already_open') return fail('Bạn vừa chấm công. Đợi 3 phút rồi quét lại nếu muốn đổi vào / ra ca.', 409);
+        throw error;
+      }
       // Các lượt cùng ngày làm (vào lại sau nửa đêm để dọn quán thì tính chung ca hôm trước, không báo trễ nhầm).
       const sessions = await sessionsOfDay(db, user.id, done.session, settings);
       return withDevice(NextResponse.json({ ok: true, clocked: done.clocked, at: done.at, session: done.session, sessions, warnings }, { headers }), request, device);
@@ -771,7 +783,7 @@ export async function POST(request) {
       }
       // Chốt lương: máy chủ tự tính lại bằng cùng công thức với trang Lương rồi lưu lại. Cả tháng thì giữ
       // nguyên người đã chốt riêng trước đó; người nghỉ việc trước tháng này không tính.
-      const m = await loadPayrollMonth(db, year, month);
+      const m = await loadPayrollMonth(db, year, month, vnToday());
       const closedIds = new Set(m.closes.map(c => c.staff_id));
       const closedAt = isoNow();
       const rows = m.staff.filter(p => (only ? p.id === only : !closedIds.has(p.id))).map(p => {
@@ -1099,13 +1111,26 @@ export async function POST(request) {
       return NextResponse.json({ ok: true }, { headers });
     }
 
-    // Ngày quán nghỉ (cả quán đóng cửa): thêm / sửa ghi chú, xoá. Người được nhận lương ngày nghỉ có đủ 1 ngày công.
-    if (body.action === 'save_closed_day' || body.action === 'delete_closed_day') {
+    // Ngày quán nghỉ (cả quán đóng cửa): thêm ngày nghỉ, ngày theo lịch âm mà quán mở (skip), bỏ dòng đã ghi.
+    // Người được nhận lương ngày nghỉ có đủ 1 ngày công.
+    if (['save_closed_day', 'skip_closed_day', 'delete_closed_day'].includes(body.action)) {
       const day = String(body.day || '');
       if (!DATE.test(day) || new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) !== day) return fail('Chọn ngày quán nghỉ.');
+      const row = { day, note: body.action === 'save_closed_day' ? text(body.note, 120) || null : null, skip: body.action === 'skip_closed_day',
+        created_by: user.full_name || null, created_at: isoNow() };
       const r = body.action === 'delete_closed_day'
         ? await db.from('shop_closed_days').delete().eq('day', day)
-        : await db.from('shop_closed_days').upsert({ day, note: text(body.note, 120) || null, created_by: user.full_name || null, created_at: isoNow() }, { onConflict: 'day' });
+        : await db.from('shop_closed_days').upsert(row, { onConflict: 'day' });
+      if (missingTable(r.error) || /skip/.test(String(r.error?.message || ''))) return fail('Web đang cập nhật phần ngày quán nghỉ, thử lại sau ít phút.', 503);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Lịch nghỉ theo âm lịch mỗi tháng (vd. mùng 1 và rằm), áp dụng từ hôm nay; danh sách rỗng = thôi nghỉ theo lịch.
+    if (body.action === 'save_closed_rule') {
+      const days = [...new Set((Array.isArray(body.lunar_days) ? body.lunar_days : []).map(Number))].sort((a, b) => a - b);
+      if (days.some(d => !Number.isInteger(d) || d < 1 || d > 30)) return fail('Ngày âm lịch từ 1 đến 30.');
+      const r = await db.from('shop_closed_rules').upsert({ valid_from: today, lunar_days: days, updated_by: user.full_name || null, updated_at: isoNow() }, { onConflict: 'valid_from' });
       if (missingTable(r.error)) return fail('Web đang cập nhật phần ngày quán nghỉ, thử lại sau ít phút.', 503);
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true }, { headers });
@@ -1119,6 +1144,28 @@ export async function POST(request) {
         ? await db.from('payroll_holiday_pay').upsert({ staff_id: staffId, paid: body.paid, updated_by: user.full_name || null, updated_at: isoNow() }, { onConflict: 'staff_id' })
         : await db.from('payroll_holiday_pay').delete().eq('staff_id', staffId);
       if (missingTable(r.error)) return fail('Web đang cập nhật phần ngày quán nghỉ, thử lại sau ít phút.', 503);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Cho / thôi cho một người chấm công bằng nút tên trên máy quầy (không có điện thoại); tên trên nút + ảnh nhỏ.
+    if (body.action === 'save_tap_staff') {
+      if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
+      const staffId = String(body.staff_id).toLowerCase();
+      if (body.enabled === false) {
+        const r = await db.from('checkin_tap_staff').delete().eq('staff_id', staffId);
+        if (missingTable(r.error)) return fail('Web đang cập nhật phần chấm công bằng nút, thử lại sau ít phút.', 503);
+        if (r.error) throw r.error;
+        return NextResponse.json({ ok: true }, { headers });
+      }
+      const row = { staff_id: staffId, label: text(body.label, 30) || null, created_by: user.full_name || null, updated_at: isoNow() };
+      if ('photo' in body) {
+        const photo = body.photo === null || body.photo === '' ? null : String(body.photo);
+        if (photo && (!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(photo) || photo.length > 150000)) return fail('Ảnh không hợp lệ hoặc quá lớn.');
+        row.photo = photo;
+      }
+      const r = await db.from('checkin_tap_staff').upsert(row, { onConflict: 'staff_id' });
+      if (missingTable(r.error)) return fail('Web đang cập nhật phần chấm công bằng nút, thử lại sau ít phút.', 503);
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true }, { headers });
     }

@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
 import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
+import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthTallies, shopClosedDays, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
 import { unlockSpeech } from '@/lib/speak';
@@ -123,6 +123,21 @@ function DayTable({ rows, first }) {
       </table>
     </div>
   );
+}
+// Ảnh nút chấm công trên máy quầy: cắt vuông giữa ảnh, thu còn 160×160 JPEG (vài chục KB) trước khi gửi.
+function shrinkPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const side = Math.min(img.width, img.height), canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 160;
+      canvas.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 160, 160);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', 0.8));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Không đọc được ảnh này.')); };
+    img.src = url;
+  });
 }
 const typedMoney = v => { const raw = String(v ?? '').replace(/\./g, '').replace(/\D/g, ''); return raw ? Number(raw).toLocaleString('vi-VN') : ''; };
 const shownMoney = n => (Number(n) > 0 ? Number(n).toLocaleString('vi-VN') : '');
@@ -461,13 +476,13 @@ export default function PayrollPage() {
   }, []);
   // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
   // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
-  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedDays: [], holidayPay: [], monthOver: false });
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], monthOver: false });
   const fetchPayrollMonth = useCallback(async () => {
     try {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedDays: j.closedDays || [], holidayPay: j.holidayPay || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   // So khuôn mặt ở máy quầy (app): cài đặt, ai có mặt mẫu, ca sai mặt 3 lần chờ duyệt.
@@ -625,6 +640,10 @@ export default function PayrollPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selMonth, selYear]);
 
+  // Ngày quán nghỉ của tháng đang xem tới hôm nay (lịch âm lịch + ngày thêm tay, bỏ ngày mở cửa) — ngày chưa tới chưa tính lương.
+  const monthLastDay = `${selYear}-${fmt(selMonth)}-${fmt(new Date(Date.UTC(selYear, selMonth, 0)).getUTCDate())}`;
+  const monthClosedDays = shopClosedDays({ rules: payrollMonth.closedRules, rows: payrollMonth.closedRows, from: `${selYear}-${fmt(selMonth)}-01`,
+    to: monthLastDay < vnToday() ? monthLastDay : vnToday() });
   // Lương tháng đang xem (cùng công thức với nút "Chốt lương" trên máy chủ).
   const calcSalary = (staffId) => computeSalary({
     year: selYear, month: selMonth, staffId,
@@ -636,8 +655,7 @@ export default function PayrollPage() {
     rules, reviews: reviewList, hourlyRates: payrollMonth.hourlyRates.filter(r => r.staff_id === staffId),
     lateRules: lateRulesOf(payrollMonth.lateRules, staffId),
     // Ngày quán nghỉ chưa tới thì chưa tính (lương tạm tính đến hôm nay).
-    ...holidayArgs(staffList.find(x => x.id === staffId) || { id: staffId }, { closedDays: payrollMonth.closedDays.filter(d => String(d.day) <= vnToday()),
-      holidayPay: payrollMonth.holidayPay, departures: checkin?.departures || [] }),
+    ...holidayArgs(staffList.find(x => x.id === staffId) || { id: staffId }, { closedDays: monthClosedDays, holidayPay: payrollMonth.holidayPay, departures: checkin?.departures || [] }),
   });
   // Trễ / quên ra ca trong tháng (theo ngày làm) → xét thưởng chuyên cần và gợi ý phạt.
   const talliesOf = staffId => monthTallies({ sessions: attendance.filter(a => a.staff_id === staffId), rules, key: `${selYear}-${fmt(selMonth)}`, autoClosed: payrollMonth.autoClosed });
@@ -804,22 +822,47 @@ export default function PayrollPage() {
       </div>
     );
   };
-  // Ngày quán nghỉ (cả quán đóng cửa): thêm ngày + ghi chú, xoá. Người được nhận lương ngày nghỉ có đủ 1 ngày công.
+  // Ngày quán nghỉ: lịch âm lịch mỗi tháng (vd. mùng 1 và rằm) + ngày thêm tay; ngày theo lịch mà quán mở thì bấm "Mở cửa".
+  // Người được nhận lương ngày nghỉ có đủ 1 ngày công.
   const weekday = d => ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][new Date(`${d}T00:00:00Z`).getUTCDay()];
   const closedDaysEditor = () => {
-    const from = new Date(Date.parse(`${vnToday().slice(0, 7)}-01T00:00:00Z`) - 31 * 86400000).toISOString().slice(0, 10);
-    const list = (payrollMonth.closedDays || []).filter(d => String(d.day) >= from);
+    const today = vnToday(), shown = d => d.split('-').reverse().join('/');
+    const from = new Date(Date.parse(`${today.slice(0, 7)}-01T00:00:00Z`) - 31 * 86400000).toISOString().slice(0, 10);
+    const to = new Date(Date.parse(`${today}T00:00:00Z`) + 92 * 86400000).toISOString().slice(0, 10);
+    const list = shopClosedDays({ rules: payrollMonth.closedRules, rows: payrollMonth.closedRows, from, to, withSkipped: true });
+    const rules = [...(payrollMonth.closedRules || [])].sort((a, b) => String(a.valid_from).localeCompare(String(b.valid_from)));
+    const rule = rules.filter(r => String(r.valid_from) <= today).pop() || null;
     const box = { padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', background: 'white' };
     const day = draftOf('closed:day', ''), note = draftOf('closed:note', '');
+    const lunarText = draftOf('closed:lunar', (rule?.lunar_days || []).join(', '));
+    const lunarLabel = ds => ds.map(n => (n === 1 ? 'mùng 1' : n === 15 ? 'rằm (15)' : n < 11 ? `mùng ${n}` : `${n}`)).join(' và ');
+    const saveRule = () => {
+      const days = lunarText.split(/[^\d]+/).filter(Boolean).map(Number);
+      if (days.some(n => n < 1 || n > 30)) return alert('Ngày âm lịch từ 1 đến 30.');
+      editAction('save_closed_rule', { lunar_days: days }, days.length ? null : 'Thôi nghỉ theo âm lịch từ hôm nay?', 'closed:lunar');
+    };
     return (
       <div style={{ fontSize: '0.82rem' }}>
-        {list.length === 0 && <div style={{ color: '#94a3b8' }}>Chưa có ngày quán nghỉ nào.</div>}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
+          <span>🌙 Nghỉ theo âm lịch mỗi tháng, ngày:</span>
+          <input style={{ ...box, width: 90 }} placeholder="1, 15" value={lunarText} onChange={e => setDraft('closed:lunar', e.target.value)} />
+          <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }} onClick={saveRule}>Lưu</button>
+        </div>
+        <div style={{ fontSize: '0.76rem', color: '#64748b', marginBottom: 6 }}>
+          {rule?.lunar_days?.length ? `Đang nghỉ ${lunarLabel(rule.lunar_days)} âm lịch mỗi tháng (kể cả tháng nhuận), từ ${shown(String(rule.valid_from))}.` : 'Chưa nghỉ theo âm lịch.'}
+          {' '}Đổi thì áp dụng từ hôm nay. Ngày theo lịch mà quán vẫn mở thì bấm "Mở cửa".
+        </div>
+        {list.length === 0 && <div style={{ color: '#94a3b8' }}>Không có ngày quán nghỉ nào từ tháng trước tới 3 tháng tới.</div>}
         {list.map(d => (
-          <div key={d.day} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0', borderTop: '1px solid #f1f5f9' }}>
-            <strong style={{ minWidth: 92 }}>{weekday(String(d.day))} {String(d.day).split('-').reverse().join('/')}</strong>
-            <span style={{ flex: 1, color: '#64748b' }}>{d.note || ''}</span>
-            <button style={{ ...smallBtn, color: '#dc2626', borderColor: '#fecaca', background: '#fff5f5' }}
-              onClick={() => editAction('delete_closed_day', { day: d.day }, `Xoá ngày quán nghỉ ${String(d.day).split('-').reverse().join('/')}?`)}>Xoá</button>
+          <div key={d.day} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0', borderTop: '1px solid #f1f5f9', opacity: d.skipped ? 0.55 : 1 }}>
+            <strong style={{ minWidth: 92, textDecoration: d.skipped ? 'line-through' : 'none' }}>{weekday(d.day)} {shown(d.day)}</strong>
+            <span style={{ flex: 1, color: '#64748b' }}>
+              {d.source === 'lunar' ? `${d.lunar.day === 1 ? 'Mùng 1' : d.lunar.day === 15 ? 'Rằm' : `Ngày ${d.lunar.day}`} tháng ${d.lunar.month}${d.lunar.leap ? ' nhuận' : ''} âm` : d.note || 'Thêm tay'}
+              {d.skipped ? ' — quán mở' : ''}{d.day < today ? '' : d.day === today ? ' — hôm nay' : ''}
+            </span>
+            {d.source === 'lunar' && !d.skipped && <button style={smallBtn} onClick={() => editAction('skip_closed_day', { day: d.day }, `Ngày ${shown(d.day)} quán vẫn mở cửa (không tính ngày nghỉ)?`)}>Mở cửa</button>}
+            {(d.source === 'manual' || d.skipped) && <button style={{ ...smallBtn, color: '#dc2626', borderColor: '#fecaca', background: '#fff5f5' }}
+              onClick={() => editAction('delete_closed_day', { day: d.day }, d.skipped ? `Ngày ${shown(d.day)} quay lại nghỉ theo lịch?` : `Xoá ngày quán nghỉ ${shown(d.day)}?`)}>{d.skipped ? 'Nghỉ lại' : 'Xoá'}</button>}
           </div>
         ))}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
@@ -929,6 +972,7 @@ export default function PayrollPage() {
                 <strong style={{ minWidth: 92 }}>{dateLabel(a)}</strong>
                 <span>{a.clock_in ? hhmm(a.clock_in) : '—'} → {a.clock_out ? hhmm(a.clock_out) : 'chưa ra'}</span>
                 <span style={{ color: '#16a34a', fontWeight: 600 }}>{a.clock_out ? hoursText(Date.parse(a.clock_out) - Date.parse(a.clock_in)) : 'đang làm'}</span>
+                {(checkin?.scans || []).some(x => x.attendance_id === a.id && x.method === 'tap') && <span style={{ color: '#6d28d9', fontSize: '0.76rem' }}>🔘 bấm nút</span>}
                 <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
                   {isEd ? btn('Huỷ', () => setEditingAtt(null)) : btn('✏️ Sửa giờ', () => setEditingAtt({ ...a, clock_in: localDT(a.clock_in), clock_out: localDT(a.clock_out) }))}
                   {btn('🗑 Xoá', () => editAction('delete_attendance', { id: a.id }, `Xoá lượt ${dateLabel(a)} ${a.clock_in ? hhmm(a.clock_in) : ''} → ${a.clock_out ? hhmm(a.clock_out) : 'chưa ra'}? Giờ làm của lượt này sẽ không tính lương.`), 'red')}
@@ -2157,7 +2201,7 @@ export default function PayrollPage() {
             const warnText = { other_network: 'không dùng wifi quán', unknown_device: 'máy lạ', shared_device: 'máy của người khác', admin_no_qr: 'admin chấm không quét mã', no_face: 'chưa có mặt mẫu' };
             const card = { background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 16, marginBottom: 14 };
             const kiosks = checkin.kiosks.filter(k => !k.revoked_at);
-            const scans = checkin.scans.filter(s => !onlyWarnings || s.warnings?.length || s.action === 'blocked');
+            const scans = checkin.scans.filter(s => !onlyWarnings || s.warnings?.length || s.action === 'blocked' || s.method === 'tap');
             const shortUa = ua => /iPhone/.test(ua || '') ? 'iPhone' : /iPad/.test(ua || '') ? 'iPad' : /Android/.test(ua || '') ? (String(ua).match(/;\s*([^;)]+?)\s+Build/)?.[1] || 'Android') : 'Máy khác';
             const st = checkin.settings;
             const nowHours = hoursOn(st, vnToday());
@@ -2302,12 +2346,52 @@ export default function PayrollPage() {
                   })}
                 </div>
 
+                {/* Chấm công bằng nút cho người không có điện thoại */}
+                <div style={card}>
+                  <div style={{ fontWeight: 800, marginBottom: 4 }}>🔘 Chấm công bằng nút (người không có điện thoại)</div>
+                  <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 8, lineHeight: 1.5 }}>
+                    Người được chọn có nút tên / ảnh dưới mã QR trên máy quầy: bấm tên rồi bấm xác nhận là chấm công, giờ công tính như quét mã.
+                    Ai đứng ở máy quầy cũng bấm được nên chỉ bật cho người không có điện thoại. Lượt chấm bằng nút ghi &quot;🔘 bấm nút&quot;.
+                  </div>
+                  {staffList.filter(x => !departureOf(x.id) || departureOf(x.id).last_day >= vnToday()).map(x => {
+                    const row = (checkin.tapStaff || []).find(t => t.staff_id === x.id);
+                    const label = draftOf(`tap:${x.id}:label`, row?.label || '');
+                    const pick = async e => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (!file) return;
+                      try { await editAction('save_tap_staff', { staff_id: x.id, enabled: true, label, photo: await shrinkPhoto(file) }); } catch (err) { alert(err.message); }
+                    };
+                    return (
+                      <div key={x.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', fontSize: '0.84rem' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 140, fontWeight: 700, cursor: 'pointer' }}>
+                          <input type="checkbox" checked={!!row} onChange={e => editAction('save_tap_staff', { staff_id: x.id, enabled: e.target.checked },
+                            e.target.checked ? null : `Thôi cho ${x.full_name} chấm công bằng nút?`)} />
+                          {x.full_name}
+                        </label>
+                        {row && <>
+                          {row.photo ? <img src={row.photo} alt="" style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover' }} />
+                            : <span style={{ width: 36, height: 36, borderRadius: '50%', background: '#e2e8f0', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', color: '#64748b' }}>ảnh</span>}
+                          <input value={label} placeholder={`Tên trên nút (${x.full_name})`} maxLength={30} onChange={e => setDraft(`tap:${x.id}:label`, e.target.value)}
+                            style={{ padding: '5px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', width: 150 }} />
+                          {label !== (row.label || '') && <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }}
+                            onClick={() => editAction('save_tap_staff', { staff_id: x.id, enabled: true, label }, null, `tap:${x.id}:`)}>Lưu tên</button>}
+                          <label style={{ ...smallBtn, display: 'inline-block' }}>📷 {row.photo ? 'Đổi ảnh' : 'Thêm ảnh'}
+                            <input type="file" accept="image/*" onChange={pick} style={{ display: 'none' }} />
+                          </label>
+                          {row.photo && <button style={smallBtn} onClick={() => editAction('save_tap_staff', { staff_id: x.id, enabled: true, label: row.label || '', photo: null }, 'Xoá ảnh trên nút?')}>Xoá ảnh</button>}
+                        </>}
+                      </div>
+                    );
+                  })}
+                </div>
+
                 {/* Lịch sử quét */}
                 <div style={card}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                     <div style={{ fontWeight: 800 }}>📜 Lịch sử chấm công 14 ngày</div>
                     <label style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                      <input type="checkbox" checked={onlyWarnings} onChange={e => setOnlyWarnings(e.target.checked)} /> Chỉ lần có cảnh báo
+                      <input type="checkbox" checked={onlyWarnings} onChange={e => setOnlyWarnings(e.target.checked)} /> Chỉ lần có cảnh báo / bấm nút
                     </label>
                   </div>
                   {scans.length === 0 && <div style={{ fontSize: '0.84rem', color: '#16a34a' }}>{onlyWarnings ? '✅ Không có lần nào bị cảnh báo.' : 'Chưa có ai chấm công.'}</div>}
@@ -2319,6 +2403,7 @@ export default function PayrollPage() {
                         {s.action === 'blocked' ? '⛔ Bị chặn' : s.action === 'out' ? 'Ra ca' : 'Vào ca'}
                       </span>
                       {s.warnings?.length > 0 && <span style={{ color: '#c2410c' }}>⚠ {s.warnings.map(w => warnText[w] || w).join(', ')}</span>}
+                      {s.method === 'tap' && <span style={{ color: '#6d28d9' }}>🔘 bấm nút trên máy quầy</span>}
                     </div>
                   ))}
                 </div>

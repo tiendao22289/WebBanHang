@@ -22,8 +22,12 @@ export async function applyClock(db, { staffId, at, scan = {}, review = null }) 
   const last = await latestSession(db, staffId);
   const open = last && !last.clock_out ? last : null;
   const result = open
-    ? await db.from('attendance_sessions').update({ clock_out: at }).eq('id', open.id).select('*').single()
+    ? await db.from('attendance_sessions').update({ clock_out: at }).eq('id', open.id).is('clock_out', null).select('*').single()
     : await db.from('attendance_sessions').insert({ staff_id: staffId, date: vnDate(at), clock_in: at }).select('*').single();
+  // Hai lượt cùng lúc: DB chỉ cho một ca đang mở mỗi người (attendance_one_open), ca đã có người khác vừa đóng.
+  if (result.error?.code === '23505' || (open && (result.error?.code === 'PGRST116' || !result.data))) {
+    throw Object.assign(new Error('Ca vừa được chấm ở lượt khác.'), { code: 'already_open' });
+  }
   if (result.error) throw result.error;
   const clocked = open ? 'out' : 'in';
   if (review) {

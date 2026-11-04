@@ -1,7 +1,7 @@
 // Đọc mọi thứ cần để tính lương cả quán một tháng — dùng chung cho trang Lương / chốt lương /
 // Thống kê (api/admin/workforce) và Sổ thu chi (lương mỗi ngày theo chấm công). Chỉ phía server.
 import { readCheckinSettings } from './attendanceRules.mjs';
-import { BONUS_MIN_DAYS, activeFineKinds } from './payroll.mjs';
+import { BONUS_MIN_DAYS, activeFineKinds, shopClosedDays } from './payroll.mjs';
 import { faceHolds, markFaceHolds, missingTable } from './faceCheck.mjs';
 
 export const monthRange = (year, month) => {
@@ -45,14 +45,23 @@ export async function readLateRules(db) {
   return data || [];
 }
 
-// Ngày quán nghỉ + từng người có nhận lương ngày nghỉ không. Bảng chưa tạo: chưa có ngày nghỉ nào.
+// Ngày quán nghỉ (lịch âm lịch mỗi tháng + ngày thêm tay / mở cửa bù) + từng người có nhận lương ngày nghỉ không.
+// Bảng chưa tạo: chưa có ngày nghỉ nào.
 export async function readHolidays(db) {
-  const [days, pay] = await Promise.all([
+  const [days, rules, pay] = await Promise.all([
     db.from('shop_closed_days').select('*').order('day'),
+    db.from('shop_closed_rules').select('*').order('valid_from'),
     db.from('payroll_holiday_pay').select('*'),
   ]);
-  for (const r of [days, pay]) if (r.error && !missingTable(r.error)) throw r.error;
-  return { closedDays: days.error ? [] : days.data || [], holidayPay: pay.error ? [] : pay.data || [] };
+  for (const r of [days, rules, pay]) if (r.error && !missingTable(r.error)) throw r.error;
+  return { closedRows: days.error ? [] : days.data || [], closedRules: rules.error ? [] : rules.data || [], holidayPay: pay.error ? [] : pay.data || [] };
+}
+
+// Ngày quán nghỉ của tháng tới hôm nay (ngày chưa tới thì chưa tính lương — lương tạm tính đến hôm nay, như Sổ thu chi).
+export function closedDaysToDate({ closedRows = [], closedRules = [] }, start, end, today) {
+  today ||= new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
+  const last = new Date(Date.parse(`${end}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+  return shopClosedDays({ rules: closedRules, rows: closedRows, from: start, to: last < today ? last : today });
 }
 
 // Lần chủ duyệt giờ ngoài ca của đúng các ca đang tính (bảng này chỉ lớn dần, không đọc hết được).
@@ -66,7 +75,8 @@ export async function reviewsFor(db, sessionIds) {
   return rows;
 }
 
-export async function loadPayrollMonth(db, year, month) {
+// today: ngày hôm nay (giờ Việt Nam, theo giờ internet ở máy chủ) — ngày quán nghỉ chưa tới thì chưa tính lương.
+export async function loadPayrollMonth(db, year, month, today) {
   const { start, end } = monthRange(year, month);
   const [staff, configs, sessions, requests, violations, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules, hourlyRates, lateRules, holidays] = await Promise.all([
     db.from('staff').select('id, full_name, role, created_at'),
@@ -93,6 +103,5 @@ export async function loadPayrollMonth(db, year, month) {
   return { start, end, staff: staff.data || [], configs: configs.data || [], sessions: markFaceHolds(sessions, held), requests: requests.data || [],
     violations: violations.data || [], reviews, closes: closes.data || [], departures: departures.data || [], rules,
     bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data), hourlyRates, lateRules,
-    // Ngày quán nghỉ chưa tới thì chưa tính lương (lương tạm tính đến hôm nay, như Sổ thu chi).
-    closedDays: holidays.closedDays.filter(d => String(d.day) <= new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10)), holidayPay: holidays.holidayPay };
+    closedDays: closedDaysToDate(holidays, start, end, today), holidayPay: holidays.holidayPay };
 }
