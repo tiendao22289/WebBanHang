@@ -122,12 +122,26 @@ function Payments({ summary }) {
   </Card>;
 }
 
+// Từng khoản trong một nhóm chi (tiền nhà, tiền điện…): hiện khi nhóm có hơn 1 khoản hoặc khoản đó khác tên nhóm.
+const COST_ITEMS_SHOWN = 8;
+const sameName = (a, b) => String(a).replace(/\s*\(Sổ tay\)$/, '').trim().toLowerCase() === String(b).trim().toLowerCase();
+function CostItems({ cost }) {
+  const items = cost.items || [];
+  if (!items.length || (items.length === 1 && sameName(cost.label, items[0].name))) return null;
+  const rest = items.slice(COST_ITEMS_SHOWN);
+  return <ul className="tk-cost-items">
+    {items.slice(0, COST_ITEMS_SHOWN).map(i => <li key={i.name}><span>{i.name}</span><b>{money(i.amount)}</b></li>)}
+    {rest.length > 0 && <li className="tk-cost-more"><span>+{rest.length} khoản khác</span><b>{money(rest.reduce((a, i) => a + i.amount, 0))}</b></li>}
+  </ul>;
+}
+
 function Costs({ summary }) {
   const max = Math.max(1, ...summary.costs.map(c => c.amount));
   return <Card icon={Wallet} title="Các khoản chi" aside={money(summary.cost)}>
     {summary.costs.length ? <ul className="tk-bars">{summary.costs.map(c => <li key={c.label}>
       <div className="tk-bar-line"><span>{c.label}</span><b>{money(c.amount)}</b></div>
       <span className="tk-bar-track"><span className="tk-bar-fill cost" style={{ width: `${c.amount / max * 100}%` }} /></span>
+      <CostItems cost={c} />
     </li>)}</ul> : <p className="tk-empty">Chưa có khoản chi.</p>}
   </Card>;
 }

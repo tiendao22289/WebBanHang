@@ -61,15 +61,63 @@ export function noteOtherCosts(items, total, lineCost) {
   return out;
 }
 
-/** Gộp tiền theo loại của id lạ / đã xoá vào "Khác"; trả [{ id, name, amount }] theo thứ tự danh sách loại. */
-export function otherCostRows(byId = {}, categories = []) {
+// Tên khoản để cộng chung: "Tiền  điện" = "tiền điện" (không phân biệt hoa thường, khoảng trắng, dấu chấm cuối).
+const itemKey = s => key(s).replace(/[.,;:!]+$/, '').trim();
+const itemLabel = s => { const t = String(s || '').replace(/\s+/g, ' ').trim().replace(/[.,;:!]+$/, ''); return t.charAt(0).toUpperCase() + t.slice(1); };
+
+/**
+ * Như noteOtherCosts nhưng giữ từng khoản theo tên dòng hàng (tiền nhà, tiền điện…): { [id loại]: { [tên]: { name, amount } } }.
+ * Cùng cách chặn tiền theo tổng phiếu nên cộng các khoản của một loại đúng bằng tiền loại đó.
+ */
+export function noteOtherItems(items, total, lineCost) {
+  const out = {};
+  let left = Math.max(0, Number(total) || 0);
+  for (const item of items || []) {
+    const id = lineCategory(item), name = String(item?.name || '').trim();
+    if (!id || !name) continue;
+    const cost = Math.min(left, Math.max(0, lineCost(item) || 0));
+    if (!cost) continue;
+    addNamedCost((out[id] ||= {}), name, cost);
+    left -= cost;
+  }
+  return out;
+}
+
+/** Cộng tiền vào khoản theo tên: map { [tên đã gộp]: { name, amount } } (tên hiện là cách viết gặp đầu tiên). */
+export function addNamedCost(map, name, amount) {
+  const k = itemKey(name), v = Number(amount) || 0;
+  if (!k || !(v > 0)) return map;
+  map[k] = { name: map[k]?.name || itemLabel(name), amount: (map[k]?.amount || 0) + v };
+  return map;
+}
+
+/** Các khoản { [tên]: { name, amount } } → [{ name, amount }] nhiều tiền trước (làm tròn đồng). */
+export const namedCostList = map => Object.values(map || {}).map(x => ({ name: x.name, amount: Math.round(Number(x.amount) || 0) })).filter(x => x.amount > 0)
+  .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name, 'vi'));
+
+/** Cộng dồn { id loại: { tên: { name, amount } } } của b vào a. */
+export function addItemCosts(a, b) {
+  for (const [id, byName] of Object.entries(b || {})) {
+    const into = (a[id] ||= {});
+    for (const [k, x] of Object.entries(byName || {})) into[k] = { name: into[k]?.name || x.name, amount: (into[k]?.amount || 0) + (Number(x.amount) || 0) };
+  }
+  return a;
+}
+
+/**
+ * Gộp tiền theo loại của id lạ / đã xoá vào "Khác"; trả [{ id, name, amount, items? }] theo thứ tự danh sách loại.
+ * itemsById (noteOtherItems / addItemCosts): có thì mỗi loại kèm items [{ name, amount }] — từng khoản, nhiều tiền trước.
+ */
+export function otherCostRows(byId = {}, categories = [], itemsById = null) {
   const known = new Set(categories.map(c => c.id));
-  const sums = {};
+  const sums = {}, items = {};
   for (const [id, v] of Object.entries(byId || {})) {
     const k = known.has(id) ? id : OTHER_ID;
     sums[k] = (sums[k] || 0) + (Number(v) || 0);
   }
-  return categoryOptions(categories).filter(c => sums[c.id] > 0).map(c => ({ id: c.id, name: c.name, amount: sums[c.id] }));
+  for (const [id, byName] of Object.entries(itemsById || {})) addItemCosts(items, { [known.has(id) ? id : OTHER_ID]: byName });
+  return categoryOptions(categories).filter(c => sums[c.id] > 0)
+    .map(c => ({ id: c.id, name: c.name, amount: sums[c.id], ...(itemsById ? { items: namedCostList(items[c.id]) } : {}) }));
 }
 
 /** Cộng dồn { id: tiền } của b vào a. */

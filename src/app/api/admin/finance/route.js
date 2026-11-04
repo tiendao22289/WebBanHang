@@ -35,7 +35,7 @@ import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
 import { loadPayrollMonth, readClosedDays } from '@/lib/payrollMonth.mjs';
 import { payrollCost } from '@/lib/payroll.mjs';
-import { addCosts } from '@/lib/noteCategories.mjs';
+import { addCosts, addItemCosts, namedCostList } from '@/lib/noteCategories.mjs';
 import { FINANCE_START_DATE, FIXED_CATEGORIES, billHasStaff, billStaff, checkoutKey, closeDifferences, dailyReportText, dailyWarnings, groupPaidBills, isMonthKey, itemKey, shoppingParts, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, plainName, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
 
 export const runtime = 'nodejs';
@@ -597,11 +597,13 @@ async function readNoteCategories(db) {
   if (error) { if (missingTable(error)) return []; throw error; }
   return Array.isArray(data?.value?.categories) ? data.value.categories : [];
 }
-// Chi của ngày / kỳ để hiện: đi chợ (hàng ốc), từng loại Khác của Sổ tay, rồi các khoản còn lại.
+// Chi của ngày / kỳ để hiện: đi chợ (hàng ốc), từng loại Khác của Sổ tay (kèm từng khoản theo tên: tiền nhà, tiền điện…),
+// rồi các khoản còn lại.
 const costList = (d, noteCategories) => [
-  ...shoppingParts(d, noteCategories).map(p => [p.id ? `${p.name} (Sổ tay)` : 'Đi chợ', p.amount]),
-  ['Chi trong ngày', d.drinks], ['Lương', d.salary], ['Chi cố định', d.fixedShare], ['Khác', d.customTotal],
-].filter(([, amount]) => amount > 0).map(([label, amount]) => ({ label, amount }));
+  ...shoppingParts(d, noteCategories).map(p => [p.id ? `${p.name} (Sổ tay)` : 'Đi chợ', p.amount, p.id ? p.items : null]),
+  ['Chi trong ngày', d.drinks, namedCostList(d.costItems?.drinks)], ['Lương', d.salary], ['Chi cố định', d.fixedShare, namedCostList(d.costItems?.fixed)],
+  ['Khác', d.customTotal, namedCostList(d.costItems?.custom)],
+].filter(([, amount]) => amount > 0).map(([label, amount, items]) => ({ label, amount, ...(items?.length ? { items } : {}) }));
 
 // Nhóm so bán ra / nhập vào (vd "Ốc hương"): finance_settings['item_groups'].
 const MAX_ITEM_GROUPS = 60;
@@ -776,11 +778,13 @@ export async function GET(request) {
       const monthExtra = (a, b) => (period !== 'month' ? 0 : loaded.map(l => l.summary)
         .filter(s => s.days.length && a <= s.from && b >= s.to).reduce((total, s) => total + (Number(s.totals.salaryExtra) || 0), 0));
       const sum = (list, extra = 0) => {
-        const t = { revenue: 0, bills: 0, paperBills: 0, cash: 0, byAccount: {}, purchases: 0, notesOther: {}, drinks: 0, salary: 0, fixedShare: 0, customTotal: 0, profit: 0, closedDays: 0 };
+        const t = { revenue: 0, bills: 0, paperBills: 0, cash: 0, byAccount: {}, purchases: 0, notesOther: {}, notesOtherItems: {}, costItems: { drinks: {}, fixed: {}, custom: {} }, drinks: 0, salary: 0, fixedShare: 0, customTotal: 0, profit: 0, closedDays: 0 };
         for (const d of list) {
           for (const k of ['revenue', 'bills', 'paperBills', 'cash', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit']) t[k] += Number(d[k]) || 0;
           for (const [id, v] of Object.entries(d.byAccount || {})) t.byAccount[id] = (t.byAccount[id] || 0) + v;
           addCosts(t.notesOther, d.notesOther);
+          addItemCosts(t.notesOtherItems, d.notesOtherItems);
+          addItemCosts(t.costItems, d.costItems);
           if (d.close || d.check) t.closedDays += 1;
         }
         t.salary += extra;
