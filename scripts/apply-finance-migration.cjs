@@ -142,6 +142,14 @@ async function main() {
   console.log(JSON.stringify(hourly));
   if (!hourly.table_ok || !hourly.anon_blocked) throw new Error('Chưa cài được bảng lương theo giờ.');
 
+  // Luật đi trễ (payroll_late_rules.sql): mặc định cả quán + luật riêng từng người.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_late_rules.sql'), 'utf8'));
+  const [late] = await query(`SELECT to_regclass('public.payroll_late_rules') IS NOT NULL AS table_ok,
+    (SELECT count(*)::int FROM public.payroll_late_rules WHERE scope = 'shop') AS shop_rules,
+    NOT has_table_privilege('anon', 'public.payroll_late_rules', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(late));
+  if (!late.table_ok || late.shop_rules < 1 || !late.anon_blocked) throw new Error('Chưa cài được bảng luật đi trễ.');
+
   // So khuôn mặt ở máy quầy (checkin_face.sql): chỉ dấu mặt mẫu, không ảnh — cài TRƯỚC khi dùng app máy quầy.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_face.sql'), 'utf8'));
   const [face] = await query(`SELECT

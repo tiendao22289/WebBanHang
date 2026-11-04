@@ -37,6 +37,14 @@ export async function readHourlyRates(db, staffId = null) {
   return data || [];
 }
 
+// Luật đi trễ (mặc định của quán + riêng từng người). Bảng chưa tạo: chưa có luật, không trừ.
+export async function readLateRules(db) {
+  const { data, error } = await db.from('payroll_late_rules').select('*').order('valid_from');
+  if (missingTable(error)) return [];
+  if (error) throw error;
+  return data || [];
+}
+
 // Lần chủ duyệt giờ ngoài ca của đúng các ca đang tính (bảng này chỉ lớn dần, không đọc hết được).
 export async function reviewsFor(db, sessionIds) {
   const rows = [];
@@ -50,7 +58,7 @@ export async function reviewsFor(db, sessionIds) {
 
 export async function loadPayrollMonth(db, year, month) {
   const { start, end } = monthRange(year, month);
-  const [staff, configs, sessions, requests, violations, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules, hourlyRates] = await Promise.all([
+  const [staff, configs, sessions, requests, violations, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules, hourlyRates, lateRules] = await Promise.all([
     db.from('staff').select('id, full_name, role'),
     db.from('payroll_config').select('*'),
     // Cả ngày 1 tháng sau (ca đêm cuối tháng); đọc từng trang.
@@ -65,6 +73,7 @@ export async function loadPayrollMonth(db, year, month) {
     db.from('payroll_fine_reviews').select('*').gte('work_day', start).lt('work_day', end),
     db.from('payroll_fine_rules').select('kind, active'),
     readHourlyRates(db),
+    readLateRules(db),
   ]);
   for (const r of [staff, configs, requests, violations, closes, departures, bonuses, fineReviews, fineRules]) if (r.error) throw r.error;
   const reviews = await reviewsFor(db, sessions.map(x => x.id));
@@ -72,5 +81,5 @@ export async function loadPayrollMonth(db, year, month) {
   const held = await faceHolds(db, sessions.map(x => x.id));
   return { start, end, staff: staff.data || [], configs: configs.data || [], sessions: markFaceHolds(sessions, held), requests: requests.data || [],
     violations: violations.data || [], reviews, closes: closes.data || [], departures: departures.data || [], rules,
-    bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data), hourlyRates };
+    bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data), hourlyRates, lateRules };
 }

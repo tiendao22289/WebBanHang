@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
 import { dayFlags, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
+import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, lateRuleOn, lateRulesOf, monthTallies, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
 import { unlockSpeech } from '@/lib/speak';
@@ -81,14 +81,46 @@ function Time24({ value, onChange, step = 5 }) {
   );
 }
 // Ngày + giờ 24h ('YYYY-MM-DDTHH:MM', giờ trên máy) cho ô sửa / thêm ca, thay ô datetime-local (có máy hiện SA/CH).
-function DateTime24({ value, onChange }) {
+// Ô còn trống (ca chưa ra) mà chỉ chọn giờ thì lấy ngày `fallback` (ngày vào ca), không lấy hôm nay.
+function DateTime24({ value, onChange, fallback }) {
   const [d, t] = String(value || '').split('T');
   return (
     <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
       <input type="date" value={d || ''} onChange={e => onChange(`${e.target.value}T${t || '00:00'}`)}
         style={{ padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem' }} />
-      <Time24 value={t || '00:00'} step={1} onChange={v => onChange(`${d || vnToday()}T${v}`)} />
+      <Time24 value={t || '00:00'} step={1} onChange={v => onChange(`${d || fallback || vnToday()}T${v}`)} />
     </span>
+  );
+}
+// Bảng vào sớm / vào trễ / ra dư / về sớm theo ngày (c.daily của computeSalary): mỗi dòng một người (xem một ngày)
+// hoặc một ngày (xem cả tháng của một người). Trễ / về sớm kèm tiền bị trừ; tiền ngày đã gồm tăng ca (vào sớm + ra dư).
+function DayTable({ rows, first }) {
+  const t = m => (m ? durationText(m) : '—');
+  const note = (text, color) => <div style={{ fontSize: '0.72rem', color }}>{text}</div>;
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table className="payroll-table" style={{ minWidth: 620 }}>
+        <thead><tr><th>{first}</th><th>Vào → Ra</th><th>Vào sớm</th><th>Vào trễ</th><th>Ra dư</th><th>Về sớm</th><th>Tiền ngày</th></tr></thead>
+        <tbody>
+          {rows.map(({ key, label, d }) => (
+            <tr key={key}>
+              <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{label}</td>
+              <td style={{ whiteSpace: 'nowrap' }}>{d.in ? hhmm(d.in) : '—'} → {d.out ? hhmm(d.out) : 'chưa ra'}</td>
+              <td>{t(d.early)}</td>
+              <td style={{ color: d.late ? '#c2410c' : undefined }}>{t(d.late)}{d.lateCut > 0 && note(`−${formatMoney(d.lateCut)}`, '#dc2626')}</td>
+              <td>{t(d.stay)}</td>
+              <td style={{ color: d.leftEarly ? '#c2410c' : undefined }}>{t(d.leftEarly)}{d.earlyCut > 0 && note(`−${formatMoney(d.earlyCut)}`, '#dc2626')}</td>
+              <td style={{ whiteSpace: 'nowrap' }}>
+                <strong>{formatMoney(d.pay)}</strong>
+                {d.extraAmt > 0 && note(`gồm tăng ca +${formatMoney(d.extraAmt)}`, '#16a34a')}
+                {d.pendingMin > 0 && note(`${durationText(d.pendingMin)} ngoài ca chờ duyệt`, '#b45309')}
+              </td>
+            </tr>
+          ))}
+          {!rows.length && <tr><td colSpan="7" style={{ textAlign: 'center', color: '#94a3b8' }}>Không có ai chấm công</td></tr>}
+        </tbody>
+      </table>
+    </div>
   );
 }
 const typedMoney = v => { const raw = String(v ?? '').replace(/\./g, '').replace(/\D/g, ''); return raw ? Number(raw).toLocaleString('vi-VN') : ''; };
@@ -428,13 +460,13 @@ export default function PayrollPage() {
   }, []);
   // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
   // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
-  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], monthOver: false });
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], monthOver: false });
   const fetchPayrollMonth = useCallback(async () => {
     try {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   // So khuôn mặt ở máy quầy (app): cài đặt, ai có mặt mẫu, ca sai mặt 3 lần chờ duyệt.
@@ -477,16 +509,19 @@ export default function PayrollPage() {
   const dateLabel = a => { const d = workDayOf(a, rules); return d === a.date ? a.date : `${a.date} (ca ngày ${d.slice(8, 10)}/${d.slice(5, 7)})`; };
   const hoursText = ms => `${fmtNum(Math.round(ms / 360000) / 10)} giờ`;
   // Trễ / vào sớm ở ca đầu ngày, về sớm / ở lại ở ca cuối ngày.
-  // Tiền trừ vì về sớm theo từng ngày (tính một lần mỗi người mỗi lần vẽ trang).
-  const earlyCuts = {};
-  const earlyCutOf = (staffId, day) => (earlyCuts[staffId] ||= calcSalary(staffId).earlyList || []).find(x => x.day === day) || null;
+  // Tiền trừ vì vào trễ / về sớm theo từng ngày (tính một lần mỗi người mỗi lần vẽ trang).
+  const cutLists = {};
+  const cutsOf = staffId => (cutLists[staffId] ||= calcSalary(staffId));
+  const earlyCutOf = (staffId, day) => (cutsOf(staffId).earlyList || []).find(x => x.day === day) || null;
+  const lateCutOf = (staffId, day) => (cutsOf(staffId).lateList || []).find(x => x.day === day) || null;
   const rowFlags = a => {
     const wd = workDayOf(a, rules);
     const day = attendance.filter(x => x.staff_id === a.staff_id && workDayOf(x, rules) === wd).sort((x, y) => String(x.clock_in).localeCompare(String(y.clock_in)));
     const f = dayFlags(day, rules), first = day[0]?.id === a.id, last = day[day.length - 1]?.id === a.id;
     const texts = flagTexts({ late: first ? f.late : 0, early: first ? f.early : 0, leftEarly: last ? f.leftEarly : 0, stayed: last ? f.stayed : 0 });
-    // Về sớm từ 30 phút (từ tháng 11): ghi số tiền bị trừ của ngày đó.
-    const cut = last ? earlyCutOf(a.staff_id, wd) : null;
+    // Vào trễ / về sớm bị trừ lương: ghi số tiền bị trừ của ngày đó.
+    const lateCut = first ? lateCutOf(a.staff_id, wd) : null, cut = last ? earlyCutOf(a.staff_id, wd) : null;
+    if (lateCut) texts.push(`trừ lương ${formatMoney(lateCut.amount)} vì vào trễ`);
     if (cut) texts.push(`trừ lương ${formatMoney(cut.amount)} vì về sớm`);
     if (a.face_hold) texts.push('sai mặt 3 lần — chờ duyệt, chưa tính lương');
     return (payrollMonth.autoClosed || []).includes(a.id) ? [...texts, 'quên ra ca (máy tự đóng)'] : texts;
@@ -495,7 +530,7 @@ export default function PayrollPage() {
     const h = hoursOf(a), outside = h.earlyMs + h.stayMs;
     if (!outside) return '';
     const r = reviewMap[a.id];
-    return `ngoài ca ${durationText(outside / 60000)}: ${r ? (r.status === 'approved' ? 'đã cho tính' : 'không tính') : 'chờ duyệt'}`;
+    return `ngoài ca ${durationText(outside / 60000)}: ${r ? (r.status === 'approved' ? 'đã cho tính' : 'không tính') : h.autoExtra ? 'tự tính tăng ca' : 'chờ duyệt'}`;
   };
 
   // Violation form
@@ -533,6 +568,8 @@ export default function PayrollPage() {
   };
 
   const [expandedSalaryStaff, setExpandedSalaryStaff] = useState(null);
+  // Bảng lương: '' = cả tháng, hoặc một ngày (YYYY-MM-DD) để xem ai vào sớm / trễ, ra dư / về sớm ngày đó.
+  const [viewDay, setViewDay] = useState('');
   // Phiếu lương trên điện thoại: gọn (tên · thực lĩnh · 1 dòng tóm tắt), bấm để xem chi tiết.
   const [openSalaryCard, setOpenSalaryCard] = useState(null);
 
@@ -596,9 +633,15 @@ export default function PayrollPage() {
     violations: violations.filter(v => v.staff_id === staffId),
     bonuses: payrollMonth.bonuses.filter(b => b.staff_id === staffId),
     rules, reviews: reviewList, hourlyRates: payrollMonth.hourlyRates.filter(r => r.staff_id === staffId),
+    lateRules: lateRulesOf(payrollMonth.lateRules, staffId),
   });
   // Trễ / quên ra ca trong tháng (theo ngày làm) → xét thưởng chuyên cần và gợi ý phạt.
   const talliesOf = staffId => monthTallies({ sessions: attendance.filter(a => a.staff_id === staffId), rules, key: `${selYear}-${fmt(selMonth)}`, autoClosed: payrollMonth.autoClosed });
+  // Vào trễ theo từng ngày đã tính lương (gồm cả ngày luật riêng cho trễ ít hơn số phút cho lệch của quán).
+  const lateTallyOf = staffId => {
+    const late = (calcSalary(staffId).daily || []).filter(d => d.late > 0);
+    return late.length ? { count: late.length, minutes: late.reduce((a, d) => a + d.late, 0) } : talliesOf(staffId).late;
+  };
   const bonusOf = staffId => bonusCheck({ year: selYear, month: selMonth, salary: calcSalary(staffId), tallies: talliesOf(staffId), departure: departureOf(staffId), settings: payrollMonth.bonusSettings });
   const approvedBonusOf = staffId => payrollMonth.bonuses.find(b => b.staff_id === staffId) || null;
   // Đã có lương: lương cơ bản, hoặc lương 1 giờ áp dụng trong tháng đang xem.
@@ -622,12 +665,12 @@ export default function PayrollPage() {
   // Tải bảng lương tháng đang xem ra file Excel (để in / lưu / chuyển khoản).
   const exportPayroll = async rows => {
     const XLSX = await import('xlsx');
-    const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Lương 1 giờ', 'Giờ theo giờ', 'Lương theo giờ', 'Trừ về sớm', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
+    const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Lương 1 giờ', 'Giờ theo giờ', 'Lương theo giờ', 'Trừ vào trễ', 'Trừ về sớm', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
       'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Thực lĩnh', 'Trạng thái', 'Nghỉ việc'];
     const data = rows.map(({ s, c }) => {
       const d = departureOf(s.id);
       return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.dayUnits ?? c.workUnits : c.workDays, c.dayAmt ?? c.basePay,
-        c.hourly?.rates?.join(' / ') || '', c.hourly ? Math.round(c.hourly.minutes / 6) / 10 : '', c.hourly?.amount || '', c.earlyAmt || 0, c.totalWorkH, c.otHours, c.otAmt,
+        c.hourly?.rates?.join(' / ') || '', c.hourly ? Math.round(c.hourly.minutes / 6) / 10 : '', c.hourly?.amount || '', c.lateAmt || 0, c.earlyAmt || 0, c.totalWorkH, c.otHours, c.otAmt,
         c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.net, c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
         d ? `Làm đến ${d.last_day.split('-').reverse().join('/')}` : ''];
     });
@@ -726,6 +769,37 @@ export default function PayrollPage() {
   };
   const localDT = ts => (ts ? new Date(new Date(ts) - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
   const isoOf = v => (v ? new Date(v).toISOString() : null);
+  // Luật đi trễ: scope 'shop' = mặc định cả quán; mã nhân viên = theo quán hoặc luật riêng. Đổi luật áp dụng từ hôm nay.
+  const describeLate = r => (r ? `cho trễ ${r.allowed} phút; trễ quá thì ${[r.fixed ? `trừ ${formatMoney(r.fixed)} mỗi lần` : '', r.perMinute ? 'trừ theo phút trễ' : ''].filter(Boolean).join(' + ') || 'không trừ'}` : 'chưa đặt, không trừ');
+  const lateRuleEditor = scope => {
+    const isShop = scope === 'shop', today = vnToday();
+    const shopRule = lateRuleOn(payrollMonth.lateRules, '-', today), cur = isShop ? shopRule : lateRuleOn(payrollMonth.lateRules, scope, today);
+    const k = f => `late:${scope}:${f}`;
+    const mode = draftOf(k('mode'), isShop || cur?.own ? 'own' : 'shop');
+    const allowed = draftOf(k('allowed'), String(cur?.allowed ?? 10)), perMinute = draftOf(k('per'), cur ? cur.perMinute : true), fixed = draftOf(k('fixed'), String(cur?.fixed || ''));
+    const box = { padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', background: 'white' };
+    const save = () => editAction('save_late_rule', mode === 'shop' ? { scope, use_shop: true }
+      : { scope, allowed_minutes: Number(allowed), per_minute: !!perMinute, fixed_amount: fixed || 0 }, null, `late:${scope}:`);
+    return (
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', fontSize: '0.82rem' }}>
+        {!isShop && (
+          <select style={box} value={mode} onChange={e => setDraft(k('mode'), e.target.value)}>
+            <option value="shop">Theo mặc định của quán</option>
+            <option value="own">Riêng cho người này</option>
+          </select>
+        )}
+        {mode === 'own' && <>
+          <label>Cho phép trễ <input style={{ ...box, width: 56 }} inputMode="numeric" value={allowed} onChange={e => setDraft(k('allowed'), e.target.value.replace(/\D/g, ''))} /> phút</label>
+          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}><input type="checkbox" checked={!!perMinute} onChange={e => setDraft(k('per'), e.target.checked)} /> Trừ theo phút trễ</label>
+          <label>Trừ mỗi lần trễ <input style={{ ...box, width: 96 }} inputMode="numeric" placeholder="0" value={typedMoney(fixed)} onChange={e => setDraft(k('fixed'), e.target.value.replace(/\D/g, ''))} />đ</label>
+        </>}
+        <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }} onClick={save}>Lưu</button>
+        <div style={{ flexBasis: '100%', fontSize: '0.76rem', color: '#64748b' }}>
+          Đang áp dụng: {describeLate(cur)}{!isShop && cur ? (cur.own ? ' (riêng)' : ' (theo quán)') : ''}. Đổi thì áp dụng từ hôm nay. Trừ theo phút = lương ngày ÷ số phút của ca × số phút trễ.
+        </div>
+      </div>
+    );
+  };
   const payEditor = s => {
     const live = calcSalary(s.id), closed = closeOf(s.id), pay = hourlyEditOf(s.id);
     const edit = configEdits[s.id] || { base_salary: 0, overtime_rate: 25000, pay_day: 5 };
@@ -762,6 +836,13 @@ export default function PayrollPage() {
           {closed && <div style={{ color: '#b45309' }}>🔒 Tháng này đã chốt lương cho người này: sửa xong thì bấm Mở chốt rồi chốt lại để lấy số mới.</div>}
         </div>
 
+        {(live.daily || []).length > 0 && (
+          <div style={section}>
+            {head('📅 Từng ngày trong tháng')}
+            <DayTable first="Ngày" rows={[...live.daily].reverse().map(d => ({ key: d.day, label: ddmm(d.day), d }))} />
+          </div>
+        )}
+
         <div style={section}>
           {head('💰 Lương')}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
@@ -778,6 +859,11 @@ export default function PayrollPage() {
             <label style={label}>Giá tăng ca/giờ<input style={{ ...box, width: 90 }} inputMode="numeric" value={edit.overtime_rate ?? 25000} onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value.replace(/\D/g, '') } }))} /></label>
             {btn('Lưu lương', () => handleSaveConfig(s.id), 'dark')}
           </div>
+        </div>
+
+        <div style={section}>
+          {head('⏰ Đi trễ')}
+          {lateRuleEditor(s.id)}
         </div>
 
         <div style={section}>
@@ -798,15 +884,15 @@ export default function PayrollPage() {
                 {flags.length > 0 && <div style={{ flexBasis: '100%', fontSize: '0.75rem', color: '#c2410c' }}>⚠ {flags.join(' · ')}</div>}
                 {outside > 0 && a.clock_out && (
                   <div style={{ flexBasis: '100%', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.78rem' }}>
-                    <span>Ngoài ca {durationText(outside / 60000)}: <strong>{review ? (review.status === 'approved' ? 'đã cho tính' : 'không tính') : 'chờ duyệt'}</strong></span>
-                    {review?.status !== 'approved' && btn('Cho tính', () => editAction('decide_extra', { attendance_id: a.id, status: 'approved' }))}
+                    <span>Ngoài ca {durationText(outside / 60000)}: <strong>{review ? (review.status === 'approved' ? 'đã cho tính' : 'không tính') : h.autoExtra ? 'tự tính tăng ca' : 'chờ duyệt'}</strong></span>
+                    {review?.status !== 'approved' && !(h.autoExtra && !review) && btn('Cho tính', () => editAction('decide_extra', { attendance_id: a.id, status: 'approved' }))}
                     {review?.status !== 'rejected' && btn('Không tính', () => editAction('decide_extra', { attendance_id: a.id, status: 'rejected' }))}
                   </div>
                 )}
                 {isEd && (
                   <div style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                    <label style={label}>Giờ vào<DateTime24 value={editingAtt.clock_in || ''} onChange={v => setEditingAtt(p => ({ ...p, clock_in: v }))} /></label>
-                    <label style={label}>Giờ ra<DateTime24 value={editingAtt.clock_out || ''} onChange={v => setEditingAtt(p => ({ ...p, clock_out: v }))} /></label>
+                    <label style={label}>Giờ vào<DateTime24 value={editingAtt.clock_in || ''} fallback={(editingAtt.clock_in || '').slice(0, 10)} onChange={v => setEditingAtt(p => ({ ...p, clock_in: v }))} /></label>
+                    <label style={label}>Giờ ra<DateTime24 value={editingAtt.clock_out || ''} fallback={(editingAtt.clock_in || '').slice(0, 10)} onChange={v => setEditingAtt(p => ({ ...p, clock_out: v }))} /></label>
                     <label style={label}>Ghi chú<input style={{ ...box, width: 160 }} value={editingAtt.note || ''} placeholder="Lý do sửa…" onChange={e => setEditingAtt(p => ({ ...p, note: e.target.value }))} /></label>
                     {btn('💾 Lưu giờ', handleSaveAttEdit, 'dark')}
                   </div>
@@ -943,7 +1029,8 @@ export default function PayrollPage() {
   const departureOf = id => (checkin?.departures || []).find(d => d.staff_id === id) || null;
   // Gợi ý phạt chưa xử lý của cả quán trong tháng (người nghỉ việc trước tháng này không tính).
   const fineHints = staffList.filter(s => activeInMonth(departureOf(s.id), `${selYear}-${fmt(selMonth)}`))
-    .flatMap(s => fineSuggestions({ staffId: s.id, tallies: talliesOf(s.id), reviews: payrollMonth.fineReviews, kinds: activeFineKinds(payrollMonth.fineRules) }));
+    .flatMap(s => fineSuggestions({ staffId: s.id, tallies: talliesOf(s.id), reviews: payrollMonth.fineReviews, kinds: activeFineKinds(payrollMonth.fineRules),
+      autoLateDays: (calcSalary(s.id).lateList || []).map(x => x.day) }));
   // Thưởng / phạt: gửi lên máy chủ rồi tải lại (khoản phạt đọc lại cả bảng lương).
   const payrollAction = async (action, body, confirmText) => {
     if (confirmText && !confirm(confirmText)) return false;
@@ -1026,7 +1113,7 @@ export default function PayrollPage() {
               const h = myHours(s), outside = h.earlyMs + h.stayMs;
               if (!outside) return '';
               const r = myReviewMap[s.id];
-              return `ngoài ca ${durationText(outside / 60000)}: ${r ? (r.status === 'approved' ? 'được tính' : 'không tính') : 'chờ chủ duyệt'}`;
+              return `ngoài ca ${durationText(outside / 60000)}: ${r ? (r.status === 'approved' ? 'được tính' : 'không tính') : h.autoExtra ? 'tính tăng ca' : 'chờ chủ duyệt'}`;
             };
             const myShift = myRules && currentUser ? shiftOf(myRules, currentUser.id, vnToday()) : null;
             const pendingFix = id => myFixes.some(f => f.attendance_id === id && f.status === 'pending');
@@ -1037,9 +1124,9 @@ export default function PayrollPage() {
             const fixFormFor = s => fixForm?.attendance_id === s.id && (
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: 10, margin: '6px 0 8px', display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.8rem' }}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>Giờ vào đúng
-                  <DateTime24 value={fixForm.clock_in} onChange={v => setFixForm(p => ({ ...p, clock_in: v }))} /></label>
+                  <DateTime24 value={fixForm.clock_in} fallback={(fixForm.clock_in || '').slice(0, 10)} onChange={v => setFixForm(p => ({ ...p, clock_in: v }))} /></label>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>Giờ ra đúng
-                  <DateTime24 value={fixForm.clock_out} onChange={v => setFixForm(p => ({ ...p, clock_out: v }))} /></label>
+                  <DateTime24 value={fixForm.clock_out} fallback={(fixForm.clock_in || '').slice(0, 10)} onChange={v => setFixForm(p => ({ ...p, clock_out: v }))} /></label>
                 <input type="text" value={fixForm.reason} placeholder="Lý do (vd: quên bấm ra ca, về lúc 23:30)" onChange={e => setFixForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} />
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button onClick={handleSubmitFix} disabled={sending === 'fix'} style={{ flex: 1, padding: 8, background: '#111827', color: 'white', border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer', opacity: sending === 'fix' ? 0.6 : 1 }}>{sending === 'fix' ? 'Đang gửi…' : 'Gửi chủ quán duyệt'}</button>
@@ -1147,7 +1234,7 @@ export default function PayrollPage() {
                   <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '12px 14px', fontSize: '0.85rem', color: '#1e3a8a', lineHeight: 1.6 }}>
                     📶 Vào <strong>wifi quán</strong> → bấm nút trên rồi đưa camera vào mã QR trên <strong>máy quầy</strong>. Dùng app Camera của điện thoại quét cũng được.
                     {myShift && (
-                      <div style={{ marginTop: 6 }}>🕑 Ca của bạn: <strong>{myShift.start} – {myShift.end}</strong> (cho lệch {hoursOn(myRules, vnToday()).grace} phút). Vào sớm / ở lại ngoài ca chỉ được tính khi chủ quán đồng ý.</div>
+                      <div style={{ marginTop: 6 }}>🕑 Ca của bạn: <strong>{myShift.start} – {myShift.end}</strong> (cho lệch {hoursOn(myRules, vnToday()).grace} phút). Vào sớm / ở lại quá số phút cho lệch được tính tăng ca; đi trễ bị trừ lương theo luật đi trễ của quán.</div>
                     )}
                     <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>Quên ra ca thì máy tự tính ra ca lúc hết ca; bấm "Xin sửa giờ" để chủ quán sửa lại.</div>
                   </div>
@@ -1243,6 +1330,12 @@ export default function PayrollPage() {
                       {c.hourly && row('Giờ trong ca', `${durationText(c.hourly.minutes)} × ${rateText(c)} → ${formatMoney(c.hourly.amount)}`)}
                     </>
                   : <>{row('Lương cơ bản', formatMoney(c.base))}{row('Ngày công', `${c.workDays} ngày`)}</>}
+                {c.lateAmt > 0 && row(`Trừ vào trễ (${c.lateList?.length || 0} lần)`, `−${formatMoney(c.lateAmt)}`, '#dc2626')}
+                {c.lateAmt > 0 && (
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', padding: '2px 0 6px', borderBottom: '1px solid #f1f5f9' }}>
+                    {(c.lateList || []).map(x => <div key={x.day}>• {ddmm(x.day)} · trễ {durationText(x.minutes)} — −{formatMoney(x.amount)}</div>)}
+                  </div>
+                )}
                 {c.earlyAmt > 0 && row(`Trừ về sớm (${c.earlyList?.length || 0} lần)`, `−${formatMoney(c.earlyAmt)}`, '#dc2626')}
                 {c.earlyAmt > 0 && (
                   <div style={{ fontSize: '0.76rem', color: '#64748b', padding: '2px 0 6px', borderBottom: '1px solid #f1f5f9' }}>
@@ -1277,8 +1370,8 @@ export default function PayrollPage() {
                 <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: 6, lineHeight: 1.5 }}>
                   {c.rule === 'days'
                     ? hourOnly(c)
-                      ? 'Lương = số giờ có mặt trong ca × lương 1 giờ (đi trễ / về sớm thì không tính phần đó). Tăng ca là giờ ngoài ca chủ quán đã đồng ý.'
-                      : `Lương = lương cơ bản ÷ ${c.standardDays} × số ngày đi làm (ngày làm dưới nửa ca tính nửa ngày). Về sớm từ 30 phút bị trừ lương theo giờ về sớm.${c.hourly ? ' Ngày làm theo giờ: số giờ trong ca × lương 1 giờ.' : ''} Tăng ca là giờ ngoài ca chủ quán đã đồng ý.`
+                      ? 'Lương = số giờ có mặt trong ca × lương 1 giờ (đi trễ / về sớm thì không tính phần đó). Tăng ca là giờ vào sớm / ở lại ngoài ca.'
+                      : `Lương = lương cơ bản ÷ ${c.standardDays} × số ngày đi làm (ngày làm dưới nửa ca tính nửa ngày). Đi trễ bị trừ theo luật đi trễ của quán; về sớm từ 30 phút bị trừ theo số phút về sớm.${c.hourly ? ' Ngày làm theo giờ: số giờ trong ca × lương 1 giờ.' : ''} Tăng ca là giờ vào sớm / ở lại ngoài ca.`
                     : 'Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca là giờ làm quá 8 tiếng mỗi ngày.'}
                   {!c.locked && ' Số còn thay đổi tới khi chủ quán chốt lương cuối tháng.'}
                 </div>
@@ -1423,6 +1516,14 @@ export default function PayrollPage() {
             const closes = payrollMonth.closes, closedAt = closes[0]?.closed_at, closedBy = closes[0]?.closed_by;
             const changed = rows.filter(x => x.c.locked && x.c.liveNet !== x.c.net);
             const leftThisMonth = s => { const d = departureOf(s.id); return d && d.last_day.slice(0, 7) === thisMonth ? d : null; };
+            // Xem một ngày của tháng đang xem (tới hôm nay); cộng dồn cả tháng ở các cột Vào sớm / trễ / Ra dư / Về sớm.
+            const lastDay = new Date(Date.UTC(selYear, selMonth, 0)).getUTCDate();
+            const dayOptions = Array.from({ length: lastDay }, (_, i) => `${thisMonth}-${fmt(i + 1)}`).filter(d => d <= today).reverse();
+            const shownDay = dayOptions.includes(viewDay) ? viewDay : '';
+            const tally = (t, cut) => (t?.count
+              ? <>{durationText(t.minutes)}<div style={{ fontSize: '0.72rem', color: cut ? '#ef4444' : '#94a3b8' }}>{t.count} lần{cut ? ` · −${formatMoney(cut)}` : ''}</div></>
+              : <span style={{ color: '#94a3b8' }}>—</span>);
+            const tallyText = (t, cut) => (t?.count ? `${durationText(t.minutes)} (${t.count} lần)${cut ? ` · −${formatMoney(cut)}` : ''}` : '—');
             return (
               <div>
                 {/* Filter bar */}
@@ -1437,13 +1538,27 @@ export default function PayrollPage() {
                   <select value={selYear} onChange={e => setSelYear(Number(e.target.value))}>
                     {years.map(y => <option key={y} value={y}>{y}</option>)}
                   </select>
+                  {dayPay && (
+                    <select value={shownDay} onChange={e => setViewDay(e.target.value)}>
+                      <option value="">📅 Cả tháng</option>
+                      {dayOptions.map(d => <option key={d} value={d}>📅 Ngày {ddmm(d)}</option>)}
+                    </select>
+                  )}
                 </div>
+
+                {/* Một ngày: ai vào sớm / trễ, ra dư / về sớm, tiền ngày đó */}
+                {shownDay && (
+                  <div style={{ margin: '0 0 12px' }}>
+                    <div style={{ fontWeight: 800, margin: '2px 0 6px' }}>📅 Chấm công ngày {ddmm(shownDay)}</div>
+                    <DayTable first="Nhân viên" rows={filtered.map(s => ({ key: s.id, label: s.full_name, d: (calcSalary(s.id).daily || []).find(x => x.day === shownDay) })).filter(r => r.d)} />
+                  </div>
+                )}
 
                 {/* Cách tính + chốt lương tháng */}
                 <div style={{ background: closes.length ? '#f0fdf4' : 'white', border: `1px solid ${closes.length ? '#bbf7d0' : '#e5e7eb'}`, borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155', lineHeight: 1.6 }}>
                   <div>
                     {dayPay
-                      ? <>📐 <strong>Tính theo ngày công:</strong> lương cơ bản ÷ {STANDARD_DAYS} × số ngày đi làm (làm dư thì cộng thêm, ngày làm dưới nửa ca tính nửa ngày). Về sớm từ 30 phút: trừ lương theo giờ về sớm (lương ngày ÷ số giờ của ca). Tăng ca = giờ ngoài ca bạn đã bấm "Cho tính". Đơn báo nghỉ không trừ thêm. Người trả theo giờ: số giờ trong ca × lương 1 giờ (trễ / về sớm mất đúng số phút đó), giờ ngoài ca bạn cho tính trả theo giá tăng ca.</>
+                      ? <>📐 <strong>Tính theo ngày công:</strong> lương cơ bản ÷ {STANDARD_DAYS} × số ngày đi làm (làm dư thì cộng thêm, ngày làm dưới nửa ca tính nửa ngày). Đi trễ: trừ theo luật đi trễ (mặc định của quán hoặc riêng từng người — tiền cố định mỗi lần và / hoặc theo phút trễ); về sớm từ 30 phút: trừ số phút về sớm (lương ngày ÷ số phút của ca). Vào sớm / ra dư quá số phút cho lệch: tự tính tăng ca (bấm "Sửa" để bỏ một ca nếu không trả). Đơn báo nghỉ không trừ thêm. Người trả theo giờ: số giờ trong ca × lương 1 giờ (trễ / về sớm mất đúng số phút đó), giờ ngoài ca trả theo giá tăng ca.</>
                       : <>📐 Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày, trừ ngày nghỉ có đơn.</>}
                   </div>
                   {isAdmin && (
@@ -1487,7 +1602,7 @@ export default function PayrollPage() {
                         <button type="button" className="salary-card-header" onClick={() => setOpenSalaryCard(cardOpen ? null : s.id)} aria-expanded={cardOpen}>
                           <div style={{ minWidth: 0 }}>
                             <div className="salary-card-name">{c.locked ? '🔒 ' : ''}{s.full_name}</div>
-                            <div className="salary-card-sum">{[daysText(c), c.otHours ? `tăng ca ${fmtNum(c.otHours)} giờ` : null, c.advAmt ? `ứng ${formatMoney(c.advAmt)}` : null, c.vioAmt ? `phạt ${formatMoney(c.vioAmt)}` : null].filter(Boolean).join(' · ')}</div>
+                            <div className="salary-card-sum">{[daysText(c), lateTallyOf(s.id).count ? `trễ ${lateTallyOf(s.id).count} lần` : null, c.otHours ? `tăng ca ${fmtNum(c.otHours)} giờ` : null, c.advAmt ? `ứng ${formatMoney(c.advAmt)}` : null, c.vioAmt ? `phạt ${formatMoney(c.vioAmt)}` : null].filter(Boolean).join(' · ')}</div>
                           </div>
                           <div className="salary-card-end">
                             <div className={`salary-card-net ${c.net < 0 ? 'negative' : ''}`}>{formatMoney(c.net)}</div>
@@ -1503,16 +1618,16 @@ export default function PayrollPage() {
                             <span className="salary-card-label">{hourOnly(c) ? 'Giờ tính lương' : 'Ngày công'}</span>
                             <span className="salary-card-value">{daysText(c)}{c.rule === 'days' && <> → {formatMoney(c.basePay)}</>}</span>
                           </div>
-                          {c.earlyAmt > 0 && (
-                            <div className="salary-card-row">
-                              <span className="salary-card-label">Trừ về sớm ({c.earlyList?.length || 0} lần)</span>
-                              <span className="salary-card-value red">−{formatMoney(c.earlyAmt)}</span>
-                            </div>
-                          )}
                           <div className="salary-card-row">
                             <span className="salary-card-label">Tổng giờ làm</span>
                             <span className="salary-card-value">{fmtNum(c.totalWorkH)} giờ</span>
                           </div>
+                          {[['Vào sớm', talliesOf(s.id).early], ['Vào trễ', lateTallyOf(s.id), c.lateAmt], ['Ra dư', talliesOf(s.id).stayed], ['Về sớm', talliesOf(s.id).leftEarly, c.earlyAmt]].map(([label, t, cut]) => (
+                            <div key={label} className="salary-card-row">
+                              <span className="salary-card-label">{label}</span>
+                              <span className={`salary-card-value ${cut ? 'red' : t.count ? '' : 'muted'}`}>{tallyText(t, cut)}</span>
+                            </div>
+                          ))}
                           {c.pendingH > 0 && (
                             <div className="salary-card-row">
                               <span className="salary-card-label">Ngoài ca chờ duyệt</span>
@@ -1572,7 +1687,7 @@ export default function PayrollPage() {
                 <div className="desktop-table">
                   <table className="payroll-table">
                     <thead><tr>
-                      <th>Nhân viên</th><th>Lương CB</th><th>Ngày công</th><th>Giờ làm</th>
+                      <th>Nhân viên</th><th>Lương CB</th><th>Ngày công</th><th>Giờ làm</th><th>Vào sớm</th><th>Vào trễ</th><th>Ra dư</th><th>Về sớm</th>
                       <th>Tăng ca</th><th>Thưởng</th><th>Ứng lương</th><th>Nghỉ</th><th>Vi phạm</th>
                       <th style={{color:'#16a34a'}}>Thực lĩnh</th>
                       {isAdmin && <th></th>}
@@ -1585,9 +1700,12 @@ export default function PayrollPage() {
                             <tr>
                             <td><div style={{fontWeight:700}}>{c.locked ? '🔒 ' : ''}{s.full_name}</div><div style={{fontSize:'0.73rem',color:'#94a3b8'}}>{s.phone}</div></td>
                             <td>{baseText(c)}</td>
-                            <td>{daysText(c)}{c.rule === 'days' && <div style={{fontSize:'0.72rem',color:'#94a3b8'}}>= {formatMoney(c.basePay)}</div>}
-                              {c.earlyAmt > 0 && <div style={{fontSize:'0.72rem',color:'#ef4444'}}>−{formatMoney(c.earlyAmt)} về sớm ({c.earlyList?.length || 0} lần)</div>}</td>
+                            <td>{daysText(c)}{c.rule === 'days' && <div style={{fontSize:'0.72rem',color:'#94a3b8'}}>= {formatMoney(c.basePay)}</div>}</td>
                             <td>{fmtNum(c.totalWorkH)} giờ{c.pendingH > 0 && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>+{fmtNum(c.pendingH)} giờ ngoài ca chờ duyệt</div>}</td>
+                            <td>{tally(talliesOf(s.id).early)}</td>
+                            <td>{tally(lateTallyOf(s.id), c.lateAmt)}</td>
+                            <td>{tally(talliesOf(s.id).stayed)}</td>
+                            <td>{tally(talliesOf(s.id).leftEarly, c.earlyAmt)}</td>
                             <td><span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.otHours)} giờ</div></td>
                             <td>{c.bonusAmt > 0 ? <span style={{color:'#16a34a'}}>+{formatMoney(c.bonusAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}</td>
                             <td><span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span></td>
@@ -1605,12 +1723,12 @@ export default function PayrollPage() {
                               <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} compact /></td>}
                           </tr>
                           {isAdmin && expandedSalaryStaff === s.id && (
-                            <tr><td colSpan="11" style={{ padding: 0, borderBottom: '2px solid #3b82f6' }}>{payEditor(s)}</td></tr>
+                            <tr><td colSpan="15" style={{ padding: 0, borderBottom: '2px solid #3b82f6' }}>{payEditor(s)}</td></tr>
                           )}
                           </React.Fragment>
                         );
                       })}
-                      {filtered.length === 0 && <tr><td colSpan={isAdmin ? '10' : '9'} style={{textAlign:'center',color:'#94a3b8',padding:24}}>Chưa có nhân viên</td></tr>}
+                      {filtered.length === 0 && <tr><td colSpan={isAdmin ? '15' : '14'} style={{textAlign:'center',color:'#94a3b8',padding:24}}>Chưa có nhân viên</td></tr>}
                     </tbody>
                   </table>
                 </div>
@@ -1647,7 +1765,7 @@ export default function PayrollPage() {
                 );
               })}
 
-              {/* Giờ ngoài ca (vào sớm / ở lại) chưa tính lương, chờ chủ cho tính hoặc không. */}
+              {/* Giờ ngoài ca chờ chủ cho tính hoặc không: chỉ còn ngày trước khi giờ ngoài ca tự tính (AUTO_EXTRA_FROM). */}
               {(checkin?.extras || []).map(x => {
                 const t = ts => new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
                 return (
@@ -1892,7 +2010,7 @@ export default function PayrollPage() {
                                   ].map(({ label, key, type }) => (
                                     <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                       <span style={{ width: 70, fontSize: '0.78rem', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>{label}</span>
-                                      <DateTime24 value={editingAtt[key] || ''} onChange={v => setEditingAtt(p => ({ ...p, [key]: v }))} />
+                                      <DateTime24 value={editingAtt[key] || ''} fallback={(editingAtt.clock_in || '').slice(0, 10)} onChange={v => setEditingAtt(p => ({ ...p, [key]: v }))} />
                                     </div>
                                   ))}
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1939,7 +2057,7 @@ export default function PayrollPage() {
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, padding: '8px 4px' }}>
                                       {[{label:'Giờ vào',key:'clock_in',type:'datetime-local'},{label:'Giờ ra',key:'clock_out',type:'datetime-local'}].map(({label,key,type})=>(
                                         <label key={key} style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
-                                          {label}<DateTime24 value={editingAtt[key]||''} onChange={v=>setEditingAtt(p=>({...p,[key]:v}))} />
+                                          {label}<DateTime24 value={editingAtt[key]||''} fallback={(editingAtt.clock_in||'').slice(0,10)} onChange={v=>setEditingAtt(p=>({...p,[key]:v}))} />
                                         </label>
                                       ))}
                                       <label style={{display:'flex',flexDirection:'column',gap:2,fontSize:'0.78rem',fontWeight:600,color:'#475569'}}>
@@ -2015,7 +2133,7 @@ export default function PayrollPage() {
                 <div style={card}>
                   <div style={{ fontWeight: 800, marginBottom: 6 }}>🕑 Giờ làm</div>
                   <div style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.6, marginBottom: 10 }}>
-                    Nhân viên quét mã lúc nào cũng được, nhưng <strong>chỉ tính lương giờ trong ca</strong>. Vào sớm / ở lại quá số phút cho lệch là <strong>giờ ngoài ca</strong>: chưa tính, chờ bạn bấm "Cho tính" ở tab Yêu cầu.
+                    Nhân viên quét mã lúc nào cũng được, nhưng <strong>chỉ tính lương giờ trong ca</strong>. Vào sớm / ở lại quá số phút cho lệch là <strong>giờ ngoài ca</strong>: tự tính tăng ca. Đi trễ: trừ theo luật đi trễ bên dưới.
                     Quên ra ca thì máy tính ra ca lúc hết ca.
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: '0.86rem' }}>
@@ -2032,6 +2150,9 @@ export default function PayrollPage() {
                     )}
                   </div>
                   <div style={{ marginTop: 6 }}><SpanNote start={hoursEdit.opening_time} end={hoursEdit.closing_time} label="Quán mở" /></div>
+                  <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>⏰ Đi trễ — mặc định cả quán</div>
+                  {lateRuleEditor('shop')}
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>Từng người đặt riêng ở tab Cấu hình hoặc nút "Sửa" trong Bảng lương.</div>
                   <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 8 }}>
                     Tính giờ theo ca từ ngày <strong>{st.hours_from.split('-').reverse().join('/')}</strong>; những ngày trước đó vẫn tính như cũ. Đổi giờ hay đổi ca thì áp dụng từ hôm nay, ngày đã làm giữ giờ cũ.
                   </div>
@@ -2302,6 +2423,9 @@ export default function PayrollPage() {
                           onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, pay_day: e.target.value } }))} />
                       </div>
                       <button className="btn-primary" style={{ marginTop: 18 }} onClick={() => handleSaveConfig(s.id)}>Lưu</button>
+                      <div className="config-note" style={{ borderTop: '1px dashed #e2e8f0', paddingTop: 6 }}>
+                        <strong>⏰ Đi trễ</strong> {lateRuleEditor(s.id)}
+                      </div>
                       {(pay.type === 'hour' || pay.current) && (
                         <div className="config-note">
                           {pay.current ? `Đang trả theo giờ: ${formatMoney(pay.current.hourly_rate)}/giờ từ ${ddmm(String(pay.current.valid_from))}. ` : 'Đang trả theo tháng. '}

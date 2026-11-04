@@ -209,7 +209,7 @@ test('only admins see the kiosk page data and change check-in settings', async (
   assert.deepEqual([overview.status, overview.body.kiosks.length], [200, 1]);
 });
 
-test('outside-shift time waits for the owner, and changing the hours asks again', async () => {
+test('outside-shift time counts by itself from November; the owner can still not count a shift', async () => {
   const id = '00000000-0000-4000-8000-000000000004';
   const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
   const at = hm => new Date(`${today}T${hm}:00+07:00`).toISOString();
@@ -218,20 +218,23 @@ test('outside-shift time waits for the owner, and changing the hours asks again'
   state.checkin_hours = [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }];
   const admin = load(state, ADMIN);
   const overview = async () => plain(await admin.GET({ url: 'http://x/api/admin/workforce?checkin=1' })).body;
-  assert.deepEqual((await overview()).extras.map(x => [x.attendance_id, x.early_minutes, x.stay_minutes]), [[id, 50, 45]]);
-  assert.equal((await post(load(state, STAFF), { action: 'decide_extra', attendance_id: id, status: 'approved' })).status, 403);
-  const ok = await post(admin, { action: 'decide_extra', attendance_id: id, status: 'approved' });
-  assert.deepEqual([ok.status, ok.body.minutes], [200, 95]);
-  const after = await overview();
-  assert.deepEqual([after.extras.length, after.reviews[0].status, after.reviews[0].minutes], [0, 'approved', 95]);
-  const me = plain(await load(state, STAFF).GET({ url: 'http://x/api/admin/workforce?me=1' })).body;
-  assert.deepEqual(me.reviews.map(r => r.minutes), [95], 'staff see that it was counted');
-
-  await post(admin, { action: 'edit_attendance', id, clock_in: at('13:30'), clock_out: at('23:45') });
-  assert.equal(state.attendance_extra_reviews.length, 0);
-  assert.deepEqual((await overview()).extras.map(x => [x.early_minutes, x.stay_minutes]), [[30, 45]]);
-  await post(admin, { action: 'decide_extra', attendance_id: id, status: 'rejected' });
+  const first = await overview();
+  assert.deepEqual(first.extras, [], 'nothing waits for approval');
+  const hours = review => rules.sessionHours(state.attendance_sessions[0], first.settings, review);
+  assert.deepEqual([hours().earlyMs / 60000, hours().stayMs / 60000, hours().approvedMs / 60000, hours().pendingMs, hours().autoExtra], [50, 45, 95, 0, true]);
+  assert.equal((await post(load(state, STAFF), { action: 'decide_extra', attendance_id: id, status: 'rejected' })).status, 403);
+  assert.equal((await post(admin, { action: 'decide_extra', attendance_id: id, status: 'rejected' })).status, 200);
   assert.deepEqual(plain(state.attendance_extra_reviews.map(r => [r.status, r.minutes])), [['rejected', 0]]);
+  assert.deepEqual([hours(state.attendance_extra_reviews[0]).approvedMs, hours(state.attendance_extra_reviews[0]).pendingMs], [0, 0], 'not counted');
+  // Sửa giờ (hay duyệt đơn xin sửa giờ) vẫn giữ "không tính" của chủ: không tự mở lại tiền tăng ca.
+  await post(admin, { action: 'edit_attendance', id, clock_in: at('13:30'), clock_out: at('23:45') });
+  assert.deepEqual(plain(state.attendance_extra_reviews.map(r => r.status)), ['rejected']);
+  assert.equal(hours(state.attendance_extra_reviews[0]).approvedMs, 0);
+  // Lần "cho tính" (số phút cũ) thì bỏ đi khi sửa giờ: giờ ngoài ca mới tự tính đủ.
+  assert.equal((await post(admin, { action: 'decide_extra', attendance_id: id, status: 'approved' })).status, 200);
+  await post(admin, { action: 'edit_attendance', id, clock_in: at('13:00'), clock_out: at('23:45') });
+  assert.equal(state.attendance_extra_reviews.length, 0);
+  assert.equal(hours().approvedMs / 60000, 105);
 });
 
 test('owner sets a shift per person from today, or goes back to the shop hours', async () => {
@@ -663,4 +666,35 @@ test('from the pay slip the owner adds a forgotten shift, deletes a mis-scan, re
   assert.equal((await post(admin, { action: 'edit_violation', id: S('f1'), amount: '30.000', reason: 'Đi trễ 20 phút' })).status, 200);
   assert.deepEqual([state.payroll_violations[0].amount, state.payroll_violations[0].reason], [30000, 'Đi trễ 20 phút']);
   assert.equal((await post(admin, { action: 'edit_violation', id: S('f9'), amount: 1000 })).status, 404);
+});
+
+test('the owner sets the shop late rule and a rule per person from today; staff cannot', async () => {
+  const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
+  const state = shop({ payroll_late_rules: [{ scope: 'shop', valid_from: '2026-11-04', allowed_minutes: 10, per_minute: true, fixed_amount: 50000, use_shop: false }] });
+  const admin = load(state, ADMIN);
+  assert.equal((await post(load(state, STAFF), { action: 'save_late_rule', scope: STAFF.id, allowed_minutes: 60, per_minute: false, fixed_amount: 0 })).status, 403);
+  assert.equal((await post(admin, { action: 'save_late_rule', scope: 'abc', allowed_minutes: 10 })).status, 400);
+  assert.equal((await post(admin, { action: 'save_late_rule', scope: STAFF.id, allowed_minutes: -1 })).status, 400);
+  assert.equal((await post(admin, { action: 'save_late_rule', scope: LAN.id.toUpperCase(), allowed_minutes: 5, per_minute: true, fixed_amount: 0 })).status, 200);
+  assert.ok(state.payroll_late_rules.some(r => r.scope === LAN.id), 'a staff id is saved in lower case');
+  assert.equal((await post(admin, { action: 'save_late_rule', scope: STAFF.id, allowed_minutes: 30, per_minute: false, fixed_amount: '50.000' })).status, 200);
+  assert.equal((await post(admin, { action: 'save_late_rule', scope: 'shop', allowed_minutes: 15, per_minute: true, fixed_amount: '30.000' })).status, 200);
+  const rows = plain(state.payroll_late_rules.filter(r => r.valid_from === today && r.scope !== LAN.id).map(r => [r.scope, r.allowed_minutes, r.per_minute, r.fixed_amount, r.use_shop, r.updated_by]))
+    .sort((x, y) => x[0].localeCompare(y[0]));
+  assert.deepEqual(rows, [[STAFF.id, 30, false, 50000, false, 'Chủ quán'], ['shop', 15, true, 30000, false, 'Chủ quán']]);
+  assert.deepEqual(payroll.lateRuleOn(state.payroll_late_rules, STAFF.id, today), { allowed: 30, perMinute: false, fixed: 50000, own: true });
+  assert.equal((await post(admin, { action: 'save_late_rule', scope: STAFF.id, use_shop: true })).status, 200, 'back to the shop rule, same day replaces');
+  assert.deepEqual(payroll.lateRuleOn(state.payroll_late_rules, STAFF.id, today), { allowed: 15, perMinute: true, fixed: 30000, own: false });
+  const month = plain(await admin.GET({ url: `http://x/api/admin/workforce?payroll=1&year=${today.slice(0, 4)}&month=${Number(today.slice(5, 7))}` })).body;
+  assert.equal(month.lateRules.length, state.payroll_late_rules.length);
+});
+
+test('editing a shift refuses an end before its start or longer than a day', async () => {
+  const id = '00000000-0000-4000-8000-000000000777';
+  const state = shop({ attendance_sessions: [{ id, staff_id: STAFF.id, date: '2026-11-05', clock_in: '2026-11-05T07:00:00.000Z', clock_out: '2026-11-05T17:00:00.000Z' }] });
+  const admin = load(state, ADMIN);
+  assert.equal((await post(admin, { action: 'edit_attendance', id, clock_out: '2026-11-05T06:00:00.000Z' })).status, 400);
+  assert.equal((await post(admin, { action: 'edit_attendance', id, clock_in: '2026-11-04T06:00:00.000Z' })).status, 400, 'more than 24 hours');
+  assert.equal(state.attendance_sessions[0].clock_out, '2026-11-05T17:00:00.000Z', 'nothing changed');
+  assert.equal((await post(admin, { action: 'edit_attendance', id, clock_out: '2026-11-05T17:25:00.000Z' })).status, 200);
 });
