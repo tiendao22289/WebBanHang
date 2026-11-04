@@ -399,6 +399,14 @@ function NotesTiles({ s }) {
   </div>;
 }
 
+// Đã nợ bao lâu tính tới hôm nay: "hôm nay", "3 ngày".
+const owedFor = date => {
+  const days = date ? Math.round((Date.parse(`${vnToday()}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 86400000) : null;
+  return days === null || days < 0 ? '' : days === 0 ? 'hôm nay' : `${days} ngày`;
+};
+const OWED_SHOWN = 10;
+
+// Còn nợ theo chủ nợ: mỗi chủ nợ một khối (tên + tổng), mỗi món nợ một dòng (tên món, ngày ghi, đã nợ bao lâu, số tiền).
 function OwedList({ owed }) {
   const [open, setOpen] = useState(false);
   if (!owed?.length) return null;
@@ -406,10 +414,23 @@ function OwedList({ owed }) {
   return <div className="tk-sub">
     <button type="button" className="tk-sub-head" onClick={() => setOpen(!open)} aria-expanded={open}>
       <h3>Còn nợ theo chủ nợ</h3><b>{money(total)}</b><ChevronDown size={16} className={open ? 'tk-chev on' : 'tk-chev'} /></button>
-    {open && <ul className="tk-table">{owed.map(o => <li key={o.who}>
-      <span className="tk-cell-main"><b>{o.who}</b><small>{o.items.slice(0, 6).map(i => `${i.what} ${money(i.left)} (${i.day})`).join(' · ')}{o.items.length > 6 ? ` · +${o.items.length - 6} món` : ''}</small></span>
-      <span className="tk-cell-end"><b>{money(o.total)}</b></span>
-    </li>)}</ul>}
+    {open && <div className="tk-owed">{owed.map(o => {
+      const unnamed = o.who === 'Không ghi tên';
+      return <section key={o.who} className="tk-owed-group">
+        <div className="tk-owed-head">
+          <span><b>{unnamed ? 'Chưa ghi tên' : o.who}</b><small>{o.items.length} món</small></span>
+          <b>{money(o.total)}</b>
+        </div>
+        <ul className="tk-owed-items">
+          {o.items.slice(0, OWED_SHOWN).map((i, k) => <li key={`${i.what}-${i.date}-${k}`}>
+            <span><b>{i.what}</b><small>ghi ngày {i.day}{owedFor(i.date) ? ` · nợ ${owedFor(i.date)}` : ''}</small></span>
+            <b>{money(i.left)}</b>
+          </li>)}
+          {o.items.length > OWED_SHOWN && <li className="tk-owed-more">+{o.items.length - OWED_SHOWN} món nữa — xem trong Sổ tay</li>}
+        </ul>
+        {unnamed && <p className="tk-owed-hint">Ghi tên chủ nợ ở dòng hàng trong Sổ tay để biết đang nợ ai.</p>}
+      </section>;
+    })}</div>}
   </div>;
 }
 

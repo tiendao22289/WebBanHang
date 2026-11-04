@@ -227,6 +227,23 @@ button.tk-tile { cursor: pointer; }
 .tk-sub-head { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; cursor: pointer; }
 .tk-sub-head h3 { flex: 1; margin: 0; text-align: left; }
 .tk-sub-head b { font-variant-numeric: tabular-nums; color: var(--tk-neg); }
+/* Còn nợ theo chủ nợ: mỗi chủ nợ một khối, mỗi món một dòng, số tiền thẳng cột bên phải. */
+.tk-owed { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.tk-owed-group { background: var(--tk-soft); border-radius: 12px; padding: 10px 12px; }
+.tk-owed-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--tk-line); }
+.tk-owed-head span { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.tk-owed-head span b { font-size: 15px; overflow-wrap: anywhere; }
+.tk-owed-head small { font-size: 12px; color: var(--tk-muted); white-space: nowrap; }
+.tk-owed-head > b { font-size: 16px; color: var(--tk-neg); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tk-owed-items { list-style: none; margin: 0; padding: 0; }
+.tk-owed-items li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--tk-line); }
+.tk-owed-items li:first-child { border-top: 0; }
+.tk-owed-items li span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tk-owed-items li span b { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.tk-owed-items li span small { font-size: 12px; color: var(--tk-muted); }
+.tk-owed-items li > b { font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tk-owed-items li.tk-owed-more { justify-content: center; font-size: 13px; color: var(--tk-muted); }
+.tk-owed-hint { margin: 6px 0 0; font-size: 12px; color: var(--tk-warn); line-height: 1.4; }
 .tk-chev { color: var(--tk-muted); transition: transform 0.2s; flex-shrink: 0; }
 .tk-chev.on { transform: rotate(180deg); }
 .tk-good { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--tk-pos); font-weight: 700; font-size: 14px; }

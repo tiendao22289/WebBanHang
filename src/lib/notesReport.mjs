@@ -188,7 +188,8 @@ function itemMoney(item) {
     payNow: total - owed, owed, paid, left: owed - paid, creditor: String(item.creditor || '').trim(), warnings: lineWarnings(item) };
 }
 
-// Còn nợ theo chủ nợ (từng món, từ ngày nào), nợ nhiều nhất trước.
+// Còn nợ theo chủ nợ (từng món, từ ngày nào), nợ nhiều nhất trước — chủ nợ lẫn từng món của chủ nợ đó.
+// date: ngày ghi phiếu (giờ VN) để trang tính đã nợ bao lâu.
 function owedByCreditor(allNotes) {
   const byWho = new Map();
   for (const n of allNotes) {
@@ -196,11 +197,11 @@ function owedByCreditor(allNotes) {
       const m = itemMoney(item);
       if (m.left > 0) {
         const who = m.creditor || 'Không ghi tên';
-        byWho.set(who, [...(byWho.get(who) || []), { what: m.name, left: m.left, day: dayMonth(n.created_at) }]);
+        byWho.set(who, [...(byWho.get(who) || []), { what: m.name, left: m.left, day: dayMonth(n.created_at), date: vnIso(n.created_at).slice(0, 10) }]);
       }
     }
   }
-  return [...byWho.entries()].map(([who, items]) => ({ who, total: items.reduce((a, o) => a + o.left, 0), items }))
+  return [...byWho.entries()].map(([who, items]) => ({ who, total: items.reduce((a, o) => a + o.left, 0), items: [...items].sort((a, b) => b.left - a.left) }))
     .sort((a, b) => b.total - a.total);
 }
 
