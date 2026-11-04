@@ -203,6 +203,14 @@ async function main() {
   console.log(JSON.stringify(returns));
   if (!returns.table_ok || !returns.anon_blocked) throw new Error('Chưa cài được bảng đi làm lại.');
 
+  // Trả lương theo kỳ (payroll_pay_cycles.sql): kỳ N ngày của từng người + các lần đã trả.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_pay_cycles.sql'), 'utf8'));
+  const [cycles] = await query(`SELECT to_regclass('public.payroll_pay_cycles') IS NOT NULL AS cycles_ok,
+    to_regclass('public.payroll_payouts') IS NOT NULL AS payouts_ok,
+    NOT has_table_privilege('anon', 'public.payroll_pay_cycles', 'SELECT') AND NOT has_table_privilege('anon', 'public.payroll_payouts', 'SELECT') AS anon_blocked`);
+  console.log(JSON.stringify(cycles));
+  if (!cycles.cycles_ok || !cycles.payouts_ok || !cycles.anon_blocked) throw new Error('Chưa cài được bảng trả lương theo kỳ.');
+
   // Chấm công bằng nút trên máy quầy cho người không có điện thoại (checkin_tap.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_tap.sql'), 'utf8'));
   const [tap] = await query(`SELECT to_regclass('public.checkin_tap_staff') IS NOT NULL AS table_ok,

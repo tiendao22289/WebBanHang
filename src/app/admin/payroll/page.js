@@ -4,7 +4,8 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
 import { currentWorkDay, dayFlags, dayInShiftMs, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { LATE_FINE_MINUTES, STANDARD_DAYS, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthTallies, shopClosedDays, usesDayPay } from '@/lib/payroll.mjs';
+import { LATE_FINE_MINUTES, MAX_CYCLE_DAYS, STANDARD_DAYS, activeFineKinds, addDays, bonusCheck, computeSalary, cycleDueTo, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthTallies,
+  payoutPartOfMonth, shopClosedDays, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
 import { unlockSpeech } from '@/lib/speak';
@@ -317,6 +318,72 @@ function PayActions({ s, c, left, onClose, onPaid, compact }) {
 }
 
 
+// Trả lương theo kỳ (5, 7, 10 ngày…): từng người đang trả theo kỳ — kỳ đang chạy, ngày phát, số phải trả tới ngày chọn (máy chủ
+// tính, cùng công thức bảng lương), nút "Đã thanh toán lương" (kỳ mới tính từ hôm sau ngày đã trả tới) và bỏ lần trả bấm nhầm.
+const CYCLE_PRESETS = [5, 7, 10, 15];
+const paydayText = n => (n === 0 ? 'hôm nay' : n > 0 ? `còn ${n} ngày` : `quá ${-n} ngày`);
+function CycleBox({ people, today, nameOf, onPay, onUndo }) {
+  const [toDays, setToDays] = useState({});
+  if (!people.length) return null;
+  const line = { display: 'flex', justifyContent: 'space-between', gap: 8, padding: '2px 0' };
+  const list = [...people].sort((a, b) => a.period.daysLeft - b.period.daysLeft);
+  return (
+    <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155' }}>
+      <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 2 }}>💵 Trả lương theo kỳ</div>
+      <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 8 }}>Trả xong bấm &quot;Đã thanh toán lương&quot;: kỳ mới tự tính từ hôm sau. Cài kỳ ở nút Sửa của từng người hoặc tab Cấu hình.</div>
+      {list.map(p => {
+        const { start, payday, daysLeft } = p.period;
+        const name = nameOf(p.staff_id), started = start <= today, due = daysLeft <= 0 && started;
+        const defaultTo = payday < today ? payday : today;
+        const picked = toDays[p.staff_id], to = picked && picked >= start && picked <= today ? picked : defaultTo;
+        const d = started ? cycleDueTo(p, to, start) : null;
+        const workDays = d ? d.days.filter(x => x.day >= start && x.due > 0) : [];
+        const sum = xs => xs.reduce((a, x) => a + x.amount, 0);
+        const last = p.payouts[0];
+        return (
+          <div key={p.staff_id} style={{ border: `1.5px solid ${due ? '#fdba74' : '#e2e8f0'}`, background: due ? '#fff7ed' : '#f8fafc', borderRadius: 10, padding: '10px 12px', marginTop: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+              <span><strong style={{ fontSize: '0.95rem' }}>{name}</strong> <span style={{ color: '#64748b' }}>· mỗi {p.every_days} ngày</span></span>
+              <span style={{ fontWeight: 700, color: due ? '#c2410c' : '#475569' }}>{due ? '🔔 ' : ''}Ngày phát {ddmm(payday)} ({paydayText(daysLeft)})</span>
+            </div>
+            <div style={{ color: '#475569', marginTop: 2 }}>Kỳ này: {ddmm(start)} → {ddmm(payday)}</div>
+            {!started && <div style={{ color: '#64748b', marginTop: 4 }}>Kỳ mới bắt đầu ngày {ddmm(start)}, chưa có gì phải trả.</div>}
+            {d && (
+              <>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '6px 0 4px', fontWeight: 600 }}>
+                  Tính tới hết ngày
+                  <input type="date" value={to} min={start} max={today} onChange={e => setToDays(x => ({ ...x, [p.staff_id]: e.target.value }))}
+                    style={{ padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', background: 'white' }} />
+                </label>
+                <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 10px' }}>
+                  <div style={line}><span>{workDays.length ? `${workDays.length} ngày có công (${workDays.map(x => x.day.slice(8, 10)).join(', ')}/${to.slice(5, 7)})` : 'Chưa có ngày công nào'}</span><b>{formatMoney(d.work)}</b></div>
+                  {d.adjust !== 0 && <div style={line}><span>Phần chênh của ngày đã trả trước ({d.days.filter(x => x.day < start).map(x => ddmm(x.day)).join(', ')})</span><b>{d.adjust > 0 ? '+' : '−'}{formatMoney(Math.abs(d.adjust))}</b></div>}
+                  {d.advances.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ ứng lương</span><b>−{formatMoney(sum(d.advances))}</b></div>}
+                  {d.fines.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ phạt</span><b>−{formatMoney(sum(d.fines))}</b></div>}
+                  {d.bonuses.length > 0 && <div style={{ ...line, color: '#16a34a' }}><span>Thưởng chuyên cần</span><b>+{formatMoney(sum(d.bonuses))}</b></div>}
+                  <div style={{ ...line, borderTop: '1px dashed #cbd5e1', marginTop: 4, paddingTop: 4, fontSize: '0.95rem' }}>
+                    <strong>Cần trả</strong><strong style={{ color: d.amount < 0 ? '#dc2626' : '#15803d' }}>{formatMoney(d.amount)}</strong>
+                  </div>
+                </div>
+                {p.openDay && p.openDay <= to && <div style={{ color: '#b45309', fontSize: '0.78rem', marginTop: 4 }}>⏳ Ngày {ddmm(p.openDay)} {name} chưa ra ca nên chưa tính tiền ngày đó; trả xong thì phần đó tự cộng vào lần trả sau.</div>}
+                {d.amount < 0
+                  ? <div style={{ color: '#dc2626', fontSize: '0.8rem', marginTop: 6 }}>Tiền ứng / phạt nhiều hơn tiền công nên chưa phải trả; lần trả sau sẽ trừ tiếp.</div>
+                  : <button className="btn-primary" style={{ marginTop: 8, width: '100%' }} onClick={() => onPay(p, to, d.amount, name)}>✅ Đã thanh toán lương {formatMoney(d.amount)}</button>}
+              </>
+            )}
+            {last && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.76rem', color: '#64748b', marginTop: 6 }}>
+                <span>Lần trả gần nhất: {ddmm(String(last.from_day))} – {ddmm(String(last.to_day))} · {formatMoney(last.amount)} · {new Date(last.paid_at).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}{last.paid_by ? ` (${last.paid_by})` : ''}</span>
+                <button style={{ ...smallBtn, fontSize: '0.72rem', padding: '2px 8px', color: '#dc2626', borderColor: '#fecaca', background: '#fff5f5' }} onClick={() => onUndo(last, name)}>Bỏ lần trả này</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function PayrollPage() {
   const [activeTab, setActiveTab] = useState('salary');
   const [staffList, setStaffList] = useState([]);
@@ -481,13 +548,13 @@ export default function PayrollPage() {
   }, []);
   // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
   // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
-  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], monthOver: false });
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], payouts: [], monthOver: false });
   const fetchPayrollMonth = useCallback(async () => {
     try {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], payouts: j.payouts || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   // So khuôn mặt ở máy quầy (app): cài đặt, ai có mặt mẫu, ca sai mặt 3 lần chờ duyệt.
@@ -498,6 +565,15 @@ export default function PayrollPage() {
       const j = await r.json().catch(() => ({}));
       if (r.ok) setFaces(j);
     } catch { /* phần so mặt hiện "đang tải" */ }
+  }, []);
+  // Người trả lương theo kỳ (5, 7, 10 ngày…): kỳ đang chạy, ngày phát, số còn phải trả — máy chủ tính, cùng công thức bảng lương.
+  const [cycles, setCycles] = useState({ ready: true, today: null, people: [] });
+  const fetchCycles = useCallback(async () => {
+    try {
+      const r = await fetch('/api/admin/workforce?cycles=1', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) setCycles({ ready: j.ready !== false, today: j.today || null, people: j.people || [] });
+    } catch { /* khung trả lương theo kỳ chờ lần tải sau */ }
   }, []);
   const checkinAction = async (action, body, confirmText) => {
     if (confirmText && !confirm(confirmText)) return false;
@@ -608,6 +684,7 @@ export default function PayrollPage() {
     fetchCheckin();
     fetchPayrollMonth();
     fetchFaces();
+    fetchCycles();
     setLoading(true);
     const [staffRes, cfgRes, reqRes, vioRes, attRes] = await Promise.all([
       supabase.from('staff').select('id, full_name, phone, role, created_at, last_login').order('full_name'),
@@ -631,7 +708,7 @@ export default function PayrollPage() {
     setHasSynced(true);
     setLastSyncedAt(new Date());
     setLoading(false);
-  }, [selMonth, selYear, fetchCheckin, fetchPayrollMonth]);
+  }, [selMonth, selYear, fetchCheckin, fetchPayrollMonth, fetchCycles]);
 
 
   // Mở trang là tự tải (không còn nút Đồng bộ). Quay lại trang (mở lại app) sau ≥ 1 phút thì tải lại cho mới.
@@ -702,17 +779,33 @@ export default function PayrollPage() {
     try { await workforce('mark_paid', { year: selYear, month: selMonth, staff_id: staffId, paid }); } catch (err) { return alert(err.message); }
     fetchPayrollMonth();
   };
+  // Trả lương theo kỳ: "Đã thanh toán lương" tới hết ngày đã chọn. Máy chủ tính lại; khác số đang hiện thì báo và tải lại.
+  const payCycle = async (p, to, amount, name) => {
+    const next = addDays(to, 1);
+    if (!confirm(`Đã trả lương cho ${name} ${formatMoney(amount)} (từ ${ddmm(p.period.start)} tới hết ${ddmm(to)})?\n\nKỳ mới tính từ ${ddmm(next)}, ngày phát ${ddmm(addDays(next, p.every_days - 1))}.`)) return;
+    try { await workforce('pay_cycle', { staff_id: p.staff_id, to_day: to, amount }); } catch (err) { alert(err.message); fetchCycles(); return; }
+    fetchCycles();
+    fetchPayrollMonth();
+  };
+  const undoPayout = async (payout, name) => {
+    if (!confirm(`Bỏ lần trả lương ${formatMoney(payout.amount)} của ${name} (${ddmm(String(payout.from_day))} – ${ddmm(String(payout.to_day))})? Kỳ sẽ quay lại như trước khi bấm.`)) return;
+    try { await workforce('undo_payout', { id: payout.id }); } catch (err) { return alert(err.message); }
+    fetchCycles();
+    fetchPayrollMonth();
+  };
+  // Phần lương tháng đang xem của một người đã trả theo kỳ (tiền các ngày của tháng + thưởng − ứng − phạt đã tính vào các lần trả).
+  const cyclePaidOf = id => payoutPartOfMonth(payrollMonth.payouts.filter(p => p.staff_id === id), `${selYear}-${fmt(selMonth)}`);
   // Tải bảng lương tháng đang xem ra file Excel (để in / lưu / chuyển khoản).
   const exportPayroll = async rows => {
     const XLSX = await import('xlsx');
     const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Lương 1 ngày', 'Ngày theo ngày', 'Lương theo ngày', 'Lương 1 giờ', 'Giờ theo giờ', 'Lương theo giờ', 'Trừ vào trễ', 'Trừ về sớm', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
-      'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Thực lĩnh', 'Trạng thái', 'Nghỉ việc'];
+      'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Thực lĩnh', 'Đã trả theo kỳ', 'Còn phải trả', 'Trạng thái', 'Nghỉ việc'];
     const data = rows.map(({ s, c }) => {
       const d = departureOf(s.id);
       return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.dayUnits ?? c.workUnits : c.workDays, c.dayAmt ?? c.basePay,
         c.dayWage?.rates?.join(' / ') || '', c.dayWage ? c.dayWage.days : '', c.dayWage?.amount || '',
         c.hourly?.rates?.join(' / ') || '', c.hourly ? Math.round(c.hourly.minutes / 6) / 10 : '', c.hourly?.amount || '', c.lateAmt || 0, c.earlyAmt || 0, c.totalWorkH, c.otHours, c.otAmt,
-        c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.net, c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
+        c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.net, cyclePaidOf(s.id), c.net - cyclePaidOf(s.id), c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
         d ? `Làm đến ${d.last_day.split('-').reverse().join('/')}` : ''];
     });
     const sheet = XLSX.utils.aoa_to_sheet([[`Bảng lương tháng ${selMonth}/${selYear}`], [], head, ...data]);
@@ -915,6 +1008,47 @@ export default function PayrollPage() {
       </select>
     );
   };
+  // Kỳ trả lương của một người: chốt theo tháng như cũ, hoặc mỗi N ngày (5, 7, 10…) từ ngày bắt đầu. Đổi số ngày thì kỳ đang chạy
+  // vẫn tính từ ngày sau lần trả gần nhất. Ngày bắt đầu mặc định: đầu tháng này (hoặc ngày bắt đầu trả theo ngày / giờ nếu muộn hơn)
+  // để những ngày đã làm trong tháng vào kỳ đầu.
+  const cycleOf = staffId => cycles.people.find(p => p.staff_id === staffId) || null;
+  const showCycle = (staffId, pay) => pay.type !== 'month' || pay.currentType !== 'month' || !!cycleOf(staffId);
+  const cycleEditor = staffId => {
+    if (!cycles.ready) return <span style={{ color: '#64748b', fontSize: '0.8rem' }}>Web đang cập nhật phần trả lương theo kỳ, thử lại sau ít phút.</span>;
+    const cur = cycleOf(staffId), curEvery = cur?.every_days || 0, k = f => `cycle:${staffId}:${f}`;
+    const choice = draftOf(k('every'), !curEvery ? '0' : CYCLE_PRESETS.includes(curEvery) ? String(curEvery) : 'custom');
+    const custom = draftOf(k('custom'), curEvery && !CYCLE_PRESETS.includes(curEvery) ? String(curEvery) : '');
+    const pay = hourlyEditOf(staffId), monthStart = `${vnToday().slice(0, 7)}-01`, rateFrom = pay.current ? String(pay.current.valid_from).slice(0, 10) : '';
+    const start = draftOf(k('start'), rateFrom > monthStart ? rateFrom : monthStart);
+    const every = choice === 'custom' ? Number(custom) || 0 : Number(choice);
+    const name = staffList.find(x => x.id === staffId)?.full_name || '';
+    const box = { padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', background: 'white' };
+    const save = () => {
+      if (choice === 'custom' && !(every >= 1 && every <= MAX_CYCLE_DAYS)) return alert(`Nhập số ngày của kỳ, từ 1 tới ${MAX_CYCLE_DAYS}.`);
+      return editAction('save_pay_cycle', { staff_id: staffId, every_days: every, ...(cur ? {} : { start_day: start }) },
+        every ? null : `Thôi trả lương theo kỳ cho ${name}? Lương chốt cuối tháng như cũ (các lần đã trả vẫn được trừ ở bảng lương tháng).`, `cycle:${staffId}:`);
+    };
+    return (
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.82rem' }}>
+        <select style={box} value={choice} onChange={e => setDraft(k('every'), e.target.value)}>
+          <option value="0">Chốt theo tháng</option>
+          {CYCLE_PRESETS.map(n => <option key={n} value={n}>Mỗi {n} ngày{n === 7 ? ' (1 tuần)' : ''}</option>)}
+          <option value="custom">Số ngày khác…</option>
+        </select>
+        {choice === 'custom' && <input style={{ ...box, width: 70 }} inputMode="numeric" placeholder="Số ngày" value={custom} onChange={e => setDraft(k('custom'), e.target.value.replace(/\D/g, ''))} />}
+        {!cur && every > 0 && (
+          <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>bắt đầu từ
+            <input type="date" style={box} value={start} min="2026-11-01" onChange={e => setDraft(k('start'), e.target.value)} />
+          </label>
+        )}
+        {every !== curEvery && <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }} onClick={save}>Lưu kỳ</button>}
+        <span style={{ color: '#64748b' }}>
+          {cur ? `Kỳ này ${ddmm(cur.period.start)} → ${ddmm(cur.period.payday)}, phát lương ngày ${ddmm(cur.period.payday)}.`
+            : every > 0 ? `Kỳ đầu ${ddmm(start)} → ${ddmm(addDays(start, every - 1))}, phát lương ngày ${ddmm(addDays(start, every - 1))}.` : 'Chốt lương cuối tháng như cũ.'}
+        </span>
+      </div>
+    );
+  };
   const payEditor = s => {
     const live = calcSalary(s.id), closed = closeOf(s.id), pay = hourlyEditOf(s.id);
     const edit = configEdits[s.id] || { base_salary: 0, overtime_rate: 25000, pay_day: 5 };
@@ -975,6 +1109,12 @@ export default function PayrollPage() {
             <label style={label}>Giá tăng ca/giờ<input style={{ ...box, width: 90 }} inputMode="numeric" value={edit.overtime_rate ?? 25000} onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value.replace(/\D/g, '') } }))} /></label>
             {btn('Lưu lương', () => handleSaveConfig(s.id), 'dark')}
           </div>
+          {showCycle(s.id, pay) && (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #e2e8f0' }}>
+              <div style={{ ...label, marginBottom: 4 }}>Kỳ trả lương</div>
+              {cycleEditor(s.id)}
+            </div>
+          )}
         </div>
 
         <div style={section}>
@@ -1682,6 +1822,11 @@ export default function PayrollPage() {
                   </div>
                 )}
 
+                {/* Người trả lương theo kỳ (5, 7, 10 ngày…): ngày phát, số phải trả, nút "Đã thanh toán lương" */}
+                {isAdmin && (
+                  <CycleBox people={cycles.people} today={cycles.today || today} nameOf={id => staffList.find(x => x.id === id)?.full_name || 'Nhân viên'} onPay={payCycle} onUndo={undoPayout} />
+                )}
+
                 {/* Cách tính + chốt lương tháng */}
                 <div style={{ background: closes.length ? '#f0fdf4' : 'white', border: `1px solid ${closes.length ? '#bbf7d0' : '#e5e7eb'}`, borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155', lineHeight: 1.6 }}>
                   <div>
@@ -1723,14 +1868,14 @@ export default function PayrollPage() {
                 <div className="mobile-cards">
                   {filtered.length === 0 && <div className="empty-state">Chưa có nhân viên</div>}
                   {filtered.map(s => {
-                    const c = salaryOf(s.id);
+                    const c = salaryOf(s.id), paidCycle = cyclePaidOf(s.id);
                     const cardOpen = openSalaryCard === s.id;
                     return (
                       <div key={s.id} className="salary-card">
                         <button type="button" className="salary-card-header" onClick={() => setOpenSalaryCard(cardOpen ? null : s.id)} aria-expanded={cardOpen}>
                           <div style={{ minWidth: 0 }}>
                             <div className="salary-card-name">{c.locked ? '🔒 ' : ''}{s.full_name}</div>
-                            <div className="salary-card-sum">{[daysText(c), lateTallyOf(s.id).count ? `trễ ${lateTallyOf(s.id).count} lần` : null, c.otHours ? `tăng ca ${fmtNum(c.otHours)} giờ` : null, c.advAmt ? `ứng ${formatMoney(c.advAmt)}` : null, c.vioAmt ? `phạt ${formatMoney(c.vioAmt)}` : null].filter(Boolean).join(' · ')}</div>
+                            <div className="salary-card-sum">{[daysText(c), lateTallyOf(s.id).count ? `trễ ${lateTallyOf(s.id).count} lần` : null, c.otHours ? `tăng ca ${fmtNum(c.otHours)} giờ` : null, c.advAmt ? `ứng ${formatMoney(c.advAmt)}` : null, c.vioAmt ? `phạt ${formatMoney(c.vioAmt)}` : null, paidCycle ? `đã trả theo kỳ ${formatMoney(paidCycle)}` : null].filter(Boolean).join(' · ')}</div>
                           </div>
                           <div className="salary-card-end">
                             <div className={`salary-card-net ${c.net < 0 ? 'negative' : ''}`}>{formatMoney(c.net)}</div>
@@ -1796,6 +1941,18 @@ export default function PayrollPage() {
                               <span className="salary-card-value" style={{ color: '#b45309' }}>{formatMoney(c.liveNet)}</span>
                             </div>
                           )}
+                          {paidCycle !== 0 && (
+                            <>
+                              <div className="salary-card-row">
+                                <span className="salary-card-label">Đã trả theo kỳ</span>
+                                <span className="salary-card-value">{formatMoney(paidCycle)}</span>
+                              </div>
+                              <div className="salary-card-row">
+                                <span className="salary-card-label">Còn phải trả tháng này</span>
+                                <span className={`salary-card-value ${c.net - paidCycle >= 0 ? 'green' : 'red'}`}>{formatMoney(c.net - paidCycle)}</span>
+                              </div>
+                            </>
+                          )}
                         </div>}
                         {isAdmin && <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} />}
                         {isAdmin && cardOpen && (
@@ -1822,7 +1979,7 @@ export default function PayrollPage() {
                     </tr></thead>
                     <tbody>
                       {filtered.map(s => {
-                        const c = salaryOf(s.id);
+                        const c = salaryOf(s.id), paidCycle = cyclePaidOf(s.id);
                         return (
                           <React.Fragment key={s.id}>
                             <tr>
@@ -1845,6 +2002,7 @@ export default function PayrollPage() {
                               <strong style={{color: c.net >= 0 ? '#16a34a' : '#ef4444', fontSize:'0.95rem'}}>{formatMoney(c.net)}</strong>
                               {c.locked && c.liveNet !== c.net && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>nay tính ra {formatMoney(c.liveNet)}</div>}
                               {!c.locked && running && <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>tạm tính</div>}
+                              {paidCycle !== 0 && <div style={{ fontSize: '0.72rem', color: '#475569' }}>đã trả theo kỳ {formatMoney(paidCycle)} · còn {formatMoney(c.net - paidCycle)}</div>}
                             </td>
                             {isAdmin && <td><button onClick={() => setExpandedSalaryStaff(expandedSalaryStaff === s.id ? null : s.id)}
                               style={{ fontSize: '0.75rem', padding: '3px 10px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#1d4ed8', whiteSpace: 'nowrap' }}>{expandedSalaryStaff === s.id ? '▴ Ẩn' : '✏️ Sửa'}</button>
@@ -2609,6 +2767,11 @@ export default function PayrollPage() {
                       <div className="config-note" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                         <strong>🏖 Ngày quán nghỉ</strong> {holidayEditor(s.id)}
                       </div>
+                      {showCycle(s.id, pay) && (
+                        <div className="config-note" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <strong>💵 Kỳ trả lương</strong> {cycleEditor(s.id)}
+                        </div>
+                      )}
                       {(pay.type !== 'month' || pay.current) && (
                         <div className="config-note">
                           {pay.current

@@ -427,3 +427,110 @@ export function staffMonthStats({ year, month, staff = [], configs = [], session
     },
   };
 }
+
+/*
+ * Trả lương theo kỳ (người trả theo ngày / theo giờ, bảng payroll_pay_cycles): mỗi người một kỳ N ngày (vd. 7 ngày) tính từ
+ * start_day. Kỳ đang chạy bắt đầu ngày sau lần trả gần nhất (payroll_payouts); ngày phát = ngày đầu kỳ + N − 1. Chủ bấm "Đã thanh
+ * toán lương" → lưu lần trả với tiền từng ngày đã trả và các khoản ứng / phạt / thưởng đã trừ / cộng; kỳ mới bắt đầu từ hôm sau.
+ *
+ * Số phải trả tới hết ngày `to` = tiền công từng ngày (byDay của computeSalary, cùng công thức bảng lương) từ start_day tới `to`
+ * − số đã trả cho từng ngày đó (ngày đã trả mà sau đó sửa giờ / ra ca muộn: phần chênh vào lần trả sau) − ứng lương, phạt chưa trừ
+ * + thưởng chuyên cần chưa cộng (ứng / phạt / thưởng đã trừ rồi mà sau đó sửa số tiền hay xoá: phần chênh cũng vào lần trả sau).
+ * Lương tháng của người đó vẫn tính như cũ; bảng lương tháng trừ phần đã trả theo kỳ (payoutPartOfMonth) ra "còn lại".
+ */
+export const MAX_CYCLE_DAYS = 31;
+export const addDays = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+export const daysBetween = (a, b) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000);
+const day10 = d => String(d ?? '').slice(0, 10);
+
+/** Lần trả gần nhất (trả tới ngày muộn nhất). */
+export const lastPayout = payouts => [...(payouts || [])].sort((a, b) => day10(b.to_day).localeCompare(day10(a.to_day)))[0] || null;
+
+/**
+ * Kỳ đang chạy của một người: { every, start, payday, daysLeft (âm = quá ngày phát), last }; null = không trả theo kỳ.
+ * Kỳ bắt đầu ngày sau lần trả gần nhất (trả sớm / trễ thì kỳ sau tính lại từ hôm sau ngày đã trả tới), không sớm hơn start_day.
+ */
+export function cyclePeriod({ cycle, payouts = [], today }) {
+  const every = Math.round(Number(cycle?.every_days) || 0);
+  if (!(every >= 1) || !cycle?.start_day) return null;
+  const last = lastPayout(payouts), first = day10(cycle.start_day);
+  const after = last ? addDays(day10(last.to_day), 1) : first;
+  const start = after > first ? after : first, payday = addDays(start, every - 1);
+  return { every, start, payday, daysLeft: daysBetween(today, payday), last };
+}
+
+// Tổng đã trả / đã trừ trong các lần trả: tiền từng ngày, từng khoản ứng / phạt (theo mã), thưởng từng tháng.
+function payoutTotals(payouts) {
+  const days = {}, advances = new Map(), fines = new Map(), bonuses = new Map();
+  const add = (map, k, v, key) => map.set(k, { amount: (map.get(k)?.amount || 0) + (Number(v) || 0), key });
+  for (const p of payouts || []) {
+    const d = p.detail || {};
+    for (const [day, v] of Object.entries(d.days || {})) days[day] = (days[day] || 0) + (Number(v) || 0);
+    for (const a of d.advances || []) add(advances, a.id, a.amount, a.key);
+    for (const f of d.fines || []) add(fines, f.id, f.amount, f.key);
+    for (const b of d.bonuses || []) add(bonuses, b.key, b.amount, b.key);
+  }
+  return { days, advances, fines, bonuses };
+}
+
+/**
+ * Số phải trả của một người tới hết ngày `to`. months: các tháng đã tính lại (từ tháng của ngày cần tính sớm nhất tới tháng của
+ * `to`) [{ key: 'YYYY-MM', byDay: { ngày: tiền }, advances: [{ id, amount }] (ứng đã duyệt), fines: [{ id, amount }],
+ * bonus: thưởng chuyên cần đã duyệt }]. Ngày / khoản của tháng không có trong months thì không đụng tới.
+ * → { days: [{ day, earned, paid, due }] (ngày còn chênh), work (tiền ngày từ đầu kỳ), adjust (chênh ngày đã trả trước đó),
+ *     advances / fines / bonuses: [{ id?, key, amount }] (phần chưa trừ / chưa cộng), amount (số phải trả) }.
+ */
+export function cycleDue({ cycle, payouts = [], months = [], to, periodStart = null }) {
+  const first = day10(cycle?.start_day), toKey = String(to).slice(0, 7);
+  const list = (months || []).filter(m => m.key <= toKey), keys = new Set(list.map(m => m.key));
+  const inScope = d => d >= first && d <= to && keys.has(d.slice(0, 7));
+  const done = payoutTotals(payouts);
+  const earned = {};
+  for (const m of list) for (const [d, v] of Object.entries(m.byDay || {})) if (inScope(d)) earned[d] = (earned[d] || 0) + (Number(v) || 0);
+  const days = [...new Set([...Object.keys(earned), ...Object.keys(done.days).filter(inScope)])].sort()
+    .map(day => ({ day, earned: earned[day] || 0, paid: done.days[day] || 0 })).map(x => ({ ...x, due: x.earned - x.paid })).filter(x => x.due !== 0);
+  // Khoản ứng / phạt: số hiện tại − số đã trừ (khoản đã xoá sau khi trừ: trả lại phần đã trừ).
+  const items = (field, taken) => {
+    const now = new Map(list.flatMap(m => (m[field] || []).map(x => [x.id, { amount: Number(x.amount) || 0, key: m.key }])));
+    return [...new Set([...now.keys(), ...[...taken.entries()].filter(([, v]) => keys.has(v.key)).map(([id]) => id)])]
+      .map(id => ({ id, key: now.get(id)?.key || taken.get(id).key, amount: (now.get(id)?.amount || 0) - (taken.get(id)?.amount || 0) })).filter(x => x.amount !== 0);
+  };
+  const advances = items('advances', done.advances), fines = items('fines', done.fines);
+  const bonuses = list.map(m => ({ key: m.key, amount: (Number(m.bonus) || 0) - (done.bonuses.get(m.key)?.amount || 0) })).filter(x => x.amount !== 0);
+  const sum = xs => xs.reduce((a, x) => a + x.amount, 0);
+  const start = periodStart || first;
+  const work = days.filter(x => x.day >= start).reduce((a, x) => a + x.due, 0), adjust = days.filter(x => x.day < start).reduce((a, x) => a + x.due, 0);
+  return { days, work, adjust, advances, fines, bonuses, amount: work + adjust - sum(advances) - sum(fines) + sum(bonuses) };
+}
+
+/** Chi tiết lưu cùng lần trả (để lần sau biết ngày / khoản nào đã trả, và bảng lương tháng trừ đúng phần của tháng). */
+export const payoutDetail = due => ({
+  days: Object.fromEntries(due.days.map(x => [x.day, x.due])),
+  advances: due.advances.map(({ id, key, amount }) => ({ id, key, amount })), fines: due.fines.map(({ id, key, amount }) => ({ id, key, amount })),
+  bonuses: due.bonuses.map(({ key, amount }) => ({ key, amount })),
+});
+
+/** Phần lương tháng `key` (YYYY-MM) đã trả theo kỳ: tiền các ngày của tháng + thưởng − ứng − phạt của tháng đó đã tính vào các lần trả. */
+export function payoutPartOfMonth(payouts, key) {
+  let total = 0;
+  for (const p of payouts || []) {
+    const d = p.detail || {};
+    for (const [day, v] of Object.entries(d.days || {})) if (day.startsWith(key)) total += Number(v) || 0;
+    for (const b of d.bonuses || []) if (b.key === key) total += Number(b.amount) || 0;
+    for (const x of [...(d.advances || []), ...(d.fines || [])]) if (x.key === key) total -= Number(x.amount) || 0;
+  }
+  return total;
+}
+
+/**
+ * Phần của `due` (cycleDue tính tới hôm nay) nếu chỉ trả tới hết ngày `to`: ngày tới `to`, ứng / phạt / thưởng của các tháng tới
+ * tháng của `to` — đúng bằng cycleDue tính thẳng tới `to`. Trang Lương dùng để đổi ngày trả tới mà không phải hỏi lại máy chủ.
+ */
+export function cycleDueTo(due, to, periodStart) {
+  const toKey = String(to).slice(0, 7), upTo = x => x.key <= toKey;
+  const days = (due?.days || []).filter(x => x.day <= to);
+  const advances = (due?.advances || []).filter(upTo), fines = (due?.fines || []).filter(upTo), bonuses = (due?.bonuses || []).filter(upTo);
+  const sum = xs => xs.reduce((a, x) => a + x.amount, 0);
+  const work = days.filter(x => x.day >= periodStart).reduce((a, x) => a + x.due, 0), adjust = days.filter(x => x.day < periodStart).reduce((a, x) => a + x.due, 0);
+  return { days, work, adjust, advances, fines, bonuses, amount: work + adjust - sum(advances) - sum(fines) + sum(bonuses) };
+}
