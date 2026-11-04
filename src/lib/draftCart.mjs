@@ -105,11 +105,16 @@ export function menuLinePrice(item, itemOptions, now = Date.now()) {
     if (choice == null || choice === '') continue;
     const opt = (item?.options || []).find(o => o?.name === sel.name && Array.isArray(o.choices));
     if (!opt) return { price: null, off: String(choice) };
-    const parts = opt.choices.includes(choice) ? [choice] : String(choice).split(', ');
-    for (const part of parts) {
+    // Tách chuỗi ghép theo tên lựa chọn có thật (dài trước), để tên có dấu phẩy vẫn khớp.
+    const known = opt.choices.filter(c => typeof c === 'string' && c).sort((a, b) => b.length - a.length);
+    let rest = String(choice);
+    while (rest) {
+      const part = known.find(c => rest === c || rest.startsWith(`${c}, `));
+      if (part === undefined) return { price: null, off: rest.split(', ')[0] };
       const i = opt.choices.indexOf(part);
-      if (i < 0 || isChoiceOff(opt.hiddenChoices?.[i], now)) return { price: null, off: part };
+      if (isChoiceOff(opt.hiddenChoices?.[i], now)) return { price: null, off: part };
       if (hasPrice(opt.prices?.[i])) { sum += Number(opt.prices[i]); priced = true; }
+      rest = rest === part ? '' : rest.slice(part.length + 2);
     }
   }
   return { price: priced ? sum : Number(item?.price || 0), off: null };

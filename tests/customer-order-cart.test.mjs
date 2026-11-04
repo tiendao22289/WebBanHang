@@ -29,6 +29,9 @@ test('the line price follows the same rule as the server: chosen priced choices,
   assert.deepEqual(menuLinePrice(oc, [{ name: 'LOẠI', choice: 'Nướng mỡ hành' }], NOW), { price: null, off: 'Nướng mỡ hành' });
   assert.deepEqual(menuLinePrice(oc, [{ name: 'THÊM', choice: 'Bánh mì, Rau' }], NOW), { price: null, off: 'Rau' });
   assert.deepEqual(menuLinePrice(bia, [], NOW), { price: 20000, off: null });
+  const comma = { ...oc, options: [{ name: 'THÊM', choices: ['Bánh mì', 'Rau, giá'], prices: [5000, 4000], hiddenChoices: [] }] };
+  assert.deepEqual(menuLinePrice(comma, [{ name: 'THÊM', choice: 'Rau, giá, Bánh mì' }], NOW), { price: 9000, off: null }, 'a choice name with a comma');
+  assert.deepEqual(menuLinePrice(comma, [{ name: 'THÊM', choice: 'Bánh mì, Ớt' }], NOW), { price: null, off: 'Ớt' });
 });
 
 test('a reopened saved cart drops dishes and choices switched off since, and takes today\'s prices', () => {

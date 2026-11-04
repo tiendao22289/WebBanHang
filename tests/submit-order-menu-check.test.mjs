@@ -95,6 +95,11 @@ test('the unit price comes from the menu, with the chosen LOẠI and every extra
   const ok = await submit(id(10), [line(OC, 2, 158000, { item_options: opts }), line(BIA, 3, 20000)]);
   assert.equal(ok.already_submitted, false);
   assert.equal(Number(ok.total), 2 * 158000 + 3 * 20000);
+  // Tên lựa chọn có dấu phẩy vẫn tách đúng khi khách chọn nhiều (trang ghép bằng ", ").
+  await db.query('UPDATE menu_items SET options = $2 WHERE id = $1', [OC, JSON.stringify([LOAI,
+    { ...THEM, choices: ['Bánh mì', 'Rau, giá'], prices: [5000, 4000] }])]);
+  const comma = [{ name: 'LOẠI', choice: 'Rang muối' }, { name: 'THÊM', choice: 'Rau, giá, Bánh mì' }];
+  assert.equal((await submit(id(12), [line(OC, 1, 159000, { item_options: comma })])).already_submitted, false);
   // Lựa chọn không đặt giá (Hấp sả) → giá món (0đ = theo thời giá, nhân viên nhập sau).
   assert.equal((await submit(id(11), [line(OC, 1, 0, { item_options: [{ name: 'LOẠI', choice: 'Hấp sả' }] })])).already_submitted, false);
   assert.equal((await db.query('SELECT status FROM tables WHERE id = $1', [id(1)])).rows[0].status, 'occupied');

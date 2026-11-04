@@ -88,7 +88,7 @@ DECLARE
   v_item jsonb;
   v_pos integer;
   v_opt jsonb;
-  v_parts text[];
+  v_rest text;
   v_part text;
   v_idx integer;
   v_qty integer;
@@ -164,17 +164,22 @@ BEGIN
           THEN dish->'options' ELSE '[]'::jsonb END) o
         WHERE o.value->>'name' = v_opt->>'name' AND jsonb_typeof(o.value->'choices') = 'array' LIMIT 1;
       IF menu_opt IS NULL THEN v_off := v_opt->>'choice'; EXIT; END IF;
-      v_parts := CASE WHEN menu_opt->'choices' ? (v_opt->>'choice') THEN ARRAY[v_opt->>'choice']
-        ELSE string_to_array(v_opt->>'choice', ', ') END;
-      FOREACH v_part IN ARRAY v_parts LOOP
-        SELECT (c.n - 1)::integer INTO v_idx FROM jsonb_array_elements_text(menu_opt->'choices') WITH ORDINALITY AS c(value, n)
-          WHERE c.value = v_part ORDER BY c.n LIMIT 1;
-        IF v_idx IS NULL OR public.menu_flag_off(menu_opt->'hiddenChoices'->v_idx) THEN v_off := v_part; EXIT; END IF;
+      -- Tách chuỗi ghép theo tên lựa chọn có thật (dài trước), để tên có dấu phẩy vẫn khớp
+      -- (cùng cách với menuLinePrice ở draftCart.mjs).
+      v_rest := v_opt->>'choice';
+      WHILE v_rest <> '' LOOP
+        SELECT c.value, (c.n - 1)::integer INTO v_part, v_idx
+        FROM jsonb_array_elements_text(menu_opt->'choices') WITH ORDINALITY AS c(value, n)
+        WHERE c.value <> '' AND (v_rest = c.value OR left(v_rest, length(c.value) + 2) = c.value || ', ')
+        ORDER BY length(c.value) DESC, c.n LIMIT 1;
+        IF v_part IS NULL THEN v_off := split_part(v_rest, ', ', 1); EXIT; END IF;
+        IF public.menu_flag_off(menu_opt->'hiddenChoices'->v_idx) THEN v_off := v_part; EXIT; END IF;
         v_p := public.menu_json_number(menu_opt->'prices'->v_idx);
         IF v_p IS NOT NULL THEN
           option_sum := option_sum + v_p;
           option_priced := true;
         END IF;
+        v_rest := CASE WHEN v_rest = v_part THEN '' ELSE substr(v_rest, length(v_part) + 3) END;
       END LOOP;
       EXIT WHEN v_off IS NOT NULL;
     END LOOP;
