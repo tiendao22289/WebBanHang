@@ -233,6 +233,16 @@ async function main() {
   console.log(JSON.stringify(draft));
   if (!draft.lines || !draft.fn_updated || !draft.web_can_call || !draft.anon_blocked) throw new Error('Chưa cài được bản gửi món an toàn.');
 
+  // Khách gửi món: giá theo thực đơn, từ chối món / lựa chọn đang tắt và quà không đủ suất
+  // (submit_customer_order_menu_check.sql). Cài cùng lúc deploy trang gọi món mới (trang biết sửa giỏ khi bị từ chối).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'submit_customer_order_menu_check.sql'), 'utf8'));
+  const [menuCheck] = await query(`SELECT
+    position('price_changed' in pg_get_functiondef('public.submit_customer_order_atomic(uuid,uuid,uuid,text,text,text,text,jsonb)'::regprocedure)) > 0 AS fn_updated,
+    has_function_privilege('anon', 'public.submit_customer_order_atomic(uuid,uuid,uuid,text,text,text,text,jsonb)', 'EXECUTE') AS web_can_call,
+    NOT has_function_privilege('anon', 'public.menu_promo_divisor(jsonb,jsonb)', 'EXECUTE') AS helpers_hidden`);
+  console.log(JSON.stringify(menuCheck));
+  if (!menuCheck.fn_updated || !menuCheck.web_can_call || !menuCheck.helpers_hidden) throw new Error('Chưa cài được phần kiểm món khách gửi.');
+
   // Voucher tặng khách (vouchers.sql): bảng mã, dùng mã vào bill, trả mã khi xoá dòng / huỷ bill.
   // Công tắc voucher + "Hẹn lần sau" mặc định TẮT — chủ quán bật ở Admin > Voucher.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'vouchers.sql'), 'utf8'));
