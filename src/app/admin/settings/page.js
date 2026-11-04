@@ -1,6 +1,7 @@
 'use client';
 
 import { statsQuotaProgress } from '@/lib/statsQuotaDisplay';
+import ZaloReportPanel from '@/components/ZaloReportPanel';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { getActiveAccount } from '@/lib/bankAccount';
@@ -15,6 +16,9 @@ const BANKS = [
 
 const EMPTY_FORM = { account_name: '', bank_name: 'Vietcombank', account_number: '', daily_limit: '5000000', sort_order: '0', is_visible: false };
 
+// Các nhóm của trang Cài đặt.
+const SETTINGS_GROUPS = [['pay', '💳 Thanh toán'], ['promo', '🎁 Khuyến mãi khách'], ['print', '🖨️ Máy in & QR'], ['shop', '🏠 Quán & báo cáo']];
+
 export default function SettingsPage() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -25,6 +29,13 @@ export default function SettingsPage() {
   const [msg, setMsg] = useState('');
   const [formContext, setFormContext] = useState('inside');
   const [showSecretModal, setShowSecretModal] = useState(false);
+  // Trang chia 4 nhóm (trước đây một trang dài): nhớ nhóm xem lần trước trên máy này.
+  const [group, setGroup] = useState('pay');
+  useEffect(() => {
+    try { const saved = localStorage.getItem('settingsGroup'); if (SETTINGS_GROUPS.some(([k]) => k === saved)) setGroup(saved); } catch { /* trình duyệt chặn lưu trữ */ }
+  }, []);
+  const chooseGroup = key => { setGroup(key); try { localStorage.setItem('settingsGroup', key); } catch { /* bỏ qua */ } };
+  const shown = key => ({ display: group === key ? 'block' : 'none' });
   const [secretAccounts, setSecretAccounts] = useState([]);
   const [quotaSummary, setQuotaSummary] = useState(null);
 
@@ -712,6 +723,17 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* Chọn nhóm cài đặt */}
+      <div role="tablist" aria-label="Nhóm cài đặt" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginBottom: 18 }}>
+        {SETTINGS_GROUPS.map(([key, label]) => (
+          <button key={key} type="button" role="tab" aria-selected={group === key} onClick={() => chooseGroup(key)}
+            style={{ minHeight: 44, padding: '8px 10px', borderRadius: 12, border: `1.5px solid ${group === key ? '#0f172a' : '#e2e8f0'}`, background: group === key ? '#0f172a' : 'white',
+              color: group === key ? 'white' : '#334155', fontWeight: 700, fontSize: '0.86rem', cursor: 'pointer' }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
       {/* Add/Edit form */}
       {showForm && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 999999, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(3px)' }}>
@@ -775,6 +797,8 @@ export default function SettingsPage() {
           </div></div>
       )}
 
+      {/* ══ Nhóm Thanh toán: tài khoản ngân hàng nhận tiền ══ */}
+      <div style={shown('pay')}>
       {/* Account list */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {loading ? (
@@ -826,6 +850,13 @@ export default function SettingsPage() {
 
 
 
+      </div>
+
+      {/* ══ Nhóm Quán & báo cáo: báo cáo Zalo, vị trí quán ══ */}
+      <div style={shown('shop')}>
+      {/* ── Báo cáo Zalo hằng ngày (trước đây ở Sổ thu chi → Tháng) ── */}
+      <ZaloReportPanel />
+
       {/* ── Restaurant Location ── */}
       <div style={{ marginTop: 28, background: 'white', border: '1.5px solid #d1fae5', borderRadius: 14, padding: '18px 16px', boxShadow: '0 2px 10px rgba(16,185,129,0.07)' }}>
         <div style={{ fontWeight: 800, fontSize: '1rem', color: '#065f46', marginBottom: 4 }}>📍 Vị trí nhà hàng</div>
@@ -862,6 +893,10 @@ export default function SettingsPage() {
           </button>
         </div>
       </div>
+      </div>
+
+      {/* ══ Nhóm Khuyến mãi khách: nút ưu đãi, vòng quay, ưu đãi mạng xã hội ══ */}
+      <div style={shown('promo')}>
       {/* ── Nút ưu đãi trang khách (Thử thách / Đặt tiệc) ── */}
       <div style={{ marginTop: 28 }}>
         <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#0f172a', marginBottom: 2 }}>
@@ -1317,6 +1352,10 @@ export default function SettingsPage() {
         })}
       </div>
 
+      </div>
+
+      {/* ══ Nhóm Máy in & QR: máy in, in mã QR dán bàn ══ */}
+      <div style={shown('print')}>
       {/* ── Máy in ── */}
       <div style={{ marginTop: 28, background: 'white', border: '1.5px solid #e9d5ff', borderRadius: 14, padding: '18px 16px', boxShadow: '0 2px 10px rgba(124,58,237,0.06)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
@@ -1548,6 +1587,8 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+
+      </div>
 
       {/* Secret Modal */}
       {showSecretModal && (

@@ -305,6 +305,11 @@
 
 /* Mục: không cuộn ngang nữa (mục cuối từng bị khuất), xuống dòng; điện thoại thành lưới 4 cột. */
 .payroll-tabs { flex-wrap: wrap; overflow: visible; }
+/* Hai nhóm mục: "Việc hằng ngày" và "Cài đặt", mỗi nhóm một hàng có chữ nhỏ ở trên. */
+.payroll-tab-group { margin-bottom: 8px; }
+.payroll-tab-group .payroll-tabs { margin-bottom: 0; }
+.payroll-tab-group + .payroll-tab-group { margin-bottom: 14px; }
+.payroll-tab-group-label { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #94a3b8; margin: 0 0 4px 2px; }
 .payroll-tab { display: inline-flex; align-items: center; gap: 5px; }
 @media (max-width: 640px) {
   .payroll-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }

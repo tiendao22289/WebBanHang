@@ -332,7 +332,7 @@ function CycleBox({ people, today, nameOf, onPay, onUndo }) {
   return (
     <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155' }}>
       <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 2 }}>💵 Trả lương theo kỳ</div>
-      <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 8 }}>Trả xong bấm &quot;Đã thanh toán lương&quot;: kỳ mới tự tính từ hôm sau. Cài kỳ ở nút Sửa của từng người hoặc tab Cấu hình.</div>
+      <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 8 }}>Trả xong bấm &quot;Đã thanh toán lương&quot;: kỳ mới tự tính từ hôm sau. Cài kỳ ở nút Sửa của từng người hoặc tab Mức lương.</div>
       {list.map(p => {
         const { start, payday, daysLeft } = p.period;
         const name = nameOf(p.staff_id), started = start <= today, due = daysLeft <= 0 && started;
@@ -1770,24 +1770,34 @@ export default function PayrollPage() {
         </div>
       )}
 
-      {/* Mục: lưới (điện thoại 4 cột) — thấy đủ mọi mục, không còn mục bị khuất bên phải. */}
-      <div className="payroll-tabs">
-        {[
+      {/* Mục chia 2 nhóm: việc hằng ngày, rồi phần cài đặt (người, mức lương, máy chấm công). Lưới (điện thoại 4 cột) —
+          thấy đủ mọi mục, không còn mục bị khuất bên phải. */}
+      {[
+        ['Việc hằng ngày', [
           { key: 'salary', icon: '📊', label: 'Bảng lương' },
+          { key: 'attendance', icon: '⏰', label: 'Chấm công' },
           { key: 'requests', icon: '📋', label: 'Yêu cầu', badge: pendingCount + (checkin?.fixes || []).filter(f => f.status === 'pending').length + (checkin?.extras || []).length + (faces?.reviews || []).length },
           { key: 'violations', icon: '⚠️', label: 'Vi phạm', badge: fineHints.length },
-          { key: 'attendance', icon: '⏰', label: 'Chấm công' },
+        ]],
+        ['Cài đặt', [
+          { key: 'accounts', icon: '👤', label: 'Nhân viên' },
+          { key: 'config', icon: '💰', label: 'Mức lương' },
           { key: 'qr', icon: '📱', label: 'Cài chấm công' },
-          { key: 'accounts', icon: '👤', label: 'Tài khoản' },
-          { key: 'config', icon: '⚙️', label: 'Cấu hình' },
-        ].map(tab => (
-          <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)} aria-pressed={activeTab === tab.key}>
-            <span className="tab-icon" aria-hidden="true">{tab.icon}</span>
-            <span className="tab-label">{tab.label}</span>
-            {tab.badge > 0 && <span className="badge">{tab.badge}</span>}
-          </button>
-        ))}
-      </div>
+        ]],
+      ].map(([group, tabs]) => (
+        <div key={group} className="payroll-tab-group">
+          <div className="payroll-tab-group-label">{group}</div>
+          <div className="payroll-tabs" role="group" aria-label={group}>
+            {tabs.map(tab => (
+              <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)} aria-pressed={activeTab === tab.key}>
+                <span className="tab-icon" aria-hidden="true">{tab.icon}</span>
+                <span className="tab-label">{tab.label}</span>
+                {tab.badge > 0 && <span className="badge">{tab.badge}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
 
       {!hasSynced ? (
         <div className="empty-state">Đang tải dữ liệu lương…</div>
@@ -2471,7 +2481,7 @@ export default function PayrollPage() {
                   <div style={{ marginTop: 6 }}><SpanNote start={hoursEdit.opening_time} end={hoursEdit.closing_time} label="Quán mở" /></div>
                   <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>⏰ Đi trễ — mặc định cả quán</div>
                   {lateRuleEditor('shop')}
-                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>Từng người đặt riêng ở tab Cấu hình hoặc nút "Sửa" trong Bảng lương.</div>
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>Từng người đặt riêng ở tab Mức lương hoặc nút "Sửa" trong Bảng lương.</div>
                   <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>🏖 Ngày quán nghỉ</div>
                   <div style={{ fontSize: '0.76rem', color: '#64748b', marginBottom: 4 }}>Ngày cả quán đóng cửa. Người được nhận lương ngày nghỉ (mặc định: lương tháng có, theo ngày / theo giờ không — đổi từng người ở tab Cấu hình) được đủ 1 ngày công.</div>
                   {closedDaysEditor()}
