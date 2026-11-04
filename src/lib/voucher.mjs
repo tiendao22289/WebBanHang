@@ -51,6 +51,11 @@ export function nextVisitWindow(days, nowMs = Date.now()) {
   return { validFrom: new Date(from).toISOString(), validUntil: new Date(from + n * DAY_MS).toISOString() };
 }
 
+/** Mốc 05:00 sáng (giờ VN) mở đầu ngày bán hàng đang chạy — 00:20 sáng vẫn thuộc ngày hôm trước. */
+export function shopDayStartISO(nowMs = Date.now()) {
+  return new Date(new Date(shiftEndISO(nowMs)).getTime() - DAY_MS).toISOString();
+}
+
 /** Ngày "YYYY-MM-DD" (giờ VN) → mốc 05:00 sáng ngày đó. Ngày bán hàng của quán bắt đầu lúc 5h. */
 export function vnDayStartISO(day) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ''));

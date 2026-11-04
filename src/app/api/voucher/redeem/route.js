@@ -9,8 +9,8 @@
  */
 import { NextResponse } from 'next/server';
 import { statusDatabase } from '@/lib/statusAuth';
-import { normalizeVoucherCode, normalizePhone, customerRedeemText, CUSTOMER_REDEEM_NAME } from '@/lib/voucher.mjs';
-import { hashVoucherKey } from '@/lib/voucherServer.mjs';
+import { normalizeVoucherCode, customerRedeemText, CUSTOMER_REDEEM_NAME } from '@/lib/voucher.mjs';
+import { hashVoucherKey, takeawayVoucherBills } from '@/lib/voucherServer.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,7 +66,7 @@ export async function POST(request) {
     const takeaway = (group || []).find(t => t.id === hostId)?.table_type === 'takeaway';
     const ids = tableIds.length ? tableIds : [hostId];
     const [{ data: orders, error: ordersError }, { data: mine, error: mineError }] = await Promise.all([
-      db.from('orders').select('id, customer_phone, status').in('table_id', ids).in('status', OPEN),
+      db.from('orders').select('id, customer_phone, status, created_at').in('table_id', ids).in('status', OPEN),
       db.from('orders').select('id, customer_phone, status, created_at').eq('id', orderId).in('table_id', ids).maybeSingle(),
     ]);
     if (ordersError || mineError) throw ordersError || mineError;
@@ -76,9 +76,9 @@ export async function POST(request) {
       return reply({ ok: false, message: customerRedeemText({ reason: 'no_bill' }) });
     }
     let bills = (orders || []).filter(o => o.customer_phone !== 'BAO_BEP');
+    // Mang về: mọi khách chung 1 bàn ảo → chỉ bill của chính khách này, hôm nay (từ 05:00), chưa giao.
+    if (takeaway) bills = takeawayVoucherBills(bills, mine, now);
     if (!bills.length) return reply({ ok: false, message: customerRedeemText({ reason: 'no_bill' }) });
-    // Mang về: mọi khách chung 1 bàn ảo → chỉ bill của chính khách này.
-    if (takeaway) bills = bills.filter(o => o.id === orderId || (normalizePhone(o.customer_phone) && normalizePhone(o.customer_phone) === normalizePhone(mine.customer_phone)));
 
     const code = normalizeVoucherCode(body.code);
     if (!code) {

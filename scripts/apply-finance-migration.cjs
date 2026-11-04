@@ -260,6 +260,14 @@ async function main() {
   if (!vouchers.table_ok || !vouchers.redeem_ok || !vouchers.keys_ok || vouchers.voucher_triggers !== 3 || vouchers.settings < 9 || !vouchers.settings_locked
     || !vouchers.anon_blocked || !vouchers.keys_hidden || !vouchers.anon_cannot_redeem) throw new Error('Chưa cài đủ phần voucher.');
 
+  // Voucher mang về chỉ trừ vào bill hôm nay (từ 05:00) chưa giao (voucher_takeaway_today.sql). Chạy SAU vouchers.sql.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'voucher_takeaway_today.sql'), 'utf8'));
+  const [takeawayVoucher] = await query(`SELECT
+    position('day_start' in pg_get_functiondef('public.redeem_voucher(text,uuid[],uuid,text)'::regprocedure)) > 0 AS fn_updated,
+    NOT has_function_privilege('anon', 'public.redeem_voucher(text,uuid[],uuid,text)', 'EXECUTE') AS anon_cannot_redeem`);
+  console.log(JSON.stringify(takeawayVoucher));
+  if (!takeawayVoucher.fn_updated || !takeawayVoucher.anon_cannot_redeem) throw new Error('Chưa cài được phần voucher mang về.');
+
   // Vai trò Quản lý (staff_manager_role.sql): cột staff.role nhận thêm 'manager'.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'staff_manager_role.sql'), 'utf8'));
   const [roles] = await query(`SELECT position('manager' in pg_get_constraintdef(oid)) > 0 AS manager_ok

@@ -199,6 +199,7 @@ function loadRedeem(state) {
   return vm.runInNewContext(`${redeemSource}\n({ POST })`, {
     NextResponse: { json: (body, init = {}) => ({ status: init.status || 200, body }) },
     statusDatabase: () => fakeDb(state), ...voucher, hashVoucherKey: voucherServer.hashVoucherKey,
+    takeawayVoucherBills: voucherServer.takeawayVoucherBills,
     URL, Promise, Date, console: { log() {}, error() {} },
   });
 }
@@ -263,11 +264,22 @@ test('khách tự nhập mã: phải có bill của chính mình ở đúng bàn
   assert.equal((await ask(POST, { code: 'BK-7K3P9X', tableId: id(1), orderId: id(14) })).body.ok, true, 'bill vừa gộp vào bill khác vẫn được');
 });
 
-test('mang về: khách chỉ trừ vào bill của chính SĐT mình', async () => {
+test('mang về: khách chỉ trừ vào bill của chính SĐT mình, hôm nay và chưa giao', async () => {
   const state = shop();
+  // Mốc theo ngày bán hàng thật lúc chạy test (05:00 giờ VN) để test không lệch khi chạy lúc 05:00–06:00.
+  const dayStart = Date.parse(voucher.shopDayStartISO());
+  const at = ms => new Date(dayStart + ms).toISOString();
+  state.orders.find(o => o.id === id(90)).created_at = at(0);
+  // Bill cùng SĐT: đơn hôm nay chưa giao (93), đơn tuần trước đã giao vẫn 'completed' (94), đơn trước 05:00 chưa giao (95).
+  state.orders.push(
+    { id: id(93), table_id: id(9), status: 'preparing', customer_phone: '0905555555', created_at: at(0) },
+    { id: id(94), table_id: id(9), status: 'completed', customer_phone: '0905555555', created_at: at(-7 * 86400000) },
+    { id: id(95), table_id: id(9), status: 'pending', customer_phone: '0905555555', created_at: at(-3600000) },
+  );
   const { POST } = loadRedeem(state);
   await ask(POST, { code: 'BK-7K3P9X', tableId: id(9), orderId: id(90) });
-  assert.deepEqual(JSON.parse(JSON.stringify(state.rpc[0][1].p_order_ids)).sort(), [id(90), id(92)]);
+  // id(92): cùng SĐT nhưng đã giao ('completed') → không nhận voucher, không tính mức tối thiểu.
+  assert.deepEqual(JSON.parse(JSON.stringify(state.rpc[0][1].p_order_ids)).sort(), [id(90), id(93)]);
 });
 
 test('dò mã: mỗi máy / bill sai 6 lần là khoá; người ngoài không khoá được khách khác; khách không biết mã đã dùng ở đâu', async () => {

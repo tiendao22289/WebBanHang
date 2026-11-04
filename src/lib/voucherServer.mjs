@@ -10,8 +10,22 @@ import {
   NEXT_VOUCHER_KEYS, VOUCHER_SWITCH_KEY, isVoucherSwitchOn, parseNextVoucherConfig, nextVisitWindow, newVoucherCode,
   pickVoucherPhone, normalizePhone, fillVoucherMessage, GIFT_MESSAGE_TEMPLATE,
   NEXT_VISIT_MESSAGE_TEMPLATE, voucherValueText, shortDay, firstUseDay, lastUseDay, money, HOW_TO_USE,
-  calcVoucherDiscount,
+  calcVoucherDiscount, shopDayStartISO,
 } from './voucher.mjs';
+
+/**
+ * Mang về (mọi khách chung 1 bàn ảo): bill nhận voucher / tính mức tối thiểu là bill của chính khách
+ * (bill của máy này hoặc cùng SĐT), tạo từ 05:00 hôm nay và CHƯA giao (pending / preparing).
+ * Bill giao xong vẫn 'completed' và không bao giờ thu tiền — không lọc thì bill tuần trước nhận dòng
+ * giảm và chặn mọi voucher sau của SĐT đó. Cùng quy tắc với redeem_voucher (voucher_takeaway_today.sql).
+ * bills: các bill đang mở của bàn mang về { id, customer_phone, status, created_at }; mine: bill của máy khách.
+ */
+export function takeawayVoucherBills(bills, mine, nowMs = Date.now()) {
+  const phone = normalizePhone(mine?.customer_phone);
+  const since = Date.parse(shopDayStartISO(nowMs));
+  return (bills || []).filter(o => (o.id === mine?.id || (phone && normalizePhone(o.customer_phone) === phone))
+    && ['pending', 'preparing'].includes(o.status) && Date.parse(o.created_at) >= since);
+}
 
 export async function loadNextVoucherConfig(db) {
   const { data, error } = await db.from('voucher_settings').select('key, value').in('key', [VOUCHER_SWITCH_KEY, ...NEXT_VOUCHER_KEYS]);
