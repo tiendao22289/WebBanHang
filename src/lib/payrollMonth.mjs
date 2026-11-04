@@ -45,6 +45,16 @@ export async function readLateRules(db) {
   return data || [];
 }
 
+// Ngày quán nghỉ + từng người có nhận lương ngày nghỉ không. Bảng chưa tạo: chưa có ngày nghỉ nào.
+export async function readHolidays(db) {
+  const [days, pay] = await Promise.all([
+    db.from('shop_closed_days').select('*').order('day'),
+    db.from('payroll_holiday_pay').select('*'),
+  ]);
+  for (const r of [days, pay]) if (r.error && !missingTable(r.error)) throw r.error;
+  return { closedDays: days.error ? [] : days.data || [], holidayPay: pay.error ? [] : pay.data || [] };
+}
+
 // Lần chủ duyệt giờ ngoài ca của đúng các ca đang tính (bảng này chỉ lớn dần, không đọc hết được).
 export async function reviewsFor(db, sessionIds) {
   const rows = [];
@@ -58,8 +68,8 @@ export async function reviewsFor(db, sessionIds) {
 
 export async function loadPayrollMonth(db, year, month) {
   const { start, end } = monthRange(year, month);
-  const [staff, configs, sessions, requests, violations, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules, hourlyRates, lateRules] = await Promise.all([
-    db.from('staff').select('id, full_name, role'),
+  const [staff, configs, sessions, requests, violations, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules, hourlyRates, lateRules, holidays] = await Promise.all([
+    db.from('staff').select('id, full_name, role, created_at'),
     db.from('payroll_config').select('*'),
     // Cả ngày 1 tháng sau (ca đêm cuối tháng); đọc từng trang.
     readAll(() => db.from('attendance_sessions').select('*').gte('date', start).lte('date', end).order('clock_in')),
@@ -74,6 +84,7 @@ export async function loadPayrollMonth(db, year, month) {
     db.from('payroll_fine_rules').select('kind, active'),
     readHourlyRates(db),
     readLateRules(db),
+    readHolidays(db),
   ]);
   for (const r of [staff, configs, requests, violations, closes, departures, bonuses, fineReviews, fineRules]) if (r.error) throw r.error;
   const reviews = await reviewsFor(db, sessions.map(x => x.id));
@@ -81,5 +92,7 @@ export async function loadPayrollMonth(db, year, month) {
   const held = await faceHolds(db, sessions.map(x => x.id));
   return { start, end, staff: staff.data || [], configs: configs.data || [], sessions: markFaceHolds(sessions, held), requests: requests.data || [],
     violations: violations.data || [], reviews, closes: closes.data || [], departures: departures.data || [], rules,
-    bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data), hourlyRates, lateRules };
+    bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data), hourlyRates, lateRules,
+    // Ngày quán nghỉ chưa tới thì chưa tính lương (lương tạm tính đến hôm nay, như Sổ thu chi).
+    closedDays: holidays.closedDays.filter(d => String(d.day) <= new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10)), holidayPay: holidays.holidayPay };
 }

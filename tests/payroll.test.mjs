@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dayFlags, groupByWorkDay, normalizeRules, sessionHours } from '../src/lib/attendanceRules.mjs';
-import { LATE_FINE_MINUTES, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, lateRuleOn, monthTallies, payrollCost, usesDayPay } from '../src/lib/payroll.mjs';
+import { LATE_FINE_MINUTES, activeFineKinds, bonusCheck, computeSalary, fineSuggestions, holidayArgs, lateRuleOn, monthTallies, payrollCost, usesDayPay } from '../src/lib/payroll.mjs';
 
 // Quán 14:00–23:00 giờ VN = 07:00Z–16:00Z, cho lệch 10 phút, tính giờ theo ca từ 25/10/2026.
 const RULES = normalizeRules({ hours_from: '2026-10-25' }, [], [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }]);
@@ -310,4 +310,41 @@ test('the fixed late cut never makes a day negative; days before shift hours are
   const later = normalizeRules({ hours_from: '2027-01-01' }, [], [{ valid_from: '2026-11-01', opening_time: '14:00', closing_time: '00:00', grace_minutes: 10 }]);
   assert.equal(computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 7500000 }, rules: later, lateRules: SHOP_LATE,
     sessions: [{ id: 'y', staff_id: 'a', date: '2026-11-05', clock_in: vnAt('2026-11-05', '15:00'), clock_out: vnAt('2026-11-05', '23:00') }] }).lateAmt, 0, 'shift hours not used yet');
+});
+
+test('shop closed days: a full day of pay for people who get it (monthly by default, hourly not), only while employed', () => {
+  const work = [{ id: 'w', staff_id: 'a', date: '2026-11-04', clock_in: vnAt('2026-11-04', '14:00'), clock_out: new Date(Date.parse(vnAt('2026-11-04', '00:00')) + 86400000).toISOString() }];
+  const pay = extra => computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 7800000, overtime_rate: 30000 }, rules: LATE_RULES, sessions: work,
+    closedDays: ['2026-11-03', '2026-11-04', '2026-12-01'], ...extra });
+  const c = pay({});
+  assert.deepEqual([c.holidayDays, c.workUnits, c.dayUnits, c.dayAmt, c.net], [1, 2, 2, 600000, 600000], '3/11 paid; 4/11 was worked, paid once; December is another month');
+  assert.deepEqual(c.byDay, { '2026-11-03': 300000, '2026-11-04': 300000 });
+  assert.deepEqual(c.daily.map(d => [d.day, !!d.holiday, d.pay]), [['2026-11-03', true, 300000], ['2026-11-04', false, 300000]]);
+  assert.equal(pay({ holidayPaid: false }).holidayDays, 0, 'set to not paid');
+  assert.equal(pay({ employed: { from: '2026-11-04', to: null } }).holidayDays, 0, 'joined after the closed day');
+  assert.equal(pay({ employed: { from: '2026-01-01', to: '2026-11-02' } }).holidayDays, 0, 'left before the closed day');
+  assert.equal(computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 7800000 }, rules: LATE_RULES, sessions: [], closedDays: ['2026-11-03'] }).holidayDays, 0,
+    'nobody is paid a closed day in a month they never worked');
+  // Theo giờ (ca 14:00 → 00:00, 30.000đ/giờ): mặc định không; bật lên thì được đủ giờ của ca.
+  const hourlyRates = [{ staff_id: 'a', valid_from: '2026-11-01', hourly_rate: 30000 }];
+  assert.equal(pay({ hourlyRates }).holidayDays, 0);
+  const h = pay({ hourlyRates, holidayPaid: true });
+  assert.deepEqual([h.holidayDays, h.hourly.minutes, h.hourly.amount, h.byDay['2026-11-03'], h.net], [1, 1200, 600000, 300000, 600000]);
+  assert.deepEqual(holidayArgs({ id: 'a', created_at: '2026-11-02T18:00:00Z' }, { closedDays: [{ day: '2026-11-03' }], holidayPay: [{ staff_id: 'a', paid: false }], departures: [{ staff_id: 'a', last_day: '2026-11-20' }] }),
+    { closedDays: ['2026-11-03'], holidayPaid: false, employed: { from: '2026-11-03', to: '2026-11-20' } }, 'created 01:00 on 3/11 Vietnam time');
+});
+
+test('working on a shop closed day: no late / early cut, and someone paid for closed days gets at least the full day', () => {
+  const at = (from, to) => [{ id: 'c', staff_id: 'a', date: '2026-11-10', clock_in: vnAt('2026-11-10', from), clock_out: vnAt('2026-11-10', to) }];
+  const pay = (sessions, extra = {}) => computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 7800000, overtime_rate: 30000 }, rules: LATE_RULES,
+    lateRules: SHOP_LATE, sessions, closedDays: ['2026-11-10'], ...extra });
+  const called = pay(at('16:00', '20:00')); // gọi vào dọn 4 tiếng: trễ 2 tiếng, về sớm 4 tiếng
+  assert.deepEqual([called.byDay['2026-11-10'], called.lateAmt, called.earlyAmt, called.dayUnits, called.holidayDays], [300000, 0, 0, 1, 0], 'never less than staying home');
+  assert.equal(called.daily[0].closed, true);
+  const unpaid = pay(at('16:00', '20:00'), { holidayPaid: false });
+  assert.deepEqual([unpaid.byDay['2026-11-10'], unpaid.lateAmt, unpaid.earlyAmt, unpaid.dayUnits], [150000, 0, 0, 0.5], 'not paid for closed days: half a day worked, still no cuts');
+  // Bật "có lương" nhưng chưa nhập lương cơ bản: không cộng ngày công ảo.
+  const noBase = computeSalary({ year: 2026, month: 11, staffId: 'a', config: null, rules: LATE_RULES, holidayPaid: true, closedDays: ['2026-11-03'],
+    sessions: [{ id: 'w', staff_id: 'a', date: '2026-11-04', clock_in: vnAt('2026-11-04', '14:00'), clock_out: vnAt('2026-11-04', '23:00') }] });
+  assert.deepEqual([noBase.dayUnits, noBase.workUnits, noBase.holidayDays, noBase.net], [1, 1, 0, 0]);
 });
