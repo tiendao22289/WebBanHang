@@ -97,6 +97,15 @@ async function main() {
   if (money.web_still_calls) console.log(`Lưu ý: khoá công khai vẫn gọi được ${money.web_still_calls} — trigger chặn khi ghi tiền.`);
   console.log('Đã khoá phần tiền: khoá công khai không còn chốt / sửa bill đã thu.');
 
+  // "Nhận tiền mặt" ở trang Mã QR báo lại khi mã phiếu đã ghi trước đó (custom_cash_receipt_once.sql).
+  // Hàm thuộc supabase_admin thì không thay được: chỉ báo, trang Mã QR vẫn không dùng lại mã cũ.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'custom_cash_receipt_once.sql'), 'utf8'));
+  const [cashOnce] = await query(`SELECT
+    position('already_completed' in pg_get_functiondef('public.record_custom_cash_receipt(uuid,numeric)'::regprocedure)) > 0 AS fn_updated,
+    NOT has_function_privilege('anon', 'public.record_custom_cash_receipt(uuid,numeric)', 'EXECUTE') AS anon_blocked`);
+  console.log(JSON.stringify(cashOnce));
+  if (!cashOnce.fn_updated) console.log('Lưu ý: chưa thay được record_custom_cash_receipt (không phải chủ hàm) — trang Mã QR chưa báo được "đã ghi".');
+
   // Khoá ghi trực tiếp từ trình duyệt + nhật ký + sổ trả nợ Sổ tay (staff_security.sql).
   // Chạy SAU khi web mới đã deploy (Sổ tay / Lương / Chấm công đã ghi qua máy chủ).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'staff_security.sql'), 'utf8'));
