@@ -62,6 +62,18 @@ async function main() {
   }
   console.log('Đã cài sổ thu chi vào DB thật.');
 
+  // Sổ thu chi = đúng tiền thu mỗi lần đóng bàn (finance_ledger_checkout_sum.sql): bill âm vì dòng giảm giá
+  // ghi 0đ, phần âm trừ vào bill lớn nhất cùng lần thu; sửa luôn các lần thu cũ. Chạy SAU owner_finance.sql.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'finance_ledger_checkout_sum.sql'), 'utf8'));
+  const [balance] = await query(`SELECT
+    to_regprocedure('public.balance_finance_checkout(timestamptz)') IS NOT NULL AS fn_ok,
+    EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'capture_finance_revenue_balance' AND tgrelid = 'public.orders'::regclass AND tgenabled = 'O') AS trigger_on,
+    (SELECT count(*)::int FROM (SELECT 1 FROM public.finance_revenue_ledger GROUP BY paid_at, payment_method, account_id
+      HAVING bool_or(public.finance_ledger_bill_total(items, amount) < 0)
+        AND sum(amount) <> GREATEST(sum(public.finance_ledger_bill_total(items, amount)), 0)) x) AS unbalanced`);
+  console.log(JSON.stringify(balance));
+  if (!balance.fn_ok || !balance.trigger_on || balance.unbalanced !== 0) throw new Error('Chưa cài được phần chia giảm giá trong sổ thu chi.');
+
   // Khoá phần tiền (bill_money_guard.sql): khoá công khai trong trang web không còn đóng bàn "đã thu",
   // sửa / xoá bill đã thu, xác nhận mã QR hay cộng tiền vào thẻ. Chạy SAU confirm_custom_qr_payment.sql.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'bill_money_guard.sql'), 'utf8'));
