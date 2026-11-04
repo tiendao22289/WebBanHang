@@ -133,10 +133,12 @@ const ALERT_TEXT = { other_network: 'không dùng wifi quán', unknown_device: '
  * pending: payroll_requests đang chờ { staff_id, request_type, amount, days, reason };
  * fixes: đơn xin sửa giờ đang chờ; alerts: lần quét bị cảnh báo / bị chặn;
  * settings / shifts / hours: dòng checkin_settings, staff_shifts, checkin_hours (null = tính cả ca như cũ);
- * reviews: chủ đã cho / không cho tính giờ ngoài ca; staffNames: { id: tên }.
+ * reviews: chủ đã cho / không cho tính giờ ngoài ca; staffNames: { id: tên };
+ * closedDays: ngày quán nghỉ — chủ gọi vào làm thì không tính trễ / về sớm.
  */
-export function staffData({ sessions = [], pending = [], fixes = [], alerts = [], settings = null, shifts = [], hours = [], reviews = [], staffNames = {}, date = null }) {
+export function staffData({ sessions = [], pending = [], fixes = [], alerts = [], settings = null, shifts = [], hours = [], reviews = [], staffNames = {}, date = null, closedDays = [] }) {
   const rules = settings ? normalizeRules(settings, shifts, hours) : null;
+  const closedDay = !!date && closedDays.includes(date);
   if (date) sessions = sessions.filter(s => workDayOf(s, rules) === date);
   const reviewOf = new Map(reviews.map(r => [r.attendance_id, r]));
   const nameOf = id => staffNames[id] || 'Không rõ';
@@ -149,7 +151,7 @@ export function staffData({ sessions = [], pending = [], fixes = [], alerts = []
     const counted = sorted.map(s => sessionHours(s, rules, reviewOf.get(s.id)));
     const waitMs = counted.reduce((a, h) => a + h.pendingMs, 0);
     if (waitMs) outside.push({ id, name: nameOf(id), minutes: Math.round(waitMs / 60000) });
-    const flags = dayFlags(sorted, rules);
+    const flags = closedDay ? { ...dayFlags(sorted, rules), late: 0, leftEarly: 0 } : dayFlags(sorted, rules);
     // Về sớm từ 30 phút (từ tháng 11) bị trừ lương theo giờ.
     const cut = flags.leftEarly >= EARLY_CUT_MINUTES && !!date && date.slice(0, 7) >= DAY_PAY_FROM;
     people.push({ id, name: nameOf(id), spans: sorted.map(s => ({ in: s.clock_in, out: s.clock_out || null })),
@@ -203,8 +205,9 @@ export function staffBlock(input) {
  * Nhân viên trong một khoảng ngày (tuần / tháng): mỗi người bao nhiêu ngày, bao nhiêu giờ, mấy lần trễ /
  * về sớm / quên ra ca / bị cảnh báo khi quét. from / to: ngày làm đầu / cuối (YYYY-MM-DD).
  */
-export function staffRangeData({ sessions = [], alerts = [], settings = null, shifts = [], hours = [], reviews = [], staffNames = {}, from, to }) {
+export function staffRangeData({ sessions = [], alerts = [], settings = null, shifts = [], hours = [], reviews = [], staffNames = {}, from, to, closedDays = [] }) {
   const rules = settings ? normalizeRules(settings, shifts, hours) : null;
+  const closed = new Set(closedDays);
   const reviewOf = new Map(reviews.map(r => [r.attendance_id, r]));
   const byDay = new Map();
   for (const s of sessions) {
@@ -226,7 +229,8 @@ export function staffRangeData({ sessions = [], alerts = [], settings = null, sh
     p.days += 1;
     p.hours += counted.reduce((a, h) => a + h.countedMs, 0) / 3600000;
     p.waitMinutes += Math.round(counted.reduce((a, h) => a + h.pendingMs, 0) / 60000);
-    const f = dayFlags(sorted, rules);
+    // Ngày quán nghỉ (chủ gọi vào làm): không tính trễ / về sớm.
+    const f = closed.has(key.split('|')[1]) ? { ...dayFlags(sorted, rules), late: 0, leftEarly: 0 } : dayFlags(sorted, rules);
     for (const k of ['late', 'leftEarly', 'early', 'stayed']) if (f[k]) { p[k].count += 1; p[k].minutes += f[k]; }
     if (sorted.some(s => s.auto_closed)) p.forgot += 1;
   }

@@ -91,6 +91,8 @@ function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFai
       return { staff: [], configs: [], sessions: [], requests: [], violations: [], bonuses: [], rules: null, reviews: [], closes: [], ...state.payroll };
     },
     payrollCost,
+    // Ngày quán nghỉ (thẻ nhân viên không báo trễ ngày đó); state.closedDays: các ngày nghỉ của bài test.
+    readClosedDays: async () => state.closedDays || [],
   });
 }
 
