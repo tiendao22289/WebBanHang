@@ -31,7 +31,7 @@ test('after a scan the staff see the time, today\'s hours and whether they were 
   const second = { id: 's2', staff_id: 'a', date: '2026-11-02', clock_in: '2026-11-02T10:30:00Z', clock_out: null };
   const inResult = { clocked: 'in', at: second.clock_in, session: second, sessions: [first, second] };
   assert.match(clockSummary(inResult), /^🟢 Vào ca lúc \d\d:30\n⏱ Tổng tích luỹ hôm nay: 2,6 giờ$/);
-  assert.equal(punctuality('in', second, inResult.sessions, R, 'a'), '⏰ Trễ 25 phút so với ca 14:00.', 'the first clock-in of the day decides lateness');
+  assert.equal(punctuality('in', second, inResult.sessions, R, 'a'), '⏰ Trễ 25 phút so với ca 14:00. Đi trễ có thể bị trừ lương.', 'the first clock-in of the day decides lateness');
   const out = { ...second, clock_out: '2026-11-02T16:00:00Z' };
   const outResult = { clocked: 'out', at: out.clock_out, session: out, sessions: [first, out] };
   assert.match(clockSummary(outResult), /^🔴 Ra ca lúc \d\d:00 · Ca này: 5,5 giờ\n✅ Tổng hôm nay: 8,1 giờ$/);

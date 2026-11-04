@@ -144,10 +144,15 @@ export function groupByWorkDay(sessions, rules) {
 export const currentWorkDay = (rules, staffId, now = Date.now()) =>
   workDayOf({ staff_id: staffId, date: new Date(now + 7 * HOUR).toISOString().slice(0, 10), clock_in: new Date(now).toISOString() }, rules);
 
+// Từ ngày làm này giờ ngoài ca (vào sớm / ở lại) tự tính, không chờ chủ duyệt (chủ chọn 2026-11-04);
+// chủ vẫn bấm "Không tính" được cho từng ca. Ngày trước đó giờ ngoài ca chưa duyệt vẫn chờ duyệt.
+export const AUTO_EXTRA_FROM = '2026-11-01';
+
 /**
  * Giờ công của một ca đã ra ca. Từ ngày `hours_from`: chỉ tính trong ca (vào trễ /
  * về sớm trong số phút cho lệch vẫn tính đủ); vào sớm / ở lại quá số phút đó là
- * giờ ngoài ca, chỉ tính khi chủ cho (`review`). Ngày trước đó tính cả ca như cũ.
+ * giờ ngoài ca: từ AUTO_EXTRA_FROM tự tính (trừ khi chủ bấm không tính), trước đó chỉ
+ * tính khi chủ cho (`review`). Ngày trước `hours_from` tính cả ca như cũ.
  */
 export function sessionHours(session, rules, review = null) {
   const out = { totalMs: 0, countedMs: 0, earlyMs: 0, stayMs: 0, pendingMs: 0, approvedMs: 0, byShift: false };
@@ -165,6 +170,7 @@ export function sessionHours(session, rules, review = null) {
   out.stayMs = e > we + grace ? Math.max(0, e - Math.max(s, we)) : 0;
   const outside = out.earlyMs + out.stayMs;
   if (review?.status === 'approved') out.approvedMs = Math.min(outside, Math.max(0, Number(review.minutes) || 0) * 60000);
+  else if (!review && w.date >= AUTO_EXTRA_FROM) { out.approvedMs = outside; out.autoExtra = outside > 0; }
   else if (!review) out.pendingMs = outside;
   out.countedMs = inShift + out.approvedMs;
   return out;

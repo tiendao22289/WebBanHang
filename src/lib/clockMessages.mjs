@@ -3,7 +3,7 @@
  * điện thoại) và nút "Quét mã chấm công" trong app nhân viên: đọc mã quét được, kiểm mã còn
  * mới, câu báo sau khi vào / ra ca. Máy chủ mới là nơi kiểm chữ ký, wifi, điện thoại.
  */
-import { dayFlags, durationText, shiftOf, workDayOf } from './attendanceRules.mjs';
+import { AUTO_EXTRA_FROM, dayFlags, durationText, shiftOf, workDayOf } from './attendanceRules.mjs';
 import { DAY_PAY_FROM, EARLY_CUT_MINUTES } from './payroll.mjs';
 import { FACE_MISS_TEXT } from './faceCheck.mjs';
 
@@ -114,17 +114,19 @@ export function punctuality(clocked, session, sessions, rules, staffId) {
   if (!rules || !session || !(String(session.date) >= rules.hours_from)) return '';
   const day = (sessions || []).some(s => s.id === session.id) ? sessions : [session];
   // Ca của ngày làm: vào lại sau nửa đêm để dọn quán vẫn so với ca hôm trước.
-  const f = dayFlags(day, rules), shift = shiftOf(rules, staffId, workDayOf(session, rules));
+  const workDay = workDayOf(session, rules), f = dayFlags(day, rules), shift = shiftOf(rules, staffId, workDay);
+  // Từ tháng 11 giờ ngoài ca tự tính tăng ca. Đi trễ bị trừ theo luật đi trễ của từng người (máy chủ tính).
+  const autoExtra = workDay >= AUTO_EXTRA_FROM;
   if (clocked === 'in') {
-    if (f.late) return `⏰ Trễ ${durationText(f.late)} so với ca ${shift.start}.`;
-    if (f.early) return `🌅 Vào sớm ${durationText(f.early)}: giờ trước ${shift.start} chỉ được tính khi chủ quán đồng ý.`;
+    if (f.late) return `⏰ Trễ ${durationText(f.late)} so với ca ${shift.start}.${autoExtra ? ' Đi trễ có thể bị trừ lương.' : ''}`;
+    if (f.early) return `🌅 Vào sớm ${durationText(f.early)}: giờ trước ${shift.start} ${autoExtra ? 'được tính tăng ca' : 'chỉ được tính khi chủ quán đồng ý'}.`;
     return `✅ Đúng giờ (ca ${shift.start} – ${shift.end}).`;
   }
   if (f.leftEarly) {
     // Từ tháng 11 về sớm từ 30 phút bị trừ lương theo giờ về sớm.
-    const cut = f.leftEarly >= EARLY_CUT_MINUTES && workDayOf(session, rules).slice(0, 7) >= DAY_PAY_FROM;
+    const cut = f.leftEarly >= EARLY_CUT_MINUTES && workDay.slice(0, 7) >= DAY_PAY_FROM;
     return `⏰ Về sớm ${durationText(f.leftEarly)} so với giờ hết ca ${shift.end}.${cut ? ' Về sớm từ 30 phút bị trừ lương theo giờ về sớm.' : ''}`;
   }
-  if (f.stayed) return `🌙 Ở lại ${durationText(f.stayed)} sau ca: giờ này chờ chủ quán duyệt mới được tính.`;
+  if (f.stayed) return `🌙 Ở lại ${durationText(f.stayed)} sau ca: ${autoExtra ? 'được tính tăng ca' : 'giờ này chờ chủ quán duyệt mới được tính'}.`;
   return '✅ Ra ca đúng giờ.';
 }

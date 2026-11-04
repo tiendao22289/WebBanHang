@@ -179,7 +179,8 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
   add(T(10, '10:00'), () => staffPost(CHI, T(10, '10:00'), { action: 'request_fix', attendance_id: sessionOf(CHI, 9).id, clock_out: iso(T(9, '23:40')), reason: 'quên bấm, dọn tới 23:40' }));
   add(T(14, '10:00'), () => staffPost(CHI, T(14, '10:00'), { action: 'request_fix', attendance_id: sessionOf(CHI, 13).id, clock_out: iso(T(13, '23:20')), reason: 'quên bấm' }));
 
-  // Chủ quán duyệt mỗi sáng: giờ ngoài ca theo kế hoạch, đơn sửa giờ, đơn ứng / nghỉ, phạt.
+  // Chủ quán xem mỗi sáng: đơn sửa giờ, đơn ứng / nghỉ, phạt. Giờ ngoài ca từ tháng 11 tự tính tăng ca; theo kế hoạch
+  // chủ vẫn bấm "Cho tính" / "Không tính" ở vài ca (Chi 4/11 không tính).
   const extraPlan = { [`${CHI.id}2026-11-02`]: 'approved', [`${CHI.id}2026-11-04`]: 'rejected', [`${CHI.id}2026-11-09`]: 'approved', [`${CHI.id}2026-11-20`]: 'approved',
     [`${DUNG.id}2026-11-19`]: 'approved', [`${DUNG.id}2026-11-26`]: 'approved', [`${DUNG.id}2026-11-28`]: 'approved' };
   const fixPlan = { '2026-11-09': 'approved', '2026-11-13': 'rejected' };
@@ -191,9 +192,12 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
       if (fixPlan[s.date]) await ownerPost(T(d, '10:31'), { action: 'decide_fix', id: f.id, status: fixPlan[s.date] });
     }
     const again = await ownerGet(T(d, '10:32'), 'checkin=1');
-    for (const x of again.extras) {
-      const plan = extraPlan[`${x.staff_id}${x.date}`];
-      if (plan) await ownerPost(T(d, '10:33'), { action: 'decide_extra', attendance_id: x.attendance_id, status: plan });
+    assert.deepEqual(again.extras, [], 'nothing waits for approval');
+    const R0 = rules.normalizeRules(state.checkin_settings[0], state.staff_shifts, state.checkin_hours);
+    const reviewed = new Set((state.attendance_extra_reviews || []).map(r => r.attendance_id));
+    for (const x of state.attendance_sessions.filter(s => s.clock_out && !reviewed.has(s.id))) {
+      const plan = extraPlan[`${x.staff_id}${rules.workDayOf(x, R0)}`], h = rules.sessionHours(x, R0);
+      if (plan && h.earlyMs + h.stayMs > 0) await ownerPost(T(d, '10:33'), { action: 'decide_extra', attendance_id: x.id, status: plan });
     }
     for (const r of (state.payroll_requests || []).filter(x => x.status === 'pending')) {
       if (requestPlan[r.reason]) await ownerPost(T(d, '10:34'), { action: 'decide_request', id: r.id, status: requestPlan[r.reason] });
@@ -233,7 +237,7 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
   assert.equal(line(report('2026-11-29'), 'Dung'), undefined, '29/11 Dũng nghỉ: lượt 00:40–01:15 thuộc ca 28/11');
   assert.equal(line(report('2026-11-28'), 'Dung'), '• Dung: 18:00–00:30, 00:40–01:15 (7,1 giờ) ⚠ ở lại 15 phút');
   // Ở lại 30 phút (00:20–00:50), không phải 1 giờ 20 phút tính từ 23:30: lúc vắng không tính.
-  assert.equal(line(report('2026-11-30'), 'Chi'), '• Chi: 14:00–23:30, 00:20–00:50 (9,5 giờ) ⚠ ở lại 30 phút');
+  assert.equal(line(report('2026-11-30'), 'Chi'), '• Chi: 14:00–23:30, 00:20–00:50 (10 giờ) ⚠ ở lại 30 phút', '30 phút ở lại tự tính');
   assert.equal(line(report('2026-12-01'), 'Chi'), undefined);
 
   // ── Sáng 1/12: chủ xem gợi ý phạt và thưởng chuyên cần (như trang Lương tính), tự điền tiền, rồi chốt.
@@ -274,7 +278,7 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
   // Số tính tay (lương cơ bản 5.200.000đ = 200.000đ/ngày công, tăng ca 30.000đ/giờ = 500đ/phút).
   assert.deepEqual(show(slip(AN)), { units: 26, basePay: 5200000, earlyAmt: 0, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 300000, advAmt: 0, vioAmt: 0, absDays: 0, net: 5500000 }, 'An: thưởng chuyên cần 300.000đ');
   assert.deepEqual(show(slip(BINH)), { units: 25, basePay: 5000000, earlyAmt: 0, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 0, advAmt: 1000000, vioAmt: 200000, absDays: 0, net: 3800000 }, 'Bình: phạt tay 100.000đ + 2 lần trễ quá 30 phút');
-  assert.deepEqual(show(slip(CHI)), { units: 26, basePay: 5200000, earlyAmt: 0, otHours: 2.1, otAmt: 62500, pendingH: 1.3, bonusAmt: 0, advAmt: 0, vioAmt: 60000, absDays: 0, net: 5202500 }, 'Chi: 45 + 40 + 40 phút cho tính, 50 + 30 phút chưa duyệt, 2 lần quên ra ca bị phạt');
+  assert.deepEqual(show(slip(CHI)), { units: 26, basePay: 5200000, earlyAmt: 0, otHours: 3.4, otAmt: 102500, pendingH: 0, bonusAmt: 0, advAmt: 0, vioAmt: 60000, absDays: 0, net: 5242500 }, 'Chi: 45 + 40 + 40 phút cho tính, 50 + 30 phút tự tính (4/11 chủ không tính), 2 lần quên ra ca bị phạt');
   assert.deepEqual(show(slip(DUNG)), { units: 23.5, basePay: 4700000, earlyAmt: 14286, otHours: 1.1, otAmt: 32500, pendingH: 0, bonusAmt: 250000, advAmt: 0, vioAmt: 0, absDays: 0, net: 4968214 },
     'Dũng: 24 ngày, 1 nửa ngày (12/11 về sớm 4 giờ trên ca 7 giờ: được 200.000 × 3/7 = 85.714đ thay vì nửa ngày → trừ 14.286đ), ra vào lại sau nửa đêm không thành ngày công mới; thưởng 250.000đ');
   assert.deepEqual(show(slip(EM)), { units: 14, basePay: 2800000, earlyAmt: 0, otHours: 0, otAmt: 0, pendingH: 0, bonusAmt: 0, advAmt: 3000000, vioAmt: 0, absDays: 0, net: -200000 }, 'Em: kết toán 25/11, còn nợ quán 200.000đ');
@@ -288,7 +292,7 @@ test('a whole month for six people: every pay slip matches the numbers worked ou
   assert.equal(st('Chi').forgot, 3);
   assert.deepEqual([st('Dung').late.count, st('Dung').leftEarly.count], [0, 1], 'ca đêm: không báo trễ sai, về sớm đúng 1 lần (nửa ngày)');
   assert.deepEqual([st('Phat').warnings, st('An').late.count, st('An').stayed.count, st('An').early.count], [6, 0, 0, 0], 'Phát: 3 ngày khác wifi / máy lạ = 6 lần quét bị cảnh báo (vào + ra)');
-  assert.equal(stats.totals.gross, 5200000 + 5000000 + 5262500 + 4732500 - 14286 + 2800000 + 4000000 + 300000 + 250000);
+  assert.equal(stats.totals.gross, 5200000 + 5000000 + 5302500 + 4732500 - 14286 + 2800000 + 4000000 + 300000 + 250000);
   assert.equal(stats.totals.earlyCuts, 14286);
   assert.deepEqual([stats.totals.bonuses, stats.totals.fines], [550000, 100000 + 100000 + 60000 + 50000]);
   assert.equal(await departure.hasLeft(fakeDb(state), EM.id, '2026-11-26'), true, 'Em không đăng nhập được nữa từ 26/11');

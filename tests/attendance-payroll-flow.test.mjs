@@ -99,15 +99,14 @@ test('the whole flow: scan, late, forgot, fix, approvals, requests, pay, close, 
   assert.equal((await post(workforce(state, PHAT, at('04', '10:05')), { action: 'request', type: 'advance', amount: '500.000', reason: 'tiền nhà' })).status, 200);
   assert.equal((await post(workforce(state, PHAT, at('04', '10:06')), { action: 'request', type: 'absent', from_date: '2026-11-10', to_date: '2026-11-11', reason: 'về quê' })).status, 200);
 
-  // 6. Chủ quán duyệt: đơn sửa giờ, giờ ngoài ca 2 ngày, ứng, nghỉ; thêm phạt đi trễ.
+  // 6. Chủ quán duyệt: đơn sửa giờ, ứng, nghỉ; thêm phạt đi trễ (giờ ngoài ca tự tính).
   const owner = now => workforce(state, ADMIN, now);
   const overview = (await get(owner(at('04', '11:00')), 'checkin=1')).body;
   assert.equal(overview.fixes.filter(f => f.status === 'pending').length, 1);
   assert.equal((await post(owner(at('04', '11:01')), { action: 'decide_fix', id: overview.fixes[0].id, status: 'approved' })).status, 200);
   assert.equal(day3.clock_out, new Date(at('03', '23:30')).toISOString());
-  const extras = (await get(owner(at('04', '11:02')), 'checkin=1')).body.extras;
-  assert.deepEqual(extras.map(x => [x.date, x.early_minutes, x.stay_minutes]).sort(), [['2026-11-02', 0, 40], ['2026-11-03', 0, 30]]);
-  for (const x of extras) assert.equal((await post(owner(at('04', '11:03')), { action: 'decide_extra', attendance_id: x.attendance_id, status: 'approved' })).status, 200);
+  // Giờ ở lại 2 ngày (40 + 30 phút): từ tháng 11 tự tính tăng ca, không còn chờ chủ duyệt.
+  assert.deepEqual((await get(owner(at('04', '11:02')), 'checkin=1')).body.extras, []);
   for (const req of state.payroll_requests) await post(owner(at('04', '11:04')), { action: 'decide_request', id: req.id, status: 'approved' });
   assert.equal((await post(owner(at('04', '11:05')), { action: 'add_violation', staff_id: PHAT.id, amount: '50.000', reason: 'đi trễ', month: 11, year: 2026 })).status, 200);
 

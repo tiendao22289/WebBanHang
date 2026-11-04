@@ -233,6 +233,7 @@ function StaffReport({ date, monthRevenue }) {
         p.forgot ? <span className="warn">quên ra ca {p.forgot}</span> : null,
         c.otHours ? `tăng ca ${num(c.otHours)} giờ` : null,
         c.pendingH ? `${num(c.pendingH)} giờ ngoài ca chờ duyệt` : null,
+        c.lateAmt ? <span className="warn">trừ vào trễ {money(c.lateAmt)}</span> : null,
         c.earlyAmt ? <span className="warn">trừ về sớm {money(c.earlyAmt)}</span> : null,
         c.bonusAmt ? `thưởng ${money(c.bonusAmt)}` : null,
         c.advAmt ? `ứng ${money(c.advAmt)}` : null,
