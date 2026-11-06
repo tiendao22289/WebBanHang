@@ -169,9 +169,21 @@ function BonusBox({ year, month, people, settings, monthOver, onAction }) {
   const amountOf = p => amounts[p.s.id] ?? suggested;
   const approve = p => (amountOf(p) ? onAction('decide_bonus', { staff_id: p.s.id, year, month, amount: amountOf(p) }) : alert('Nhập số tiền thưởng.'));
   const amountInput = p => <input style={moneyBox} inputMode="numeric" placeholder="Số tiền" value={amountOf(p)} onChange={e => setAmounts(a => ({ ...a, [p.s.id]: typedMoney(e.target.value) }))} />;
+  // Gọn một dòng (tên + tình trạng), bấm để mở; tự mở khi hết tháng mà còn người chờ duyệt thưởng.
+  const needsAction = monthOver && eligible.length > 0;
+  const [open, setOpen] = useState(needsAction);
+  const status = unused ? 'chưa đặt mức thưởng'
+    : [needsAction ? `${eligible.length} người chờ duyệt` : !monthOver ? (eligible.length ? `đang giữ được: ${eligible.length} người` : 'chưa ai giữ được') : '',
+      approved.length ? `đã thưởng ${approved.length} người` : ''].filter(Boolean).join(' · ');
   return (
-    <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155', lineHeight: 1.7 }}>
-      <div style={{ fontWeight: 800 }}>⭐ Thưởng chuyên cần tháng {month}/{year}</div>
+    <div className="bonus-box" style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 12, padding: '10px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155', lineHeight: 1.7 }}>
+      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', border: 0, background: 'none', padding: 0, font: 'inherit', color: 'inherit', textAlign: 'left', cursor: 'pointer' }}>
+        <span style={{ fontWeight: 800 }}>⭐ Thưởng chuyên cần {month}/{year}</span>
+        <span style={{ flex: 1, minWidth: 0, fontSize: '0.78rem', color: needsAction ? '#b45309' : '#64748b', fontWeight: needsAction ? 700 : 500 }}>{status}</span>
+        <span style={{ color: '#b45309', fontSize: '0.8rem' }}>{open ? '▴' : '▾'}</span>
+      </button>
+      {open && <>
       {edit ? (
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0' }}>
           <label>Mức thưởng gợi ý <input style={moneyBox} inputMode="numeric" value={edit.bonus_amount} onChange={e => setEdit(x => ({ ...x, bonus_amount: typedMoney(e.target.value) }))} /></label>
@@ -219,6 +231,7 @@ function BonusBox({ year, month, people, settings, monthOver, onAction }) {
           )}
         </>
       )}
+      </>}
     </div>
   );
 }
@@ -399,6 +412,8 @@ function CycleBox({ people, today, nameOf, onPay, onUndo }) {
 
 export default function PayrollPage() {
   const [activeTab, setActiveTab] = useState('salary');
+  // Điện thoại: mục Cài đặt nhớ lần mở gần nhất (bấm "Cài đặt" mở lại đúng mục đó).
+  const [lastSettingTab, setLastSettingTab] = useState('accounts');
   const [configFocus, setConfigFocus] = useState(null);
   const [lateOpen, setLateOpen] = useState(null);
   // Bảng lương: bấm một ô (Vào sớm, Vào trễ, Ra dư, Về sớm, Ứng lương, Nghỉ, Vi phạm) của một người để xem từng ngày / từng khoản
@@ -1207,13 +1222,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           <button style={smallBtn} onClick={() => setDetail(null)}>Đóng</button>
         </div>
         <div style={{ overflowX: 'auto' }}>
-          <table className="payroll-table" style={{ width: '100%', maxWidth: 640, fontSize: '0.8rem' }}>
+          <table className="payroll-table detail-list" style={{ width: '100%', maxWidth: 640, fontSize: '0.8rem' }}>
             <thead><tr><th style={{ padding: '6px 10px' }}>Ngày</th><th style={{ padding: '6px 10px' }}>Lỗi / lý do</th><th style={{ padding: '6px 10px', textAlign: 'right' }}>Số tiền</th></tr></thead>
             <tbody>
               {list.map(({ v, m }) => (
                 <tr key={v.id}>
                   <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', verticalAlign: 'top', fontWeight: 700 }}>{m?.fine_date ? `${weekday(m.fine_date)} ${ddmm(m.fine_date)}` : '—'}</td>
-                  <td style={{ padding: '6px 10px', verticalAlign: 'top' }}>
+                  <td data-label="" className="detail-wide" style={{ padding: '6px 10px', verticalAlign: 'top' }}>
                     {m?.kind ? '🤖 ' : ''}{m?.self_reported ? '🙋 ' : ''}{v.reason || '(không ghi lý do)'}
                     {m?.note && <div style={{ fontSize: '0.74rem', color: '#475569' }}>{m.note}</div>}
                     <div style={{ fontSize: '0.7rem', color: m?.self_reported ? '#b45309' : '#94a3b8' }}>
@@ -1221,7 +1236,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                       {v.created_at ? ` lúc ${hhmm(v.created_at)} ${dayOf(v.created_at)}` : ''}
                     </div>
                   </td>
-                  <td style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', verticalAlign: 'top', color: Number(v.amount) > 0 ? '#dc2626' : '#b45309', fontWeight: 700 }}>
+                  <td className="detail-money" style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', verticalAlign: 'top', color: Number(v.amount) > 0 ? '#dc2626' : '#b45309', fontWeight: 700 }}>
                     {Number(v.amount) > 0 ? `-${formatMoney(v.amount)}` : 'chưa định tiền'}
                   </td>
                 </tr>
@@ -1235,6 +1250,23 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   };
   // Đơn ứng lương / báo nghỉ của một người trong tháng đang xem (bỏ đơn đã từ chối).
   const monthRequests = (staffId, type) => requests.filter(r => r.staff_id === staffId && r.month === selMonth && r.year === selYear && r.request_type === type && r.status !== 'rejected');
+  // Một dòng của phiếu lương trên điện thoại: tên trái, số phải; có kind + has thì bấm được ("›") và mở chi tiết ngay dưới dòng.
+  const slipRow = (s, { label, sub = null, value, tone = '', kind = null, has = false }) => {
+    const open = has && detail?.id === s.id && detail.kind === kind;
+    const body = <>
+      <span className="slip-label">{label}{sub && <small>{sub}</small>}</span>
+      <span className={`slip-value ${tone}`}>{value}</span>
+      <span className={`slip-chev ${open ? 'open' : ''}`} aria-hidden="true">{has ? '›' : ''}</span>
+    </>;
+    return (
+      <React.Fragment key={label}>
+        {has
+          ? <button type="button" className={`slip-row ${open ? 'open' : ''}`} aria-expanded={open} onClick={() => setDetail(open ? null : { id: s.id, kind })}>{body}</button>
+          : <div className="slip-row">{body}</div>}
+        {open && <div className="slip-detail">{detailPanel(s, kind)}</div>}
+      </React.Fragment>
+    );
+  };
   // Ô bấm được của Bảng lương: giữ nguyên nội dung ô, thêm khung + mũi tên; không có gì để xem thì để nguyên.
   const cellBtn = (staffId, kind, has, children) => {
     if (!has) return children;
@@ -1290,10 +1322,10 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         return (
           <tr key={x.day}>
             {dayCell(x.day)}
-            <td style={{ ...td, whiteSpace: 'nowrap' }}>{shiftText(x)}</td>
-            <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 600 }}>{isIn ? hhmm(a.clock_in) : a.clock_out ? hhmm(a.clock_out) : 'chưa ra'}</td>
-            <td style={{ ...td, whiteSpace: 'nowrap', color: kind === 'late' || kind === 'leftEarly' ? '#c2410c' : undefined }}>{durationText(x[kind])}</td>
-            <td style={td}>
+            <td data-label={head[1]} style={{ ...td, whiteSpace: 'nowrap' }}>{shiftText(x)}</td>
+            <td data-label={head[2]} style={{ ...td, whiteSpace: 'nowrap', fontWeight: 600 }}>{isIn ? hhmm(a.clock_in) : a.clock_out ? hhmm(a.clock_out) : 'chưa ra'}</td>
+            <td data-label={head[3]} style={{ ...td, whiteSpace: 'nowrap', color: kind === 'late' || kind === 'leftEarly' ? '#c2410c' : undefined }}>{durationText(x[kind])}</td>
+            <td data-label={head[4]} className={kind === 'late' || kind === 'leftEarly' ? 'detail-money' : undefined} style={td}>
               {kind === 'early' || kind === 'stay'
                 ? <span style={{ color: st.color }}>{st.text}{x.d?.extraAmt > 0 ? ` · tăng ca ngày đó +${formatMoney(x.d.extraAmt)}` : ''}</span>
                 : cut > 0 ? <><strong style={{ color: '#dc2626' }}>−{formatMoney(cut)}</strong>
@@ -1312,9 +1344,9 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
       rows = list.map(r => (
         <tr key={r.id}>
           {dayCell(vnDay(r.created_at))}
-          <td style={td}>{r.reason || '—'}</td>
-          <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 700, color: '#dc2626' }}>−{formatMoney(r.amount)}</td>
-          <td style={{ ...td, whiteSpace: 'nowrap', color: r.status === 'pending' ? '#b45309' : '#16a34a' }}>{r.status === 'pending' ? 'chờ duyệt (chưa trừ)' : 'đã duyệt, đã trừ'}</td>
+          <td data-label="Lý do" style={td}>{r.reason || '—'}</td>
+          <td data-label="Số tiền" className="detail-money" style={{ ...td, whiteSpace: 'nowrap', fontWeight: 700, color: '#dc2626' }}>−{formatMoney(r.amount)}</td>
+          <td data-label="Trạng thái" style={{ ...td, whiteSpace: 'nowrap', color: r.status === 'pending' ? '#b45309' : '#16a34a' }}>{r.status === 'pending' ? 'chờ duyệt (chưa trừ)' : 'đã duyệt, đã trừ'}</td>
         </tr>
       ));
       editHint = 'Sửa số tiền, duyệt hoặc xoá ở ✏️ Sửa → Ứng lương.';
@@ -1328,9 +1360,9 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         return (
           <tr key={r.id}>
             <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 700 }}>{l ? `${ddmm(l.from_date)}${l.to_date !== l.from_date ? ` – ${ddmm(l.to_date)}` : ''}` : `gửi ${ddmm(vnDay(r.created_at))}`}</td>
-            <td style={{ ...td, whiteSpace: 'nowrap' }}>{fmtNum(r.days)} ngày</td>
-            <td style={td}>{r.reason || '—'}</td>
-            <td style={{ ...td, whiteSpace: 'nowrap', color: r.status === 'pending' ? '#b45309' : '#16a34a' }}>{r.status === 'pending' ? 'chờ duyệt' : 'đã duyệt'}</td>
+            <td data-label="Số ngày" style={{ ...td, whiteSpace: 'nowrap' }}>{fmtNum(r.days)} ngày</td>
+            <td data-label="Lý do" style={td}>{r.reason || '—'}</td>
+            <td data-label="Trạng thái" style={{ ...td, whiteSpace: 'nowrap', color: r.status === 'pending' ? '#b45309' : '#16a34a' }}>{r.status === 'pending' ? 'chờ duyệt' : 'đã duyệt'}</td>
           </tr>
         );
       });
@@ -1345,7 +1377,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         </div>
         {rows.length === 0 ? <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Không có gì trong tháng này.</div> : (
           <div style={{ overflowX: 'auto' }}>
-            <table className="payroll-table" style={{ width: '100%', maxWidth: 720, fontSize: '0.8rem' }}>
+            <table className="payroll-table detail-list" style={{ width: '100%', maxWidth: 720, fontSize: '0.8rem' }}>
               <thead><tr>{head.map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
               <tbody>{rows}</tbody>
             </table>
@@ -2185,9 +2217,10 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         </div>
       )}
 
-      {/* Mục chia 2 nhóm: việc hằng ngày, rồi phần cài đặt (người, mức lương, máy chấm công). Lưới (điện thoại 4 cột) —
-          thấy đủ mọi mục, không còn mục bị khuất bên phải. */}
-      {[
+      {/* Mục chia 2 nhóm: việc hằng ngày, rồi phần cài đặt (người, mức lương, máy chấm công). Máy tính: 2 hàng có chữ nhóm.
+          Điện thoại: một hàng 5 nút (4 việc hằng ngày + Cài đặt); đang ở phần cài đặt thì hiện thêm 3 mục con bên dưới. */}
+      {(() => {
+        const groups = [
         ['Việc hằng ngày', [
           { key: 'salary', icon: '📊', label: 'Bảng lương' },
           { key: 'attendance', icon: '⏰', label: 'Chấm công' },
@@ -2200,20 +2233,49 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           { key: 'config', icon: '💰', label: 'Mức lương' },
           { key: 'qr', icon: '📱', label: 'Cài chấm công' },
         ]],
-      ].map(([group, tabs]) => (
-        <div key={group} className="payroll-tab-group">
-          <div className="payroll-tab-group-label">{group}</div>
-          <div className="payroll-tabs" role="group" aria-label={group}>
-            {tabs.map(tab => (
-              <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => { setActiveTab(tab.key); setConfigFocus(null); }} aria-pressed={activeTab === tab.key}>
-                <span className="tab-icon" aria-hidden="true">{tab.icon}</span>
-                <span className="tab-label">{tab.label}</span>
-                {tab.badge > 0 && <span className="badge">{tab.badge}</span>}
+        ];
+        const [daily, settings] = [groups[0][1], groups[1][1]];
+        const inSettings = settings.some(t => t.key === activeTab);
+        const go = key => { setActiveTab(key); setConfigFocus(null); if (settings.some(t => t.key === key)) setLastSettingTab(key); };
+        return <>
+          {groups.map(([group, tabs]) => (
+            <div key={group} className="payroll-tab-group">
+              <div className="payroll-tab-group-label">{group}</div>
+              <div className="payroll-tabs" role="group" aria-label={group}>
+                {tabs.map(tab => (
+                  <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => go(tab.key)} aria-pressed={activeTab === tab.key}>
+                    <span className="tab-icon" aria-hidden="true">{tab.icon}</span>
+                    <span className="tab-label">{tab.label}</span>
+                    {tab.badge > 0 && <span className="badge">{tab.badge}</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <nav className="pnav" aria-label="Mục lương">
+            <div className="pnav-main">
+              {daily.map(tab => (
+                <button key={tab.key} className={`pnav-btn ${activeTab === tab.key ? 'active' : ''}`} onClick={() => go(tab.key)} aria-pressed={activeTab === tab.key}>
+                  <span className="pnav-ic" aria-hidden="true">{tab.icon}</span>{tab.label}
+                  {tab.badge > 0 && <span className="pnav-badge">{tab.badge}</span>}
+                </button>
+              ))}
+              <button className={`pnav-btn ${inSettings ? 'active' : ''}`} onClick={() => go(inSettings ? activeTab : lastSettingTab)} aria-pressed={inSettings}>
+                <span className="pnav-ic" aria-hidden="true">⚙️</span>Cài đặt
               </button>
-            ))}
-          </div>
-        </div>
-      ))}
+            </div>
+            {inSettings && (
+              <div className="pnav-sub" role="group" aria-label="Cài đặt">
+                {settings.map(tab => (
+                  <button key={tab.key} className={`pnav-chip ${activeTab === tab.key ? 'active' : ''}`} onClick={() => go(tab.key)} aria-pressed={activeTab === tab.key}>
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </nav>
+        </>;
+      })()}
 
       {!hasSynced ? (
         <div className="empty-state">Đang tải dữ liệu lương…</div>
@@ -2248,21 +2310,21 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
             return (
               <div>
                 {/* Filter bar */}
-                <div className="filter-bar">
-                  <select value={salarySearch} onChange={e => setSalarySearch(e.target.value)}>
-                    <option value="">👥 Tất cả nhân viên</option>
+                {/* Một hàng: người · tháng (tháng + năm chung một ô, mới nhất ở trên) · ngày. */}
+                <div className="filter-bar one-row">
+                  <select value={salarySearch} onChange={e => setSalarySearch(e.target.value)} aria-label="Nhân viên">
+                    <option value="">👥 Tất cả</option>
                     {activeStaff.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
                   </select>
-                  <select value={selMonth} onChange={e => setSelMonth(Number(e.target.value))}>
-                    {months.map(m => <option key={m} value={m}>Tháng {m}</option>)}
-                  </select>
-                  <select value={selYear} onChange={e => setSelYear(Number(e.target.value))}>
-                    {years.map(y => <option key={y} value={y}>{y}</option>)}
+                  <select value={`${selYear}-${selMonth}`} aria-label="Tháng" onChange={e => { const [y, m] = e.target.value.split('-').map(Number); setSelYear(y); setSelMonth(m); }}>
+                    {[...years].reverse().flatMap(y => [...months].reverse().map(m => ({ y, m })))
+                      .filter(({ y, m }) => `${y}-${fmt(m)}` <= today.slice(0, 7) || (y === selYear && m === selMonth))
+                      .map(({ y, m }) => <option key={`${y}-${m}`} value={`${y}-${m}`}>{fmt(m)}/{y}</option>)}
                   </select>
                   {dayPay && (
-                    <select value={shownDay} onChange={e => setViewDay(e.target.value)}>
-                      <option value="">📅 Cả tháng</option>
-                      {dayOptions.map(d => <option key={d} value={d}>📅 Ngày {ddmm(d)}</option>)}
+                    <select value={shownDay} onChange={e => setViewDay(e.target.value)} aria-label="Ngày">
+                      <option value="">Cả tháng</option>
+                      {dayOptions.map(d => <option key={d} value={d}>Ngày {ddmm(d)}</option>)}
                     </select>
                   )}
                 </div>
@@ -2281,23 +2343,24 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 )}
 
                 {/* Cách tính + chốt lương tháng */}
-                <div style={{ background: closes.length ? '#f0fdf4' : 'white', border: `1px solid ${closes.length ? '#bbf7d0' : '#e5e7eb'}`, borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155', lineHeight: 1.6 }}>
-                  <div>
+                <div className="pay-close" style={{ background: closes.length ? '#f0fdf4' : 'white', border: `1px solid ${closes.length ? '#bbf7d0' : '#e5e7eb'}`, borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155', lineHeight: 1.6 }}>
+                  <details className="pay-rules">
+                    <summary>📐 <strong>{dayPay ? 'Cách tính lương theo ngày công' : 'Cách tính lương tháng này'}</strong> <span>(bấm để xem)</span></summary>
                     {dayPay
-                      ? <>📐 <strong>Tính theo ngày công:</strong> 1 ngày công = lương cơ bản ÷ 30 (tháng nào cũng vậy) × số ngày công (ngày làm dưới nửa ca tính nửa ngày; ngày quán nghỉ cũng được 1 công). Tháng 31 ngày trừ bớt 1 ngày, tháng 2 cộng thêm 2 ngày (năm nhuận 1 ngày), nên đi làm đủ tháng = đúng lương cơ bản và mỗi ngày nghỉ tháng nào cũng trừ bằng nhau{monthDays(selYear, selMonth) !== 30 ? ` (tháng này ${monthDays(selYear, selMonth)} ngày)` : ''}. Đi trễ: trừ theo luật đi trễ (mặc định của quán hoặc riêng từng người — tiền cố định mỗi lần và / hoặc theo phút trễ); về sớm từ 30 phút: trừ số phút về sớm (lương ngày ÷ số phút của ca). Vào sớm / ra dư quá số phút cho lệch: tự tính tăng ca (bấm "Sửa" để bỏ một ca nếu không trả). Đơn báo nghỉ không trừ thêm. Người trả theo ngày: lương 1 ngày × số ngày đi làm (cách tính ngày, trễ / về sớm như trên; ngày không chấm công là nghỉ, không lương). Người trả theo giờ: số giờ trong ca × lương 1 giờ (trễ / về sớm mất đúng số phút đó), giờ ngoài ca trả theo giá tăng ca.</>
-                      : <>📐 Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày, trừ ngày nghỉ có đơn.</>}
-                  </div>
+                      ? <><strong>Tính theo ngày công:</strong> 1 ngày công = lương cơ bản ÷ 30 (tháng nào cũng vậy) × số ngày công (ngày làm dưới nửa ca tính nửa ngày; ngày quán nghỉ cũng được 1 công). Tháng 31 ngày trừ bớt 1 ngày, tháng 2 cộng thêm 2 ngày (năm nhuận 1 ngày), nên đi làm đủ tháng = đúng lương cơ bản và mỗi ngày nghỉ tháng nào cũng trừ bằng nhau{monthDays(selYear, selMonth) !== 30 ? ` (tháng này ${monthDays(selYear, selMonth)} ngày)` : ''}. Đi trễ: trừ theo luật đi trễ (mặc định của quán hoặc riêng từng người — tiền cố định mỗi lần và / hoặc theo phút trễ); về sớm từ 30 phút: trừ số phút về sớm (lương ngày ÷ số phút của ca). Vào sớm / ra dư quá số phút cho lệch: tự tính tăng ca (bấm "Sửa" để bỏ một ca nếu không trả). Đơn báo nghỉ không trừ thêm. Người trả theo ngày: lương 1 ngày × số ngày đi làm (cách tính ngày, trễ / về sớm như trên; ngày không chấm công là nghỉ, không lương). Người trả theo giờ: số giờ trong ca × lương 1 giờ (trễ / về sớm mất đúng số phút đó), giờ ngoài ca trả theo giá tăng ca.</>
+                      : <>Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày, trừ ngày nghỉ có đơn.</>}
+                  </details>
                   {isAdmin && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
+                    <div className="pay-close-actions" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
                       {fullyClosed
-                        ? <span>🔒 <strong>Đã chốt lương tháng {selMonth}/{selYear}</strong> lúc {new Date(closedAt).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}{closedBy ? ` (${closedBy})` : ''}</span>
+                        ? <span className="pay-close-status">🔒 <strong>Đã chốt lương tháng {selMonth}/{selYear}</strong> lúc {new Date(closedAt).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}{closedBy ? ` (${closedBy})` : ''}</span>
                         : closedCount > 0
-                          ? <span>🔒 Đã chốt {closedCount}/{withData.length} người, còn lại chưa chốt.</span>
-                          : <span>{running ? '⏳ Tháng đang chạy: số dưới đây là tạm tính đến hôm nay.' : 'Tháng này chưa chốt lương.'}</span>}
-                      {!fullyClosed && <button className="btn-primary" style={{ marginTop: 0 }} onClick={() => closeMonth(false, rows)}>🔒 Chốt lương tháng {selMonth}/{selYear}{closedCount > 0 ? ' (người còn lại)' : ''}</button>}
+                          ? <span className="pay-close-status">🔒 Đã chốt {closedCount}/{withData.length} người, còn lại chưa chốt.</span>
+                          : <span className="pay-close-status">{running ? '⏳ Tháng đang chạy: số dưới đây là tạm tính đến hôm nay.' : 'Tháng này chưa chốt lương.'}</span>}
+                      {!fullyClosed && <button className="btn-primary" style={{ marginTop: 0 }} onClick={() => closeMonth(false, rows)}>🔒 Chốt lương<span className="long"> tháng {selMonth}/{selYear}</span>{closedCount > 0 ? ' (người còn lại)' : ''}</button>}
                       {closes.length > 0 && <button className="btn-danger" style={{ marginTop: 0 }} onClick={() => closeMonth(true)}>Mở chốt{fullyClosed ? '' : ' tất cả'}</button>}
-                      <button style={{ padding: '6px 12px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}
-                        onClick={() => exportPayroll(rows)}>⬇️ Tải bảng lương (Excel)</button>
+                      <button className="pay-excel" style={{ padding: '6px 12px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}
+                        onClick={() => exportPayroll(rows)}>⬇️ <span className="long">Tải bảng lương (Excel)</span><span className="short">Excel</span></button>
                     </div>
                   )}
                   {isAdmin && fullyClosed && (
@@ -2335,81 +2398,48 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <small>{c.locked ? 'đã chốt' : running ? 'tạm tính' : 'thực lĩnh'} {cardOpen ? '▴' : '▾'}</small>
                           </div>
                         </button>
-                        {cardOpen && <div className="salary-card-body">
-                          <div className="salary-card-row">
-                            <span className="salary-card-label">{hourOnly(c) ? 'Lương 1 giờ' : monthPart(c) ? 'Lương cơ bản' : 'Lương 1 ngày'}</span>
-                            <span className="salary-card-value">{baseText(c)}</span>
-                          </div>
-                          <div className="salary-card-row">
-                            <span className="salary-card-label">{hourOnly(c) ? 'Giờ tính lương' : 'Ngày công'}</span>
-                            <span className="salary-card-value">{daysText(c)}{c.rule === 'days' && <> → {formatMoney(c.basePay)}</>}{c.monthAdjust ? <small style={{ display: 'block', fontWeight: 400, color: '#94a3b8' }}>gồm {adjustText(c)}</small> : null}</span>
-                          </div>
-                          <div className="salary-card-row">
-                            <span className="salary-card-label">Tổng giờ làm</span>
-                            <span className="salary-card-value">{fmtNum(c.totalWorkH)} giờ</span>
-                          </div>
-                          {[['early', 'Vào sớm', talliesOf(s.id).early], ['late', 'Vào trễ', lateTallyOf(s.id), c.lateAmt], ['stay', 'Ra dư', talliesOf(s.id).stayed], ['leftEarly', 'Về sớm', talliesOf(s.id).leftEarly, c.earlyAmt]].map(([kind, label, t, cut]) => (
-                            <div key={label} className="salary-card-row">
-                              <span className="salary-card-label">{label}</span>
-                              <span className={`salary-card-value ${cut ? 'red' : t.count ? '' : 'muted'}`}>{cellBtn(s.id, kind, t.count > 0, tallyText(t, cut))}</span>
-                            </div>
-                          ))}
-                          {c.pendingH > 0 && (
-                            <div className="salary-card-row">
-                              <span className="salary-card-label">Ngoài ca chờ duyệt</span>
-                              <span className="salary-card-value" style={{ color: '#b45309' }}>{fmtNum(c.pendingH)} giờ (chưa tính)</span>
-                            </div>
-                          )}
-                          <div className="salary-card-row">
-                            <span className="salary-card-label">Tăng ca</span>
-                            {!c.otAmt && !overtimeOn(s.id)
-                              ? <span className="salary-card-value muted">Không tính{c.otHours ? ` (${fmtNum(c.otHours)} giờ ngoài ca)` : ''}</span>
-                              : <span className="salary-card-value green">+{formatMoney(c.otAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({fmtNum(c.otHours)} giờ)</small></span>}
-                          </div>
-                          {c.bonusAmt > 0 && (
-                            <div className="salary-card-row">
-                              <span className="salary-card-label">Thưởng chuyên cần</span>
-                              <span className="salary-card-value green">+{formatMoney(c.bonusAmt)}</span>
-                            </div>
-                          )}
-                          <div className="salary-card-row">
-                            <span className="salary-card-label">Ứng lương</span>
-                            <span className="salary-card-value red">{cellBtn(s.id, 'advance', monthRequests(s.id, 'advance').length > 0, `-${formatMoney(c.advAmt)}`)}</span>
-                          </div>
-                          <div className="salary-card-row">
-                            <span className="salary-card-label">Nghỉ</span>
-                            {c.rule === 'days'
-                              ? <span className="salary-card-value muted">{cellBtn(s.id, 'absent', monthRequests(s.id, 'absent').length > 0, c.absDays ? `${fmtNum(c.absDays)} ngày có đơn (không trừ thêm)` : monthRequests(s.id, 'absent').length ? 'chờ duyệt' : '—')}</span>
-                              : <span className="salary-card-value red">{cellBtn(s.id, 'absent', monthRequests(s.id, 'absent').length > 0, <>-{formatMoney(c.absAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({fmtNum(c.absDays)} ngày)</small></>)}</span>}
-                          </div>
-                          <div className="salary-card-row">
-                            <span className="salary-card-label">Vi phạm</span>
-                            <span className="salary-card-value">{vioCell(s.id, c)}</span>
-                          </div>
-                          <div className="salary-card-row">
-                            <span className="salary-card-label">{c.locked ? 'Thực lĩnh (đã chốt)' : running ? 'Thực lĩnh (tạm tính)' : 'Thực lĩnh'}</span>
-                            <span className={`salary-card-value ${c.net >= 0 ? 'green' : 'red'}`}>{formatMoney(c.net)}</span>
-                          </div>
-                          {c.locked && c.liveNet !== c.net && (
-                            <div className="salary-card-row">
-                              <span className="salary-card-label" style={{ color: '#b45309' }}>Nay tính ra</span>
-                              <span className="salary-card-value" style={{ color: '#b45309' }}>{formatMoney(c.liveNet)}</span>
-                            </div>
-                          )}
-                          {paidCycle !== 0 && (
-                            <>
-                              <div className="salary-card-row">
-                                <span className="salary-card-label">Đã trả theo kỳ</span>
-                                <span className="salary-card-value">{formatMoney(paidCycle)}</span>
+                        {cardOpen && (() => {
+                          // Phiếu lương trên điện thoại: mỗi khoản một dòng (tên trái, số phải). Dòng có "›" bấm được — chi tiết từng
+                          // ngày / từng khoản mở ngay dưới dòng đó.
+                          const t = talliesOf(s.id), lateT = lateTallyOf(s.id), adv = monthRequests(s.id, 'advance'), abs = monthRequests(s.id, 'absent');
+                          const fines = finesOf(s.id), unpriced = fines.filter(x => !(Number(x.v.amount) > 0)).length, advPending = adv.filter(r => r.status === 'pending').length;
+                          const tallyValue = (x, cut) => (x.count ? <>{durationText(x.minutes)}{cut ? <div className="slip-cut">−{formatMoney(cut)}</div> : null}</> : '—');
+                          return (
+                            <div className="slip">
+                              <div className="slip-group">Lương</div>
+                              {slipRow(s, { label: hourOnly(c) ? 'Lương 1 giờ' : monthPart(c) ? 'Lương cơ bản' : 'Lương 1 ngày', value: baseText(c) })}
+                              {slipRow(s, { label: hourOnly(c) ? 'Giờ tính lương' : 'Ngày công', sub: c.monthAdjust ? `gồm ${adjustText(c)}` : null,
+                                value: <>{daysText(c)}{c.rule === 'days' && <div className="slip-sub">{formatMoney(c.basePay)}</div>}</> })}
+                              {slipRow(s, { label: 'Tổng giờ làm', value: `${fmtNum(c.totalWorkH)} giờ` })}
+                              <div className="slip-group">Giờ giấc</div>
+                              {slipRow(s, { label: 'Vào sớm', sub: t.early.count ? `${t.early.count} lần` : null, value: tallyValue(t.early), tone: t.early.count ? '' : 'muted', kind: 'early', has: t.early.count > 0 })}
+                              {slipRow(s, { label: 'Vào trễ', sub: lateT.count ? `${lateT.count} lần` : null, value: tallyValue(lateT, c.lateAmt), tone: lateT.count ? 'orange' : 'muted', kind: 'late', has: lateT.count > 0 })}
+                              {slipRow(s, { label: 'Ra dư', sub: t.stayed.count ? `${t.stayed.count} lần` : null, value: tallyValue(t.stayed), tone: t.stayed.count ? '' : 'muted', kind: 'stay', has: t.stayed.count > 0 })}
+                              {slipRow(s, { label: 'Về sớm', sub: t.leftEarly.count ? `${t.leftEarly.count} lần` : null, value: tallyValue(t.leftEarly, c.earlyAmt), tone: t.leftEarly.count ? 'orange' : 'muted', kind: 'leftEarly', has: t.leftEarly.count > 0 })}
+                              {c.pendingH > 0 && slipRow(s, { label: 'Ngoài ca chờ duyệt', value: `${fmtNum(c.pendingH)} giờ`, sub: 'chưa tính tiền', tone: 'amber' })}
+                              <div className="slip-group">Cộng / trừ</div>
+                              {slipRow(s, { label: 'Tăng ca', sub: c.otHours ? `${fmtNum(c.otHours)} giờ ngoài ca` : null,
+                                value: !c.otAmt && !overtimeOn(s.id) ? 'không tính' : `+${formatMoney(c.otAmt)}`, tone: !c.otAmt && !overtimeOn(s.id) ? 'muted' : 'green' })}
+                              {c.bonusAmt > 0 && slipRow(s, { label: 'Thưởng chuyên cần', value: `+${formatMoney(c.bonusAmt)}`, tone: 'green' })}
+                              {slipRow(s, { label: 'Ứng lương', sub: adv.length ? `${adv.length} lần${advPending ? ` · ${advPending} chờ duyệt` : ''}` : null,
+                                value: adv.length ? `−${formatMoney(c.advAmt)}` : '—', tone: adv.length ? 'red' : 'muted', kind: 'advance', has: adv.length > 0 })}
+                              {slipRow(s, { label: 'Nghỉ', sub: abs.length ? `${abs.length} đơn${c.rule === 'days' ? ' · không trừ thêm' : ''}` : null,
+                                value: c.rule === 'days' ? (c.absDays ? `${fmtNum(c.absDays)} ngày` : abs.length ? 'chờ duyệt' : '—') : `−${formatMoney(c.absAmt)}`,
+                                tone: c.rule === 'days' || !c.absAmt ? 'muted' : 'red', kind: 'absent', has: abs.length > 0 })}
+                              {slipRow(s, { label: 'Vi phạm', sub: fines.length ? `${fines.length} lỗi${unpriced ? ` · ${unpriced} chưa định tiền` : ''}` : null,
+                                value: fines.length ? `−${formatMoney(c.vioAmt)}` : '—', tone: fines.length ? 'red' : 'muted', kind: 'fines', has: fines.length > 0 })}
+                              <div className={`slip-total ${c.net < 0 ? 'negative' : ''}`}>
+                                <span>{c.locked ? 'Thực lĩnh (đã chốt)' : running ? 'Thực lĩnh (tạm tính)' : 'Thực lĩnh'}</span>
+                                <strong>{formatMoney(c.net)}</strong>
                               </div>
-                              <div className="salary-card-row">
-                                <span className="salary-card-label">Còn phải trả tháng này</span>
-                                <span className={`salary-card-value ${c.net - paidCycle >= 0 ? 'green' : 'red'}`}>{formatMoney(c.net - paidCycle)}</span>
-                              </div>
-                            </>
-                          )}
-                        </div>}
-                        {cardOpen && detail?.id === s.id && detailPanel(s, detail.kind)}
+                              {c.locked && c.liveNet !== c.net && <div className="slip-note" style={{ color: '#b45309' }}><span>Nay tính ra</span><strong>{formatMoney(c.liveNet)}</strong></div>}
+                              {paidCycle !== 0 && <>
+                                <div className="slip-note"><span>Đã trả theo kỳ</span><strong>{formatMoney(paidCycle)}</strong></div>
+                                <div className="slip-note"><span>Còn phải trả tháng này</span><strong style={{ color: c.net - paidCycle >= 0 ? '#16a34a' : '#dc2626' }}>{formatMoney(c.net - paidCycle)}</strong></div>
+                              </>}
+                            </div>
+                          );
+                        })()}
                         {isAdmin && <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} />}
                         {isAdmin && cardOpen && (
                           <button
@@ -3134,76 +3164,75 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 <button className="btn-primary" onClick={handleCreateAccount}>Tạo tài khoản</button>
               </details>
 
-              {/* Staff list */}
-              <div className="config-list">
-                {staffList.filter(s => !departureOf(s.id)).map(s => (
-                  <div key={s.id} className="config-row" style={{ flexWrap: 'wrap', gap: 10 }}>
-                    <div style={{ minWidth: 140 }}>
-                      <div style={{ fontWeight: 700 }}>{s.full_name}</div>
-                      <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div>
-                      <button type="button" onClick={() => setDraft(`acct:${s.id}:open`, !draftOf(`acct:${s.id}:open`, false))}
-                        style={{ display: 'block', marginTop: 4, padding: 0, border: 'none', background: 'none', color: '#1d4ed8', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer' }}>
-                        {draftOf(`acct:${s.id}:open`, false) ? '▴ Đóng sửa' : '✏️ Sửa tên / SĐT'}
+              {/* Danh sách tài khoản: mỗi người một dòng gọn (chữ đầu tên, tên, số điện thoại, vai trò); bấm vào mở phần sửa —
+                  tên / số đăng nhập, mã PIN, vai trò, cho nghỉ việc, xoá. */}
+              <div className="acct-list">
+                {staffList.filter(s => !departureOf(s.id)).map(s => {
+                  const open = !!draftOf(`acctx:${s.id}`, false), self = s.id === currentUser?.id, role = normalizeRole(s.role);
+                  const roleStyle = role === 'admin' ? { background: '#fef9c3', color: '#92400e' } : role === 'manager' ? { background: '#f5f3ff', color: '#6d28d9' } : { background: '#e0f2fe', color: '#0369a1' };
+                  const name = draftOf(`acct:${s.id}:name`, s.full_name || ''), phone = draftOf(`acct:${s.id}:phone`, s.phone || '');
+                  const phoneChanged = phone.replace(/\s+/g, '') !== String(s.phone || '').replace(/\s+/g, '');
+                  const changed = name.trim() !== (s.full_name || '') || phoneChanged;
+                  // Sửa tên / số điện thoại đăng nhập (mã PIN giữ nguyên; đổi số thì lần sau đăng nhập bằng số mới).
+                  const saveInfo = () => (!changed ? alert('Chưa đổi gì.') : editAction('edit_account', { staff_id: s.id, full_name: name, ...(phoneChanged ? { phone } : {}) },
+                    phoneChanged ? `Đổi số đăng nhập của ${s.full_name} từ ${s.phone} thành ${phone.replace(/\s+/g, '')}?\n\nMã PIN giữ nguyên; lần sau đăng nhập bằng số mới.` : null, `acct:${s.id}:`));
+                  return (
+                    <div key={s.id} className={`acct-item ${open ? 'open' : ''}`}>
+                      <button type="button" className="acct-head" onClick={() => setDraft(`acctx:${s.id}`, !open)} aria-expanded={open}>
+                        <span className="acct-avatar" aria-hidden="true">{(s.full_name || '?').trim().charAt(0).toUpperCase()}</span>
+                        <span className="acct-name">{s.full_name}{self ? ' (bạn)' : ''}<small>{s.phone}</small></span>
+                        <span className="acct-role" style={roleStyle}>{roleLabel(s.role)}</span>
+                        <span className="acct-chev" aria-hidden="true">{open ? '▴' : '▾'}</span>
                       </button>
-                      {s.id === currentUser?.id
-                        ? <span style={{ display: 'inline-block', marginTop: 4, fontSize: '0.7rem', fontWeight: 700, padding: '1px 7px', borderRadius: 4, background: '#fef9c3', color: '#92400e' }}>{roleLabel(s.role)}</span>
-                        : <select value={normalizeRole(s.role)} onChange={e => handleSetRole(s, e.target.value)} aria-label={`Vai trò của ${s.full_name}`}
-                            style={{ display: 'block', marginTop: 4, fontSize: '0.75rem', fontWeight: 700, padding: '2px 6px', borderRadius: 6, border: '1px solid #cbd5e1', background: s.role === 'admin' ? '#fef9c3' : s.role === 'manager' ? '#f5f3ff' : '#f0f9ff', color: s.role === 'admin' ? '#92400e' : s.role === 'manager' ? '#6d28d9' : '#0369a1' }}>
-                            {ROLES.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
-                          </select>}
-                    </div>
-                    <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 140 }}>
-                      <label>Đổi mã PIN (mật khẩu) mới</label>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <input type="text" inputMode="numeric" maxLength={8} placeholder="PIN mới..." value={editingPin[s.id] || ''}
-                          onChange={e => setEditingPin(p => ({ ...p, [s.id]: e.target.value.replace(/\D/g, '') }))}
-                          style={{ flex: 1 }} />
-                        <button className="btn-primary" style={{ padding: '6px 12px', marginTop: 0, whiteSpace: 'nowrap' }} onClick={() => handleUpdatePin(s.id)}>Lưu</button>
-                      </div>
-                    </div>
-                    {s.id !== currentUser?.id && (
-                      <button style={{ marginTop: 18, alignSelf: 'flex-end', padding: '6px 12px', background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}
-                        onClick={() => setDepartForm({ staff_id: s.id, name: s.full_name, last_day: vnToday(), reason: '' })}>Cho nghỉ việc</button>
-                    )}
-                    <button className="btn-danger" style={{ marginTop: 18, alignSelf: 'flex-end' }} onClick={() => handleDeleteAccount(s.id, s.full_name)}>Xoá</button>
-                    {/* Sửa tên / số điện thoại đăng nhập (mã PIN giữ nguyên; đổi số thì lần sau đăng nhập bằng số mới). */}
-                    {draftOf(`acct:${s.id}:open`, false) && (() => {
-                      const name = draftOf(`acct:${s.id}:name`, s.full_name || ''), phone = draftOf(`acct:${s.id}:phone`, s.phone || '');
-                      const changed = name.trim() !== (s.full_name || '') || phone.replace(/\s+/g, '') !== String(s.phone || '').replace(/\s+/g, '');
-                      const save = () => {
-                        if (!changed) return alert('Chưa đổi gì.');
-                        const phoneChanged = phone.replace(/\s+/g, '') !== String(s.phone || '').replace(/\s+/g, '');
-                        return editAction('edit_account', { staff_id: s.id, full_name: name, ...(phoneChanged ? { phone } : {}) },
-                          phoneChanged ? `Đổi số đăng nhập của ${s.full_name} từ ${s.phone} thành ${phone.replace(/\s+/g, '')}?\n\nMã PIN giữ nguyên; lần sau đăng nhập bằng số mới.` : null, `acct:${s.id}:`);
-                      };
-                      const field = { padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.86rem' };
-                      return (
-                        <div style={{ flexBasis: '100%', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: 12, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', fontSize: '0.82rem' }}>
-                          <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontWeight: 600, flex: '1 1 160px' }}>Họ và tên
-                            <input type="text" value={name} maxLength={80} onChange={e => setDraft(`acct:${s.id}:name`, e.target.value)} style={{ ...field, width: '100%', boxSizing: 'border-box' }} />
-                          </label>
-                          <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontWeight: 600, flex: '1 1 140px' }}>Số điện thoại đăng nhập
-                            <input type="tel" inputMode="numeric" value={phone} maxLength={16} onChange={e => setDraft(`acct:${s.id}:phone`, e.target.value.replace(/[^\d+ ]/g, ''))} style={{ ...field, width: '100%', boxSizing: 'border-box' }} />
-                          </label>
-                          <button className="btn-primary" style={{ marginTop: 0, padding: '7px 14px' }} onClick={save}>Lưu</button>
-                          <div style={{ flexBasis: '100%', fontSize: '0.74rem', color: '#64748b' }}>Mật khẩu (mã PIN) đổi ở ô &quot;Đổi mã PIN&quot; bên trên. Đổi số điện thoại thì lần sau người này đăng nhập bằng số mới.</div>
+                      {open && (
+                        <div className="acct-body">
+                          <div className="acct-field">Họ và tên · số điện thoại đăng nhập
+                            <div className="acct-line">
+                              <input type="text" value={name} maxLength={80} aria-label="Họ và tên" onChange={e => setDraft(`acct:${s.id}:name`, e.target.value)} />
+                              <input type="tel" inputMode="numeric" value={phone} maxLength={16} aria-label="Số điện thoại" onChange={e => setDraft(`acct:${s.id}:phone`, e.target.value.replace(/[^\d+ ]/g, ''))} />
+                            </div>
+                            {changed && <div className="acct-line"><button className="btn-primary" style={{ marginTop: 0, flex: 1 }} onClick={saveInfo}>Lưu tên / số</button></div>}
+                          </div>
+                          <div className="acct-field">Đổi mã PIN (mật khẩu)
+                            <div className="acct-line">
+                              <input type="text" inputMode="numeric" maxLength={8} placeholder="PIN mới…" value={editingPin[s.id] || ''} aria-label="Mã PIN mới"
+                                onChange={e => setEditingPin(p => ({ ...p, [s.id]: e.target.value.replace(/\D/g, '') }))} />
+                              <button className="btn-primary" style={{ marginTop: 0, padding: '6px 16px' }} onClick={() => handleUpdatePin(s.id)}>Lưu PIN</button>
+                            </div>
+                          </div>
+                          <div className="acct-field">Vai trò
+                            {self
+                              ? <span style={{ fontWeight: 500, color: '#64748b' }}>{roleLabel(s.role)} — tài khoản bạn đang dùng, không tự đổi vai trò.</span>
+                              : <div className="acct-line">
+                                  <select value={role} onChange={e => handleSetRole(s, e.target.value)} aria-label={`Vai trò của ${s.full_name}`}>
+                                    {ROLES.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
+                                  </select>
+                                </div>}
+                          </div>
+                          <div className="acct-actions">
+                            {!self && (
+                              <button style={{ padding: '8px 12px', background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}
+                                onClick={() => setDepartForm({ staff_id: s.id, name: s.full_name, last_day: vnToday(), reason: '' })}>🚪 Cho nghỉ việc</button>
+                            )}
+                            <button className="btn-danger" style={{ marginTop: 0 }} onClick={() => handleDeleteAccount(s.id, s.full_name)}>🗑 Xoá tài khoản</button>
+                          </div>
+                          {departForm?.staff_id === s.id && (
+                            <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.84rem' }}>
+                              <div><strong>Cho {s.full_name} nghỉ việc.</strong> Qua ngày làm cuối, người này không đăng nhập và không chấm công được nữa; lương tháng cuối tính tới ngày đó, kết toán ở tab Bảng Lương.</div>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>Ngày làm việc cuối cùng
+                                <input type="date" value={departForm.last_day} onChange={e => setDepartForm(p => ({ ...p, last_day: e.target.value }))} style={{ padding: '4px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} /></label>
+                              <input type="text" placeholder="Lý do (tuỳ chọn)" value={departForm.reason} onChange={e => setDepartForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} />
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <button className="btn-danger" style={{ marginTop: 0 }} onClick={handleDepart}>Xác nhận nghỉ việc</button>
+                                <button style={{ padding: '6px 12px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer' }} onClick={() => setDepartForm(null)}>Huỷ</button>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      );
-                    })()}
-                    {departForm?.staff_id === s.id && (
-                      <div style={{ flexBasis: '100%', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.84rem' }}>
-                        <div><strong>Cho {s.full_name} nghỉ việc.</strong> Qua ngày làm cuối, người này không đăng nhập và không chấm công được nữa; lương tháng cuối tính tới ngày đó, kết toán ở tab Bảng Lương.</div>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>Ngày làm việc cuối cùng
-                          <input type="date" value={departForm.last_day} onChange={e => setDepartForm(p => ({ ...p, last_day: e.target.value }))} style={{ padding: '4px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} /></label>
-                        <input type="text" placeholder="Lý do (tuỳ chọn)" value={departForm.reason} onChange={e => setDepartForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} />
-                        <div style={{ display: 'flex', gap: 8 }}>
-                          <button className="btn-danger" style={{ marginTop: 0 }} onClick={handleDepart}>Xác nhận nghỉ việc</button>
-                          <button style={{ padding: '6px 12px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer' }} onClick={() => setDepartForm(null)}>Huỷ</button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
+                      )}
+                    </div>
+                  );
+                })}
                 {staffList.length === 0 && <div className="empty-state">Chưa có nhân viên nào</div>}
               </div>
 
