@@ -477,6 +477,17 @@ function periodRange(period, date, today) {
   return { from, to, start, end, prevStart: prevFrom, prevEnd };
 }
 
+// Lỗi nhân viên tự ghi trong ngày (trang Lương của họ): { staff_id, reason, amount, note }. Cột chưa cài / lỗi đọc: không có.
+async function selfFinesOn(db, date) {
+  const { data: meta, error } = await db.from('payroll_violation_meta').select('violation_id, staff_id, note').eq('fine_date', date).eq('self_reported', true);
+  if (error || !meta?.length) return [];
+  const { data: rows, error: e } = await db.from('payroll_violations').select('id, staff_id, reason, amount, created_at').in('id', meta.map(m => m.violation_id));
+  if (e) { console.error('[admin/finance] self fines', e); return []; }
+  const noteOf = new Map(meta.map(m => [m.violation_id, m.note]));
+  return (rows || []).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    .map(v => ({ staff_id: v.staff_id, reason: v.reason, amount: Number(v.amount) || 0, note: noteOf.get(v.id) || null }));
+}
+
 async function insightBlocks(db, { date, range, sections }) {
   const blocks = [];
   const staffNames = Object.fromEntries(((await db.from('staff').select('id, full_name')).data || []).map(s => [s.id, s.full_name]));
@@ -490,12 +501,13 @@ async function insightBlocks(db, { date, range, sections }) {
   }
   if (sections.staff) {
     try {
-      const [input, pending, fixes] = await Promise.all([
+      const [input, pending, fixes, selfFines] = await Promise.all([
         staffInputs(db, { from: date, to: date, range }),
         db.from('payroll_requests').select('staff_id, request_type, amount, days, reason').eq('status', 'pending').then(r => r.data || []),
         db.from('attendance_fix_requests').select('staff_id, reason').eq('status', 'pending').then(r => r.data || []),
+        selfFinesOn(db, date),
       ]);
-      const args = { ...input, pending, fixes, staffNames, date };
+      const args = { ...input, pending, fixes, selfFines, staffNames, date };
       blocks.push({ key: 'staff', text: staffBlock(args), data: staffData(args) });
     } catch (error) { console.error('[admin/finance] staff block', error); }
   }

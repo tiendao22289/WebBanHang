@@ -18,6 +18,8 @@ const fmt = (n) => String(n).padStart(2, '0');
 const formatMoney = (v) => Number(v || 0).toLocaleString('vi-VN') + 'đ';
 const vnToday = () => new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
 const ddmm = d => d.slice(8, 10) + '/' + d.slice(5, 7);
+// Giờ + ngày (giờ Việt Nam) của một mốc ISO: "21:05 06/11".
+const whenText = iso => { const d = new Date(Date.parse(iso) + 7 * 3600000).toISOString(); return `${d.slice(11, 16)} ${d.slice(8, 10)}/${d.slice(5, 7)}`; };
 // " (02/11 – 03/11)" cho đơn báo nghỉ có ngày nghỉ.
 const leaveText = l => (l ? ` (${ddmm(l.from_date)}${l.to_date !== l.from_date ? ` – ${ddmm(l.to_date)}` : ''})` : '');
 const fmtNum = n => String(n).replace('.', ',');
@@ -312,8 +314,12 @@ function PayActions({ s, c, left, onClose, onPaid, compact }) {
       {left && !c.locked && (
         <button style={{ ...btn, background: '#fff7ed', borderColor: '#fed7aa', color: '#9a3412', fontWeight: 700 }} onClick={() => onClose(s.id, s.full_name)}>🔒 Kết toán</button>
       )}
+      {c.locked && paidDay && (c.received_at
+        ? <span style={{ fontSize: '0.74rem', color: '#15803d', fontWeight: 700 }}>🤝 NV đã xác nhận nhận {whenText(c.received_at)}</span>
+        : <span style={{ fontSize: '0.74rem', color: '#b45309' }}>⏳ chờ NV bấm &quot;Tôi đã nhận&quot;</span>)}
       {c.locked && (paidDay
-        ? <button style={{ ...btn, background: '#dcfce7', borderColor: '#bbf7d0', color: '#15803d', fontWeight: 700 }} title="Bấm để bỏ đánh dấu" onClick={() => onPaid(s.id, false)}>✅ Đã trả {paidDay}</button>
+        ? <button style={{ ...btn, background: '#dcfce7', borderColor: '#bbf7d0', color: '#15803d', fontWeight: 700 }} title={c.received_at ? 'Nhân viên đã xác nhận nhận lương' : 'Bấm để bỏ đánh dấu'}
+          disabled={!!c.received_at} onClick={() => onPaid(s.id, false)}>✅ Đã trả {paidDay}</button>
         : <button style={{ ...btn, color: '#1d4ed8', fontWeight: 700 }} onClick={() => onPaid(s.id, true)}>💵 Đánh dấu đã trả</button>)}
     </div>
   );
@@ -376,7 +382,12 @@ function CycleBox({ people, today, nameOf, onPay, onUndo }) {
             {last && (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.76rem', color: '#64748b', marginTop: 6 }}>
                 <span>Lần trả gần nhất: {ddmm(String(last.from_day))} – {ddmm(String(last.to_day))} · {formatMoney(last.amount)} · {new Date(last.paid_at).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}{last.paid_by ? ` (${last.paid_by})` : ''}</span>
-                <button style={{ ...smallBtn, fontSize: '0.72rem', padding: '2px 8px', color: '#dc2626', borderColor: '#fecaca', background: '#fff5f5' }} onClick={() => onUndo(last, name)}>Bỏ lần trả này</button>
+                {last.received_at
+                  ? <span style={{ color: '#15803d', fontWeight: 700 }}>🤝 {name} đã xác nhận nhận {whenText(last.received_at)}</span>
+                  : <>
+                      <span style={{ color: '#b45309' }}>⏳ chờ {name} bấm &quot;Tôi đã nhận&quot;</span>
+                      <button style={{ ...smallBtn, fontSize: '0.72rem', padding: '2px 8px', color: '#dc2626', borderColor: '#fecaca', background: '#fff5f5' }} onClick={() => onUndo(last, name)}>Bỏ lần trả này</button>
+                    </>}
               </div>
             )}
           </div>
@@ -441,7 +452,13 @@ export default function PayrollPage() {
   const [myReviews,  setMyReviews]  = useState([]);   // chủ đã cho / không cho tính giờ ngoài ca
   const [myLeaveDays, setMyLeaveDays] = useState([]); // ngày nghỉ của các đơn báo nghỉ
   const [mySalary,   setMySalary]   = useState(null); // lương tạm tính tháng này (máy chủ tính)
-  const [myFines,    setMyFines]    = useState([]);   // tiền phạt tháng này kèm lý do
+  const [myFines,    setMyFines]    = useState([]);   // tiền phạt tháng này kèm lý do (self: tự ghi, note: ghi thêm)
+  // Tự ghi lỗi của mình: danh sách lỗi chủ đặt (tiền có sẵn), ô đang điền.
+  const [myFineRules, setMyFineRules] = useState([]);
+  // Lương chủ quán đã đánh dấu trả cho mình: bấm "Tôi đã nhận" (không đổi lại được).
+  const [myPayments, setMyPayments] = useState([]);
+  const [selfFine, setSelfFine] = useState({ rule_id: '', reason: '', note: '' });
+  const [showSelfFine, setShowSelfFine] = useState(false);
   const [myMonth,    setMyMonth]    = useState({ y: now.getFullYear(), m: now.getMonth() + 1 }); // tháng của lịch sử chấm công
   const [myBonus,    setMyBonus]    = useState(null); // thưởng chuyên cần: đã trễ / quên ra ca chưa (khi chủ có dùng)
   const [sending,    setSending]    = useState('');   // đang gửi đơn nào (chặn bấm 2 lần)
@@ -498,6 +515,8 @@ export default function PayrollPage() {
     setMyLeaveDays(meRes.leave_days || []);
     setMySalary(meRes.salary || null);
     setMyFines(meRes.violations || []);
+    setMyFineRules(meRes.fineRules || []);
+    setMyPayments(meRes.payments || []);
     setMyBonus(meRes.bonus || null);
     setMyAllSessions(monthRes.data || []);
     setEmpReqs(reqRes.data || []);
@@ -516,6 +535,27 @@ export default function PayrollPage() {
     const ok = await send('adv', 'request', { type: 'advance', amount: advForm.amount, reason: advForm.reason },
       () => { setAdvForm({ amount: '', reason: '' }); setShowAdvForm(false); });
     if (ok) say('Đã gửi yêu cầu ứng lương, chờ chủ quán duyệt.');
+  };
+
+  // Xác nhận đã nhận đủ một khoản lương chủ quán đánh dấu đã trả.
+  const handleReceived = async p => {
+    if (!confirm(`Xác nhận bạn đã nhận đủ ${formatMoney(p.amount)} (${p.label})?\n\nBấm rồi không đổi lại được.`)) return;
+    const ok = await send(`recv:${p.kind}:${p.id || `${p.year}-${p.month}`}`, 'confirm_received', p.kind === 'payout' ? { kind: 'payout', id: p.id } : { kind: 'month', year: p.year, month: p.month });
+    if (ok) say('Đã xác nhận nhận lương. Cảm ơn bạn!');
+  };
+
+  // Tự ghi lỗi của mình hôm nay: gửi rồi không sửa / xoá được (chỉ chủ quán).
+  const handleSelfFine = async () => {
+    const rule = myFineRules.find(r => r.id === selfFine.rule_id);
+    const reason = rule ? rule.name : selfFine.reason.trim();
+    if (!reason) return say('Chọn lỗi trong danh sách hoặc ghi rõ lỗi gì.', false);
+    const money = rule ? (rule.amount ? `trừ ${formatMoney(rule.amount)}` : 'chủ quán định tiền sau') : 'chủ quán định tiền sau';
+    if (!confirm(`Ghi lỗi "${reason}" (${money}) vào lương tháng này?
+
+Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ quán.`)) return;
+    const ok = await send('fine', 'report_violation', { rule_id: rule?.id || null, reason: rule ? '' : reason, note: selfFine.note },
+      () => { setSelfFine({ rule_id: '', reason: '', note: '' }); setShowSelfFine(false); });
+    if (ok) say('Đã ghi lỗi. Chủ quán đã thấy trong mục Vi phạm.');
   };
 
   const handleSubmitAbsent = async () => {
@@ -769,7 +809,7 @@ export default function PayrollPage() {
   const closeOf = id => payrollMonth.closes.find(c => c.staff_id === id);
   const salaryOf = id => {
     const live = calcSalary(id), closed = closeOf(id);
-    return closed ? { ...closed.snapshot, locked: true, liveNet: live.net, paid_at: closed.paid_at || null } : { ...live, locked: false };
+    return closed ? { ...closed.snapshot, locked: true, liveNet: live.net, paid_at: closed.paid_at || null, received_at: closed.received_at || null } : { ...live, locked: false };
   };
   // Kết toán riêng một người (vd. nghỉ việc giữa tháng) và đánh dấu đã trả lương.
   const closeOne = async (staffId, name) => {
@@ -1597,6 +1637,30 @@ export default function PayrollPage() {
           })()}
 
           {/* 💰 Lương tạm tính tháng này (máy chủ tính bằng cùng công thức với bảng lương của chủ quán) */}
+          {/* Lương chủ quán đã trả: chưa xác nhận thì nổi bật ở trên, bấm "Tôi đã nhận". */}
+          {myPayments.length > 0 && (
+            <div style={{ background: myPayments.some(p => !p.received_at) ? '#fffbeb' : 'white', border: `1px solid ${myPayments.some(p => !p.received_at) ? '#fde68a' : '#e5e7eb'}`, borderRadius: 14, padding: 18 }}>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>💵 Lương đã trả</div>
+              {myPayments.slice(0, 6).map(p => {
+                const key = `recv:${p.kind}:${p.id || `${p.year}-${p.month}`}`;
+                return (
+                  <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #f1f5f9' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>{p.label} · {formatMoney(p.amount)}</div>
+                      <div style={{ fontSize: '0.74rem', color: '#64748b' }}>Chủ quán trả lúc {whenText(p.paid_at)}{p.received_at ? ` · bạn đã xác nhận ${whenText(p.received_at)}` : ''}</div>
+                    </div>
+                    {p.received_at
+                      ? <span style={{ fontSize: '0.78rem', color: '#15803d', fontWeight: 700, whiteSpace: 'nowrap' }}>✅ Đã nhận</span>
+                      : <button onClick={() => handleReceived(p)} disabled={sending === key}
+                          style={{ background: '#15803d', color: 'white', border: 'none', borderRadius: 9, padding: '8px 12px', fontWeight: 800, fontSize: '0.8rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                          {sending === key ? 'Đang gửi…' : 'Tôi đã nhận'}
+                        </button>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {mySalary && (() => {
             const c = mySalary;
             const row = (label, value, color) => (
@@ -1642,10 +1706,10 @@ export default function PayrollPage() {
                 {c.absDays > 0 && (c.rule === 'days'
                   ? row('Nghỉ có đơn', `${fmtNum(c.absDays)} ngày (không trừ thêm)`, '#64748b')
                   : row('Nghỉ có đơn', `−${formatMoney(c.absAmt)} (${fmtNum(c.absDays)} ngày)`, '#dc2626'))}
-                {c.vioAmt > 0 && row('Phạt', `−${formatMoney(c.vioAmt)}`, '#dc2626')}
-                {c.vioAmt > 0 && myFines.length > 0 && (
+                {(c.vioAmt > 0 || myFines.length > 0) && row(`Phạt (${myFines.length} lỗi)`, `−${formatMoney(c.vioAmt)}`, '#dc2626')}
+                {myFines.length > 0 && (
                   <div style={{ fontSize: '0.76rem', color: '#64748b', padding: '2px 0 6px', borderBottom: '1px solid #f1f5f9' }}>
-                    {myFines.map((v, i) => <div key={i}>• {v.date ? `${ddmm(v.date)} · ` : ''}{v.reason} — {formatMoney(v.amount)}</div>)}
+                    {myFines.map((v, i) => <div key={v.id || i}>• {v.date ? `${ddmm(v.date)} · ` : ''}{v.self ? '🙋 ' : ''}{v.reason}{v.note ? ` (${v.note})` : ''} — {Number(v.amount) > 0 ? formatMoney(v.amount) : 'chờ chủ quán định tiền'}</div>)}
                   </div>
                 )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, paddingTop: 10 }}>
@@ -1670,6 +1734,38 @@ export default function PayrollPage() {
               </div>
             );
           })()}
+
+          {/* Tự ghi lỗi của mình */}
+          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showSelfFine ? 12 : 0, gap: 8 }}>
+              <div>
+                <div style={{ fontWeight: 800 }}>⚠️ Tự ghi lỗi</div>
+                <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Làm vỡ ly, ghi sai món… tự ghi trung thực. Gửi rồi không sửa / xoá được.</div>
+              </div>
+              <button onClick={() => setShowSelfFine(p => !p)} style={{ fontSize: '0.8rem', background: showSelfFine ? '#f3f4f6' : '#111827', color: showSelfFine ? '#374151' : 'white', border: 'none', borderRadius: 8, padding: '6px 12px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {showSelfFine ? 'Huỷ' : '+ Ghi lỗi'}
+              </button>
+            </div>
+            {showSelfFine && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <select value={selfFine.rule_id} onChange={e => setSelfFine(p => ({ ...p, rule_id: e.target.value }))}
+                  style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', background: 'white' }}>
+                  <option value="">Lỗi khác (tự ghi lỗi gì)</option>
+                  {myFineRules.map(r => <option key={r.id} value={r.id}>{r.name}{r.amount ? ` — ${formatMoney(r.amount)}` : ''}</option>)}
+                </select>
+                {!selfFine.rule_id && <input type="text" placeholder="Lỗi gì? vd: làm đổ nồi lẩu" value={selfFine.reason} maxLength={200} onChange={e => setSelfFine(p => ({ ...p, reason: e.target.value }))}
+                  style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />}
+                <input type="text" placeholder="Ghi thêm (không bắt buộc): bàn nào, mấy cái…" value={selfFine.note} maxLength={300} onChange={e => setSelfFine(p => ({ ...p, note: e.target.value }))}
+                  style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
+                <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
+                  {(() => { const r = myFineRules.find(x => x.id === selfFine.rule_id); return r ? (r.amount ? `Trừ ${formatMoney(r.amount)} vào lương tháng này.` : 'Chủ quán sẽ định số tiền.') : 'Lỗi khác: chủ quán sẽ định số tiền.'; })()}
+                </div>
+                <button onClick={handleSelfFine} disabled={sending === 'fine'} style={{ background: '#b91c1c', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer' }}>
+                  {sending === 'fine' ? 'Đang gửi…' : 'Gửi (không sửa được)'}
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Ứng lương */}
           <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
@@ -1777,7 +1873,8 @@ export default function PayrollPage() {
           { key: 'salary', icon: '📊', label: 'Bảng lương' },
           { key: 'attendance', icon: '⏰', label: 'Chấm công' },
           { key: 'requests', icon: '📋', label: 'Yêu cầu', badge: pendingCount + (checkin?.fixes || []).filter(f => f.status === 'pending').length + (checkin?.extras || []).length + (faces?.reviews || []).length },
-          { key: 'violations', icon: '⚠️', label: 'Vi phạm', badge: fineHints.length },
+          // Gợi ý phạt chưa xử lý + lỗi nhân viên tự ghi chưa có tiền (chờ chủ định tiền).
+          { key: 'violations', icon: '⚠️', label: 'Vi phạm', badge: fineHints.length + violations.filter(v => !(Number(v.amount) > 0)).length },
         ]],
         ['Cài đặt', [
           { key: 'accounts', icon: '👤', label: 'Nhân viên' },
@@ -2240,6 +2337,9 @@ export default function PayrollPage() {
 
                 {list.length === 0 ? <div className="empty-state">Không có khoản phạt nào trong tháng {selMonth}/{selYear}</div> : (
                   <>
+                    {list.some(x => x.m?.self_reported) && <div style={{ fontSize: '0.8rem', color: '#b45309', margin: '0 0 4px' }}>
+                      🙋 {list.filter(x => x.m?.self_reported).length} khoản nhân viên tự ghi{list.some(x => !(Number(x.v.amount) > 0)) ? ` · ${list.filter(x => !(Number(x.v.amount) > 0)).length} khoản chưa định tiền` : ''}.
+                    </div>}
                     <div style={{ fontSize: '0.82rem', color: '#475569', margin: '0 0 6px' }}>Tháng {selMonth}/{selYear}: {list.length} khoản phạt, tổng <strong style={{ color: '#dc2626' }}>{formatMoney(total)}</strong></div>
                     <table className="payroll-table">
                       <thead><tr><th>Ngày</th><th>Nhân viên</th><th>Lý do</th><th>Số tiền</th><th></th></tr></thead>
@@ -2248,8 +2348,24 @@ export default function PayrollPage() {
                           <tr key={v.id}>
                             <td style={{ whiteSpace: 'nowrap' }}>{m?.fine_date ? ddmm(m.fine_date) : '—'}</td>
                             <td>{v.staff?.full_name || nameOf(v.staff_id)}</td>
-                            <td>{m?.kind ? '🤖 ' : ''}{v.reason}{m?.recorded_by && <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>ghi bởi {m.recorded_by}</div>}</td>
-                            <td style={{ color: '#dc2626', fontWeight: 700, whiteSpace: 'nowrap' }}>{formatMoney(v.amount)}</td>
+                            <td>{m?.kind ? '🤖 ' : ''}{m?.self_reported ? '🙋 ' : ''}{v.reason}
+                              {m?.note && <div style={{ fontSize: '0.76rem', color: '#475569' }}>{m.note}</div>}
+                              {m?.recorded_by && <div style={{ fontSize: '0.72rem', color: m?.self_reported ? '#b45309' : '#94a3b8' }}>
+                                {m?.self_reported ? 'nhân viên tự ghi' : `ghi bởi ${m.recorded_by}`}{v.created_at ? ` lúc ${hhmm(v.created_at)} ${ddmm(new Date(Date.parse(v.created_at) + 7 * 3600000).toISOString().slice(0, 10))}` : ''}
+                              </div>}
+                            </td>
+                            <td style={{ color: '#dc2626', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                              {Number(v.amount) > 0 ? formatMoney(v.amount) : (
+                                // Lỗi khác nhân viên tự ghi: chủ định tiền (0đ = chưa trừ gì).
+                                <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                                  <input style={{ ...moneyBox, width: 72 }} inputMode="numeric" placeholder="Tiền" aria-label="Định tiền phạt" value={typedMoney(draftOf(`vprice:${v.id}`, ''))}
+                                    onChange={e => setDraft(`vprice:${v.id}`, e.target.value.replace(/\D/g, ''))} />
+                                  <button style={smallBtn} onClick={() => (Number(draftOf(`vprice:${v.id}`, '')) > 0
+                                    ? editAction('edit_violation', { id: v.id, amount: draftOf(`vprice:${v.id}`, '') }, null, `vprice:${v.id}`)
+                                    : alert('Nhập số tiền phạt.'))}>Lưu</button>
+                                </span>
+                              )}
+                            </td>
                             <td><button className="btn-danger" style={{ fontSize: '0.75rem', padding: '4px 10px' }} onClick={() => handleDeleteViolation(v.id, !!m?.kind)}>Xoá</button></td>
                           </tr>
                         ))}

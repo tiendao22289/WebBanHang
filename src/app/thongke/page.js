@@ -375,6 +375,13 @@ function StaffDayCard({ staff }) {
       </ul>
       <a className="tk-link" href="/admin/payroll">Mở trang Lương để duyệt →</a>
     </div>}
+    {(staff.selfFines || []).length > 0 && <div className="tk-sub">
+      <h3>🙋 Nhân viên tự ghi lỗi</h3>
+      <ul className="tk-table">{staff.selfFines.map((f, i) => <li key={`s${i}`}>
+        <span className="tk-cell-main"><b>{f.name}</b><small>{f.reason}{f.note ? ` (${f.note})` : ''}</small></span>
+        <b>{f.amount > 0 ? money(f.amount) : 'chờ định tiền'}</b>
+      </li>)}</ul>
+    </div>}
   </Card>;
 }
 

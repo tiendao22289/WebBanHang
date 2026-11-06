@@ -341,7 +341,7 @@ test('staff see only their own salary for this month, or the closed numbers once
   assert.equal(me.salary.locked, false);
   assert.deepEqual([me.salary.base, me.salary.advAmt, me.salary.vioAmt, me.salary.year, me.salary.month], [5200000, 100000, 20000, year, month]);
   assert.equal(me.salary.net, me.salary.basePay + me.salary.otAmt - 100000 - 20000 - me.salary.absAmt);
-  assert.deepEqual(me.violations, [{ amount: 20000, reason: 'đi trễ', date: null }], 'only their own fines');
+  assert.deepEqual(me.violations.map(({ amount, reason, date, self }) => ({ amount, reason, date, self })), [{ amount: 20000, reason: 'đi trễ', date: null, self: false }], 'only their own fines');
   assert.equal(me.bonus, null, 'no attendance bonus line while the owner does not use it');
 
   state.payroll_closes.push({ year, month, staff_id: STAFF.id, snapshot: { name: 'Phát', net: 123456, rule: 'days' }, closed_at: '2026-11-30T12:00:00Z' });
@@ -440,7 +440,7 @@ test('the owner records a fine with a date and a mistake from the list; staff se
   const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
   await post(owner, { action: 'add_violation', staff_id: STAFF.id, date: today, reason: 'không mặc đồng phục', amount: '20.000' });
   const me = plain(await load(state, STAFF).GET({ url: 'http://x/api/admin/workforce?me=1' })).body;
-  assert.deepEqual(me.violations, [{ amount: 20000, reason: 'không mặc đồng phục', date: today }]);
+  assert.deepEqual(me.violations.map(({ amount, reason, date, self }) => ({ amount, reason, date, self })), [{ amount: 20000, reason: 'không mặc đồng phục', date: today, self: false }], 'recorded by the owner, not self-reported');
 });
 
 test('fine suggestions: the owner fines with an amount or skips, once; deleting the fine brings it back', async () => {
