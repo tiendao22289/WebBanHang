@@ -298,8 +298,8 @@ test('the shop default late rule: past 10 minutes 50.000đ each time plus the mi
   const back = [...own, { scope: 'a', valid_from: '2026-11-07', allowed_minutes: 0, per_minute: false, fixed_amount: 0, use_shop: true }];
   assert.equal(dayOf('2026-11-07', '14:25', '00:00', back).lateAmt, 50000 + 12019, '25 minutes × 288.462 ÷ 600');
   assert.equal(dayOf('2026-11-04', '14:25', '00:00', own).lateAmt, 50000 + 12019, 'the 4th still uses the shop rule');
-  assert.deepEqual(lateRuleOn(back, 'a', '2026-11-06'), { allowed: 30, perMinute: false, fixed: 50000, own: true });
-  assert.deepEqual(lateRuleOn(back, 'a', '2026-11-08'), { allowed: 10, perMinute: true, fixed: 50000, own: false });
+  assert.deepEqual(lateRuleOn(back, 'a', '2026-11-06'), { allowed: 30, perMinute: false, fixed: 50000, own: true, on: true, early: null });
+  assert.deepEqual(lateRuleOn(back, 'a', '2026-11-08'), { allowed: 10, perMinute: true, fixed: 50000, own: false, on: true, early: null });
   assert.equal(lateRuleOn(back, 'a', '2026-11-01'), null, 'no rule yet: nothing is cut');
   // Ngày đã tự trừ theo luật thì không gợi ý phạt trễ nữa.
   const late = { lateDays: [{ day: '2026-11-05', minutes: 45, attendance_id: 'x' }], forgotten: [] };

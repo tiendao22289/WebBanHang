@@ -11,8 +11,10 @@
  *   tự tính từ AUTO_EXTRA_FROM trừ ca chủ bấm không tính) × giá tăng ca. Đơn báo nghỉ chỉ để ghi
  *   lý do, không trừ thêm.
  *   Đi trễ theo luật đi trễ (payroll_late_rules: mặc định cả quán hoặc riêng từng người): trễ quá số phút
- *   cho phép thì trừ số tiền cố định mỗi lần và / hoặc trừ đúng số phút trễ; về sớm từ 30 phút: trừ số phút
- *   về sớm — phần theo phút tính theo lương ngày ÷ số phút của ca, không trừ quá số tiền ngày đó được tính.
+ *   cho phép thì trừ số tiền cố định mỗi lần và / hoặc trừ đúng số phút trễ (tắt trừ tiền = được phép đi trễ). Về sớm:
+ *   luật cùng dòng (cho phép về sớm bao nhiêu phút, trừ theo phút về sớm và / hoặc tiền cố định mỗi lần, tắt được); dòng chưa
+ *   cài về sớm thì như cũ: về sớm từ 30 phút trừ số phút về sớm — phần theo phút tính theo lương ngày ÷ số phút của ca, không
+ *   trừ quá số tiền ngày đó được tính.
  *   Ngày quán nghỉ (shop_closed_days) mà người đó không đi làm: người được nhận lương ngày nghỉ được đủ 1 ngày công
  *   (lương cơ bản ÷ 30; theo giờ: số giờ của ca × lương 1 giờ), tính cả vào số ngày công. Mặc định lương tháng có,
  *   theo giờ không; chủ đổi từng người (payroll_holiday_pay). Chỉ tính ngày từ lúc vào làm tới ngày nghỉ việc (người
@@ -90,8 +92,16 @@ export function lateRuleOn(rules, staffId, day) {
     return found;
   };
   const own = latest(staffId), r = own && !own.use_shop ? own : latest('shop');
-  return r ? { allowed: Number(r.allowed_minutes) || 0, perMinute: !!r.per_minute, fixed: Number(r.fixed_amount) || 0, own: r === own } : null;
+  if (!r) return null;
+  // on: có trừ tiền khi đi trễ (tắt = được phép đi trễ: vẫn ghi lại, không trừ). early: luật về sớm cùng dòng; dòng chưa cài về
+  // sớm (cột trống) → null = như cũ (về sớm từ 30 phút trừ theo phút về sớm).
+  const early = r.early_allowed_minutes === null || r.early_allowed_minutes === undefined ? null
+    : { on: r.early_on !== false, allowed: Number(r.early_allowed_minutes) || 0, perMinute: !!r.early_per_minute, fixed: Number(r.early_fixed_amount) || 0 };
+  return { allowed: Number(r.allowed_minutes) || 0, perMinute: !!r.per_minute, fixed: Number(r.fixed_amount) || 0, own: r === own, on: r.late_on !== false, early };
 }
+
+/** Luật về sớm của một ngày (từ luật đi trễ / về sớm): { on, allowed, perMinute, fixed }; chưa cài = như cũ, từ 30 phút trừ theo phút. */
+export const earlyRuleOf = lateRule => lateRule?.early || { on: true, allowed: EARLY_CUT_MINUTES - 1, perMinute: true, fixed: 0, legacy: true };
 
 const vnDay = iso => (iso ? new Date(Date.parse(iso) + 7 * 3600000).toISOString().slice(0, 10) : null);
 const dayBefore = d => new Date(Date.parse(`${d}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
@@ -165,7 +175,8 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
     const days = [...groupByWorkDay(sessions, rules).entries()].filter(([day]) => day.slice(0, 7) === key);
     const workDays = days.filter(([, list]) => list.some(s => s.clock_out)).length;
     const standardDays = monthDays(year, month), dayRate = base / DAY_BASE;
-    const earlyList = [], lateList = [], daily = [];
+    // lateFree: ngày đi trễ mà luật tắt trừ tiền (được phép đi trễ) — không gợi ý phạt trễ.
+    const earlyList = [], lateList = [], daily = [], lateFree = [];
     let otMs = 0, dayUnits = 0, hourMin = 0, hourPay = 0, wageUnits = 0, wagePay = 0;
     // Ngày quán nghỉ: người được nhận lương ngày nghỉ (trong thời gian làm việc, trừ lúc đã nghỉ rồi đi làm lại; mặc định
     // lương tháng có, theo giờ / theo ngày không).
@@ -192,34 +203,44 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
       const lateRule = lateRuleOn(lateRules, staffId, day);
       const rawLate = Math.max(0, Math.floor((Date.parse(list[0].clock_in) - w.start.getTime()) / 60000)) || 0;
       const byShift = !!rules && String(list[0].date) >= rules.hours_from;
-      const lateHit = !!(lateRule && unit && byShift && !closedDay && rawLate > lateRule.allowed && (base > 0 || rate || wage));
-      // Tiền cố định mỗi lần trễ: không trừ quá số tiền còn lại của ngày đó (ngày làm ít giờ không thành âm).
+      // Luật tắt trừ tiền (được phép đi trễ): vẫn ghi trễ, không trừ, không gợi ý phạt trễ.
+      if (lateRule && !lateRule.on && byShift && !closedDay && rawLate > 0) lateFree.push(day);
+      const lateHit = !!(lateRule && lateRule.on && unit && byShift && !closedDay && rawLate > lateRule.allowed && (base > 0 || rate || wage));
+      // Về sớm: luật riêng / của quán (tắt = được phép về sớm); chưa cài = như cũ (từ 30 phút trừ theo phút về sớm).
+      const earlyRule = earlyRuleOf(lateRule);
+      const earlyHit = !!(earlyRule.on && unit && !closedDay && flags.leftEarly > earlyRule.allowed && (earlyRule.legacy || base > 0 || rate || wage));
+      // Tiền cố định mỗi lần trễ / về sớm: không trừ quá số tiền còn lại của ngày đó (ngày làm ít giờ không thành âm).
       const fixedOf = left => (lateHit ? Math.min(lateRule.fixed, Math.max(0, Math.floor(left))) : 0);
+      const earlyFixedOf = left => (earlyHit ? Math.min(earlyRule.fixed, Math.max(0, Math.floor(left))) : 0);
       let pay, lateCut = 0, earlyCut = 0, lateFixed = 0;
       if (rate) {
-        // Theo giờ: số phút trong ca × lương 1 giờ (trễ đã mất đúng số phút đó, chỉ trừ thêm tiền cố định của luật đi
-        // trễ). Làm tròn lên phút để khớp "trễ / về sớm X phút" (làm tròn xuống).
+        // Theo giờ: số phút trong ca × lương 1 giờ (trễ / về sớm đã mất đúng số phút đó, chỉ trừ thêm tiền cố định mỗi lần
+        // của luật đi trễ / về sớm). Làm tròn lên phút để khớp "trễ / về sớm X phút" (làm tròn xuống).
         const minutes = Math.max(Math.ceil(inShiftMs / 60000), holidayFull ? Math.round((w.end - w.start) / 60000) : 0), earned = minutes / 60 * rate;
         lateFixed = fixedOf(earned);
-        pay = earned - lateFixed;
+        earlyCut = earlyFixedOf(earned - lateFixed);
+        if (earlyCut > 0) earlyList.push({ day, minutes: flags.leftEarly, amount: earlyCut });
+        pay = earned - lateFixed - earlyCut;
         hourMin += minutes;
         hourPay += earned;
       } else {
         // Lương 1 ngày: trả theo ngày thì đúng số chủ nhập, theo tháng thì lương cơ bản ÷ số ngày của tháng.
         const oneDay = wage || dayRate;
         if (wage) { wageUnits += unit; wagePay += wage * unit; } else dayUnits += unit;
-        // Trễ quá số phút cho phép (luật trừ theo phút): trừ đúng số phút trễ; về sớm từ 30 phút: trừ số phút về sớm.
+        // Trễ / về sớm quá số phút cho phép (luật trừ theo phút): trừ đúng số phút trễ / về sớm; rồi tiền cố định mỗi lần.
         // Ngày đó chỉ được lương ngày × phần ca có mặt, không hơn số tiền ngày công đã tính (dưới nửa ca vẫn tối đa nửa ngày).
         const shiftMin = (w.end - w.start) / 60000;
         const late = lateHit && lateRule.perMinute ? rawLate : 0;
-        const early = unit && !closedDay && flags.leftEarly >= EARLY_CUT_MINUTES ? flags.leftEarly : 0;
+        const early = earlyHit && earlyRule.perMinute ? flags.leftEarly : 0;
         const full = oneDay * unit, kept = Math.min(full, oneDay * Math.max(0, 1 - (late + early) / shiftMin));
         const cut = Math.round(full - kept);
         lateCut = Math.min(cut, Math.round(oneDay * late / shiftMin));
         earlyCut = cut - lateCut;
-        if (earlyCut > 0) earlyList.push({ day, minutes: early, amount: earlyCut });
         lateFixed = fixedOf(full - cut);
-        pay = full - cut - lateFixed;
+        const earlyFixed = earlyFixedOf(full - cut - lateFixed);
+        earlyCut += earlyFixed;
+        if (earlyCut > 0) earlyList.push({ day, minutes: flags.leftEarly, amount: earlyCut });
+        pay = full - cut - lateFixed - earlyFixed;
       }
       // Tiền trừ vì đi trễ của ngày: phần theo phút + tiền cố định mỗi lần trễ.
       if (lateCut + lateFixed > 0) lateList.push({ day, minutes: rawLate, amount: lateCut + lateFixed, perMinute: lateCut, fixed: lateFixed });
@@ -288,7 +309,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
     return { rule: 'days', base, standardDays, dayBase: DAY_BASE, workDays, workUnits, holidayDays, dayUnits, dayAmt, monthAdjust, hourly, dayWage, basePay, earlyAmt, earlyList,
       lateAmt, lateList,
       totalWorkH: round1(totalWorkH), otHours, otAmt, bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, pendingH: round1(pendingMs / HOUR),
-      net: basePay - lateAmt - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt, byDay, daily };
+      net: basePay - lateAmt - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt, byDay, daily, lateFree };
   }
 
   // Cách cũ (giữ nguyên số của các tháng trước): tính từng ngày làm, làm tròn 0,1 giờ. Theo ngày làm như tháng
@@ -434,7 +455,7 @@ export function staffMonthStats({ year, month, staff = [], configs = [], session
       late: t.late, early: t.early, leftEarly: t.leftEarly, stayed: t.stayed, forgot: t.forgot,
       warnings: myScans.filter(s => s.warnings?.length).length, blocked: myScans.filter(s => s.action === 'blocked').length,
       bonus: { ...bonusCheck({ year, month, salary: live, tallies: t, departure, settings: bonusSettings }), approved: gifts[0] || null },
-      fineSuggestions: fineSuggestions({ staffId: p.id, tallies: t, reviews: fineReviews, kinds: fineKinds, autoLateDays: (live.lateList || []).map(x => x.day) }).length,
+      fineSuggestions: fineSuggestions({ staffId: p.id, tallies: t, reviews: fineReviews, kinds: fineKinds, autoLateDays: [...(live.lateList || []).map(x => x.day), ...(live.lateFree || [])] }).length,
     };
   }).filter(Boolean);
   const sum = f => people.reduce((a, p) => a + (Number(f(p)) || 0), 0);
