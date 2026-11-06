@@ -340,3 +340,13 @@ button.salary-card-header { width: 100%; border: 0; text-align: left; font: inhe
   .config-salary .config-row input, .config-salary .config-row select { width: 100%; box-sizing: border-box; font-size: 16px; }
   .config-salary .config-row label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
+
+/* Khung Sửa của Bảng lương — Từng ngày trong tháng (ngày + tiền + lượt chấm công + so với ca). Màn hình hẹp:
+   mỗi ngày thành một thẻ, hàng 1 ngày + tiền, dưới là các lượt chấm công và trễ / sớm / ngoài ca, không phải kéo ngang. */
+@media (max-width: 640px) {
+  table.day-merge { min-width: 0 !important; width: 100% !important; }
+  table.day-merge thead { display: none; }
+  table.day-merge tr { display: grid; grid-template-columns: auto minmax(0, 1fr); border-bottom: 1px solid #e2e8f0; }
+  table.day-merge td { border-bottom: none !important; max-width: none !important; }
+  table.day-merge td:nth-child(3), table.day-merge td:nth-child(4), table.day-merge td[colspan] { grid-column: 1 / -1; padding-top: 2px !important; }
+}
