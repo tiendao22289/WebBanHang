@@ -401,8 +401,9 @@ export default function PayrollPage() {
   const [activeTab, setActiveTab] = useState('salary');
   const [configFocus, setConfigFocus] = useState(null);
   const [lateOpen, setLateOpen] = useState(null);
-  // Bảng lương: bấm ô Vi phạm của một người để xem từng lỗi (ngày, lỗi gì, lý do, ai ghi, số tiền).
-  const [vioOpen, setVioOpen] = useState(null);
+  // Bảng lương: bấm một ô (Vào sớm, Vào trễ, Ra dư, Về sớm, Ứng lương, Nghỉ, Vi phạm) của một người để xem từng ngày / từng khoản
+  // ngay dưới dòng đó. { id: staffId, kind } — mỗi lần mở một ô.
+  const [detail, setDetail] = useState(null);
   const [staffList, setStaffList] = useState([]);
   const [configs, setConfigs] = useState({});
   const [requests, setRequests] = useState([]);
@@ -1183,10 +1184,10 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     .sort((a, b) => String(b.m?.fine_date || '').localeCompare(String(a.m?.fine_date || '')));
   // Ô Vi phạm của Bảng lương: tổng tiền + số lỗi, bấm để mở / đóng danh sách.
   const vioCell = (staffId, c) => {
-    const list = finesOf(staffId), open = vioOpen === staffId, unpriced = list.filter(x => !(Number(x.v.amount) > 0)).length;
+    const list = finesOf(staffId), open = detail?.id === staffId && detail.kind === 'fines', unpriced = list.filter(x => !(Number(x.v.amount) > 0)).length;
     if (!list.length) return <span style={{ color: '#94a3b8' }}>—</span>;
     return (
-      <button onClick={() => setVioOpen(open ? null : staffId)} title="Bấm để xem từng lỗi"
+      <button onClick={() => setDetail(open ? null : { id: staffId, kind: 'fines' })} title="Bấm để xem từng lỗi"
         style={{ border: '1px solid #fecaca', background: open ? '#fee2e2' : '#fff5f5', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', textAlign: 'left', font: 'inherit' }}>
         <span style={{ color: '#ef4444', fontWeight: 700, whiteSpace: 'nowrap' }}>{c.vioAmt > 0 ? `-${formatMoney(c.vioAmt)}` : '0đ'}</span>
         <div style={{ fontSize: '0.72rem', color: '#b91c1c', whiteSpace: 'nowrap' }}>{list.length} lỗi {open ? '▴' : '▾'}</div>
@@ -1202,8 +1203,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
       <div style={{ background: '#fffafa', borderTop: '1px solid #fee2e2', padding: '10px 12px' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
           <strong style={{ fontSize: '0.85rem' }}>⚠️ Vi phạm tháng {selMonth}/{selYear} — {s.full_name}: {list.length} lỗi, trừ <span style={{ color: '#dc2626' }}>{formatMoney(total)}</span></strong>
-          <button style={smallBtn} onClick={() => { setVioOpen(null); setActiveTab('violations'); }}>Sửa / xoá ở tab Vi phạm</button>
-          <button style={smallBtn} onClick={() => setVioOpen(null)}>Đóng</button>
+          <button style={smallBtn} onClick={() => { setDetail(null); setActiveTab('violations'); }}>Sửa / xoá ở tab Vi phạm</button>
+          <button style={smallBtn} onClick={() => setDetail(null)}>Đóng</button>
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table className="payroll-table" style={{ width: '100%', maxWidth: 640, fontSize: '0.8rem' }}>
@@ -1229,6 +1230,128 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           </table>
         </div>
         <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: 4 }}>🤖 lỗi máy gợi ý từ chấm công · 🙋 nhân viên tự ghi. Tiền trừ vì đi trễ / về sớm tự động nằm ở cột Vào trễ / Về sớm, không ở đây.</div>
+      </div>
+    );
+  };
+  // Đơn ứng lương / báo nghỉ của một người trong tháng đang xem (bỏ đơn đã từ chối).
+  const monthRequests = (staffId, type) => requests.filter(r => r.staff_id === staffId && r.month === selMonth && r.year === selYear && r.request_type === type && r.status !== 'rejected');
+  // Ô bấm được của Bảng lương: giữ nguyên nội dung ô, thêm khung + mũi tên; không có gì để xem thì để nguyên.
+  const cellBtn = (staffId, kind, has, children) => {
+    if (!has) return children;
+    const open = detail?.id === staffId && detail.kind === kind;
+    return (
+      <button onClick={() => setDetail(open ? null : { id: staffId, kind })} title="Bấm để xem từng ngày"
+        style={{ border: '1px solid #cbd5e1', background: open ? '#dbeafe' : '#f8fafc', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', textAlign: 'left', font: 'inherit', color: 'inherit' }}>
+        {children}<div style={{ fontSize: '0.68rem', color: '#2563eb', whiteSpace: 'nowrap' }}>{open ? 'đóng ▴' : 'xem ▾'}</div>
+      </button>
+    );
+  };
+  // Từng ngày làm của một người trong tháng: giờ vào / ra, ca, vào sớm / trễ / ra dư / về sớm (giống số đếm ở Bảng lương) và tiền trừ.
+  const dayDetailsOf = staffId => {
+    const key = `${selYear}-${fmt(selMonth)}`, daily = new Map((calcSalary(staffId).daily || []).map(d => [d.day, d]));
+    const out = [];
+    for (const [day, list] of groupByWorkDay(attendance.filter(a => a.staff_id === staffId && !a.face_hold), rules)) {
+      if (day.slice(0, 7) !== key) continue;
+      const f = dayFlags(list, rules), d = daily.get(day), closed = monthClosedDays.some(x => x.day === day);
+      out.push({ day, list, d, shift: rules ? shiftOf(rules, staffId, day) : null, first: list[0], last: list[list.length - 1],
+        early: f.early, stay: f.stayed, late: d ? d.late : closed ? 0 : f.late, leftEarly: closed ? 0 : f.leftEarly });
+    }
+    return out.sort((a, b) => b.day.localeCompare(a.day));
+  };
+  // Giờ ngoài ca của một lượt có được cộng tiền không (người không tăng ca thì không cộng).
+  const extraStatus = (staffId, a) => {
+    if (!a?.clock_out) return { text: 'chưa ra ca', color: '#94a3b8' };
+    const h = hoursOf(a), r = reviewMap[a.id];
+    if (!(h.earlyMs + h.stayMs)) return { text: 'trong số phút cho lệch', color: '#94a3b8' };
+    if (!overtimeOn(staffId)) return { text: 'không tăng ca (không cộng tiền)', color: '#64748b' };
+    if (r) return r.status === 'approved' ? { text: 'đã cho tính tăng ca', color: '#16a34a' } : { text: 'không tính', color: '#64748b' };
+    return h.autoExtra ? { text: 'tự tính tăng ca', color: '#16a34a' } : { text: 'chờ duyệt', color: '#b45309' };
+  };
+  const DETAIL_TITLES = { early: '🌅 Vào sớm', late: '⏰ Vào trễ', stay: '🌙 Ra dư', leftEarly: '🚪 Về sớm', advance: '💵 Ứng lương', absent: '🛌 Nghỉ' };
+  // Danh sách mở dưới dòng của người đó khi bấm một ô của Bảng lương.
+  const detailPanel = (s, kind) => {
+    if (kind === 'fines') return finesPanel(s);
+    const c = calcSalary(s.id), isAdmin = currentUser?.role === 'admin';
+    const th = { padding: '6px 10px', whiteSpace: 'nowrap' }, td = { padding: '6px 10px', verticalAlign: 'top' };
+    const dayCell = day => <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 700 }}>{weekday(day)} {ddmm(day)}</td>;
+    const shiftText = x => (x.shift ? `${x.shift.start}–${x.shift.end}${x.shift.own ? ' riêng' : ''}` : '—');
+    const vnDay = iso => new Date(Date.parse(iso) + 7 * 3600000).toISOString().slice(0, 10);
+    let head = [], rows = [], summary = '', editHint = null;
+    if (['early', 'late', 'stay', 'leftEarly'].includes(kind)) {
+      const days = dayDetailsOf(s.id).filter(x => x[kind] > 0), total = days.reduce((a, x) => a + x[kind], 0);
+      const cutOf = x => (kind === 'late' ? x.d?.lateCut || 0 : kind === 'leftEarly' ? x.d?.earlyCut || 0 : 0);
+      const cutTotal = days.reduce((a, x) => a + cutOf(x), 0);
+      summary = `${days.length} lần, tổng ${durationText(total)}${cutTotal ? `, trừ ${formatMoney(cutTotal)}` : ''}`;
+      const isIn = kind === 'early' || kind === 'late';
+      head = ['Ngày', 'Ca', isIn ? 'Giờ vào' : 'Giờ ra', DETAIL_TITLES[kind].split(' ').slice(1).join(' '), kind === 'early' || kind === 'stay' ? 'Tiền' : 'Trừ lương'];
+      rows = days.map(x => {
+        const a = isIn ? x.first : x.last, cut = cutOf(x), st = extraStatus(s.id, a);
+        const breakdown = kind === 'late' ? (c.lateList || []).find(l => l.day === x.day) : null;
+        return (
+          <tr key={x.day}>
+            {dayCell(x.day)}
+            <td style={{ ...td, whiteSpace: 'nowrap' }}>{shiftText(x)}</td>
+            <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 600 }}>{isIn ? hhmm(a.clock_in) : a.clock_out ? hhmm(a.clock_out) : 'chưa ra'}</td>
+            <td style={{ ...td, whiteSpace: 'nowrap', color: kind === 'late' || kind === 'leftEarly' ? '#c2410c' : undefined }}>{durationText(x[kind])}</td>
+            <td style={td}>
+              {kind === 'early' || kind === 'stay'
+                ? <span style={{ color: st.color }}>{st.text}{x.d?.extraAmt > 0 ? ` · tăng ca ngày đó +${formatMoney(x.d.extraAmt)}` : ''}</span>
+                : cut > 0 ? <><strong style={{ color: '#dc2626' }}>−{formatMoney(cut)}</strong>
+                  {breakdown && breakdown.fixed > 0 && breakdown.perMinute > 0 && <div style={{ fontSize: '0.7rem', color: '#64748b' }}>{formatMoney(breakdown.fixed)} mỗi lần + {formatMoney(breakdown.perMinute)} theo phút</div>}</>
+                  : <span style={{ color: '#94a3b8' }}>không trừ{x.d?.closed ? ' (ngày quán nghỉ)' : ''}</span>}
+            </td>
+          </tr>
+        );
+      });
+      editHint = 'Giờ vào / ra sai thì sửa ở ✏️ Sửa → Từng ngày trong tháng.';
+    } else if (kind === 'advance') {
+      const list = monthRequests(s.id, 'advance')
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+      summary = `${list.length} lần, đã trừ ${formatMoney(c.advAmt)}`;
+      head = ['Ngày', 'Lý do', 'Số tiền', 'Trạng thái'];
+      rows = list.map(r => (
+        <tr key={r.id}>
+          {dayCell(vnDay(r.created_at))}
+          <td style={td}>{r.reason || '—'}</td>
+          <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 700, color: '#dc2626' }}>−{formatMoney(r.amount)}</td>
+          <td style={{ ...td, whiteSpace: 'nowrap', color: r.status === 'pending' ? '#b45309' : '#16a34a' }}>{r.status === 'pending' ? 'chờ duyệt (chưa trừ)' : 'đã duyệt, đã trừ'}</td>
+        </tr>
+      ));
+      editHint = 'Sửa số tiền, duyệt hoặc xoá ở ✏️ Sửa → Ứng lương.';
+    } else if (kind === 'absent') {
+      const list = monthRequests(s.id, 'absent');
+      const leaveOf = id => (payrollMonth.leaveDays || []).find(l => l.request_id === id);
+      summary = `${list.length} đơn, ${fmtNum(c.absDays || 0)} ngày đã duyệt`;
+      head = ['Ngày nghỉ', 'Số ngày', 'Lý do', 'Trạng thái'];
+      rows = list.map(r => {
+        const l = leaveOf(r.id);
+        return (
+          <tr key={r.id}>
+            <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 700 }}>{l ? `${ddmm(l.from_date)}${l.to_date !== l.from_date ? ` – ${ddmm(l.to_date)}` : ''}` : `gửi ${ddmm(vnDay(r.created_at))}`}</td>
+            <td style={{ ...td, whiteSpace: 'nowrap' }}>{fmtNum(r.days)} ngày</td>
+            <td style={td}>{r.reason || '—'}</td>
+            <td style={{ ...td, whiteSpace: 'nowrap', color: r.status === 'pending' ? '#b45309' : '#16a34a' }}>{r.status === 'pending' ? 'chờ duyệt' : 'đã duyệt'}</td>
+          </tr>
+        );
+      });
+      editHint = c.rule === 'days' ? 'Ngày nghỉ không trừ thêm tiền (ngày không đi làm thì không có ngày công). Xoá đơn ở ✏️ Sửa → Đơn báo nghỉ.' : 'Xoá đơn ở ✏️ Sửa → Đơn báo nghỉ.';
+    }
+    return (
+      <div style={{ background: '#f8fbff', borderTop: '1px solid #dbeafe', padding: '10px 12px' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
+          <strong style={{ fontSize: '0.85rem' }}>{DETAIL_TITLES[kind]} tháng {selMonth}/{selYear} — {s.full_name}: {summary}</strong>
+          {isAdmin && <button style={smallBtn} onClick={() => { setDetail(null); setExpandedSalaryStaff(s.id); }}>✏️ Mở Sửa</button>}
+          <button style={smallBtn} onClick={() => setDetail(null)}>Đóng</button>
+        </div>
+        {rows.length === 0 ? <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Không có gì trong tháng này.</div> : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="payroll-table" style={{ width: '100%', maxWidth: 720, fontSize: '0.8rem' }}>
+              <thead><tr>{head.map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>{rows}</tbody>
+            </table>
+          </div>
+        )}
+        {editHint && <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: 4 }}>{editHint}</div>}
       </div>
     );
   };
@@ -2102,8 +2225,11 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
             const dayPay = usesDayPay(selYear, selMonth);
             const today = vnToday(), thisMonth = `${selYear}-${fmt(selMonth)}`;
             const running = today.slice(0, 7) === thisMonth;
-            // Người nghỉ việc trước tháng này không hiện; nghỉ trong tháng thì vẫn hiện để kết toán.
-            const activeStaff = staffList.filter(s => activeInMonth(departureOf(s.id), thisMonth));
+            // Người nghỉ việc trước tháng này không hiện; nghỉ trong tháng thì vẫn hiện để kết toán. Tài khoản Admin (chủ quán) không
+            // hiện — trừ khi tháng này người đó có tiền thật (lương, giờ làm, ứng, phạt, phiếu đã chốt) để bảng không thiếu khoản nào.
+            const adminNoPay = s => normalizeRole(s.role) === 'admin'
+              && !(c => c.locked || c.base || c.totalWorkH || c.advAmt || c.vioAmt || c.absDays || c.hourly || c.dayWage)(salaryOf(s.id));
+            const activeStaff = staffList.filter(s => activeInMonth(departureOf(s.id), thisMonth) && !adminNoPay(s));
             const filtered = activeStaff.filter(s => !salarySearch || s.full_name === salarySearch);
             const rows = activeStaff.map(s => ({ s, c: salaryOf(s.id) }));
             const withData = rows.filter(({ c }) => c.locked || c.base || c.totalWorkH || c.advAmt || c.vioAmt || c.absDays);
@@ -2125,7 +2251,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 <div className="filter-bar">
                   <select value={salarySearch} onChange={e => setSalarySearch(e.target.value)}>
                     <option value="">👥 Tất cả nhân viên</option>
-                    {staffList.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
+                    {activeStaff.map(s => <option key={s.id} value={s.full_name}>{s.full_name}</option>)}
                   </select>
                   <select value={selMonth} onChange={e => setSelMonth(Number(e.target.value))}>
                     {months.map(m => <option key={m} value={m}>Tháng {m}</option>)}
@@ -2222,10 +2348,10 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <span className="salary-card-label">Tổng giờ làm</span>
                             <span className="salary-card-value">{fmtNum(c.totalWorkH)} giờ</span>
                           </div>
-                          {[['Vào sớm', talliesOf(s.id).early], ['Vào trễ', lateTallyOf(s.id), c.lateAmt], ['Ra dư', talliesOf(s.id).stayed], ['Về sớm', talliesOf(s.id).leftEarly, c.earlyAmt]].map(([label, t, cut]) => (
+                          {[['early', 'Vào sớm', talliesOf(s.id).early], ['late', 'Vào trễ', lateTallyOf(s.id), c.lateAmt], ['stay', 'Ra dư', talliesOf(s.id).stayed], ['leftEarly', 'Về sớm', talliesOf(s.id).leftEarly, c.earlyAmt]].map(([kind, label, t, cut]) => (
                             <div key={label} className="salary-card-row">
                               <span className="salary-card-label">{label}</span>
-                              <span className={`salary-card-value ${cut ? 'red' : t.count ? '' : 'muted'}`}>{tallyText(t, cut)}</span>
+                              <span className={`salary-card-value ${cut ? 'red' : t.count ? '' : 'muted'}`}>{cellBtn(s.id, kind, t.count > 0, tallyText(t, cut))}</span>
                             </div>
                           ))}
                           {c.pendingH > 0 && (
@@ -2248,13 +2374,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                           )}
                           <div className="salary-card-row">
                             <span className="salary-card-label">Ứng lương</span>
-                            <span className="salary-card-value red">-{formatMoney(c.advAmt)}</span>
+                            <span className="salary-card-value red">{cellBtn(s.id, 'advance', monthRequests(s.id, 'advance').length > 0, `-${formatMoney(c.advAmt)}`)}</span>
                           </div>
                           <div className="salary-card-row">
                             <span className="salary-card-label">Nghỉ</span>
                             {c.rule === 'days'
-                              ? <span className="salary-card-value muted">{c.absDays ? `${fmtNum(c.absDays)} ngày có đơn (không trừ thêm)` : '—'}</span>
-                              : <span className="salary-card-value red">-{formatMoney(c.absAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({fmtNum(c.absDays)} ngày)</small></span>}
+                              ? <span className="salary-card-value muted">{cellBtn(s.id, 'absent', monthRequests(s.id, 'absent').length > 0, c.absDays ? `${fmtNum(c.absDays)} ngày có đơn (không trừ thêm)` : monthRequests(s.id, 'absent').length ? 'chờ duyệt' : '—')}</span>
+                              : <span className="salary-card-value red">{cellBtn(s.id, 'absent', monthRequests(s.id, 'absent').length > 0, <>-{formatMoney(c.absAmt)} <small style={{fontWeight:400,color:'#94a3b8'}}>({fmtNum(c.absDays)} ngày)</small></>)}</span>}
                           </div>
                           <div className="salary-card-row">
                             <span className="salary-card-label">Vi phạm</span>
@@ -2283,7 +2409,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             </>
                           )}
                         </div>}
-                        {cardOpen && vioOpen === s.id && finesPanel(s)}
+                        {cardOpen && detail?.id === s.id && detailPanel(s, detail.kind)}
                         {isAdmin && <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} />}
                         {isAdmin && cardOpen && (
                           <button
@@ -2317,16 +2443,16 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <td>{baseText(c)}</td>
                             <td>{daysText(c)}{c.rule === 'days' && <div style={{fontSize:'0.72rem',color:'#94a3b8'}}>= {formatMoney(c.basePay)}{c.monthAdjust ? ` (gồm ${adjustText(c)})` : ''}</div>}</td>
                             <td>{fmtNum(c.totalWorkH)} giờ{c.pendingH > 0 && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>+{fmtNum(c.pendingH)} giờ ngoài ca chờ duyệt</div>}</td>
-                            <td>{tally(talliesOf(s.id).early)}</td>
-                            <td>{tally(lateTallyOf(s.id), c.lateAmt)}</td>
-                            <td>{tally(talliesOf(s.id).stayed)}</td>
-                            <td>{tally(talliesOf(s.id).leftEarly, c.earlyAmt)}</td>
+                            <td>{cellBtn(s.id, 'early', talliesOf(s.id).early.count > 0, tally(talliesOf(s.id).early))}</td>
+                            <td>{cellBtn(s.id, 'late', lateTallyOf(s.id).count > 0, tally(lateTallyOf(s.id), c.lateAmt))}</td>
+                            <td>{cellBtn(s.id, 'stay', talliesOf(s.id).stayed.count > 0, tally(talliesOf(s.id).stayed))}</td>
+                            <td>{cellBtn(s.id, 'leftEarly', talliesOf(s.id).leftEarly.count > 0, tally(talliesOf(s.id).leftEarly, c.earlyAmt))}</td>
                             <td>{!c.otAmt && !overtimeOn(s.id) ? <span style={{color:'#94a3b8'}}>Không tính</span> : <span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span>}<div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.otHours)} giờ</div></td>
                             <td>{c.bonusAmt > 0 ? <span style={{color:'#16a34a'}}>+{formatMoney(c.bonusAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}</td>
-                            <td><span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span></td>
-                            <td>{c.rule === 'days'
-                              ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không trừ)` : '—'}</span>
-                              : <><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.absDays)} ngày</div></>}</td>
+                            <td>{cellBtn(s.id, 'advance', monthRequests(s.id, 'advance').length > 0, <span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span>)}</td>
+                            <td>{cellBtn(s.id, 'absent', monthRequests(s.id, 'absent').length > 0, c.rule === 'days'
+                              ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không trừ)` : monthRequests(s.id, 'absent').length ? 'chờ duyệt' : '—'}</span>
+                              : <><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.absDays)} ngày</div></>)}</td>
                             <td>{vioCell(s.id, c)}</td>
                             <td>
                               <strong style={{color: c.net >= 0 ? '#16a34a' : '#ef4444', fontSize:'0.95rem'}}>{formatMoney(c.net)}</strong>
@@ -2338,8 +2464,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                               style={{ fontSize: '0.75rem', padding: '3px 10px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#1d4ed8', whiteSpace: 'nowrap' }}>{expandedSalaryStaff === s.id ? '▴ Ẩn' : '✏️ Sửa'}</button>
                               <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} compact /></td>}
                           </tr>
-                          {vioOpen === s.id && (
-                            <tr><td colSpan="15" style={{ padding: 0, borderBottom: '2px solid #fca5a5' }}>{finesPanel(s)}</td></tr>
+                          {detail?.id === s.id && (
+                            <tr><td colSpan="15" style={{ padding: 0, borderBottom: `2px solid ${detail.kind === 'fines' ? '#fca5a5' : '#93c5fd'}` }}>{detailPanel(s, detail.kind)}</td></tr>
                           )}
                           {isAdmin && expandedSalaryStaff === s.id && (
                             <tr><td colSpan="15" style={{ padding: 0, borderBottom: '2px solid #3b82f6' }}>{payEditor(s)}</td></tr>
