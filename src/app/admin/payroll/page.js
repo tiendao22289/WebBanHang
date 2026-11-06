@@ -401,6 +401,8 @@ export default function PayrollPage() {
   const [activeTab, setActiveTab] = useState('salary');
   const [configFocus, setConfigFocus] = useState(null);
   const [lateOpen, setLateOpen] = useState(null);
+  // Bảng lương: bấm ô Vi phạm của một người để xem từng lỗi (ngày, lỗi gì, lý do, ai ghi, số tiền).
+  const [vioOpen, setVioOpen] = useState(null);
   const [staffList, setStaffList] = useState([]);
   const [configs, setConfigs] = useState({});
   const [requests, setRequests] = useState([]);
@@ -1175,6 +1177,61 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   };
   // Khung Sửa của Bảng lương chỉ còn số liệu tháng (từng ngày, chấm công, ứng, phạt, thưởng); cài đặt của người đó (lương, tăng ca,
   // kỳ trả lương, đi trễ / về sớm, ngày quán nghỉ) ở tab Mức lương — một dòng tóm tắt + nút mở đúng người.
+  // Các khoản phạt của một người trong tháng đang xem, mới nhất lên đầu (khoản cũ chưa có ngày nằm cuối).
+  const finesOf = staffId => violations.filter(v => v.staff_id === staffId)
+    .map(v => ({ v, m: payrollMonth.violationMeta.find(x => x.violation_id === v.id) || null }))
+    .sort((a, b) => String(b.m?.fine_date || '').localeCompare(String(a.m?.fine_date || '')));
+  // Ô Vi phạm của Bảng lương: tổng tiền + số lỗi, bấm để mở / đóng danh sách.
+  const vioCell = (staffId, c) => {
+    const list = finesOf(staffId), open = vioOpen === staffId, unpriced = list.filter(x => !(Number(x.v.amount) > 0)).length;
+    if (!list.length) return <span style={{ color: '#94a3b8' }}>—</span>;
+    return (
+      <button onClick={() => setVioOpen(open ? null : staffId)} title="Bấm để xem từng lỗi"
+        style={{ border: '1px solid #fecaca', background: open ? '#fee2e2' : '#fff5f5', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', textAlign: 'left', font: 'inherit' }}>
+        <span style={{ color: '#ef4444', fontWeight: 700, whiteSpace: 'nowrap' }}>{c.vioAmt > 0 ? `-${formatMoney(c.vioAmt)}` : '0đ'}</span>
+        <div style={{ fontSize: '0.72rem', color: '#b91c1c', whiteSpace: 'nowrap' }}>{list.length} lỗi {open ? '▴' : '▾'}</div>
+        {unpriced > 0 && <div style={{ fontSize: '0.7rem', color: '#b45309', whiteSpace: 'nowrap' }}>{unpriced} chưa định tiền</div>}
+      </button>
+    );
+  };
+  // Danh sách lỗi mở ra dưới dòng của người đó: ngày, lỗi (🤖 máy gợi ý, 🙋 nhân viên tự ghi), ghi chú, ai ghi lúc nào, số tiền.
+  const finesPanel = s => {
+    const list = finesOf(s.id), total = list.reduce((a, x) => a + Number(x.v.amount || 0), 0);
+    const dayOf = iso => ddmm(new Date(Date.parse(iso) + 7 * 3600000).toISOString().slice(0, 10));
+    return (
+      <div style={{ background: '#fffafa', borderTop: '1px solid #fee2e2', padding: '10px 12px' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
+          <strong style={{ fontSize: '0.85rem' }}>⚠️ Vi phạm tháng {selMonth}/{selYear} — {s.full_name}: {list.length} lỗi, trừ <span style={{ color: '#dc2626' }}>{formatMoney(total)}</span></strong>
+          <button style={smallBtn} onClick={() => { setVioOpen(null); setActiveTab('violations'); }}>Sửa / xoá ở tab Vi phạm</button>
+          <button style={smallBtn} onClick={() => setVioOpen(null)}>Đóng</button>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table className="payroll-table" style={{ width: '100%', maxWidth: 640, fontSize: '0.8rem' }}>
+            <thead><tr><th style={{ padding: '6px 10px' }}>Ngày</th><th style={{ padding: '6px 10px' }}>Lỗi / lý do</th><th style={{ padding: '6px 10px', textAlign: 'right' }}>Số tiền</th></tr></thead>
+            <tbody>
+              {list.map(({ v, m }) => (
+                <tr key={v.id}>
+                  <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', verticalAlign: 'top', fontWeight: 700 }}>{m?.fine_date ? `${weekday(m.fine_date)} ${ddmm(m.fine_date)}` : '—'}</td>
+                  <td style={{ padding: '6px 10px', verticalAlign: 'top' }}>
+                    {m?.kind ? '🤖 ' : ''}{m?.self_reported ? '🙋 ' : ''}{v.reason || '(không ghi lý do)'}
+                    {m?.note && <div style={{ fontSize: '0.74rem', color: '#475569' }}>{m.note}</div>}
+                    <div style={{ fontSize: '0.7rem', color: m?.self_reported ? '#b45309' : '#94a3b8' }}>
+                      {m?.self_reported ? 'nhân viên tự ghi' : m?.recorded_by ? `ghi bởi ${m.recorded_by}` : 'chủ ghi'}{m?.kind && !m?.self_reported ? ' · lỗi máy gợi ý' : ''}
+                      {v.created_at ? ` lúc ${hhmm(v.created_at)} ${dayOf(v.created_at)}` : ''}
+                    </div>
+                  </td>
+                  <td style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', verticalAlign: 'top', color: Number(v.amount) > 0 ? '#dc2626' : '#b45309', fontWeight: 700 }}>
+                    {Number(v.amount) > 0 ? `-${formatMoney(v.amount)}` : 'chưa định tiền'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: 4 }}>🤖 lỗi máy gợi ý từ chấm công · 🙋 nhân viên tự ghi. Tiền trừ vì đi trễ / về sớm tự động nằm ở cột Vào trễ / Về sớm, không ở đây.</div>
+      </div>
+    );
+  };
   const settingsText = staffId => {
     const pay = hourlyEditOf(staffId), cycle = cycleOf(staffId), late = lateRuleOn(payrollMonth.lateRules, staffId, vnToday());
     const wage = pay.currentType === 'month' ? `Lương tháng ${formatMoney(Number(configs[staffId]?.base_salary) || 0)}` : `Lương 1 ${payUnitText[pay.currentType]} ${formatMoney(pay.current.hourly_rate)}`;
@@ -2201,7 +2258,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                           </div>
                           <div className="salary-card-row">
                             <span className="salary-card-label">Vi phạm</span>
-                            <span className={`salary-card-value ${c.vioAmt > 0 ? 'red' : 'muted'}`}>{c.vioAmt > 0 ? `-${formatMoney(c.vioAmt)}` : '—'}</span>
+                            <span className="salary-card-value">{vioCell(s.id, c)}</span>
                           </div>
                           <div className="salary-card-row">
                             <span className="salary-card-label">{c.locked ? 'Thực lĩnh (đã chốt)' : running ? 'Thực lĩnh (tạm tính)' : 'Thực lĩnh'}</span>
@@ -2226,6 +2283,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             </>
                           )}
                         </div>}
+                        {cardOpen && vioOpen === s.id && finesPanel(s)}
                         {isAdmin && <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} />}
                         {isAdmin && cardOpen && (
                           <button
@@ -2269,7 +2327,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <td>{c.rule === 'days'
                               ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không trừ)` : '—'}</span>
                               : <><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.absDays)} ngày</div></>}</td>
-                            <td>{c.vioAmt > 0 ? <span style={{color:'#ef4444'}}>-{formatMoney(c.vioAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}</td>
+                            <td>{vioCell(s.id, c)}</td>
                             <td>
                               <strong style={{color: c.net >= 0 ? '#16a34a' : '#ef4444', fontSize:'0.95rem'}}>{formatMoney(c.net)}</strong>
                               {c.locked && c.liveNet !== c.net && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>nay tính ra {formatMoney(c.liveNet)}</div>}
@@ -2280,6 +2338,9 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                               style={{ fontSize: '0.75rem', padding: '3px 10px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#1d4ed8', whiteSpace: 'nowrap' }}>{expandedSalaryStaff === s.id ? '▴ Ẩn' : '✏️ Sửa'}</button>
                               <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} compact /></td>}
                           </tr>
+                          {vioOpen === s.id && (
+                            <tr><td colSpan="15" style={{ padding: 0, borderBottom: '2px solid #fca5a5' }}>{finesPanel(s)}</td></tr>
+                          )}
                           {isAdmin && expandedSalaryStaff === s.id && (
                             <tr><td colSpan="15" style={{ padding: 0, borderBottom: '2px solid #3b82f6' }}>{payEditor(s)}</td></tr>
                           )}
