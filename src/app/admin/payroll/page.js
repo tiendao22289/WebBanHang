@@ -975,11 +975,12 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   // Áp dụng từ một ngày (đầu tháng này tới hôm nay) trở đi.
   const describeLate = r => {
     if (!r) return 'chưa đặt, không trừ';
-    const how = (fixed, perMinute, word) => [fixed ? `trừ ${formatMoney(fixed)} mỗi lần` : '', perMinute ? `trừ theo phút ${word}` : ''].filter(Boolean).join(' + ') || 'không trừ';
-    const late = r.on === false ? 'Đi trễ: được phép (không trừ tiền)' : `Đi trễ: cho trễ ${r.allowed} phút; trễ quá thì ${how(r.fixed, r.perMinute, 'trễ')}`;
+    const how = (fixed, perMinute, amount, word) => [fixed ? `trừ ${formatMoney(fixed)} mỗi lần` : '',
+      perMinute ? (amount ? `${formatMoney(amount)} mỗi phút ${word}` : `trừ theo phút ${word} (theo lương)`) : ''].filter(Boolean).join(' + ') || 'không trừ';
+    const late = r.on === false ? 'Đi trễ: được phép (không trừ tiền)' : `Đi trễ: cho trễ ${r.allowed} phút; trễ quá thì ${how(r.fixed, r.perMinute, r.minuteAmount, 'trễ')}`;
     const e = r.early;
     const early = !e ? 'Về sớm: về sớm từ 30 phút thì trừ theo phút về sớm (mặc định)'
-      : !e.on ? 'Về sớm: được phép (không trừ tiền)' : `Về sớm: cho về sớm ${e.allowed} phút; quá thì ${how(e.fixed, e.perMinute, 'về sớm')}`;
+      : !e.on ? 'Về sớm: được phép (không trừ tiền)' : `Về sớm: cho về sớm ${e.allowed} phút; quá thì ${how(e.fixed, e.perMinute, e.minuteAmount, 'về sớm')}`;
     return `${late}. ${early}`;
   };
   const lateRuleEditor = scope => {
@@ -992,6 +993,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     const ce = cur?.early || null;
     const earlyOn = draftOf(k('eon'), ce ? ce.on : true);
     const earlyAllowed = draftOf(k('eallowed'), String(ce ? ce.allowed : 30)), earlyPer = draftOf(k('eper'), ce ? ce.perMinute : true), earlyFixed = draftOf(k('efixed'), String(ce?.fixed || ''));
+    // Số tiền trừ mỗi phút (chủ tự điền); để trống = theo lương ngày ÷ số phút của ca.
+    const lateMin = draftOf(k('pmin'), String(cur?.minuteAmount || '')), earlyMin = draftOf(k('epmin'), String(ce?.minuteAmount || ''));
     const from = draftOf(k('from'), today);
     const box = { padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', background: 'white' };
     const line = { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', flexBasis: '100%' };
@@ -1002,9 +1005,27 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         <input type="checkbox" checked={!!on} onChange={e => setDraft(k(key), e.target.checked)} /> {on ? `Trừ tiền khi ${text}` : `Được phép ${text} (không trừ)`}
       </label>
     );
+    // Trừ thêm theo phút: tích thì hiện ô số tiền mỗi phút (trống = theo lương), kèm ví dụ tính sẵn để chủ thấy trễ / về sớm
+    // bao nhiêu phút thì bị trừ bao nhiêu.
+    const minuteBox = (onKey, on, amountKey, amount, word, allowedText, fixedText) => {
+      const ex = (Number(allowedText) || 0) + 5, perMin = Number(amount) || 0, fixedNum = Number(fixedText) || 0;
+      const parts = [on && perMin ? `${ex} × ${formatMoney(perMin)}` : '', fixedNum ? formatMoney(fixedNum) : ''].filter(Boolean);
+      const example = on && !perMin ? `trừ ${fixedNum ? `${formatMoney(fixedNum)} + ` : ''}${ex} phút theo lương (lương ngày ÷ số phút của ca)`
+        : parts.length ? `trừ ${parts.join(' + ')}${on && perMin ? ` = ${formatMoney(ex * perMin + fixedNum)}` : ''}` : 'không trừ';
+      return <>
+        <label style={lab}><input type="checkbox" checked={!!on} onChange={e => setDraft(k(onKey), e.target.checked)} /> Trừ thêm theo phút {word}</label>
+        {on && (
+          <label style={lab}><input style={{ ...box, width: 84 }} inputMode="numeric" placeholder="theo lương" value={typedMoney(amount)}
+            onChange={e => setDraft(k(amountKey), e.target.value.replace(/\D/g, ''))} />đ mỗi phút</label>
+        )}
+        <span style={{ flexBasis: '100%', fontSize: '0.74rem', color: '#475569', paddingLeft: 66 }}>Ví dụ {word} {ex} phút → {example}.</span>
+      </>;
+    };
     const save = () => editAction('save_late_rule', mode === 'shop' ? { scope, use_shop: true, valid_from: from }
       : { scope, valid_from: from, late_on: !!lateOn, allowed_minutes: Number(allowed) || 0, per_minute: !!perMinute, fixed_amount: fixed || 0,
-        early_on: !!earlyOn, early_allowed_minutes: Number(earlyAllowed) || 0, early_per_minute: !!earlyPer, early_fixed_amount: earlyFixed || 0 },
+        minute_amount: perMinute && lateMin ? lateMin : null,
+        early_on: !!earlyOn, early_allowed_minutes: Number(earlyAllowed) || 0, early_per_minute: !!earlyPer, early_fixed_amount: earlyFixed || 0,
+        early_minute_amount: earlyPer && earlyMin ? earlyMin : null },
       from < today ? `Áp dụng từ ${ddmm(from)}: lương các ngày từ ${ddmm(from)} sẽ tính lại theo luật này. Đồng ý?` : null, `late:${scope}:`);
     return (
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', fontSize: '0.82rem' }}>
@@ -1020,8 +1041,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
             {toggle('on', lateOn, 'đi trễ')}
             {lateOn && <>
               <label style={lab}>Cho phép trễ <input style={{ ...box, width: 56 }} inputMode="numeric" value={allowed} onChange={e => setDraft(k('allowed'), e.target.value.replace(/\D/g, ''))} /> phút</label>
-              <label style={lab}><input type="checkbox" checked={!!perMinute} onChange={e => setDraft(k('per'), e.target.checked)} /> Trừ theo phút trễ</label>
               <label style={lab}>Trừ mỗi lần trễ <input style={{ ...box, width: 96 }} inputMode="numeric" placeholder="0" value={typedMoney(fixed)} onChange={e => setDraft(k('fixed'), e.target.value.replace(/\D/g, ''))} />đ</label>
+              {minuteBox('per', perMinute, 'pmin', lateMin, 'trễ', allowed, fixed)}
             </>}
           </div>
           <div style={line}>
@@ -1029,8 +1050,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
             {toggle('eon', earlyOn, 'về sớm')}
             {earlyOn && <>
               <label style={lab}>Cho phép về sớm <input style={{ ...box, width: 56 }} inputMode="numeric" value={earlyAllowed} onChange={e => setDraft(k('eallowed'), e.target.value.replace(/\D/g, ''))} /> phút</label>
-              <label style={lab}><input type="checkbox" checked={!!earlyPer} onChange={e => setDraft(k('eper'), e.target.checked)} /> Trừ theo phút về sớm</label>
               <label style={lab}>Trừ mỗi lần về sớm <input style={{ ...box, width: 96 }} inputMode="numeric" placeholder="0" value={typedMoney(earlyFixed)} onChange={e => setDraft(k('efixed'), e.target.value.replace(/\D/g, ''))} />đ</label>
+              {minuteBox('eper', earlyPer, 'epmin', earlyMin, 'về sớm', earlyAllowed, earlyFixed)}
             </>}
           </div>
         </>}
@@ -1040,7 +1061,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         </div>
         <div style={{ flexBasis: '100%', fontSize: '0.76rem', color: '#64748b' }}>
           Đang áp dụng{!isShop && cur ? (cur.own ? ' (riêng)' : ' (theo quán)') : ''}: {describeLate(cur)}. Trễ / về sớm trong số phút cho phép thì không trừ; mỗi ngày trễ / về sớm tính một lần.
-          Trừ theo phút = lương ngày ÷ số phút của ca × số phút trễ / về sớm. Không trừ quá tiền của ngày đó.
+          Trừ theo phút: mỗi phút trễ / về sớm (tính từ giờ vào ca / hết ca) trừ đúng số tiền điền ở ô "đ mỗi phút"; để trống thì theo lương
+          (lương ngày ÷ số phút của ca). Người trả theo giờ chỉ bị trừ tiền mỗi lần (đã mất đúng số phút đó). Không trừ quá tiền của ngày đó.
         </div>
       </div>
     );
@@ -1162,10 +1184,10 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   const lateShort = staffId => {
     const r = lateRuleOn(payrollMonth.lateRules, staffId, vnToday());
     if (!r || !r.own) return 'theo mặc định của quán';
-    const cut = (allowed, fixed, perMinute, word) => (!fixed && !perMinute ? `${word} không trừ`
-      : `${word} quá ${allowed} phút trừ ${[fixed ? formatMoney(fixed) : '', perMinute ? 'theo phút' : ''].filter(Boolean).join(' + ')}`);
-    const late = r.on === false ? 'được phép đi trễ' : cut(r.allowed, r.fixed, r.perMinute, 'trễ');
-    const early = !r.early ? 'về sớm như mặc định' : r.early.on === false ? 'được phép về sớm' : cut(r.early.allowed, r.early.fixed, r.early.perMinute, 'về sớm');
+    const cut = (allowed, fixed, perMinute, amount, word) => (!fixed && !perMinute ? `${word} không trừ`
+      : `${word} quá ${allowed} phút trừ ${[fixed ? formatMoney(fixed) : '', perMinute ? (amount ? `${formatMoney(amount)}/phút` : 'theo phút') : ''].filter(Boolean).join(' + ')}`);
+    const late = r.on === false ? 'được phép đi trễ' : cut(r.allowed, r.fixed, r.perMinute, r.minuteAmount, 'trễ');
+    const early = !r.early ? 'về sớm như mặc định' : r.early.on === false ? 'được phép về sớm' : cut(r.early.allowed, r.early.fixed, r.early.perMinute, r.early.minuteAmount, 'về sớm');
     return `riêng: ${late} · ${early}`;
   };
   const openShiftFor = staffId => {

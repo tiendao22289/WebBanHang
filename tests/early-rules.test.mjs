@@ -69,6 +69,27 @@ test('the daily report says "trừ lương" for leaving early only when the rule
   assert.equal(staffData({ ...base, lateRules: rule({ early_on: false, early_allowed_minutes: 30, early_per_minute: true, early_fixed_amount: 0 }) }).people[0].cut, false);
 });
 
+test('the owner types how much one late / early minute costs; empty keeps "by the day pay"', () => {
+  const late = [ses('2026-11-05', '22:47', '02:00')]; // trễ 47 phút
+  const typed = pay(late, rule({ per_minute: true, minute_amount: 1000 }));
+  assert.deepEqual([typed.lateAmt, typed.byDay['2026-11-05'], typed.lateList[0].perMinute, typed.lateList[0].fixed], [47000 + 50000, 120000 - 97000, 47000, 50000],
+    '47 minutes × 1.000đ + 50.000đ once');
+  assert.equal(pay(late, rule({ per_minute: true, minute_amount: 1000, fixed_amount: 0 })).lateAmt, 47000, 'only per minute');
+  assert.equal(pay(late, rule({ per_minute: true })).lateAmt, 47 * 500 + 50000, 'no amount typed: by the day pay (120.000đ ÷ 240 phút)');
+  assert.equal(pay(late, rule({ per_minute: false, minute_amount: 1000 })).lateAmt, 50000, 'per minute off: the typed amount is not used');
+  // Về sớm 40 phút × 2.000đ.
+  const early = pay([ses('2026-11-05', '22:00', '01:20')], rule({ early_on: true, early_allowed_minutes: 30, early_per_minute: true, early_fixed_amount: 0, early_minute_amount: 2000 }));
+  assert.deepEqual([early.earlyAmt, early.byDay['2026-11-05']], [80000, 40000]);
+  // Không trừ quá tiền của ngày đó.
+  const big = pay(late, rule({ per_minute: true, minute_amount: 5000 }));
+  assert.deepEqual([big.lateAmt, big.byDay['2026-11-05']], [120000, 0]);
+  // Trả theo giờ: đã mất đúng số phút trễ, chỉ trừ tiền mỗi lần.
+  const hourly = [{ staff_id: 'a', valid_from: '2026-11-01', hourly_rate: 30000, unit: 'hour' }];
+  assert.equal(pay(late, rule({ per_minute: true, minute_amount: 1000 }), hourly).lateAmt, 50000);
+  assert.deepEqual(payroll.lateRuleOn(rule({ per_minute: true, minute_amount: 1000, early_allowed_minutes: 30, early_per_minute: true, early_minute_amount: 2000 }), 'a', '2026-11-05'),
+    { allowed: 10, perMinute: true, fixed: 50000, minuteAmount: 1000, own: true, on: true, early: { on: true, allowed: 30, perMinute: true, fixed: 0, minuteAmount: 2000 } });
+});
+
 // ---- Lưu luật qua máy chủ ----
 const source = readFileSync(new URL('../src/app/api/admin/workforce/route.js', import.meta.url), 'utf8').replace(/^import [\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
 const OWNER = { id: '00000000-0000-4000-8000-00000000aaaa', full_name: 'Chủ quán', role: 'admin' };
@@ -100,5 +121,15 @@ test('the owner saves a late / early rule from a chosen day this month; later ru
   // Trang cũ (không gửi phần về sớm): giữ như cũ, ngày hôm nay.
   assert.equal((await post({ action: 'save_late_rule', scope: 'shop', allowed_minutes: 10, per_minute: true, fixed_amount: 50000 })).status, 200);
   const shop = state.payroll_late_rules.find(x => x.scope === 'shop');
-  assert.deepEqual([shop.valid_from, 'early_allowed_minutes' in shop], ['2026-11-06', false]);
+  assert.deepEqual([shop.valid_from, 'early_allowed_minutes' in shop, 'minute_amount' in shop], ['2026-11-06', false, false]);
+  // Số tiền mỗi phút chủ điền: chỉ lưu khi bật trừ theo phút; trống = theo lương.
+  const typed = { ...full, late_on: true, per_minute: true, minute_amount: '1.000', early_per_minute: true, early_minute_amount: '', valid_from: '2026-11-06' };
+  assert.equal((await post({ action: 'save_late_rule', ...typed, minute_amount: '2.000.000' })).status, 400, 'over 1.000.000đ a minute');
+  assert.equal((await post({ action: 'save_late_rule', ...typed, minute_amount: 'abc' })).status, 400);
+  assert.equal((await post({ action: 'save_late_rule', ...typed })).status, 200);
+  const saved = state.payroll_late_rules.find(x => x.scope === CO7 && x.valid_from === '2026-11-06');
+  assert.deepEqual([saved.minute_amount, saved.early_minute_amount], [1000, null]);
+  assert.equal(payroll.lateRuleOn(state.payroll_late_rules, CO7, '2026-11-06').minuteAmount, 1000);
+  assert.equal((await post({ action: 'save_late_rule', ...typed, per_minute: false })).status, 200);
+  assert.equal(state.payroll_late_rules.find(x => x.scope === CO7 && x.valid_from === '2026-11-06').minute_amount, null, 'per minute off: no amount kept');
 });

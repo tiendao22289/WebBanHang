@@ -1459,9 +1459,17 @@ export async function POST(request) {
         Object.assign(row, { late_on: body.late_on !== false, early_on: body.early_on !== false, early_allowed_minutes: earlyAllowed, early_per_minute: body.early_per_minute === true,
           early_fixed_amount: earlyFixed });
       }
+      // Số tiền trừ mỗi phút trễ / về sớm chủ tự điền (trống = theo lương: lương ngày ÷ số phút của ca). Trang cũ không gửi thì giữ trống.
+      if (!useShop && ('minute_amount' in body || 'early_minute_amount' in body)) {
+        const perMin = v => (v === null || v === undefined || v === '' ? 0 : money(v));
+        const lateMin = perMin(body.minute_amount), earlyMin = perMin(body.early_minute_amount);
+        if (lateMin === null || lateMin > 1_000_000 || earlyMin === null || earlyMin > 1_000_000) return fail('Số tiền trừ mỗi phút không hợp lệ.');
+        Object.assign(row, { minute_amount: body.per_minute === true && lateMin > 0 ? lateMin : null,
+          early_minute_amount: body.early_per_minute === true && earlyMin > 0 ? earlyMin : null });
+      }
       const r = await db.from('payroll_late_rules').upsert(row, { onConflict: 'scope,valid_from' });
       if (missingTable(r.error)) return fail('Web đang cập nhật phần luật đi trễ, thử lại sau ít phút.', 503);
-      if (r.error && /late_on|early_/.test(String(r.error.message || ''))) return fail('Web đang cập nhật phần luật về sớm, thử lại sau ít phút.', 503);
+      if (r.error && /late_on|early_|minute_amount/.test(String(r.error.message || ''))) return fail('Web đang cập nhật phần luật đi trễ / về sớm, thử lại sau ít phút.', 503);
       if (r.error) throw r.error;
       // Luật đặt sau ngày áp dụng của cùng người / quán: bỏ (luật mới tính từ ngày đó trở đi).
       const later = await db.from('payroll_late_rules').delete().eq('scope', scope).gt('valid_from', from);
