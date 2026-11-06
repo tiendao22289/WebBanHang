@@ -455,3 +455,24 @@ button.slip-row:active, .slip-row.open { background: #eff6ff; }
 .acct-line button { flex-shrink: 0; }
 .acct-actions { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 10px; border-top: 1px dashed #e2e8f0; }
 @media (min-width: 641px) { .acct-line input, .acct-line select { font-size: 0.88rem; } .acct-body .acct-field { max-width: 560px; } }
+
+/* Bảng lương trên điện thoại: mỗi người MỘT hàng — tên · công · trễ · ứng · phạt · thực lĩnh; tên cột ghi một lần ở đầu. */
+.sc-row { display: grid !important; grid-template-columns: minmax(0, 1.55fr) minmax(0, 0.6fr) minmax(0, 0.55fr) minmax(0, 0.85fr) minmax(0, 0.85fr) minmax(0, 1.55fr);
+  align-items: center; column-gap: 4px; }
+.sc-head { padding: 0 12px 4px; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: #94a3b8; }
+.sc-head span { text-align: center; white-space: nowrap; }
+.sc-head span:first-child { text-align: left; }
+.sc-head span:last-child { text-align: right; }
+.salary-card-header.sc-row { padding: 9px 12px; min-height: 46px; gap: 0 4px; }
+.salary-card-header.sc-row.open { background: #eff6ff; }
+.sc-name { min-width: 0; font-weight: 800; font-size: 0.82rem; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-name small { display: block; font-size: 0.62rem; font-weight: 600; color: #64748b; overflow: hidden; text-overflow: ellipsis; }
+.sc-num { min-width: 0; text-align: center; font-size: 0.76rem; font-weight: 800; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.sc-num.orange { color: #c2410c; }
+.sc-num.red { color: #dc2626; }
+.sc-num small { font-size: 0.62rem; font-weight: 700; color: #b45309; }
+.sc-none { color: #cbd5e1; font-weight: 600; }
+.sc-net { min-width: 0; text-align: right; font-size: 0.8rem; font-weight: 800; color: #16a34a; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sc-net.negative { color: #dc2626; }
+.sc-net i { font-style: normal; font-size: 0.62rem; color: #94a3b8; margin-left: 3px; }
+.mobile-cards .salary-card { margin-bottom: 5px; border-radius: 10px; }

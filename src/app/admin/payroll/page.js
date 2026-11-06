@@ -23,6 +23,8 @@ const whenText = iso => { const d = new Date(Date.parse(iso) + 7 * 3600000).toIS
 // " (02/11 – 03/11)" cho đơn báo nghỉ có ngày nghỉ.
 const leaveText = l => (l ? ` (${ddmm(l.from_date)}${l.to_date !== l.from_date ? ` – ${ddmm(l.to_date)}` : ''})` : '');
 const fmtNum = n => String(n).replace('.', ',');
+// Tiền gọn cho ô nhỏ trên điện thoại: 200.000đ → 200k, 63.889đ → 63,9k, 1.250.000đ → 1,25tr.
+const shortMoney = n => { const v = Math.abs(Number(n) || 0), sign = Number(n) < 0 ? '−' : ''; return v >= 1e6 ? `${sign}${fmtNum(Math.round(v / 1e4) / 100)}tr` : `${sign}${fmtNum(Math.round(v / 100) / 10)}k`; };
 // Supabase trả tối đa 1000 dòng mỗi lần: đọc từng trang (giờ công cả quán một tháng có thể quá 1000 lượt).
 async function readAllRows(build) {
   const rows = [];
@@ -2382,22 +2384,34 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
 
                 {/* Mobile cards */}
                 <div className="mobile-cards">
+                  {filtered.length > 0 && (
+                    <div className="sc-row sc-head" aria-hidden="true">
+                      <span>Nhân viên</span><span>Công</span><span>Trễ</span><span>Ứng</span><span>Phạt</span><span>{running ? 'Tạm tính' : 'Thực lĩnh'}</span>
+                    </div>
+                  )}
                   {filtered.length === 0 && <div className="empty-state">Chưa có nhân viên</div>}
                   {filtered.map(s => {
                     const c = salaryOf(s.id), paidCycle = cyclePaidOf(s.id);
                     const cardOpen = openSalaryCard === s.id;
                     return (
                       <div key={s.id} className="salary-card">
-                        <button type="button" className="salary-card-header" onClick={() => setOpenSalaryCard(cardOpen ? null : s.id)} aria-expanded={cardOpen}>
-                          <div style={{ minWidth: 0 }}>
-                            <div className="salary-card-name">{c.locked ? '🔒 ' : ''}{s.full_name}</div>
-                            <div className="salary-card-sum">{[daysText(c), lateTallyOf(s.id).count ? `trễ ${lateTallyOf(s.id).count} lần` : null, c.otHours ? `tăng ca ${fmtNum(c.otHours)} giờ` : null, c.advAmt ? `ứng ${formatMoney(c.advAmt)}` : null, c.vioAmt ? `phạt ${formatMoney(c.vioAmt)}` : null, paidCycle ? `đã trả theo kỳ ${formatMoney(paidCycle)}` : null].filter(Boolean).join(' · ')}</div>
-                          </div>
-                          <div className="salary-card-end">
-                            <div className={`salary-card-net ${c.net < 0 ? 'negative' : ''}`}>{formatMoney(c.net)}</div>
-                            <small>{c.locked ? 'đã chốt' : running ? 'tạm tính' : 'thực lĩnh'} {cardOpen ? '▴' : '▾'}</small>
-                          </div>
-                        </button>
+                        {/* Một hàng: tên · công · trễ · ứng · phạt · thực lĩnh (tên cột ghi một lần ở đầu danh sách). Bấm để mở phiếu lương. */}
+                        {(() => {
+                          const lt = lateTallyOf(s.id), advN = monthRequests(s.id, 'advance').length, fines = finesOf(s.id);
+                          const unpriced = fines.filter(x => !(Number(x.v.amount) > 0)).length;
+                          const days = c.rule === 'days' ? c.workUnits : c.workDays;
+                          const none = <span className="sc-none">—</span>;
+                          return (
+                            <button type="button" className={`salary-card-header sc-row ${cardOpen ? 'open' : ''}`} onClick={() => setOpenSalaryCard(cardOpen ? null : s.id)} aria-expanded={cardOpen}>
+                              <span className="sc-name">{c.locked ? '🔒 ' : ''}{s.full_name}{paidCycle !== 0 && <small>đã trả kỳ {shortMoney(paidCycle)}</small>}</span>
+                              <span className="sc-num">{fmtNum(days || 0)}</span>
+                              <span className="sc-num orange">{lt.count ? lt.count : none}</span>
+                              <span className="sc-num red">{c.advAmt ? shortMoney(c.advAmt) : advN ? <small>chờ</small> : none}</span>
+                              <span className="sc-num red">{c.vioAmt ? shortMoney(c.vioAmt) : unpriced ? <small>chưa định</small> : none}</span>
+                              <span className={`sc-net ${c.net < 0 ? 'negative' : ''}`}>{formatMoney(c.net)}<i aria-hidden="true">{cardOpen ? '▴' : '▾'}</i></span>
+                            </button>
+                          );
+                        })()}
                         {cardOpen && (() => {
                           // Phiếu lương trên điện thoại: mỗi khoản một dòng (tên trái, số phải). Dòng có "›" bấm được — chi tiết từng
                           // ngày / từng khoản mở ngay dưới dòng đó.
