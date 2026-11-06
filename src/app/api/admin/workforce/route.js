@@ -923,14 +923,19 @@ export async function POST(request) {
     }
 
     if (body.action === 'save_shift') {
-      // Ca riêng của một nhân viên từ hôm nay; clear = từ hôm nay quay về giờ quán. Ngày cũ giữ ca cũ.
+      // Ca riêng của một nhân viên từ valid_from (mặc định hôm nay; chọn được từ ngày 1 tháng này, ví dụ người mới vào làm
+      // trước khi đặt ca); clear = từ ngày đó quay về giờ quán. Ngày trước đó giữ ca cũ; ca đặt sau ngày đó bị bỏ.
       if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
       if (!body.clear && (!validTime(body.start_time) || !validTime(body.end_time) || body.start_time === body.end_time)) return fail('Giờ vào ca và hết ca dạng 14:00, và phải khác nhau.');
-      const row = { staff_id: body.staff_id, valid_from: today, start_time: body.clear ? null : body.start_time, end_time: body.clear ? null : body.end_time, updated_at: isoNow() };
-      const { data: old, error } = await db.from('staff_shifts').select('staff_id').eq('staff_id', body.staff_id).eq('valid_from', today).maybeSingle();
+      const from = body.valid_from === undefined || body.valid_from === null || body.valid_from === '' ? today : String(body.valid_from);
+      if (!DATE.test(from) || from < `${today.slice(0, 7)}-01` || from > today) return fail('Ngày áp dụng từ ngày 1 tháng này đến hôm nay.');
+      const row = { staff_id: body.staff_id, valid_from: from, start_time: body.clear ? null : body.start_time, end_time: body.clear ? null : body.end_time, updated_at: isoNow() };
+      const { data: old, error } = await db.from('staff_shifts').select('staff_id').eq('staff_id', body.staff_id).eq('valid_from', from).maybeSingle();
       if (error) throw error;
-      const r = old ? await db.from('staff_shifts').update(row).eq('staff_id', body.staff_id).eq('valid_from', today) : await db.from('staff_shifts').insert(row);
+      const r = old ? await db.from('staff_shifts').update(row).eq('staff_id', body.staff_id).eq('valid_from', from) : await db.from('staff_shifts').insert(row);
       if (r.error) throw r.error;
+      const later = await db.from('staff_shifts').delete().eq('staff_id', body.staff_id).gt('valid_from', from);
+      if (later.error) throw later.error;
       return NextResponse.json({ ok: true }, { headers });
     }
 

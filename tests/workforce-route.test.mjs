@@ -256,6 +256,22 @@ test('owner sets a shift per person from today, or goes back to the shop hours',
   assert.deepEqual([rules.shiftOf(after, STAFF.id, today).own, rules.shiftOf(after, STAFF.id, '2026-06-01').start], [false, '16:00'], 'from today back to the shop hours');
 });
 
+test('a shift can start on an earlier day this month (a new hire who worked before the shift was set); later shift rows give way', async () => {
+  const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
+  const first = `${today.slice(0, 7)}-01`;
+  const lastMonth = new Date(Date.parse(`${first}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+  const state = shop({ staff_shifts: [{ staff_id: STAFF.id, valid_from: today, start_time: '22:00', end_time: '02:00' }] });
+  const admin = load(state, ADMIN);
+  assert.equal((await post(load(state, STAFF), { action: 'save_shift', staff_id: STAFF.id, start_time: '22:00', end_time: '02:00', valid_from: first })).status, 403);
+  assert.equal((await post(admin, { action: 'save_shift', staff_id: STAFF.id, start_time: '22:00', end_time: '02:00', valid_from: lastMonth })).status, 400, 'not before this month');
+  assert.equal((await post(admin, { action: 'save_shift', staff_id: STAFF.id, start_time: '22:00', end_time: '02:00', valid_from: '2999-01-01' })).status, 400, 'not in the future');
+  assert.equal((await post(admin, { action: 'save_shift', staff_id: STAFF.id, start_time: '22:00', end_time: '02:00', valid_from: 'x' })).status, 400);
+  assert.equal((await post(admin, { action: 'save_shift', staff_id: STAFF.id, start_time: '22:00', end_time: '02:00', valid_from: first })).status, 200);
+  assert.deepEqual(plain(state.staff_shifts.map(s => [s.valid_from, s.start_time, s.end_time])), [[first, '22:00', '02:00']], 'one row from the 1st; the later row is gone');
+  const after = (await load(state, ADMIN).GET({ url: 'http://x/api/admin/workforce?checkin=1' })).body.settings;
+  assert.deepEqual([rules.shiftOf(after, STAFF.id, first).start, rules.shiftOf(after, STAFF.id, today).start], ['22:00', '22:00']);
+});
+
 test('closing a month saves each person\'s salary; closing again replaces it; reopening clears it', async () => {
   const state = shop({
     payroll_config: [{ staff_id: STAFF.id, base_salary: 6000000, overtime_rate: 30000 }],

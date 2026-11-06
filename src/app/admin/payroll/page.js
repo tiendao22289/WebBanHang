@@ -2646,7 +2646,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   <div style={{ fontSize: '0.76rem', color: '#64748b', marginBottom: 4 }}>Ngày cả quán đóng cửa. Người được nhận lương ngày nghỉ (mặc định: lương tháng có, theo ngày / theo giờ không — đổi từng người ở tab Cấu hình) được đủ 1 ngày công.</div>
                   {closedDaysEditor()}
                   <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 8 }}>
-                    Tính giờ theo ca từ ngày <strong>{st.hours_from.split('-').reverse().join('/')}</strong>; những ngày trước đó vẫn tính như cũ. Đổi giờ hay đổi ca thì áp dụng từ hôm nay, ngày đã làm giữ giờ cũ.
+                    Tính giờ theo ca từ ngày <strong>{st.hours_from.split('-').reverse().join('/')}</strong>; những ngày trước đó vẫn tính như cũ. Đổi giờ quán thì áp dụng từ hôm nay, ngày đã làm giữ giờ cũ. Ca riêng chọn được ngày bắt đầu trong tháng này (ví dụ người mới vào làm trước khi đặt ca).
                   </div>
 
                   <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>Ca riêng từng người</div>
@@ -2661,8 +2661,17 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <Time24 value={shiftEdit.start} onChange={v => setShiftEdit(p => ({ ...p, start: v }))} />
                             <span>→</span>
                             <Time24 value={shiftEdit.end} onChange={v => setShiftEdit(p => ({ ...p, end: v }))} />
+                            <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', whiteSpace: 'nowrap' }}>từ
+                              <input type="date" value={shiftEdit.from || vnToday()} min={`${vnToday().slice(0, 7)}-01`} max={vnToday()} style={{ ...timeInput, width: 'auto' }}
+                                onChange={e => setShiftEdit(p => ({ ...p, from: e.target.value || vnToday() }))} /></label>
                             <button className="btn-primary" style={{ marginTop: 0, padding: '5px 12px' }}
-                              onClick={async () => { if (await checkinAction('save_shift', { staff_id: s.id, start_time: shiftEdit.start, end_time: shiftEdit.end })) setShiftEdit(null); }}>Lưu</button>
+                              onClick={async () => {
+                                const from = shiftEdit.from || vnToday(), past = from < vnToday();
+                                if (!await checkinAction('save_shift', { staff_id: s.id, start_time: shiftEdit.start, end_time: shiftEdit.end, valid_from: from },
+                                  past ? `Ca ${shiftEdit.start} → ${shiftEdit.end} áp dụng từ ${ddmm(from)}: giờ công và lương các ngày từ ${ddmm(from)} sẽ tính lại theo ca này. Đồng ý?` : null)) return;
+                                setShiftEdit(null);
+                                if (past) fetchAll();
+                              }}>Lưu</button>
                             <button style={{ fontSize: '0.78rem', padding: '4px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }} onClick={() => setShiftEdit(null)}>Huỷ</button>
                             <div style={{ flexBasis: '100%' }}><SpanNote start={shiftEdit.start} end={shiftEdit.end} /></div>
                           </>
