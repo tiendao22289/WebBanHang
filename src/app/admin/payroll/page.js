@@ -968,17 +968,42 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   };
   const localDT = ts => (ts ? new Date(new Date(ts) - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
   const isoOf = v => (v ? new Date(v).toISOString() : null);
-  // Luật đi trễ: scope 'shop' = mặc định cả quán; mã nhân viên = theo quán hoặc luật riêng. Đổi luật áp dụng từ hôm nay.
-  const describeLate = r => (r ? `cho trễ ${r.allowed} phút; trễ quá thì ${[r.fixed ? `trừ ${formatMoney(r.fixed)} mỗi lần` : '', r.perMinute ? 'trừ theo phút trễ' : ''].filter(Boolean).join(' + ') || 'không trừ'}` : 'chưa đặt, không trừ');
+  // Luật đi trễ / về sớm: scope 'shop' = mặc định cả quán; mã nhân viên = theo quán hoặc luật riêng. Mỗi phần có công tắc
+  // "trừ tiền" (bỏ tích = được phép đi trễ / về sớm: vẫn ghi lại, không trừ), số phút cho phép, trừ theo phút, tiền mỗi lần.
+  // Áp dụng từ một ngày (đầu tháng này tới hôm nay) trở đi.
+  const describeLate = r => {
+    if (!r) return 'chưa đặt, không trừ';
+    const how = (fixed, perMinute, word) => [fixed ? `trừ ${formatMoney(fixed)} mỗi lần` : '', perMinute ? `trừ theo phút ${word}` : ''].filter(Boolean).join(' + ') || 'không trừ';
+    const late = r.on === false ? 'Đi trễ: được phép (không trừ tiền)' : `Đi trễ: cho trễ ${r.allowed} phút; trễ quá thì ${how(r.fixed, r.perMinute, 'trễ')}`;
+    const e = r.early;
+    const early = !e ? 'Về sớm: về sớm từ 30 phút thì trừ theo phút về sớm (mặc định)'
+      : !e.on ? 'Về sớm: được phép (không trừ tiền)' : `Về sớm: cho về sớm ${e.allowed} phút; quá thì ${how(e.fixed, e.perMinute, 'về sớm')}`;
+    return `${late}. ${early}`;
+  };
   const lateRuleEditor = scope => {
     const isShop = scope === 'shop', today = vnToday();
     const shopRule = lateRuleOn(payrollMonth.lateRules, '-', today), cur = isShop ? shopRule : lateRuleOn(payrollMonth.lateRules, scope, today);
     const k = f => `late:${scope}:${f}`;
     const mode = draftOf(k('mode'), isShop || cur?.own ? 'own' : 'shop');
+    const lateOn = draftOf(k('on'), cur ? cur.on !== false : true);
     const allowed = draftOf(k('allowed'), String(cur?.allowed ?? 10)), perMinute = draftOf(k('per'), cur ? cur.perMinute : true), fixed = draftOf(k('fixed'), String(cur?.fixed || ''));
+    const ce = cur?.early || null;
+    const earlyOn = draftOf(k('eon'), ce ? ce.on : true);
+    const earlyAllowed = draftOf(k('eallowed'), String(ce ? ce.allowed : 30)), earlyPer = draftOf(k('eper'), ce ? ce.perMinute : true), earlyFixed = draftOf(k('efixed'), String(ce?.fixed || ''));
+    const from = draftOf(k('from'), today);
     const box = { padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', background: 'white' };
-    const save = () => editAction('save_late_rule', mode === 'shop' ? { scope, use_shop: true }
-      : { scope, allowed_minutes: Number(allowed), per_minute: !!perMinute, fixed_amount: fixed || 0 }, null, `late:${scope}:`);
+    const line = { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', flexBasis: '100%' };
+    // Nhãn không bị cắt chữ (tab Mức lương trên điện thoại cắt nhãn dài).
+    const lab = { display: 'inline-flex', gap: 4, alignItems: 'center', overflow: 'visible', whiteSpace: 'nowrap' };
+    const toggle = (key, on, text) => (
+      <label style={{ ...lab, gap: 5, fontWeight: 700, color: on ? '#b91c1c' : '#15803d' }}>
+        <input type="checkbox" checked={!!on} onChange={e => setDraft(k(key), e.target.checked)} /> {on ? `Trừ tiền khi ${text}` : `Được phép ${text} (không trừ)`}
+      </label>
+    );
+    const save = () => editAction('save_late_rule', mode === 'shop' ? { scope, use_shop: true, valid_from: from }
+      : { scope, valid_from: from, late_on: !!lateOn, allowed_minutes: Number(allowed) || 0, per_minute: !!perMinute, fixed_amount: fixed || 0,
+        early_on: !!earlyOn, early_allowed_minutes: Number(earlyAllowed) || 0, early_per_minute: !!earlyPer, early_fixed_amount: earlyFixed || 0 },
+      from < today ? `Áp dụng từ ${ddmm(from)}: lương các ngày từ ${ddmm(from)} sẽ tính lại theo luật này. Đồng ý?` : null, `late:${scope}:`);
     return (
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', fontSize: '0.82rem' }}>
         {!isShop && (
@@ -988,13 +1013,32 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           </select>
         )}
         {mode === 'own' && <>
-          <label>Cho phép trễ <input style={{ ...box, width: 56 }} inputMode="numeric" value={allowed} onChange={e => setDraft(k('allowed'), e.target.value.replace(/\D/g, ''))} /> phút</label>
-          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}><input type="checkbox" checked={!!perMinute} onChange={e => setDraft(k('per'), e.target.checked)} /> Trừ theo phút trễ</label>
-          <label>Trừ mỗi lần trễ <input style={{ ...box, width: 96 }} inputMode="numeric" placeholder="0" value={typedMoney(fixed)} onChange={e => setDraft(k('fixed'), e.target.value.replace(/\D/g, ''))} />đ</label>
+          <div style={line}>
+            <strong style={{ minWidth: 58 }}>Đi trễ:</strong>
+            {toggle('on', lateOn, 'đi trễ')}
+            {lateOn && <>
+              <label style={lab}>Cho phép trễ <input style={{ ...box, width: 56 }} inputMode="numeric" value={allowed} onChange={e => setDraft(k('allowed'), e.target.value.replace(/\D/g, ''))} /> phút</label>
+              <label style={lab}><input type="checkbox" checked={!!perMinute} onChange={e => setDraft(k('per'), e.target.checked)} /> Trừ theo phút trễ</label>
+              <label style={lab}>Trừ mỗi lần trễ <input style={{ ...box, width: 96 }} inputMode="numeric" placeholder="0" value={typedMoney(fixed)} onChange={e => setDraft(k('fixed'), e.target.value.replace(/\D/g, ''))} />đ</label>
+            </>}
+          </div>
+          <div style={line}>
+            <strong style={{ minWidth: 58 }}>Về sớm:</strong>
+            {toggle('eon', earlyOn, 'về sớm')}
+            {earlyOn && <>
+              <label style={lab}>Cho phép về sớm <input style={{ ...box, width: 56 }} inputMode="numeric" value={earlyAllowed} onChange={e => setDraft(k('eallowed'), e.target.value.replace(/\D/g, ''))} /> phút</label>
+              <label style={lab}><input type="checkbox" checked={!!earlyPer} onChange={e => setDraft(k('eper'), e.target.checked)} /> Trừ theo phút về sớm</label>
+              <label style={lab}>Trừ mỗi lần về sớm <input style={{ ...box, width: 96 }} inputMode="numeric" placeholder="0" value={typedMoney(earlyFixed)} onChange={e => setDraft(k('efixed'), e.target.value.replace(/\D/g, ''))} />đ</label>
+            </>}
+          </div>
         </>}
-        <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }} onClick={save}>Lưu</button>
+        <div style={line}>
+          <label style={lab}>Áp dụng từ <input type="date" style={box} value={from} min={`${today.slice(0, 7)}-01`} max={today} onChange={e => setDraft(k('from'), e.target.value || today)} /></label>
+          <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }} onClick={save}>Lưu</button>
+        </div>
         <div style={{ flexBasis: '100%', fontSize: '0.76rem', color: '#64748b' }}>
-          Đang áp dụng: {describeLate(cur)}{!isShop && cur ? (cur.own ? ' (riêng)' : ' (theo quán)') : ''}. Đổi thì áp dụng từ hôm nay. Trừ theo phút = lương ngày ÷ số phút của ca × số phút trễ.
+          Đang áp dụng{!isShop && cur ? (cur.own ? ' (riêng)' : ' (theo quán)') : ''}: {describeLate(cur)}. Trễ / về sớm trong số phút cho phép thì không trừ; mỗi ngày trễ / về sớm tính một lần.
+          Trừ theo phút = lương ngày ÷ số phút của ca × số phút trễ / về sớm. Không trừ quá tiền của ngày đó.
         </div>
       </div>
     );
@@ -1181,7 +1225,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         </div>
 
         <div style={section}>
-          {head('⏰ Đi trễ')}
+          {head('⏰ Đi trễ / về sớm')}
           {lateRuleEditor(s.id)}
         </div>
 
@@ -1358,7 +1402,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   // Gợi ý phạt chưa xử lý của cả quán trong tháng (người nghỉ việc trước tháng này không tính).
   const fineHints = staffList.filter(s => activeInMonth(departureOf(s.id), `${selYear}-${fmt(selMonth)}`))
     .flatMap(s => fineSuggestions({ staffId: s.id, tallies: talliesOf(s.id), reviews: payrollMonth.fineReviews, kinds: activeFineKinds(payrollMonth.fineRules),
-      autoLateDays: (calcSalary(s.id).lateList || []).map(x => x.day) }));
+      autoLateDays: [...(calcSalary(s.id).lateList || []).map(x => x.day), ...(calcSalary(s.id).lateFree || [])] }));
   // Thưởng / phạt: gửi lên máy chủ rồi tải lại (khoản phạt đọc lại cả bảng lương).
   const payrollAction = async (action, body, confirmText) => {
     if (confirmText && !confirm(confirmText)) return false;
@@ -2595,7 +2639,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                     )}
                   </div>
                   <div style={{ marginTop: 6 }}><SpanNote start={hoursEdit.opening_time} end={hoursEdit.closing_time} label="Quán mở" /></div>
-                  <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>⏰ Đi trễ — mặc định cả quán</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>⏰ Đi trễ / về sớm — mặc định cả quán</div>
                   {lateRuleEditor('shop')}
                   <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>Từng người đặt riêng ở tab Mức lương hoặc nút "Sửa" trong Bảng lương.</div>
                   <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>🏖 Ngày quán nghỉ</div>
@@ -2800,6 +2844,10 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                     <div style={{ minWidth: 140 }}>
                       <div style={{ fontWeight: 700 }}>{s.full_name}</div>
                       <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div>
+                      <button type="button" onClick={() => setDraft(`acct:${s.id}:open`, !draftOf(`acct:${s.id}:open`, false))}
+                        style={{ display: 'block', marginTop: 4, padding: 0, border: 'none', background: 'none', color: '#1d4ed8', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer' }}>
+                        {draftOf(`acct:${s.id}:open`, false) ? '▴ Đóng sửa' : '✏️ Sửa tên / SĐT'}
+                      </button>
                       {s.id === currentUser?.id
                         ? <span style={{ display: 'inline-block', marginTop: 4, fontSize: '0.7rem', fontWeight: 700, padding: '1px 7px', borderRadius: 4, background: '#fef9c3', color: '#92400e' }}>{roleLabel(s.role)}</span>
                         : <select value={normalizeRole(s.role)} onChange={e => handleSetRole(s, e.target.value)} aria-label={`Vai trò của ${s.full_name}`}
@@ -2808,7 +2856,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                           </select>}
                     </div>
                     <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 140 }}>
-                      <label>Đổi PIN mới</label>
+                      <label>Đổi mã PIN (mật khẩu) mới</label>
                       <div style={{ display: 'flex', gap: 6 }}>
                         <input type="text" inputMode="numeric" maxLength={8} placeholder="PIN mới..." value={editingPin[s.id] || ''}
                           onChange={e => setEditingPin(p => ({ ...p, [s.id]: e.target.value.replace(/\D/g, '') }))}
@@ -2821,6 +2869,30 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                         onClick={() => setDepartForm({ staff_id: s.id, name: s.full_name, last_day: vnToday(), reason: '' })}>Cho nghỉ việc</button>
                     )}
                     <button className="btn-danger" style={{ marginTop: 18, alignSelf: 'flex-end' }} onClick={() => handleDeleteAccount(s.id, s.full_name)}>Xoá</button>
+                    {/* Sửa tên / số điện thoại đăng nhập (mã PIN giữ nguyên; đổi số thì lần sau đăng nhập bằng số mới). */}
+                    {draftOf(`acct:${s.id}:open`, false) && (() => {
+                      const name = draftOf(`acct:${s.id}:name`, s.full_name || ''), phone = draftOf(`acct:${s.id}:phone`, s.phone || '');
+                      const changed = name.trim() !== (s.full_name || '') || phone.replace(/\s+/g, '') !== String(s.phone || '').replace(/\s+/g, '');
+                      const save = () => {
+                        if (!changed) return alert('Chưa đổi gì.');
+                        const phoneChanged = phone.replace(/\s+/g, '') !== String(s.phone || '').replace(/\s+/g, '');
+                        return editAction('edit_account', { staff_id: s.id, full_name: name, ...(phoneChanged ? { phone } : {}) },
+                          phoneChanged ? `Đổi số đăng nhập của ${s.full_name} từ ${s.phone} thành ${phone.replace(/\s+/g, '')}?\n\nMã PIN giữ nguyên; lần sau đăng nhập bằng số mới.` : null, `acct:${s.id}:`);
+                      };
+                      const field = { padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.86rem' };
+                      return (
+                        <div style={{ flexBasis: '100%', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: 12, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', fontSize: '0.82rem' }}>
+                          <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontWeight: 600, flex: '1 1 160px' }}>Họ và tên
+                            <input type="text" value={name} maxLength={80} onChange={e => setDraft(`acct:${s.id}:name`, e.target.value)} style={{ ...field, width: '100%', boxSizing: 'border-box' }} />
+                          </label>
+                          <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontWeight: 600, flex: '1 1 140px' }}>Số điện thoại đăng nhập
+                            <input type="tel" inputMode="numeric" value={phone} maxLength={16} onChange={e => setDraft(`acct:${s.id}:phone`, e.target.value.replace(/[^\d+ ]/g, ''))} style={{ ...field, width: '100%', boxSizing: 'border-box' }} />
+                          </label>
+                          <button className="btn-primary" style={{ marginTop: 0, padding: '7px 14px' }} onClick={save}>Lưu</button>
+                          <div style={{ flexBasis: '100%', fontSize: '0.74rem', color: '#64748b' }}>Mật khẩu (mã PIN) đổi ở ô &quot;Đổi mã PIN&quot; bên trên. Đổi số điện thoại thì lần sau người này đăng nhập bằng số mới.</div>
+                        </div>
+                      );
+                    })()}
                     {departForm?.staff_id === s.id && (
                       <div style={{ flexBasis: '100%', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.84rem' }}>
                         <div><strong>Cho {s.full_name} nghỉ việc.</strong> Qua ngày làm cuối, người này không đăng nhập và không chấm công được nữa; lương tháng cuối tính tới ngày đó, kết toán ở tab Bảng Lương.</div>
@@ -2924,7 +2996,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                       <button className="btn-primary" style={{ marginTop: 18 }} onClick={() => handleSaveConfig(s.id)}>Lưu</button>
                       {pay.type !== 'month' && tinyWage(pay.rate) && <div className="config-note">{tinyWageNote(pay.rate, payUnitText[pay.type])}</div>}
                       <div className="config-note" style={{ borderTop: '1px dashed #e2e8f0', paddingTop: 6 }}>
-                        <strong>⏰ Đi trễ</strong> {lateRuleEditor(s.id)}
+                        <strong>⏰ Đi trễ / về sớm</strong> {lateRuleEditor(s.id)}
                       </div>
                       <div className="config-note" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                         <strong>🏖 Ngày quán nghỉ</strong> {holidayEditor(s.id)}

@@ -227,6 +227,13 @@ async function main() {
   console.log(JSON.stringify(received));
   if (!received.closes_col || !received.payouts_col) throw new Error('Chưa cài được phần nhân viên xác nhận đã nhận lương.');
 
+  // Công tắc trừ tiền đi trễ + luật về sớm (payroll_early_rules.sql): thêm cột vào bảng luật đi trễ.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_early_rules.sql'), 'utf8'));
+  const [early] = await query(`SELECT count(*)::int AS cols FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payroll_late_rules'
+    AND column_name IN ('late_on', 'early_on', 'early_allowed_minutes', 'early_per_minute', 'early_fixed_amount')`);
+  console.log(JSON.stringify(early));
+  if (early.cols !== 5) throw new Error('Chưa cài được luật về sớm.');
+
   // Chấm công bằng nút trên máy quầy cho người không có điện thoại (checkin_tap.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_tap.sql'), 'utf8'));
   const [tap] = await query(`SELECT to_regclass('public.checkin_tap_staff') IS NOT NULL AS table_ok,

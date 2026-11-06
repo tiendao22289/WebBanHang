@@ -401,6 +401,16 @@ test('PINs are stored hashed and plain old PINs can be hashed by the server job'
   assert.equal((await post(admin, { action: 'set_role', staff_id: ADMIN.id, role: 'staff' })).status, 400, 'no changing your own role');
   assert.equal((await post(load(state, STAFF), { action: 'set_role', staff_id: lan.id, role: 'admin' })).status, 403, 'staff cannot change roles');
 
+  // Sửa tên / số đăng nhập: PIN giữ nguyên, số không trùng người khác, chỉ admin.
+  assert.equal((await post(admin, { action: 'edit_account', staff_id: lan.id, full_name: '  Lan   Anh ', phone: '0933 333 333' })).status, 200);
+  assert.deepEqual([lan.full_name, lan.phone], ['Lan Anh', '0933333333']);
+  assert.ok(pin.pinMatches(lan.pin, lan.id, '4321', SECRET), 'the PIN still works after the phone changes');
+  assert.equal((await post(admin, { action: 'edit_account', staff_id: lan.id, phone: '0911111111' })).status, 409, "someone else's number");
+  assert.equal((await post(admin, { action: 'edit_account', staff_id: lan.id, phone: '0933333333' })).status, 200, 'keeping your own number is fine');
+  for (const bad of [{ full_name: '   ' }, { phone: '12ab' }, {}]) assert.equal((await post(admin, { action: 'edit_account', staff_id: lan.id, ...bad })).status, 400, JSON.stringify(bad));
+  assert.equal((await post(admin, { action: 'edit_account', staff_id: ADMIN.id, full_name: 'Chủ quán mới' })).status, 404, 'unknown id (the admin row is not in this state)');
+  assert.equal((await post(load(state, STAFF), { action: 'edit_account', staff_id: lan.id, full_name: 'X' })).status, 403, 'staff cannot rename people');
+
   const nobody = load(state, null);
   assert.equal((await post(nobody, { action: 'hash_all_pins' })).status, 401);
   const key = createHmac('sha256', SECRET).update('staff-maintenance').digest('hex');
@@ -712,9 +722,9 @@ test('the owner sets the shop late rule and a rule per person from today; staff 
   const rows = plain(state.payroll_late_rules.filter(r => r.valid_from === today && r.scope !== LAN.id).map(r => [r.scope, r.allowed_minutes, r.per_minute, r.fixed_amount, r.use_shop, r.updated_by]))
     .sort((x, y) => x[0].localeCompare(y[0]));
   assert.deepEqual(rows, [[STAFF.id, 30, false, 50000, false, 'Chủ quán'], ['shop', 15, true, 30000, false, 'Chủ quán']]);
-  assert.deepEqual(payroll.lateRuleOn(state.payroll_late_rules, STAFF.id, today), { allowed: 30, perMinute: false, fixed: 50000, own: true });
+  assert.deepEqual(payroll.lateRuleOn(state.payroll_late_rules, STAFF.id, today), { allowed: 30, perMinute: false, fixed: 50000, own: true, on: true, early: null });
   assert.equal((await post(admin, { action: 'save_late_rule', scope: STAFF.id, use_shop: true })).status, 200, 'back to the shop rule, same day replaces');
-  assert.deepEqual(payroll.lateRuleOn(state.payroll_late_rules, STAFF.id, today), { allowed: 15, perMinute: true, fixed: 30000, own: false });
+  assert.deepEqual(payroll.lateRuleOn(state.payroll_late_rules, STAFF.id, today), { allowed: 15, perMinute: true, fixed: 30000, own: false, on: true, early: null });
   const month = plain(await admin.GET({ url: `http://x/api/admin/workforce?payroll=1&year=${today.slice(0, 4)}&month=${Number(today.slice(5, 7))}` })).body;
   assert.equal(month.lateRules.length, state.payroll_late_rules.length);
 });

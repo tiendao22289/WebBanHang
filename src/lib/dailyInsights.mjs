@@ -7,7 +7,7 @@
  * cùng số liệu dạng dữ liệu cho trang /thongke (thẻ số, bảng) — chữ Zalo dựng từ chính dữ liệu đó.
  */
 import { dayFlags, durationText, flagTexts, normalizeRules, sessionHours, workDayOf } from './attendanceRules.mjs';
-import { DAY_PAY_FROM, EARLY_CUT_MINUTES } from './payroll.mjs';
+import { DAY_PAY_FROM, earlyRuleOf, lateRuleOn } from './payroll.mjs';
 
 const vnd =n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;
 const clock = iso => new Date(new Date(iso).getTime() + 7 * 3600000).toISOString().slice(11, 16);
@@ -135,10 +135,11 @@ const ALERT_TEXT = { other_network: 'không dùng wifi quán', unknown_device: '
  * settings / shifts / hours: dòng checkin_settings, staff_shifts, checkin_hours (null = tính cả ca như cũ);
  * reviews: chủ đã cho / không cho tính giờ ngoài ca; staffNames: { id: tên };
  * closedDays: ngày quán nghỉ — chủ gọi vào làm thì không tính trễ / về sớm;
- * selfFines: lỗi nhân viên tự ghi trong ngày { staff_id, reason, amount, note } (0đ = chờ chủ định tiền).
+ * selfFines: lỗi nhân viên tự ghi trong ngày { staff_id, reason, amount, note } (0đ = chờ chủ định tiền);
+ * lateRules: luật đi trễ / về sớm (payroll_late_rules) — về sớm có bị trừ lương không theo luật của từng người.
  */
 export function staffData({ sessions = [], pending = [], fixes = [], alerts = [], settings = null, shifts = [], hours = [], reviews = [], staffNames = {}, date = null, closedDays = [],
-  selfFines = [] }) {
+  selfFines = [], lateRules = [] }) {
   const rules = settings ? normalizeRules(settings, shifts, hours) : null;
   const closedDay = !!date && closedDays.includes(date);
   if (date) sessions = sessions.filter(s => workDayOf(s, rules) === date);
@@ -154,8 +155,9 @@ export function staffData({ sessions = [], pending = [], fixes = [], alerts = []
     const waitMs = counted.reduce((a, h) => a + h.pendingMs, 0);
     if (waitMs) outside.push({ id, name: nameOf(id), minutes: Math.round(waitMs / 60000) });
     const flags = closedDay ? { ...dayFlags(sorted, rules), late: 0, leftEarly: 0 } : dayFlags(sorted, rules);
-    // Về sớm từ 30 phút (từ tháng 11) bị trừ lương theo giờ.
-    const cut = flags.leftEarly >= EARLY_CUT_MINUTES && !!date && date.slice(0, 7) >= DAY_PAY_FROM;
+    // Về sớm quá số phút luật cho phép (từ tháng 11; chưa cài luật về sớm: từ 30 phút) và luật có trừ tiền: bị trừ lương.
+    const er = earlyRuleOf(date ? lateRuleOn(lateRules, id, date) : null);
+    const cut = er.on && flags.leftEarly > er.allowed && !!date && date.slice(0, 7) >= DAY_PAY_FROM;
     people.push({ id, name: nameOf(id), spans: sorted.map(s => ({ in: s.clock_in, out: s.clock_out || null })),
       hours: Math.round(counted.reduce((a, h) => a + h.countedMs, 0) / 360000) / 10, flags, cut,
       open: sorted.some(s => !s.clock_out), forgot: sorted.some(s => s.auto_closed), waitMinutes: Math.round(waitMs / 60000) });

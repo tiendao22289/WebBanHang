@@ -92,7 +92,7 @@ function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFai
     },
     payrollCost,
     // Ngày quán nghỉ (thẻ nhân viên không báo trễ ngày đó); state.closedDays: các ngày nghỉ của bài test.
-    readClosedDays: async () => state.closedDays || [],
+    readClosedDays: async () => state.closedDays || [], readLateRules: async () => state.lateRules || [],
   });
 }
 

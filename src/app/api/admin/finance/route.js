@@ -34,7 +34,7 @@ import { dayAudit } from '@/lib/dayAudit.mjs';
 import { LINK_CODE_MINUTES, REPORT_SECTIONS, readReportSettings, reportPlan, reportSections, reportStatus, saveReportSettings, validSendAt } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
-import { loadPayrollMonth, readClosedDays } from '@/lib/payrollMonth.mjs';
+import { loadPayrollMonth, readClosedDays, readLateRules } from '@/lib/payrollMonth.mjs';
 import { payrollCost } from '@/lib/payroll.mjs';
 import { addCosts, addItemCosts, namedCostList } from '@/lib/noteCategories.mjs';
 import { FINANCE_START_DATE, FIXED_CATEGORIES, billHasStaff, billStaff, checkoutKey, closeDifferences, dailyReportText, dailyWarnings, groupPaidBills, isMonthKey, itemKey, shoppingParts, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, plainName, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
@@ -416,7 +416,7 @@ async function lossInputs(db, { from, to, range }) {
 // Chấm công các ngày from..to (lấy dư 1 ngày hai đầu: lượt dọn quán sau nửa đêm thuộc ca hôm trước), lần quét
 // bị cảnh báo / chặn, giờ làm, ca quên ra ca, lần chủ duyệt giờ ngoài ca.
 async function staffInputs(db, { from, to, range }) {
-  const [sessions, scans, settings, shifts, hours, closedDays] = await Promise.all([
+  const [sessions, scans, settings, shifts, hours, closedDays, lateRules] = await Promise.all([
     readAll(() => db.from('attendance_sessions').select('*').gte('date', addDays(from, -1)).lte('date', addDays(to, 1)).order('clock_in')),
     readAll(() => db.from('checkin_scans').select('staff_id, action, warnings, created_at').gte('created_at', range.start.toISOString()).lt('created_at', range.end.toISOString()).order('created_at')),
     db.from('checkin_settings').select('*').eq('id', 1).maybeSingle().then(r => r.data || null),
@@ -424,6 +424,8 @@ async function staffInputs(db, { from, to, range }) {
     db.from('checkin_hours').select('*').then(r => r.data || []),
     // Ngày quán nghỉ: chủ gọi vào làm thì không báo trễ / về sớm (như trang Lương). Lỗi đọc thì báo như thường.
     readClosedDays(db, from, to).catch(error => { console.error('[admin/finance] closed days', error); return []; }),
+    // Luật đi trễ / về sớm: về sớm có bị trừ lương không (báo cáo ghi "trừ lương"). Lỗi đọc: theo cách cũ.
+    readLateRules(db).catch(error => { console.error('[admin/finance] late rules', error); return []; }),
   ]);
   const ids = sessions.map(s => s.id);
   const autoRows = [], reviews = [];
@@ -437,7 +439,7 @@ async function staffInputs(db, { from, to, range }) {
   }
   const autoIds = new Set(autoRows.map(r => r.attendance_id));
   sessions.forEach(s => { s.auto_closed = autoIds.has(s.id); });
-  return { sessions, alerts: scans.filter(s => s.action === 'blocked' || s.warnings?.length), settings, shifts, hours, reviews, closedDays };
+  return { sessions, alerts: scans.filter(s => s.action === 'blocked' || s.warnings?.length), settings, shifts, hours, reviews, closedDays, lateRules };
 }
 
 // Phiếu Sổ tay tới hết khoảng (để tính nợ), các lần trả nợ, phiếu bị xoá trong khoảng, tên nhân viên.

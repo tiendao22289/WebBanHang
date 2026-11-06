@@ -37,7 +37,7 @@
  *   pay_cycle {staff_id, to_day, amount} (đã thanh toán lương kỳ này tới hết to_day; amount = số trang đang hiện), undo_payout {id} (bỏ lần trả gần nhất),
  *   save_tap_staff {staff_id, enabled, label?, photo?} (người không có điện thoại chấm công bằng nút trên máy quầy),
  *   save_checkin_settings, save_shift, revoke_kiosk, reset_device,
- *   create_account, set_pin, delete_account,
+ *   create_account, set_pin, edit_account {staff_id, full_name?, phone?}, delete_account,
  *   face_enroll {staff_id, embeddings, force} (lấy mặt mẫu trên máy quầy), face_delete, save_face_settings,
  *   decide_face {attendance_id, clocked, status}   (admin)
  *   hash_all_pins            → băm PIN còn lưu chữ thường (admin / workflow)
@@ -1432,18 +1432,35 @@ export async function POST(request) {
     }
 
     if (body.action === 'save_late_rule') {
-      // Luật đi trễ từ hôm nay: scope 'shop' = mặc định cả quán, hoặc một nhân viên (use_shop: quay về theo quán).
+      // Luật đi trễ / về sớm từ ngày valid_from (mặc định hôm nay, sớm nhất ngày 1 tháng này; "từ ngày X" nghĩa là từ X trở đi,
+      // các luật đặt sau X của cùng người / quán bị bỏ). scope 'shop' = mặc định cả quán, hoặc một nhân viên (use_shop: quay về
+      // theo quán). late_on / early_on = false: được phép đi trễ / về sớm — vẫn ghi lại, không trừ tiền. Không gửi phần về sớm
+      // (trang cũ) thì giữ như cũ (cột trống).
       const scope = body.scope === 'shop' ? 'shop' : UUID.test(body.scope || '') ? String(body.scope).toLowerCase() : null;
       if (!scope) return fail('Thiếu nhân viên.');
+      const from = DATE.test(body.valid_from || '') ? body.valid_from : today;
+      if (from > today || from < `${today.slice(0, 7)}-01`) return fail('Ngày áp dụng từ đầu tháng này tới hôm nay.');
       const allowed = Math.round(Number(body.allowed_minutes)), fixed = money(body.fixed_amount ?? 0);
       const useShop = scope !== 'shop' && body.use_shop === true;
       if (!useShop && (!Number.isFinite(allowed) || allowed < 0 || allowed > 600)) return fail('Số phút cho phép trễ từ 0 đến 600.');
       if (fixed === null || fixed > 10_000_000) return fail('Số tiền trừ mỗi lần trễ không hợp lệ.');
-      const row = { scope, valid_from: today, allowed_minutes: useShop ? 0 : allowed, per_minute: !useShop && body.per_minute === true, fixed_amount: useShop ? 0 : fixed,
+      const row = { scope, valid_from: from, allowed_minutes: useShop ? 0 : allowed, per_minute: !useShop && body.per_minute === true, fixed_amount: useShop ? 0 : fixed,
         use_shop: useShop, updated_by: user.full_name || null, updated_at: isoNow() };
+      const withEarly = !useShop && ('late_on' in body || 'early_allowed_minutes' in body);
+      if (withEarly) {
+        const earlyAllowed = Math.round(Number(body.early_allowed_minutes)), earlyFixed = money(body.early_fixed_amount ?? 0);
+        if (!Number.isFinite(earlyAllowed) || earlyAllowed < 0 || earlyAllowed > 600) return fail('Số phút cho phép về sớm từ 0 đến 600.');
+        if (earlyFixed === null || earlyFixed > 10_000_000) return fail('Số tiền trừ mỗi lần về sớm không hợp lệ.');
+        Object.assign(row, { late_on: body.late_on !== false, early_on: body.early_on !== false, early_allowed_minutes: earlyAllowed, early_per_minute: body.early_per_minute === true,
+          early_fixed_amount: earlyFixed });
+      }
       const r = await db.from('payroll_late_rules').upsert(row, { onConflict: 'scope,valid_from' });
       if (missingTable(r.error)) return fail('Web đang cập nhật phần luật đi trễ, thử lại sau ít phút.', 503);
+      if (r.error && /late_on|early_/.test(String(r.error.message || ''))) return fail('Web đang cập nhật phần luật về sớm, thử lại sau ít phút.', 503);
       if (r.error) throw r.error;
+      // Luật đặt sau ngày áp dụng của cùng người / quán: bỏ (luật mới tính từ ngày đó trở đi).
+      const later = await db.from('payroll_late_rules').delete().eq('scope', scope).gt('valid_from', from);
+      if (later.error) throw later.error;
       return NextResponse.json({ ok: true }, { headers });
     }
 
@@ -1493,6 +1510,31 @@ export async function POST(request) {
       if (r.error) throw r.error;
       if (!r.data?.length) return fail('Không tìm thấy nhân viên.', 404);
       return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Sửa tên / số điện thoại đăng nhập của một tài khoản (nhân viên, quản lý, admin). Mã PIN không đổi (băm theo mã tài khoản,
+    // không theo số điện thoại); lần sau đăng nhập bằng số mới. Số điện thoại không trùng tài khoản khác.
+    if (body.action === 'edit_account') {
+      if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
+      const patch = {};
+      if ('full_name' in body) {
+        const name = text(body.full_name, 80).replace(/\s+/g, ' ');
+        if (!name) return fail('Tên không được để trống.');
+        patch.full_name = name;
+      }
+      if ('phone' in body) {
+        const phone = text(body.phone, 20).replace(/\s+/g, '');
+        if (!/^\+?\d{8,15}$/.test(phone)) return fail('Số điện thoại gồm 8–15 chữ số.');
+        const { data: dup, error } = await db.from('staff').select('id').eq('phone', phone).neq('id', body.staff_id).limit(1);
+        if (error) throw error;
+        if (dup?.length) return fail('⚠️ Số điện thoại này đã là tài khoản của người khác.', 409);
+        patch.phone = phone;
+      }
+      if (!Object.keys(patch).length) return fail('Không có gì để sửa.');
+      const r = await db.from('staff').update(patch).eq('id', body.staff_id).select('id, full_name, phone');
+      if (r.error) return fail(String(r.error.message).includes('unique') ? '⚠️ Số điện thoại này đã là tài khoản của người khác.' : 'Không sửa được tài khoản.', 409);
+      if (!r.data?.length) return fail('Không tìm thấy nhân viên.', 404);
+      return NextResponse.json({ ok: true, staff: r.data[0] }, { headers });
     }
 
     if (body.action === 'set_role') {
