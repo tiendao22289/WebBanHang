@@ -354,7 +354,8 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
  */
 export function payrollCost({ year, month, staff = [], configs = [], sessions = [], requests = [], violations = [], bonuses = [], rules = null, reviews = [], closes = [], hourlyRates = [], lateRules = [],
   closedDays = [], holidayPay = [], departures = [], returns = [], asOf = null }) {
-  const byDay = {};
+  // byDayStaff: lương mỗi ngày tách theo người { [ngày]: { [tên]: { name, amount } } } — Sổ thu chi bấm "Lương" để xem ai bao nhiêu.
+  const byDay = {}, byDayStaff = {};
   let monthExtra = 0;
   for (const p of staff) {
     const of = rows => rows.filter(r => r.staff_id === p.id);
@@ -364,11 +365,17 @@ export function payrollCost({ year, month, staff = [], configs = [], sessions = 
     const closed = closes.find(c => c.staff_id === p.id)?.snapshot;
     const live = closed?.byDay ? null : computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: of(requests), violations: vios, bonuses: gifts, rules, reviews,
       hourlyRates: of(hourlyRates), lateRules: lateRulesOf(lateRules, p.id), ...holidayArgs(p, { closedDays, holidayPay, departures, returns, asOf }) });
-    for (const [day, amount] of Object.entries(closed?.byDay || live.byDay)) byDay[day] = (byDay[day] || 0) + amount;
+    const name = String(p.full_name || '').trim() || 'Nhân viên';
+    for (const [day, amount] of Object.entries(closed?.byDay || live.byDay)) {
+      byDay[day] = (byDay[day] || 0) + amount;
+      if (!(amount > 0)) continue;
+      const people = (byDayStaff[day] ||= {}), k = `${p.id}`;
+      people[k] = { name, amount: (people[k]?.amount || 0) + amount };
+    }
     const settled = closed ? { bonusAmt: 0, ...closed } : live;
     monthExtra += (Number(settled.bonusAmt) || 0) - (Number(settled.vioAmt) || 0) + (Number(settled.monthAdjust) || 0);
   }
-  return { byDay, monthExtra };
+  return { byDay, byDayStaff, monthExtra };
 }
 
 /**

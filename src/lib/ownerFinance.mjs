@@ -217,7 +217,7 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     date, revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {},
     purchases: 0, purchaseNotes: 0, notesOther: {}, notesOtherItems: {}, suspiciousNotes: 0, mismatchNotes: 0, drinks: 0, salary: Number(wages?.byDay?.[date]) || 0, fixedShare: fixedPerDay,
     custom: { ...customDailyShare }, customTotal: 0, profit: 0, close: null, check: null,
-    costItems: { drinks: {}, fixed: structuredClone(fixedItemsPerDay), custom: {} },
+    costItems: { drinks: {}, fixed: structuredClone(fixedItemsPerDay), custom: {}, salary: structuredClone(wages?.byDayStaff?.[date] || {}) },
   }));
   const byDate = new Map(days.map(d => [d.date, d]));
 
