@@ -211,6 +211,22 @@ async function main() {
   console.log(JSON.stringify(cycles));
   if (!cycles.cycles_ok || !cycles.payouts_ok || !cycles.anon_blocked) throw new Error('Chưa cài được bảng trả lương theo kỳ.');
 
+  // Nhân viên tự ghi lỗi (payroll_self_fines.sql): đánh dấu khoản tự ghi + ghi chú của nhân viên.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_self_fines.sql'), 'utf8'));
+  const [selfFines] = await query(`SELECT
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payroll_violation_meta' AND column_name = 'self_reported') AS self_col,
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payroll_violation_meta' AND column_name = 'note') AS note_col`);
+  console.log(JSON.stringify(selfFines));
+  if (!selfFines.self_col || !selfFines.note_col) throw new Error('Chưa cài được phần nhân viên tự ghi lỗi.');
+
+  // Nhân viên xác nhận đã nhận lương (payroll_pay_received.sql): received_at của lương tháng và lần trả theo kỳ.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_pay_received.sql'), 'utf8'));
+  const [received] = await query(`SELECT
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payroll_closes' AND column_name = 'received_at') AS closes_col,
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payroll_payouts' AND column_name = 'received_at') AS payouts_col`);
+  console.log(JSON.stringify(received));
+  if (!received.closes_col || !received.payouts_col) throw new Error('Chưa cài được phần nhân viên xác nhận đã nhận lương.');
+
   // Chấm công bằng nút trên máy quầy cho người không có điện thoại (checkin_tap.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_tap.sql'), 'utf8'));
   const [tap] = await query(`SELECT to_regclass('public.checkin_tap_staff') IS NOT NULL AS table_ok,

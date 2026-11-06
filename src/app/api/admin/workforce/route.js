@@ -18,6 +18,10 @@
  *   request {type, amount | from_date, to_date, reason} → ứng lương / báo nghỉ (có ngày nghỉ) của chính mình
  *   request_fix {attendance_id, clock_in, clock_out, reason} → xin sửa giờ một ca của mình
  *   cancel_request {id, kind}  → huỷ đơn của mình khi còn chờ duyệt (kind 'fix' = đơn xin sửa giờ)
+ *   confirm_received {kind: 'month', year, month | kind: 'payout', id} → nhân viên xác nhận đã nhận lương chủ đánh dấu đã trả
+ *                              (không đổi lại được; đã xác nhận thì chủ không bỏ dấu đã trả / không bỏ lần trả được)
+ *   report_violation {rule_id?, reason?, note?} → tự ghi một lỗi của chính mình hôm nay (tiền theo danh sách lỗi; lỗi khác 0đ
+ *                              chờ chủ định tiền). Ghi xong không tự sửa / xoá được — chỉ chủ quán (edit_violation / delete_violation).
  *   edit_attendance, add_attendance {staff_id, clock_in, clock_out, note}, delete_attendance {id},
  *   add_advance {staff_id, amount, date, reason}, edit_request {id, amount?, reason?}, delete_request {id},
  *   edit_violation {id, amount?, reason?}, decide_request, decide_fix, decide_extra, close_month, reopen_month, mark_paid,
@@ -45,7 +49,7 @@ import { hashPin, isHashedPin, validPin } from '@/lib/staffPin.mjs';
 import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, KIOSK_COOKIE, newDeviceId, readKioskCookie, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
 import { closedDaysToDate, loadPayrollMonth, monthRange, readClosedDays, readHolidays, readHourlyRates, readLateRules, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
 import { AUTO_CLOSE_BY, AUTO_EXTRA_FROM, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { DAY_PAY_FROM, DEFAULT_OT_RATE, MAX_CYCLE_DAYS, addDays, computeSalary, cycleDue, cycleDueTo, cyclePeriod, holidayArgs, lateRulesOf, monthKey, monthTallies, payoutDetail, staffMonthStats,
+import { DAY_PAY_FROM, DEFAULT_OT_RATE, MAX_CYCLE_DAYS, addDays, computeSalary, cycleDue, cycleDueTo, cyclePeriod, holidayArgs, lateRulesOf, monthKey, monthTallies, payoutDetail, payoutPartOfMonth, staffMonthStats,
   usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import { normalizeRole } from '@/lib/staffRoles.mjs';
@@ -145,7 +149,36 @@ async function myStatus(db, staffId) {
   const holds = new Set((held || []).map(r => r.attendance_id));
   const open = last && !last.clock_out ? markFaceHolds([last], holds)[0] : null;
   return { open, sessions: markFaceHolds((today.data || []).filter(x => workDayOf(x, settings) === day), holds), fixes: fixes.data || [], auto_closed: autoClosed, reviews: reviews.data || [],
-    leave_days: leaveDays.data || [], face_holds: [...holds], rules, ...await mySalary(db, staffId, settings, reviews.data || [], autoClosed) };
+    leave_days: leaveDays.data || [], face_holds: [...holds], rules, ...await mySalary(db, staffId, settings, reviews.data || [], autoClosed),
+    payments: await myPayments(db, staffId) };
+}
+
+// Lương chủ quán đã đánh dấu trả cho chính người đó (khoảng 100 ngày gần đây): lương tháng đã chốt (số còn lại sau phần đã trả
+// theo kỳ) và từng lần trả theo kỳ — nhân viên bấm "Tôi đã nhận" (received_at). Bảng / cột chưa có: danh sách trống.
+async function myPayments(db, staffId) {
+  try {
+    const since = new Date(nowMs() - 100 * 86400000).toISOString();
+    const [closes, payouts] = await Promise.all([
+      db.from('payroll_closes').select('*').eq('staff_id', staffId).gte('paid_at', since),
+      db.from('payroll_payouts').select('*').eq('staff_id', staffId).gte('paid_at', addDays(vnToday(), -160)),
+    ]);
+    if (closes.error && !missingTable(closes.error)) throw closes.error;
+    if (payouts.error && !missingTable(payouts.error)) throw payouts.error;
+    const myPayouts = payouts.error ? [] : payouts.data || [];
+    const list = [
+      ...(closes.error ? [] : closes.data || []).map(c => {
+        const key = monthKey(c.year, c.month);
+        return { kind: 'month', year: c.year, month: c.month, label: `Lương tháng ${c.month}/${c.year}`,
+          amount: Math.round((Number(c.snapshot?.net) || 0) - payoutPartOfMonth(myPayouts, key)), paid_at: c.paid_at, received_at: c.received_at || null };
+      }),
+      ...myPayouts.filter(p => String(p.paid_at) >= since).map(p => ({ kind: 'payout', id: p.id, label: `Lương ${ddmm(String(p.from_day))} – ${ddmm(String(p.to_day))}`,
+        amount: Number(p.amount) || 0, paid_at: p.paid_at, received_at: p.received_at || null })),
+    ];
+    return list.sort((a, b) => String(b.paid_at).localeCompare(String(a.paid_at)));
+  } catch (error) {
+    console.error('[workforce] my payments', error);
+    return [];
+  }
 }
 
 // Lương tạm tính tháng này của chính người đó (cùng công thức với bảng lương của chủ);
@@ -161,7 +194,7 @@ async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
       db.from('payroll_violations').select('*').eq('staff_id', staffId).eq('month', month).eq('year', year),
       db.from('payroll_closes').select('*').eq('staff_id', staffId).eq('year', year).eq('month', month).maybeSingle(),
       db.from('payroll_bonuses').select('*').eq('staff_id', staffId).eq('year', year).eq('month', month),
-      db.from('payroll_violation_meta').select('violation_id, fine_date').eq('staff_id', staffId).gte('fine_date', start).lt('fine_date', end),
+      db.from('payroll_violation_meta').select('*').eq('staff_id', staffId).gte('fine_date', start).lt('fine_date', end),
       readPayrollSettings(db),
       readHourlyRates(db, staffId),
       readLateRules(db),
@@ -182,11 +215,18 @@ async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
     // Thưởng chuyên cần (khi chủ có dùng): tới hôm nay đã trễ / quên ra ca chưa (hôm quán nghỉ không tính). Không đưa mức thưởng gợi ý.
     const t = monthTallies({ sessions: mine, rules: settings, key: monthKey(year, month), autoClosed, closedDays });
     const bonus = payroll.bonus_amount > 0 && usesDayPay(year, month) ? { late: t.late.count, forgot: t.forgot, minDays: payroll.bonus_min_days, units: live.workUnits, approved: bonuses.data?.[0]?.amount || null } : null;
-    const dateOf = new Map((meta.data || []).map(m => [m.violation_id, m.fine_date]));
-    return { salary, bonus, violations: (violations.data || []).map(v => ({ amount: v.amount, reason: v.reason, date: dateOf.get(v.id) || null })) };
+    const metaOf = new Map((meta.data || []).map(m => [m.violation_id, m]));
+    // Danh sách lỗi để tự ghi (lỗi máy tự gợi ý từ chấm công — trễ, quên ra ca — không tự ghi).
+    const { data: rules, error: re } = await db.from('payroll_fine_rules').select('id, name, amount, kind, active, sort').order('sort').order('created_at');
+    if (re) console.error('[workforce] fine rules', re);
+    return { salary, bonus, fineRules: (rules || []).filter(r => r.active && !r.kind).map(({ id, name, amount }) => ({ id, name, amount: Number(amount) || 0 })),
+      violations: (violations.data || []).map(v => {
+        const m = metaOf.get(v.id);
+        return { id: v.id, amount: v.amount, reason: v.reason, date: m?.fine_date || null, self: !!m?.self_reported, note: m?.note || null, at: v.created_at || null };
+      }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.at || '').localeCompare(String(a.at || ''))) };
   } catch (error) {
     console.error('[workforce] my salary', error);
-    return { salary: null, bonus: null, violations: [] };
+    return { salary: null, bonus: null, violations: [], fineRules: [] };
   }
 }
 
@@ -632,6 +672,68 @@ export async function POST(request) {
       return NextResponse.json({ ok: true }, { headers });
     }
 
+    // Nhân viên xác nhận đã nhận lương chủ quán đánh dấu đã trả (của chính mình). Bấm một lần, không đổi lại được.
+    if (body.action === 'confirm_received') {
+      const stamp = isoNow();
+      const missingCol = e => /received_at/.test(String(e?.message || '')) || missingTable(e);
+      if (body.kind === 'payout') {
+        if (!UUID.test(body.id || '')) return fail('Thiếu lần trả.');
+        const { data: row, error } = await db.from('payroll_payouts').select('*').eq('id', body.id).eq('staff_id', user.id).maybeSingle();
+        if (missingCol(error)) return fail('Web đang cập nhật phần xác nhận nhận lương, thử lại sau ít phút.', 503);
+        if (error) throw error;
+        if (!row) return fail('Không thấy lần trả lương này.', 404);
+        if (row.received_at) return NextResponse.json({ ok: true, received_at: row.received_at }, { headers });
+        const r = await db.from('payroll_payouts').update({ received_at: stamp }).eq('id', row.id).is('received_at', null).select('id');
+        if (missingCol(r.error)) return fail('Web đang cập nhật phần xác nhận nhận lương, thử lại sau ít phút.', 503);
+        if (r.error) throw r.error;
+        return NextResponse.json({ ok: true, received_at: stamp }, { headers });
+      }
+      const year = Number(body.year), month = Number(body.month);
+      if (!(month >= 1 && month <= 12) || !(year >= 2024 && year <= 2100)) return fail('Tháng không hợp lệ.');
+      const { data: row, error } = await db.from('payroll_closes').select('*').eq('year', year).eq('month', month).eq('staff_id', user.id).maybeSingle();
+      if (error) throw error;
+      if (!row?.paid_at) return fail('Chủ quán chưa đánh dấu đã trả lương tháng này.', 409);
+      if (row.received_at) return NextResponse.json({ ok: true, received_at: row.received_at }, { headers });
+      const r = await db.from('payroll_closes').update({ received_at: stamp }).eq('year', year).eq('month', month).eq('staff_id', user.id).is('received_at', null).select('staff_id');
+      if (missingCol(r.error)) return fail('Web đang cập nhật phần xác nhận nhận lương, thử lại sau ít phút.', 503);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true, received_at: stamp }, { headers });
+    }
+
+    // Nhân viên tự ghi lỗi của chính mình hôm nay (làm vỡ ly, ghi sai món…). Tiền theo danh sách lỗi chủ đặt (không tự gõ tiền);
+    // lỗi khác thì 0đ, chủ quán định tiền sau. Ghi xong người ghi không sửa / xoá được: chỉ chủ quán (các thao tác bên dưới).
+    if (body.action === 'report_violation') {
+      const settings = await readCheckinSettings(db);
+      const day = currentWorkDay(settings, user.id, nowMs());
+      let reason = text(body.reason, 200), ruleId = null, amount = 0;
+      if (body.rule_id) {
+        if (!UUID.test(body.rule_id)) return fail('Lỗi này không còn trong danh sách.');
+        const { data: rule, error } = await db.from('payroll_fine_rules').select('*').eq('id', body.rule_id).maybeSingle();
+        if (error) throw error;
+        if (!rule || !rule.active || rule.kind) return fail('Lỗi này không còn trong danh sách.');
+        ruleId = rule.id; reason = rule.name; amount = Number(rule.amount) || 0;
+      }
+      if (!reason) return fail('Chọn lỗi trong danh sách hoặc ghi rõ lỗi gì.');
+      const note = text(body.note, 300) || null;
+      // Bấm nhiều lần liền: một ngày tối đa 20 khoản tự ghi.
+      const { data: todays, error: te } = await db.from('payroll_violation_meta').select('violation_id').eq('staff_id', user.id).eq('fine_date', day).eq('self_reported', true);
+      if (te) {
+        if (/self_reported/.test(String(te.message || '')) || missingTable(te)) return fail('Web đang cập nhật phần tự ghi lỗi, thử lại sau ít phút.', 503);
+        throw te;
+      }
+      if ((todays || []).length >= 20) return fail('Hôm nay bạn đã tự ghi nhiều lỗi rồi. Nhờ chủ quán ghi giúp.', 429);
+      const v = await db.from('payroll_violations').insert({ staff_id: user.id, amount, reason, month: Number(day.slice(5, 7)), year: Number(day.slice(0, 4)), created_at: isoNow() })
+        .select('id').single();
+      if (v.error) throw v.error;
+      const meta = await db.from('payroll_violation_meta').insert({ violation_id: v.data.id, staff_id: user.id, fine_date: day, rule_id: ruleId, recorded_by: user.full_name || null,
+        self_reported: true, note, created_at: isoNow() });
+      if (meta.error) {
+        await db.from('payroll_violations').delete().eq('id', v.data.id);
+        throw meta.error;
+      }
+      return NextResponse.json({ ok: true, id: v.data.id, amount, reason, date: day }, { headers });
+    }
+
     const denied = adminOnly();
     if (denied) return denied;
 
@@ -839,6 +941,12 @@ export async function POST(request) {
       const only = UUID.test(body.staff_id || '') ? body.staff_id : null;
       if (body.action === 'mark_paid') {
         if (!only) return fail('Thiếu nhân viên.');
+        // Nhân viên đã bấm "Tôi đã nhận" thì không bỏ dấu "đã trả" được nữa.
+        if (body.paid === false) {
+          const { data: row, error: e } = await db.from('payroll_closes').select('*').eq('year', year).eq('month', month).eq('staff_id', only).maybeSingle();
+          if (e) throw e;
+          if (row?.received_at) return fail('Nhân viên đã xác nhận đã nhận lương tháng này, không bỏ dấu "Đã trả" được.', 409);
+        }
         const r = await db.from('payroll_closes').update(body.paid === false ? { paid_at: null, paid_by: null } : { paid_at: isoNow(), paid_by: user.full_name || null })
           .eq('year', year).eq('month', month).eq('staff_id', only).select('staff_id');
         if (r.error) throw r.error;
@@ -1292,6 +1400,7 @@ export async function POST(request) {
       if (missingTable(error)) return fail(CYCLE_NOT_READY, 503);
       if (error) throw error;
       if (!row) return fail('Không thấy lần trả này.', 404);
+      if (row.received_at) return fail('Nhân viên đã xác nhận đã nhận lần trả này, không bỏ được.', 409);
       const later = await db.from('payroll_payouts').select('id').eq('staff_id', row.staff_id).gt('to_day', row.to_day);
       if (later.error) throw later.error;
       if (later.data?.length) return fail('Chỉ bỏ được lần trả gần nhất của người này.', 409);

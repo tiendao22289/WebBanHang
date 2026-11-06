@@ -134,9 +134,11 @@ const ALERT_TEXT = { other_network: 'không dùng wifi quán', unknown_device: '
  * fixes: đơn xin sửa giờ đang chờ; alerts: lần quét bị cảnh báo / bị chặn;
  * settings / shifts / hours: dòng checkin_settings, staff_shifts, checkin_hours (null = tính cả ca như cũ);
  * reviews: chủ đã cho / không cho tính giờ ngoài ca; staffNames: { id: tên };
- * closedDays: ngày quán nghỉ — chủ gọi vào làm thì không tính trễ / về sớm.
+ * closedDays: ngày quán nghỉ — chủ gọi vào làm thì không tính trễ / về sớm;
+ * selfFines: lỗi nhân viên tự ghi trong ngày { staff_id, reason, amount, note } (0đ = chờ chủ định tiền).
  */
-export function staffData({ sessions = [], pending = [], fixes = [], alerts = [], settings = null, shifts = [], hours = [], reviews = [], staffNames = {}, date = null, closedDays = [] }) {
+export function staffData({ sessions = [], pending = [], fixes = [], alerts = [], settings = null, shifts = [], hours = [], reviews = [], staffNames = {}, date = null, closedDays = [],
+  selfFines = [] }) {
   const rules = settings ? normalizeRules(settings, shifts, hours) : null;
   const closedDay = !!date && closedDays.includes(date);
   if (date) sessions = sessions.filter(s => workDayOf(s, rules) === date);
@@ -172,6 +174,8 @@ export function staffData({ sessions = [], pending = [], fixes = [], alerts = []
     pending: pending.map(r => ({ id: r.staff_id, name: nameOf(r.staff_id), kind: r.request_type === 'advance' ? 'advance' : 'absent', amount: Number(r.amount) || 0, days: Number(r.days) || 1, reason: r.reason ? String(r.reason).slice(0, 60) : '' })),
     fixes: fixes.map(f => ({ id: f.staff_id, name: nameOf(f.staff_id), reason: f.reason ? String(f.reason).slice(0, 60) : '' })),
     outside,
+    selfFines: selfFines.map(f => ({ id: f.staff_id, name: nameOf(f.staff_id), reason: String(f.reason || '').slice(0, 80), amount: Number(f.amount) || 0,
+      note: f.note ? String(f.note).slice(0, 80) : '' })),
   };
 }
 
@@ -188,6 +192,10 @@ export function staffBlock(input) {
   if (d.alerts.length) {
     lines.push('⚠ Cảnh báo chấm công:');
     for (const a of d.alerts) lines.push(`• ${a.name}: ${a.items.map(({ text, count }) => (count > 1 ? `${text} ×${count}` : text)).join('; ')}`);
+  }
+  if (d.selfFines.length) {
+    lines.push(`🙋 Nhân viên tự ghi lỗi (${d.selfFines.length}):`);
+    for (const f of d.selfFines.slice(0, 10)) lines.push(`• ${f.name}: ${f.reason}${f.note ? ` (${f.note})` : ''} — ${f.amount > 0 ? vnd(f.amount) : 'chờ bạn định tiền'}`);
   }
   const waiting = d.pending.length + d.fixes.length + d.outside.length;
   if (waiting) {
