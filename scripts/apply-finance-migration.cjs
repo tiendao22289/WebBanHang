@@ -234,6 +234,13 @@ async function main() {
   console.log(JSON.stringify(early));
   if (early.cols !== 5) throw new Error('Chưa cài được luật về sớm.');
 
+  // Số tiền trừ mỗi phút trễ / về sớm chủ tự điền (payroll_minute_amounts.sql).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_minute_amounts.sql'), 'utf8'));
+  const [perMinute] = await query(`SELECT count(*)::int AS cols FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payroll_late_rules'
+    AND column_name IN ('minute_amount', 'early_minute_amount')`);
+  console.log(JSON.stringify(perMinute));
+  if (perMinute.cols !== 2) throw new Error('Chưa cài được số tiền trừ mỗi phút.');
+
   // Chấm công bằng nút trên máy quầy cho người không có điện thoại (checkin_tap.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_tap.sql'), 'utf8'));
   const [tap] = await query(`SELECT to_regclass('public.checkin_tap_staff') IS NOT NULL AS table_ok,
