@@ -400,6 +400,7 @@ function CycleBox({ people, today, nameOf, onPay, onUndo }) {
 export default function PayrollPage() {
   const [activeTab, setActiveTab] = useState('salary');
   const [configFocus, setConfigFocus] = useState(null);
+  const [lateOpen, setLateOpen] = useState(null);
   const [staffList, setStaffList] = useState([]);
   const [configs, setConfigs] = useState({});
   const [requests, setRequests] = useState([]);
@@ -1158,6 +1159,21 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     const lateText = !late ? 'đi trễ không trừ' : late.on === false ? 'được phép đi trễ' : `trễ quá ${late.allowed} phút thì trừ`;
     return [wage, overtimeOn(staffId) ? 'có tăng ca' : 'không tăng ca', cycle?.every_days ? `trả mỗi ${cycle.every_days} ngày` : 'chốt cuối tháng', lateText].join(' · ');
   };
+  const lateShort = staffId => {
+    const r = lateRuleOn(payrollMonth.lateRules, staffId, vnToday());
+    if (!r || !r.own) return 'theo mặc định của quán';
+    const cut = (allowed, fixed, perMinute, word) => (!fixed && !perMinute ? `${word} không trừ`
+      : `${word} quá ${allowed} phút trừ ${[fixed ? formatMoney(fixed) : '', perMinute ? 'theo phút' : ''].filter(Boolean).join(' + ')}`);
+    const late = r.on === false ? 'được phép đi trễ' : cut(r.allowed, r.fixed, r.perMinute, 'trễ');
+    const early = !r.early ? 'về sớm như mặc định' : r.early.on === false ? 'được phép về sớm' : cut(r.early.allowed, r.early.fixed, r.early.perMinute, 'về sớm');
+    return `riêng: ${late} · ${early}`;
+  };
+  const openShiftFor = staffId => {
+    setActiveTab('qr');
+    setConfigFocus(staffId);
+    setLateOpen(staffId);
+    setTimeout(() => document.getElementById(`shift-${staffId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+  };
   const openConfigFor = staffId => {
     setActiveTab('config');
     setConfigFocus(staffId);
@@ -1190,6 +1206,111 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     const textIn = (key, placeholder, width = 180) => <input style={{ ...box, width }} placeholder={placeholder} value={draftOf(key, '')} onChange={e => setDraft(key, e.target.value)} />;
     const dateIn = (key, init) => <input type="date" style={box} value={draftOf(key, init)} onChange={e => setDraft(key, e.target.value)} />;
     const newIn = draftOf(`att:${s.id}:in`, `${day}T${shift.start}`), newOut = draftOf(`att:${s.id}:out`, `${shift.end <= shift.start ? nextDay(day) : day}T${shift.end}`);
+    // Từng ngày trong tháng: mỗi ngày làm một dòng gồm các lượt chấm công (sửa / xoá), đi trễ / về sớm (tiền bị trừ), giờ ngoài ca
+    // (cho tính / không tính) và tiền của ngày. Lượt dọn quán sau nửa đêm nằm ở ngày của ca; ngày quán nghỉ có lương cũng có dòng.
+    const dailyOf = new Map((live.daily || []).map(d => [d.day, d]));
+    const byWorkDay = new Map();
+    for (const a of atts) { const wd = workDayOf(a, rules); byWorkDay.set(wd, [...(byWorkDay.get(wd) || []), a]); }
+    const dayKeys = [...new Set([...dailyOf.keys(), ...byWorkDay.keys()])].sort().reverse();
+    const workedDays = [...byWorkDay.keys()].length;
+    const mini = (text, onClick, kind) => (
+      <button onClick={onClick} style={{ ...smallBtn, padding: '2px 8px', fontSize: '0.72rem', ...(kind === 'red' ? { color: '#dc2626', borderColor: '#fecaca', background: '#fff5f5' } : kind === 'green' ? { color: '#15803d', borderColor: '#bbf7d0', background: '#f0fdf4' } : {}) }}>{text}</button>
+    );
+    const small = (text, color = '#64748b') => <div style={{ fontSize: '0.72rem', color, marginTop: 2, lineHeight: 1.35 }}>{text}</div>;
+    const none = <span style={{ color: '#cbd5e1' }}>—</span>;
+    const dayRow = wd => {
+      const d = dailyOf.get(wd), list = [...(byWorkDay.get(wd) || [])].sort((x, y) => String(x.clock_in).localeCompare(String(y.clock_in)));
+      // Ngày đã tính lương: số trễ / sớm theo bảng lương; ngày chưa tính (tháng cũ, ca sai mặt chờ duyệt): theo giờ quét.
+      const f = d ? { late: d.late, leftEarly: d.leftEarly, early: d.early, stay: d.stay } : (x => ({ late: x.late, leftEarly: x.leftEarly, early: x.early, stay: x.stayed }))(dayFlags(list, rules));
+      const autoClosed = id => (payrollMonth.autoClosed || []).includes(id);
+      const outsideOf = a => { const h = hoursOf(a); return h.earlyMs + h.stayMs; };
+      const extras = list.filter(a => a.clock_out && outsideOf(a) > 0);
+      const waiting = extras.some(a => !reviewMap[a.id] && !hoursOf(a).autoExtra);
+      const attention = waiting || list.some(a => a.face_hold || autoClosed(a.id));
+      const editing = list.find(a => a.id === editingAtt?.id);
+      const dayShift = rules ? shiftOf(rules, s.id, wd) : null;
+      const cell = { verticalAlign: 'top', padding: '8px 10px', background: attention ? '#fffbeb' : undefined };
+      const unitNote = !d || d.holiday || !list.some(a => a.clock_out) ? null
+        : d.hourly ? small(`${durationText(d.inShiftMin)} trong ca`)
+          : d.unit === 0.5 ? small(`½ ngày công: trong ca ${durationText(d.inShiftMin)}, chưa tới nửa ca (${durationText(Math.round(d.shiftMin / 2))})`, '#b45309')
+            : d.unit === 0 ? small('0 ngày công: không có phút nào trong ca', '#b45309') : small('1 ngày công');
+      return (
+        <React.Fragment key={wd}>
+          <tr>
+            <td style={{ ...cell, whiteSpace: 'nowrap' }}>
+              <strong>{weekday(wd)} {ddmm(wd)}</strong>
+              {dayShift && !d?.holiday && small(`ca ${dayShift.start}–${dayShift.end}${dayShift.own ? ' riêng' : ''}`)}
+            </td>
+            <td style={{ ...cell, minWidth: 110, maxWidth: 170 }}>
+              {d ? <strong style={{ fontSize: '0.9rem', whiteSpace: 'nowrap' }}>{formatMoney(d.pay)}</strong> : <span style={{ color: '#94a3b8' }}>{list.some(a => a.face_hold) ? 'chưa tính' : '—'}</span>}
+              {d?.holiday && small('quán nghỉ, có lương')}
+              {unitNote}
+              {d?.extraAmt > 0 && small(`gồm tăng ca +${formatMoney(d.extraAmt)}`, '#16a34a')}
+            </td>
+            <td style={cell}>
+              {d?.holiday && <span>🏖 Quán nghỉ</span>}
+              {list.map(a => (
+                <div key={a.id} style={{ padding: '2px 0' }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {a.date !== wd && <span style={{ fontSize: '0.72rem', color: '#64748b' }}>rạng sáng {ddmm(a.date)}</span>}
+                    <strong style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{a.clock_in ? hhmm(a.clock_in) : '—'} → {a.clock_out ? hhmm(a.clock_out) : 'chưa ra'}</strong>
+                    <span style={{ color: '#16a34a', whiteSpace: 'nowrap' }}>{a.clock_out ? hoursText(Date.parse(a.clock_out) - Date.parse(a.clock_in)) : 'đang làm'}</span>
+                    {(checkin?.scans || []).some(x => x.attendance_id === a.id && x.method === 'tap') && <span style={{ color: '#6d28d9', fontSize: '0.72rem' }}>🔘 bấm nút</span>}
+                    {editing?.id === a.id ? mini('Huỷ', () => setEditingAtt(null))
+                      : mini('✏️ Sửa', () => setEditingAtt({ ...a, clock_in: localDT(a.clock_in), clock_out: localDT(a.clock_out) }))}
+                    {mini('Xoá', () => editAction('delete_attendance', { id: a.id }, `Xoá lượt ${dateLabel(a)} ${a.clock_in ? hhmm(a.clock_in) : ''} → ${a.clock_out ? hhmm(a.clock_out) : 'chưa ra'}? Giờ làm của lượt này sẽ không tính lương.`), 'red')}
+                  </div>
+                  {a.face_hold && small('⚠ Sai mặt 3 lần: chờ duyệt, chưa tính lương', '#c2410c')}
+                  {autoClosed(a.id) && small('⚠ Quên ra ca, máy tự đóng: xem lại giờ ra', '#c2410c')}
+                </div>
+              ))}
+            </td>
+            <td style={cell}>
+              {f.late > 0 && (
+                <div style={{ color: '#c2410c' }}>Trễ {durationText(f.late)}
+                  {d?.lateCut > 0 ? <strong style={{ color: '#dc2626' }}> −{formatMoney(d.lateCut)}</strong> : d ? <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}> (không trừ)</span> : null}
+                </div>
+              )}
+              {f.leftEarly > 0 && (
+                <div style={{ color: '#c2410c' }}>Về sớm {durationText(f.leftEarly)}
+                  {d?.earlyCut > 0 ? <strong style={{ color: '#dc2626' }}> −{formatMoney(d.earlyCut)}</strong> : d ? <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}> (không trừ)</span> : null}
+                </div>
+              )}
+              {f.early > 0 && <div>Vào sớm {durationText(f.early)}</div>}
+              {f.stay > 0 && <div>Ra dư {durationText(f.stay)}</div>}
+              {!f.late && !f.leftEarly && !f.early && !f.stay && (d?.holiday || !list.length ? none : <span style={{ color: '#16a34a' }}>Đúng giờ</span>)}
+              {d?.closed && small('Ngày quán nghỉ: không tính trễ / về sớm')}
+              {extras.map(a => {
+                const h = hoursOf(a), r = reviewMap[a.id];
+                const status = r ? (r.status === 'approved' ? 'đã cho tính' : 'không tính') : h.autoExtra ? 'tự tính tăng ca' : 'chờ duyệt';
+                const color = status === 'chờ duyệt' ? '#b45309' : status === 'không tính' ? '#64748b' : '#16a34a';
+                return (
+                  <div key={a.id} style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', marginTop: 3 }}>
+                    <span style={{ fontSize: '0.74rem', fontWeight: 700, color }}>{extras.length > 1 ? `Lượt ${hhmm(a.clock_in)}: ` : ''}{durationText(outsideOf(a) / 60000)} {status}</span>
+                    {r?.status !== 'approved' && !(h.autoExtra && !r) && mini('Cho tính', () => editAction('decide_extra', { attendance_id: a.id, status: 'approved' }), 'green')}
+                    {r?.status !== 'rejected' && mini('Không tính', () => editAction('decide_extra', { attendance_id: a.id, status: 'rejected' }))}
+                  </div>
+                );
+              })}
+            </td>
+          </tr>
+          {editing && (
+            <tr>
+              <td colSpan="4" style={{ background: '#eff6ff', padding: '8px 10px' }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                  <strong style={{ flexBasis: '100%', fontSize: '0.78rem' }}>✏️ Sửa lượt {hhmm(editing.clock_in)} → {editing.clock_out ? hhmm(editing.clock_out) : 'chưa ra'} (ngày {ddmm(wd)})</strong>
+                  <label style={label}>Giờ vào<DateTime24 value={editingAtt.clock_in || ''} fallback={(editingAtt.clock_in || '').slice(0, 10)} onChange={v => setEditingAtt(p => ({ ...p, clock_in: v }))} /></label>
+                  <label style={label}>Giờ ra<DateTime24 value={editingAtt.clock_out || ''} fallback={(editingAtt.clock_in || '').slice(0, 10)} onChange={v => setEditingAtt(p => ({ ...p, clock_out: v }))} /></label>
+                  <label style={label}>Ghi chú<input style={{ ...box, width: 160 }} value={editingAtt.note || ''} placeholder="Lý do sửa…" onChange={e => setEditingAtt(p => ({ ...p, note: e.target.value }))} /></label>
+                  {btn('💾 Lưu giờ', handleSaveAttEdit, 'dark')}
+                  {btn('Huỷ', () => setEditingAtt(null))}
+                </div>
+              </td>
+            </tr>
+          )}
+        </React.Fragment>
+      );
+    };
     return (
       <div style={{ background: '#f8fafc', borderTop: '1px solid #e2e8f0', padding: '10px 12px' }}>
         <div style={{ fontSize: '0.8rem', color: '#334155', marginBottom: 8, lineHeight: 1.6 }}>
@@ -1199,51 +1320,31 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         </div>
         <div style={{ ...section, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.8rem', color: '#475569' }}>
           <span>⚙️ {settingsText(s.id)}</span>
-          <button style={smallBtn} onClick={() => openConfigFor(s.id)}>⚙️ Đổi lương, đi trễ, kỳ trả lương</button>
+          <button style={smallBtn} onClick={() => openConfigFor(s.id)}>💰 Đổi lương, kỳ trả lương</button>
+          <button style={smallBtn} onClick={() => openShiftFor(s.id)}>⏰ Đổi ca, đi trễ / về sớm</button>
         </div>
 
-        {(live.daily || []).length > 0 && (
-          <div style={section}>
-            {head('📅 Từng ngày trong tháng')}
-            <DayTable first="Ngày" rows={[...live.daily].reverse().map(d => ({ key: d.day, label: ddmm(d.day), d }))} />
-          </div>
-        )}
-
         <div style={section}>
-          {head(`🕒 Chấm công (${atts.length} lượt)`)}
-          {atts.length === 0 && <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Chưa có lượt chấm công nào trong tháng.</div>}
-          {atts.map(a => {
-            const isEd = editingAtt?.id === a.id, h = hoursOf(a), outside = h.earlyMs + h.stayMs, review = reviewMap[a.id];
-            const flags = [...rowFlags(a)].filter(Boolean);
-            return (
-              <div key={a.id} style={{ ...row, background: isEd ? '#eff6ff' : undefined }}>
-                <strong style={{ minWidth: 92 }}>{dateLabel(a)}</strong>
-                <span>{a.clock_in ? hhmm(a.clock_in) : '—'} → {a.clock_out ? hhmm(a.clock_out) : 'chưa ra'}</span>
-                <span style={{ color: '#16a34a', fontWeight: 600 }}>{a.clock_out ? hoursText(Date.parse(a.clock_out) - Date.parse(a.clock_in)) : 'đang làm'}</span>
-                {(checkin?.scans || []).some(x => x.attendance_id === a.id && x.method === 'tap') && <span style={{ color: '#6d28d9', fontSize: '0.76rem' }}>🔘 bấm nút</span>}
-                <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-                  {isEd ? btn('Huỷ', () => setEditingAtt(null)) : btn('✏️ Sửa giờ', () => setEditingAtt({ ...a, clock_in: localDT(a.clock_in), clock_out: localDT(a.clock_out) }))}
-                  {btn('🗑 Xoá', () => editAction('delete_attendance', { id: a.id }, `Xoá lượt ${dateLabel(a)} ${a.clock_in ? hhmm(a.clock_in) : ''} → ${a.clock_out ? hhmm(a.clock_out) : 'chưa ra'}? Giờ làm của lượt này sẽ không tính lương.`), 'red')}
-                </span>
-                {flags.length > 0 && <div style={{ flexBasis: '100%', fontSize: '0.75rem', color: '#c2410c' }}>⚠ {flags.join(' · ')}</div>}
-                {outside > 0 && a.clock_out && (
-                  <div style={{ flexBasis: '100%', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.78rem' }}>
-                    <span>Ngoài ca {durationText(outside / 60000)}: <strong>{review ? (review.status === 'approved' ? 'đã cho tính' : 'không tính') : h.autoExtra ? 'tự tính tăng ca' : 'chờ duyệt'}</strong></span>
-                    {review?.status !== 'approved' && !(h.autoExtra && !review) && btn('Cho tính', () => editAction('decide_extra', { attendance_id: a.id, status: 'approved' }))}
-                    {review?.status !== 'rejected' && btn('Không tính', () => editAction('decide_extra', { attendance_id: a.id, status: 'rejected' }))}
-                  </div>
-                )}
-                {isEd && (
-                  <div style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                    <label style={label}>Giờ vào<DateTime24 value={editingAtt.clock_in || ''} fallback={(editingAtt.clock_in || '').slice(0, 10)} onChange={v => setEditingAtt(p => ({ ...p, clock_in: v }))} /></label>
-                    <label style={label}>Giờ ra<DateTime24 value={editingAtt.clock_out || ''} fallback={(editingAtt.clock_in || '').slice(0, 10)} onChange={v => setEditingAtt(p => ({ ...p, clock_out: v }))} /></label>
-                    <label style={label}>Ghi chú<input style={{ ...box, width: 160 }} value={editingAtt.note || ''} placeholder="Lý do sửa…" onChange={e => setEditingAtt(p => ({ ...p, note: e.target.value }))} /></label>
-                    {btn('💾 Lưu giờ', handleSaveAttEdit, 'dark')}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {head(`📅 Từng ngày trong tháng (${workedDays} ngày đi làm, ${atts.length} lượt chấm công)`)}
+          <div style={{ fontSize: '0.74rem', color: '#64748b', marginBottom: 6, lineHeight: 1.5 }}>
+            Mỗi ngày một dòng, ngày mới nhất ở trên. Lượt dọn quán sau nửa đêm nằm ở ngày của ca. Dòng nền vàng: ngày cần xem
+            (giờ ngoài ca chờ duyệt, quên ra ca, sai mặt).
+          </div>
+          {dayKeys.length === 0 ? <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Chưa có lượt chấm công nào trong tháng.</div> : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="payroll-table day-merge" style={{ width: 'auto', minWidth: 600, fontSize: '0.8rem' }}>
+                <thead>
+                  <tr>
+                    <th style={{ padding: '8px 10px' }}>Ngày</th>
+                    <th style={{ padding: '8px 10px' }}>Tiền ngày</th>
+                    <th style={{ padding: '8px 10px' }}>Giờ vào → ra</th>
+                    <th style={{ padding: '8px 10px' }}>So với ca: trễ, về sớm, ngoài ca</th>
+                  </tr>
+                </thead>
+                <tbody>{dayKeys.map(dayRow)}</tbody>
+              </table>
+            </div>
+          )}
           <div style={{ ...row, alignItems: 'flex-end' }}>
             <strong style={{ flexBasis: '100%', fontSize: '0.78rem' }}>+ Thêm lượt (nhân viên quên quét cả lúc vào)</strong>
             <label style={label}>Vào<DateTime24 value={newIn} onChange={v => setDraft(`att:${s.id}:in`, v)} /></label>
@@ -2613,20 +2714,20 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   <div style={{ marginTop: 6 }}><SpanNote start={hoursEdit.opening_time} end={hoursEdit.closing_time} label="Quán mở" /></div>
                   <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>⏰ Đi trễ / về sớm — mặc định cả quán</div>
                   {lateRuleEditor('shop')}
-                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>Từng người đặt riêng ở tab Mức lương.</div>
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>Từng người đặt riêng ở mục Ca và đi trễ / về sớm từng người bên dưới.</div>
                   <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>🏖 Ngày quán nghỉ</div>
-                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginBottom: 4 }}>Ngày cả quán đóng cửa. Người được nhận lương ngày nghỉ (mặc định: lương tháng có, theo ngày / theo giờ không — đổi từng người ở tab Cấu hình) được đủ 1 ngày công.</div>
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginBottom: 4 }}>Ngày cả quán đóng cửa. Người được nhận lương ngày nghỉ (mặc định: lương tháng có, theo ngày / theo giờ không — đổi từng người ở tab Mức lương) được đủ 1 ngày công.</div>
                   {closedDaysEditor()}
                   <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 8 }}>
                     Tính giờ theo ca từ ngày <strong>{st.hours_from.split('-').reverse().join('/')}</strong>; những ngày trước đó vẫn tính như cũ. Đổi giờ quán thì áp dụng từ hôm nay, ngày đã làm giữ giờ cũ. Ca riêng chọn được ngày bắt đầu trong tháng này (ví dụ người mới vào làm trước khi đặt ca).
                   </div>
 
-                  <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>Ca riêng từng người</div>
-                  <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 6 }}>Ai làm khác giờ quán (ví dụ 17:00–23:00) thì đặt riêng. Giờ chọn theo 24 giờ: 00:00 là nửa đêm, 12:00 là trưa. Giờ hết ca trước giờ vào ca nghĩa là làm qua nửa đêm (ví dụ 14:00 → 00:00 là ca 10 tiếng).</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>Ca và đi trễ / về sớm từng người</div>
+                  <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 6 }}>Ai làm khác giờ quán (ví dụ 17:00–23:00) thì đặt riêng. Giờ chọn theo 24 giờ: 00:00 là nửa đêm, 12:00 là trưa. Giờ hết ca trước giờ vào ca nghĩa là làm qua nửa đêm (ví dụ 14:00 → 00:00 là ca 10 tiếng). Đi trễ / về sớm: không đặt riêng thì theo mặc định của quán ở trên.</div>
                   {staffList.filter(s => !departureOf(s.id) || departureOf(s.id).last_day >= vnToday()).map(s => {
                     const shift = shiftOf(st, s.id, vnToday()), own = shift.own, editing = shiftEdit?.staff_id === s.id;
                     return (
-                      <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', fontSize: '0.85rem' }}>
+                      <div key={s.id} id={`shift-${s.id}`} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', fontSize: '0.85rem', scrollMarginTop: 12, ...(configFocus === s.id ? { outline: '2px solid #3b82f6', outlineOffset: 2, borderRadius: 6 } : {}) }}>
                         <strong style={{ minWidth: 110 }}>{s.full_name}</strong>
                         {editing ? (
                           <>
@@ -2657,6 +2758,12 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <div style={{ flexBasis: '100%' }}><SpanNote start={shift.start} end={shift.end} /></div>
                           </>
                         )}
+                        <div style={{ flexBasis: '100%', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.8rem' }}>
+                          <span style={{ color: lateRuleOn(payrollMonth.lateRules, s.id, vnToday())?.own ? '#1d4ed8' : '#64748b' }}>⏰ Đi trễ / về sớm: {lateShort(s.id)}</span>
+                          <button style={{ fontSize: '0.78rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}
+                            onClick={() => setLateOpen(lateOpen === s.id ? null : s.id)}>{lateOpen === s.id ? 'Đóng' : 'Sửa'}</button>
+                        </div>
+                        {lateOpen === s.id && <div style={{ flexBasis: '100%', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px' }}>{lateRuleEditor(s.id)}</div>}
                       </div>
                     );
                   })}
@@ -2976,8 +3083,9 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                       </div>
                       <button className="btn-primary" style={{ marginTop: 18 }} onClick={() => handleSaveConfig(s.id)}>Lưu</button>
                       {pay.type !== 'month' && tinyWage(pay.rate) && <div className="config-note">{tinyWageNote(pay.rate, payUnitText[pay.type])}</div>}
-                      <div className="config-note" style={{ borderTop: '1px dashed #e2e8f0', paddingTop: 6 }}>
-                        <strong>⏰ Đi trễ / về sớm</strong> {lateRuleEditor(s.id)}
+                      <div className="config-note" style={{ borderTop: '1px dashed #e2e8f0', paddingTop: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <strong>⏰ Đi trễ / về sớm</strong> <span>{lateShort(s.id)}</span>
+                        <button style={smallBtn} onClick={() => openShiftFor(s.id)}>Sửa ở Cài chấm công</button>
                       </div>
                       <div className="config-note" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                         <strong>🏖 Ngày quán nghỉ</strong> {holidayEditor(s.id)}

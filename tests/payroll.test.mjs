@@ -314,7 +314,7 @@ test('the shop default late rule: past 10 minutes 50.000đ each time plus the mi
 test('early arrival and staying late are paid as overtime by themselves; each day shows early / late / stay / left early', () => {
   const c = dayOf('2026-11-05', '13:15', '01:13');
   assert.deepEqual(c.daily, [{ day: '2026-11-05', in: vnAt('2026-11-05', '13:15'), out: new Date(Date.parse(vnAt('2026-11-05', '01:13')) + 86400000).toISOString(), hourly: false,
-    early: 45, late: 0, stay: 73, leftEarly: 0, inShiftMin: 600, extraMin: 118, extraAmt: 49167, pendingMin: 0, lateCut: 0, earlyCut: 0, pay: 337629 }]);
+    unit: 1, shiftMin: 600, early: 45, late: 0, stay: 73, leftEarly: 0, inShiftMin: 600, extraMin: 118, extraAmt: 49167, pendingMin: 0, lateCut: 0, earlyCut: 0, pay: 337629 }]);
   // Ngày tính ra 337.628,2đ nhưng phiếu làm tròn từng phần (288.462 + 49.167): ngày cuối nhận phần lệch để khớp phiếu.
   assert.deepEqual([c.otAmt, c.pendingH, c.net, c.byDay['2026-11-05']], [49167, 0, 337629, 337629], 'the day takes the rounding of the slip');
   const no = dayOf('2026-11-05', '13:15', '23:59', PER_MINUTE, [{ attendance_id: 'x', status: 'rejected', minutes: 0 }]);
@@ -322,6 +322,13 @@ test('early arrival and staying late are paid as overtime by themselves; each da
   // Trước tháng 11 giờ ngoài ca chưa duyệt vẫn chờ chủ.
   const oct = sessionHours({ id: 'o', staff_id: 'a', date: '2026-10-27', clock_in: '2026-10-27T06:00:00Z', clock_out: '2026-10-27T16:00:00Z' }, RULES);
   assert.deepEqual([oct.pendingMs / 60000, oct.approvedMs, !!oct.autoExtra], [60, 0, false]);
+});
+
+test('each day says how many workdays it counts: under half the shift in it is half a day', () => {
+  const short = dayOf('2026-11-05', '16:18', '16:45', []);
+  assert.deepEqual([short.daily[0].unit, short.daily[0].shiftMin, short.daily[0].inShiftMin], [0.5, 600, 27], 'the table can say why the day is half');
+  const full = dayOf('2026-11-05', '14:00', '00:00', []);
+  assert.deepEqual([full.daily[0].unit, full.daily[0].shiftMin], [1, 600]);
 });
 
 test('someone without a salary yet is not cut for being late', () => {

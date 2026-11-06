@@ -250,7 +250,9 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
       if (unit || dayOtMs) byDay[day] = Math.round(pay + dayOtMs / HOUR * otRate);
       const last = list[list.length - 1];
       // Ngày quán nghỉ không có trễ / về sớm (chủ gọi vào làm giờ nào cũng được).
+      // unit: ngày công của ngày đó (1, 0,5 khi giờ trong ca chưa tới nửa ca, 0 khi không có phút nào trong ca); shiftMin: ca dài bao nhiêu phút.
       daily.push({ day, in: list[0].clock_in, out: last.clock_out || null, hourly: !!rate, ...(wage ? { wage } : {}), ...(closedDay ? { closed: true } : {}),
+        unit, shiftMin: Math.round((w.end - w.start) / 60000),
         early: flags.early, late: lateHit ? rawLate : closedDay ? 0 : flags.late, stay: flags.stayed, leftEarly: closedDay ? 0 : flags.leftEarly,
         inShiftMin: Math.round(inShiftMs / 60000), extraMin: Math.round(dayOtMs / 60000), extraAmt: Math.round(dayOtMs / HOUR * otRate),
         pendingMin: Math.round(hs.reduce((a, h) => a + h.pendingMs, 0) / 60000), lateCut, earlyCut, pay: byDay[day] || 0 });
@@ -271,7 +273,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
       workUnits += 1;
       holidayDays += 1;
       byDay[day] = Math.round(pay);
-      daily.push({ day, in: null, out: null, hourly: !!rate, ...(wage ? { wage } : {}), holiday: true, early: 0, late: 0, stay: 0, leftEarly: 0, inShiftMin: 0, extraMin: 0, extraAmt: 0,
+      daily.push({ day, in: null, out: null, hourly: !!rate, ...(wage ? { wage } : {}), holiday: true, unit: 1, shiftMin: minutes, early: 0, late: 0, stay: 0, leftEarly: 0, inShiftMin: 0, extraMin: 0, extraAmt: 0,
         pendingMin: 0, lateCut: 0, earlyCut: 0, pay: byDay[day] });
     }
     daily.sort((a, b) => a.day.localeCompare(b.day));
