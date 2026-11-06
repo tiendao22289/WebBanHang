@@ -338,7 +338,7 @@ function CycleBox({ people, today, nameOf, onPay, onUndo }) {
   return (
     <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155' }}>
       <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 2 }}>💵 Trả lương theo kỳ</div>
-      <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 8 }}>Trả xong bấm &quot;Đã thanh toán lương&quot;: kỳ mới tự tính từ hôm sau. Cài kỳ ở nút Sửa của từng người hoặc tab Mức lương.</div>
+      <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 8 }}>Trả xong bấm &quot;Đã thanh toán lương&quot;: kỳ mới tự tính từ hôm sau. Cài kỳ ở tab Mức lương.</div>
       {list.map(p => {
         const { start, payday, daysLeft } = p.period;
         const name = nameOf(p.staff_id), started = start <= today, due = daysLeft <= 0 && started;
@@ -399,6 +399,7 @@ function CycleBox({ people, today, nameOf, onPay, onUndo }) {
 
 export default function PayrollPage() {
   const [activeTab, setActiveTab] = useState('salary');
+  const [configFocus, setConfigFocus] = useState(null);
   const [staffList, setStaffList] = useState([]);
   const [configs, setConfigs] = useState({});
   const [requests, setRequests] = useState([]);
@@ -1149,9 +1150,21 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
       </div>
     );
   };
+  // Khung Sửa của Bảng lương chỉ còn số liệu tháng (từng ngày, chấm công, ứng, phạt, thưởng); cài đặt của người đó (lương, tăng ca,
+  // kỳ trả lương, đi trễ / về sớm, ngày quán nghỉ) ở tab Mức lương — một dòng tóm tắt + nút mở đúng người.
+  const settingsText = staffId => {
+    const pay = hourlyEditOf(staffId), cycle = cycleOf(staffId), late = lateRuleOn(payrollMonth.lateRules, staffId, vnToday());
+    const wage = pay.currentType === 'month' ? `Lương tháng ${formatMoney(Number(configs[staffId]?.base_salary) || 0)}` : `Lương 1 ${payUnitText[pay.currentType]} ${formatMoney(pay.current.hourly_rate)}`;
+    const lateText = !late ? 'đi trễ không trừ' : late.on === false ? 'được phép đi trễ' : `trễ quá ${late.allowed} phút thì trừ`;
+    return [wage, overtimeOn(staffId) ? 'có tăng ca' : 'không tăng ca', cycle?.every_days ? `trả mỗi ${cycle.every_days} ngày` : 'chốt cuối tháng', lateText].join(' · ');
+  };
+  const openConfigFor = staffId => {
+    setActiveTab('config');
+    setConfigFocus(staffId);
+    setTimeout(() => document.getElementById(`config-${staffId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+  };
   const payEditor = s => {
-    const live = calcSalary(s.id), closed = closeOf(s.id), pay = hourlyEditOf(s.id);
-    const edit = configEdits[s.id] || { base_salary: 0, overtime_rate: 25000, pay_day: 5 };
+    const live = calcSalary(s.id), closed = closeOf(s.id);
     const atts = attendance.filter(a => a.staff_id === s.id);
     const mine = requests.filter(r => r.staff_id === s.id && r.month === selMonth && r.year === selYear && r.status !== 'rejected');
     const advances = mine.filter(r => r.request_type === 'advance'), absences = mine.filter(r => r.request_type === 'absent');
@@ -1184,6 +1197,10 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           {' '}Hiện tính ra: <strong>{daysText(live)}</strong> → {formatMoney(live.basePay)}, tăng ca {formatMoney(live.otAmt)}, thực lĩnh <strong>{formatMoney(live.net)}</strong>.
           {closed && <div style={{ color: '#b45309' }}>🔒 Tháng này đã chốt lương cho người này: sửa xong thì bấm Mở chốt rồi chốt lại để lấy số mới.</div>}
         </div>
+        <div style={{ ...section, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.8rem', color: '#475569' }}>
+          <span>⚙️ {settingsText(s.id)}</span>
+          <button style={smallBtn} onClick={() => openConfigFor(s.id)}>⚙️ Đổi lương, đi trễ, kỳ trả lương</button>
+        </div>
 
         {(live.daily || []).length > 0 && (
           <div style={section}>
@@ -1191,51 +1208,6 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
             <DayTable first="Ngày" rows={[...live.daily].reverse().map(d => ({ key: d.day, label: ddmm(d.day), d }))} />
           </div>
         )}
-
-        <div style={section}>
-          {head('💰 Lương')}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <label style={label}>Trả lương
-              <select style={box} value={pay.type} onChange={e => setPayType(s.id, pay, e.target.value)}>
-                <option value="month">Theo tháng</option>
-                <option value="day">Theo ngày</option>
-                <option value="hour">Theo giờ</option>
-              </select>
-            </label>
-            {pay.type !== 'month'
-              ? <label style={label}>Lương 1 {payUnitText[pay.type]}<input style={{ ...box, width: 110 }} inputMode="numeric" placeholder={pay.type === 'day' ? '120.000' : '25.000'} value={typedMoney(pay.rate)} onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, rate: e.target.value.replace(/\D/g, '') } }))} /></label>
-              : <label style={label}>Lương cơ bản<input style={{ ...box, width: 120 }} inputMode="numeric" placeholder="5.000.000" value={typedMoney(edit.base_salary)} onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, base_salary: e.target.value.replace(/\D/g, '') || 0 } }))} /></label>}
-            {pay.changed && <label style={label}>Áp dụng từ<input type="date" style={box} value={pay.from} min={`${vnToday().slice(0, 7)}-01`} onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, from: e.target.value } }))} /></label>}
-            <label style={label}>Tăng ca
-              <select style={box} value={overtimeOn(s.id) ? 'on' : 'off'} onChange={e => saveOvertime(s.id, e.target.value === 'on')}>
-                <option value="on">Có</option>
-                <option value="off">Không</option>
-              </select>
-            </label>
-            {overtimeOn(s.id) && <label style={label}>Giá tăng ca/giờ<input style={{ ...box, width: 90 }} inputMode="numeric" value={edit.overtime_rate ?? 25000} onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value.replace(/\D/g, '') } }))} /></label>}
-            {btn('Lưu lương', () => handleSaveConfig(s.id), 'dark')}
-          </div>
-          {pay.type !== 'month' && <div style={{ marginTop: 4 }}>{tinyWageNote(pay.rate, payUnitText[pay.type])}</div>}
-          {showCycle(s.id, pay) && (
-            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #e2e8f0' }}>
-              <div style={{ ...label, marginBottom: 4 }}>Kỳ trả lương</div>
-              {cycleEditor(s.id)}
-            </div>
-          )}
-        </div>
-
-        <div style={section}>
-          {head('⏰ Đi trễ / về sớm')}
-          {lateRuleEditor(s.id)}
-        </div>
-
-        <div style={section}>
-          {head('🏖 Ngày quán nghỉ')}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.82rem' }}>
-            {holidayEditor(s.id)}
-            <span style={{ color: '#64748b' }}>Ngày quán nghỉ cài ở tab Cài chấm công.{live.holidayDays ? ` Tháng này được ${live.holidayDays} ngày.` : ''}</span>
-          </div>
-        </div>
 
         <div style={section}>
           {head(`🕒 Chấm công (${atts.length} lượt)`)}
@@ -1930,7 +1902,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           <div className="payroll-tab-group-label">{group}</div>
           <div className="payroll-tabs" role="group" aria-label={group}>
             {tabs.map(tab => (
-              <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => setActiveTab(tab.key)} aria-pressed={activeTab === tab.key}>
+              <button key={tab.key} className={`payroll-tab ${activeTab === tab.key ? 'active' : ''}`} onClick={() => { setActiveTab(tab.key); setConfigFocus(null); }} aria-pressed={activeTab === tab.key}>
                 <span className="tab-icon" aria-hidden="true">{tab.icon}</span>
                 <span className="tab-label">{tab.label}</span>
                 {tab.badge > 0 && <span className="badge">{tab.badge}</span>}
@@ -2641,7 +2613,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   <div style={{ marginTop: 6 }}><SpanNote start={hoursEdit.opening_time} end={hoursEdit.closing_time} label="Quán mở" /></div>
                   <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>⏰ Đi trễ / về sớm — mặc định cả quán</div>
                   {lateRuleEditor('shop')}
-                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>Từng người đặt riêng ở tab Mức lương hoặc nút "Sửa" trong Bảng lương.</div>
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>Từng người đặt riêng ở tab Mức lương.</div>
                   <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>🏖 Ngày quán nghỉ</div>
                   <div style={{ fontSize: '0.76rem', color: '#64748b', marginBottom: 4 }}>Ngày cả quán đóng cửa. Người được nhận lương ngày nghỉ (mặc định: lương tháng có, theo ngày / theo giờ không — đổi từng người ở tab Cấu hình) được đủ 1 ngày công.</div>
                   {closedDaysEditor()}
@@ -2953,7 +2925,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   const pay = hourlyEditOf(s.id);
                   const shift = rules ? shiftOf(rules, s.id, vnToday()) : null;
                   return (
-                    <div key={s.id} className="config-row">
+                    <div key={s.id} id={`config-${s.id}`} className="config-row" style={configFocus === s.id ? { outline: '2px solid #3b82f6', outlineOffset: 2, scrollMarginTop: 12 } : { scrollMarginTop: 12 }}>
                       <div className="staff-name">{s.full_name}<div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div></div>
                       <div className="form-group" style={{ margin: 0 }}>
                         <label>Trả lương</label>
