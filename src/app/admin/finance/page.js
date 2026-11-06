@@ -5,7 +5,8 @@ import { Banknote, Camera, ChevronDown, ChevronLeft, ChevronRight, CreditCard, P
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import { useBackClose } from '@/lib/useBackClose';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
-import { billStaff, costParts, groupPaidBills, staffText } from '@/lib/ownerFinance.mjs';
+import { billStaff, costParts, groupPaidBills, shoppingParts, staffText } from '@/lib/ownerFinance.mjs';
+import { addNamedCost, namedCostList } from '@/lib/noteCategories.mjs';
 import './finance.css';
 
 const money = value => `${Math.round(Number(value || 0)).toLocaleString('vi-VN')}đ`;
@@ -93,7 +94,7 @@ const isDailyEntry = (e, categories) => e.kind === 'drink' || (e.kind === 'custo
 
 // Chi trong ngày của một ngày: bấm khoản (nước ngọt, đá, gas…, tab tự tạo theo ngày, Khác), nhập tiền.
 // Ngay dưới là các khoản đã chi trong ngày đó, xoá được.
-function DailySpend({ date, entries, history, categories: loaded, onSaved }) {
+function DailySpend({ date, entries, history, categories: loaded, onSaved, embedded = false }) {
   // Tab vừa tạo được giữ tạm cho tới khi danh sách tải lại xong (không thì mất tên tab).
   const [created, setCreated] = useState([]);
   const categories = [...loaded, ...created.filter(c => !loaded.some(x => x.id === c.id))];
@@ -144,8 +145,9 @@ function DailySpend({ date, entries, history, categories: loaded, onSaved }) {
     try { await post({ action: 'archive_category', id: category.id }); choose(DAILY_PRESETS[0]); onSaved(); } catch (err) { alert(err.message); }
   }
 
-  return <section className="fin-panel fin-spend" id="fin-spend">
-    <h2 className="fin-panel-head"><span>Chi trong ngày</span><b>{money(total)}</b></h2>
+  // embedded: nằm trong dòng "Chi trong ngày" của khung Chi ngày này (tab Hôm nay) — không cần tiêu đề riêng.
+  return <section className={embedded ? 'fin-spend fin-spend-embedded' : 'fin-panel fin-spend'} id={embedded ? undefined : 'fin-spend'}>
+    {!embedded && <h2 className="fin-panel-head"><span>Chi trong ngày</span><b>{money(total)}</b></h2>}
     <p className="fin-hint">Khoản mỗi ngày mỗi khác: nước ngọt, đá, gas… Đi chợ / nhập hàng thì ghi ở Sổ tay, lương tự tính theo chấm công.</p>
     <form onSubmit={save}>
       <div className="fin-search-tables fin-wrap fin-picks">
@@ -271,6 +273,68 @@ const costLine = (d, categories) => {
     .filter(([, v]) => v > 0).map(([k, v]) => `${k} ${money(v)}`).join(' · ');
 };
 
+// Chi của một ngày (tab Hôm nay): 4 nhóm — Chi trong ngày, Nhập hàng, Lương, Cố định — mỗi nhóm một dòng, bấm để xem từng
+// khoản. Cố định ghi rõ tiền cả tháng và phần chia cho mỗi ngày (cả tháng ÷ số ngày của tháng).
+function DayCosts({ day, month, spend = null, openTick = 0 }) {
+  const [open, setOpen] = useState(null);
+  // Bấm "Nhập / Thêm" ở Việc trong ngày: mở dòng Chi trong ngày và cuộn tới.
+  useEffect(() => {
+    if (!openTick) return;
+    setOpen('daily');
+    setTimeout(() => document.getElementById('fin-spend')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+  }, [openTick]);
+  const categories = month?.categories || [], noteCategories = month?.noteCategories || [];
+  const monthly = new Set(categories.filter(c => c.scope === 'tab' && c.schedule === 'monthly').map(c => c.id));
+  const tabName = id => categories.find(c => c.id === id)?.name || 'Khác';
+  const fixedName = id => (month?.fixedCategories || []).find(c => c.key === id)?.label || categories.find(c => c.id === id)?.name || '';
+  const p = costParts(day, categories), dim = Number(month?.daysInMonth) || 30;
+  const dailyItems = [...namedCostList(day.costItems?.drinks),
+    ...Object.entries(day.custom || {}).filter(([id, v]) => !monthly.has(id) && v > 0).map(([id, v]) => ({ name: tabName(id), amount: Math.round(v) }))];
+  const shop = shoppingParts(day, noteCategories).filter(x => x.amount > 0);
+  const staff = namedCostList(day.costItems?.salary);
+  const fixedMonth = {};
+  for (const e of month?.fixedEntries || []) addNamedCost(fixedMonth, e.label || fixedName(e.category) || 'Chi cố định', Number(e.amount) || 0);
+  const fixedRows = [...namedCostList(fixedMonth),
+    ...Object.entries(month?.customMonthTotals || {}).filter(([, v]) => v > 0).map(([id, v]) => ({ name: `${tabName(id)} (tab theo tháng)`, amount: Math.round(v) }))]
+    .map(x => ({ ...x, perDay: x.amount / dim }));
+  const groups = [
+    { key: 'daily', label: 'Chi trong ngày', amount: p.daily, hint: 'Nước ngọt, đá, gas… ghi trong ngày (và tab nhập theo ngày).' },
+    { key: 'purchases', label: 'Nhập hàng', amount: p.purchases, hint: `Tiền phiếu Sổ tay${day.purchaseNotes ? ` (${day.purchaseNotes} phiếu)` : ''}: đi chợ hàng ốc và các loại Khác.` },
+    { key: 'salary', label: 'Lương', amount: p.salary, hint: 'Lương ngày này theo chấm công (cùng cách tính trang Lương). Thưởng / phạt tính theo tháng, không chia vào ngày.' },
+    { key: 'fixed', label: 'Cố định', amount: p.fixed, hint: `Chi cả tháng chia đều mỗi ngày: cả tháng ÷ ${dim} ngày (tháng này).` },
+  ].filter(g => g.amount > 0 || g.key === 'daily');
+  const list = rows => <ul className="fin-costs-list">{rows.map((r, i) => <li key={`${r.name}-${i}`}><span>{r.name}</span><b>{money(r.amount)}</b></li>)}</ul>;
+  return <div className="fin-costs">
+    <div className="fin-costs-title">Chi ngày này — bấm từng mục để xem</div>
+    {groups.map(g => {
+      const isOpen = open === g.key;
+      return <div key={g.key} id={g.key === 'daily' ? 'fin-spend' : undefined} className={`fin-costs-group ${isOpen ? 'open' : ''}`}>
+        <button type="button" className="fin-costs-row" onClick={() => setOpen(isOpen ? null : g.key)} aria-expanded={isOpen}>
+          <span>{g.label}</span><b className={g.amount > 0 ? '' : 'zero'}>{money(g.amount)}</b><ChevronRight size={16} style={{ transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
+        </button>
+        {isOpen && <div className="fin-costs-body">
+          {g.key !== 'daily' && <p className="fin-costs-hint">{g.hint}</p>}
+          {g.key === 'daily' && (spend || (dailyItems.length ? list(dailyItems) : <p className="fin-empty">Đang tải…</p>))}
+          {g.key === 'purchases' && <ul className="fin-costs-list">
+            {shop.map(x => <li key={x.id || 'shop'}>
+              <span>{x.id ? `${x.name} (Sổ tay)` : 'Đi chợ hàng ốc'}{x.items?.length > 0 && <small>{x.items.map(it => `${it.name} ${money(it.amount)}`).join(' · ')}</small>}</span>
+              <b>{money(x.amount)}</b>
+            </li>)}
+          </ul>}
+          {g.key === 'salary' && (staff.length ? list(staff) : <p className="fin-empty">Chưa tách được theo người.</p>)}
+          {g.key === 'fixed' && <table className="fin-costs-table">
+            <thead><tr><th>Khoản</th><th>Cả tháng</th><th>Mỗi ngày</th></tr></thead>
+            <tbody>
+              {fixedRows.map((r, i) => <tr key={`${r.name}-${i}`}><td>{r.name}</td><td>{money(r.amount)}</td><td><b>{money(r.perDay)}</b></td></tr>)}
+              <tr className="sum"><td>Tổng</td><td>{money(fixedRows.reduce((s, r) => s + r.amount, 0))}</td><td><b>{money(p.fixed)}</b></td></tr>
+            </tbody>
+          </table>}
+        </div>}
+      </div>;
+    })}
+  </div>;
+}
+
 // Nhóm gập/mở: tiêu đề + số đếm / tổng tiền luôn hiện, bấm để xem chi tiết.
 function Fold({ title, sub, initial = false, openTick = 0, children }) {
   const [open, setOpen] = useState(initial);
@@ -359,7 +423,7 @@ async function sendReceipt(fields, image) {
 
 // Việc trong một ngày, đúng thứ tự làm: bill tự vào sổ → đi chợ ghi Sổ tay → chi trong ngày → kiểm tra
 // bill chuyển khoản → máy tự kiểm tra cuối ngày (5 giờ sáng hôm sau, không cần chủ chốt sổ). Mục xong có dấu ✓, mục cần làm có nút làm luôn.
-function DayTasks({ date, detail, spend, checking, onSearch, onOpenNotes, onOpenCheck, onCheck }) {
+function DayTasks({ date, detail, spend, checking, onSearch, onOpenNotes, onOpenCheck, onCheck, onOpenSpend }) {
   const transfer = detail.bills.filter(b => b.payment_method === 'transfer');
   const paperTransfer = (detail.paperBills || []).filter(b => b.paymentMethod === 'transfer');
   // Đóng bàn có ghi lý do không chụp được thì không tính "chưa có ảnh" (như máy tự kiểm tra 5 giờ sáng).
@@ -383,7 +447,7 @@ function DayTasks({ date, detail, spend, checking, onSearch, onOpenNotes, onOpen
       sub: detail.notes.length ? `${detail.notes.length} phiếu · ${money(detail.notes.reduce((s, n) => s + n.cost, 0))}${badNotes ? ` · ⚠ ${badNotes} phiếu cần xem lại` : ''}` : 'Chưa có phiếu nào',
       actions: badNotes ? [['Xem phiếu', onOpenNotes]] : [] },
     { state: spend.count ? 'done' : 'idle', title: 'Chi trong ngày', sub: spend.count ? `${spend.count} khoản · ${money(spend.total)}` : 'Nước ngọt, đá, gas… chưa nhập',
-      actions: [[spend.count ? 'Thêm' : 'Nhập', () => document.getElementById('fin-spend')?.scrollIntoView({ behavior: 'smooth', block: 'start' })]] },
+      actions: [[spend.count ? 'Thêm' : 'Nhập', onOpenSpend]] },
     { state: !transfer.length && !paperTransfer.length ? 'done' : noPhoto || unchecked ? 'warn' : 'done', title: 'Kiểm tra bill chuyển khoản',
       sub: !transfer.length && !paperTransfer.length ? 'Không có bill chuyển khoản'
         : [noPhoto && `📷 ${noPhoto} chưa có ảnh`, unchecked && `☐ ${unchecked} chưa đối chiếu`].filter(Boolean).join(' · ') || 'Đủ ảnh, đã đối chiếu',
@@ -435,6 +499,7 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
   const [view, setView] = useState(null);
   const [attaching, setAttaching] = useState(null);
   const [notesTick, setNotesTick] = useState(0);
+  const [spendTick, setSpendTick] = useState(0);
   const [checking, setChecking] = useState(false);
   const attachInput = useRef(null);
   // Back (Android) / vuốt lùi (iPhone): đóng ảnh đang xem.
@@ -513,16 +578,19 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
         <span>💵 Tiền mặt {money(summary.cash)}</span>
         {Object.entries(summary.byAccount || {}).map(([id, amount]) => <span key={id}>💳 {cardName(id)} {money(amount)}</span>)}
       </div>
-      {dayCost(summary) > 0 && <div className="fin-daysum-money"><span>Chi: {costLine(summary, categories)}</span></div>}
+      <DayCosts day={summary} month={data} openTick={spendTick}
+        spend={detail ? <DailySpend embedded date={date} entries={detail.entries || []} history={data?.entries || []} categories={categories} onSaved={changed} /> : null} />
     </div>}
 
     {detail && <>
       <DayTasks date={date} detail={detail} spend={spend} checking={checking} onSearch={onSearch} onCheck={runCheck}
-        onOpenNotes={() => { setNotesTick(t => t + 1); scrollTo('fin-notes'); }} onOpenCheck={() => scrollTo('fin-check')} />
+        onOpenNotes={() => { setNotesTick(t => t + 1); scrollTo('fin-notes'); }} onOpenCheck={() => scrollTo('fin-check')}
+        onOpenSpend={() => (summary ? setSpendTick(t => t + 1) : scrollTo('fin-spend'))} />
 
       <DayCheckPanel check={detail.check} date={date} onSearch={onSearch} />
 
-      <DailySpend date={date} entries={detail.entries || []} history={data?.entries || []} categories={categories} onSaved={changed} />
+      {/* Chưa có số của tháng (đang tải / ngoài tháng): ô Chi trong ngày đứng riêng như trước. */}
+      {!summary && <DailySpend date={date} entries={detail.entries || []} history={data?.entries || []} categories={categories} onSaved={changed} />}
 
       <div id="fin-close"><CloseForm detail={detail} accounts={accounts} onSaved={changed} /></div>
 

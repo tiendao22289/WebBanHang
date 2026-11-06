@@ -393,3 +393,32 @@
 .fin-check .fin-fold-body .fin-secondary { margin-bottom: 6px; }
 .fin-check .fin-fold-head { grid-template-columns: minmax(0, 1fr) auto auto; }
 .fin-check .fin-fold-head b { font-size: 14px; line-height: 1.35; }
+
+/* Tab Hôm nay — Chi ngày này: 4 nhóm một dòng, bấm mở từng khoản (Cố định: cả tháng + mỗi ngày). */
+.fin-costs { margin-top: 8px; border-top: 1px solid #e5e7eb; padding-top: 6px; }
+.fin-costs-title { font-size: 11px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: #9ca3af; margin: 2px 0 4px; }
+.fin-costs-group { border-radius: 8px; }
+.fin-costs-group.open { background: white; box-shadow: 0 0 0 1px #dbeafe; }
+.fin-costs-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 6px 6px; border: 0; background: none; font: inherit; color: #111827;
+  text-align: left; cursor: pointer; border-radius: 8px; -webkit-tap-highlight-color: transparent; }
+.fin-costs-row:active { background: #eff6ff; }
+.fin-costs-row span { flex: 1; font-size: 14px; font-weight: 600; }
+.fin-costs-row b { font-size: 14px; color: #b91c1c; white-space: nowrap; }
+.fin-costs-row svg { color: #2563eb; flex-shrink: 0; }
+.fin-costs-body { padding: 0 8px 8px; }
+.fin-costs-hint { margin: 0 0 6px; font-size: 12px; color: #6b7280; }
+.fin-costs-list { list-style: none; margin: 0; padding: 0; }
+.fin-costs-list li { display: flex; align-items: baseline; gap: 10px; padding: 6px 0; border-top: 1px solid #f1f5f9; font-size: 13px; }
+.fin-costs-list li span { flex: 1; min-width: 0; color: #374151; }
+.fin-costs-list li small { display: block; font-size: 11px; color: #9ca3af; margin-top: 1px; }
+.fin-costs-list li b { white-space: nowrap; color: #111827; }
+.fin-costs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.fin-costs-table th { text-align: right; font-size: 11px; font-weight: 700; color: #9ca3af; text-transform: uppercase; padding: 4px 0 4px 8px; }
+.fin-costs-table th:first-child, .fin-costs-table td:first-child { text-align: left; padding-left: 0; }
+.fin-costs-table td { text-align: right; padding: 6px 0 6px 8px; border-top: 1px solid #f1f5f9; white-space: nowrap; color: #374151; }
+.fin-costs-table td:first-child { white-space: normal; }
+.fin-costs-table tr.sum td { font-weight: 800; color: #111827; border-top: 1.5px solid #e5e7eb; }
+/* Ô nhập Chi trong ngày nằm trong khung Chi ngày này. */
+.fin-spend-embedded { margin: 0; padding: 0; border: 0; background: none; box-shadow: none; }
+.fin-spend-embedded .fin-hint { margin-top: 0; }
+.fin-costs-row b.zero { color: #9ca3af; }

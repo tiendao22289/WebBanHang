@@ -209,6 +209,11 @@ test('the shop wage cost per day adds everyone; bonus minus fines go to the mont
     bonuses: [{ staff_id: 'b', year: 2026, month: 11, amount: 300000 }] });
   assert.deepEqual(cost.byDay, { '2026-11-02': 200000 + 100000, '2026-11-03': 88889, '2026-11-04': 245000 });
   assert.equal(cost.monthExtra, 300000 - 50000 - 20000, 'someone with only a fine still counts');
+  // Sổ thu chi bấm "Lương" của một ngày: ai bao nhiêu (cộng lại đúng bằng lương ngày đó).
+  const named = payrollCost({ year: 2026, month: 11, staff: [{ id: 'a', full_name: 'Hoa' }, { id: 'b', full_name: 'Lan' }], rules: RULES, reviews: NOV_REVIEWS, sessions,
+    configs: [{ staff_id: 'a', ...CONFIG }, { staff_id: 'b', base_salary: 3000000 }] });
+  assert.deepEqual(Object.values(named.byDayStaff['2026-11-02']).map(x => [x.name, x.amount]), [['Hoa', 200000], ['Lan', 100000]]);
+  assert.equal(Object.values(named.byDayStaff['2026-11-02']).reduce((s, x) => s + x.amount, 0), named.byDay['2026-11-02']);
 
   const closed = payrollCost({ year: 2026, month: 11, staff, rules: RULES, reviews: NOV_REVIEWS, sessions, configs: [{ staff_id: 'a', ...CONFIG }],
     violations: [{ staff_id: 'a', amount: 50000 }], closes: [{ staff_id: 'a', snapshot: { vioAmt: 70000, bonusAmt: 10000 } }] });
