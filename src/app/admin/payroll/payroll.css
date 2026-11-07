@@ -476,3 +476,51 @@ button.slip-row:active, .slip-row.open { background: #eff6ff; }
 .sc-net.negative { color: #dc2626; }
 .sc-net i { font-style: normal; font-size: 0.62rem; color: #94a3b8; margin-left: 3px; }
 .mobile-cards .salary-card { margin-bottom: 5px; border-radius: 10px; }
+
+/* Trang Đơn từ của nhân viên: 4 ô chọn nhanh (2 cột), dòng đơn đã gửi, lối tắt từ trang Lương. */
+.form-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.form-tile { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 14px 12px; border-radius: 14px; border: 2px solid #e5e7eb; background: white; text-align: left; cursor: pointer; font: inherit; color: #0f172a; }
+.form-tile.on { border-color: #111827; background: #f8fafc; }
+.form-tile-icon { font-size: 1.5rem; line-height: 1; margin-bottom: 4px; }
+.form-tile-title { font-weight: 800; font-size: 0.95rem; }
+.form-tile-sub { font-size: 0.74rem; color: #64748b; }
+.form-tile-badge { position: absolute; top: 10px; right: 10px; font-size: 0.66rem; font-weight: 800; color: #92400e; background: #fef3c7; border-radius: 999px; padding: 2px 7px; }
+.form-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 9px 0; border-top: 1px solid #f1f5f9; }
+.form-row > span:first-child { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.form-row b { font-size: 0.86rem; }
+.form-row small { font-size: 0.74rem; color: #6b7280; }
+.form-row-end { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; font-size: 0.82rem; font-weight: 700; }
+.form-status { padding: 2px 8px; border-radius: 5px; font-size: 0.72rem; font-weight: 700; background: #fef9c3; color: #92400e; white-space: nowrap; }
+.form-status.approved { background: #dcfce7; color: #15803d; }
+.form-status.rejected { background: #fee2e2; color: #dc2626; }
+.form-cancel { font-size: 0.72rem; padding: 2px 8px; background: none; border: 1px solid #e2e8f0; border-radius: 6px; color: #64748b; cursor: pointer; font-weight: 400; }
+.forms-shortcut { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 14px 16px; border-radius: 14px; background: white; border: 1px solid #e5e7eb; color: #0f172a; text-decoration: none; }
+.forms-shortcut > span:first-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.forms-shortcut small { font-size: 0.76rem; color: #64748b; }
+.forms-shortcut-end { display: flex; align-items: center; gap: 8px; font-size: 1.3rem; color: #94a3b8; flex-shrink: 0; }
+.forms-shortcut-end em { font-style: normal; font-size: 0.7rem; font-weight: 800; color: #92400e; background: #fef3c7; border-radius: 999px; padding: 2px 8px; }
+
+/* Lịch sử chấm công của nhân viên: mỗi ngày một hàng — Ngày | Vào → Ra (từng lượt) | Giờ làm. */
+.hist-table { border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden; }
+.hist-head, .hist-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) 64px; gap: 8px; align-items: start; padding: 7px 10px; }
+.hist-head { background: #f8fafc; font-size: 0.66rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #94a3b8; border-bottom: 1px solid #e5e7eb; }
+.hist-head span:last-child, .hist-hours { text-align: right; }
+.hist-row { border-top: 1px solid #f1f5f9; font-size: 0.8rem; color: #334155; }
+.hist-row:nth-of-type(odd) { background: #fcfcfd; }
+.hist-row.warn { background: #fff7ed; }
+.hist-day { display: flex; flex-direction: column; line-height: 1.2; }
+.hist-day b { font-size: 0.78rem; color: #0f172a; }
+.hist-day span { font-size: 0.72rem; color: #64748b; }
+.hist-times { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.hist-time { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-variant-numeric: tabular-nums; }
+.hist-time > span:first-child { font-weight: 600; color: #0f172a; }
+.hist-tag { font-size: 0.68rem; font-weight: 700; border-radius: 999px; padding: 1px 6px; background: #f1f5f9; color: #475569; }
+.hist-tag.bad { background: #fee2e2; color: #b91c1c; }
+.hist-tag.warn { background: #ffedd5; color: #c2410c; }
+.hist-tag.amber { background: #fef3c7; color: #92400e; }
+.hist-fix { font-size: 0.78rem; line-height: 1; padding: 3px 5px; background: none; border: 1px solid #e2e8f0; border-radius: 6px; cursor: pointer; }
+.hist-note { grid-column: 2 / -1; font-size: 0.7rem; line-height: 1.35; color: #9a3412; margin-top: -2px; }
+.hist-hours { display: flex; flex-direction: column; font-variant-numeric: tabular-nums; }
+.hist-hours b { font-size: 0.82rem; color: #15803d; }
+.hist-hours small { font-size: 0.66rem; color: #0f766e; }
+.hist-fixform { grid-column: 1 / -1; }

@@ -9,6 +9,7 @@ import { DEFAULT_OT_RATE, LATE_FINE_MINUTES, MAX_CYCLE_DAYS, STANDARD_DAYS, acti
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
 import { unlockSpeech } from '@/lib/speak';
+import Link from 'next/link';
 import { ROLES, normalizeRole, roleLabel } from '@/lib/staffRoles.mjs';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users } from 'lucide-react';
 import './payroll.css';
@@ -413,7 +414,17 @@ function CycleBox({ people, today, nameOf, onPay, onUndo }) {
   );
 }
 
-export default function PayrollPage() {
+// Mục Đơn từ của nhân viên: mỗi loại một ô, bấm để mở đúng phần điền.
+const FORM_TILES = [
+  ['fine', '⚠️', 'Tự ghi lỗi', 'Làm vỡ ly, ghi sai món…'],
+  ['claim', '🧾', 'Chi hộ quán', 'Xăng, đá… lấy lại tiền'],
+  ['advance', '💵', 'Ứng lương', 'Xin ứng trước tiền lương'],
+  ['absent', '🏖', 'Báo nghỉ', 'Xin nghỉ ngày nào'],
+];
+
+// staffSection 'forms': trang Đơn từ (/admin/payroll/don) — nhân viên / quản lý chỉ thấy phần gửi đơn.
+export default function PayrollPage({ staffSection = null } = {}) {
+  const formsView = staffSection === 'forms';
   const [activeTab, setActiveTab] = useState('salary');
   // Điện thoại: mục Cài đặt nhớ lần mở gần nhất (bấm "Cài đặt" mở lại đúng mục đó).
   const [lastSettingTab, setLastSettingTab] = useState('accounts');
@@ -487,6 +498,13 @@ export default function PayrollPage() {
   const emptyClaim = () => ({ item: '', amount: '', spent_on: vnToday(), note: '', payout: '' });
   const [claimForm, setClaimForm] = useState(emptyClaim);
   const [showClaimForm, setShowClaimForm] = useState(false);
+  // Trang Đơn từ: loại đơn đang mở ('fine' | 'claim' | 'advance' | 'absent').
+  const [formTab, setFormTab] = useState('');
+  const pickForm = k => {
+    setFormTab(t => (t === k ? '' : k));
+    setShowSelfFine(k === 'fine'); setShowClaimForm(k === 'claim'); setShowAdvForm(k === 'advance'); setShowAbsForm(k === 'absent');
+    setClaimForm(emptyClaim());
+  };
   const [myMonth,    setMyMonth]    = useState({ y: now.getFullYear(), m: now.getMonth() + 1 }); // tháng của lịch sử chấm công
   const [myBonus,    setMyBonus]    = useState(null); // thưởng chuyên cần: đã trễ / quên ra ca chưa (khi chủ có dùng)
   const [sending,    setSending]    = useState('');   // đang gửi đơn nào (chặn bấm 2 lần)
@@ -1786,7 +1804,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           </div>
         )}
         <div className="payroll-header">
-          <div className="payroll-title">💰 Tính Lương của tôi</div>
+          <div className="payroll-title">{formsView ? '📝 Đơn từ' : '💰 Tính Lương của tôi'}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', background: '#dbeafe', borderRadius: 20, fontSize: '0.78rem', fontWeight: 700, color: '#1d4ed8', flexShrink: 0 }}>
             <span>👤</span>
             <span>{currentUser.full_name}</span>
@@ -1800,8 +1818,26 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
 
         <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
 
+          {/* Trang Đơn từ: 4 ô chọn nhanh, rồi phần điền của ô đã chọn. */}
+          {formsView && (() => {
+            const pendingOf = k => k === 'claim' ? myClaims.list.filter(x => x.status === 'pending').length
+              : k === 'fine' ? 0 : empReqs.filter(r => r.request_type === k && r.status === 'pending').length;
+            return (
+              <div className="form-tiles">
+                {FORM_TILES.filter(([k]) => k !== 'claim' || myClaims.ready).map(([k, icon, title, sub]) => (
+                  <button key={k} type="button" className={`form-tile${formTab === k ? ' on' : ''}`} onClick={() => pickForm(k)} aria-pressed={formTab === k}>
+                    <span className="form-tile-icon" aria-hidden="true">{icon}</span>
+                    <span className="form-tile-title">{title}</span>
+                    <span className="form-tile-sub">{sub}</span>
+                    {pendingOf(k) > 0 && <span className="form-tile-badge">{pendingOf(k)} chờ duyệt</span>}
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
+
           {/* ⏰ Chấm công hôm nay — multi-session */}
-          {(() => {
+          {!formsView && (() => {
             const fmtTime = ts => ts ? new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
             // Format duration from milliseconds → Vietnamese "X giờ Y phút Z giây"
             const fmtDurMs = (ms) => {
@@ -1833,10 +1869,6 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
             };
             const myShift = myRules && currentUser ? shiftOf(myRules, currentUser.id, vnToday()) : null;
             const pendingFix = id => myFixes.some(f => f.attendance_id === id && f.status === 'pending');
-            const fixButton = s => pendingFix(s.id)
-              ? <span style={{ fontSize: '0.72rem', color: '#92400e', fontWeight: 600 }}>⏳ chờ duyệt sửa giờ</span>
-              : <button onClick={() => setFixForm({ attendance_id: s.id, clock_in: toLocalDT(s.clock_in), clock_out: toLocalDT(s.clock_out), reason: '' })}
-                  style={{ fontSize: '0.72rem', padding: '1px 8px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}>✏️ Xin sửa giờ</button>;
             const fixFormFor = s => fixForm?.attendance_id === s.id && (
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: 10, margin: '6px 0 8px', display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.8rem' }}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>Giờ vào đúng
@@ -1956,50 +1988,61 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   </div>
                 </div>
 
-                {/* Monthly history (read-only) */}
-                {histDays.length > 0 && (
-                  <details open style={{ borderTop: '1px solid #e5e7eb' }}>
-                    <summary style={{ padding: '10px 18px', fontSize: '0.82rem', fontWeight: 700, color: '#64748b', cursor: 'pointer', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
-                      📋 Lịch sử chấm công tháng {myMonth.m} ({histDays.length} ngày)
-                    </summary>
-                    <div style={{ padding: '0 18px 14px' }}>
-                      {histDays.map(([date, daySessions]) => {
-                        const dayMs = daySessions.filter(s => s.clock_out).reduce((a, s) =>
-                          a + (new Date(s.clock_out) - new Date(s.clock_in)), 0);
-                        // Giờ trong ca gộp cả ngày (quét nhầm rồi vào lại không tính trùng) + giờ ngoài ca được tính.
-                        const dayCounted = dayInShiftMs(daySessions, myRules) + daySessions.reduce((a, s) => a + myHours(s).approvedMs, 0);
-                        // Hôm quán nghỉ (chủ gọi vào làm) không có trễ / về sớm.
-                        const dayWarn = flagTexts({ ...dayFlags(daySessions, myRules), ...((myRules?.closedDays || []).includes(date) ? { late: 0, leftEarly: 0 } : {}) });
-                        return (
-                          <div key={date} style={{ marginBottom: 10 }}>
-                            <div style={{ fontSize: '0.79rem', fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>
-                              {new Date(date + 'T00:00:00').toLocaleDateString('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit' })}
-                              <span style={{ marginLeft: 8, color: '#16a34a', fontWeight: 600 }}>· {dayMs === 0 && daySessions.some(s => !s.clock_out) ? 'đang làm' : fmtDurMs(dayMs)}</span>
-                              {dayCounted !== dayMs && <span style={{ marginLeft: 6, color: '#0f766e', fontWeight: 600 }}>(tính lương {fmtDurMs(dayCounted)})</span>}
-                              {dayWarn.length > 0 && <span style={{ marginLeft: 6, color: '#c2410c', fontWeight: 600 }}>⚠ {dayWarn.join(', ')}</span>}
-                            </div>
-                            {daySessions.map((s, i) => {
-                              const durMs = s.clock_out ? new Date(s.clock_out) - new Date(s.clock_in) : null;
-                              return (
-                                <React.Fragment key={s.id}>
-                                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: '0.78rem', color: '#475569', marginLeft: 8, marginBottom: 2 }}>
-                                    <span style={{ color: '#94a3b8', minWidth: 30 }}>Ca {i + 1}:</span>
-                                    <span>Vào {fmtTime(s.clock_in)} → {s.clock_out ? `Ra ${fmtTime(s.clock_out)}` : '–'}</span>
-                                    {durMs && <span style={{ color: '#16a34a', fontWeight: 600 }}>{fmtDurMs(durMs)}</span>}
-                                    {forgot(s) && <span style={{ color: '#c2410c', fontWeight: 700 }}>⚠ quên ra ca</span>}
-                                    {myExtra(s) && <span style={{ color: '#b45309' }}>⏱ {myExtra(s)}</span>}
-                                    {fixButton(s)}
-                                  </div>
-                                  {fixFormFor(s)}
-                                </React.Fragment>
-                              );
-                            })}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </details>
-                )}
+                {/* Lịch sử chấm công tháng này: mỗi ngày một hàng — Ngày | Vào → Ra (từng lượt) | Giờ làm. */}
+                {histDays.length > 0 && (() => {
+                  const hm = ts => (ts ? new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '…');
+                  const short = ms => { const m = Math.round(Math.max(0, ms) / 60000); return `${Math.floor(m / 60)}g${String(m % 60).padStart(2, '0')}`; };
+                  const DAY = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+                  const monthMs = histDays.reduce((t, [, ss]) => t + ss.filter(x => x.clock_out).reduce((a, x) => a + (new Date(x.clock_out) - new Date(x.clock_in)), 0), 0);
+                  return (
+                    <details open style={{ borderTop: '1px solid #e5e7eb' }}>
+                      <summary style={{ padding: '10px 18px', fontSize: '0.82rem', fontWeight: 700, color: '#64748b', cursor: 'pointer', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        📋 Lịch sử chấm công tháng {myMonth.m} · {histDays.length} ngày · {short(monthMs)}
+                      </summary>
+                      <div style={{ padding: '0 12px 14px' }}>
+                        <div className="hist-table">
+                          <div className="hist-head"><span>Ngày</span><span>Vào → Ra</span><span>Giờ làm</span></div>
+                          {histDays.map(([date, daySessions]) => {
+                            const dayMs = daySessions.filter(x => x.clock_out).reduce((t, x) => t + (new Date(x.clock_out) - new Date(x.clock_in)), 0);
+                            // Giờ trong ca gộp cả ngày (quét nhầm rồi vào lại không tính trùng) + giờ ngoài ca được tính.
+                            const dayCounted = dayInShiftMs(daySessions, myRules) + daySessions.reduce((t, x) => t + myHours(x).approvedMs, 0);
+                            // Hôm quán nghỉ (chủ gọi vào làm) không có trễ / về sớm.
+                            const flags = { ...dayFlags(daySessions, myRules), ...((myRules?.closedDays || []).includes(date) ? { late: 0, leftEarly: 0 } : {}) };
+                            const dayWarn = flagTexts(flags);
+                            const working = dayMs === 0 && daySessions.some(x => !x.clock_out);
+                            // Nền cam: ngày đi trễ / về sớm / quên ra ca. Ghi chú (trễ, sớm, ngoài ca) gom một dòng nhỏ dưới giờ.
+                            const bad = flags.late > 0 || flags.leftEarly > 0 || daySessions.some(forgot);
+                            const notes = [...(dayWarn.length ? [`⚠ ${dayWarn.join(', ')}`] : []), ...daySessions.map(myExtra).filter(Boolean).map(t => `⏱ ${t}`)];
+                            return (
+                              <div key={date} className={`hist-row${bad ? ' warn' : ''}`}>
+                                <div className="hist-day"><b>{DAY[new Date(`${date}T00:00:00Z`).getUTCDay()]}</b><span>{ddmm(date)}</span></div>
+                                <div className="hist-times">
+                                  {daySessions.map(x => (
+                                    <div key={x.id} className="hist-time">
+                                      <span>{hm(x.clock_in)} → {x.clock_out ? hm(x.clock_out) : '…'}</span>
+                                      {forgot(x) && <span className="hist-tag bad">quên ra ca</span>}
+                                      {pendingFix(x.id)
+                                        ? <span className="hist-tag amber" title="Đơn sửa giờ chờ chủ duyệt">⏳ chờ sửa</span>
+                                        : <button type="button" className="hist-fix" aria-label="Xin sửa giờ lượt này" title="Xin sửa giờ"
+                                            onClick={() => setFixForm({ attendance_id: x.id, clock_in: toLocalDT(x.clock_in), clock_out: toLocalDT(x.clock_out), reason: '' })}>✏️</button>}
+                                    </div>
+                                  ))}
+                                </div>
+                                <div className="hist-hours">
+                                  <b>{working ? 'đang làm' : short(dayMs)}</b>
+                                  {!working && dayCounted !== dayMs && <small>tính {short(dayCounted)}</small>}
+                                </div>
+                                {notes.length > 0 && <div className="hist-note">{notes.join(' · ')}</div>}
+                                {daySessions.some(x => fixForm?.attendance_id === x.id) && <div className="hist-fixform">{daySessions.map(x => <React.Fragment key={x.id}>{fixFormFor(x)}</React.Fragment>)}</div>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: 6 }}>"tính" = giờ được tính lương (trong ca + giờ ngoài ca được cho tính). Bấm ✏️ để xin sửa giờ lượt đó.</div>
+                      </div>
+                    </details>
+                  );
+                })()}
 
                 {myFixes.length > 0 && (
                   <div style={{ borderTop: '1px solid #e5e7eb', padding: '10px 18px 14px' }}>
@@ -2026,7 +2069,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
 
           {/* 💰 Lương tạm tính tháng này (máy chủ tính bằng cùng công thức với bảng lương của chủ quán) */}
           {/* Lương chủ quán đã trả: chưa xác nhận thì nổi bật ở trên, bấm "Tôi đã nhận". */}
-          {myPayments.length > 0 && (
+          {!formsView && myPayments.length > 0 && (
             <div style={{ background: myPayments.some(p => !p.received_at) ? '#fffbeb' : 'white', border: `1px solid ${myPayments.some(p => !p.received_at) ? '#fde68a' : '#e5e7eb'}`, borderRadius: 14, padding: 18 }}>
               <div style={{ fontWeight: 800, marginBottom: 8 }}>💵 Lương đã trả</div>
               {myPayments.slice(0, 6).map(p => {
@@ -2049,7 +2092,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
             </div>
           )}
 
-          {mySalary && (() => {
+          {!formsView && mySalary && (() => {
             const c = mySalary;
             const row = (label, value, color) => (
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '6px 0', borderBottom: '1px solid #f1f5f9', fontSize: '0.86rem' }}>
@@ -2124,8 +2167,19 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
             );
           })()}
 
+          {/* Trang Lương: lối nhanh sang Đơn từ (tự ghi lỗi, chi hộ, ứng lương, báo nghỉ). */}
+          {!formsView && (() => {
+            const waiting = empReqs.filter(r => r.status === 'pending').length + myClaims.list.filter(x => x.status === 'pending').length;
+            return (
+              <Link href="/admin/payroll/don" className="forms-shortcut">
+                <span><b>📝 Đơn từ</b><small>Tự ghi lỗi · Chi hộ quán · Ứng lương · Báo nghỉ</small></span>
+                <span className="forms-shortcut-end">{waiting > 0 && <em>{waiting} chờ duyệt</em>}›</span>
+              </Link>
+            );
+          })()}
+
           {/* Tự ghi lỗi của mình */}
-          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+          {formsView && formTab === 'fine' && <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showSelfFine ? 12 : 0, gap: 8 }}>
               <div>
                 <div style={{ fontWeight: 800 }}>⚠️ Tự ghi lỗi</div>
@@ -2154,12 +2208,23 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 </button>
               </div>
             )}
-          </div>
+            {myFines.some(f => f.self) && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b', marginBottom: 4 }}>Lỗi bạn đã tự ghi tháng này</div>
+                {myFines.filter(f => f.self).map(f => (
+                  <div key={f.id} className="form-row">
+                    <span><b>{f.reason}</b><small>{f.date ? ddmm(f.date) : ''}{f.note ? ` · ${f.note}` : ''}</small></span>
+                    <span className="form-row-end" style={{ color: f.amount > 0 ? '#dc2626' : '#92400e' }}>{f.amount > 0 ? `−${formatMoney(f.amount)}` : 'chờ định tiền'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>}
 
           {/* Chi hộ quán: tự bỏ tiền chi cho quán (xăng, đá…) thì ghi vào, chủ duyệt rồi trả lại — tự chọn lấy tiền mặt hay cộng vào lương. */}
-          {myClaims.ready && (
+          {formsView && formTab === 'claim' && myClaims.ready && (
             <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: showClaimForm || myClaims.list.length ? 12 : 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: showClaimForm ? 12 : 0 }}>
                 <div>
                   <div style={{ fontWeight: 800 }}>🧾 Chi hộ quán</div>
                   <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 2 }}>Bạn bỏ tiền ra chi cho quán thì ghi vào đây, chủ duyệt rồi trả lại.</div>
@@ -2169,7 +2234,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 </button>
               </div>
               {showClaimForm && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: myClaims.list.length ? 14 : 0 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {['Xăng', 'Đá', 'Gas', 'Rau củ', 'Gửi xe', 'Ship hàng'].map(x => (
                       <button key={x} type="button" onClick={() => setClaimForm(p => ({ ...p, item: x }))}
@@ -2206,37 +2271,11 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   </button>
                 </div>
               )}
-              {myClaims.list.map(x => (
-                <div key={x.id} style={{ padding: '9px 0', borderTop: '1px solid #f3f4f6', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>{x.item} · {formatMoney(x.amount)}</div>
-                    <div style={{ fontSize: '0.74rem', color: '#6b7280', marginTop: 2 }}>
-                      Chi ngày {ddmm(x.spent_on)} · {x.payout === 'cash' ? '💵 lấy tiền mặt' : '💰 cộng vào lương'}
-                      {x.status === 'approved' && x.payout === 'salary' && x.month ? ` tháng ${x.month}/${x.year}` : ''}
-                    </div>
-                    {x.note && <div style={{ fontSize: '0.74rem', color: '#6b7280', marginTop: 2 }}>{x.note}</div>}
-                    {x.admin_note && <div style={{ fontSize: '0.73rem', color: '#9ca3af', marginTop: 2 }}>💬 {x.admin_note}</div>}
-                  </div>
-                  <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-                    <span style={{ padding: '2px 8px', borderRadius: 5, fontSize: '0.72rem', fontWeight: 700,
-                      background: x.status === 'approved' ? '#dcfce7' : x.status === 'rejected' ? '#fee2e2' : '#fef9c3',
-                      color: x.status === 'approved' ? '#15803d' : x.status === 'rejected' ? '#dc2626' : '#92400e' }}>
-                      {x.status === 'pending' ? '⏳ Chờ duyệt' : x.status === 'approved' ? '✅ Đã duyệt' : '❌ Từ chối'}
-                    </span>
-                    {x.status === 'pending' && (
-                      <button onClick={() => handleCancel(x.id, 'claim')} disabled={!!sending}
-                        style={{ fontSize: '0.72rem', padding: '2px 8px', background: 'none', border: '1px solid #e2e8f0', borderRadius: 6, color: '#64748b', cursor: 'pointer' }}>
-                        {sending === `cancel-${x.id}` ? 'Đang huỷ…' : 'Huỷ'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
             </div>
           )}
 
           {/* Ứng lương */}
-          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+          {formsView && formTab === 'advance' && <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showAdvForm ? 12 : 0 }}>
               <div style={{ fontWeight: 800 }}>💵 Xin Ứng Lương</div>
               <button onClick={() => setShowAdvForm(p => !p)} style={{ fontSize: '0.8rem', background: showAdvForm ? '#f3f4f6' : '#111827', color: showAdvForm ? '#374151' : 'white', border: 'none', borderRadius: 8, padding: '5px 12px', fontWeight: 700, cursor: 'pointer' }}>
@@ -2255,10 +2294,10 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 </button>
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Báo nghỉ */}
-          <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+          {formsView && formTab === 'absent' && <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showAbsForm ? 12 : 0 }}>
               <div style={{ fontWeight: 800 }}>🏖 Báo Nghỉ</div>
               <button onClick={() => setShowAbsForm(p => !p)} style={{ fontSize: '0.8rem', background: showAbsForm ? '#f3f4f6' : '#111827', color: showAbsForm ? '#374151' : 'white', border: 'none', borderRadius: 8, padding: '5px 12px', fontWeight: 700, cursor: 'pointer' }}>
@@ -2282,38 +2321,40 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 </button>
               </div>
             )}
-          </div>
+          </div>}
 
-          {/* Lịch sử yêu cầu tháng này */}
-          {empReqs.length > 0 && (
-            <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
-              <div style={{ fontWeight: 800, marginBottom: 10 }}>📄 Yêu cầu gần đây</div>
-              {empReqs.map(r => (
-                <div key={r.id} style={{ padding: '10px 0', borderBottom: '1px solid #f3f4f6', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: '0.88rem' }}>
-                      {r.request_type === 'advance' ? `💵 Ứng ${Number(r.amount || 0).toLocaleString('vi-VN')}đ` : `🏖 Nghỉ ${r.days} ngày${leaveText(myLeaveDays.find(l => l.request_id === r.id))}`}
-                    </div>
-                    <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{r.reason}</div>
-                    {r.admin_note && <div style={{ fontSize: '0.73rem', color: '#9ca3af', marginTop: 2 }}>💬 {r.admin_note}</div>}
-                  </div>
-                  <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-                    <span style={{ padding: '2px 8px', borderRadius: 5, fontSize: '0.72rem', fontWeight: 700,
-                      background: r.status === 'approved' ? '#dcfce7' : r.status === 'rejected' ? '#fee2e2' : '#fef9c3',
-                      color: r.status === 'approved' ? '#15803d' : r.status === 'rejected' ? '#dc2626' : '#92400e' }}>
-                      {r.status === 'pending' ? '⏳ Chờ duyệt' : r.status === 'approved' ? '✅ Đã duyệt' : '❌ Từ chối'}
+          {/* Đơn đã gửi: ứng lương, báo nghỉ, chi hộ quán — mới nhất trước; còn chờ duyệt thì tự huỷ được. */}
+          {formsView && (empReqs.length > 0 || myClaims.list.length > 0) && (() => {
+            const items = [
+              ...empReqs.map(r => ({ key: `r-${r.id}`, id: r.id, kind: undefined, at: r.created_at, status: r.status, admin_note: r.admin_note,
+                title: r.request_type === 'advance' ? `💵 Ứng ${formatMoney(r.amount)}` : `🏖 Nghỉ ${r.days} ngày${leaveText(myLeaveDays.find(l => l.request_id === r.id))}`, sub: r.reason })),
+              ...myClaims.list.map(x => ({ key: `c-${x.id}`, id: x.id, kind: 'claim', at: x.created_at, status: x.status, admin_note: x.admin_note,
+                title: `🧾 ${x.item} · ${formatMoney(x.amount)}`,
+                sub: `Chi hộ ngày ${ddmm(x.spent_on)} · ${x.payout === 'cash' ? '💵 lấy tiền mặt' : `💰 cộng vào lương${x.status === 'approved' && x.month ? ` tháng ${x.month}/${x.year}` : ''}`}${x.note ? ` · ${x.note}` : ''}` })),
+            ].sort((a, b) => String(b.at).localeCompare(String(a.at)));
+            return (
+              <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: '14px 16px' }}>
+                <div style={{ fontWeight: 800, marginBottom: 4 }}>📄 Đơn đã gửi</div>
+                {items.map(it => (
+                  <div key={it.key} className="form-row">
+                    <span>
+                      <b>{it.title}</b>
+                      {it.sub && <small>{it.sub}</small>}
+                      {it.admin_note && <small style={{ color: '#9ca3af' }}>💬 {it.admin_note}</small>}
                     </span>
-                    {r.status === 'pending' && (
-                      <button onClick={() => handleCancel(r.id)} disabled={!!sending}
-                        style={{ fontSize: '0.72rem', padding: '2px 8px', background: 'none', border: '1px solid #e2e8f0', borderRadius: 6, color: '#64748b', cursor: 'pointer' }}>
-                        {sending === `cancel-${r.id}` ? 'Đang huỷ…' : 'Huỷ đơn'}
-                      </button>
-                    )}
+                    <span className="form-row-end">
+                      <span className={`form-status ${it.status}`}>{it.status === 'pending' ? '⏳ Chờ duyệt' : it.status === 'approved' ? '✅ Đã duyệt' : '❌ Từ chối'}</span>
+                      {it.status === 'pending' && (
+                        <button onClick={() => handleCancel(it.id, it.kind)} disabled={!!sending} className="form-cancel">
+                          {sending === `cancel-${it.id}` ? 'Đang huỷ…' : 'Huỷ'}
+                        </button>
+                      )}
+                    </span>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            );
+          })()}
         </div>
       </div>
     );
