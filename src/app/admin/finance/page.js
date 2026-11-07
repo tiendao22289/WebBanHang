@@ -1013,7 +1013,8 @@ function ItemsView({ month, today }) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(null);
   const [editing, setEditing] = useState(null);
-  const [list, setList] = useState('groups');
+  // Mở tab Món là thấy Món bán trước (chủ quán xếp: Món bán · Theo nhóm · Hàng nhập, 2026-11-07).
+  const [list, setList] = useState('sold');
   const [custom, setCustom] = useState(false);
   useEffect(() => { setRange({ from: monthFrom, to: monthTo }); }, [month]);
 
@@ -1062,7 +1063,7 @@ function ItemsView({ month, today }) {
       {t.paperRevenue > 0 && <p className="fin-hint">Bill giấy {money(t.paperRevenue)} không có chi tiết món nên không tính ở đây.</p>}
 
       <nav className="fin-switch fin-items-switch" role="tablist">
-        {[['groups', `Theo nhóm (${data.groups.length})`], ['sold', `Món bán (${data.sold.length})`], ['bought', `Hàng nhập (${data.bought.length})`]].map(([k, text]) =>
+        {[['sold', `Món bán (${data.sold.length})`], ['groups', `Theo nhóm (${data.groups.length})`], ['bought', `Hàng nhập (${data.bought.length})`]].map(([k, text]) =>
           <button key={k} role="tab" aria-selected={list === k} className={list === k ? 'active' : ''} onClick={() => setList(k)}>{text}</button>)}
       </nav>
 
