@@ -420,6 +420,7 @@ const FORM_TILES = [
   ['claim', '🧾', 'Chi hộ quán', 'Xăng, đá… lấy lại tiền'],
   ['advance', '💵', 'Ứng lương', 'Xin ứng trước tiền lương'],
   ['absent', '🏖', 'Báo nghỉ', 'Xin nghỉ ngày nào'],
+  ['peer', '🚩', 'Báo lỗi người khác', 'Thấy bạn làm sai thì báo chủ'],
 ];
 
 // staffSection 'forms': trang Đơn từ (/admin/payroll/don) — nhân viên / quản lý chỉ thấy phần gửi đơn.
@@ -498,12 +499,16 @@ export default function PayrollPage({ staffSection = null } = {}) {
   const emptyClaim = () => ({ item: '', amount: '', spent_on: vnToday(), note: '', payout: '' });
   const [claimForm, setClaimForm] = useState(emptyClaim);
   const [showClaimForm, setShowClaimForm] = useState(false);
-  // Trang Đơn từ: loại đơn đang mở ('fine' | 'claim' | 'advance' | 'absent').
+  // Báo lỗi đồng nghiệp: người chọn được + các lần mình đã báo (máy chủ đọc; ready false = web chưa cài bảng).
+  const [myPeer, setMyPeer] = useState({ ready: false, colleagues: [], list: [] });
+  const emptyPeer = () => ({ staff_id: '', rule_id: '', reason: '', note: '', date: '' });
+  const [peerForm, setPeerForm] = useState(emptyPeer);
+  // Trang Đơn từ: loại đơn đang mở ('fine' | 'claim' | 'advance' | 'absent' | 'peer').
   const [formTab, setFormTab] = useState('');
   const pickForm = k => {
     setFormTab(t => (t === k ? '' : k));
     setShowSelfFine(k === 'fine'); setShowClaimForm(k === 'claim'); setShowAdvForm(k === 'advance'); setShowAbsForm(k === 'absent');
-    setClaimForm(emptyClaim());
+    setClaimForm(emptyClaim()); setPeerForm(emptyPeer());
   };
   const [myMonth,    setMyMonth]    = useState({ y: now.getFullYear(), m: now.getMonth() + 1 }); // tháng của lịch sử chấm công
   const [myBonus,    setMyBonus]    = useState(null); // thưởng chuyên cần: đã trễ / quên ra ca chưa (khi chủ có dùng)
@@ -564,6 +569,7 @@ export default function PayrollPage({ staffSection = null } = {}) {
     setMyFineRules(meRes.fineRules || []);
     setMyPayments(meRes.payments || []);
     setMyClaims(meRes.claims || { ready: false, list: [] });
+    setMyPeer(meRes.peer || { ready: false, colleagues: [], list: [] });
     setMyBonus(meRes.bonus || null);
     setMyAllSessions(monthRes.data || []);
     setEmpReqs(reqRes.data || []);
@@ -622,6 +628,18 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     const ok = await send('claim', 'claim_expense', { item, amount, spent_on: claimForm.spent_on || vnToday(), note: claimForm.note, payout: claimForm.payout },
       () => { setClaimForm(emptyClaim()); setShowClaimForm(false); });
     if (ok) say('Đã gửi khoản chi, chờ chủ quán duyệt.');
+  };
+
+  // Báo lỗi đồng nghiệp: chưa trừ tiền, chủ quán xem rồi phạt hoặc bỏ qua; người bị báo không thấy tên người báo.
+  const handleSubmitPeer = async () => {
+    const who = myPeer.colleagues.find(c => c.id === peerForm.staff_id);
+    const rule = myFineRules.find(r => r.id === peerForm.rule_id);
+    const reason = rule ? rule.name : peerForm.reason.trim();
+    if (!who) return say('Chọn người bạn muốn báo lỗi.', false);
+    if (!reason) return say('Chọn lỗi trong danh sách hoặc ghi rõ lỗi gì.', false);
+    const ok = await send('peer', 'report_peer', { staff_id: who.id, rule_id: rule?.id || null, reason: rule ? '' : reason, note: peerForm.note, date: peerForm.date || null },
+      () => setPeerForm(emptyPeer()));
+    if (ok) say(`Đã báo lỗi của ${who.name}. Chủ quán sẽ xem và quyết định.`);
   };
 
   // Huỷ đơn của mình khi còn chờ duyệt (lỡ gửi nhầm).
@@ -684,11 +702,27 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
       if (r.ok) setClaims({ ready: j.ready !== false, claims: j.claims || [] });
     } catch { /* tab Yêu cầu chờ lần tải sau */ }
   }, []);
+  // Báo lỗi đồng nghiệp: chờ chủ xem + đã xử lý 60 ngày gần đây (máy chủ đọc); ô tiền phạt từng lần báo (mặc định tiền gợi ý).
+  const [peers, setPeers] = useState({ ready: true, reports: [] });
+  const [peerAmounts, setPeerAmounts] = useState({});
+  const fetchPeers = useCallback(async () => {
+    try {
+      const r = await fetch('/api/admin/workforce?peer=1', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) setPeers({ ready: j.ready !== false, reports: j.reports || [] });
+    } catch { /* tab Yêu cầu chờ lần tải sau */ }
+  }, []);
   const claimAction = async (action, body, confirmText) => {
     if (confirmText && !confirm(confirmText)) return;
     try { await workforce(action, body); } catch (err) { alert(err.message); return; }
     // Duyệt / xoá khoản cộng lương: lương tháng và lần trả theo kỳ đổi theo.
     fetchClaims(); fetchPayrollMonth(); fetchCycles();
+  };
+  const peerAction = async body => {
+    try { await workforce('decide_peer', body); } catch (err) { alert(err.message); return; }
+    // Phạt: thêm một khoản ở Vi phạm của người bị báo → tải lại bảng lương.
+    fetchPeers();
+    if (body.status === 'approved') fetchAllRef.current?.();
   };
   const checkinAction = async (action, body, confirmText) => {
     if (confirmText && !confirm(confirmText)) return false;
@@ -801,6 +835,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     fetchFaces();
     fetchCycles();
     fetchClaims();
+    fetchPeers();
     setLoading(true);
     const [staffRes, cfgRes, reqRes, vioRes, attRes] = await Promise.all([
       supabase.from('staff').select('id, full_name, phone, role, created_at, last_login').order('full_name'),
@@ -824,7 +859,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     setHasSynced(true);
     setLastSyncedAt(new Date());
     setLoading(false);
-  }, [selMonth, selYear, fetchCheckin, fetchPayrollMonth, fetchCycles, fetchClaims]);
+  }, [selMonth, selYear, fetchCheckin, fetchPayrollMonth, fetchCycles, fetchClaims, fetchPeers]);
 
 
   // Mở trang là tự tải (không còn nút Đồng bộ). Quay lại trang (mở lại app) sau ≥ 1 phút thì tải lại cho mới.
@@ -1821,10 +1856,11 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           {/* Trang Đơn từ: 4 ô chọn nhanh, rồi phần điền của ô đã chọn. */}
           {formsView && (() => {
             const pendingOf = k => k === 'claim' ? myClaims.list.filter(x => x.status === 'pending').length
+              : k === 'peer' ? myPeer.list.filter(x => x.status === 'pending').length
               : k === 'fine' ? 0 : empReqs.filter(r => r.request_type === k && r.status === 'pending').length;
             return (
               <div className="form-tiles">
-                {FORM_TILES.filter(([k]) => k !== 'claim' || myClaims.ready).map(([k, icon, title, sub]) => (
+                {FORM_TILES.filter(([k]) => (k !== 'claim' || myClaims.ready) && (k !== 'peer' || myPeer.ready)).map(([k, icon, title, sub]) => (
                   <button key={k} type="button" className={`form-tile${formTab === k ? ' on' : ''}`} onClick={() => pickForm(k)} aria-pressed={formTab === k}>
                     <span className="form-tile-icon" aria-hidden="true">{icon}</span>
                     <span className="form-tile-title">{title}</span>
@@ -2169,7 +2205,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
 
           {/* Trang Lương: lối nhanh sang Đơn từ (tự ghi lỗi, chi hộ, ứng lương, báo nghỉ). */}
           {!formsView && (() => {
-            const waiting = empReqs.filter(r => r.status === 'pending').length + myClaims.list.filter(x => x.status === 'pending').length;
+            const waiting = empReqs.filter(r => r.status === 'pending').length + myClaims.list.filter(x => x.status === 'pending').length + myPeer.list.filter(x => x.status === 'pending').length;
             return (
               <Link href="/admin/payroll/don" className="forms-shortcut">
                 <span><b>📝 Đơn từ</b><small>Tự ghi lỗi · Chi hộ quán · Ứng lương · Báo nghỉ</small></span>
@@ -2323,14 +2359,47 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
             )}
           </div>}
 
+          {/* Báo lỗi đồng nghiệp: chọn người, lỗi, ngày; chủ quán xem rồi phạt hoặc bỏ qua. */}
+          {formsView && formTab === 'peer' && myPeer.ready && (
+            <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div>
+                <div style={{ fontWeight: 800 }}>🚩 Báo lỗi người khác</div>
+                <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 2 }}>Chưa trừ tiền ngay: chủ quán xem rồi mới quyết định. Người bị báo không thấy tên bạn và phần ghi thêm của bạn.</div>
+              </div>
+              <select value={peerForm.staff_id} onChange={e => setPeerForm(p => ({ ...p, staff_id: e.target.value }))}
+                style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', background: 'white' }}>
+                <option value="">— Chọn người —</option>
+                {myPeer.colleagues.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <select value={peerForm.rule_id} onChange={e => setPeerForm(p => ({ ...p, rule_id: e.target.value }))}
+                style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem', background: 'white' }}>
+                <option value="">Lỗi khác (tự ghi lỗi gì)</option>
+                {myFineRules.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+              {!peerForm.rule_id && <input type="text" placeholder="Lỗi gì? vd: để khách chờ lâu không ra món" value={peerForm.reason} maxLength={200}
+                onChange={e => setPeerForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />}
+              <input type="text" placeholder="Ghi thêm: bàn nào, lúc mấy giờ, chuyện gì…" value={peerForm.note} maxLength={300}
+                onChange={e => setPeerForm(p => ({ ...p, note: e.target.value }))} style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem', color: '#475569' }}>Ngày xảy ra
+                <input type="date" value={peerForm.date || myPeer.workDay || vnToday()} max={vnToday()} min={new Date(Date.parse(`${vnToday()}T00:00:00Z`) - 7 * 86400000).toISOString().slice(0, 10)}
+                  onChange={e => setPeerForm(p => ({ ...p, date: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.85rem' }} /></label>
+              <button onClick={handleSubmitPeer} disabled={sending === 'peer'} style={{ background: '#b91c1c', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer', opacity: sending === 'peer' ? 0.6 : 1 }}>
+                {sending === 'peer' ? 'Đang gửi…' : 'Gửi chủ quán xem'}
+              </button>
+            </div>
+          )}
+
           {/* Đơn đã gửi: ứng lương, báo nghỉ, chi hộ quán — mới nhất trước; còn chờ duyệt thì tự huỷ được. */}
-          {formsView && (empReqs.length > 0 || myClaims.list.length > 0) && (() => {
+          {formsView && (empReqs.length > 0 || myClaims.list.length > 0 || myPeer.list.length > 0) && (() => {
             const items = [
               ...empReqs.map(r => ({ key: `r-${r.id}`, id: r.id, kind: undefined, at: r.created_at, status: r.status, admin_note: r.admin_note,
                 title: r.request_type === 'advance' ? `💵 Ứng ${formatMoney(r.amount)}` : `🏖 Nghỉ ${r.days} ngày${leaveText(myLeaveDays.find(l => l.request_id === r.id))}`, sub: r.reason })),
               ...myClaims.list.map(x => ({ key: `c-${x.id}`, id: x.id, kind: 'claim', at: x.created_at, status: x.status, admin_note: x.admin_note,
                 title: `🧾 ${x.item} · ${formatMoney(x.amount)}`,
                 sub: `Chi hộ ngày ${ddmm(x.spent_on)} · ${x.payout === 'cash' ? '💵 lấy tiền mặt' : `💰 cộng vào lương${x.status === 'approved' && x.month ? ` tháng ${x.month}/${x.year}` : ''}`}${x.note ? ` · ${x.note}` : ''}` })),
+              ...myPeer.list.map(x => ({ key: `p-${x.id}`, id: x.id, kind: 'peer', at: x.created_at, status: x.status, admin_note: x.admin_note,
+                title: `🚩 Báo lỗi ${x.staff_name}: ${x.reason}`, sub: `Ngày ${ddmm(x.date)}${x.note ? ` · ${x.note}` : ''}`,
+                label: x.status === 'approved' ? '✅ Chủ đã xử lý' : x.status === 'rejected' ? 'Chủ bỏ qua' : null })),
             ].sort((a, b) => String(b.at).localeCompare(String(a.at)));
             return (
               <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: '14px 16px' }}>
@@ -2343,7 +2412,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                       {it.admin_note && <small style={{ color: '#9ca3af' }}>💬 {it.admin_note}</small>}
                     </span>
                     <span className="form-row-end">
-                      <span className={`form-status ${it.status}`}>{it.status === 'pending' ? '⏳ Chờ duyệt' : it.status === 'approved' ? '✅ Đã duyệt' : '❌ Từ chối'}</span>
+                      <span className={`form-status ${it.status}`}>{it.status === 'pending' ? '⏳ Chờ duyệt' : it.label || (it.status === 'approved' ? '✅ Đã duyệt' : '❌ Từ chối')}</span>
                       {it.status === 'pending' && (
                         <button onClick={() => handleCancel(it.id, it.kind)} disabled={!!sending} className="form-cancel">
                           {sending === `cancel-${it.id}` ? 'Đang huỷ…' : 'Huỷ'}
@@ -2383,7 +2452,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           { key: 'salary', icon: '📊', label: 'Bảng lương' },
           { key: 'attendance', icon: '⏰', label: 'Chấm công' },
           { key: 'requests', icon: '📋', label: 'Yêu cầu', badge: pendingCount + (checkin?.fixes || []).filter(f => f.status === 'pending').length + (checkin?.extras || []).length + (faces?.reviews || []).length
-            + claims.claims.filter(x => x.status === 'pending').length },
+            + claims.claims.filter(x => x.status === 'pending').length + peers.reports.filter(x => x.status === 'pending').length },
           // Gợi ý phạt chưa xử lý + lỗi nhân viên tự ghi chưa có tiền (chờ chủ định tiền).
           { key: 'violations', icon: '⚠️', label: 'Vi phạm', badge: fineHints.length + violations.filter(v => !(Number(v.amount) > 0)).length },
         ]],
@@ -2687,6 +2756,43 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           {/* === YÊU CẦU === */}
           {activeTab === 'requests' && (
             <div className="request-list">
+              {/* Báo lỗi đồng nghiệp: chủ phạt (số tiền tự định) hoặc bỏ qua. Người bị báo không thấy tên người báo. */}
+              {[...peers.reports.filter(x => x.status === 'pending'), ...peers.reports.filter(x => x.status !== 'pending').slice(0, 20)].map(x => {
+                const nameOf = id => staffList.find(st => st.id === id)?.full_name || 'Không rõ';
+                const who = nameOf(x.staff_id), by = x.reporter_name || nameOf(x.reporter_id);
+                const at = ts => (ts ? new Date(ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '');
+                const typed = peerAmounts[x.id] ?? (x.suggested_amount ? x.suggested_amount.toLocaleString('vi-VN') : '');
+                const amount = Number(String(typed).replace(/\D/g, '')) || 0;
+                return (
+                  <div key={`peer-${x.id}`} className={`request-card ${x.status}`}>
+                    <div className="request-info">
+                      <div className="name">{who}</div>
+                      <div style={{ marginTop: 4 }}>
+                        <span style={{ display: 'inline-block', background: '#fee2e2', color: '#991b1b', borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>🚩 Bị báo lỗi</span>
+                        <span className={`status-badge ${x.status}`}>{x.status === 'pending' ? '⏳ Chờ xem' : x.status === 'approved' ? `✅ Đã phạt ${formatMoney(x.amount || 0)}` : '➖ Bỏ qua'}</span>
+                      </div>
+                      <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
+                        <div>Lỗi: <strong>{x.reason}</strong> · ngày {ddmm(x.date)}</div>
+                        {x.note && <div>Ghi thêm: {x.note}</div>}
+                        <div style={{ color: '#475569' }}>Người báo: <strong>{by}</strong> <span style={{ color: '#94a3b8' }}>(chỉ bạn thấy)</span></div>
+                        <div style={{ color: '#94a3b8' }}>Báo lúc {at(x.created_at)}{x.status !== 'pending' && x.decided_by ? ` · ${x.decided_by} ${at(x.decided_at)}` : ''}</div>
+                      </div>
+                      {x.admin_note && <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 4 }}>💬 {x.admin_note}</div>}
+                    </div>
+                    {x.status === 'pending' && (
+                      <div className="request-actions" style={{ flexShrink: 1, width: '100%' }}>
+                        <input type="text" inputMode="numeric" placeholder="Tiền phạt" value={typed} aria-label="Tiền phạt"
+                          onChange={e => { const r = e.target.value.replace(/\D/g, ''); setPeerAmounts(m => ({ ...m, [x.id]: r ? Number(r).toLocaleString('vi-VN') : '' })); }}
+                          style={{ width: 110, padding: '7px 10px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.85rem' }} />
+                        <button className="btn-danger" onClick={() => peerAction({ id: x.id, status: 'approved', amount })}>{amount ? `✓ Phạt ${formatMoney(amount)}` : '✓ Ghi lỗi (định tiền sau)'}</button>
+                        <button className="btn-secondary" style={{ padding: '7px 12px', background: 'white', border: '1px solid #e2e8f0', borderRadius: 8, color: '#475569', cursor: 'pointer' }}
+                          onClick={() => { const note = prompt('Ghi chú khi bỏ qua (tuỳ chọn):'); if (note === null) return; peerAction({ id: x.id, status: 'rejected', admin_note: note }); }}>Bỏ qua</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
               {/* Khoản chi hộ quán: duyệt → vào Sổ thu chi (Chi trong ngày, đúng ngày chi); tiền mặt thì đưa ngay, cộng lương thì vào lương tháng này. */}
               {[...claims.claims.filter(x => x.status === 'pending'), ...claims.claims.filter(x => x.status !== 'pending').slice(0, 20)].map(x => {
                 const who = staffList.find(st => st.id === x.staff_id)?.full_name || x.created_by_name || 'Không rõ', cash = x.payout === 'cash';
@@ -2711,6 +2817,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                     <div className="request-actions">
                       {x.status === 'pending' ? <>
                         <button className="btn-success" onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved' })}>{cash ? '✓ Duyệt · đưa tiền mặt' : '✓ Duyệt · cộng lương'}</button>
+                        {!cash && <button onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved', cash: true }, `Duyệt và đưa ${formatMoney(x.amount)} tiền mặt cho ${who} (không cộng vào lương)?`)}
+                          style={{ padding: '6px 10px', background: 'white', border: '1px solid #bbf7d0', borderRadius: 7, color: '#15803d', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer' }}>💵 Đưa tiền mặt</button>}
                         <button className="btn-danger" onClick={() => { const note = prompt('Lý do từ chối (tuỳ chọn):'); if (note === null) return; claimAction('decide_claim', { id: x.id, status: 'rejected', admin_note: note }); }}>✗ Từ chối</button>
                       </> : (
                         <button onClick={() => claimAction('delete_claim', { id: x.id }, `Xoá khoản chi "${x.item}" ${formatMoney(x.amount)} của ${who}?${x.status === 'approved' ? `\n\nDòng này trong Sổ thu chi cũng bị xoá${cash ? '' : ', tiền cộng lương bị bỏ'}.` : ''}`)}
@@ -2798,7 +2906,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   </div>
                 );
               })}
-              {requests.length === 0 && !(checkin?.fixes || []).length && !(checkin?.extras || []).length && !claims.claims.length && <div className="empty-state">Không có yêu cầu nào</div>}
+              {requests.length === 0 && !(checkin?.fixes || []).length && !(checkin?.extras || []).length && !claims.claims.length && !peers.reports.length && <div className="empty-state">Không có yêu cầu nào</div>}
               {requests.map(req => {
                 const typeInfo = requestTypeMap[req.request_type] || {};
                 return (

@@ -297,7 +297,7 @@ button.tk-tile { cursor: pointer; }
 .tk-muted-text { color: var(--tk-muted); }
 
 /* Món ăn bán chạy: nút xem tất cả + bảng mọi món ăn (số lượng, tiền). */
-.tk-more { display: block; width: 100%; min-height: 40px; margin-top: 10px; border: 1px solid var(--tk-line, #e5e7eb); border-radius: 10px; background: transparent;
+.tk-showall { display: block; width: 100%; min-height: 40px; margin-top: 10px; border: 1px solid var(--tk-line, #e5e7eb); border-radius: 10px; background: transparent;
   color: var(--tk-brand, #0f766e); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
 .tk-food-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; }
 .tk-food-table th { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--tk-muted, #6b7280); text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--tk-line, #e5e7eb); }

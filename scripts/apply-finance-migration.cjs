@@ -249,6 +249,14 @@ async function main() {
   console.log(JSON.stringify(claims));
   if (!claims.table_ok || !claims.anon_blocked) throw new Error('Chưa cài được bảng khoản chi hộ.');
 
+  // Báo lỗi chéo giữa nhân viên, chủ duyệt mới thành phạt (payroll_peer_reports.sql).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_peer_reports.sql'), 'utf8'));
+  const [peer] = await query(`SELECT to_regclass('public.payroll_peer_reports') IS NOT NULL AS table_ok,
+    NOT has_table_privilege('anon', 'public.payroll_peer_reports', 'SELECT') AND NOT has_table_privilege('authenticated', 'public.payroll_peer_reports', 'SELECT') AS anon_blocked,
+    EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'audit_staff_data' AND tgrelid = 'public.payroll_peer_reports'::regclass) AS audited`);
+  console.log(JSON.stringify(peer));
+  if (!peer.table_ok || !peer.anon_blocked) throw new Error('Chưa cài được bảng báo lỗi chéo.');
+
   // Chấm công bằng nút trên máy quầy cho người không có điện thoại (checkin_tap.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_tap.sql'), 'utf8'));
   const [tap] = await query(`SELECT to_regclass('public.checkin_tap_staff') IS NOT NULL AS table_ok,

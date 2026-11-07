@@ -217,7 +217,7 @@ function TopItems({ compare }) {
       <span className="tk-bar-track"><span className="tk-bar-fill" style={{ width: `${item.qty / max * 100}%` }} /></span>
     </li>)}</ol>
     <p className="tk-caption">{foods.length} món ăn · {totalQty} phần · {money(totalAmount)}. Không tính bia, nước, khăn.</p>
-    {foods.length > top.length && <button type="button" className="tk-more" onClick={() => setAll(a => !a)} aria-expanded={all}>
+    {foods.length > top.length && <button type="button" className="tk-showall" onClick={() => setAll(a => !a)} aria-expanded={all}>
       {all ? 'Thu gọn ▴' : `Xem tất cả ${foods.length} món ăn ▾`}</button>}
     {all && <table className="tk-food-table">
       <thead><tr><th>#</th><th>Món</th><th>SL</th><th>Tiền</th></tr></thead>
@@ -244,7 +244,8 @@ function StaffReport({ date, monthRevenue }) {
     return () => { cancelled = true; };
   }, [year, month]);
   if (failed || !data || data.year !== year || data.month !== month) return null;
-  const t = data.totals, pending = data.pending.fixes + data.pending.extras + data.pending.requests + (data.pending.fines || 0) + (data.pending.bonuses || 0);
+  const t = data.totals, pending = data.pending.fixes + data.pending.extras + data.pending.requests + (data.pending.fines || 0) + (data.pending.bonuses || 0)
+    + (data.pending.claims || 0) + (data.pending.peers || 0);
   const ratio = monthRevenue > 0 ? Math.round(t.gross / monthRevenue * 100) : null;
   const people = [...data.people].sort((a, b) => b.salary.net - a.salary.net);
   const watch = people.flatMap(p => [
@@ -443,7 +444,7 @@ function StaffDayCard({ staff }) {
     {waiting > 0 && <div className="tk-sub">
       <h3>Chờ bạn duyệt</h3>
       <ul className="tk-table">
-        {staff.pending.map((r, i) => <li key={`p${i}`}><span className="tk-cell-main"><b>{r.name}</b><small>{r.kind === 'advance' ? `xin ứng ${money(r.amount)}` : r.kind === 'expense' ? `ghi chi hộ quán ${money(r.amount)}` : `báo nghỉ ${r.days} ngày`}{r.reason ? ` — ${r.reason}` : ''}</small></span></li>)}
+        {staff.pending.map((r, i) => <li key={`p${i}`}><span className="tk-cell-main"><b>{r.name}</b><small>{r.kind === 'advance' ? `xin ứng ${money(r.amount)}` : r.kind === 'expense' ? `ghi chi hộ quán ${money(r.amount)}` : r.kind === 'peer' ? 'báo lỗi đồng nghiệp' : `báo nghỉ ${r.days} ngày`}{r.reason ? ` — ${r.reason}` : ''}</small></span></li>)}
         {staff.fixes.map((f, i) => <li key={`f${i}`}><span className="tk-cell-main"><b>{f.name}</b><small>xin sửa giờ chấm công{f.reason ? ` — ${f.reason}` : ''}</small></span></li>)}
         {staff.outside.map(o => <li key={`o${o.id}`}><span className="tk-cell-main"><b>{o.name}</b><small>{minutes(o.minutes)} ngoài ca chưa tính lương</small></span></li>)}
       </ul>

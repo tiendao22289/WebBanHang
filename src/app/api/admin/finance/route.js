@@ -390,12 +390,20 @@ function reportKeyOk(request, purpose = 'finance-daily-report') {
 
 // Đơn nhân viên đang chờ chủ duyệt (ứng lương, báo nghỉ) + khoản chi hộ quán chờ duyệt (request_type 'expense'; bảng chưa có thì bỏ qua).
 async function pendingStaffRequests(db) {
-  const [reqs, claims] = await Promise.all([
+  const [reqs, claims, peers] = await Promise.all([
     db.from('payroll_requests').select('staff_id, request_type, amount, days, reason').eq('status', 'pending').then(r => r.data || []),
     db.from('payroll_expense_claims').select('staff_id, item, amount, payout').eq('status', 'pending').then(r => (r.error ? [] : r.data || [])),
+    db.from('payroll_peer_reports').select('reporter_id, staff_id, reason').eq('status', 'pending').then(r => (r.error ? [] : r.data || [])),
   ]);
+  // Báo lỗi đồng nghiệp: dòng của người báo, lý do ghi kèm tên người bị báo.
+  let names = new Map();
+  if (peers.length) {
+    const { data } = await db.from('staff').select('id, full_name').in('id', [...new Set(peers.map(p => p.staff_id))]);
+    names = new Map((data || []).map(p => [p.id, p.full_name || 'Nhân viên']));
+  }
   return [...reqs, ...claims.map(c => ({ staff_id: c.staff_id, request_type: 'expense', amount: Number(c.amount) || 0, days: null,
-    reason: `${c.item} · ${c.payout === 'cash' ? 'lấy tiền mặt' : 'cộng vào lương'}` }))];
+    reason: `${c.item} · ${c.payout === 'cash' ? 'lấy tiền mặt' : 'cộng vào lương'}` })),
+    ...peers.map(p => ({ staff_id: p.reporter_id, request_type: 'peer', amount: 0, days: null, reason: `${names.get(p.staff_id) || 'Nhân viên'}: ${p.reason}` }))];
 }
 
 const inChunks = (list, size = 150) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));

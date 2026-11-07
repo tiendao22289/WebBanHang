@@ -154,7 +154,8 @@ test('báo cáo ngày gom mọi dòng "Voucher BK-…" thành một nhóm Vouche
 test('Thống kê nhanh ranks only dishes: beer, drinks, towels and gifts are left out; every dish is listed with its money', () => {
   for (const name of ['Bia Heineken lun', 'Bia sài gòn', 'Coca', '7 UP', 'Siting', 'Ôlong', 'O long', 'Trà đá', 'Trà chanh xã', 'Khăn', 'Nước suối', 'Xá xị', 'C 2', '0 độ'])
     assert.equal(isDrinkItem(name), true, name);
-  for (const name of ['Ốc Hương', 'Sò Sữa', 'Hàu nướng', 'Mì Xào', 'Đậu hũ chiên', 'Bánh mì', 'Tu Hài', 'Sò Điệp'])
+  for (const name of ['Đá', 'đá viên', 'Sữa tươi', 'Sữa đậu nành']) assert.equal(isDrinkItem(name), true, name);
+  for (const name of ['Ốc Hương', 'Sò Sữa', 'Hàu nướng', 'Mì Xào', 'Đậu hũ chiên', 'Bánh mì', 'Tu Hài', 'Sò Điệp', 'Da heo chiên giòn', 'Da gà chiên mắm', 'Đà điểu xào lăn', 'Sữa chua nếp cẩm'])
     assert.equal(isDrinkItem(name), false, name);
   const ledgerDay = [{ paid_at: '2026-11-06T12:00:00Z', amount: 0, items: [
     { name: 'Bia Heineken lun', quantity: 10, unit_price: 20000 }, { name: 'Ốc Hương', quantity: 3, unit_price: 90000 },
@@ -203,4 +204,17 @@ test('Thống kê nhanh splits every promotion: wheel prizes, Google and other c
   assert.deepEqual([promos.gifts.drinks.qty, promos.gifts.drinks.amount], [3, 30000]);
   assert.equal(promos.total, 57000 + 50000 + 10000 + 50000 + 5000 + 537000);
   assert.equal(gifts.value, 15000 + 500000 + 30000 + 7000, 'the loss card values gifts at the menu price too');
+});
+
+test('the daily report lists claims and colleague reports waiting for the owner', () => {
+  const settings = { hours_from: '2026-10-25' }, hours = [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '23:00', grace_minutes: 10 }];
+  const text = staffBlock({ date: '2026-11-08', settings, hours, staffNames: { a: 'An', b: 'Bình' }, sessions: [], pending: [
+    { staff_id: 'a', request_type: 'expense', amount: 50000, reason: 'Xăng · lấy tiền mặt' },
+    { staff_id: 'b', request_type: 'peer', amount: 0, reason: 'An: Làm vỡ ly, chén, dĩa' },
+    { staff_id: 'a', request_type: 'advance', amount: 200000, reason: 'việc nhà' },
+  ] });
+  assert.match(text, /Chờ bạn duyệt \(3\):/);
+  assert.match(text, /• An ghi chi hộ quán 50\.000đ — Xăng · lấy tiền mặt/);
+  assert.match(text, /• Bình báo lỗi đồng nghiệp — An: Làm vỡ ly, chén, dĩa/);
+  assert.match(text, /• An xin ứng 200\.000đ — việc nhà/);
 });
