@@ -18,6 +18,7 @@ import {
   History,
   ScanQrCode,
   Ticket,
+  ClipboardList,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import QrClockScanner from '@/components/QrClockScanner';
@@ -36,13 +37,15 @@ const ALL_NAV = [
   { href: '/admin/vouchers', label: 'Voucher', icon: Ticket, adminOnly: true },
   { href: '/admin/notes', label: 'Sổ tay', icon: ChefHat },
   { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
+  // Đơn từ của nhân viên / quản lý: tự ghi lỗi, chi hộ quán, ứng lương, báo nghỉ (chủ quán duyệt ở Lương → Yêu cầu).
+  { href: '/admin/payroll/don', label: 'Đơn từ', icon: ClipboardList, staffOnly: true },
   { href: '/admin/stats', label: 'Thống kê', icon: BarChart3 },
   { href: '/admin/settings', label: 'Cài đặt', icon: Settings, adminOnly: true },
   { href: '/admin/logs', label: 'Lịch sử bàn', icon: History, adminOnly: true },
 ];
 
 // Nhân viên / quản lý chỉ thấy các trang vai trò của mình được mở (src/lib/staffRoles.mjs).
-const navFor = role => (allowedPaths(role) ? ALL_NAV.filter(n => canOpenPath(role, n.href)) : ALL_NAV);
+const navFor = role => (allowedPaths(role) ? ALL_NAV.filter(n => canOpenPath(role, n.href)) : ALL_NAV.filter(n => !n.staffOnly));
 
 export default function AdminLayout({ children }) {
   const pathname = usePathname();
@@ -249,9 +252,11 @@ export default function AdminLayout({ children }) {
               <span style={{ display: 'inline-flex', padding: '5px 9px', borderRadius: 10, background: '#16a34a', color: 'white' }}><ScanQrCode size={20} /></span>
             </button>
           )}
-          {navItems.map((item) => {
+          {navItems.map((item, _, all) => {
             const Icon = item.icon;
-            const isActive = pathname.startsWith(item.href);
+            // Sáng mục khớp đường dẫn dài nhất (/admin/payroll/don sáng "Đơn từ", không sáng cả "Tính Lương").
+            const best = all.filter(n => pathname === n.href || pathname.startsWith(`${n.href}/`)).sort((a, b) => b.href.length - a.href.length)[0];
+            const isActive = best ? best.href === item.href : pathname.startsWith(item.href);
             return (
               <Link
                 key={item.href}
