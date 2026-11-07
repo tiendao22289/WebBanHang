@@ -2,17 +2,17 @@
 .tk-page {
   --tk-bg: #f3f4f6; --tk-surface: #ffffff; --tk-text: #0f172a; --tk-muted: #64748b; --tk-line: #e5e7eb; --tk-soft: #f1f5f9;
   --tk-brand: #b91c1c; --tk-brand-2: #7f1d1d; --tk-pos: #059669; --tk-neg: #dc2626; --tk-warn: #b45309; --tk-warn-bg: #fffbeb; --tk-warn-line: #fde68a;
-  --tk-ok-bg: #ecfdf5; --tk-bar: #0f172a; --tk-cost: #f97316;
+  --tk-ok-bg: #ecfdf5; --tk-bar: #0f172a; --tk-cost: #f97316; --tk-tab-on: #b91c1c;
   --tk-c1: #0f766e; --tk-c2: #2563eb; --tk-c3: #7c3aed; --tk-c4: #db2777; --tk-c5: #ca8a04;
   --tk-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.05);
   min-height: 100vh; background: var(--tk-bg); color: var(--tk-text);
   font-family: 'Be Vietnam Pro', 'DM Sans', system-ui, sans-serif; -webkit-font-smoothing: antialiased;
-  padding-bottom: calc(32px + env(safe-area-inset-bottom));
+  padding-bottom: calc(92px + env(safe-area-inset-bottom));
 }
 @media (prefers-color-scheme: dark) {
   .tk-page {
     --tk-bg: #0b0f17; --tk-surface: #151b26; --tk-text: #e5e7eb; --tk-muted: #94a3b8; --tk-line: #263040; --tk-soft: #1d2533;
-    --tk-pos: #34d399; --tk-neg: #f87171; --tk-warn: #fbbf24; --tk-warn-bg: #231c0b; --tk-warn-line: #4a3a12; --tk-ok-bg: #0f241c; --tk-bar: #e5e7eb;
+    --tk-pos: #34d399; --tk-neg: #f87171; --tk-warn: #fbbf24; --tk-warn-bg: #231c0b; --tk-warn-line: #4a3a12; --tk-ok-bg: #0f241c; --tk-bar: #e5e7eb; --tk-tab-on: #f87171;
     --tk-c1: #2dd4bf; --tk-c2: #60a5fa; --tk-c3: #a78bfa; --tk-c4: #f472b6; --tk-c5: #facc15;
     --tk-shadow: none;
   }
@@ -140,6 +140,14 @@
 .tk-text .tk-li { position: relative; padding-left: 14px; color: var(--tk-text); }
 .tk-text .tk-li::before { content: ''; position: absolute; left: 2px; top: 9px; width: 5px; height: 5px; border-radius: 50%; background: var(--tk-muted); }
 
+/* Thanh menu dưới đáy: Tổng quan · Món · Khuyến mãi · Nhân viên · Sổ tay. */
+.tk-tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: color-mix(in srgb, var(--tk-surface) 92%, transparent); backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); border-top: 1px solid var(--tk-line); padding-bottom: env(safe-area-inset-bottom); }
+.tk-tabbar-inner { max-width: 560px; margin: 0 auto; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.tk-tabbar button { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; height: 60px; padding: 0 2px; border: 0; background: none; color: var(--tk-muted); font-size: 11px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.tk-tabbar button span { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tk-tabbar button.on { color: var(--tk-tab-on); font-weight: 800; }
+.tk-tabbar button.on::before { content: ''; position: absolute; top: -1px; left: 26%; right: 26%; height: 3px; border-radius: 0 0 3px 3px; background: var(--tk-tab-on); }
+.tk-tab-badge { position: absolute; top: 6px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--tk-neg); color: #fff; font-size: 10px; font-style: normal; font-weight: 800; line-height: 17px; text-align: center; box-shadow: 0 0 0 2px var(--tk-surface); }
 .tk-foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 6px 4px 0; font-size: 13px; color: var(--tk-muted); }
 .tk-foot a { color: var(--tk-brand); font-weight: 600; text-decoration: none; }
 .tk-alert { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #fee2e2; color: #991b1b; border-radius: 12px; padding: 12px 14px; font-size: 14px; font-weight: 600; margin-bottom: 12px; }
