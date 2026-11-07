@@ -641,6 +641,9 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
       {/* Đếm két (so tiền mặt / thẻ với sổ) đã bỏ khỏi tab Hôm nay theo ý chủ quán (2026-11-07): máy tự kiểm tra lúc 5 giờ sáng.
           CloseForm còn giữ trong mã; số đã đếm trước đây vẫn nằm trong sổ. */}
 
+      {/* Vùng bill (tiền vào) tô nền xanh lá nhạt — mỗi vùng của trang một màu nhẹ để dễ phân biệt. */}
+      <div className="fin-zone fin-zone-bills">
+      <div className="fin-zone-label">💰 Bill trong ngày</div>
       <Fold title="Bill đã thu" sub={`${detail.bills.length} bill · ${money(detail.bills.reduce((s, b) => s + Number(b.amount || 0), 0))}`}>
         {detail.bills.length === 0 && <p className="fin-empty">Chưa có bill.</p>}
         {/* Một dòng = một lần đóng bàn: các bill thu cùng lúc gộp lại, bấm vào để xem từng bill. */}
@@ -708,6 +711,7 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
           </div>;
         })}
       </Fold>}
+      </div>
 
       {/* Chưa có số của tháng (đang tải / ngoài tháng): phiếu Sổ tay đứng riêng như trước. */}
       {!summary && <div id="fin-notes"><Fold title="Đi chợ / nhập hàng (Sổ tay)" openTick={notesTick} sub={detail.notes.length ? `${detail.notes.length} phiếu · ${money(detail.notes.reduce((s, n) => s + n.cost, 0))}` : 'Không có phiếu'}>
