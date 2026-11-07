@@ -478,3 +478,21 @@
 .fin-day-when { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fin-day.compact .fin-day-tags { margin-top: 6px; }
 @media (max-width: 420px) { .fin-day-row > span, .fin-day-when { font-size: 12px; } .fin-days-head, .fin-day-row { column-gap: 4px; } .fin-day.compact { padding: 8px; } .fin-days-head { padding: 0 8px 4px; } }
+
+/* Tab Hôm nay: mỗi vùng một màu nền nhẹ để dễ phân biệt (2026-11-07).
+   Thu · Chi · Lãi (+ khung Chi) xanh dương · Việc trong ngày tím · Kết quả máy kiểm tra cam · Bill xanh lá · Các ngày xám. */
+.fin-daysum { background: #eff6ff; border-color: #bfdbfe; }
+.fin-daysum .fin-costs { border-top-color: #dbeafe; }
+.fin-daysum .fin-costs-row:active { background: #dbeafe; }
+.fin-daysum .fin-costs-group.open { background: white; box-shadow: 0 0 0 1px #bfdbfe; }
+.fin-tasks { background: #f5f3ff; border-color: #ddd6fe; }
+.fin-tasks li { border-top-color: #ede9fe; }
+.fin-tasks h2 { color: #5b21b6; }
+.fin-panel.fin-check { background: #fff7ed; border-color: #fed7aa; }
+.fin-zone { margin: 10px 0; padding: 2px 12px 2px; border: 1px solid; border-radius: 12px; }
+.fin-zone-bills { background: #f0fdf4; border-color: #bbf7d0; }
+.fin-zone-bills .fin-fold { border-top-color: #dcfce7; }
+.fin-zone-bills .fin-fold:first-of-type { border-top: 0; }
+.fin-zone-label { padding: 9px 0 0; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #15803d; }
+#fin-month-days { background: #f1f5f9; border-color: #e2e8f0; }
+#fin-month-days h2 { color: #334155; }
