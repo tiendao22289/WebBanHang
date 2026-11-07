@@ -154,10 +154,11 @@ const ratesIn = (rates, staffId, key, unit) => [...new Set([(unit === 'day' ? da
  * rules / reviews: giờ làm và các lần chủ duyệt giờ ngoài ca; hourlyRates: lương 1 giờ
  * (payroll_hourly_rates) của người đó; lateRules: luật đi trễ (của quán + của người đó); closedDays / holidayPaid /
  * employed: ngày quán nghỉ (xem holidayArgs); asOf: hôm nay (tháng đang chạy: phần chỉnh theo số ngày của tháng chỉ tính
- * tới hôm nay), không có = cả tháng.
+ * tới hôm nay), không có = cả tháng. claims: khoản chi hộ quán (payroll_expense_claims) — khoản đã duyệt nhân viên chọn
+ * "cộng vào lương" của tháng này cộng vào thực lĩnh (claimAmt); khoản lấy tiền mặt không đụng tới lương.
  */
 export function computeSalary({ year, month, staffId, sessions = [], config = null, requests = [], violations = [], bonuses = [], rules = null, reviews = [], hourlyRates = [], lateRules = [],
-  closedDays = [], holidayPaid = null, employed = null, asOf = null }) {
+  closedDays = [], holidayPaid = null, employed = null, asOf = null, claims = [] }) {
   sessions = sessions.filter(s => !s.face_hold);
   const base = Number(config?.base_salary) || 0;
   const otRate = config?.overtime_rate === null || config?.overtime_rate === undefined ? DEFAULT_OT_RATE : Number(config.overtime_rate) || 0;
@@ -168,6 +169,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
   const absDays = approved.filter(r => r.request_type === 'absent').reduce((a, r) => a + Number(r.days || 0), 0);
   const vioAmt = violations.reduce((a, v) => a + Number(v.amount || 0), 0);
   const bonusAmt = bonuses.filter(b => Number(b.year) === year && Number(b.month) === month).reduce((a, b) => a + Number(b.amount || 0), 0);
+  const claimAmt = salaryClaims(claims, year, month).reduce((a, c) => a + Number(c.amount || 0), 0);
   let totalWorkH = 0, otHours = 0, pendingMs = 0, workUnits = 0;
   const byDay = {};
 
@@ -317,8 +319,8 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
     }
     return { rule: 'days', base, standardDays, dayBase: DAY_BASE, workDays, workUnits, holidayDays, dayUnits, dayAmt, monthAdjust, hourly, dayWage, basePay, earlyAmt, earlyList,
       lateAmt, lateList,
-      totalWorkH: round1(totalWorkH), otHours, otAmt, bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, pendingH: round1(pendingMs / HOUR),
-      net: basePay - lateAmt - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt, byDay, daily, lateFree };
+      totalWorkH: round1(totalWorkH), otHours, otAmt, bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, claimAmt, pendingH: round1(pendingMs / HOUR),
+      net: basePay - lateAmt - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt + claimAmt, byDay, daily, lateFree };
   }
 
   // Cách cũ (giữ nguyên số của các tháng trước): tính từng ngày làm, làm tròn 0,1 giờ. Theo ngày làm như tháng
@@ -342,7 +344,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
   const otAmt = Math.round(otHours * otRate);
   const absAmt = Math.round(absDays * (base > 0 ? Math.round(base / STANDARD_DAYS) : 0));
   return { rule: 'hours', base, standardDays: STANDARD_DAYS, workDays, workUnits: workDays, hourly: null, basePay: base, earlyAmt: 0, earlyList: [], lateAmt: 0, lateList: [], totalWorkH, otHours, otAmt,
-    bonusAmt, advAmt, absDays, absAmt, vioAmt, pendingH: round1(pendingMs / HOUR), net: base + otAmt + bonusAmt - advAmt - absAmt - vioAmt, byDay };
+    bonusAmt, advAmt, absDays, absAmt, vioAmt, claimAmt, pendingH: round1(pendingMs / HOUR), net: base + otAmt + bonusAmt - advAmt - absAmt - vioAmt + claimAmt, byDay };
 }
 
 /**
@@ -437,6 +439,15 @@ export function fineSuggestions({ staffId, tallies, reviews = [], kinds = ['late
 }
 
 /** Luật đi trễ dùng cho một người: mặc định của quán + luật riêng của người đó. */
+/**
+ * Khoản chi hộ quán (payroll_expense_claims): nhân viên tự bỏ tiền chi cho quán rồi ghi vào trang Lương, chủ duyệt. Nhân viên chọn
+ * nhận lại bằng tiền mặt tại chủ (payout 'cash', chủ đưa lúc duyệt) hay cộng vào lương ('salary': cộng vào lương tháng year/month —
+ * tháng lúc chủ duyệt). Hàm này lấy các khoản đã duyệt được cộng vào lương tháng đó.
+ */
+export const CLAIM_PAYOUTS = { cash: 'Lấy tiền mặt', salary: 'Cộng vào lương' };
+export const salaryClaims = (claims, year, month) => (claims || []).filter(c => c.status === 'approved' && c.payout === 'salary'
+  && Number(c.year) === Number(year) && Number(c.month) === Number(month));
+
 export const lateRulesOf = (rules, staffId) => (rules || []).filter(r => r.scope === 'shop' || r.scope === staffId);
 
 /** Loại gợi ý phạt còn dùng: lỗi máy tự gợi ý mà chủ chưa ẩn (chưa có danh sách lỗi thì dùng cả hai). */
@@ -449,17 +460,17 @@ export const activeFineKinds = rules => (rules?.length ? rules.filter(r => r.kin
  */
 export function staffMonthStats({ year, month, staff = [], configs = [], sessions = [], requests = [], violations = [], reviews = [], rules = null,
   closes = [], departures = [], autoClosed = [], scans = [], bonuses = [], bonusSettings = null, fineReviews = [], fineKinds = ['late', 'forgot'], hourlyRates = [], lateRules = [],
-  closedDays = [], holidayPay = [], returns = [], asOf = null }) {
+  closedDays = [], holidayPay = [], returns = [], asOf = null, claims = [] }) {
   const key = monthKey(year, month);
   const of = (rows, id) => rows.filter(r => r.staff_id === id);
   const people = staff.map(p => {
     const departure = departures.find(d => d.staff_id === p.id) || null;
     if (departure && String(departure.last_day).slice(0, 7) < key) return null;
     const mine = of(sessions, p.id), config = configs.find(c => c.staff_id === p.id) || null;
-    const reqs = of(requests, p.id), vios = of(violations, p.id), gifts = of(bonuses, p.id);
-    if (!config && !mine.length && !reqs.length && !vios.length) return null;
+    const reqs = of(requests, p.id), vios = of(violations, p.id), gifts = of(bonuses, p.id), mineClaims = of(claims, p.id);
+    if (!config && !mine.length && !reqs.length && !vios.length && !mineClaims.length) return null;
     const live = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, bonuses: gifts, rules, reviews, hourlyRates: of(hourlyRates, p.id),
-      lateRules: lateRulesOf(lateRules, p.id), ...holidayArgs(p, { closedDays, holidayPay, departures, returns, asOf }) });
+      lateRules: lateRulesOf(lateRules, p.id), ...holidayArgs(p, { closedDays, holidayPay, departures, returns, asOf }), claims: mineClaims });
     const closed = closes.find(c => c.staff_id === p.id);
     // Số đã chốt trước khi có thưởng chuyên cần không có bonusAmt.
     const salary = closed ? { bonusAmt: 0, ...closed.snapshot, locked: true, paid_at: closed.paid_at || null } : { ...live, locked: false, paid_at: null };
@@ -480,7 +491,7 @@ export function staffMonthStats({ year, month, staff = [], configs = [], session
     totals: {
       staff: people.length,
       gross: sum(p => p.salary.basePay - (p.salary.lateAmt || 0) - (p.salary.earlyAmt || 0) + p.salary.otAmt + p.salary.bonusAmt),
-      net: sum(p => p.salary.net), advances: sum(p => p.salary.advAmt), fines: sum(p => p.salary.vioAmt), bonuses: sum(p => p.salary.bonusAmt),
+      net: sum(p => p.salary.net), advances: sum(p => p.salary.advAmt), fines: sum(p => p.salary.vioAmt), bonuses: sum(p => p.salary.bonusAmt), claims: sum(p => p.salary.claimAmt || 0),
       earlyCuts: sum(p => p.salary.earlyAmt || 0), lateCuts: sum(p => p.salary.lateAmt || 0),
       otAmt: sum(p => p.salary.otAmt), hours: round1(sum(p => p.salary.totalWorkH)), pendingH: round1(sum(p => p.salary.pendingH)),
       late: sum(p => p.late.count), forgot: sum(p => p.forgot), closed: people.filter(p => p.salary.locked).length,
@@ -496,7 +507,8 @@ export function staffMonthStats({ year, month, staff = [], configs = [], session
  *
  * Số phải trả tới hết ngày `to` = tiền công từng ngày (byDay của computeSalary, cùng công thức bảng lương) từ start_day tới `to`
  * − số đã trả cho từng ngày đó (ngày đã trả mà sau đó sửa giờ / ra ca muộn: phần chênh vào lần trả sau) − ứng lương, phạt chưa trừ
- * + thưởng chuyên cần chưa cộng (ứng / phạt / thưởng đã trừ rồi mà sau đó sửa số tiền hay xoá: phần chênh cũng vào lần trả sau).
+ * + thưởng chuyên cần chưa cộng + khoản chi hộ (chọn cộng vào lương) chưa trả (ứng / phạt / thưởng / chi hộ đã tính rồi mà sau đó
+ * sửa số tiền hay xoá: phần chênh cũng vào lần trả sau).
  * Lương tháng của người đó vẫn tính như cũ; bảng lương tháng trừ phần đã trả theo kỳ (payoutPartOfMonth) ra "còn lại".
  */
 export const MAX_CYCLE_DAYS = 31;
@@ -522,7 +534,7 @@ export function cyclePeriod({ cycle, payouts = [], today }) {
 
 // Tổng đã trả / đã trừ trong các lần trả: tiền từng ngày, từng khoản ứng / phạt (theo mã), thưởng từng tháng.
 function payoutTotals(payouts) {
-  const days = {}, advances = new Map(), fines = new Map(), bonuses = new Map();
+  const days = {}, advances = new Map(), fines = new Map(), bonuses = new Map(), claims = new Map();
   const add = (map, k, v, key) => map.set(k, { amount: (map.get(k)?.amount || 0) + (Number(v) || 0), key });
   for (const p of payouts || []) {
     const d = p.detail || {};
@@ -530,16 +542,18 @@ function payoutTotals(payouts) {
     for (const a of d.advances || []) add(advances, a.id, a.amount, a.key);
     for (const f of d.fines || []) add(fines, f.id, f.amount, f.key);
     for (const b of d.bonuses || []) add(bonuses, b.key, b.amount, b.key);
+    for (const c of d.claims || []) add(claims, c.id, c.amount, c.key);
   }
-  return { days, advances, fines, bonuses };
+  return { days, advances, fines, bonuses, claims };
 }
 
 /**
  * Số phải trả của một người tới hết ngày `to`. months: các tháng đã tính lại (từ tháng của ngày cần tính sớm nhất tới tháng của
  * `to`) [{ key: 'YYYY-MM', byDay: { ngày: tiền }, advances: [{ id, amount }] (ứng đã duyệt), fines: [{ id, amount }],
- * bonus: thưởng chuyên cần đã duyệt }]. Ngày / khoản của tháng không có trong months thì không đụng tới.
+ * bonus: thưởng chuyên cần đã duyệt, claims: [{ id, amount }] chi hộ cộng lương đã duyệt }]. Ngày / khoản của tháng không có trong
+ * months thì không đụng tới.
  * → { days: [{ day, earned, paid, due }] (ngày còn chênh), work (tiền ngày từ đầu kỳ), adjust (chênh ngày đã trả trước đó),
- *     advances / fines / bonuses: [{ id?, key, amount }] (phần chưa trừ / chưa cộng), amount (số phải trả) }.
+ *     advances / fines / bonuses / claims: [{ id?, key, amount }] (phần chưa trừ / chưa cộng), amount (số phải trả) }.
  */
 export function cycleDue({ cycle, payouts = [], months = [], to, periodStart = null }) {
   const first = day10(cycle?.start_day), toKey = String(to).slice(0, 7);
@@ -556,28 +570,28 @@ export function cycleDue({ cycle, payouts = [], months = [], to, periodStart = n
     return [...new Set([...now.keys(), ...[...taken.entries()].filter(([, v]) => keys.has(v.key)).map(([id]) => id)])]
       .map(id => ({ id, key: now.get(id)?.key || taken.get(id).key, amount: (now.get(id)?.amount || 0) - (taken.get(id)?.amount || 0) })).filter(x => x.amount !== 0);
   };
-  const advances = items('advances', done.advances), fines = items('fines', done.fines);
+  const advances = items('advances', done.advances), fines = items('fines', done.fines), claims = items('claims', done.claims);
   const bonuses = list.map(m => ({ key: m.key, amount: (Number(m.bonus) || 0) - (done.bonuses.get(m.key)?.amount || 0) })).filter(x => x.amount !== 0);
   const sum = xs => xs.reduce((a, x) => a + x.amount, 0);
   const start = periodStart || first;
   const work = days.filter(x => x.day >= start).reduce((a, x) => a + x.due, 0), adjust = days.filter(x => x.day < start).reduce((a, x) => a + x.due, 0);
-  return { days, work, adjust, advances, fines, bonuses, amount: work + adjust - sum(advances) - sum(fines) + sum(bonuses) };
+  return { days, work, adjust, advances, fines, bonuses, claims, amount: work + adjust - sum(advances) - sum(fines) + sum(bonuses) + sum(claims) };
 }
 
 /** Chi tiết lưu cùng lần trả (để lần sau biết ngày / khoản nào đã trả, và bảng lương tháng trừ đúng phần của tháng). */
 export const payoutDetail = due => ({
   days: Object.fromEntries(due.days.map(x => [x.day, x.due])),
   advances: due.advances.map(({ id, key, amount }) => ({ id, key, amount })), fines: due.fines.map(({ id, key, amount }) => ({ id, key, amount })),
-  bonuses: due.bonuses.map(({ key, amount }) => ({ key, amount })),
+  bonuses: due.bonuses.map(({ key, amount }) => ({ key, amount })), claims: (due.claims || []).map(({ id, key, amount }) => ({ id, key, amount })),
 });
 
-/** Phần lương tháng `key` (YYYY-MM) đã trả theo kỳ: tiền các ngày của tháng + thưởng − ứng − phạt của tháng đó đã tính vào các lần trả. */
+/** Phần lương tháng `key` (YYYY-MM) đã trả theo kỳ: tiền các ngày của tháng + thưởng + chi hộ − ứng − phạt của tháng đó đã tính vào các lần trả. */
 export function payoutPartOfMonth(payouts, key) {
   let total = 0;
   for (const p of payouts || []) {
     const d = p.detail || {};
     for (const [day, v] of Object.entries(d.days || {})) if (day.startsWith(key)) total += Number(v) || 0;
-    for (const b of d.bonuses || []) if (b.key === key) total += Number(b.amount) || 0;
+    for (const b of [...(d.bonuses || []), ...(d.claims || [])]) if (b.key === key) total += Number(b.amount) || 0;
     for (const x of [...(d.advances || []), ...(d.fines || [])]) if (x.key === key) total -= Number(x.amount) || 0;
   }
   return total;
@@ -591,7 +605,8 @@ export function cycleDueTo(due, to, periodStart) {
   const toKey = String(to).slice(0, 7), upTo = x => x.key <= toKey;
   const days = (due?.days || []).filter(x => x.day <= to);
   const advances = (due?.advances || []).filter(upTo), fines = (due?.fines || []).filter(upTo), bonuses = (due?.bonuses || []).filter(upTo);
+  const claims = (due?.claims || []).filter(upTo);
   const sum = xs => xs.reduce((a, x) => a + x.amount, 0);
   const work = days.filter(x => x.day >= periodStart).reduce((a, x) => a + x.due, 0), adjust = days.filter(x => x.day < periodStart).reduce((a, x) => a + x.due, 0);
-  return { days, work, adjust, advances, fines, bonuses, amount: work + adjust - sum(advances) - sum(fines) + sum(bonuses) };
+  return { days, work, adjust, advances, fines, bonuses, claims, amount: work + adjust - sum(advances) - sum(fines) + sum(bonuses) + sum(claims) };
 }

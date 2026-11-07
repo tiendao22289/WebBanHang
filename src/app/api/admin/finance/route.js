@@ -345,7 +345,7 @@ async function auditDay(db, date, today) {
     quiet('loss', lossInputs(db, { from: date, to: date, range }), null),
     quiet('notes', notesBetween(db, from, to), []),
     quiet('staff', staffInputs(db, { from: date, to: date, range }), null),
-    db.from('payroll_requests').select('staff_id, request_type, amount, days, reason').eq('status', 'pending').then(r => r.data || []),
+    pendingStaffRequests(db),
     db.from('attendance_fix_requests').select('staff_id, reason').eq('status', 'pending').then(r => r.data || []),
     db.from('staff_data_audit').select('changed_at').eq('table_name', 'staff_notes').eq('op', 'DELETE').gte('changed_at', from).lt('changed_at', to)
       .then(r => (r.error ? [] : r.data || [])),
@@ -386,6 +386,16 @@ function reportKeyOk(request, purpose = 'finance-daily-report') {
   if (secret.length < 20 || !given) return false;
   const want = createHmac('sha256', secret).update(purpose).digest('hex');
   return given.length === want.length && timingSafeEqual(Buffer.from(given), Buffer.from(want));
+}
+
+// Đơn nhân viên đang chờ chủ duyệt (ứng lương, báo nghỉ) + khoản chi hộ quán chờ duyệt (request_type 'expense'; bảng chưa có thì bỏ qua).
+async function pendingStaffRequests(db) {
+  const [reqs, claims] = await Promise.all([
+    db.from('payroll_requests').select('staff_id, request_type, amount, days, reason').eq('status', 'pending').then(r => r.data || []),
+    db.from('payroll_expense_claims').select('staff_id, item, amount, payout').eq('status', 'pending').then(r => (r.error ? [] : r.data || [])),
+  ]);
+  return [...reqs, ...claims.map(c => ({ staff_id: c.staff_id, request_type: 'expense', amount: Number(c.amount) || 0, days: null,
+    reason: `${c.item} · ${c.payout === 'cash' ? 'lấy tiền mặt' : 'cộng vào lương'}` }))];
 }
 
 const inChunks = (list, size = 150) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
@@ -518,7 +528,7 @@ async function insightBlocks(db, { date, range, sections }) {
     try {
       const [input, pending, fixes, selfFines] = await Promise.all([
         staffInputs(db, { from: date, to: date, range }),
-        db.from('payroll_requests').select('staff_id, request_type, amount, days, reason').eq('status', 'pending').then(r => r.data || []),
+        pendingStaffRequests(db),
         db.from('attendance_fix_requests').select('staff_id, reason').eq('status', 'pending').then(r => r.data || []),
         selfFinesOn(db, date),
       ]);

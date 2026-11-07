@@ -47,7 +47,7 @@ import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { hashPin, isHashedPin, validPin } from '@/lib/staffPin.mjs';
 import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, KIOSK_COOKIE, newDeviceId, readKioskCookie, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
-import { closedDaysToDate, loadPayrollMonth, monthRange, readClosedDays, readHolidays, readHourlyRates, readLateRules, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
+import { closedDaysToDate, loadPayrollMonth, monthRange, readClosedDays, readHolidays, readHourlyRates, readLateRules, readMonthClaims, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
 import { AUTO_CLOSE_BY, AUTO_EXTRA_FROM, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
 import { DAY_PAY_FROM, DEFAULT_OT_RATE, MAX_CYCLE_DAYS, addDays, computeSalary, cycleDue, cycleDueTo, cyclePeriod, holidayArgs, lateRulesOf, monthKey, monthTallies, payoutDetail, payoutPartOfMonth, staffMonthStats,
   usesDayPay } from '@/lib/payroll.mjs';
@@ -73,6 +73,7 @@ const secret = () => process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const money = v => { const n = Math.round(Number(String(v ?? '').replace(/\./g, ''))); return Number.isFinite(n) && n >= 0 && n <= MAX_MONEY ? n : null; };
 const text = (v, max = 300) => String(v ?? '').trim().slice(0, max);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const CLAIMS_NOT_READY = 'Web đang cập nhật phần khoản chi hộ, thử lại sau ít phút.';
 const ddmm = d => `${String(d).slice(8, 10)}/${String(d).slice(5, 7)}`;
 // Tháng đã hết chưa (giờ Việt Nam): thưởng chuyên cần chỉ duyệt khi đã hết tháng.
 const monthOver = (year, month) => vnToday() >= monthRange(year, month).end;
@@ -150,7 +151,33 @@ async function myStatus(db, staffId) {
   const open = last && !last.clock_out ? markFaceHolds([last], holds)[0] : null;
   return { open, sessions: markFaceHolds((today.data || []).filter(x => workDayOf(x, settings) === day), holds), fixes: fixes.data || [], auto_closed: autoClosed, reviews: reviews.data || [],
     leave_days: leaveDays.data || [], face_holds: [...holds], rules, ...await mySalary(db, staffId, settings, reviews.data || [], autoClosed),
-    payments: await myPayments(db, staffId) };
+    payments: await myPayments(db, staffId), claims: await myClaims(db, staffId) };
+}
+
+// Khoản chi hộ quán của chính người đó (60 ngày gần đây + mọi khoản còn chờ duyệt). Bảng chưa có: ready false (ẩn phần ghi).
+async function myClaims(db, staffId) {
+  try {
+    const { data, error } = await db.from('payroll_expense_claims').select('*').eq('staff_id', staffId)
+      .or(`status.eq.pending,created_at.gte."${new Date(nowMs() - 60 * 86400000).toISOString()}"`).order('created_at', { ascending: false }).limit(100);
+    if (missingTable(error)) return { ready: false, list: [] };
+    if (error) throw error;
+    return { ready: true, list: (data || []).map(claimView) };
+  } catch (error) {
+    console.error('[workforce] my claims', error);
+    return { ready: false, list: [] };
+  }
+}
+const claimView = c => ({ id: c.id, staff_id: c.staff_id, spent_on: String(c.spent_on).slice(0, 10), item: c.item, amount: Number(c.amount) || 0, note: c.note || null,
+  payout: c.payout, status: c.status, year: c.year, month: c.month, admin_note: c.admin_note || null, decided_by: c.decided_by || null, decided_at: c.decided_at || null,
+  created_at: c.created_at, created_by_name: c.created_by_name || null, finance_entry_id: c.finance_entry_id || null });
+
+// Trang Lương của chủ: khoản chi hộ còn chờ duyệt + khoản đã duyệt / từ chối 60 ngày gần đây (kèm tên người ghi).
+async function claimsOverview(db) {
+  const { data, error } = await db.from('payroll_expense_claims').select('*')
+    .or(`status.eq.pending,created_at.gte."${new Date(nowMs() - 60 * 86400000).toISOString()}"`).order('created_at', { ascending: false }).limit(300);
+  if (missingTable(error)) return { ready: false, claims: [] };
+  if (error) throw error;
+  return { ready: true, claims: (data || []).map(claimView) };
 }
 
 // Lương chủ quán đã đánh dấu trả cho chính người đó (khoảng 100 ngày gần đây): lương tháng đã chốt (số còn lại sau phần đã trả
@@ -202,12 +229,13 @@ async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
       db.from('staff').select('id, created_at').eq('id', staffId).maybeSingle(),
       db.from('staff_departures').select('*').eq('staff_id', staffId),
     ]);
+    const claims = await readMonthClaims(db, year, month, staffId);
     for (const r of [sessions, config, requests, violations, closed, bonuses, meta]) if (r.error) throw r.error;
     const mine = markFaceHolds(sessions.data || [], await faceHolds(db, (sessions.data || []).map(x => x.id)));
     const closedDays = closedDaysToDate(holidays, start, end, vnToday());
     const live = computeSalary({ year, month, staffId, sessions: mine, config: config.data, requests: requests.data || [],
       violations: violations.data || [], bonuses: bonuses.data || [], rules: settings, reviews, hourlyRates, lateRules: lateRulesOf(lateRules, staffId),
-      ...holidayArgs(me.data || { id: staffId }, { closedDays, holidayPay: holidays.holidayPay, departures: left.data || [], returns: holidays.returns, asOf: vnToday() }) });
+      ...holidayArgs(me.data || { id: staffId }, { closedDays, holidayPay: holidays.holidayPay, departures: left.data || [], returns: holidays.returns, asOf: vnToday() }), claims });
     const salary = closed.data
       ? { bonusAmt: 0, ...closed.data.snapshot, year, month, locked: true, closed_at: closed.data.closed_at, paid_at: closed.data.paid_at || null }
       : { ...live, year, month, locked: false };
@@ -256,12 +284,15 @@ async function staffStats(db, year, month) {
     pendingExtras(db, m.rules),
     db.from('attendance_face_reviews').select('attendance_id').eq('status', 'pending'),
   ]);
+  const pendingClaims = await db.from('payroll_expense_claims').select('id').eq('status', 'pending');
+  if (pendingClaims.error && !missingTable(pendingClaims.error)) throw pendingClaims.error;
   for (const r of [fixes, pendingReqs]) if (r.error) throw r.error;
   if (faces.error && !missingTable(faces.error)) throw faces.error;
   const stats = staffMonthStats({ year, month, ...m, autoClosed: auto.map(r => r.attendance_id), scans });
   // Người đủ điều kiện thưởng chuyên cần mà chủ chưa duyệt (chỉ khi đã hết tháng và chủ có dùng thưởng).
   const bonusWaiting = monthOver(year, month) && m.bonusSettings.bonus_amount > 0 ? stats.people.filter(p => p.bonus.eligible && !p.bonus.approved && !p.salary.locked).length : 0;
   return { ...stats, pending: { fixes: (fixes.data || []).length, requests: (pendingReqs.data || []).length, extras: extras.length, faces: (faces.data || []).length,
+    claims: pendingClaims.error ? 0 : (pendingClaims.data || []).length,
     fines: stats.people.reduce((a, p) => a + p.fineSuggestions, 0), bonuses: bonusWaiting } };
 }
 
@@ -291,8 +322,9 @@ async function payrollMonth(db, year, month) {
   if (payouts.error && !missingTable(payouts.error)) throw payouts.error;
   // reviews: lần duyệt giờ ngoài ca của các ca trong tháng (trang Lương tính bằng đúng dữ liệu máy chủ chốt).
   const ids = sessionIds.map(x => x.id);
-  // faceHolds: ca chờ chủ duyệt mặt — trang Lương chưa tính lương các ca này.
-  return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set(auto.map(r => r.attendance_id))],
+  // faceHolds: ca chờ chủ duyệt mặt — trang Lương chưa tính lương các ca này. claims: chi hộ đã duyệt tính vào lương tháng này.
+  const claims = await readMonthClaims(db, year, month);
+  return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set(auto.map(r => r.attendance_id))], claims,
     reviews: await reviewsFor(db, ids), faceHolds: [...await faceHolds(db, ids)],
     bonuses: bonuses.data || [], bonusSettings, fineRules: fineRules.data || [], fineReviews: fineReviews.data || [], violationMeta: meta.data || [],
     hourlyRates, lateRules, ...holidays, payouts: payouts.error ? [] : payouts.data || [], monthOver: monthOver(year, month) };
@@ -345,12 +377,13 @@ async function cycleStates(db, staffId = null) {
   const monthOf = (k, id) => {
     const m = loaded.get(k), of = rows => (rows || []).filter(r => r.staff_id === id);
     const person = m.staff.find(x => x.id === id) || { id };
-    const [year, month] = k.split('-').map(Number), reqs = of(m.requests), vios = of(m.violations), gifts = of(m.bonuses);
+    const [year, month] = k.split('-').map(Number), reqs = of(m.requests), vios = of(m.violations), gifts = of(m.bonuses), claims = of(m.claims || []);
     const closed = m.closes.find(x => x.staff_id === id)?.snapshot;
     const byDay = closed?.byDay || computeSalary({ year, month, staffId: id, sessions: of(m.sessions), config: of(m.configs)[0] || null, requests: reqs, violations: vios, bonuses: gifts,
       rules: m.rules, reviews: m.reviews, hourlyRates: of(m.hourlyRates), lateRules: lateRulesOf(m.lateRules, id), ...holidayArgs(person, m) }).byDay;
     return { key: k, byDay, advances: reqs.filter(r => r.request_type === 'advance' && r.status === 'approved').map(r => ({ id: r.id, amount: Number(r.amount) || 0 })),
-      fines: vios.map(v => ({ id: v.id, amount: Number(v.amount) || 0 })), bonus: gifts.reduce((a, b) => a + (Number(b.amount) || 0), 0) };
+      fines: vios.map(v => ({ id: v.id, amount: Number(v.amount) || 0 })), bonus: gifts.reduce((a, b) => a + (Number(b.amount) || 0), 0),
+      claims: claims.filter(c => c.payout === 'salary').map(c => ({ id: c.id, amount: Number(c.amount) || 0 })) };
   };
   const last = loaded.get(today.slice(0, 7));
   return { ready: true, today, people: plans.map(({ c, mine, period, from }) => {
@@ -358,7 +391,7 @@ async function cycleStates(db, staffId = null) {
     // Ca đang mở (chưa ra ca): tiền ngày đó chưa tính, trả tới ngày đó thì phần còn lại vào lần trả sau.
     const open = (last?.sessions || []).find(x => x.staff_id === c.staff_id && !x.clock_out);
     return { staff_id: c.staff_id, every_days: period.every, start_day: String(c.start_day).slice(0, 10), period: { start: period.start, payday: period.payday, daysLeft: period.daysLeft },
-      openDay: open ? workDayOf(open, last.rules) : null, days: due.days, advances: due.advances, fines: due.fines, bonuses: due.bonuses,
+      openDay: open ? workDayOf(open, last.rules) : null, days: due.days, advances: due.advances, fines: due.fines, bonuses: due.bonuses, claims: due.claims,
       payouts: mine.slice(-6).reverse().map(({ detail: _d, ...x }) => x) };
   }) };
 }
@@ -477,8 +510,9 @@ export async function GET(request) {
     const params = new URL(request.url).searchParams;
     if (params.get('me')) return NextResponse.json(await myStatus(s.db, s.user.id), { headers });
     if (params.get('face_check')) return NextResponse.json(await faceCheckStatus(s.db, s.user.id, params.get('face_check')), { headers });
-    if (!params.get('checkin') && !params.get('payroll') && !params.get('stats') && !params.get('faces') && !params.get('cycles')) return fail('Thiếu yêu cầu.');
+    if (!params.get('checkin') && !params.get('payroll') && !params.get('stats') && !params.get('faces') && !params.get('cycles') && !params.get('claims')) return fail('Thiếu yêu cầu.');
     if (!s.isAdmin) return fail('Chỉ admin xem phần này.', 403);
+    if (params.get('claims')) return NextResponse.json(await claimsOverview(s.db), { headers });
     if (params.get('faces')) return NextResponse.json(await faceOverview(s.db), { headers });
     if (params.get('cycles')) return NextResponse.json(await cycleStates(s.db), { headers });
     if (params.get('payroll') || params.get('stats')) {
@@ -659,8 +693,9 @@ export async function POST(request) {
     if (body.action === 'cancel_request') {
       // Nhân viên tự huỷ đơn của mình khi còn chờ duyệt (ứng lương, báo nghỉ, xin sửa giờ).
       if (!UUID.test(body.id || '')) return fail('Thiếu đơn cần huỷ.');
-      const table = body.kind === 'fix' ? 'attendance_fix_requests' : 'payroll_requests';
+      const table = body.kind === 'fix' ? 'attendance_fix_requests' : body.kind === 'claim' ? 'payroll_expense_claims' : 'payroll_requests';
       const { data: req, error } = await db.from(table).select('*').eq('id', body.id).maybeSingle();
+      if (missingTable(error)) return fail(CLAIMS_NOT_READY, 503);
       if (error) throw error;
       if (!req || req.staff_id !== user.id) return fail('Không tìm thấy đơn của bạn.', 404);
       if (req.status !== 'pending') return fail('Đơn đã được duyệt, không huỷ được nữa. Nhờ chủ quán nếu cần sửa.', 409);
@@ -698,6 +733,30 @@ export async function POST(request) {
       if (missingCol(r.error)) return fail('Web đang cập nhật phần xác nhận nhận lương, thử lại sau ít phút.', 503);
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true, received_at: stamp }, { headers });
+    }
+
+    // Nhân viên / quản lý ghi khoản tự bỏ tiền chi cho quán (vd đổ xăng 50.000đ đi chợ) rồi gửi chủ duyệt; tự chọn nhận lại bằng
+    // tiền mặt tại chủ hay cộng vào lương. Ngày chi: hôm nay hoặc tối đa 31 ngày trước. Còn chờ duyệt thì tự huỷ được (cancel_request).
+    if (body.action === 'claim_expense') {
+      const item = text(body.item, 80), note = text(body.note, 300) || null, amount = money(body.amount);
+      const payout = body.payout === 'cash' || body.payout === 'salary' ? body.payout : null;
+      const today = vnToday(), spentOn = DATE.test(body.spent_on || '') ? body.spent_on : today;
+      if (!item) return fail('Ghi khoản chi gì (vd: Xăng đi chợ).');
+      if (!amount || amount < 1000 || amount > 50000000) return fail('Số tiền chi không hợp lệ (từ 1.000đ).');
+      if (!payout) return fail('Chọn nhận lại tiền: lấy tiền mặt hay cộng vào lương.');
+      if (spentOn > today || spentOn < addDays(today, -31)) return fail('Ngày chi phải trong 31 ngày gần đây, không sau hôm nay.');
+      // Bấm đúp / mạng chập chờn: khoản giống hệt vừa gửi trong 30 giây thì coi như đã gửi.
+      const { data: recent, error: re } = await db.from('payroll_expense_claims').select('id, item, amount, spent_on, payout, status, created_at').eq('staff_id', user.id)
+        .eq('status', 'pending').order('created_at', { ascending: false }).limit(50);
+      if (missingTable(re)) return fail(CLAIMS_NOT_READY, 503);
+      if (re) throw re;
+      if ((recent || []).some(x => x.item === item && Number(x.amount) === amount && String(x.spent_on).slice(0, 10) === spentOn && x.payout === payout
+        && Date.parse(x.created_at) > nowMs() - 30000)) return NextResponse.json({ ok: true, duplicate: true }, { headers });
+      if ((recent || []).length >= 30) return fail('Bạn còn nhiều khoản chi đang chờ duyệt. Nhờ chủ quán duyệt bớt rồi ghi tiếp.', 429);
+      const r = await db.from('payroll_expense_claims').insert({ staff_id: user.id, spent_on: spentOn, item, amount, note, payout, status: 'pending',
+        created_by_name: user.full_name || null, created_at: isoNow() }).select('id').single();
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true, id: r.data.id }, { headers });
     }
 
     // Nhân viên tự ghi lỗi của chính mình hôm nay (làm vỡ ly, ghi sai món…). Tiền theo danh sách lỗi chủ đặt (không tự gõ tiền);
@@ -982,12 +1041,12 @@ export async function POST(request) {
         const departure = m.departures.find(d => d.staff_id === p.id);
         if (!activeInMonth(departure, monthKey(year, month))) return null;
         const of = rows => rows.filter(x => x.staff_id === p.id);
-        const config = of(m.configs)[0] || null, mine = of(m.sessions), reqs = of(m.requests), vios = of(m.violations);
-        if (!config && !mine.length && !reqs.length && !vios.length) return null;
+        const config = of(m.configs)[0] || null, mine = of(m.sessions), reqs = of(m.requests), vios = of(m.violations), claims = of(m.claims || []);
+        if (!config && !mine.length && !reqs.length && !vios.length && !claims.length) return null;
         // Tiền từng ngày (byDay) lưu cùng số đã chốt: Sổ thu chi theo đúng phiếu đã trả dù sau đó có sửa giờ. Chi tiết từng
         // ngày (trang Lương tự tính lại) không lưu.
         const { daily, ...salary } = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, bonuses: of(m.bonuses), rules: m.rules, reviews: m.reviews, hourlyRates: of(m.hourlyRates), lateRules: lateRulesOf(m.lateRules, p.id),
-          ...holidayArgs(p, m) });
+          ...holidayArgs(p, m), claims });
         return { year, month, staff_id: p.id, snapshot: { name: p.full_name, ...salary }, closed_by: user.full_name || null, closed_at: closedAt };
       }).filter(Boolean);
       if (only) {
@@ -1149,6 +1208,61 @@ export async function POST(request) {
       // Cho nhân viên đổi điện thoại: lần chấm công tới sẽ ghi máy mới.
       if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
       const r = await db.from('staff_checkin_devices').delete().eq('staff_id', body.staff_id);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Duyệt khoản chi hộ: khoản chi vào Sổ thu chi (Chi trong ngày, đúng ngày chi); nhân viên chọn cộng vào lương thì cộng vào
+    // lương tháng này (người trả theo kỳ: lần trả kế tiếp), chọn tiền mặt thì chủ đưa tiền ngay lúc duyệt. Từ chối thì không ghi gì.
+    if (body.action === 'decide_claim') {
+      if (!UUID.test(body.id || '')) return fail('Thiếu khoản chi.');
+      const status = body.status === 'approved' ? 'approved' : body.status === 'rejected' ? 'rejected' : null;
+      if (!status) return fail('Chọn duyệt hay từ chối.');
+      const { data: claim, error } = await db.from('payroll_expense_claims').select('*').eq('id', body.id).maybeSingle();
+      if (missingTable(error)) return fail(CLAIMS_NOT_READY, 503);
+      if (error) throw error;
+      if (!claim) return fail('Không thấy khoản chi này.', 404);
+      if (claim.status !== 'pending') return fail('Khoản chi này đã được xử lý rồi. Tải lại trang.', 409);
+      const now = vnNow(), patch = { status, admin_note: text(body.admin_note) || null, decided_by: user.full_name || null, decided_at: isoNow() };
+      let entryId = null;
+      if (status === 'approved') {
+        patch.year = now.getUTCFullYear(); patch.month = now.getUTCMonth() + 1;
+        const { data: who } = await db.from('staff').select('full_name').eq('id', claim.staff_id).maybeSingle();
+        const name = who?.full_name || claim.created_by_name || 'nhân viên';
+        const entry = await db.from('finance_entries').insert({ entry_date: String(claim.spent_on).slice(0, 10), kind: 'drink', category: null, label: claim.item,
+          amount: claim.amount, note: `Chi hộ: ${name} · ${claim.payout === 'cash' ? 'đã đưa tiền mặt' : `cộng vào lương tháng ${patch.month}/${patch.year}`}${claim.note ? ` · ${claim.note}` : ''}`.slice(0, 300),
+          created_by_name: user.full_name || null }).select('id').single();
+        if (entry.error) throw entry.error;
+        entryId = entry.data.id;
+        patch.finance_entry_id = entryId;
+      }
+      const r = await db.from('payroll_expense_claims').update(patch).eq('id', claim.id).eq('status', 'pending').select('id');
+      if (r.error || !r.data?.length) {
+        if (entryId) await db.from('finance_entries').delete().eq('id', entryId).then(({ error: e }) => { if (e) console.error('[workforce] claim entry undo', e); });
+        if (r.error) throw r.error;
+        return fail('Khoản chi này vừa được xử lý ở máy khác. Tải lại trang.', 409);
+      }
+      return NextResponse.json({ ok: true, status, year: patch.year || null, month: patch.month || null }, { headers });
+    }
+
+    // Xoá khoản chi hộ ghi nhầm (cả khoản đã duyệt): bỏ luôn dòng trong Sổ thu chi. Khoản cộng lương của tháng đã chốt thì mở chốt
+    // người đó trước; người trả theo kỳ đã nhận khoản này thì lần trả sau tự trừ lại.
+    if (body.action === 'delete_claim') {
+      if (!UUID.test(body.id || '')) return fail('Thiếu khoản chi.');
+      const { data: claim, error } = await db.from('payroll_expense_claims').select('*').eq('id', body.id).maybeSingle();
+      if (missingTable(error)) return fail(CLAIMS_NOT_READY, 503);
+      if (error) throw error;
+      if (!claim) return NextResponse.json({ ok: true }, { headers });
+      if (claim.status === 'approved' && claim.payout === 'salary' && claim.year && claim.month) {
+        const { data: closed, error: ce } = await db.from('payroll_closes').select('staff_id').eq('year', claim.year).eq('month', claim.month).eq('staff_id', claim.staff_id).maybeSingle();
+        if (ce) throw ce;
+        if (closed) return fail(`Lương tháng ${claim.month}/${claim.year} của người này đã chốt. Mở chốt người đó trước rồi mới xoá khoản chi.`, 409);
+      }
+      if (claim.finance_entry_id) {
+        const d = await db.from('finance_entries').delete().eq('id', claim.finance_entry_id);
+        if (d.error) throw d.error;
+      }
+      const r = await db.from('payroll_expense_claims').delete().eq('id', claim.id);
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true }, { headers });
     }

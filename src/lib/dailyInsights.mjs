@@ -195,7 +195,7 @@ const ALERT_TEXT = { other_network: 'không dùng wifi quán', unknown_device: '
 /**
  * sessions: attendance_sessions quanh ngày báo cáo { id, staff_id, date, clock_in, clock_out, auto_closed };
  * date: ngày báo cáo — chỉ giữ các lượt thuộc ca của ngày đó (lượt dọn quán sau nửa đêm tính về ca hôm trước);
- * pending: payroll_requests đang chờ { staff_id, request_type, amount, days, reason };
+ * pending: payroll_requests đang chờ { staff_id, request_type, amount, days, reason } (request_type 'expense' = khoản chi hộ quán chờ duyệt);
  * fixes: đơn xin sửa giờ đang chờ; alerts: lần quét bị cảnh báo / bị chặn;
  * settings / shifts / hours: dòng checkin_settings, staff_shifts, checkin_hours (null = tính cả ca như cũ);
  * reviews: chủ đã cho / không cho tính giờ ngoài ca; staffNames: { id: tên };
@@ -238,7 +238,7 @@ export function staffData({ sessions = [], pending = [], fixes = [], alerts = []
   return {
     people,
     alerts: [...byPerson].map(([id, m]) => ({ id, name: nameOf(id), items: [...m].map(([text, count]) => ({ text, count })) })),
-    pending: pending.map(r => ({ id: r.staff_id, name: nameOf(r.staff_id), kind: r.request_type === 'advance' ? 'advance' : 'absent', amount: Number(r.amount) || 0, days: Number(r.days) || 1, reason: r.reason ? String(r.reason).slice(0, 60) : '' })),
+    pending: pending.map(r => ({ id: r.staff_id, name: nameOf(r.staff_id), kind: r.request_type === 'advance' || r.request_type === 'expense' ? r.request_type : 'absent', amount: Number(r.amount) || 0, days: Number(r.days) || 1, reason: r.reason ? String(r.reason).slice(0, 60) : '' })),
     fixes: fixes.map(f => ({ id: f.staff_id, name: nameOf(f.staff_id), reason: f.reason ? String(f.reason).slice(0, 60) : '' })),
     outside,
     selfFines: selfFines.map(f => ({ id: f.staff_id, name: nameOf(f.staff_id), reason: String(f.reason || '').slice(0, 80), amount: Number(f.amount) || 0,
@@ -268,7 +268,7 @@ export function staffBlock(input) {
   if (waiting) {
     lines.push(`Chờ bạn duyệt (${waiting}):`);
     for (const r of d.pending.slice(0, 8)) {
-      lines.push(`• ${r.name} ${r.kind === 'advance' ? `xin ứng ${vnd(r.amount)}` : `báo nghỉ ${r.days} ngày`}${r.reason ? ` — ${r.reason}` : ''}`);
+      lines.push(`• ${r.name} ${r.kind === 'advance' ? `xin ứng ${vnd(r.amount)}` : r.kind === 'expense' ? `ghi chi hộ quán ${vnd(r.amount)}` : `báo nghỉ ${r.days} ngày`}${r.reason ? ` — ${r.reason}` : ''}`);
     }
     for (const f of d.fixes.slice(0, 8)) lines.push(`• ${f.name} xin sửa giờ chấm công${f.reason ? ` — ${f.reason}` : ''}`);
     for (const o of d.outside) lines.push(`• ${o.name} có ${durationText(o.minutes)} ngoài ca chưa tính lương`);
