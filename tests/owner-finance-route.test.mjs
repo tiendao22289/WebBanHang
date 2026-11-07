@@ -8,6 +8,7 @@ import { notesDayData, notesRangeData, notesReportMessages, packMessages } from 
 import { compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData } from '../src/lib/dailyInsights.mjs';
 import * as dayCheckLib from '../src/lib/dayCheck.mjs';
 import * as noteCategoriesLib from '../src/lib/noteCategories.mjs';
+import { allOpenDebts } from '../src/lib/notesDebts.mjs';
 import { dayAudit } from '../src/lib/dayAudit.mjs';
 import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { payrollCost } from '../src/lib/payroll.mjs';
@@ -78,7 +79,7 @@ function fakeDb(state, { failTable } = {}) {
 function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFails = false, env = {} }) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...finance, ...zaloLink, ...dayCheckLib, ...noteCategoriesLib, dayAudit, notesReportMessages, notesDayData, notesRangeData, packMessages, compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData, AUTO_CLOSE_BY: 'Máy tự đóng (quên ra ca)', createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
+    NextResponse, ...finance, ...zaloLink, ...dayCheckLib, ...noteCategoriesLib, allOpenDebts, dayAudit, notesReportMessages, notesDayData, notesRangeData, packMessages, compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData, AUTO_CLOSE_BY: 'Máy tự đóng (quên ra ca)', createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
     sendOaText: async (_db, id, text) => { sent.push({ id, text }); return zaloFails ? { ok: false, detail: { error: -230 } } : { ok: true }; },
     URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
@@ -170,7 +171,9 @@ test('day view lists bills, purchase notes with items, and that day entries', as
   assert.equal(res.body.notes[0].cost, 300000);
   assert.equal(res.body.notes[0].debtLeft, 200000, 'debt already paid back is not shown as still owed');
   assert.equal(res.body.notes[0].text, 'đi chợ sáng');
-  assert.deepEqual(res.body.notes[0].items, [{ name: 'Ốc len', qty: '3kg', price: '300.000', paymentStatus: 'debt', creditor: 'Cô Ba' }]);
+  assert.deepEqual(res.body.notes[0].items, [{ name: 'Ốc len', qty: '3kg', price: '300.000', paymentStatus: 'debt', creditor: 'Cô Ba', debtAmount: '', paid_amount: 0 }]);
+  // Tổng nợ Sổ tay tới giờ (mọi phiếu chưa trả hết), theo người bán: dòng Ốc len nợ 900.000đ (3kg × 300.000), chưa trả dòng nào.
+  assert.deepEqual(res.body.debts, { total: 900000, count: 1, byCreditor: [{ name: 'Cô Ba', amount: 900000 }] });
   assert.deepEqual(res.body.entries.map(e => e.id), ['e1']);
   assert.equal((await get(load({ state }), 'date=23-10-2026')).status, 400);
   assert.equal((await get(load({ state }), 'month=2026-13')).status, 400);
