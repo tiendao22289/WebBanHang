@@ -287,3 +287,19 @@ button.tk-tile { cursor: pointer; }
 .tk-ok > span { display: flex; flex-direction: column; gap: 2px; }
 .tk-ok-sub { font-size: 12px; font-weight: 500; color: var(--tk-muted); }
 .tk-muted-text { color: var(--tk-muted); }
+
+/* Món ăn bán chạy: nút xem tất cả + bảng mọi món ăn (số lượng, tiền). */
+.tk-more { display: block; width: 100%; min-height: 40px; margin-top: 10px; border: 1px solid var(--tk-line, #e5e7eb); border-radius: 10px; background: transparent;
+  color: var(--tk-brand, #0f766e); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+.tk-food-table { width: 100%; margin-top: 8px; border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.tk-food-table th { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--tk-muted, #6b7280); text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--tk-line, #e5e7eb); }
+.tk-food-table th:nth-child(3), .tk-food-table th:nth-child(4) { text-align: right; }
+.tk-food-table td { padding: 7px 4px; border-bottom: 1px solid var(--tk-line, #f1f5f9); }
+.tk-food-table td:first-child { width: 26px; color: var(--tk-muted, #6b7280); }
+.tk-food-table td.num { text-align: right; white-space: nowrap; font-weight: 700; }
+/* Khuyến mãi: bảng món tặng (Món · SL · Giá gốc · Tiền) và dòng tóm tắt từng loại. */
+.tk-gift-table { margin: 0 0 4px; }
+.tk-gift-table th:nth-child(2) { text-align: right; }
+.tk-gift-table td:first-child { width: auto; color: inherit; }
+.tk-gift-table tfoot td { border-bottom: 0; border-top: 2px solid var(--tk-line, #e5e7eb); font-weight: 800; }
+.tk-promo-sum { margin: 0 0 4px; font-weight: 700; color: var(--tk-text); }

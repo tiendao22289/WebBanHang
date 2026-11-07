@@ -8,7 +8,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle, Banknote, BarChart3, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight,
-  Clock, CreditCard, LogOut, NotebookPen, RefreshCw, ShieldAlert, Users, UtensilsCrossed, Wallet,
+  Clock, CreditCard, Gift, LogOut, NotebookPen, RefreshCw, ShieldAlert, Users, UtensilsCrossed, Wallet,
 } from 'lucide-react';
 
 const vnToday = () => new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
@@ -192,15 +192,37 @@ function Hours({ compare, title = 'Giờ đông khách' }) {
   </Card>;
 }
 
+// Món ăn bán chạy (không tính bia, nước, khăn): 8 món đầu dạng thanh; bấm "Xem tất cả" mở bảng mọi món ăn đã bán
+// (số lượng + tiền). Máy chủ cũ chưa có `foods` thì hiện như trước.
 function TopItems({ compare }) {
-  if (!compare?.top?.length) return null;
-  const max = Math.max(1, ...compare.top.map(i => i.qty));
-  return <Card icon={UtensilsCrossed} title="Món bán chạy">
-    <ol className="tk-bars tk-rank">{compare.top.map((item, i) => <li key={item.name}>
+  const [all, setAll] = useState(false);
+  const foods = compare?.foods;
+  if (!foods) {
+    if (!compare?.top?.length) return null;
+    const max = Math.max(1, ...compare.top.map(i => i.qty));
+    return <Card icon={UtensilsCrossed} title="Món bán chạy">
+      <ol className="tk-bars tk-rank">{compare.top.map((item, i) => <li key={item.name}>
+        <div className="tk-bar-line"><span><em>{i + 1}</em>{item.name}</span><b>{item.qty}</b></div>
+        <span className="tk-bar-track"><span className="tk-bar-fill" style={{ width: `${item.qty / max * 100}%` }} /></span>
+      </li>)}</ol>
+      {compare.slow?.length > 0 && <p className="tk-caption">Bán ít: {compare.slow.map(i => `${i.name} (${i.qty})`).join(', ')}</p>}
+    </Card>;
+  }
+  if (!foods.length) return null;
+  const top = foods.slice(0, 8), max = Math.max(1, ...top.map(i => i.qty));
+  const totalQty = foods.reduce((s, f) => s + f.qty, 0), totalAmount = foods.reduce((s, f) => s + f.amount, 0);
+  return <Card icon={UtensilsCrossed} title="Món ăn bán chạy">
+    <ol className="tk-bars tk-rank">{top.map((item, i) => <li key={item.name}>
       <div className="tk-bar-line"><span><em>{i + 1}</em>{item.name}</span><b>{item.qty}</b></div>
       <span className="tk-bar-track"><span className="tk-bar-fill" style={{ width: `${item.qty / max * 100}%` }} /></span>
     </li>)}</ol>
-    {compare.slow?.length > 0 && <p className="tk-caption">Bán ít: {compare.slow.map(i => `${i.name} (${i.qty})`).join(', ')}</p>}
+    <p className="tk-caption">{foods.length} món ăn · {totalQty} phần · {money(totalAmount)}. Không tính bia, nước, khăn.</p>
+    {foods.length > top.length && <button type="button" className="tk-more" onClick={() => setAll(a => !a)} aria-expanded={all}>
+      {all ? 'Thu gọn ▴' : `Xem tất cả ${foods.length} món ăn ▾`}</button>}
+    {all && <table className="tk-food-table">
+      <thead><tr><th>#</th><th>Món</th><th>SL</th><th>Tiền</th></tr></thead>
+      <tbody>{foods.map((f, i) => <tr key={f.name}><td>{i + 1}</td><td>{f.name}</td><td className="num">{f.qty}</td><td className="num">{money(f.amount)}</td></tr>)}</tbody>
+    </table>}
   </Card>;
 }
 
@@ -297,37 +319,89 @@ function Limited({ items, max = 5, children }) {
 const Pill = ({ tone, children }) => <span className={`tk-pill${tone ? ` ${tone}` : ''}`}>{children}</span>;
 const minutes = m => (m >= 60 ? `${Math.floor(m / 60)} giờ${m % 60 ? ` ${m % 60} phút` : ''}` : `${m} phút`);
 
-// Thất thoát: 4 ô (bill huỷ, món bớt sau khi in bếp, giảm giá, món tặng) — bấm ô để xem từng dòng.
+const whenOf = (iso, range) => (!iso ? '--:--' : range ? `${ddmm(new Date(new Date(iso).getTime() + 7 * 3600000).toISOString().slice(0, 10))} ${clockOf(iso)}` : clockOf(iso));
+
+// Thất thoát: bill huỷ và món bớt sau khi in bếp — bấm ô để xem từng dòng. Giảm giá và món tặng nằm ở thẻ Khuyến mãi.
 function LossCard({ loss, range }) {
   const [open, setOpen] = useState(null);
   if (!loss) return null;
-  const { cancelled, removed, discounts, gifts } = loss;
-  const any = cancelled.count || removed.qty || discounts.count || gifts.qty;
+  const { cancelled, removed } = loss;
+  const any = cancelled.count || removed.qty;
   const toggle = key => setOpen(o => (o === key ? null : key));
-  const when = iso => (range ? `${ddmm(new Date(new Date(iso).getTime() + 7 * 3600000).toISOString().slice(0, 10))} ${clockOf(iso)}` : clockOf(iso));
-  return <Card icon={ShieldAlert} title="Thất thoát" aside={any ? `~${money(loss.total)}` : null} tone={any ? 'warn' : ''}>
-    {!any ? <p className="tk-good"><CheckCircle2 size={18} /> Không có bill huỷ, món bị bớt, giảm giá hay món tặng.</p> : <>
+  const when = iso => whenOf(iso, range);
+  return <Card icon={ShieldAlert} title="Thất thoát" aside={any ? `~${money(cancelled.total + removed.value)}` : null} tone={any ? 'warn' : ''}>
+    {!any ? <p className="tk-good"><CheckCircle2 size={18} /> Không có bill huỷ hay món bị bớt sau khi in bếp.</p> : <>
       <div className="tk-tiles">
         <Tile label="Bill huỷ" value={cancelled.count} sub={money(cancelled.total)} tone={cancelled.count ? 'bad' : 'zero'} active={open === 'cancel'} onClick={cancelled.count ? () => toggle('cancel') : null} />
         <Tile label="Món bớt sau khi in bếp" value={removed.qty} sub={money(removed.value)} tone={removed.qty ? 'bad' : 'zero'} active={open === 'removed'} onClick={removed.qty ? () => toggle('removed') : null} />
-        <Tile label="Giảm giá" value={`${discounts.count} lần`} sub={money(discounts.amount)} tone={discounts.count ? 'warn' : 'zero'} active={open === 'discount'} onClick={discounts.count ? () => toggle('discount') : null} />
-        <Tile label="Món tặng" value={gifts.qty} sub={gifts.value ? `~${money(gifts.value)}` : 'theo giá menu'} tone={gifts.qty ? 'warn' : 'zero'} active={open === 'gift'} onClick={gifts.qty ? () => toggle('gift') : null} />
       </div>
       {open === 'cancel' && <ul className="tk-table">{cancelled.rows.map((r, i) => <li key={i}>
-        <span className="tk-cell-main"><b>Bàn {r.table ?? '?'}</b><small>{r.at ? when(r.at) : '--:--'}{r.by ? ` · huỷ bởi ${r.by}` : ''}</small></span>
+        <span className="tk-cell-main"><b>Bàn {r.table ?? '?'}</b><small>{when(r.at)}{r.by ? ` · huỷ bởi ${r.by}` : ''}</small></span>
         <span className="tk-cell-end"><b>{money(r.printedValue || r.amount)}</b><small>{r.printedCount ? `${r.printedCount} món đã in bếp` : 'chưa in bếp'}</small></span>
       </li>)}</ul>}
       {open === 'removed' && <ul className="tk-table">{removed.rows.map((r, i) => <li key={i}>
-        <span className="tk-cell-main"><b>{r.name} ×{r.qty}</b><small>Bàn {r.table ?? '?'} · thu {r.paidAt ? when(r.paidAt) : '--:--'}</small></span>
+        <span className="tk-cell-main"><b>{r.name} ×{r.qty}</b><small>Bàn {r.table ?? '?'} · thu {when(r.paidAt)}</small></span>
         <span className="tk-cell-end"><b>{money(r.value)}</b></span>
       </li>)}</ul>}
-      {open === 'discount' && <ul className="tk-table">{discounts.kinds.map(k => <li key={k.kind}>
-        <span className="tk-cell-main"><b>{k.kind}</b><small>{k.count} lần</small></span><span className="tk-cell-end"><b>{money(k.amount)}</b></span>
-      </li>)}</ul>}
-      {open === 'gift' && <ul className="tk-table">{gifts.items.map(g => <li key={g.name}>
-        <span className="tk-cell-main"><b>{g.name}</b><small>×{g.qty}</small></span><span className="tk-cell-end"><b>{g.value ? `~${money(g.value)}` : '—'}</b></span>
-      </li>)}</ul>}
-      {!open && <p className="tk-caption">Bấm vào từng ô để xem chi tiết. Tiền ước tính = món đã in bếp của bill huỷ + món bị bớt + giảm giá + giá menu của món tặng.</p>}
+      {!open && <p className="tk-caption">Bấm vào từng ô để xem chi tiết. Tiền ước tính = món đã in bếp của bill huỷ + món bị bớt.</p>}
+    </>}
+  </Card>;
+}
+
+// Khuyến mãi: mỗi loại một ô (vòng xoay, đánh giá Google, TikTok, Zalo, Facebook, voucher, giảm khác, nước tặng, món ăn
+// tặng). Bấm ô để xem bàn nào, giờ nào, được gì, bao nhiêu tiền. Món tặng tính theo giá gốc trên thực đơn.
+const PROMO_UNIT = { wheel: 'giải', google: 'đánh giá', voucher: 'mã', other: 'lần' };
+const SOCIAL = new Set(['google', 'tiktok', 'zalo', 'facebook']);
+const prizeOf = r => (r.kind === 'gift' ? `Tặng ${r.name}${r.qty > 1 ? ` ×${r.qty}` : ''}`
+  : r.name.replace(/^Vòng xoay may mắn:\s*/i, '').replace(/^giảm/, 'Giảm'));
+function GiftTable({ part }) {
+  return <table className="tk-food-table tk-gift-table">
+    <thead><tr><th>Món</th><th>SL</th><th>Giá gốc</th><th>Tiền</th></tr></thead>
+    <tbody>{part.items.map(g => <tr key={g.name}><td>{g.name}</td><td className="num">{g.qty}</td><td className="num">{g.unit ? money(g.unit) : '—'}</td><td className="num">{money(g.amount)}</td></tr>)}</tbody>
+    <tfoot><tr><td>Tổng</td><td className="num">{part.qty}</td><td /><td className="num">{money(part.amount)}</td></tr></tfoot>
+  </table>;
+}
+function PromoRows({ rows, social, range }) {
+  return <ul className="tk-table"><Limited items={rows} max={8}>{(r, i) => <li key={i}>
+    <span className="tk-cell-main">{social
+      ? <><b>Bàn {r.table ?? '?'}</b><small>{whenOf(r.at, range)}</small></>
+      : <><b>{prizeOf(r)}</b><small>Bàn {r.table ?? '?'} · {whenOf(r.at, range)}</small></>}</span>
+    <span className="tk-cell-end"><b>{money(r.amount)}</b>{r.kind === 'gift' && <small>giá gốc {money(r.unit)}</small>}</span>
+  </li>}</Limited></ul>;
+}
+function PromoCard({ loss, range }) {
+  const [open, setOpen] = useState(null);
+  const promos = loss?.promos;
+  if (!promos) return null;
+  const { groups, gifts } = promos;
+  const toggle = key => setOpen(o => (o === key ? null : key));
+  const tiles = [
+    ...groups.map(g => ({ key: g.key, label: `${g.icon} ${g.label}`, value: `${g.count} ${PROMO_UNIT[g.key] || 'lượt'}`, amount: g.amount })),
+    gifts.drinks.qty > 0 && { key: 'drinks', label: '🥤 Nước tặng', value: `${gifts.drinks.qty} chai`, amount: gifts.drinks.amount },
+    gifts.foods.qty > 0 && { key: 'foods', label: '🍽️ Món ăn tặng', value: `${gifts.foods.qty} phần`, amount: gifts.foods.amount },
+  ].filter(Boolean);
+  const group = groups.find(g => g.key === open);
+  const part = open === 'drinks' ? gifts.drinks : open === 'foods' ? gifts.foods : null;
+  const partRows = part ? gifts.rows.filter(r => r.drink === (open === 'drinks')) : [];
+  return <Card icon={Gift} title="Khuyến mãi" aside={tiles.length ? money(promos.total) : null}>
+    {!tiles.length ? <p className="tk-caption">Không có khuyến mãi, giảm giá hay món tặng.</p> : <>
+      <div className="tk-tiles">{tiles.map(t => <Tile key={t.key} label={t.label} value={t.value} sub={money(t.amount)} tone="warn" active={open === t.key} onClick={() => toggle(t.key)} />)}</div>
+      {group && <>
+        <p className="tk-caption tk-promo-sum">{group.key === 'wheel'
+          ? `${group.count} giải: ${group.count - group.rows.filter(r => r.kind === 'gift').length} lần giảm tiền, ${group.giftQty} món tặng (tính giá gốc) · ${money(group.amount)}`
+          : `${group.count} ${PROMO_UNIT[group.key] || 'lượt'} · ${money(group.amount)}${group.count > 1 ? ` · trung bình ${money(group.amount / group.count)}/${SOCIAL.has(group.key) ? 'bàn' : 'lần'}` : ''}`}</p>
+        <PromoRows rows={group.rows} social={SOCIAL.has(group.key)} range={range} />
+      </>}
+      {part && <>
+        <GiftTable part={part} />
+        <p className="tk-caption tk-promo-sum">Từng bàn</p>
+        <ul className="tk-table"><Limited items={partRows} max={5}>{(r, i) => <li key={i}>
+          <span className="tk-cell-main"><b>{r.name} ×{r.qty}</b><small>Bàn {r.table ?? '?'} · {whenOf(r.at, range)}</small></span>
+          <span className="tk-cell-end"><b>{money(r.amount)}</b></span>
+        </li>}</Limited></ul>
+      </>}
+      {!open && <p className="tk-caption">Bấm từng ô để xem bàn nào, giờ nào, được gì, bao nhiêu tiền. Món tặng tính theo giá gốc trên thực đơn.</p>}
+      {(part || (group?.key === 'wheel' && group.giftQty > 0)) && <p className="tk-caption">Món tặng tính theo giá gốc trên thực đơn, như lúc chưa về 0đ.</p>}
     </>}
   </Card>;
 }
@@ -708,6 +782,7 @@ export default function ThongKePage() {
         <Costs summary={report.summary} />
         <Hours compare={report.compare} />
         <TopItems compare={report.compare} />
+        <PromoCard loss={report.loss} />
         <LossCard loss={report.loss} />
         <StaffDayCard staff={report.staff} />
         <NotesDayCard notes={report.notes} />
@@ -726,6 +801,7 @@ export default function ThongKePage() {
         <Hours compare={report.sales} title="Giờ đông khách (cả kỳ)" />
         <TopItems compare={report.sales} />
         {period === 'month' && <Weekdays weekdays={report.weekdays || []} />}
+        <PromoCard loss={report.loss} range />
         <LossCard loss={report.loss} range />
         <StaffRangeCard staff={report.staff} label={rangeLabel} />
         {period === 'month' && <StaffReport date={date} monthRevenue={report.totals.revenue} />}
