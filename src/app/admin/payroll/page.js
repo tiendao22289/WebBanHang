@@ -384,6 +384,7 @@ function CycleBox({ people, today, nameOf, onPay, onUndo }) {
                   {d.advances.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ ứng lương</span><b>−{formatMoney(sum(d.advances))}</b></div>}
                   {d.fines.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ phạt</span><b>−{formatMoney(sum(d.fines))}</b></div>}
                   {d.bonuses.length > 0 && <div style={{ ...line, color: '#16a34a' }}><span>Thưởng chuyên cần</span><b>+{formatMoney(sum(d.bonuses))}</b></div>}
+                  {(d.claims || []).length > 0 && <div style={{ ...line, color: '#16a34a' }}><span>Hoàn tiền chi hộ ({d.claims.length} khoản)</span><b>+{formatMoney(sum(d.claims))}</b></div>}
                   <div style={{ ...line, borderTop: '1px dashed #cbd5e1', marginTop: 4, paddingTop: 4, fontSize: '0.95rem' }}>
                     <strong>Cần trả</strong><strong style={{ color: d.amount < 0 ? '#dc2626' : '#15803d' }}>{formatMoney(d.amount)}</strong>
                   </div>
@@ -481,6 +482,11 @@ export default function PayrollPage() {
   const [myPayments, setMyPayments] = useState([]);
   const [selfFine, setSelfFine] = useState({ rule_id: '', reason: '', note: '' });
   const [showSelfFine, setShowSelfFine] = useState(false);
+  // Khoản chi hộ quán của mình (máy chủ đọc): ready false = web chưa cài bảng, ẩn phần này.
+  const [myClaims, setMyClaims] = useState({ ready: false, list: [] });
+  const emptyClaim = () => ({ item: '', amount: '', spent_on: vnToday(), note: '', payout: '' });
+  const [claimForm, setClaimForm] = useState(emptyClaim);
+  const [showClaimForm, setShowClaimForm] = useState(false);
   const [myMonth,    setMyMonth]    = useState({ y: now.getFullYear(), m: now.getMonth() + 1 }); // tháng của lịch sử chấm công
   const [myBonus,    setMyBonus]    = useState(null); // thưởng chuyên cần: đã trễ / quên ra ca chưa (khi chủ có dùng)
   const [sending,    setSending]    = useState('');   // đang gửi đơn nào (chặn bấm 2 lần)
@@ -539,6 +545,7 @@ export default function PayrollPage() {
     setMyFines(meRes.violations || []);
     setMyFineRules(meRes.fineRules || []);
     setMyPayments(meRes.payments || []);
+    setMyClaims(meRes.claims || { ready: false, list: [] });
     setMyBonus(meRes.bonus || null);
     setMyAllSessions(monthRes.data || []);
     setEmpReqs(reqRes.data || []);
@@ -588,6 +595,17 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     if (ok) say('Đã gửi báo nghỉ, chờ chủ quán duyệt.');
   };
 
+  // Ghi khoản tự bỏ tiền chi cho quán, gửi chủ duyệt; tự chọn nhận lại bằng tiền mặt hay cộng vào lương.
+  const handleSubmitClaim = async () => {
+    const item = claimForm.item.trim(), amount = Number(String(claimForm.amount).replace(/\D/g, ''));
+    if (!item) return say('Ghi khoản chi gì (vd: Xăng đi chợ).', false);
+    if (!(amount >= 1000)) return say('Nhập số tiền đã chi (từ 1.000đ).', false);
+    if (!claimForm.payout) return say('Chọn nhận lại tiền: lấy tiền mặt hay cộng vào lương.', false);
+    const ok = await send('claim', 'claim_expense', { item, amount, spent_on: claimForm.spent_on || vnToday(), note: claimForm.note, payout: claimForm.payout },
+      () => { setClaimForm(emptyClaim()); setShowClaimForm(false); });
+    if (ok) say('Đã gửi khoản chi, chờ chủ quán duyệt.');
+  };
+
   // Huỷ đơn của mình khi còn chờ duyệt (lỡ gửi nhầm).
   const handleCancel = async (id, kind) => {
     if (!confirm('Huỷ đơn này?')) return;
@@ -612,13 +630,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   }, []);
   // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
   // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
-  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], payouts: [], monthOver: false });
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], payouts: [], monthOver: false, claims: [] });
   const fetchPayrollMonth = useCallback(async () => {
     try {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], payouts: j.payouts || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [] });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], payouts: j.payouts || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [], claims: j.claims || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   // So khuôn mặt ở máy quầy (app): cài đặt, ai có mặt mẫu, ca sai mặt 3 lần chờ duyệt.
@@ -639,6 +657,21 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
       if (r.ok) setCycles({ ready: j.ready !== false, today: j.today || null, people: j.people || [] });
     } catch { /* khung trả lương theo kỳ chờ lần tải sau */ }
   }, []);
+  // Khoản chi hộ nhân viên ghi: chờ duyệt + đã xử lý 60 ngày gần đây (máy chủ đọc).
+  const [claims, setClaims] = useState({ ready: true, claims: [] });
+  const fetchClaims = useCallback(async () => {
+    try {
+      const r = await fetch('/api/admin/workforce?claims=1', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) setClaims({ ready: j.ready !== false, claims: j.claims || [] });
+    } catch { /* tab Yêu cầu chờ lần tải sau */ }
+  }, []);
+  const claimAction = async (action, body, confirmText) => {
+    if (confirmText && !confirm(confirmText)) return;
+    try { await workforce(action, body); } catch (err) { alert(err.message); return; }
+    // Duyệt / xoá khoản cộng lương: lương tháng và lần trả theo kỳ đổi theo.
+    fetchClaims(); fetchPayrollMonth(); fetchCycles();
+  };
   const checkinAction = async (action, body, confirmText) => {
     if (confirmText && !confirm(confirmText)) return false;
     try { await workforce(action, body); } catch (err) { alert(err.message); return false; }
@@ -749,6 +782,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     fetchPayrollMonth();
     fetchFaces();
     fetchCycles();
+    fetchClaims();
     setLoading(true);
     const [staffRes, cfgRes, reqRes, vioRes, attRes] = await Promise.all([
       supabase.from('staff').select('id, full_name, phone, role, created_at, last_login').order('full_name'),
@@ -772,7 +806,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     setHasSynced(true);
     setLastSyncedAt(new Date());
     setLoading(false);
-  }, [selMonth, selYear, fetchCheckin, fetchPayrollMonth, fetchCycles]);
+  }, [selMonth, selYear, fetchCheckin, fetchPayrollMonth, fetchCycles, fetchClaims]);
 
 
   // Mở trang là tự tải (không còn nút Đồng bộ). Quay lại trang (mở lại app) sau ≥ 1 phút thì tải lại cho mới.
@@ -808,6 +842,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     requests: requests.filter(r => r.staff_id === staffId),
     violations: violations.filter(v => v.staff_id === staffId),
     bonuses: payrollMonth.bonuses.filter(b => b.staff_id === staffId),
+    claims: (payrollMonth.claims || []).filter(x => x.staff_id === staffId),
     rules, reviews: reviewList, hourlyRates: payrollMonth.hourlyRates.filter(r => r.staff_id === staffId),
     lateRules: lateRulesOf(payrollMonth.lateRules, staffId),
     // Ngày quán nghỉ chưa tới thì chưa tính (lương tạm tính đến hôm nay).
@@ -863,13 +898,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   const exportPayroll = async rows => {
     const XLSX = await import('xlsx');
     const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Chỉnh theo số ngày của tháng', 'Lương 1 ngày', 'Ngày theo ngày', 'Lương theo ngày', 'Lương 1 giờ', 'Giờ theo giờ', 'Lương theo giờ', 'Trừ vào trễ', 'Trừ về sớm', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
-      'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Thực lĩnh', 'Đã trả theo kỳ', 'Còn phải trả', 'Trạng thái', 'Nghỉ việc'];
+      'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Chi hộ (cộng lương)', 'Thực lĩnh', 'Đã trả theo kỳ', 'Còn phải trả', 'Trạng thái', 'Nghỉ việc'];
     const data = rows.map(({ s, c }) => {
       const d = departureOf(s.id);
       return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.dayUnits ?? c.workUnits : c.workDays, c.dayAmt ?? c.basePay, c.monthAdjust || 0,
         c.dayWage?.rates?.join(' / ') || '', c.dayWage ? c.dayWage.days : '', c.dayWage?.amount || '',
         c.hourly?.rates?.join(' / ') || '', c.hourly ? Math.round(c.hourly.minutes / 6) / 10 : '', c.hourly?.amount || '', c.lateAmt || 0, c.earlyAmt || 0, c.totalWorkH, c.otHours, c.otAmt,
-        c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.net, cyclePaidOf(s.id), c.net - cyclePaidOf(s.id), c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
+        c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.claimAmt || 0, c.net, cyclePaidOf(s.id), c.net - cyclePaidOf(s.id), c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
         d ? `Làm đến ${d.last_day.split('-').reverse().join('/')}` : ''];
     });
     const sheet = XLSX.utils.aoa_to_sheet([[`Bảng lương tháng ${selMonth}/${selYear}`], [], head, ...data]);
@@ -2054,6 +2089,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 {row('Giờ làm', `${fmtNum(c.totalWorkH)} giờ`)}
                 {row('Tăng ca', `${fmtNum(c.otHours)} giờ → +${formatMoney(c.otAmt)}`, '#15803d')}
                 {c.bonusAmt > 0 && row('⭐ Thưởng chuyên cần', `+${formatMoney(c.bonusAmt)}`, '#15803d')}
+                {c.claimAmt > 0 && row('🧾 Hoàn tiền chi hộ', `+${formatMoney(c.claimAmt)}`, '#15803d')}
                 {c.pendingH > 0 && row('Ngoài ca chờ chủ duyệt', `${fmtNum(c.pendingH)} giờ (chưa tính)`, '#b45309')}
                 {c.advAmt > 0 && row('Ứng lương', `−${formatMoney(c.advAmt)}`, '#dc2626')}
                 {c.absDays > 0 && (c.rule === 'days'
@@ -2119,6 +2155,85 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
               </div>
             )}
           </div>
+
+          {/* Chi hộ quán: tự bỏ tiền chi cho quán (xăng, đá…) thì ghi vào, chủ duyệt rồi trả lại — tự chọn lấy tiền mặt hay cộng vào lương. */}
+          {myClaims.ready && (
+            <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: showClaimForm || myClaims.list.length ? 12 : 0 }}>
+                <div>
+                  <div style={{ fontWeight: 800 }}>🧾 Chi hộ quán</div>
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 2 }}>Bạn bỏ tiền ra chi cho quán thì ghi vào đây, chủ duyệt rồi trả lại.</div>
+                </div>
+                <button onClick={() => { setShowClaimForm(p => !p); setClaimForm(emptyClaim()); }} style={{ fontSize: '0.8rem', background: showClaimForm ? '#f3f4f6' : '#111827', color: showClaimForm ? '#374151' : 'white', border: 'none', borderRadius: 8, padding: '6px 12px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  {showClaimForm ? 'Huỷ' : '+ Ghi khoản chi'}
+                </button>
+              </div>
+              {showClaimForm && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: myClaims.list.length ? 14 : 0 }}>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {['Xăng', 'Đá', 'Gas', 'Rau củ', 'Gửi xe', 'Ship hàng'].map(x => (
+                      <button key={x} type="button" onClick={() => setClaimForm(p => ({ ...p, item: x }))}
+                        style={{ fontSize: '0.78rem', padding: '5px 10px', borderRadius: 999, cursor: 'pointer', fontWeight: 600,
+                          border: `1.5px solid ${claimForm.item === x ? '#111827' : '#e5e7eb'}`, background: claimForm.item === x ? '#111827' : 'white', color: claimForm.item === x ? 'white' : '#374151' }}>{x}</button>
+                    ))}
+                  </div>
+                  <input type="text" placeholder="Chi gì? (vd: Xăng đi chợ)" value={claimForm.item} maxLength={80} onChange={e => setClaimForm(p => ({ ...p, item: e.target.value }))}
+                    style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input type="text" inputMode="numeric" placeholder="Số tiền (đ)" value={claimForm.amount}
+                      onChange={e => { const r = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setClaimForm(p => ({ ...p, amount: r ? Number(r).toLocaleString('vi-VN') : '' })); }}
+                      style={{ flex: 1, minWidth: 0, padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
+                    <label style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.72rem', color: '#64748b' }}>Ngày chi
+                      <input type="date" value={claimForm.spent_on} max={vnToday()} min={new Date(Date.parse(`${vnToday()}T00:00:00Z`) - 31 * 86400000).toISOString().slice(0, 10)}
+                        onChange={e => setClaimForm(p => ({ ...p, spent_on: e.target.value }))}
+                        style={{ padding: '6px 8px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.85rem' }} /></label>
+                  </div>
+                  <input type="text" placeholder="Ghi thêm (tuỳ chọn): mua ở đâu, cho việc gì…" value={claimForm.note} maxLength={300} onChange={e => setClaimForm(p => ({ ...p, note: e.target.value }))}
+                    style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem' }} />
+                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#374151' }}>Duyệt xong bạn muốn nhận lại tiền thế nào?</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    {[['cash', '💵 Lấy tiền mặt', 'chủ đưa khi duyệt'], ['salary', '💰 Cộng vào lương', 'trả cùng tiền lương']].map(([k, t, sub]) => (
+                      <button key={k} type="button" onClick={() => setClaimForm(p => ({ ...p, payout: k }))} aria-pressed={claimForm.payout === k}
+                        style={{ textAlign: 'left', padding: '10px 12px', borderRadius: 10, cursor: 'pointer', border: `2px solid ${claimForm.payout === k ? '#16a34a' : '#e5e7eb'}`,
+                          background: claimForm.payout === k ? '#f0fdf4' : 'white' }}>
+                        <div style={{ fontWeight: 800, fontSize: '0.86rem', color: '#111827' }}>{t}</div>
+                        <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 2 }}>{sub}</div>
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={handleSubmitClaim} disabled={sending === 'claim'} style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer', opacity: sending === 'claim' ? 0.6 : 1 }}>
+                    {sending === 'claim' ? 'Đang gửi…' : 'Gửi chủ duyệt'}
+                  </button>
+                </div>
+              )}
+              {myClaims.list.map(x => (
+                <div key={x.id} style={{ padding: '9px 0', borderTop: '1px solid #f3f4f6', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>{x.item} · {formatMoney(x.amount)}</div>
+                    <div style={{ fontSize: '0.74rem', color: '#6b7280', marginTop: 2 }}>
+                      Chi ngày {ddmm(x.spent_on)} · {x.payout === 'cash' ? '💵 lấy tiền mặt' : '💰 cộng vào lương'}
+                      {x.status === 'approved' && x.payout === 'salary' && x.month ? ` tháng ${x.month}/${x.year}` : ''}
+                    </div>
+                    {x.note && <div style={{ fontSize: '0.74rem', color: '#6b7280', marginTop: 2 }}>{x.note}</div>}
+                    {x.admin_note && <div style={{ fontSize: '0.73rem', color: '#9ca3af', marginTop: 2 }}>💬 {x.admin_note}</div>}
+                  </div>
+                  <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+                    <span style={{ padding: '2px 8px', borderRadius: 5, fontSize: '0.72rem', fontWeight: 700,
+                      background: x.status === 'approved' ? '#dcfce7' : x.status === 'rejected' ? '#fee2e2' : '#fef9c3',
+                      color: x.status === 'approved' ? '#15803d' : x.status === 'rejected' ? '#dc2626' : '#92400e' }}>
+                      {x.status === 'pending' ? '⏳ Chờ duyệt' : x.status === 'approved' ? '✅ Đã duyệt' : '❌ Từ chối'}
+                    </span>
+                    {x.status === 'pending' && (
+                      <button onClick={() => handleCancel(x.id, 'claim')} disabled={!!sending}
+                        style={{ fontSize: '0.72rem', padding: '2px 8px', background: 'none', border: '1px solid #e2e8f0', borderRadius: 6, color: '#64748b', cursor: 'pointer' }}>
+                        {sending === `cancel-${x.id}` ? 'Đang huỷ…' : 'Huỷ'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Ứng lương */}
           <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
@@ -2226,7 +2341,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         ['Việc hằng ngày', [
           { key: 'salary', icon: '📊', label: 'Bảng lương' },
           { key: 'attendance', icon: '⏰', label: 'Chấm công' },
-          { key: 'requests', icon: '📋', label: 'Yêu cầu', badge: pendingCount + (checkin?.fixes || []).filter(f => f.status === 'pending').length + (checkin?.extras || []).length + (faces?.reviews || []).length },
+          { key: 'requests', icon: '📋', label: 'Yêu cầu', badge: pendingCount + (checkin?.fixes || []).filter(f => f.status === 'pending').length + (checkin?.extras || []).length + (faces?.reviews || []).length
+            + claims.claims.filter(x => x.status === 'pending').length },
           // Gợi ý phạt chưa xử lý + lỗi nhân viên tự ghi chưa có tiền (chờ chủ định tiền).
           { key: 'violations', icon: '⚠️', label: 'Vi phạm', badge: fineHints.length + violations.filter(v => !(Number(v.amount) > 0)).length },
         ]],
@@ -2435,6 +2551,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                               {slipRow(s, { label: 'Tăng ca', sub: c.otHours ? `${fmtNum(c.otHours)} giờ ngoài ca` : null,
                                 value: !c.otAmt && !overtimeOn(s.id) ? 'không tính' : `+${formatMoney(c.otAmt)}`, tone: !c.otAmt && !overtimeOn(s.id) ? 'muted' : 'green' })}
                               {c.bonusAmt > 0 && slipRow(s, { label: 'Thưởng chuyên cần', value: `+${formatMoney(c.bonusAmt)}`, tone: 'green' })}
+                              {c.claimAmt > 0 && slipRow(s, { label: 'Hoàn tiền chi hộ', sub: 'cộng vào lương', value: `+${formatMoney(c.claimAmt)}`, tone: 'green' })}
                               {slipRow(s, { label: 'Ứng lương', sub: adv.length ? `${adv.length} lần${advPending ? ` · ${advPending} chờ duyệt` : ''}` : null,
                                 value: adv.length ? `−${formatMoney(c.advAmt)}` : '—', tone: adv.length ? 'red' : 'muted', kind: 'advance', has: adv.length > 0 })}
                               {slipRow(s, { label: 'Nghỉ', sub: abs.length ? `${abs.length} đơn${c.rule === 'days' ? ' · không trừ thêm' : ''}` : null,
@@ -2492,7 +2609,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <td>{cellBtn(s.id, 'stay', talliesOf(s.id).stayed.count > 0, tally(talliesOf(s.id).stayed))}</td>
                             <td>{cellBtn(s.id, 'leftEarly', talliesOf(s.id).leftEarly.count > 0, tally(talliesOf(s.id).leftEarly, c.earlyAmt))}</td>
                             <td>{!c.otAmt && !overtimeOn(s.id) ? <span style={{color:'#94a3b8'}}>Không tính</span> : <span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span>}<div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.otHours)} giờ</div></td>
-                            <td>{c.bonusAmt > 0 ? <span style={{color:'#16a34a'}}>+{formatMoney(c.bonusAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}</td>
+                            <td>{c.bonusAmt > 0 ? <span style={{color:'#16a34a'}}>+{formatMoney(c.bonusAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}
+                              {c.claimAmt > 0 && <div style={{ fontSize: '0.72rem', color: '#16a34a' }}>+{formatMoney(c.claimAmt)} chi hộ</div>}</td>
                             <td>{cellBtn(s.id, 'advance', monthRequests(s.id, 'advance').length > 0, <span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span>)}</td>
                             <td>{cellBtn(s.id, 'absent', monthRequests(s.id, 'absent').length > 0, c.rule === 'days'
                               ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không trừ)` : monthRequests(s.id, 'absent').length ? 'chờ duyệt' : '—'}</span>
@@ -2528,6 +2646,39 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           {/* === YÊU CẦU === */}
           {activeTab === 'requests' && (
             <div className="request-list">
+              {/* Khoản chi hộ quán: duyệt → vào Sổ thu chi (Chi trong ngày, đúng ngày chi); tiền mặt thì đưa ngay, cộng lương thì vào lương tháng này. */}
+              {[...claims.claims.filter(x => x.status === 'pending'), ...claims.claims.filter(x => x.status !== 'pending').slice(0, 20)].map(x => {
+                const who = staffList.find(st => st.id === x.staff_id)?.full_name || x.created_by_name || 'Không rõ', cash = x.payout === 'cash';
+                const at = ts => (ts ? new Date(ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '');
+                return (
+                  <div key={`claim-${x.id}`} className={`request-card ${x.status}`}>
+                    <div className="request-info">
+                      <div className="name">{who}</div>
+                      <div style={{ marginTop: 4 }}>
+                        <span style={{ display: 'inline-block', background: '#dcfce7', color: '#166534', borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>🧾 Chi hộ quán</span>
+                        <span className={`status-badge ${x.status}`}>{x.status === 'pending' ? '⏳ Chờ duyệt' : x.status === 'approved' ? (cash ? '✅ Đã duyệt · đã đưa tiền mặt' : `✅ Đã duyệt · cộng lương ${x.month}/${x.year}`) : '❌ Từ chối'}</span>
+                      </div>
+                      <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
+                        <div><strong>{x.item}</strong>: <strong>{formatMoney(x.amount)}</strong> · chi ngày {ddmm(x.spent_on)}</div>
+                        <div>Muốn nhận lại: <strong>{cash ? '💵 Lấy tiền mặt tại chủ' : '💰 Cộng vào lương'}</strong></div>
+                        {x.note && <div>Ghi thêm: {x.note}</div>}
+                        <div style={{ color: '#94a3b8' }}>Ghi lúc {at(x.created_at)}{x.status !== 'pending' && x.decided_by ? ` · ${x.status === 'approved' ? 'duyệt' : 'từ chối'} bởi ${x.decided_by} ${at(x.decided_at)}` : ''}</div>
+                        {x.status === 'approved' && <div style={{ color: '#475569' }}>Đã vào Sổ thu chi → Chi trong ngày {ddmm(x.spent_on)}.</div>}
+                      </div>
+                      {x.admin_note && <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 4 }}>💬 {x.admin_note}</div>}
+                    </div>
+                    <div className="request-actions">
+                      {x.status === 'pending' ? <>
+                        <button className="btn-success" onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved' })}>{cash ? '✓ Duyệt · đưa tiền mặt' : '✓ Duyệt · cộng lương'}</button>
+                        <button className="btn-danger" onClick={() => { const note = prompt('Lý do từ chối (tuỳ chọn):'); if (note === null) return; claimAction('decide_claim', { id: x.id, status: 'rejected', admin_note: note }); }}>✗ Từ chối</button>
+                      </> : (
+                        <button onClick={() => claimAction('delete_claim', { id: x.id }, `Xoá khoản chi "${x.item}" ${formatMoney(x.amount)} của ${who}?${x.status === 'approved' ? `\n\nDòng này trong Sổ thu chi cũng bị xoá${cash ? '' : ', tiền cộng lương bị bỏ'}.` : ''}`)}
+                          style={{ fontSize: '0.78rem', padding: '6px 10px', background: 'white', border: '1px solid #e2e8f0', borderRadius: 8, color: '#64748b', cursor: 'pointer' }}>🗑 Xoá</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
               {/* Ca ghi sau 3 lần sai mặt ở máy quầy: chưa tính lương, chờ chủ xác nhận đúng người hay không. */}
               {(faces?.reviews || []).map(r => {
                 const t = ts => new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
@@ -2606,7 +2757,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   </div>
                 );
               })}
-              {requests.length === 0 && !(checkin?.fixes || []).length && !(checkin?.extras || []).length && <div className="empty-state">Không có yêu cầu nào</div>}
+              {requests.length === 0 && !(checkin?.fixes || []).length && !(checkin?.extras || []).length && !claims.claims.length && <div className="empty-state">Không có yêu cầu nào</div>}
               {requests.map(req => {
                 const typeInfo = requestTypeMap[req.request_type] || {};
                 return (

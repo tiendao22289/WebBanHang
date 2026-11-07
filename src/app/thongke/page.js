@@ -443,7 +443,7 @@ function StaffDayCard({ staff }) {
     {waiting > 0 && <div className="tk-sub">
       <h3>Chờ bạn duyệt</h3>
       <ul className="tk-table">
-        {staff.pending.map((r, i) => <li key={`p${i}`}><span className="tk-cell-main"><b>{r.name}</b><small>{r.kind === 'advance' ? `xin ứng ${money(r.amount)}` : `báo nghỉ ${r.days} ngày`}{r.reason ? ` — ${r.reason}` : ''}</small></span></li>)}
+        {staff.pending.map((r, i) => <li key={`p${i}`}><span className="tk-cell-main"><b>{r.name}</b><small>{r.kind === 'advance' ? `xin ứng ${money(r.amount)}` : r.kind === 'expense' ? `ghi chi hộ quán ${money(r.amount)}` : `báo nghỉ ${r.days} ngày`}{r.reason ? ` — ${r.reason}` : ''}</small></span></li>)}
         {staff.fixes.map((f, i) => <li key={`f${i}`}><span className="tk-cell-main"><b>{f.name}</b><small>xin sửa giờ chấm công{f.reason ? ` — ${f.reason}` : ''}</small></span></li>)}
         {staff.outside.map(o => <li key={`o${o.id}`}><span className="tk-cell-main"><b>{o.name}</b><small>{minutes(o.minutes)} ngoài ca chưa tính lương</small></span></li>)}
       </ul>

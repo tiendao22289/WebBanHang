@@ -37,8 +37,13 @@ export function fakeDb(state) {
       eq(k, v) { conditions.push(r => r[k] === v); return q; },
       neq(k, v) { conditions.push(r => r[k] !== v); return q; },
       in(k, vs) { conditions.push(r => vs.includes(r[k])); return q; },
-      // "a.eq.x,b.eq.y" (chỉ dạng eq).
-      or(expr) { const parts = expr.split(',').map(e => e.split('.')); conditions.push(r => parts.some(([k, , v]) => String(r[k]) === v)); return q; },
+      // "a.eq.x,b.gte.\"y\"": eq / gt / gte / lt / lte, giá trị có thể trong ngoặc kép (giờ ISO có dấu chấm).
+      or(expr) {
+        const parts = expr.split(',').map(e => { const [k, op, ...rest] = e.split('.'); return [k, op, rest.join('.').replace(/^"(.*)"$/, '$1')]; });
+        const cmp = { eq: (a, b) => String(a) === b, gt: (a, b) => a > b, gte: (a, b) => a >= b, lt: (a, b) => a < b, lte: (a, b) => a <= b };
+        conditions.push(r => parts.some(([k, op, v]) => (cmp[op] || cmp.eq)(r[k], v)));
+        return q;
+      },
       gte(k, v) { conditions.push(r => r[k] >= v); return q; },
       gt(k, v) { conditions.push(r => r[k] > v); return q; },
       lt(k, v) { conditions.push(r => r[k] < v); return q; },

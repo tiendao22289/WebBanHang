@@ -85,6 +85,16 @@ export async function reviewsFor(db, sessionIds) {
 }
 
 // today: ngày hôm nay (giờ Việt Nam, theo giờ internet ở máy chủ) — ngày quán nghỉ chưa tới thì chưa tính lương.
+/** Khoản chi hộ đã duyệt được tính vào lương tháng year/month (payroll_expense_claims). Bảng chưa có (web lên trước migration): []. */
+export async function readMonthClaims(db, year, month, staffId = null) {
+  let q = db.from('payroll_expense_claims').select('*').eq('status', 'approved').eq('year', year).eq('month', month);
+  if (staffId) q = q.eq('staff_id', staffId);
+  const { data, error } = await q;
+  if (missingTable(error)) return [];
+  if (error) throw error;
+  return data || [];
+}
+
 export async function loadPayrollMonth(db, year, month, today) {
   const { start, end } = monthRange(year, month);
   const [staff, configs, sessions, requests, violations, closes, departures, rules, bonuses, bonusSettings, fineReviews, fineRules, hourlyRates, lateRules, holidays] = await Promise.all([
@@ -106,12 +116,13 @@ export async function loadPayrollMonth(db, year, month, today) {
     readHolidays(db),
   ]);
   for (const r of [staff, configs, requests, violations, closes, departures, bonuses, fineReviews, fineRules]) if (r.error) throw r.error;
+  const claims = await readMonthClaims(db, year, month);
   const reviews = await reviewsFor(db, sessions.map(x => x.id));
   // Ca chờ chủ duyệt mặt (face_hold) chưa tính lương.
   const held = await faceHolds(db, sessions.map(x => x.id));
   return { start, end, staff: staff.data || [], configs: configs.data || [], sessions: markFaceHolds(sessions, held), requests: requests.data || [],
     violations: violations.data || [], reviews, closes: closes.data || [], departures: departures.data || [], rules,
-    bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data), hourlyRates, lateRules,
+    bonuses: bonuses.data || [], bonusSettings, fineReviews: fineReviews.data || [], fineKinds: activeFineKinds(fineRules.data), hourlyRates, lateRules, claims,
     closedDays: closedDaysToDate(holidays, start, end, today), holidayPay: holidays.holidayPay, returns: holidays.returns,
     // Hôm nay: tháng đang chạy chỉ tính phần chỉnh theo số ngày của tháng tới hôm nay (computeSalary asOf qua holidayArgs).
     asOf: today || new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10) };
