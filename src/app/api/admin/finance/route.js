@@ -200,7 +200,7 @@ async function repairMissingBills(db) {
     if (status && status !== 'paid') continue; // mở lại / huỷ sau khi thu → không phải doanh thu
     const items = (bill.snapshot?.order_items || []).map(i => ({
       name: i.item_name || i.menu_item?.name || null, quantity: i.quantity, unit_price: i.unit_price,
-      options: i.item_options ?? null, is_gift: i.is_gift ?? null, added_by: i.added_by_name ?? null,
+      options: i.item_options ?? null, is_gift: i.is_gift ?? null, added_by: i.added_by_name ?? null, wheel_gift: i.note === 'Quà tặng từ vòng quay may mắn',
     }));
     const { error } = await db.from('finance_revenue_ledger').upsert({
       order_id: bill.orderId, paid_at: bill.paidAt, business_date: vnDate(bill.paidAt),
@@ -396,7 +396,7 @@ const inChunks = (list, size = 150) => Array.from({ length: Math.ceil(list.lengt
 async function lossInputs(db, { from, to, range }) {
   const ledgerDay = await readAll(() => db.from('finance_revenue_ledger').select('order_id, table_number, paid_at, amount, items')
     .gte('business_date', from).lt('business_date', addDays(to, 1)).order('order_id'));
-  const menu = (await db.from('menu_items').select('id, name, price')).data || [];
+  const menu = (await db.from('menu_items').select('id, name, price, options')).data || [];
   const menuName = new Map(menu.map(m => [m.id, m.name]));
   const menuPrice = new Map(menu.map(m => [String(m.name || '').trim().toLowerCase(), Number(m.price) || 0]));
   const since = new Date(range.start.getTime() - 12 * 3600000).toISOString();
@@ -423,7 +423,7 @@ async function lossInputs(db, { from, to, range }) {
     .gte('created_at', new Date(range.start.getTime() - 24 * 3600000).toISOString()).lt('created_at', range.end.toISOString())).data || [])
     .filter(o => { const t = new Date(o.cancelled_at || o.created_at).getTime(); return t >= range.start.getTime() && t < range.end.getTime(); })
     .map(o => ({ ...o, table_number: tables.get(o.table_id) }));
-  return { ledgerDay, printed, movedIds, cancelled, menuPrice };
+  return { ledgerDay, printed, movedIds, cancelled, menuPrice, menuItems: menu };
 }
 
 // Chấm công các ngày from..to (lấy dư 1 ngày hai đầu: lượt dọn quán sau nửa đêm thuộc ca hôm trước), lần quét
@@ -854,7 +854,7 @@ export async function GET(request) {
         // Đọc chấm công lỗi (tháng nào của kỳ) → lãi chưa trừ lương: trang báo như Sổ thu chi.
         wagesMissing: loaded.some(l => !l.summary.wagesReady && l.summary.days.some(d => d.date >= p.start && d.date <= p.end)),
         prev: before && { revenue: before.revenue, cost: before.cost, profit: before.profit, bills: before.bills + before.paperBills },
-        sales: { hours: sales.hours, peak: sales.peak, top: sales.top, slow: sales.slow, avgBill: t.bills ? t.revenue / t.bills : 0 }, weekdays,
+        sales: { hours: sales.hours, peak: sales.peak, top: sales.top, slow: sales.slow, foods: sales.foods, avgBill: t.bills ? t.revenue / t.bills : 0 }, weekdays,
         loss: lossIn ? lossData(lossIn) : null,
         staff: staffIn ? staffRangeData({ ...staffIn, staffNames, from: p.start, to: p.end }) : null,
         notes: notesIn ? notesRangeData({ ...notesIn, range }) : null,

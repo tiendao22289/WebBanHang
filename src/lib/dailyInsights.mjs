@@ -25,7 +25,38 @@ const pct = (now, before) => (before > 0 ? `${now >= before ? '+' : '−'}${Math
  * menuPrice: Map tên món (chữ thường) → giá menu, để ước giá trị món tặng.
  * Trả về từng loại thất thoát (số lần / số món, tiền, từng dòng) và tổng tiền ước tính.
  */
-export function lossData({ ledgerDay = [], printed = new Map(), movedIds = new Set(), cancelled = [], menuPrice = new Map() }) {
+// Các loại khuyến mãi giảm tiền, nhận theo tên dòng giảm (discountLabel ở reviewReward.js, tên giải vòng xoay, 'Voucher BK-…').
+// Dòng cuối là 'Giảm khác' (giảm tay của nhân viên…).
+const PROMO_KINDS = [
+  { key: 'wheel', label: 'Vòng xoay', icon: '🎡', test: n => /vòng xoay/i.test(n) },
+  { key: 'google', label: 'Đánh giá Google', icon: '⭐', test: n => /google/i.test(n) },
+  { key: 'tiktok', label: 'Theo dõi TikTok', icon: '🎵', test: n => /tiktok/i.test(n) },
+  { key: 'zalo', label: 'Quan tâm Zalo', icon: '💬', test: n => /zalo/i.test(n) },
+  { key: 'facebook', label: 'Theo dõi Facebook', icon: '👍', test: n => /facebook/i.test(n) },
+  { key: 'voucher', label: 'Voucher', icon: '🎟️', test: n => /^voucher /i.test(n) },
+  { key: 'other', label: 'Giảm giá khác', icon: '🏷️', test: () => true },
+];
+
+// Giá gốc 1 phần của món tặng theo thực đơn: tổng giá các lựa chọn đã chọn (vd Ốc gai "Xào tỏi" 50.000đ), không có lựa chọn
+// đặt giá thì giá món. Không thấy món trong thực đơn thì giá theo tên (menuPrice), không có nữa thì 0.
+function giftUnitPrice(i, menuByName, menuPrice) {
+  const key = String(i.name || '').trim().toLowerCase(), item = menuByName.get(key);
+  if (!item) return menuPrice.get(key) || 0;
+  let sum = 0, priced = false;
+  const picked = i.options ?? i.item_options;
+  for (const sel of Array.isArray(picked) ? picked : []) {
+    const opt = (item.options || []).find(o => o?.name === sel?.name && Array.isArray(o.choices));
+    if (!opt || sel?.choice == null || sel.choice === '') continue;
+    for (const part of String(sel.choice).split(', ')) {
+      const at = opt.choices.indexOf(part), p = at >= 0 ? opt.prices?.[at] : null;
+      if (p !== null && p !== undefined && p !== '' && Number.isFinite(Number(p))) { sum += Number(p); priced = true; }
+    }
+  }
+  return priced ? sum : Number(item.price) || 0;
+}
+
+export function lossData({ ledgerDay = [], printed = new Map(), movedIds = new Set(), cancelled = [], menuPrice = new Map(), menuItems = [] }) {
+  const menuByName = new Map(menuItems.map(m => [String(m.name || '').trim().toLowerCase(), m]));
   // Bill huỷ — kèm món đã in bếp (đã làm mà không thu tiền). Món đã sang bill khác (gộp bill / chuyển bàn)
   // vẫn được thu ở bill đó nên không tính.
   const cancelRows = cancelled.flatMap(o => {
@@ -71,20 +102,54 @@ export function lossData({ ledgerDay = [], printed = new Map(), movedIds = new S
     discounts.set(kind, { count: d.count + 1, amount: d.amount - amount });
   }
   const kinds = [...discounts.entries()].sort((a, b) => b[1].amount - a[1].amount).map(([kind, d]) => ({ kind, ...d }));
-  // Món tặng (0đ) — ước giá trị theo giá menu.
+  // Món tặng (0đ) — giá trị theo giá gốc trên thực đơn (cả lựa chọn), vd tặng 10 phần Ốc gai 50.000đ = 500.000đ.
   const gifts = new Map();
   for (const bill of ledgerDay) for (const i of bill.items || []) {
     if (!i.is_gift) continue;
     const g = gifts.get(i.name) || { qty: 0, value: 0 };
     const q = Number(i.quantity) || 0;
-    gifts.set(i.name, { qty: g.qty + q, value: g.value + q * (menuPrice.get(String(i.name || '').trim().toLowerCase()) || 0) });
+    gifts.set(i.name, { qty: g.qty + q, value: g.value + q * giftUnitPrice(i, menuByName, menuPrice) });
   }
   const giftItems = [...gifts.entries()].sort((a, b) => b[1].qty - a[1].qty).map(([name, g]) => ({ name, ...g }));
+  // Khuyến mãi từng loại (Thống kê nhanh): vòng xoay (giảm tiền / tặng món), đánh giá Google, TikTok, Zalo, Facebook, voucher,
+  // giảm khác, và món tặng (8 tặng 1 / nhân viên tặng, tách nước và món ăn). Mỗi dòng kèm bàn, giờ thu, tiền. Món tặng vòng
+  // xoay nhận ra nhờ cờ wheel_gift sổ ghi lúc thu tiền (bill thu trước khi có cờ này tính vào món tặng).
+  const groupRows = new Map(PROMO_KINDS.map(k => [k.key, []])), giftRows = [];
+  for (const bill of ledgerDay) for (const i of bill.items || []) {
+    const qty = Number(i.quantity) || 0, price = Number(i.unit_price) || 0, base = { table: bill.table_number ?? null, at: bill.paid_at || null };
+    const name = String(i.name || '');
+    if (price * qty < 0) {
+      const kind = PROMO_KINDS.find(k => k.test(name)) || PROMO_KINDS.at(-1);
+      groupRows.get(kind.key).push({ ...base, kind: 'discount', name: name || 'Giảm giá', qty, amount: -price * qty });
+    } else if (i.is_gift && qty > 0) {
+      const unit = giftUnitPrice(i, menuByName, menuPrice);
+      const row = { ...base, kind: 'gift', name: label(i.name, i.options ?? i.item_options), qty, unit, amount: unit * qty, drink: isDrinkItem(name) };
+      (i.wheel_gift ? groupRows.get('wheel') : giftRows).push(row);
+    }
+  }
+  const sum = rows => rows.reduce((a, r) => a + r.amount, 0);
+  const qtyOf = rows => rows.reduce((a, r) => a + r.qty, 0);
+  const byItem = rows => [...rows.reduce((m, r) => {
+    const g = m.get(r.name) || { name: r.name, qty: 0, unit: r.unit, amount: 0 };
+    return m.set(r.name, { ...g, qty: g.qty + r.qty, amount: g.amount + r.amount });
+  }, new Map()).values()].sort((a, b) => b.qty - a.qty || b.amount - a.amount);
+  const giftPart = rows => ({ qty: qtyOf(rows), amount: sum(rows), items: byItem(rows) });
+  const promoGroups = PROMO_KINDS.map(({ key, label: name, icon }) => {
+    const rows = groupRows.get(key);
+    return { key, label: name, icon, count: rows.length, amount: sum(rows), giftQty: qtyOf(rows.filter(r => r.kind === 'gift')), rows };
+  }).filter(g => g.count);
+  const promos = {
+    groups: promoGroups,
+    gifts: { count: giftRows.length, qty: qtyOf(giftRows), amount: sum(giftRows), rows: giftRows,
+      drinks: giftPart(giftRows.filter(r => r.drink)), foods: giftPart(giftRows.filter(r => !r.drink)) },
+  };
+  promos.total = sum(promoGroups) + promos.gifts.amount;
   const out = {
     cancelled: { count: cancelRows.length, total: cancelTotal, rows: cancelRows },
     removed: { qty: removed.reduce((a, r) => a + r.qty, 0), value: removed.reduce((a, r) => a + r.value, 0), rows: removed },
     discounts: { count: kinds.reduce((a, d) => a + d.count, 0), amount: kinds.reduce((a, d) => a + d.amount, 0), kinds },
     gifts: { qty: giftItems.reduce((a, g) => a + g.qty, 0), value: giftItems.reduce((a, g) => a + g.value, 0), items: giftItems },
+    promos,
   };
   out.total = out.cancelled.total + out.removed.value + out.discounts.amount + out.gifts.value;
   return out;
@@ -273,22 +338,37 @@ export function compareBlock({ day, prev, week, weekdayLabel, ledgerDay = [] }) 
 }
 
 /** Số liệu của compareBlock dạng dữ liệu (cho biểu đồ trang /thongke). */
+// Đồ uống / đồ lặt vặt (bia, nước ngọt, trà, khăn, đá…) theo tên món — Thống kê nhanh chỉ xếp hạng món ăn.
+const plainText = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().replace(/\s+/g, ' ').trim();
+const DRINK_NAME = /^(bia|nuoc|coca|pepsi|7 ?up|sting|siting|c ?2\b|0 ?do\b|o ?long|tra\b|xa xi|khan\b|da\b|ruou|soju|sua\b|red ?bull|bo huc|revive|aquafina|lavie|sprite|fanta|mirinda|number ?1|monster|cafe|ca phe|heineken|tiger|saigon|sai gon)/;
+export const isDrinkItem = name => DRINK_NAME.test(plainText(name));
+
 export function compareData({ day, prev, week, ledgerDay = [] }) {
   const byHour = new Map();
   for (const b of ledgerDay) { const h = hourOf(b.paid_at); const v = byHour.get(h) || { bills: 0, amount: 0 }; byHour.set(h, { bills: v.bills + 1, amount: v.amount + (Number(b.amount) || 0) }); }
   const peak = [...byHour.entries()].sort((a, b) => b[1].amount - a[1].amount)[0];
-  const sold = new Map();
+  const sold = new Map(), foodMap = new Map();
   for (const b of ledgerDay) for (const i of b.items || []) {
+    const qty = Number(i.quantity) || 0, price = Number(i.unit_price) || 0;
+    // Món ăn (bỏ bia, nước, khăn…, món tặng và dòng giảm giá / vòng xoay giá âm): mọi món, kèm tiền — Thống kê nhanh hiện vài
+    // món đầu, bấm xem tất cả.
+    if (!i.is_gift && !isDrinkItem(i.name) && qty > 0 && price > 0) {
+      const f = foodMap.get(i.name) || { name: i.name, qty: 0, amount: 0 };
+      foodMap.set(i.name, { name: i.name, qty: f.qty + qty, amount: f.amount + qty * price });
+    }
     // Bỏ món tặng, dòng giảm giá và đồ lặt vặt dưới 5.000đ (khăn, đá...).
-    if ((Number(i.unit_price) || 0) < 5000 || i.is_gift) continue;
-    sold.set(i.name, (sold.get(i.name) || 0) + (Number(i.quantity) || 0));
+    if (price < 5000 || i.is_gift) continue;
+    sold.set(i.name, (sold.get(i.name) || 0) + qty);
   }
   const ranked = [...sold.entries()].sort((a, b) => b[1] - a[1]).map(([name, qty]) => ({ name, qty }));
+  const foods = [...foodMap.values()].sort((a, b) => b.qty - a.qty || b.amount - a.amount || a.name.localeCompare(b.name, 'vi'))
+    .map(f => ({ ...f, amount: Math.round(f.amount) }));
   return {
     prev: prev ? prev.revenue : null, week: week ? week.revenue : null,
     avgBill: day.bills ? day.revenue / day.bills : 0,
     hours: [...byHour.entries()].map(([hour, v]) => ({ hour, ...v })).sort((a, b) => a.hour - b.hour),
     peak: peak ? { hour: peak[0], ...peak[1] } : null,
     top: ranked.slice(0, 8), slow: ranked.length > 8 ? ranked.slice(-3).reverse() : [],
+    foods,
   };
 }

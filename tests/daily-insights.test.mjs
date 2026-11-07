@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compareBlock, lossBlock, staffBlock } from '../src/lib/dailyInsights.mjs';
+import { compareBlock, compareData, isDrinkItem, lossBlock, staffBlock } from '../src/lib/dailyInsights.mjs';
 
 const opt = choice => [{ name: 'LOẠI', choice }];
 
@@ -149,4 +149,58 @@ test('báo cáo ngày gom mọi dòng "Voucher BK-…" thành một nhóm Vouche
   const bill = (code, amount) => ({ order_id: code, items: [{ name: `Voucher ${code}`, quantity: 1, unit_price: -amount }] });
   const d = lossData({ ledgerDay: [bill('BK-AAAAAA', 30000), bill('BK-BBBBBB', 50000)], printed: new Map(), cancelled: [], menuPrice: new Map() });
   assert.deepEqual(d.discounts.kinds, [{ kind: 'Voucher', count: 2, amount: 80000 }]);
+});
+
+test('Thống kê nhanh ranks only dishes: beer, drinks, towels and gifts are left out; every dish is listed with its money', () => {
+  for (const name of ['Bia Heineken lun', 'Bia sài gòn', 'Coca', '7 UP', 'Siting', 'Ôlong', 'O long', 'Trà đá', 'Trà chanh xã', 'Khăn', 'Nước suối', 'Xá xị', 'C 2', '0 độ'])
+    assert.equal(isDrinkItem(name), true, name);
+  for (const name of ['Ốc Hương', 'Sò Sữa', 'Hàu nướng', 'Mì Xào', 'Đậu hũ chiên', 'Bánh mì', 'Tu Hài', 'Sò Điệp'])
+    assert.equal(isDrinkItem(name), false, name);
+  const ledgerDay = [{ paid_at: '2026-11-06T12:00:00Z', amount: 0, items: [
+    { name: 'Bia Heineken lun', quantity: 10, unit_price: 20000 }, { name: 'Ốc Hương', quantity: 3, unit_price: 90000 },
+    { name: 'Khăn', quantity: 4, unit_price: 2000 }, { name: 'Mì Xào', quantity: 3, unit_price: 60000 }, { name: 'Ốc Hương', quantity: 1, unit_price: 90000, is_gift: true },
+    { name: 'Vòng xoay may mắn: giảm 2%', quantity: 1, unit_price: -7000 }, { name: 'Giảm giá', quantity: 1, unit_price: -20000 },
+  ] }, { paid_at: '2026-11-06T13:00:00Z', amount: 0, items: [{ name: 'Ốc Hương', quantity: 2, unit_price: 90000 }] }];
+  const c = compareData({ day: { revenue: 0, bills: 2 }, ledgerDay });
+  assert.deepEqual(c.foods, [{ name: 'Ốc Hương', qty: 5, amount: 450000 }, { name: 'Mì Xào', qty: 3, amount: 180000 }]);
+  assert.equal(c.top[0].name, 'Bia Heineken lun', 'the Zalo report list stays as before');
+});
+
+test('Thống kê nhanh splits every promotion: wheel prizes, Google and other channels, vouchers, gifts at the menu price', async () => {
+  const { lossData } = await import('../src/lib/dailyInsights.mjs');
+  const menuItems = [
+    { name: 'ỐC Gai', price: 0, options: [{ name: 'LOẠI', choices: ['Xào tỏi', 'Nướng mỡ hành'], prices: [50000, 55000] }] },
+    { name: 'Nước suối', price: 10000, options: [] },
+    { name: 'Coca', price: 15000 },
+  ];
+  const at = '2026-11-06T13:00:00Z';
+  const ledgerDay = [
+    { table_number: '5', paid_at: at, items: [
+      { name: 'Vòng xoay may mắn: giảm 10%', quantity: 1, unit_price: -42000 },
+      { name: 'Coca', quantity: 1, unit_price: 0, is_gift: true, wheel_gift: true },
+      { name: 'Giảm giá đánh giá Google', quantity: 1, unit_price: -20000 },
+      { name: 'ỐC Gai', quantity: 10, unit_price: 0, is_gift: true, options: [{ name: 'LOẠI', choice: 'Xào tỏi' }] },
+    ] },
+    { table_number: '9', paid_at: at, items: [
+      { name: 'Giảm giá đánh giá Google', quantity: 1, unit_price: -30000 },
+      { name: 'Giảm giá kết bạn Zalo', quantity: 1, unit_price: -10000 },
+      { name: 'Voucher BK-ABCDEF', quantity: 1, unit_price: -50000 },
+      { name: 'Giảm giá: khách quen', quantity: 1, unit_price: -5000 },
+      { name: 'Nước suối', quantity: 3, unit_price: 0, is_gift: true },
+      { name: 'Món lạ', quantity: 1, unit_price: 0, is_gift: true },
+    ] },
+  ];
+  const { promos, gifts } = lossData({ ledgerDay, menuItems, menuPrice: new Map([['món lạ', 7000]]) });
+  const g = Object.fromEntries(promos.groups.map(x => [x.key, x]));
+  assert.deepEqual(promos.groups.map(x => x.key), ['wheel', 'google', 'zalo', 'voucher', 'other'], 'empty kinds (TikTok, Facebook) are left out');
+  assert.deepEqual([g.wheel.count, g.wheel.giftQty, g.wheel.amount], [2, 1, 42000 + 15000], 'a wheel gift counts at its menu price');
+  assert.deepEqual(g.wheel.rows.map(r => [r.table, r.kind, r.name]), [['5', 'discount', 'Vòng xoay may mắn: giảm 10%'], ['5', 'gift', 'Coca']]);
+  assert.deepEqual([g.google.count, g.google.amount, g.google.rows.map(r => r.table)], [2, 50000, ['5', '9']]);
+  assert.deepEqual([g.zalo.amount, g.voucher.amount, g.other.amount], [10000, 50000, 5000]);
+  // Món tặng (không phải vòng xoay): 10 phần Ốc gai Xào tỏi 50.000đ = 500.000đ, nước tính chai riêng.
+  assert.deepEqual([promos.gifts.foods.qty, promos.gifts.foods.amount], [11, 500000 + 7000]);
+  assert.deepEqual(promos.gifts.foods.items[0], { name: 'ỐC Gai (Xào tỏi)', qty: 10, unit: 50000, amount: 500000 });
+  assert.deepEqual([promos.gifts.drinks.qty, promos.gifts.drinks.amount], [3, 30000]);
+  assert.equal(promos.total, 57000 + 50000 + 10000 + 50000 + 5000 + 537000);
+  assert.equal(gifts.value, 15000 + 500000 + 30000 + 7000, 'the loss card values gifts at the menu price too');
 });

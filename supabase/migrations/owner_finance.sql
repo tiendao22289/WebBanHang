@@ -154,7 +154,8 @@ BEGIN
     settled_at := COALESCE(NEW.paid_at, now());
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
         'name', COALESCE(i.item_name, m.name), 'quantity', i.quantity, 'unit_price', i.unit_price,
-        'options', i.item_options, 'is_gift', i.is_gift, 'added_by', to_jsonb(i)->>'added_by_name') ORDER BY i.id), '[]'::jsonb),
+        'options', i.item_options, 'is_gift', i.is_gift, 'added_by', to_jsonb(i)->>'added_by_name',
+        'wheel_gift', COALESCE(to_jsonb(i)->>'note', '') = 'Quà tặng từ vòng quay may mắn') ORDER BY i.id), '[]'::jsonb),
       COALESCE(sum(COALESCE(i.unit_price, 0) * COALESCE(i.quantity, 0)), 0)
       INTO items, total
       FROM public.order_items i LEFT JOIN public.menu_items m ON m.id = i.menu_item_id
