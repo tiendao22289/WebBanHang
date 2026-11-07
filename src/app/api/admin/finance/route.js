@@ -37,6 +37,7 @@ import { signReceiptImages } from '@/lib/receiptImages.mjs';
 import { loadPayrollMonth, readClosedDays, readLateRules } from '@/lib/payrollMonth.mjs';
 import { payrollCost } from '@/lib/payroll.mjs';
 import { addCosts, addItemCosts, namedCostList } from '@/lib/noteCategories.mjs';
+import { allOpenDebts } from '@/lib/notesDebts.mjs';
 import { FINANCE_START_DATE, FIXED_CATEGORIES, billHasStaff, billStaff, checkoutKey, closeDifferences, dailyReportText, dailyWarnings, groupPaidBills, isMonthKey, itemKey, shoppingParts, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, plainName, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
 
 export const runtime = 'nodejs';
@@ -103,6 +104,7 @@ function parseNoteItems(note) {
     // Bỏ các dòng mẫu chưa điền giá ("Tiền rau", "Tiền gia vị"...).
     return (data.items || []).filter(i => i.name && String(i.price || '').trim()).map(i => ({
       name: i.name, qty: i.qty || '', price: i.price || '', paymentStatus: i.paymentStatus || 'full', creditor: i.creditor || '',
+      debtAmount: i.debtAmount || '', paid_amount: Number(i.paid_amount) || 0,
     }));
   } catch { return null; }
 }
@@ -117,6 +119,17 @@ function noteView(note) {
     mismatch: noteMismatch(note), lineWarnings: noteLineWarnings(note),
     paid: Number(note.amount) || 0, debt: Number(note.debt) || 0,
     debtLeft: Math.max(0, (Number(note.debt) || 0) - (Number(note.paid_debt) || 0)), items, text: text.slice(0, 500) };
+}
+
+// Nợ Sổ tay còn lại tới giờ (mọi phiếu chưa trả hết): tổng + theo chủ nợ (người bán) — như trang Sổ tay.
+async function openNoteDebts(db) {
+  const rows = await readAll(() => db.from('staff_notes').select('id, created_at, content, debt, paid_debt, staff_id, staff ( full_name )')
+    .eq('note_type', 'expense').gt('debt', 0).order('created_at', { ascending: true }));
+  const lines = allOpenDebts(rows.filter(n => (Number(n.debt) || 0) > (Number(n.paid_debt) || 0)));
+  const by = {};
+  for (const l of lines) { const k = l.creditor || 'Không ghi người bán'; by[k] = (by[k] || 0) + l.left; }
+  return { total: lines.reduce((s, l) => s + l.left, 0), count: lines.length,
+    byCreditor: Object.entries(by).map(([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount) };
 }
 
 const notesBetween = (db, fromIso, toIso) => readAll(() => db.from('staff_notes')
@@ -892,7 +905,7 @@ export async function GET(request) {
     if (date) {
       if (!DATE.test(date)) return NextResponse.json({ error: 'Ngày không hợp lệ.' }, { status: 400, headers });
       const nextDay = new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
-      const [bills, notes, entries, close, paper, check] = await Promise.all([
+      const [bills, notes, entries, close, paper, check, debts] = await Promise.all([
         readAll(() => db.from('finance_revenue_ledger')
           .select('*')
           .eq('business_date', date).order('paid_at', { ascending: true })),
@@ -901,6 +914,7 @@ export async function GET(request) {
         readClose(db, date),
         readPaper(db, date, nextDay),
         readCheck(db, date),
+        openNoteDebts(db).catch(error => { console.error('[admin/finance] debts', error); return null; }),
       ]);
       const urls = await signReceiptImages(db, [...bills.flatMap(b => [b.transfer_image_path, b.cash_image_path]), ...paper.flatMap(r => [r.image_path, r.transfer_image_path])]);
       const day = { cash: 0, byAccount: {} };
@@ -915,7 +929,7 @@ export async function GET(request) {
         paperBills: paper.map(r => ({ id: r.id, receivedAt: r.received_at, amount: Number(r.amount), paymentMethod: r.payment_method,
           accountId: r.account_id, tableLabel: r.table_label, note: r.note, createdByName: r.created_by_name,
           imageUrl: urls[r.image_path] || null, transferImageUrl: urls[r.transfer_image_path] || null, imagesPurged: !!r.images_purged_at, verified: !!r.verified_at })),
-        notes: notes.map(noteView).filter(n => n.cost > 0), entries,
+        notes: notes.map(noteView).filter(n => n.cost > 0), entries, debts,
         close, closeDiff: closeDifferences(day, close), dayCash: day.cash, dayByAccount: day.byAccount, check }, { headers });
     }
 

@@ -7,6 +7,8 @@ import { useBackClose } from '@/lib/useBackClose';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
 import { billStaff, costParts, groupPaidBills, shoppingParts, staffText } from '@/lib/ownerFinance.mjs';
 import { addNamedCost, namedCostList } from '@/lib/noteCategories.mjs';
+import { parsePrice, parseQty } from '@/lib/notesMath.mjs';
+import { lineDebtBase } from '@/lib/notesDebts.mjs';
 import './finance.css';
 
 const money = value => `${Math.round(Number(value || 0)).toLocaleString('vi-VN')}đ`;
@@ -198,15 +200,23 @@ function MonthlyCosts({ data, month, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
+  // Ô thêm khoản thu gọn sau nút "+ Thêm khoản"; tháng chưa có khoản nào thì mở sẵn.
+  const [formOpen, setFormOpen] = useState(false);
 
   const tab = pick.startsWith('tab:') ? categories.find(c => c.id === pick.slice(4)) : null;
   const own = ownFixed.find(c => c.id === pick);
   useEffect(() => { if (data && pick.startsWith('tab:') && !monthlyTabs.some(t => `tab:${t.id}` === pick)) setPick('rent'); }, [data, pick]);
   const name = tab ? tab.name : own ? own.name : (data?.fixedCategories || []).find(c => c.key === pick)?.label || 'chi cố định';
   const monthText = `${month.slice(5)}/${month.slice(0, 4)}`;
-  const perDay = data?.daysInMonth ? Math.round((data.fixedMonthTotal || 0) / data.daysInMonth) : 0;
-  const listed = [...(data?.fixedEntries || []), ...(data?.customMonthlyEntries || [])];
+  const dim = Number(data?.daysInMonth) || 30;
+  // Nhiều tiền ở trên; mỗi khoản kèm phần chia cho mỗi ngày (cả tháng ÷ số ngày của tháng), giống "Cố định" ở tab Hôm nay.
+  const listed = [...(data?.fixedEntries || []), ...(data?.customMonthlyEntries || [])].sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0));
   const listedTotal = listed.reduce((s, e) => s + Number(e.amount || 0), 0);
+  const showForm = formOpen || (data && !listed.length);
+  // Khoản cố định không ghi tên thì lấy tên mục (Thuê nhà, Tiền điện…).
+  const titleOf = e => (e.kind === 'fixed' && !e.label
+    ? (data?.fixedCategories || []).find(c => c.key === e.category)?.label || categories.find(c => c.id === e.category)?.name : null) || entryTitle(e, categories);
+  const picks = [...(data?.fixedCategories || []).map(c => [c.key, c.label]), ...ownFixed.map(c => [c.id, c.name]), ...monthlyTabs.map(t => [`tab:${t.id}`, `${t.name} (tab)`])];
 
   async function save(event) {
     event.preventDefault();
@@ -220,7 +230,7 @@ function MonthlyCosts({ data, month, onSaved }) {
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   async function remove(entry) {
-    if (!confirm(`Xoá "${entryTitle(entry, categories)}" ${money(entry.amount)}?`)) return;
+    if (!confirm(`Xoá "${titleOf(entry)}" ${money(entry.amount)}?`)) return;
     try { await post({ action: 'delete', id: entry.id }); onSaved(); } catch (err) { alert(err.message); }
   }
   async function copyLast() {
@@ -231,34 +241,52 @@ function MonthlyCosts({ data, month, onSaved }) {
     try { await post({ action: 'archive_category', id: category.id }); setPick('rent'); onSaved(); } catch (err) { alert(err.message); }
   }
 
-  return <section className="fin-panel fin-spend">
-    <h2 className="fin-panel-head"><span>Chi cố định tháng {monthText}</span><b>{money(listedTotal)}</b></h2>
-    <p className="fin-hint">Tiền nhà, điện, nước, internet… nhập 1 lần cho cả tháng, sổ tự chia đều cho từng ngày{perDay ? ` (đang ≈ ${money(perDay)}/ngày)` : ''}.</p>
-    {listed.map(entry => <div key={entry.id} className="fin-row static">
-      <span>{entryTitle(entry, categories)}{entry.note && <small>{entry.note}</small>}</span>
-      <span className="fin-row-end"><b>{money(entry.amount)}</b>
-        <button type="button" className="fin-icon danger" onClick={() => remove(entry)} aria-label="Xoá"><Trash2 size={16} /></button></span>
-    </div>)}
+  return <section className="fin-panel fin-fixed">
+    {/* Tổng của tháng: cả tháng + mỗi ngày (sổ tự chia đều cho từng ngày). */}
+    <div className="fin-fixed-total">
+      <small>Chi cố định tháng {monthText}</small>
+      <b>{money(listedTotal)}</b>
+      <span>≈ {money(listedTotal / dim)} mỗi ngày · tháng {dim} ngày · {listed.length} khoản</span>
+    </div>
+    <p className="fin-hint">Tiền nhà, điện, nước, internet… nhập 1 lần cho cả tháng, sổ tự chia đều vào từng ngày (mục Cố định ở tab Hôm nay).</p>
+
+    {listed.length > 0 && <table className="fin-fixed-table">
+      <thead><tr><th>Khoản</th><th>Cả tháng</th><th>Mỗi ngày</th><th aria-label="Xoá" /></tr></thead>
+      <tbody>
+        {listed.map(entry => <tr key={entry.id}>
+          <td><span className="fin-fixed-name">{titleOf(entry)}</span>{entry.note && <small>{entry.note}</small>}</td>
+          <td className="num"><b>{money(entry.amount)}</b></td>
+          <td className="num">{money(Number(entry.amount || 0) / dim)}</td>
+          <td className="act"><button type="button" className="fin-fixed-del" onClick={() => remove(entry)} aria-label={`Xoá ${titleOf(entry)}`}><Trash2 size={15} /></button></td>
+        </tr>)}
+        <tr className="sum"><td>Tổng</td><td className="num"><b>{money(listedTotal)}</b></td><td className="num"><b>{money(listedTotal / dim)}</b></td><td /></tr>
+      </tbody>
+    </table>}
+    {data && !listed.length && <p className="fin-empty">Tháng {monthText} chưa có khoản chi cố định nào.</p>}
     {data && !data.fixedEntries?.length && month > FIRST_MONTH && <button type="button" className="fin-secondary" onClick={copyLast}>Chép chi cố định từ tháng trước</button>}
-    <form onSubmit={save}>
-      <div className="fin-fields">
-        <label className="fin-wide">Mục<select value={pick} onChange={e => { if (e.target.value === NEW) setAdding(true); else { setPick(e.target.value); setSaved(''); setError(''); } }}>
-          {(data?.fixedCategories || []).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-          {ownFixed.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          {monthlyTabs.map(t => <option key={t.id} value={`tab:${t.id}`}>{t.name}</option>)}
-          <option value={NEW}>+ Thêm mục mới...</option>
-        </select></label>
-        <label>Số tiền<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''}
-          onChange={e => setAmount(digits(e.target.value))} placeholder="0" enterKeyHint="done" required /></label>
-        <label>Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
+
+    {!showForm && <button type="button" className="fin-fixed-add" onClick={() => { setFormOpen(true); setSaved(''); setError(''); }}>+ Thêm khoản chi cố định</button>}
+    {showForm && <form onSubmit={save} className="fin-fixed-form">
+      <div className="fin-fixed-form-head"><b>Thêm khoản cho tháng {monthText}</b>
+        {listed.length > 0 && <button type="button" className="fin-link" onClick={() => setFormOpen(false)}>Đóng</button>}</div>
+      <div className="fin-search-tables fin-wrap fin-picks">
+        {picks.map(([value, label]) => <button key={value} type="button" aria-pressed={pick === value} className={pick === value ? 'active' : ''}
+          onClick={() => { setPick(value); setSaved(''); setError(''); }}>{label}</button>)}
+        <button type="button" className="fin-chip-add" onClick={() => setAdding(a => !a)}>+ Mục mới</button>
       </div>
       {adding && <NewCategory scope="fixed" onCancel={() => setAdding(false)}
         onDone={category => { setCreated(prev => [...prev, category]); setAdding(false); onSaved(); setPick(category.id); }} />}
+      <div className="fin-fields">
+        <label>Số tiền cả tháng<input inputMode="numeric" value={amount ? Number(digits(amount)).toLocaleString('vi-VN') : ''}
+          onChange={e => setAmount(digits(e.target.value))} placeholder="0" enterKeyHint="done" required /></label>
+        <label>Ghi chú<input value={note} onChange={e => setNote(e.target.value)} placeholder="Không bắt buộc" /></label>
+      </div>
+      {amount > 0 && <p className="fin-hint">≈ {money(Number(digits(amount)) / dim)} mỗi ngày.</p>}
       {error && <p className="fin-error">{error}</p>}
       {saved && <p className="fin-saved" role="status">{saved}</p>}
       <button className="fin-primary" disabled={busy}>{busy ? 'Đang lưu...' : `Thêm ${name.toLowerCase()} tháng ${monthText}`}</button>
       {(tab || own) && <button type="button" className="fin-link" onClick={() => archive(tab || own)}>Ẩn mục "{(tab || own).name}"</button>}
-    </form>
+    </form>}
   </section>;
 }
 
@@ -266,22 +294,53 @@ function MonthlyCosts({ data, month, onSaved }) {
 const diffText = diff => diff === 0 ? 'Khớp ✓' : diff > 0 ? `Thừa ${money(diff)}` : `Thiếu ${money(-diff)}`;
 const diffClass = diff => diff === 0 ? 'ok' : 'bad';
 const dayCost = d => d.purchases + d.drinks + d.salary + d.fixedShare + d.customTotal;
-// "Trong ngày 350k · Nhập hàng 1,2tr · Lương 900k · Cố định 300k" (bỏ nhóm 0đ).
-const costLine = (d, categories) => {
-  const p = costParts(d, categories);
-  return [['Trong ngày', p.daily], ['Nhập hàng', p.purchases], ['Lương', p.salary], ['Cố định', p.fixed]]
-    .filter(([, v]) => v > 0).map(([k, v]) => `${k} ${money(v)}`).join(' · ');
-};
+
+// Chi tiết Nhập hàng của một ngày: từng phiếu Sổ tay — từng món (số lượng × giá = thành tiền, món nào nợ ai), đã trả / nợ của
+// phiếu; cuối là nợ trong ngày và tổng nợ Sổ tay tới giờ (theo người bán). Cảnh báo phiếu lệch tiền / giá đáng ngờ như cũ.
+function NotesDetail({ notes, debts, parts }) {
+  if (!notes) return <p className="fin-empty">Đang tải…</p>;
+  const dayDebt = notes.reduce((s, n) => s + (Number(n.debt) || 0), 0), dayLeft = notes.reduce((s, n) => s + (Number(n.debtLeft) || 0), 0);
+  return <div className="fin-notes-detail">
+    {parts.length > 1 && <p className="fin-costs-hint">Chia loại: {parts.map(x => `${x.id ? x.name : 'Đi chợ hàng ốc'} ${money(x.amount)}`).join(' · ')}</p>}
+    {notes.length === 0 && <p className="fin-empty">Hôm nay chưa có phiếu đi chợ / nhập hàng nào. Nhân viên ghi ở Sổ tay, phiếu tự hiện ở đây.</p>}
+    {notes.map(note => <div key={note.id} className="fin-note-card">
+      <div className="fin-note-head"><span>🧾 {clock(note.createdAt)} · {note.staffName || 'Nhân viên'}</span><b>{money(note.cost)}</b></div>
+      {note.items?.length > 0 && <table className="fin-note-items">
+        <thead><tr><th>Món</th><th>SL × Giá</th><th>Thành tiền</th></tr></thead>
+        <tbody>{note.items.map((item, i) => {
+          const price = parsePrice(item.price), qty = parseQty(item.qty), total = Math.round(price * qty);
+          const owed = lineDebtBase(item), left = Math.max(0, owed - (Number(item.paid_amount) || 0));
+          return <tr key={i}>
+            <td>{item.name}{owed > 0 && <small className={left > 0 ? 'debt' : 'paid'}>{left > 0 ? `nợ ${money(left)}` : `đã trả nợ ${money(owed)}`}{item.creditor ? ` · ${item.creditor}` : ''}</small>}</td>
+            <td className="num">{item.qty || '1'} × {money(price)}</td>
+            <td className="num"><b>{money(total)}</b></td>
+          </tr>;
+        })}</tbody>
+      </table>}
+      {!note.items && note.text && <p className="fin-note-text">{note.text}</p>}
+      {note.debt > 0 && <p className="fin-note-pay">Đã trả {money(note.paid)} · nợ {money(note.debt)}{note.debtLeft > 0 ? <> · <b className="debt">còn nợ {money(note.debtLeft)}</b></> : ' · đã trả hết nợ'}</p>}
+      {note.mismatch !== 0 && note.mismatch !== undefined && <p className="fin-warn">⚠ Phiếu lệch tiền: tổng phiếu ghi {money(note.cost)} nhưng các dòng hàng cộng lại {money(note.cost - note.mismatch)} (lệch {money(Math.abs(note.mismatch))}). Thường do lỗi cũ của Sổ tay, ví dụ "2,5kg" bị tính thành 25kg. Mở phiếu trong Sổ tay, bấm Sửa rồi Lưu để tính lại.</p>}
+      {note.lineWarnings?.length > 0 && <p className="fin-warn">⚠ {note.lineWarnings.join(' · ')}</p>}
+      {note.suspicious?.length > 0 && <p className="fin-warn">⚠ Giá có thể gõ thiếu chữ "k" ({note.suspicious.join(', ')}). Sổ tay hiểu "250" là 250đ, "250k" mới là 250.000đ. Kiểm tra lại phiếu trong Sổ tay.</p>}
+    </div>)}
+    <div className="fin-debt-box">
+      <div><span>Nợ trong ngày</span><b className={dayLeft > 0 ? 'debt' : ''}>{dayDebt > 0 ? `${money(dayDebt)}${dayLeft !== dayDebt ? ` · còn ${money(dayLeft)}` : ''}` : 'Không nợ'}</b></div>
+      <div><span>Tổng nợ Sổ tay tới giờ</span><b className={debts?.total > 0 ? 'debt' : ''}>{debts ? (debts.total > 0 ? money(debts.total) : 'Không còn nợ') : '—'}</b></div>
+      {debts?.byCreditor?.length > 0 && <ul>{debts.byCreditor.map(c => <li key={c.name}><span>{c.name}</span><span>{money(c.amount)}</span></li>)}</ul>}
+      <a className="fin-link" href="/admin/notes">Mở Sổ tay để xem / trả nợ →</a>
+    </div>
+  </div>;
+}
 
 // Chi của một ngày (tab Hôm nay): 4 nhóm — Chi trong ngày, Nhập hàng, Lương, Cố định — mỗi nhóm một dòng, bấm để xem từng
 // khoản. Cố định ghi rõ tiền cả tháng và phần chia cho mỗi ngày (cả tháng ÷ số ngày của tháng).
-function DayCosts({ day, month, spend = null, openTick = 0 }) {
+function DayCosts({ day, month, spend = null, notes = null, debts = null, openTick = 0 }) {
   const [open, setOpen] = useState(null);
-  // Bấm "Nhập / Thêm" ở Việc trong ngày: mở dòng Chi trong ngày và cuộn tới.
+  // "Xem phiếu" ở Việc trong ngày (phiếu Sổ tay cần xem lại): mở dòng Nhập hàng và cuộn tới.
   useEffect(() => {
     if (!openTick) return;
-    setOpen('daily');
-    setTimeout(() => document.getElementById('fin-spend')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    setOpen('purchases');
+    setTimeout(() => document.getElementById('fin-notes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
   }, [openTick]);
   const categories = month?.categories || [], noteCategories = month?.noteCategories || [];
   const monthly = new Set(categories.filter(c => c.scope === 'tab' && c.schedule === 'monthly').map(c => c.id));
@@ -302,25 +361,20 @@ function DayCosts({ day, month, spend = null, openTick = 0 }) {
     { key: 'purchases', label: 'Nhập hàng', amount: p.purchases, hint: `Tiền phiếu Sổ tay${day.purchaseNotes ? ` (${day.purchaseNotes} phiếu)` : ''}: đi chợ hàng ốc và các loại Khác.` },
     { key: 'salary', label: 'Lương', amount: p.salary, hint: 'Lương ngày này theo chấm công (cùng cách tính trang Lương). Thưởng / phạt tính theo tháng, không chia vào ngày.' },
     { key: 'fixed', label: 'Cố định', amount: p.fixed, hint: `Chi cả tháng chia đều mỗi ngày: cả tháng ÷ ${dim} ngày (tháng này).` },
-  ].filter(g => g.amount > 0 || g.key === 'daily');
+  ].filter(g => g.amount > 0 || g.key === 'daily' || g.key === 'purchases');
   const list = rows => <ul className="fin-costs-list">{rows.map((r, i) => <li key={`${r.name}-${i}`}><span>{r.name}</span><b>{money(r.amount)}</b></li>)}</ul>;
   return <div className="fin-costs">
     <div className="fin-costs-title">Chi ngày này — bấm từng mục để xem</div>
     {groups.map(g => {
       const isOpen = open === g.key;
-      return <div key={g.key} id={g.key === 'daily' ? 'fin-spend' : undefined} className={`fin-costs-group ${isOpen ? 'open' : ''}`}>
+      return <div key={g.key} id={g.key === 'daily' ? 'fin-spend' : g.key === 'purchases' ? 'fin-notes' : undefined} className={`fin-costs-group ${isOpen ? 'open' : ''}`}>
         <button type="button" className="fin-costs-row" onClick={() => setOpen(isOpen ? null : g.key)} aria-expanded={isOpen}>
           <span>{g.label}</span><b className={g.amount > 0 ? '' : 'zero'}>{money(g.amount)}</b><ChevronRight size={16} style={{ transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }} />
         </button>
         {isOpen && <div className="fin-costs-body">
-          {g.key !== 'daily' && <p className="fin-costs-hint">{g.hint}</p>}
+          {g.key !== 'daily' && g.key !== 'purchases' && <p className="fin-costs-hint">{g.hint}</p>}
           {g.key === 'daily' && (spend || (dailyItems.length ? list(dailyItems) : <p className="fin-empty">Đang tải…</p>))}
-          {g.key === 'purchases' && <ul className="fin-costs-list">
-            {shop.map(x => <li key={x.id || 'shop'}>
-              <span>{x.id ? `${x.name} (Sổ tay)` : 'Đi chợ hàng ốc'}{x.items?.length > 0 && <small>{x.items.map(it => `${it.name} ${money(it.amount)}`).join(' · ')}</small>}</span>
-              <b>{money(x.amount)}</b>
-            </li>)}
-          </ul>}
+          {g.key === 'purchases' && <NotesDetail notes={notes} debts={debts} parts={shop} />}
           {g.key === 'salary' && (staff.length ? list(staff) : <p className="fin-empty">Chưa tách được theo người.</p>)}
           {g.key === 'fixed' && <table className="fin-costs-table">
             <thead><tr><th>Khoản</th><th>Cả tháng</th><th>Mỗi ngày</th></tr></thead>
@@ -423,15 +477,15 @@ async function sendReceipt(fields, image) {
 
 // Việc trong một ngày, đúng thứ tự làm: bill tự vào sổ → đi chợ ghi Sổ tay → chi trong ngày → kiểm tra
 // bill chuyển khoản → máy tự kiểm tra cuối ngày (5 giờ sáng hôm sau, không cần chủ chốt sổ). Mục xong có dấu ✓, mục cần làm có nút làm luôn.
-function DayTasks({ date, detail, spend, checking, onSearch, onOpenNotes, onOpenCheck, onCheck, onOpenSpend }) {
+// Việc trong ngày: chỉ việc cần bấm — đối chiếu bill chuyển khoản, máy tự kiểm tra, và phiếu Sổ tay khi có phiếu cần xem lại.
+// (Bill vào sổ, đi chợ, chi trong ngày đã có số ở khung Thu / Chi phía trên — chủ quán bỏ cho gọn, 2026-11-07.)
+function DayTasks({ date, detail, checking, onSearch, onOpenNotes, onOpenCheck, onCheck }) {
   const transfer = detail.bills.filter(b => b.payment_method === 'transfer');
   const paperTransfer = (detail.paperBills || []).filter(b => b.paymentMethod === 'transfer');
   // Đóng bàn có ghi lý do không chụp được thì không tính "chưa có ảnh" (như máy tự kiểm tra 5 giờ sáng).
   const noPhoto = transfer.filter(b => !b.transfer_image_url && !b.photo_skip_reason).length + paperTransfer.filter(b => !b.transferImageUrl && !b.imagesPurged).length;
   const unchecked = transfer.filter(b => !b.verified_at).length + paperTransfer.filter(b => !b.verified).length;
   const badNotes = detail.notes.filter(n => (n.mismatch && n.mismatch !== 0) || n.lineWarnings?.length || n.suspicious?.length).length;
-  const paperCount = (detail.paperBills || []).length;
-  const revenue = [...detail.bills, ...(detail.paperBills || [])].reduce((s, b) => s + Number(b.amount || 0), 0);
   const check = detail.check;
   const runLabel = checking ? 'Đang kiểm tra…' : check ? 'Kiểm tra lại' : 'Kiểm tra ngay';
   const checkStep = check
@@ -442,12 +496,7 @@ function DayTasks({ date, detail, spend, checking, onSearch, onOpenNotes, onOpen
         sub: date >= detail.today ? '5 giờ sáng mai máy tự kiểm tra ngày này, bạn không cần chốt sổ' : 'Chưa kiểm tra',
         actions: [[runLabel, onCheck]] };
   const steps = [
-    { state: 'done', title: 'Bill tự vào sổ khi đóng bàn', sub: `${detail.bills.length} bill${paperCount ? ` + ${paperCount} bill giấy` : ''} · ${money(revenue)}` },
-    { state: badNotes ? 'warn' : detail.notes.length ? 'done' : 'idle', title: 'Đi chợ / nhập hàng ghi ở Sổ tay',
-      sub: detail.notes.length ? `${detail.notes.length} phiếu · ${money(detail.notes.reduce((s, n) => s + n.cost, 0))}${badNotes ? ` · ⚠ ${badNotes} phiếu cần xem lại` : ''}` : 'Chưa có phiếu nào',
-      actions: badNotes ? [['Xem phiếu', onOpenNotes]] : [] },
-    { state: spend.count ? 'done' : 'idle', title: 'Chi trong ngày', sub: spend.count ? `${spend.count} khoản · ${money(spend.total)}` : 'Nước ngọt, đá, gas… chưa nhập',
-      actions: [[spend.count ? 'Thêm' : 'Nhập', onOpenSpend]] },
+    ...(badNotes ? [{ state: 'warn', title: 'Phiếu Sổ tay cần xem lại', sub: `⚠ ${badNotes} phiếu lệch tiền hoặc giá / số lượng đáng ngờ`, actions: [['Xem phiếu', onOpenNotes]] }] : []),
     { state: !transfer.length && !paperTransfer.length ? 'done' : noPhoto || unchecked ? 'warn' : 'done', title: 'Kiểm tra bill chuyển khoản',
       sub: !transfer.length && !paperTransfer.length ? 'Không có bill chuyển khoản'
         : [noPhoto && `📷 ${noPhoto} chưa có ảnh`, unchecked && `☐ ${unchecked} chưa đối chiếu`].filter(Boolean).join(' · ') || 'Đủ ảnh, đã đối chiếu',
@@ -499,7 +548,7 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
   const [view, setView] = useState(null);
   const [attaching, setAttaching] = useState(null);
   const [notesTick, setNotesTick] = useState(0);
-  const [spendTick, setSpendTick] = useState(0);
+  const [purchasesTick, setPurchasesTick] = useState(0);
   const [checking, setChecking] = useState(false);
   const attachInput = useRef(null);
   // Back (Android) / vuốt lùi (iPhone): đóng ảnh đang xem.
@@ -547,8 +596,6 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
   const startDate = data?.startDate || detail?.startDate || '2026-10-23';
   const yesterday = shiftDay(today, -1);
   const yesterdayDay = data?.days?.find(d => d.date === yesterday);
-  const spendEntries = (detail?.entries || []).filter(e => isDailyEntry(e, categories));
-  const spend = { count: spendEntries.length, total: spendEntries.reduce((s, e) => s + Number(e.amount || 0), 0) };
   const scrollTo = id => setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
 
   return <section className="fin-section fin-daypage">
@@ -578,21 +625,21 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
         <span>💵 Tiền mặt {money(summary.cash)}</span>
         {Object.entries(summary.byAccount || {}).map(([id, amount]) => <span key={id}>💳 {cardName(id)} {money(amount)}</span>)}
       </div>
-      <DayCosts day={summary} month={data} openTick={spendTick}
+      <DayCosts day={summary} month={data} notes={detail ? detail.notes : null} debts={detail?.debts || null} openTick={purchasesTick}
         spend={detail ? <DailySpend embedded date={date} entries={detail.entries || []} history={data?.entries || []} categories={categories} onSaved={changed} /> : null} />
     </div>}
 
     {detail && <>
-      <DayTasks date={date} detail={detail} spend={spend} checking={checking} onSearch={onSearch} onCheck={runCheck}
-        onOpenNotes={() => { setNotesTick(t => t + 1); scrollTo('fin-notes'); }} onOpenCheck={() => scrollTo('fin-check')}
-        onOpenSpend={() => (summary ? setSpendTick(t => t + 1) : scrollTo('fin-spend'))} />
+      <DayTasks date={date} detail={detail} checking={checking} onSearch={onSearch} onCheck={runCheck}
+        onOpenNotes={() => (summary ? setPurchasesTick(t => t + 1) : (setNotesTick(t => t + 1), scrollTo('fin-notes')))} onOpenCheck={() => scrollTo('fin-check')} />
 
       <DayCheckPanel check={detail.check} date={date} onSearch={onSearch} />
 
       {/* Chưa có số của tháng (đang tải / ngoài tháng): ô Chi trong ngày đứng riêng như trước. */}
       {!summary && <DailySpend date={date} entries={detail.entries || []} history={data?.entries || []} categories={categories} onSaved={changed} />}
 
-      <div id="fin-close"><CloseForm detail={detail} accounts={accounts} onSaved={changed} /></div>
+      {/* Đếm két (so tiền mặt / thẻ với sổ) đã bỏ khỏi tab Hôm nay theo ý chủ quán (2026-11-07): máy tự kiểm tra lúc 5 giờ sáng.
+          CloseForm còn giữ trong mã; số đã đếm trước đây vẫn nằm trong sổ. */}
 
       <Fold title="Bill đã thu" sub={`${detail.bills.length} bill · ${money(detail.bills.reduce((s, b) => s + Number(b.amount || 0), 0))}`}>
         {detail.bills.length === 0 && <p className="fin-empty">Chưa có bill.</p>}
@@ -662,19 +709,10 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
         })}
       </Fold>}
 
-      <div id="fin-notes"><Fold title="Đi chợ / nhập hàng (Sổ tay)" openTick={notesTick} sub={detail.notes.length ? `${detail.notes.length} phiếu · ${money(detail.notes.reduce((s, n) => s + n.cost, 0))}` : 'Không có phiếu'}>
-        {detail.notes.length === 0 && <p className="fin-empty">Nhân viên đi chợ / nhập hàng ghi phiếu ở Sổ tay, phiếu tự hiện ở đây.</p>}
-        {detail.notes.map(note => <div key={note.id} className="fin-row-block">
-          <div className="fin-row static"><span>{clock(note.createdAt)} · {note.staffName || 'Nhân viên'}
-            {note.debtLeft > 0 ? <small>Còn nợ {money(note.debtLeft)}</small> : note.debt > 0 && <small>Đã trả hết nợ {money(note.debt)}</small>}</span><b>{money(note.cost)}</b></div>
-          {note.items?.length > 0 && <ul className="fin-items">{note.items.map((item, i) =>
-            <li key={i}><span>{item.qty ? `${item.qty} ` : ''}{item.name}{item.paymentStatus === 'debt' ? ' (nợ)' : ''}</span><span>{item.price}</span></li>)}</ul>}
-          {!note.items && note.text && <p className="fin-note-text">{note.text}</p>}
-          {note.mismatch !== 0 && note.mismatch !== undefined && <p className="fin-warn">⚠ Phiếu lệch tiền: tổng phiếu ghi {money(note.cost)} nhưng các dòng hàng cộng lại {money(note.cost - note.mismatch)} (lệch {money(Math.abs(note.mismatch))}). Thường do lỗi cũ của Sổ tay, ví dụ "2,5kg" bị tính thành 25kg. Mở phiếu trong Sổ tay, bấm Sửa rồi Lưu để tính lại.</p>}
-          {note.lineWarnings?.length > 0 && <p className="fin-warn">⚠ {note.lineWarnings.join(' · ')}</p>}
-          {note.suspicious?.length > 0 && <p className="fin-warn">⚠ Giá có thể gõ thiếu chữ "k" ({note.suspicious.join(', ')}). Sổ tay hiểu "250" là 250đ, "250k" mới là 250.000đ. Kiểm tra lại phiếu trong Sổ tay.</p>}
-        </div>)}
-      </Fold></div>
+      {/* Chưa có số của tháng (đang tải / ngoài tháng): phiếu Sổ tay đứng riêng như trước. */}
+      {!summary && <div id="fin-notes"><Fold title="Đi chợ / nhập hàng (Sổ tay)" openTick={notesTick} sub={detail.notes.length ? `${detail.notes.length} phiếu · ${money(detail.notes.reduce((s, n) => s + n.cost, 0))}` : 'Không có phiếu'}>
+        <NotesDetail notes={detail.notes} debts={detail.debts || null} parts={[]} />
+      </Fold></div>}
     </>}
     <input ref={attachInput} type="file" accept="image/*" onChange={attach} hidden />
     <input ref={attachCapture} type="file" accept="image/*" capture="environment" onChange={attach} hidden />
@@ -1156,7 +1194,6 @@ export default function FinancePage() {
   const today = data?.today || vnToday();
   const accounts = data?.accounts || [];
   const categories = data?.categories || [];
-  const shortAccount = id => { const a = accounts.find(x => x.id === id); return a ? cardLabel(a) : 'Không rõ tài khoản'; };
   const days = [...(data?.days || [])].reverse();
   const monthText = `${month.slice(5)}/${month.slice(0, 4)}`;
   const pendingCk = data?.transferAlerts;
@@ -1172,21 +1209,13 @@ export default function FinancePage() {
       + (yesterdayDay?.check?.problems || 0)
     : 0;
 
-  const dayTags = d => <>
-    {d.close
-      ? <>
-          <span className="fin-tag ok">Đã chốt sổ</span>
-          {d.close.cashDiff !== null && <span className={`fin-tag ${diffClass(d.close.cashDiff)}`}>Tiền mặt: {diffText(d.close.cashDiff)}</span>}
-          {Object.entries(d.close.bankDiffs).filter(([, diff]) => diff !== 0).map(([id, diff]) =>
-            <span key={id} className="fin-tag bad">{shortAccount(id)}: {diffText(diff)}</span>)}
-        </>
-      : d.check
-        ? <span className={`fin-tag ${d.check.ok ? 'ok' : 'bad'}`}>{d.check.ok ? '✓ Máy đã kiểm tra' : `⚠ Máy thấy ${d.check.problems} việc`}</span>
-        : d.date < today && <span className="fin-tag muted">Chưa kiểm tra</span>}
-    {byDayCk[d.date]?.missingPhoto > 0 && <span className="fin-tag bad">📷 {byDayCk[d.date].missingPhoto} CK chưa ảnh</span>}
-    {d.mismatchNotes > 0 && <span className="fin-tag bad">⚠ {d.mismatchNotes} phiếu Sổ tay lệch tiền</span>}
-    {d.suspiciousNotes > 0 && <span className="fin-tag bad">⚠ {d.suspiciousNotes} phiếu Sổ tay giá đáng ngờ</span>}
-  </>;
+  // Danh sách ngày gọn: chỉ nhãn việc cần xem (máy thấy việc, CK chưa ảnh, phiếu Sổ tay lệch / đáng ngờ) — ngày ổn thì không nhãn.
+  const dayTags = d => [
+    d.check && !d.check.ok && <span key="check" className="fin-tag bad">⚠ Máy thấy {d.check.problems} việc</span>,
+    byDayCk[d.date]?.missingPhoto > 0 && <span key="photo" className="fin-tag bad">📷 {byDayCk[d.date].missingPhoto} CK chưa ảnh</span>,
+    d.mismatchNotes > 0 && <span key="mis" className="fin-tag bad">⚠ {d.mismatchNotes} phiếu Sổ tay lệch tiền</span>,
+    d.suspiciousNotes > 0 && <span key="sus" className="fin-tag bad">⚠ {d.suspiciousNotes} phiếu Sổ tay giá đáng ngờ</span>,
+  ].filter(Boolean);
 
   return <div className="finance">
     <header className="fin-header">
@@ -1243,21 +1272,21 @@ export default function FinancePage() {
     {/* Các ngày của tháng chứa ngày đang xem: bấm để mở ngày đó (trước đây ở tab Tháng). */}
     {view === 'today' && days.length > 0 && <section className="fin-panel" id="fin-month-days">
       <h2>Các ngày trong tháng {monthText} <small>bấm để mở ngày đó</small></h2>
-      <div className="fin-days">
-        {days.map(d => <button key={d.date} className={`fin-day${d.date === date ? ' current' : ''}`} onClick={() => openDay(d.date)} aria-current={d.date === date ? 'date' : undefined}>
-          <div className="fin-day-head">
-            <span className="fin-day-date"><b>{d.date === today ? 'Hôm nay' : dayLabel(d.date)}</b><small>{d.bills} bill{d.paperBills ? ` + ${d.paperBills} bill giấy` : ''}</small></span>
-            <ChevronRight size={16} />
-          </div>
-          {/* 3 cột thẳng hàng giữa các ngày để so nhanh. */}
-          <div className="fin-day-nums">
-            <span><small>Thu</small>{money(d.revenue)}</span>
-            <span><small>Chi</small>{money(dayCost(d))}</span>
-            <span className={d.profit < 0 ? 'loss' : 'gain'}><small>{d.profit < 0 ? 'Lỗ' : 'Lãi'}</small>{money(Math.abs(d.profit))}</span>
-          </div>
-          {dayCost(d) > 0 && <p className="fin-day-cost">Chi: {costLine(d, categories)}</p>}
-          <div className="fin-day-tags">{dayTags(d)}</div>
-        </button>)}
+      {/* Mỗi ngày một hàng: Ngày · Thu · Chi · Lãi (tên cột ghi một lần), dưới là nhãn việc cần xem nếu có. Bấm để mở ngày đó. */}
+      <div className="fin-days-head" aria-hidden="true"><span>Ngày</span><span>Thu</span><span>Chi</span><span>Lãi / lỗ</span></div>
+      <div className="fin-days compact">
+        {days.map(d => {
+          const tags = dayTags(d);
+          return <button key={d.date} className={`fin-day compact${d.date === date ? ' current' : ''}`} onClick={() => openDay(d.date)} aria-current={d.date === date ? 'date' : undefined}>
+            <span className="fin-day-row">
+              <b className="fin-day-when">{d.date === today ? 'Hôm nay' : dayLabel(d.date)}</b>
+              <span>{money(d.revenue)}</span>
+              <span>{money(dayCost(d))}</span>
+              <span className={d.profit < 0 ? 'loss' : 'gain'}>{d.profit < 0 ? '−' : ''}{money(Math.abs(d.profit))}</span>
+            </span>
+            {tags.length > 0 && <span className="fin-day-tags">{tags}</span>}
+          </button>;
+        })}
       </div>
     </section>}
 
