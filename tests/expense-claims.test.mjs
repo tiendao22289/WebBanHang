@@ -140,6 +140,20 @@ test('staff log what they paid for the shop, pick cash or salary, and the owner 
   const rejected = (await get(AN, 'me=1')).body.claims.list.find(c => c.item === 'Gửi xe');
   assert.deepEqual([rejected.status, rejected.admin_note], ['rejected', 'Xe của bạn']);
 
+  // Lương tháng này của người đó đã chốt: không duyệt cộng lương được (số chốt không có khoản này) — chủ đổi sang đưa tiền mặt.
+  const late = await post(AN, { action: 'claim_expense', item: 'Rau', amount: 40000, payout: 'salary' });
+  state.payroll_closes.push({ year: 2026, month: 11, staff_id: AN.id, snapshot: { net: 1 } });
+  const refused = await post(OWNER, { action: 'decide_claim', id: late.body.id, status: 'approved' });
+  assert.equal(refused.status, 409);
+  assert.match(refused.body.error, /đã chốt.*Đưa tiền mặt/);
+  assert.equal(state.finance_entries.length, 2, 'nothing written when refused');
+  assert.equal((await post(OWNER, { action: 'decide_claim', id: late.body.id, status: 'approved', cash: true })).status, 200);
+  const switched = state.payroll_expense_claims.find(c => c.id === late.body.id);
+  assert.deepEqual([switched.status, switched.payout], ['approved', 'cash']);
+  assert.match(state.finance_entries.at(-1).note, /Chi hộ: An · đã đưa tiền mặt/);
+  state.payroll_closes = [];
+  await post(OWNER, { action: 'delete_claim', id: late.body.id });
+
   // Chốt lương: số chốt có khoản chi hộ; đã chốt thì không xoá khoản cộng lương được tới khi mở chốt.
   assert.equal((await post(OWNER, { action: 'close_month', year: 2026, month: 11 })).status, 200);
   assert.equal(state.payroll_closes.find(c => c.staff_id === AN.id).snapshot.claimAmt, 50000);
@@ -148,6 +162,22 @@ test('staff log what they paid for the shop, pick cash or salary, and the owner 
   assert.equal((await post(OWNER, { action: 'delete_claim', id: g.body.id })).status, 200);
   assert.deepEqual(plain(state.finance_entries.map(e => e.label)), ['Đá'], 'the book line goes with it');
   assert.equal((await get(AN, 'me=1')).body.salary.claimAmt, 0);
+});
+
+test('someone who left before this month gets the salary claim in their last month', async () => {
+  const state = {
+    staff: [OWNER, AN], staff_departures: [{ staff_id: AN.id, last_day: '2026-10-31' }],
+    payroll_config: [{ staff_id: AN.id, base_salary: 6000000, overtime_rate: 0 }],
+    checkin_settings: [{ id: 1, enforce: false, hours_from: '2026-10-25' }], finance_entries: [], payroll_closes: [],
+    payroll_expense_claims: [{ id: '00000000-0000-4000-8000-0000000000c1', staff_id: AN.id, spent_on: '2026-10-30', item: 'Xăng', amount: 50000, payout: 'salary', status: 'pending', created_at: '2026-10-30T10:00:00Z' }],
+  };
+  const wf = api(state);
+  env.now = Date.UTC(2026, 10, 2, 5, 0);
+  env.user = OWNER;
+  const r = plain(await wf.POST({ json: async () => ({ action: 'decide_claim', id: '00000000-0000-4000-8000-0000000000c1', status: 'approved' }), headers: new Map() }));
+  assert.deepEqual([r.status, r.body.month, r.body.year], [200, 10, 2026]);
+  const oct = plain(await wf.GET({ url: 'http://x/api/admin/workforce?payroll=1&year=2026&month=10' })).body;
+  assert.deepEqual(oct.claims.map(c => c.amount), [50000], 'shows in October, the month they still appear in');
 });
 
 test('before the table exists the claims part hides itself and says the web is updating', async () => {

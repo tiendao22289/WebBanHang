@@ -238,7 +238,7 @@ export function staffData({ sessions = [], pending = [], fixes = [], alerts = []
   return {
     people,
     alerts: [...byPerson].map(([id, m]) => ({ id, name: nameOf(id), items: [...m].map(([text, count]) => ({ text, count })) })),
-    pending: pending.map(r => ({ id: r.staff_id, name: nameOf(r.staff_id), kind: r.request_type === 'advance' || r.request_type === 'expense' ? r.request_type : 'absent', amount: Number(r.amount) || 0, days: Number(r.days) || 1, reason: r.reason ? String(r.reason).slice(0, 60) : '' })),
+    pending: pending.map(r => ({ id: r.staff_id, name: nameOf(r.staff_id), kind: ['advance', 'expense', 'peer'].includes(r.request_type) ? r.request_type : 'absent', amount: Number(r.amount) || 0, days: Number(r.days) || 1, reason: r.reason ? String(r.reason).slice(0, 60) : '' })),
     fixes: fixes.map(f => ({ id: f.staff_id, name: nameOf(f.staff_id), reason: f.reason ? String(f.reason).slice(0, 60) : '' })),
     outside,
     selfFines: selfFines.map(f => ({ id: f.staff_id, name: nameOf(f.staff_id), reason: String(f.reason || '').slice(0, 80), amount: Number(f.amount) || 0,
@@ -268,7 +268,7 @@ export function staffBlock(input) {
   if (waiting) {
     lines.push(`Chờ bạn duyệt (${waiting}):`);
     for (const r of d.pending.slice(0, 8)) {
-      lines.push(`• ${r.name} ${r.kind === 'advance' ? `xin ứng ${vnd(r.amount)}` : r.kind === 'expense' ? `ghi chi hộ quán ${vnd(r.amount)}` : `báo nghỉ ${r.days} ngày`}${r.reason ? ` — ${r.reason}` : ''}`);
+      lines.push(`• ${r.name} ${r.kind === 'advance' ? `xin ứng ${vnd(r.amount)}` : r.kind === 'expense' ? `ghi chi hộ quán ${vnd(r.amount)}` : r.kind === 'peer' ? 'báo lỗi đồng nghiệp' : `báo nghỉ ${r.days} ngày`}${r.reason ? ` — ${r.reason}` : ''}`);
     }
     for (const f of d.fixes.slice(0, 8)) lines.push(`• ${f.name} xin sửa giờ chấm công${f.reason ? ` — ${f.reason}` : ''}`);
     for (const o of d.outside) lines.push(`• ${o.name} có ${durationText(o.minutes)} ngoài ca chưa tính lương`);
@@ -340,8 +340,10 @@ export function compareBlock({ day, prev, week, weekdayLabel, ledgerDay = [] }) 
 /** Số liệu của compareBlock dạng dữ liệu (cho biểu đồ trang /thongke). */
 // Đồ uống / đồ lặt vặt (bia, nước ngọt, trà, khăn, đá…) theo tên món — Thống kê nhanh chỉ xếp hạng món ăn.
 const plainText = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase().replace(/\s+/g, ' ').trim();
-const DRINK_NAME = /^(bia|nuoc|coca|pepsi|7 ?up|sting|siting|c ?2\b|0 ?do\b|o ?long|tra\b|xa xi|khan\b|da\b|ruou|soju|sua\b|red ?bull|bo huc|revive|aquafina|lavie|sprite|fanta|mirinda|number ?1|monster|cafe|ca phe|heineken|tiger|saigon|sai gon)/;
-export const isDrinkItem = name => DRINK_NAME.test(plainText(name));
+const DRINK_NAME = /^(bia|nuoc|coca|pepsi|7 ?up|sting|siting|c ?2\b|0 ?do\b|o ?long|tra\b|xa xi|khan\b|ruou|soju|sua (tuoi|dau|hop|bich)|red ?bull|bo huc|revive|aquafina|lavie|sprite|fanta|mirinda|number ?1|monster|cafe|ca phe|heineken|tiger|saigon|sai gon)/;
+// "Đá" (ly đá) so cả dấu: "Da heo", "Da gà", "Đà điểu" là món ăn.
+const ICE = /^đá(\s|$)/;
+export const isDrinkItem = name => DRINK_NAME.test(plainText(name)) || ICE.test(String(name || '').trim().toLowerCase().normalize('NFC'));
 
 export function compareData({ day, prev, week, ledgerDay = [] }) {
   const byHour = new Map();

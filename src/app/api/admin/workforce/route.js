@@ -74,6 +74,7 @@ const money = v => { const n = Math.round(Number(String(v ?? '').replace(/\./g, 
 const text = (v, max = 300) => String(v ?? '').trim().slice(0, max);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const CLAIMS_NOT_READY = 'Web đang cập nhật phần khoản chi hộ, thử lại sau ít phút.';
+const PEER_NOT_READY = 'Web đang cập nhật phần báo lỗi đồng nghiệp, thử lại sau ít phút.';
 const ddmm = d => `${String(d).slice(8, 10)}/${String(d).slice(5, 7)}`;
 // Tháng đã hết chưa (giờ Việt Nam): thưởng chuyên cần chỉ duyệt khi đã hết tháng.
 const monthOver = (year, month) => vnToday() >= monthRange(year, month).end;
@@ -151,7 +152,51 @@ async function myStatus(db, staffId) {
   const open = last && !last.clock_out ? markFaceHolds([last], holds)[0] : null;
   return { open, sessions: markFaceHolds((today.data || []).filter(x => workDayOf(x, settings) === day), holds), fixes: fixes.data || [], auto_closed: autoClosed, reviews: reviews.data || [],
     leave_days: leaveDays.data || [], face_holds: [...holds], rules, ...await mySalary(db, staffId, settings, reviews.data || [], autoClosed),
-    payments: await myPayments(db, staffId), claims: await myClaims(db, staffId) };
+    payments: await myPayments(db, staffId), claims: await myClaims(db, staffId), peer: { ...await myPeerReports(db, staffId), workDay: day } };
+}
+
+// Người còn làm (không phải chủ quán, không phải mình, chưa nghỉ việc) để chọn khi báo lỗi đồng nghiệp.
+async function colleaguesOf(db, staffId) {
+  const [people, left] = await Promise.all([db.from('staff').select('id, full_name, role'), db.from('staff_departures').select('staff_id, last_day')]);
+  if (people.error) throw people.error;
+  const gone = new Set((left.error ? [] : left.data || []).filter(d => String(d.last_day).slice(0, 10) < vnToday()).map(d => d.staff_id));
+  return (people.data || []).filter(p => p.id !== staffId && p.role !== 'admin' && !gone.has(p.id))
+    .map(p => ({ id: p.id, name: String(p.full_name || '').trim() || 'Nhân viên' })).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+}
+
+// Báo lỗi đồng nghiệp: các lần mình đã báo (60 ngày + còn chờ) kèm tên người bị báo. Bảng chưa có: ready false (ẩn phần này).
+async function myPeerReports(db, staffId) {
+  try {
+    const { data, error } = await db.from('payroll_peer_reports').select('*').eq('reporter_id', staffId)
+      .or(`status.eq.pending,created_at.gte."${new Date(nowMs() - 60 * 86400000).toISOString()}"`).order('created_at', { ascending: false }).limit(100);
+    if (missingTable(error)) return { ready: false, colleagues: [], list: [] };
+    if (error) throw error;
+    const colleagues = await colleaguesOf(db, staffId);
+    const nameOf = new Map(colleagues.map(c => [c.id, c.name]));
+    const missing = [...new Set((data || []).map(r => r.staff_id).filter(id => !nameOf.has(id)))];
+    if (missing.length) {
+      const { data: more } = await db.from('staff').select('id, full_name').in('id', missing);
+      for (const p of more || []) nameOf.set(p.id, p.full_name || 'Nhân viên');
+    }
+    // Người báo không cần biết số tiền chủ phạt.
+    return { ready: true, colleagues, list: (data || []).map(r => ({ id: r.id, staff_id: r.staff_id, staff_name: nameOf.get(r.staff_id) || 'Nhân viên', date: String(r.report_date).slice(0, 10),
+      reason: r.reason, note: r.note || null, status: r.status, admin_note: r.admin_note || null, created_at: r.created_at })) };
+  } catch (error) {
+    console.error('[workforce] my peer reports', error);
+    return { ready: false, colleagues: [], list: [] };
+  }
+}
+
+// Trang Lương của chủ: báo lỗi đồng nghiệp còn chờ + đã xử lý 60 ngày gần đây (tên người báo / người bị báo, tiền gợi ý).
+async function peerOverview(db) {
+  const { data, error } = await db.from('payroll_peer_reports').select('*')
+    .or(`status.eq.pending,created_at.gte."${new Date(nowMs() - 60 * 86400000).toISOString()}"`).order('created_at', { ascending: false }).limit(300);
+  if (missingTable(error)) return { ready: false, reports: [] };
+  if (error) throw error;
+  return { ready: true, reports: (data || []).map(r => ({ id: r.id, reporter_id: r.reporter_id, reporter_name: r.reporter_name || null, staff_id: r.staff_id,
+    date: String(r.report_date).slice(0, 10), rule_id: r.rule_id || null, reason: r.reason, note: r.note || null, suggested_amount: Number(r.suggested_amount) || 0,
+    status: r.status, amount: r.amount ?? null, violation_id: r.violation_id || null, admin_note: r.admin_note || null, decided_by: r.decided_by || null,
+    decided_at: r.decided_at || null, created_at: r.created_at })) };
 }
 
 // Khoản chi hộ quán của chính người đó (60 ngày gần đây + mọi khoản còn chờ duyệt). Bảng chưa có: ready false (ẩn phần ghi).
@@ -286,13 +331,15 @@ async function staffStats(db, year, month) {
   ]);
   const pendingClaims = await db.from('payroll_expense_claims').select('id').eq('status', 'pending');
   if (pendingClaims.error && !missingTable(pendingClaims.error)) throw pendingClaims.error;
+  const pendingPeers = await db.from('payroll_peer_reports').select('id').eq('status', 'pending');
+  if (pendingPeers.error && !missingTable(pendingPeers.error)) throw pendingPeers.error;
   for (const r of [fixes, pendingReqs]) if (r.error) throw r.error;
   if (faces.error && !missingTable(faces.error)) throw faces.error;
   const stats = staffMonthStats({ year, month, ...m, autoClosed: auto.map(r => r.attendance_id), scans });
   // Người đủ điều kiện thưởng chuyên cần mà chủ chưa duyệt (chỉ khi đã hết tháng và chủ có dùng thưởng).
   const bonusWaiting = monthOver(year, month) && m.bonusSettings.bonus_amount > 0 ? stats.people.filter(p => p.bonus.eligible && !p.bonus.approved && !p.salary.locked).length : 0;
   return { ...stats, pending: { fixes: (fixes.data || []).length, requests: (pendingReqs.data || []).length, extras: extras.length, faces: (faces.data || []).length,
-    claims: pendingClaims.error ? 0 : (pendingClaims.data || []).length,
+    claims: pendingClaims.error ? 0 : (pendingClaims.data || []).length, peers: pendingPeers.error ? 0 : (pendingPeers.data || []).length,
     fines: stats.people.reduce((a, p) => a + p.fineSuggestions, 0), bonuses: bonusWaiting } };
 }
 
@@ -510,9 +557,10 @@ export async function GET(request) {
     const params = new URL(request.url).searchParams;
     if (params.get('me')) return NextResponse.json(await myStatus(s.db, s.user.id), { headers });
     if (params.get('face_check')) return NextResponse.json(await faceCheckStatus(s.db, s.user.id, params.get('face_check')), { headers });
-    if (!params.get('checkin') && !params.get('payroll') && !params.get('stats') && !params.get('faces') && !params.get('cycles') && !params.get('claims')) return fail('Thiếu yêu cầu.');
+    if (!params.get('checkin') && !params.get('payroll') && !params.get('stats') && !params.get('faces') && !params.get('cycles') && !params.get('claims') && !params.get('peer')) return fail('Thiếu yêu cầu.');
     if (!s.isAdmin) return fail('Chỉ admin xem phần này.', 403);
     if (params.get('claims')) return NextResponse.json(await claimsOverview(s.db), { headers });
+    if (params.get('peer')) return NextResponse.json(await peerOverview(s.db), { headers });
     if (params.get('faces')) return NextResponse.json(await faceOverview(s.db), { headers });
     if (params.get('cycles')) return NextResponse.json(await cycleStates(s.db), { headers });
     if (params.get('payroll') || params.get('stats')) {
@@ -693,14 +741,15 @@ export async function POST(request) {
     if (body.action === 'cancel_request') {
       // Nhân viên tự huỷ đơn của mình khi còn chờ duyệt (ứng lương, báo nghỉ, xin sửa giờ).
       if (!UUID.test(body.id || '')) return fail('Thiếu đơn cần huỷ.');
-      const table = body.kind === 'fix' ? 'attendance_fix_requests' : body.kind === 'claim' ? 'payroll_expense_claims' : 'payroll_requests';
+      const table = body.kind === 'fix' ? 'attendance_fix_requests' : body.kind === 'claim' ? 'payroll_expense_claims' : body.kind === 'peer' ? 'payroll_peer_reports' : 'payroll_requests';
       const { data: req, error } = await db.from(table).select('*').eq('id', body.id).maybeSingle();
-      if (missingTable(error)) return fail(CLAIMS_NOT_READY, 503);
+      if (missingTable(error)) return fail(body.kind === 'peer' ? PEER_NOT_READY : CLAIMS_NOT_READY, 503);
       if (error) throw error;
-      if (!req || req.staff_id !== user.id) return fail('Không tìm thấy đơn của bạn.', 404);
+      if (!req || (body.kind === 'peer' ? req.reporter_id : req.staff_id) !== user.id) return fail('Không tìm thấy đơn của bạn.', 404);
       if (req.status !== 'pending') return fail('Đơn đã được duyệt, không huỷ được nữa. Nhờ chủ quán nếu cần sửa.', 409);
-      const r = await db.from(table).delete().eq('id', req.id).eq('status', 'pending');
+      const r = await db.from(table).delete().eq('id', req.id).eq('status', 'pending').select('id');
       if (r.error) throw r.error;
+      if (!r.data?.length) return fail('Đơn vừa được chủ quán xử lý, không huỷ được nữa. Tải lại trang.', 409);
       if (table === 'payroll_requests') {
         await db.from('payroll_leave_days').delete().eq('request_id', req.id).then(({ error: e }) => { if (e) console.error('[workforce] leave days', e); });
       }
@@ -757,6 +806,44 @@ export async function POST(request) {
         created_by_name: user.full_name || null, created_at: isoNow() }).select('id').single();
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true, id: r.data.id }, { headers });
+    }
+
+    // Báo lỗi đồng nghiệp: chọn người (không phải mình, không phải chủ quán), lỗi theo danh sách chủ đặt hoặc lỗi khác, ngày (hôm nay
+    // hoặc tối đa 7 ngày trước). CHƯA trừ tiền: chủ quán phạt hoặc bỏ qua ở Lương → Yêu cầu. Người bị báo không thấy tên người báo.
+    if (body.action === 'report_peer') {
+      if (!UUID.test(body.staff_id || '')) return fail('Chọn người bạn muốn báo lỗi.');
+      if (String(body.staff_id).toLowerCase() === String(user.id).toLowerCase()) return fail('Lỗi của chính mình thì ghi ở "Tự ghi lỗi".');
+      // Ngày xảy ra: ngày người báo chọn (theo lịch, tới hôm nay); không chọn thì ngày làm đang diễn ra (sau nửa đêm vẫn là ca hôm trước).
+      const today = vnToday(), day = DATE.test(body.date || '') ? body.date : currentWorkDay(await readCheckinSettings(db), user.id, nowMs());
+      if (day > today || day < addDays(today, -7)) return fail('Chỉ báo lỗi trong 7 ngày gần đây.');
+      const { data: target, error: te } = await db.from('staff').select('id, full_name, role').eq('id', body.staff_id).maybeSingle();
+      if (te) throw te;
+      if (!target || target.role === 'admin') return fail('Không báo lỗi người này được.');
+      const { data: left } = await db.from('staff_departures').select('last_day').eq('staff_id', target.id).maybeSingle();
+      if (left && String(left.last_day).slice(0, 10) < day) return fail('Người này đã nghỉ việc trước ngày đó.');
+      let reason = text(body.reason, 200), ruleId = null, suggested = 0;
+      if (body.rule_id) {
+        if (!UUID.test(body.rule_id)) return fail('Lỗi này không còn trong danh sách.');
+        const { data: rule, error } = await db.from('payroll_fine_rules').select('*').eq('id', body.rule_id).maybeSingle();
+        if (error) throw error;
+        if (!rule || !rule.active || rule.kind) return fail('Lỗi này không còn trong danh sách.');
+        ruleId = rule.id; reason = rule.name; suggested = Number(rule.amount) || 0;
+      }
+      if (!reason) return fail('Chọn lỗi trong danh sách hoặc ghi rõ lỗi gì.');
+      const note = text(body.note, 300) || null;
+      const { data: recent, error: re } = await db.from('payroll_peer_reports').select('staff_id, reason, report_date, created_at').eq('reporter_id', user.id)
+        .gte('created_at', new Date(nowMs() - 86400000).toISOString());
+      if (missingTable(re)) return fail(PEER_NOT_READY, 503);
+      if (re) throw re;
+      // Bấm đúp / mạng chập chờn: cùng người, cùng lỗi, cùng ngày trong 30 giây thì coi như đã gửi. Một ngày tối đa 10 lần báo.
+      if ((recent || []).some(x => x.staff_id === target.id && x.reason === reason && String(x.report_date).slice(0, 10) === day && Date.parse(x.created_at) > nowMs() - 30000)) {
+        return NextResponse.json({ ok: true, duplicate: true }, { headers });
+      }
+      if ((recent || []).length >= 10) return fail('Hôm nay bạn đã báo nhiều lần rồi. Nói trực tiếp với chủ quán nhé.', 429);
+      const r = await db.from('payroll_peer_reports').insert({ reporter_id: user.id, staff_id: target.id, report_date: day, rule_id: ruleId, reason, note,
+        suggested_amount: suggested, status: 'pending', reporter_name: user.full_name || null, created_at: isoNow() }).select('id').single();
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true, id: r.data.id, date: day }, { headers });
     }
 
     // Nhân viên tự ghi lỗi của chính mình hôm nay (làm vỡ ly, ghi sai món…). Tiền theo danh sách lỗi chủ đặt (không tự gõ tiền);
@@ -1212,6 +1299,49 @@ export async function POST(request) {
       return NextResponse.json({ ok: true }, { headers });
     }
 
+    // Báo lỗi đồng nghiệp: chủ phạt (số tiền tự định, mặc định theo danh sách lỗi; 0đ = ghi lỗi, định tiền sau) → thành một khoản
+    // phạt của người bị báo vào ngày bị báo (như chủ tự ghi; không chép tên hay ghi chú của người báo). Bỏ qua thì không ghi gì.
+    if (body.action === 'decide_peer') {
+      if (!UUID.test(body.id || '')) return fail('Thiếu lần báo lỗi.');
+      const status = body.status === 'approved' ? 'approved' : body.status === 'rejected' ? 'rejected' : null;
+      if (!status) return fail('Chọn phạt hay bỏ qua.');
+      const { data: rep, error } = await db.from('payroll_peer_reports').select('*').eq('id', body.id).maybeSingle();
+      if (missingTable(error)) return fail(PEER_NOT_READY, 503);
+      if (error) throw error;
+      if (!rep) return fail('Không thấy lần báo lỗi này.', 404);
+      if (rep.status !== 'pending') return fail('Lần báo lỗi này đã được xử lý rồi. Tải lại trang.', 409);
+      const patch = { status, admin_note: text(body.admin_note) || null, decided_by: user.full_name || null, decided_at: isoNow() };
+      let violationId = null;
+      if (status === 'approved') {
+        const amount = body.amount === undefined || body.amount === null || body.amount === '' ? Number(rep.suggested_amount) || 0 : money(body.amount);
+        if (amount === null) return fail('Số tiền phạt không hợp lệ.');
+        const day = String(rep.report_date).slice(0, 10);
+        // Lương tháng của ngày bị báo đã chốt thì khoản phạt không trừ vào đâu: báo chủ mở chốt người đó trước.
+        const { data: closed, error: ce } = await db.from('payroll_closes').select('staff_id').eq('year', Number(day.slice(0, 4))).eq('month', Number(day.slice(5, 7)))
+          .eq('staff_id', rep.staff_id).maybeSingle();
+        if (ce) throw ce;
+        if (closed) return fail(`Lương tháng ${Number(day.slice(5, 7))}/${day.slice(0, 4)} của người này đã chốt. Mở chốt người đó rồi phạt, hoặc ghi phạt tháng này ở mục Vi phạm.`, 409);
+        const v = await db.from('payroll_violations').insert({ staff_id: rep.staff_id, amount, reason: rep.reason, month: Number(day.slice(5, 7)), year: Number(day.slice(0, 4)), created_at: isoNow() })
+          .select('id').single();
+        if (v.error) throw v.error;
+        violationId = v.data.id;
+        const meta = await db.from('payroll_violation_meta').insert({ violation_id: violationId, staff_id: rep.staff_id, fine_date: day, rule_id: rep.rule_id || null,
+          recorded_by: user.full_name || null, created_at: isoNow() });
+        if (meta.error) console.error('[workforce] peer fine meta', meta.error);
+        Object.assign(patch, { amount, violation_id: violationId });
+      }
+      const r = await db.from('payroll_peer_reports').update(patch).eq('id', rep.id).eq('status', 'pending').select('id');
+      if (r.error || !r.data?.length) {
+        if (violationId) {
+          await db.from('payroll_violation_meta').delete().eq('violation_id', violationId);
+          await db.from('payroll_violations').delete().eq('id', violationId);
+        }
+        if (r.error) throw r.error;
+        return fail('Lần báo lỗi này vừa được xử lý ở máy khác. Tải lại trang.', 409);
+      }
+      return NextResponse.json({ ok: true, status, violation_id: violationId }, { headers });
+    }
+
     // Duyệt khoản chi hộ: khoản chi vào Sổ thu chi (Chi trong ngày, đúng ngày chi); nhân viên chọn cộng vào lương thì cộng vào
     // lương tháng này (người trả theo kỳ: lần trả kế tiếp), chọn tiền mặt thì chủ đưa tiền ngay lúc duyệt. Từ chối thì không ghi gì.
     if (body.action === 'decide_claim') {
@@ -1226,11 +1356,26 @@ export async function POST(request) {
       const now = vnNow(), patch = { status, admin_note: text(body.admin_note) || null, decided_by: user.full_name || null, decided_at: isoNow() };
       let entryId = null;
       if (status === 'approved') {
+        // Chủ đổi sang đưa tiền mặt (vd lương tháng đó đã chốt / đã trả): khoản chi không cộng vào lương nữa.
+        if (body.cash === true && claim.payout === 'salary') patch.payout = 'cash';
+        const payout = patch.payout || claim.payout;
         patch.year = now.getUTCFullYear(); patch.month = now.getUTCMonth() + 1;
         const { data: who } = await db.from('staff').select('full_name').eq('id', claim.staff_id).maybeSingle();
         const name = who?.full_name || claim.created_by_name || 'nhân viên';
+        if (payout === 'salary') {
+          // Người đã nghỉ việc trước tháng này: cộng vào lương tháng nghỉ việc (bảng lương các tháng sau không còn người đó).
+          const { data: left } = await db.from('staff_departures').select('last_day').eq('staff_id', claim.staff_id).maybeSingle();
+          const lastDay = left ? String(left.last_day).slice(0, 10) : null;
+          if (lastDay && lastDay < `${patch.year}-${String(patch.month).padStart(2, '0')}-01`) {
+            patch.year = Number(lastDay.slice(0, 4)); patch.month = Number(lastDay.slice(5, 7));
+          }
+          // Lương tháng đó đã chốt thì số đã chốt không có khoản này: không cộng lương được (khoản chi sẽ không bao giờ được trả).
+          const { data: closed, error: ce } = await db.from('payroll_closes').select('staff_id').eq('year', patch.year).eq('month', patch.month).eq('staff_id', claim.staff_id).maybeSingle();
+          if (ce) throw ce;
+          if (closed) return fail(`Lương tháng ${patch.month}/${patch.year} của ${name} đã chốt nên không cộng thêm được. Mở chốt người đó rồi duyệt, hoặc bấm "Đưa tiền mặt".`, 409);
+        }
         const entry = await db.from('finance_entries').insert({ entry_date: String(claim.spent_on).slice(0, 10), kind: 'drink', category: null, label: claim.item,
-          amount: claim.amount, note: `Chi hộ: ${name} · ${claim.payout === 'cash' ? 'đã đưa tiền mặt' : `cộng vào lương tháng ${patch.month}/${patch.year}`}${claim.note ? ` · ${claim.note}` : ''}`.slice(0, 300),
+          amount: claim.amount, note: `Chi hộ: ${name} · ${payout === 'cash' ? 'đã đưa tiền mặt' : `cộng vào lương tháng ${patch.month}/${patch.year}`}${claim.note ? ` · ${claim.note}` : ''}`.slice(0, 300),
           created_by_name: user.full_name || null }).select('id').single();
         if (entry.error) throw entry.error;
         entryId = entry.data.id;
