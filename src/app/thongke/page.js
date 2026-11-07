@@ -675,11 +675,43 @@ function Weekdays({ weekdays }) {
   </Card>;
 }
 
+// Thanh menu dưới đáy màn hình: chia trang thành 5 mục. Số đỏ trên mục = việc cần xem trong mục đó.
+const SECTIONS = [
+  ['overview', 'Tổng quan', BarChart3],
+  ['items', 'Món', UtensilsCrossed],
+  ['promo', 'Khuyến mãi', Gift],
+  ['staff', 'Nhân viên', Users],
+  ['notes', 'Sổ tay', NotebookPen],
+];
+function SectionBar({ tab, onPick, badges }) {
+  return <nav className="tk-tabbar" aria-label="Các mục">
+    <div className="tk-tabbar-inner" role="tablist">
+      {SECTIONS.map(([key, title, Icon]) => <button key={key} type="button" role="tab" aria-selected={tab === key} className={tab === key ? 'on' : ''} onClick={() => onPick(key)}>
+        <Icon size={21} aria-hidden="true" /><span>{title}</span>
+        {badges[key] > 0 && <em className="tk-tab-badge" aria-label={`${badges[key]} việc cần xem`}>{badges[key] > 9 ? '9+' : badges[key]}</em>}
+      </button>)}
+    </div>
+  </nav>;
+}
+const sectionBadges = (report, period) => {
+  if (!report) return {};
+  const { loss, staff, notes } = report;
+  const check = period === 'day' ? report.summary?.check : null;
+  return {
+    overview: period === 'day' ? (check?.issues || []).filter(i => i.level !== 'info').length + (report.summary?.warnings?.length || 0) : 0,
+    promo: loss ? (loss.cancelled?.count || 0) + (loss.removed?.rows?.length || 0) : 0,
+    staff: period === 'day' && staff ? (staff.pending?.length || 0) + (staff.fixes?.length || 0) + (staff.outside?.length || 0) : 0,
+    notes: notes?.summary?.warnings || 0,
+  };
+};
+const NoData = ({ text }) => <div className="tk-empty-state"><CalendarDays size={28} /><p>{text}</p></div>;
+
 export default function ThongKePage() {
   const [user, setUser] = useState(undefined); // undefined = đang kiểm tra
   const [sessionError, setSessionError] = useState('');
   const [date, setDate] = useState(null);
   const [period, setPeriod] = useState('day');
+  const [tab, setTab] = useState('overview');
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -690,6 +722,7 @@ export default function ThongKePage() {
     const asked = params.get('date');
     setDate(/^\d{4}-\d{2}-\d{2}$/.test(asked || '') && asked <= vnToday() ? asked : defaultDate());
     if (PERIODS.some(([k]) => k === params.get('p'))) setPeriod(params.get('p'));
+    if (SECTIONS.some(([k]) => k === params.get('t'))) setTab(params.get('t'));
     fetch('/api/admin/session', { cache: 'no-store' })
       .then(async res => {
         const result = await res.json().catch(() => ({}));
@@ -714,9 +747,13 @@ export default function ThongKePage() {
 
   useEffect(() => {
     if (!user || user.role !== 'admin' || !date) return;
-    window.history.replaceState(null, '', `/thongke?date=${date}${period === 'day' ? '' : `&p=${period}`}`);
     load(date, period);
   }, [user, date, period, load]);
+  useEffect(() => {
+    if (!user || user.role !== 'admin' || !date) return;
+    window.history.replaceState(null, '', `/thongke?date=${date}${period === 'day' ? '' : `&p=${period}`}${tab === 'overview' ? '' : `&t=${tab}`}`);
+  }, [user, date, period, tab]);
+  const pickTab = key => { setTab(key); window.scrollTo({ top: 0 }); };
 
   async function logout() {
     await fetch('/api/admin/session', { method: 'DELETE' }).catch(() => {});
@@ -775,17 +812,23 @@ export default function ThongKePage() {
       {!ready && !error && !(report?.view === period && report?.date === date && report.error) && <Skeleton />}
 
       {ready && period === 'day' && <div className={loading ? 'tk-content dim' : 'tk-content'}>
-        <Hero date={date} summary={report.summary} compare={report.compare} trend={report.trend || []} onPick={setDate} />
-        <DayKpis summary={report.summary} />
-        <Warnings summary={report.summary} />
-        <Payments summary={report.summary} />
-        <Costs summary={report.summary} />
-        <Hours compare={report.compare} />
-        <TopItems compare={report.compare} />
-        <PromoCard loss={report.loss} />
-        <LossCard loss={report.loss} />
-        <StaffDayCard staff={report.staff} />
-        <NotesDayCard notes={report.notes} />
+        {tab === 'overview' && <>
+          <Hero date={date} summary={report.summary} compare={report.compare} trend={report.trend || []} onPick={setDate} />
+          <DayKpis summary={report.summary} />
+          <Warnings summary={report.summary} />
+          <Payments summary={report.summary} />
+          <Costs summary={report.summary} />
+        </>}
+        {tab === 'items' && (report.compare ? <>
+          <TopItems compare={report.compare} />
+          <Hours compare={report.compare} />
+        </> : <NoData text="Chưa đọc được món bán trong ngày." />)}
+        {tab === 'promo' && (report.loss ? <>
+          <PromoCard loss={report.loss} />
+          <LossCard loss={report.loss} />
+        </> : <NoData text="Chưa đọc được khuyến mãi trong ngày." />)}
+        {tab === 'staff' && (report.staff ? <StaffDayCard staff={report.staff} /> : <NoData text="Chưa đọc được chấm công trong ngày." />)}
+        {tab === 'notes' && (report.notes ? <NotesDayCard notes={report.notes} /> : <NoData text="Chưa đọc được Sổ tay trong ngày." />)}
         <footer className="tk-foot">
           {loadedAt && <span>Cập nhật {loadedAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>}
           <a href="/admin/finance">Mở Sổ thu chi đầy đủ →</a>
@@ -793,24 +836,33 @@ export default function ThongKePage() {
       </div>}
 
       {ready && period !== 'day' && <div className={loading ? 'tk-content dim' : 'tk-content'}>
-        <PeriodHero data={report} onPick={openDay} />
-        {report.wagesMissing && <div className="tk-alert" role="status">Chưa đọc được chấm công — lãi chưa trừ lương<button onClick={() => load(date, period)}>Tải lại</button></div>}
-        <PeriodKpis data={report} />
-        <Payments summary={report.totals} />
-        <Costs summary={report.totals} />
-        <Hours compare={report.sales} title="Giờ đông khách (cả kỳ)" />
-        <TopItems compare={report.sales} />
-        {period === 'month' && <Weekdays weekdays={report.weekdays || []} />}
-        <PromoCard loss={report.loss} range />
-        <LossCard loss={report.loss} range />
-        <StaffRangeCard staff={report.staff} label={rangeLabel} />
-        {period === 'month' && <StaffReport date={date} monthRevenue={report.totals.revenue} />}
-        <NotesRangeCard notes={report.notes} label={rangeLabel} />
+        {tab === 'overview' && <>
+          <PeriodHero data={report} onPick={openDay} />
+          {report.wagesMissing && <div className="tk-alert" role="status">Chưa đọc được chấm công — lãi chưa trừ lương<button onClick={() => load(date, period)}>Tải lại</button></div>}
+          <PeriodKpis data={report} />
+          <Payments summary={report.totals} />
+          <Costs summary={report.totals} />
+          {period === 'month' && <Weekdays weekdays={report.weekdays || []} />}
+        </>}
+        {tab === 'items' && (report.sales ? <>
+          <TopItems compare={report.sales} />
+          <Hours compare={report.sales} title="Giờ đông khách (cả kỳ)" />
+        </> : <NoData text="Chưa đọc được món bán trong kỳ." />)}
+        {tab === 'promo' && (report.loss ? <>
+          <PromoCard loss={report.loss} range />
+          <LossCard loss={report.loss} range />
+        </> : <NoData text="Chưa đọc được khuyến mãi trong kỳ." />)}
+        {tab === 'staff' && (report.staff || period === 'month' ? <>
+          <StaffRangeCard staff={report.staff} label={rangeLabel} />
+          {period === 'month' && <StaffReport date={date} monthRevenue={report.totals.revenue} />}
+        </> : <NoData text="Chưa đọc được chấm công trong kỳ." />)}
+        {tab === 'notes' && (report.notes ? <NotesRangeCard notes={report.notes} label={rangeLabel} /> : <NoData text="Chưa đọc được Sổ tay trong kỳ." />)}
         <footer className="tk-foot">
           {loadedAt && <span>Cập nhật {loadedAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>}
           <a href="/admin/finance">Mở Sổ thu chi đầy đủ →</a>
         </footer>
       </div>}
     </div>
+    <SectionBar tab={tab} onPick={pickTab} badges={ready ? sectionBadges(report, period) : {}} />
   </main>;
 }
