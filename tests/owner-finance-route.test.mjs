@@ -792,6 +792,11 @@ test('/thongke Sổ tay: each line with a seller bill comes with a link to open 
   const notes = (await get(load({ state }), 'report=2026-10-23')).body.notes;
   assert.deepEqual(plain(notes.notes[0].items.map(i => [i.bill || null, i.billFrom || null])), [['2026-10/notebill-a.jpg', 'gallery'], [null, null]]);
   assert.deepEqual(plain(notes.photo_links), { '2026-10/notebill-a.jpg': 'signed:2026-10/notebill-a.jpg' });
+
+  // Sổ thu chi (tab Hôm nay → Nhập hàng): link xem bill thay cho đường dẫn ảnh, kèm lý do không có bill.
+  const day = (await get(load({ state }), 'date=2026-10-23')).body;
+  assert.deepEqual(plain(day.notes[0].items.map(i => [i.billUrl ?? null, i.billFrom || null, i.noBill || null, 'bill' in i])),
+    [['signed:2026-10/notebill-a.jpg', 'gallery', null, false], [null, null, 'mối quen', false]]);
 });
 
 test('/thongke lists each cost by name and who entered it: rent, electricity… in Sổ tay "Khác", fixed costs, daily costs and own tabs', async () => {
