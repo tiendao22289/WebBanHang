@@ -343,6 +343,24 @@ async function main() {
   console.log(JSON.stringify(roles));
   if (!roles?.manager_ok) throw new Error('Chưa thêm được vai trò Quản lý.');
 
+  // Giỏ khách chưa gửi → trang Bàn hiện 🛒, để yên 5 phút thì chớp vàng (customer_cart_alert.sql).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'customer_cart_alert.sql'), 'utf8'));
+  const [carts] = await query(`SELECT
+    to_regclass('public.customer_cart_drafts') IS NOT NULL AS table_ok,
+    has_function_privilege('anon', 'public.report_customer_cart(text,uuid,jsonb)', 'EXECUTE') AS web_can_report,
+    has_function_privilege('anon', 'public.get_customer_carts()', 'EXECUTE') AS web_can_read,
+    has_function_privilege('anon', 'public.dismiss_customer_carts(uuid)', 'EXECUTE') AS web_can_dismiss,
+    has_table_privilege('anon', 'public.customer_cart_drafts', 'SELECT') AS anon_can_select,
+    NOT has_table_privilege('anon', 'public.customer_cart_drafts', 'INSERT')
+      AND NOT has_table_privilege('anon', 'public.customer_cart_drafts', 'UPDATE')
+      AND NOT has_table_privilege('anon', 'public.customer_cart_drafts', 'DELETE') AS anon_cannot_write,
+    EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'customer_cart_drafts') AS realtime`);
+  console.log(JSON.stringify(carts));
+  if (!carts.table_ok || !carts.web_can_report || !carts.web_can_read || !carts.web_can_dismiss || !carts.anon_can_select || !carts.anon_cannot_write) {
+    throw new Error('Chưa cài được phần báo giỏ khách chưa gửi.');
+  }
+  if (!carts.realtime) console.log('Chưa bật realtime cho giỏ khách — trang Bàn vẫn tự hỏi lại mỗi 30 giây.');
+
   // Băm mã PIN còn lưu chữ thường (web đang chạy ở 127.0.0.1:3000 làm việc này).
   const crypto = require('node:crypto');
   const serverKey = crypto.createHmac('sha256', key).update('staff-maintenance').digest('hex');

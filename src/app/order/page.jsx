@@ -3,6 +3,7 @@
 import { isPaidTableCheckout } from '@/lib/tableCheckout';
 import { fetchOpenGroupTotal, shopDayKey, shopDayStartISO } from '@/lib/tableGroupOrders';
 import { applyOrderRefusal, cartAfterSentOrder, customerOrderLines, openChoices, refreshSavedCart } from '@/lib/draftCart.mjs';
+import { cartAlertDeviceKey, cartAlertItems, createCartReminder, createCartReporter } from '@/lib/customerCartAlert.mjs';
 import { removeVietnameseTones } from '@/lib/utils';
 import { createOrderRefresh } from '@/lib/orderRefresh.mjs';
 import { COOKING_WORDS, LOAI_SYNONYMS, KEYWORD_ALIASES } from '@/lib/quickMatch';
@@ -1058,6 +1059,49 @@ function OrderContent() {
       saveSession(saved.customerName, saved.customerPhone, saved.deliveryAddress, saved.orderId, cart);
     }
   }, [cart]);
+
+  // Báo trang Bàn: giỏ đang có món chưa gửi → 🛒 trên bàn, để yên 5 phút thì bàn chớp vàng "Khách quên
+  // gửi món" (lib/customerCartAlert.mjs). Gửi đơn / xoá hết giỏ → giỏ trống → tắt báo. Mang về thì không báo.
+  const cartReporterRef = useRef(null);
+  useEffect(() => {
+    const reporter = createCartReporter({
+      isReady: () => isSessionRestored.current,
+      send: async (tableId, items) => {
+        const { data, error } = await supabase.rpc('report_customer_cart', {
+          p_device_key: cartAlertDeviceKey(), p_table_id: tableId, p_items: items,
+        });
+        return !error && data?.ok !== false;
+      },
+    });
+    cartReporterRef.current = reporter;
+    return () => reporter.dispose();
+  }, []);
+  useEffect(() => {
+    const tableId = isTakeaway ? null : activeTableId;
+    cartReporterRef.current?.update(tableId, tableId ? cartAlertItems(cart, giftCart) : []);
+  }, [cart, giftCart, activeTableId, isTakeaway]);
+
+  // Nhắc ngay trên điện thoại khách: giỏ có món để yên 3 phút mà chưa gửi → bong bóng "Quý khách chưa
+  // gửi món" trên nút giỏ (+ rung nhẹ nếu máy hỗ trợ). Trang Bàn chỉ chớp vàng sau 5 phút.
+  const [cartReminder, setCartReminder] = useState(false);
+  const cartReminderRef = useRef(null);
+  useEffect(() => {
+    const reminder = createCartReminder({
+      onChange: (on) => {
+        setCartReminder(on);
+        if (on) { try { navigator.vibrate?.([180, 90, 180]); } catch { /* máy không rung được */ } }
+      },
+    });
+    cartReminderRef.current = reminder;
+    return () => reminder.dispose();
+  }, []);
+  const cartReminderSig = useMemo(() => JSON.stringify(cartAlertItems(cart, giftCart)), [cart, giftCart]);
+  const cartHasItems = cart.some(c => Number(c.quantity) > 0);
+  useEffect(() => {
+    cartReminderRef.current?.update(cartReminderSig, {
+      hasItems: cartHasItems, paused: showCart || submitting || showInfoModal,
+    });
+  }, [cartReminderSig, cartHasItems, showCart, submitting, showInfoModal]);
 
   // Body scroll lock effect
   useEffect(() => {
@@ -5005,16 +5049,68 @@ function OrderContent() {
           15% { transform: translateY(-2px) rotate(-4deg); }
           20% { transform: translateY(0) rotate(0); }
         }
+        .co-cart-reminder {
+          position: absolute; left: 16px; right: 16px; bottom: calc(100% - 2px);
+          display: flex; align-items: stretch; gap: 6px; pointer-events: auto;
+          animation: co-cart-remind-in 0.35s ease-out, co-cart-remind-nudge 2.4s ease-in-out 0.35s infinite;
+        }
+        .co-cart-reminder-main {
+          flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
+          padding: 10px 12px; border: 2px solid #f59e0b; border-radius: 16px;
+          background: #fffbeb; color: #78350f; text-align: left; cursor: pointer;
+          box-shadow: 0 8px 22px rgba(217, 119, 6, 0.28);
+        }
+        .co-cart-reminder-main > span:nth-child(2) { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+        .co-cart-reminder-main strong { font-size: 0.92rem; font-weight: 900; color: #92400e; }
+        .co-cart-reminder-main > span:nth-child(2) > span { font-size: 0.78rem; font-weight: 600; line-height: 1.35; }
+        .co-cart-reminder-icon { font-size: 1.5rem; line-height: 1; flex-shrink: 0; }
+        .co-cart-reminder-go {
+          flex-shrink: 0; padding: 7px 12px; border-radius: 12px;
+          background: #f59e0b; color: white; font-size: 0.82rem; font-weight: 900; white-space: nowrap;
+        }
+        .co-cart-reminder-close {
+          flex-shrink: 0; width: 34px; border: 1px solid #fcd34d; border-radius: 12px;
+          background: white; color: #92400e; font-size: 1.2rem; font-weight: 700; cursor: pointer;
+          box-shadow: 0 4px 12px rgba(217, 119, 6, 0.18);
+        }
+        @keyframes co-cart-remind-in {
+          from { opacity: 0; transform: translateY(12px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes co-cart-remind-nudge {
+          0%, 70%, 100% { transform: translateY(0); }
+          78% { transform: translateY(-5px); }
+          86% { transform: translateY(0); }
+          92% { transform: translateY(-2px); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .co-cart-reminder { animation: none; }
+        }
       `}</style>
 
         {/* ─── Cart FAB (Split Design) ─── */}
         {totalItems > 0 && (
           <div style={{
-            position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 90,
+            // Đang nhắc "chưa gửi món" thì nổi trên bong bóng 8 tặng 1 (100), vẫn dưới các bảng popup (500).
+            position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: cartReminder && !showCart ? 101 : 90,
             maxWidth: 500, margin: '0 auto',
             padding: '12px 16px', paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))',
             display: 'flex', gap: 12, pointerEvents: 'none', alignItems: 'stretch'
           }}>
+            {/* Nhắc khách quên gửi món (giỏ để yên 3 phút) — bấm mở giỏ để gửi, × thì thôi tới khi giỏ đổi */}
+            {cartReminder && !showCart && (
+              <div className="co-cart-reminder" role="status">
+                <button type="button" className="co-cart-reminder-main" onClick={() => setShowCart(true)}>
+                  <span className="co-cart-reminder-icon" aria-hidden="true">⏰</span>
+                  <span>
+                    <strong>Quý khách chưa gửi món!</strong>
+                    <span>Còn {totalItems + giftCart.length} món trong giỏ, bếp chưa nhận được.</span>
+                  </span>
+                  <span className="co-cart-reminder-go">Gửi món</span>
+                </button>
+                <button type="button" className="co-cart-reminder-close" aria-label="Để sau" onClick={() => cartReminderRef.current?.mute()}>×</button>
+              </div>
+            )}
             {/* Nút Chọn Lại */}
             <button
               onClick={(e) => {
