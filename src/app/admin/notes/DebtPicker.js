@@ -4,9 +4,10 @@
  * đang nợ của các phiếu cũ, tích khoản nào thì trả khoản đó (sửa được số tiền để
  * trả một phần), và tuỳ chọn lấy tiền dư của chuyến chợ để trả nợ.
  *
- * Có thêm khung "Tiền thừa phiếu trước chưa trả chủ": tích để lấy tiền đó trả nợ,
- * tích "Cộng tiền dư cũ vào phiếu này" để chuyển hẳn sang phiếu mới (hiện tách dư cũ / dư mới),
- * hoặc bấm "Đã trả chủ" khi người đi chợ đã đưa lại tiền thừa.
+ * Có thêm khung "Tiền thừa phiếu trước chưa trả chủ": tích "Đã trả chủ" ở từng phiếu khi người đi chợ
+ * đã đưa lại tiền thừa đó; phần còn lại tích để lấy trả nợ, hoặc "Cộng tiền dư cũ vào phiếu này" để
+ * chuyển hẳn sang phiếu mới (hiện tách dư cũ / dư mới). Cuối mục: tích "Đã trả chủ" tiền thừa của chính
+ * phiếu đang ghi (newLeft). Mọi lựa chọn ghi lại khi bấm Lưu phiếu.
  *
  * Danh sách nợ và danh sách tiền thừa thu gọn, bấm để mở (tự mở khi đã chọn khoản trả).
  * value: { [debtKey]: số tiền } — khoản đang chọn trả.
@@ -20,13 +21,17 @@ const dayMonth = iso => { const d = new Date(new Date(iso).getTime() + 7 * 36000
 const digits = v => String(v ?? '').replace(/\D/g, '');
 
 export default function DebtPicker({ notes, value, onChange, surplus, useSurplus, onUseSurplus,
-  leftovers = [], useLeftover, onUseLeftover, onReturnLeftover, canCarry, carry, onCarry, surplusOld = 0, step = 3 }) {
+  leftovers = [], useLeftover, onUseLeftover, returned = [], onReturned, canCarry, carry, onCarry, surplusOld = 0,
+  newLeft = 0, returnNow, onReturnNow, step = 3 }) {
   const [openLines, setOpenLines] = useState(false);
   const [openLeft, setOpenLeft] = useState(false);
   const lines = useMemo(() => allOpenDebts(notes || []), [notes]);
   const total = lines.reduce((a, l) => a + l.left, 0);
   const chosen = Object.values(value || {}).reduce((a, v) => a + (Number(v) || 0), 0);
-  const leftoverTotal = leftovers.reduce((a, l) => a + l.left, 0);
+  // Phiếu đã tích "Đã trả chủ" không còn dùng để trả nợ / cộng sang phiếu mới.
+  const kept = leftovers.filter(l => !returned.includes(l.note_id));
+  const leftoverTotal = kept.reduce((a, l) => a + l.left, 0);
+  const returnedTotal = leftovers.reduce((a, l) => a + (returned.includes(l.note_id) ? l.left : 0), 0);
 
   // "Lấy tiền dư / tiền thừa trả nợ": chia vào khoản đã tích trước, rồi phiếu cũ nhất.
   useEffect(() => {
@@ -37,7 +42,7 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useSurplus, useLeftover, surplus, leftoverTotal, lines]);
 
-  if (!lines.length && !leftovers.length) return null;
+  if (!lines.length && !leftovers.length && !(newLeft > 0)) return null;
   const toggle = line => {
     const key = debtKey(line);
     const next = { ...(value || {}) };
@@ -63,21 +68,23 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
       {leftovers.length > 0 && (
         <div className="np-box ok">
           <button type="button" className="np-box-head" onClick={() => setOpenLeft(o => !o)} aria-expanded={showLeft}>
-            <span>💵 Tiền thừa phiếu trước</span><b>{money(leftoverTotal)}</b><ChevronDown size={16} className={showLeft ? 'up' : ''} />
+            <span>💵 Tiền thừa phiếu trước{returnedTotal > 0 && <small> · đã trả chủ {money(returnedTotal)}</small>}</span><b>{money(leftoverTotal)}</b><ChevronDown size={16} className={showLeft ? 'up' : ''} />
           </button>
-          {showLeft && leftovers.map(l => (
-            <div key={l.note_id} className="np-box-line">
+          {showLeft && leftovers.map(l => {
+            const back = returned.includes(l.note_id);
+            return <label key={l.note_id} className={`np-box-line np-return${back ? ' on' : ''}`}>
               <span>Phiếu {dayMonth(l.created_at)}{l.writer ? ` · ${l.writer}` : ''} · còn <b>{money(l.left)}</b></span>
-              <button type="button" className="np-mini ok" onClick={() => onReturnLeftover?.(l)}>Đã trả chủ</button>
-            </div>
-          ))}
-          {showLeft && canCarry && (
+              <span className="np-return-tick"><input type="checkbox" checked={back}
+                onChange={e => onReturned?.(e.target.checked ? [...returned, l.note_id] : returned.filter(id => id !== l.note_id))} /> Đã trả chủ</span>
+            </label>;
+          })}
+          {showLeft && canCarry && kept.length > 0 && (
             <label className="np-check ok">
               <input type="checkbox" checked={!!carry} onChange={e => { onCarry?.(e.target.checked); if (e.target.checked) onUseLeftover?.(false); }} />
               Cộng tiền dư cũ vào phiếu này
             </label>
           )}
-          {showLeft && lines.length > 0 && !carry && (
+          {showLeft && lines.length > 0 && !carry && kept.length > 0 && (
             <label className="np-check ok">
               <input type="checkbox" checked={!!useLeftover} onChange={e => onUseLeftover?.(e.target.checked)} />
               Dùng tiền thừa này để trả nợ
@@ -115,6 +122,12 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
             })}
           </div>}
         </div>
+      )}
+      {newLeft > 0 && (
+        <label className={`np-check ok np-return-now${returnNow ? ' on' : ''}`}>
+          <input type="checkbox" checked={!!returnNow} onChange={e => onReturnNow?.(e.target.checked)} />
+          <span>Tiền thừa phiếu này <b>{money(newLeft)}</b>: đã trả chủ</span>
+        </label>
       )}
     </section>
   );

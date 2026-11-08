@@ -13,7 +13,9 @@
  * POST {action}: create (kèm pay_debts: [{ note_id, item_id, item_index|null, amount }] — trả đúng các khoản
  *       nợ cũ đã chọn (tìm dòng theo item_id = _id của dòng, dòng cũ chưa có mã thì theo item_index);
  *       from_note_id = lấy từ tiền thừa của phiếu trước, bỏ trống = tiền phiếu mới;
- *       carry_leftovers [{ note_id, amount }] = cộng tiền dư phiếu cũ vào phiếu mới),
+ *       carry_leftovers [{ note_id, amount }] = cộng tiền dư phiếu cũ vào phiếu mới,
+ *       return_leftovers [{ note_id, amount }] = tiền thừa phiếu cũ đã đưa lại chủ,
+ *       return_now: true = tiền thừa của chính phiếu này đã đưa lại chủ),
  *       edit (kèm updated_at của phiếu lúc mở ô sửa: phiếu đã đổi từ đó thì không ghi đè),
  *       pay_item (item_id / item_index; item_index null = cả phiếu), return_leftover (đã trả tiền thừa cho chủ),
  *       delete (admin; hoàn lại nợ đã trả / tiền dư đã chuyển bằng phiếu đó),
@@ -359,7 +361,10 @@ export async function POST(request) {
       // Các khoản nợ cũ người ghi chọn trả bằng tiền của phiếu này — kiểm tra hết trước khi lưu.
       const requested = Array.isArray(body.pay_debts) ? body.pay_debts.slice(0, 60) : [];
       const carryReq = type === 'expense' && items.length && Array.isArray(body.carry_leftovers) ? body.carry_leftovers.slice(0, 30) : [];
-      const targetIds = [...new Set([...requested.flatMap(r => [r?.note_id, r?.from_note_id]), ...carryReq.map(c => c?.note_id)].filter(id => UUID.test(id || '')))];
+      // Tiền thừa phiếu trước người đi chợ đã đưa lại chủ (tích "Đã trả chủ" lúc ghi phiếu mới).
+      const returnReq = Array.isArray(body.return_leftovers) ? body.return_leftovers.slice(0, 30) : [];
+      const targetIds = [...new Set([...requested.flatMap(r => [r?.note_id, r?.from_note_id]), ...carryReq.map(c => c?.note_id), ...returnReq.map(r => r?.note_id)]
+        .filter(id => UUID.test(id || '')))];
       const { data: targets, error: targetErr } = targetIds.length ? await db.from('staff_notes').select('*').in('id', targetIds) : { data: [], error: null };
       if (targetErr) throw targetErr;
       const byId = new Map((targets || []).map(n => [n.id, n]));
@@ -385,8 +390,15 @@ export async function POST(request) {
         if (!byId.has(c?.note_id) || !amount) return fail('Tiền dư phiếu cũ không hợp lệ.');
         carry.push({ id: c.note_id, amount });
       }
+      const returns = [];
+      for (const r of returnReq) {
+        const amount = money(r?.amount);
+        if (!byId.has(r?.note_id) || !amount) return fail('Tiền thừa đã trả chủ không hợp lệ.');
+        if (carry.some(c => c.id === r.note_id)) return fail(`Tiền thừa phiếu ${dm(byId.get(r.note_id).created_at)} không vừa cộng vào phiếu mới vừa trả chủ được.`);
+        returns.push({ id: r.note_id, amount });
+      }
       // Tiền thừa phiếu trước: phiếu nguồn phải còn đủ tiền thừa chưa trả chủ.
-      const sourceIds = [...new Set([...plan.map(x => x.from), ...carry.map(c => c.id)].filter(Boolean))];
+      const sourceIds = [...new Set([...plan.map(x => x.from), ...carry.map(c => c.id), ...returns.map(r => r.id)].filter(Boolean))];
       if (sourceIds.length) {
         const { data: sourcePays, error: sourceErr } = await db.from('staff_note_payments').select('paid_from_note_id, amount').in('paid_from_note_id', sourceIds);
         if (sourceErr) throw sourceErr;
@@ -394,7 +406,8 @@ export async function POST(request) {
           const source = byId.get(id);
           if (!source) return fail('Phiếu lấy tiền thừa không hợp lệ.');
           if (!canManage && source.staff_id !== user.id) return fail('Không dùng được tiền thừa trên phiếu của người khác.', 403);
-          const want = plan.filter(x => x.from === id).reduce((a, x) => a + x.pay, 0) + carry.filter(c => c.id === id).reduce((a, c) => a + c.amount, 0);
+          const want = plan.filter(x => x.from === id).reduce((a, x) => a + x.pay, 0) + carry.filter(c => c.id === id).reduce((a, c) => a + c.amount, 0)
+            + returns.filter(r => r.id === id).reduce((a, r) => a + r.amount, 0);
           const left = noteLeftover(source, sourcePays || []);
           if (want > left) return fail(`Tiền thừa phiếu ${dm(source.created_at)} chỉ còn ${vnd(left)}.`);
           // Phiếu nguồn cũng được khoá khi ghi: hai lần lấy cùng lúc thì lần sau bị từ chối.
@@ -423,10 +436,17 @@ export async function POST(request) {
           await removeReceiptImages(storage, [...photoPaths, ...uploaded]);
           throw error;
         }
-        content = JSON.stringify({ type: 'structured_expense', items, note: [noteText, notice].filter(Boolean).join('\n\n'),
+        const doc = { type: 'structured_expense', items, note: [noteText, notice].filter(Boolean).join('\n\n'),
           input_amount: money(body.input_amount),
           ...(photoPaths.length ? { photos: photoPaths } : {}),
-          ...(carry.length ? { carried_in: carry.map(c => ({ from_note_id: c.id, from_at: byId.get(c.id).created_at, amount: c.amount })) } : {}) });
+          ...(carry.length ? { carried_in: carry.map(c => ({ from_note_id: c.id, from_at: byId.get(c.id).created_at, amount: c.amount })) } : {}) };
+        // Tích "đã trả chủ" tiền thừa của chính phiếu này: ghi đúng số còn thừa sau khi trả hàng và trả nợ cũ.
+        if (body.return_now === true) {
+          const left = noteLeftover({ id: newId, note_type: type, content: JSON.stringify(doc), amount },
+            plan.filter(x => !x.from).map(x => ({ paid_from_note_id: newId, amount: x.pay })));
+          if (left > 0) doc.returned_logs = [{ amount: left, ts: stamp(), by: user.full_name || 'Không rõ' }];
+        }
+        content = JSON.stringify(doc);
       } else {
         content = [noteText.trim(), notice].filter(Boolean).join('\n\n');
       }
@@ -435,6 +455,10 @@ export async function POST(request) {
       for (const c of carry) {
         logInto(changes, byId.get(c.id), user, `➡ Chuyển ${vnd(c.amount)} tiền dư sang phiếu ${today}`,
           data => { data.carried_out = [...(data.carried_out || []), { amount: c.amount, ts: stamp(), by: user.full_name || 'Không rõ', to_note_id: newId }]; });
+      }
+      for (const r of returns) {
+        logInto(changes, byId.get(r.id), user, `↩ Đã trả lại chủ ${vnd(r.amount)} tiền thừa (ghi lúc tạo phiếu ${today})`,
+          data => { data.returned_logs = [...(data.returned_logs || []), { amount: r.amount, ts: stamp(), by: user.full_name || 'Không rõ' }]; });
       }
       for (const x of plan) {
         payInto(changes, x.target, x.idx, x.pay, { user, fromNoteId: x.from || newId,

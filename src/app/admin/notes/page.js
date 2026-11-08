@@ -87,6 +87,9 @@ export default function StaffNotesPage() {
   const [useSurplusForDebt, setUseSurplusForDebt] = useState(false);
   const [useLeftoverForDebt, setUseLeftoverForDebt] = useState(false);
   const [carryLeftover, setCarryLeftover] = useState(false);
+  // Tích "Đã trả chủ": tiền thừa phiếu trước (mã phiếu) và tiền thừa của chính phiếu đang ghi — ghi khi Lưu phiếu.
+  const [returnedLeftovers, setReturnedLeftovers] = useState([]);
+  const [returnNow, setReturnNow] = useState(false);
   const debtPayTotal = Object.values(debtPays).reduce((a, v) => a + (Number(v) || 0), 0);
   const [newNotePayDebtAmount, setNewNotePayDebtAmount] = useState('');
   
@@ -377,7 +380,9 @@ export default function StaffNotesPage() {
     const bills = newBills;
     // Các khoản nợ cũ đã chọn trả (máy chủ kiểm lại số còn nợ từng khoản).
     // Nguồn tiền: tiền thừa phiếu trước (nếu tích dùng) trước, rồi tiền của phiếu này.
-    const leftovers = useLeftoverForDebt && !carryLeftover ? openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ id: l.note_id, left: l.left })) : [];
+    const allLeftovers = openLeftovers(notes, payments, LEFTOVER_SINCE);
+    const keptLeftovers = allLeftovers.filter(l => !returnedLeftovers.includes(l.note_id));
+    const leftovers = useLeftoverForDebt && !carryLeftover ? keptLeftovers.map(l => ({ id: l.note_id, left: l.left })) : [];
     // Gửi kèm mã dòng (_id): máy chủ tìm dòng theo mã, phiếu nợ vừa bị sửa thì không trả nhầm dòng khác.
     const debtLines = new Map(allOpenDebts(notes).map(l => [debtKey(l), l]));
     const payDebts = fundDebtPayments(Object.entries(debtPays).filter(([, v]) => Number(v) > 0).map(([key, amount]) => ({ key, amount })), leftovers)
@@ -407,7 +412,9 @@ export default function StaffNotesPage() {
         note: newNoteContent,
         input_amount: newNoteInputAmount,
         pay_debts: payDebts,
-        carry_leftovers: carryLeftover && newNoteType === 'expense' ? openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ note_id: l.note_id, amount: l.left })) : [],
+        carry_leftovers: carryLeftover && newNoteType === 'expense' ? keptLeftovers.map(l => ({ note_id: l.note_id, amount: l.left })) : [],
+        return_leftovers: allLeftovers.filter(l => returnedLeftovers.includes(l.note_id)).map(l => ({ note_id: l.note_id, amount: l.left })),
+        return_now: returnNow,
       };
       if (sendBills.length) await notesApiWithPhotos('create', body, [], sendBills);
       else await notesApi('create', body);
@@ -429,6 +436,8 @@ export default function StaffNotesPage() {
       setUseSurplusForDebt(false);
       setUseLeftoverForDebt(false);
       setCarryLeftover(false);
+      setReturnedLeftovers([]);
+      setReturnNow(false);
       dropPhotos(bills);
       setNewBills([]);
       fetchNotes(currentUser); // Refresh list
@@ -1906,15 +1915,18 @@ export default function StaffNotesPage() {
         const { paid: thucChi, debt: tienNo } = calculateTotals();
         const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
         const leftoverList = openLeftovers(notes, payments, LEFTOVER_SINCE);
-        const carried = carryLeftover ? leftoverList.reduce((a, l) => a + l.left, 0) : 0;
+        // Phiếu đã tích "Đã trả chủ" thì không cộng sang phiếu này / không lấy trả nợ.
+        const keptLeftovers = leftoverList.filter(l => !returnedLeftovers.includes(l.note_id));
+        const carried = carryLeftover ? keptLeftovers.reduce((a, l) => a + l.left, 0) : 0;
         // Phần trả nợ lấy từ tiền thừa phiếu trước không trừ vào tiền của phiếu này.
         const fromLeftover = useLeftoverForDebt && !carryLeftover ? fundDebtPayments(Object.entries(debtPays).map(([key, amount]) => ({ key, amount })),
-          leftoverList.map(l => ({ id: l.note_id, left: l.left }))).filter(x => x.from_note_id).reduce((a, x) => a + x.amount, 0) : 0;
+          keptLeftovers.map(l => ({ id: l.note_id, left: l.left }))).filter(x => x.from_note_id).reduce((a, x) => a + x.amount, 0) : 0;
         const payOldDebt = debtPayTotal - fromLeftover;
         const balance = inputAmt + carried - thucChi - payOldDebt;
         const surplus = (inputAmt > 0 ? inputAmt - thucChi : 0) + carried;
         const goods = thucChi + tienNo;
-        const hasDebtStep = leftoverList.length > 0 || allOpenDebts(notes).length > 0;
+        // Mục 3 "Tiền thừa & nợ cũ": có tiền thừa phiếu trước, nợ cũ, hoặc phiếu này còn thừa (tích đã trả chủ).
+        const hasDebtStep = leftoverList.length > 0 || allOpenDebts(notes).length > 0 || balance > 0;
         const now = new Date();
         const when = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
         return (
@@ -1943,15 +1955,18 @@ export default function StaffNotesPage() {
                   leftovers={leftoverList} useLeftover={useLeftoverForDebt} onUseLeftover={setUseLeftoverForDebt}
                   canCarry carry={carryLeftover} onCarry={setCarryLeftover}
                   surplusOld={carried > 0 ? Math.min(carried, Math.max(0, surplus)) : 0}
-                  onReturnLeftover={async l => {
-                    if (!confirm(`Người đi chợ đã đưa lại ${l.left.toLocaleString('vi-VN')}đ tiền thừa của phiếu này cho chủ?`)) return;
-                    try { await notesApi('return_leftover', { id: l.note_id, amount: l.left }); await fetchNotes(); } catch (err) { alert(err.message); }
-                  }} />
+                  returned={returnedLeftovers}
+                  onReturned={ids => {
+                    setReturnedLeftovers(ids);
+                    // Mọi phiếu thừa đều đã trả chủ: bỏ "cộng vào phiếu này" / "dùng trả nợ".
+                    if (!leftoverList.some(l => !ids.includes(l.note_id))) { setCarryLeftover(false); setUseLeftoverForDebt(false); }
+                  }}
+                  newLeft={Math.max(0, balance)} returnNow={returnNow} onReturnNow={setReturnNow} />
               )}
 
               {(inputAmt > 0 || carried > 0 || goods > 0 || debtPayTotal > 0) && (
                 <Section step={hasDebtStep ? 4 : 3} title="Tổng kết">
-                  <TripSummary given={inputAmt} carried={carried} paid={thucChi} debt={tienNo} payOldDebt={payOldDebt} fromLeftover={fromLeftover} />
+                  <TripSummary given={inputAmt} carried={carried} paid={thucChi} debt={tienNo} payOldDebt={payOldDebt} fromLeftover={fromLeftover} returned={returnNow} />
                 </Section>
               )}
             </div>
@@ -1959,7 +1974,7 @@ export default function StaffNotesPage() {
             <div className="modal-footer np-footer">
               <div className="np-footer-sum">
                 <span>Tiền hàng <b>{vnd(goods)}</b></span>
-                {(inputAmt > 0 || carried > 0) && <span className={balance >= 0 ? 'ok' : 'bad'}>{balance >= 0 ? 'Thừa' : 'Thiếu'} <b>{vnd(Math.abs(balance))}</b></span>}
+                {(inputAmt > 0 || carried > 0) && <span className={balance >= 0 ? 'ok' : 'bad'}>{balance >= 0 ? 'Thừa' : 'Thiếu'} <b>{vnd(Math.abs(balance))}</b>{returnNow && balance > 0 ? ' · đã trả chủ' : ''}</span>}
               </div>
               <button type="button" className="btn btn-primary np-save" onClick={() => submitNewNote()} disabled={isLoading}>{isLoading ? 'Đang lưu…' : 'Lưu phiếu'}</button>
             </div>
