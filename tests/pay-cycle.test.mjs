@@ -194,6 +194,43 @@ test('the owner fixes the payday to a weekday; a payout with nothing to pay is r
   assert.equal(state.payroll_pay_cycles[0].payday_anchor, null);
 });
 
+test('pay by chosen days (anyone): pick 01 → 07 and only those days are paid, whenever the button is pressed; a mid-month close loses no later day', async () => {
+  let n = 0;
+  const shift = day => ({ id: `00000000-0000-4000-9000-${String(++n).padStart(12, '0')}`, staff_id: DUNG.id, date: `2026-11-${String(day).padStart(2, '0')}`,
+    clock_in: iso(T(day, '13:58')), clock_out: iso(T(day, '00:00+1')) });
+  const state = {
+    staff: [OWNER, DUNG], payroll_config: [{ staff_id: DUNG.id, base_salary: 0, overtime_rate: 0 }],
+    payroll_hourly_rates: [{ staff_id: DUNG.id, valid_from: '2026-11-01', hourly_rate: 200000, unit: 'day' }],
+    checkin_settings: [{ id: 1, enforce: false, hours_from: '2026-10-25' }],
+    checkin_hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '00:00', grace_minutes: 10 }],
+    attendance_sessions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(shift), payroll_payouts: [], payroll_closes: [], __clock: () => env.now,
+  };
+  const wf = api(state);
+  const now = T(11, '10:00');
+  const post = async (body, user = OWNER) => { env.user = user; env.now = now; return plain(await wf.POST({ json: async () => body, headers: new Map() })); };
+  const get = async (q, user = OWNER) => { env.user = user; env.now = now; return plain(await wf.GET({ url: `http://x/api/admin/workforce?${q}` })); };
+  const range = (from, to) => get(`range=1&staff_id=${DUNG.id}&from=${from}&to=${to}`);
+
+  assert.equal((await get(`range=1&staff_id=${DUNG.id}&from=2026-11-01&to=2026-11-07`, DUNG)).status, 403);
+  assert.equal((await range('2026-11-08', '2026-11-07')).status, 400, 'from after to');
+  assert.equal((await range('2026-11-01', '2026-11-12')).status, 400, 'not past today');
+  // Chọn 01 → 07: đúng 7 ngày (đã làm tới 10 nhưng 08–10 không tính).
+  const r1 = (await range('2026-11-01', '2026-11-07')).body;
+  assert.deepEqual([r1.amount, r1.days.length], [1400000, 7]);
+  assert.equal((await post({ action: 'pay_range', staff_id: DUNG.id, from_day: '2026-11-01', to_day: '2026-11-07', amount: 999 })).status, 409, 'page shows an old number');
+  assert.equal((await post({ action: 'pay_range', staff_id: DUNG.id, from_day: '2026-11-01', to_day: '2026-11-07', amount: 1400000 })).status, 200);
+  assert.deepEqual(plain(state.payroll_payouts.map(p => [p.from_day, p.to_day, p.amount])), [['2026-11-01', '2026-11-07', 1400000]]);
+  // Chọn lại 01 → 07: đã trả hết, không lưu lần trả 0đ. Chọn 01 → 10: chỉ còn 08–10.
+  assert.equal((await post({ action: 'pay_range', staff_id: DUNG.id, from_day: '2026-11-01', to_day: '2026-11-07', amount: 0 })).status, 409);
+  assert.equal((await range('2026-11-01', '2026-11-10')).body.amount, 600000, 'days already paid are not paid twice');
+  // Chủ lỡ chốt tháng giữa chừng (số chốt chỉ tới lúc đó): ngày sau lúc chốt vẫn tính theo chấm công.
+  state.payroll_closes.push({ year: 2026, month: 11, staff_id: DUNG.id, snapshot: { net: 1400000, byDay: Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map(d => [`2026-11-${String(d).padStart(2, '0')}`, 200000])) } });
+  const r2 = (await range('2026-11-08', '2026-11-10')).body;
+  assert.deepEqual([r2.amount, r2.days.map(x => x.day)], [600000, ['2026-11-08', '2026-11-09', '2026-11-10']]);
+  assert.equal((await post({ action: 'pay_range', staff_id: DUNG.id, from_day: '2026-11-08', to_day: '2026-11-10', amount: 600000 })).status, 200);
+  assert.deepEqual((await range('2026-11-08', '2026-11-10')).body.payouts.map(p => [p.from_day, p.amount]), [['2026-11-08', 600000], ['2026-11-01', 1400000]]);
+});
+
 test('before the migration runs the cycle parts say the web is updating', async () => {
   const state = { staff: [OWNER, DUNG], __noTable: ['payroll_pay_cycles', 'payroll_payouts'], checkin_settings: [{ id: 1 }], checkin_hours: [] };
   const wf = api(state);

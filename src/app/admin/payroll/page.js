@@ -319,7 +319,7 @@ function FineRules({ rules, onAction }) {
 
 // Ở từng dòng bảng lương: kết toán người nghỉ việc trong tháng, đánh dấu đã trả lương khi đã chốt.
 // Nút của từng người: chốt lương riêng người đó (Kết toán với người nghỉ việc), mở chốt riêng (khi chưa đánh dấu đã trả), đánh dấu đã trả.
-function PayActions({ s, c, left, onClose, onReopen, onPaid, compact, canClose }) {
+function PayActions({ s, c, left, onClose, onReopen, onPaid, onRange, compact, canClose, monthOver }) {
   if (!left && !c.locked && !canClose) return null;
   const btn = { fontSize: '0.75rem', padding: '3px 10px', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap', border: '1px solid #e2e8f0', background: '#f8fafc' };
   const paidDay = c.paid_at ? ddmm(new Date(Date.parse(c.paid_at) + 7 * 3600000).toISOString().slice(0, 10)) : null;
@@ -328,8 +328,12 @@ function PayActions({ s, c, left, onClose, onReopen, onPaid, compact, canClose }
       ? { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4, alignItems: 'flex-start' }
       : { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: '8px 12px', borderTop: '1px solid #f1f5f9', fontSize: '0.8rem' }}>
       {left && <span style={{ color: '#9a3412', fontWeight: 600, fontSize: '0.75rem' }}>🚪 Nghỉ việc, làm đến {ddmm(left.last_day)}</span>}
-      {!c.locked && (
-        <button style={{ ...btn, background: '#fff7ed', borderColor: '#fed7aa', color: '#9a3412', fontWeight: 700 }} onClick={() => onClose(s.id, s.full_name)}>🔒 {left ? 'Kết toán' : 'Chốt lương'}</button>
+      {canClose && onRange && (
+        <button style={{ ...btn, background: '#eff6ff', borderColor: '#bfdbfe', color: '#1d4ed8', fontWeight: 700 }} onClick={() => onRange(s)}>💵 Trả lương theo ngày</button>
+      )}
+      {/* Chốt cả tháng của người này: khi hết tháng (giữa tháng trả theo ngày chọn), người nghỉ việc thì kết toán lúc nào cũng được. */}
+      {!c.locked && (left || monthOver) && (
+        <button style={{ ...btn, background: '#fff7ed', borderColor: '#fed7aa', color: '#9a3412', fontWeight: 700 }} onClick={() => onClose(s.id, s.full_name)}>🔒 {left ? 'Kết toán' : 'Chốt lương tháng'}</button>
       )}
       {c.locked && !c.paid_at && onReopen && (
         <button style={{ ...btn, color: '#475569' }} title="Mở chốt riêng người này: lương tính lại theo chấm công hiện tại" onClick={() => onReopen(s.id, s.full_name)}>🔓 Mở chốt</button>
@@ -345,6 +349,97 @@ function PayActions({ s, c, left, onClose, onReopen, onPaid, compact, canClose }
   );
 }
 
+
+// Trả lương theo ngày chọn (mọi người): chọn từ ngày → đến ngày, máy chủ tính số phải trả cho đúng các ngày đó (ngày đã trả không trả
+// lại, ứng / phạt / thưởng / chi hộ chưa tính thì tính một lần), bấm "Đã trả lương" là lưu. Bấm lúc nào cũng được.
+function RangeSheet({ staff, defaultFrom, defaultTo, today, onClose, onDone }) {
+  const [from, setFrom] = useState(defaultFrom);
+  const [to, setTo] = useState(defaultTo);
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    let off = false;
+    setData(null); setErr('');
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/admin/workforce?range=1&staff_id=${staff.id}&from=${from}&to=${to}`, { cache: 'no-store' });
+        const j = await r.json().catch(() => ({}));
+        if (!off) { if (r.ok) setData(j); else setErr(j.error || 'Không tính được, thử lại.'); }
+      } catch { if (!off) setErr('Không kết nối được máy chủ.'); }
+    }, 250);
+    return () => { off = true; clearTimeout(t); };
+  }, [staff.id, from, to, reload]);
+  const sum = xs => (xs || []).reduce((a, x) => a + x.amount, 0);
+  const line = { display: 'flex', justifyContent: 'space-between', gap: 8, padding: '3px 0' };
+  const box = { padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 8, fontSize: '0.88rem', background: 'white' };
+  const work = data ? data.days.filter(x => x.due !== 0) : [];
+  const empty = data && !work.length && !data.advances.length && !data.fines.length && !data.bonuses.length && !(data.claims || []).length;
+  const pay = async () => {
+    if (!data || busy) return;
+    if (!confirm(`Đã trả lương cho ${staff.full_name} ${formatMoney(data.amount)} (từ ${ddmm(from)} tới hết ${ddmm(to)})?`)) return;
+    setBusy(true);
+    try { await workforce('pay_range', { staff_id: staff.id, from_day: from, to_day: to, amount: data.amount }); onDone(); onClose(); }
+    catch (e) { setErr(e.message); setReload(x => x + 1); }
+    finally { setBusy(false); }
+  };
+  const undo = async p => {
+    if (!confirm(`Bỏ lần trả ${formatMoney(p.amount)} (${ddmm(String(p.from_day))} – ${ddmm(String(p.to_day))}) của ${staff.full_name}?`)) return;
+    try { await workforce('undo_payout', { id: p.id }); onDone(); setReload(x => x + 1); } catch (e) { setErr(e.message); }
+  };
+  return (
+    <div role="dialog" aria-label="Trả lương theo ngày" onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: 'fixed', inset: 0, zIndex: 2000, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}>
+      <div style={{ background: 'white', width: '100%', maxWidth: 480, maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', borderRadius: 16, padding: '16px 16px 20px', fontSize: '0.88rem', color: '#334155', boxShadow: '0 12px 32px rgba(15,23,42,0.25)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <strong style={{ fontSize: '1rem', color: '#0f172a' }}>💵 Trả lương theo ngày · {staff.full_name}</strong>
+          <button onClick={onClose} aria-label="Đóng" style={{ border: 'none', background: '#f1f5f9', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontSize: '1rem' }}>✕</button>
+        </div>
+        <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 10 }}>Chọn ngày cần trả: máy tính đúng các ngày đó, bấm lúc nào cũng được. Ngày đã trả rồi không tính lại.</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.75rem', color: '#64748b' }}>Từ ngày
+            <input type="date" style={box} value={from} max={today} onChange={e => e.target.value && setFrom(e.target.value)} /></label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.75rem', color: '#64748b' }}>Đến hết ngày
+            <input type="date" style={box} value={to} min={from} max={today} onChange={e => e.target.value && setTo(e.target.value)} /></label>
+        </div>
+        {err && <div style={{ color: '#dc2626', fontSize: '0.82rem', marginBottom: 8 }}>⚠ {err}</div>}
+        {!data && !err && <div style={{ color: '#94a3b8' }}>Đang tính…</div>}
+        {data && (
+          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '8px 12px' }}>
+            {work.length > 0
+              ? <div style={line}><span>{work.length} ngày ({work.map(x => x.day.slice(8, 10)).join(', ')}/{to.slice(5, 7)})</span><b>{formatMoney(sum(work.map(x => ({ amount: x.due }))))}</b></div>
+              : <div style={{ ...line, color: '#64748b' }}><span>Không có ngày công chưa trả trong khoảng này</span></div>}
+            {data.advances.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ ứng lương</span><b>−{formatMoney(sum(data.advances))}</b></div>}
+            {data.fines.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ phạt</span><b>−{formatMoney(sum(data.fines))}</b></div>}
+            {data.bonuses.length > 0 && <div style={{ ...line, color: '#16a34a' }}><span>Thưởng chuyên cần</span><b>+{formatMoney(sum(data.bonuses))}</b></div>}
+            {(data.claims || []).length > 0 && <div style={{ ...line, color: '#16a34a' }}><span>Hoàn tiền chi hộ</span><b>+{formatMoney(sum(data.claims))}</b></div>}
+            <div style={{ ...line, borderTop: '1px dashed #cbd5e1', marginTop: 4, paddingTop: 6, fontSize: '0.98rem' }}>
+              <strong>Cần trả</strong><strong style={{ color: data.amount < 0 ? '#dc2626' : '#15803d' }}>{formatMoney(data.amount)}</strong>
+            </div>
+          </div>
+        )}
+        {data?.openDay && <div style={{ color: '#b45309', fontSize: '0.78rem', marginTop: 6 }}>⏳ Ngày {ddmm(data.openDay)} chưa ra ca nên chưa tính hết tiền ngày đó; phần còn lại tự vào lần trả sau.</div>}
+        {data && (empty
+          ? <div style={{ color: '#64748b', fontSize: '0.82rem', marginTop: 8 }}>Khoảng này chưa có gì để trả (hoặc đã trả hết rồi).</div>
+          : data.amount < 0
+            ? <div style={{ color: '#dc2626', fontSize: '0.82rem', marginTop: 8 }}>Tiền ứng / phạt nhiều hơn tiền công nên chưa phải trả.</div>
+            : <button className="btn-primary" disabled={busy} style={{ marginTop: 10, width: '100%' }} onClick={pay}>{busy ? 'Đang lưu…' : `✅ Đã trả lương ${formatMoney(data.amount)} (${ddmm(from)} → ${ddmm(to)})`}</button>)}
+        {data?.payouts?.length > 0 && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontWeight: 700, fontSize: '0.8rem', color: '#64748b', marginBottom: 4 }}>Các lần đã trả</div>
+            {data.payouts.map((p, i) => (
+              <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '5px 0', borderTop: '1px solid #f1f5f9', fontSize: '0.8rem' }}>
+                <span>{ddmm(String(p.from_day))} → {ddmm(String(p.to_day))} · <b>{formatMoney(p.amount)}</b>{p.received_at ? ' · 🤝 NV đã nhận' : ''}</span>
+                {i === 0 && !p.received_at && <button onClick={() => undo(p)} style={{ fontSize: '0.74rem', padding: '2px 8px', background: 'white', border: '1px solid #e2e8f0', borderRadius: 6, color: '#64748b', cursor: 'pointer' }}>Bỏ lần trả này</button>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // Trả lương theo kỳ (5, 7, 10 ngày…): từng người đang trả theo kỳ — kỳ đang chạy, ngày phát, số phải trả tới ngày chọn (máy chủ
 // tính, cùng công thức bảng lương), nút "Đã thanh toán lương" (kỳ mới tính từ hôm sau ngày đã trả tới) và bỏ lần trả bấm nhầm.
@@ -830,6 +925,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   };
 
   const [expandedSalaryStaff, setExpandedSalaryStaff] = useState(null);
+  // Trả lương theo ngày chọn: người đang mở khung chọn từ ngày → đến ngày.
+  const [rangeFor, setRangeFor] = useState(null);
   // Bảng lương: '' = cả tháng, hoặc một ngày (YYYY-MM-DD) để xem ai vào sớm / trễ, ra dư / về sớm ngày đó.
   const [viewDay, setViewDay] = useState('');
   // Phiếu lương trên điện thoại: gọn (tên · thực lĩnh · 1 dòng tóm tắt), bấm để xem chi tiết.
@@ -2454,9 +2551,20 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     );
   }
 
+  const rangeDefaults = staffId => {
+    const monthStart = `${selYear}-${fmt(selMonth)}-01`, monthEnd = `${selYear}-${fmt(selMonth)}-${fmt(new Date(Date.UTC(selYear, selMonth, 0)).getUTCDate())}`;
+    const to = monthEnd < vnToday() ? monthEnd : vnToday();
+    const lastTo = payrollMonth.payouts.filter(p => p.staff_id === staffId).map(p => String(p.to_day).slice(0, 10)).sort().pop();
+    let from = lastTo && lastTo >= monthStart ? addDays(lastTo, 1) : monthStart;
+    if (from > to) from = to;
+    return { from, to };
+  };
+
   // ── ADMIN VIEW ───────────────────────────────────────────────────────────────
   return (
     <div className="payroll-page">
+      {rangeFor && <RangeSheet staff={rangeFor} defaultFrom={rangeDefaults(rangeFor.id).from} defaultTo={rangeDefaults(rangeFor.id).to} today={vnToday()}
+        onClose={() => setRangeFor(null)} onDone={() => { fetchPayrollMonth(); fetchCycles(); }} />}
       {/* Gọn cho điện thoại: tên trang; người dùng + lúc cập nhật một dòng nhỏ. Dữ liệu tự tải. */}
       <div className="payroll-header">
         <div className="payroll-title">💰 Lương nhân viên</div>
@@ -2610,7 +2718,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                         : closedCount > 0
                           ? <span className="pay-close-status">🔒 Đã chốt {closedCount}/{withData.length} người, còn lại chưa chốt.</span>
                           : <span className="pay-close-status">{running ? '⏳ Tháng đang chạy: số dưới đây là tạm tính đến hôm nay.' : 'Tháng này chưa chốt lương.'}</span>}
-                      {!fullyClosed && <button className="btn-primary" style={{ marginTop: 0 }} onClick={() => closeMonth(false, rows)}>🔒 Chốt lương<span className="long"> tháng {selMonth}/{selYear}</span>{closedCount > 0 ? ' (người còn lại)' : ''}</button>}
+                      {!fullyClosed && payrollMonth.monthOver && <button className="btn-primary" style={{ marginTop: 0 }} onClick={() => closeMonth(false, rows)}>🔒 Chốt lương<span className="long"> tháng {selMonth}/{selYear}</span>{closedCount > 0 ? ' (người còn lại)' : ''}</button>}
+                      {!fullyClosed && !payrollMonth.monthOver && <span style={{ fontSize: '0.78rem', color: '#64748b' }}>Giữa tháng: trả lương ở từng người bằng <b>💵 Trả lương theo ngày</b> (chọn từ ngày → đến ngày). Hết tháng mới chốt cả tháng.</span>}
                       {closes.length > 0 && <button className="btn-danger" style={{ marginTop: 0 }} onClick={() => closeMonth(true)}>Mở chốt{fullyClosed ? '' : ' tất cả'}</button>}
                       <button className="pay-excel" style={{ padding: '6px 12px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}
                         onClick={() => exportPayroll(rows)}>⬇️ <span className="long">Tải bảng lương (Excel)</span><span className="short">Excel</span></button>
@@ -2700,13 +2809,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                               </div>
                               {c.locked && c.liveNet !== c.net && <div className="slip-note" style={{ color: '#b45309' }}><span>Nay tính ra</span><strong>{formatMoney(c.liveNet)}</strong></div>}
                               {paidCycle !== 0 && <>
-                                <div className="slip-note"><span>Đã trả theo kỳ</span><strong>{formatMoney(paidCycle)}</strong></div>
+                                <div className="slip-note"><span>Đã trả trước (theo ngày)</span><strong>{formatMoney(paidCycle)}</strong></div>
                                 <div className="slip-note"><span>Còn phải trả tháng này</span><strong style={{ color: c.net - paidCycle >= 0 ? '#16a34a' : '#dc2626' }}>{formatMoney(c.net - paidCycle)}</strong></div>
                               </>}
                             </div>
                           );
                         })()}
-                        {isAdmin && <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onReopen={reopenOne} onPaid={markPaid} canClose={hasPay(s.id) || c.net !== 0} />}
+                        {isAdmin && <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onReopen={reopenOne} onPaid={markPaid} onRange={setRangeFor} monthOver={payrollMonth.monthOver} canClose={hasPay(s.id) || c.net !== 0} />}
                         {isAdmin && cardOpen && (
                           <button
                             onClick={() => setExpandedSalaryStaff(expandedSalaryStaff === s.id ? null : s.id)}
@@ -2755,11 +2864,11 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                               <strong style={{color: c.net >= 0 ? '#16a34a' : '#ef4444', fontSize:'0.95rem'}}>{formatMoney(c.net)}</strong>
                               {c.locked && c.liveNet !== c.net && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>nay tính ra {formatMoney(c.liveNet)}</div>}
                               {!c.locked && running && <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>tạm tính</div>}
-                              {paidCycle !== 0 && <div style={{ fontSize: '0.72rem', color: '#475569' }}>đã trả theo kỳ {formatMoney(paidCycle)} · còn {formatMoney(c.net - paidCycle)}</div>}
+                              {paidCycle !== 0 && <div style={{ fontSize: '0.72rem', color: '#475569' }}>đã trả trước {formatMoney(paidCycle)} · còn {formatMoney(c.net - paidCycle)}</div>}
                             </td>
                             {isAdmin && <td><button onClick={() => setExpandedSalaryStaff(expandedSalaryStaff === s.id ? null : s.id)}
                               style={{ fontSize: '0.75rem', padding: '3px 10px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#1d4ed8', whiteSpace: 'nowrap' }}>{expandedSalaryStaff === s.id ? '▴ Ẩn' : '✏️ Sửa'}</button>
-                              <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onReopen={reopenOne} onPaid={markPaid} canClose={hasPay(s.id) || c.net !== 0} compact /></td>}
+                              <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onReopen={reopenOne} onPaid={markPaid} onRange={setRangeFor} monthOver={payrollMonth.monthOver} canClose={hasPay(s.id) || c.net !== 0} compact /></td>}
                           </tr>
                           {detail?.id === s.id && (
                             <tr><td colSpan="15" style={{ padding: 0, borderBottom: `2px solid ${detail.kind === 'fines' ? '#fca5a5' : '#93c5fd'}` }}>{detailPanel(s, detail.kind)}</td></tr>
