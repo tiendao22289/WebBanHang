@@ -19,7 +19,7 @@ import { getTableGroupOrders, OPEN_BILL_STATUSES, representativeBill, shopDaySta
 import { promoGiftStatus } from '@/lib/promoGifts.mjs';
 import { isPrintJobBad, isUnresolvedBadJob } from '@/lib/printJobStatus.mjs';
 import { NO_DRAFT, updateDraftOf, addDraftLine, decreaseDraftLine, setDraftItemTotal, removeSentLines } from '@/lib/draftCart.mjs';
-import { customerCartsByTable, customerCartsFromServer, idleMinutesText } from '@/lib/customerCartAlert.mjs';
+import { cartMinutesText, createCartBell, customerCartsByTable, customerCartsFromServer } from '@/lib/customerCartAlert.mjs';
 import { resolvePrintCategory, isKitchenItem, unsentKitchenItems, nextKitchenCheckIn } from '@/lib/kitchenTicket.mjs';
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
@@ -146,6 +146,33 @@ function ringBell() {
     playSingleBell(audioCtx, now + 0.85, master);   // Tiếng 2 (cách 850ms)
   } catch (e) {
     console.log('Audio not supported');
+  }
+}
+
+// Trình duyệt chỉ cho phát tiếng sau khi có người chạm / bấm vào trang. true = kêu được ngay,
+// false = đang bị chặn (chưa ai chạm từ lúc mở trang), null = máy không phát được tiếng.
+function bellAudioReady() {
+  try {
+    const audioCtx = getBellAudioCtx();
+    return audioCtx ? audioCtx.state === 'running' : null;
+  } catch {
+    return null;
+  }
+}
+
+// Gọi trong lúc người dùng chạm: mở tiếng cho chuông (iPhone chỉ chịu mở ngay trong lúc chạm, máy cũ
+// còn cần phát 1 mẫu im lặng). Trả về Promise xong khi tiếng đã mở; tiếng đã mở sẵn thì null.
+function unlockBellAudio() {
+  try {
+    const audioCtx = getBellAudioCtx();
+    if (!audioCtx || audioCtx.state === 'running') return null;
+    const src = audioCtx.createBufferSource();
+    src.buffer = audioCtx.createBuffer(1, 1, 22050);
+    src.connect(audioCtx.destination);
+    src.start(0);
+    return audioCtx.resume();
+  } catch {
+    return null;
   }
 }
 
@@ -402,9 +429,13 @@ export default function TablesPage() {
   const [printToast, setPrintToast] = useState(''); // '' | 'sending' | 'ok' | 'err'
   // ── Ưu đãi đánh giá Google Maps ──
   const [reviewRequests, setReviewRequests] = useState([]); // các yêu cầu đang chờ duyệt hôm nay
-  // Giỏ khách chọn trên điện thoại chưa gửi (lib/customerCartAlert.mjs): 🛒 trên bàn, để yên 5 phút thì chớp vàng.
+  // Giỏ khách chọn trên điện thoại chưa gửi (lib/customerCartAlert.mjs): "🛒 10 món · 4 phút" trên bàn,
+  // chọn đủ 5 phút mà chưa gửi thì cả ô bàn chớp vàng + kêu chuông.
   const [customerCarts, setCustomerCarts] = useState([]);
   const [cartClock, setCartClock] = useState(() => Date.now());
+  const cartBellRef = useRef(null);
+  if (!cartBellRef.current) cartBellRef.current = createCartBell();
+  const [cartBellBlocked, setCartBellBlocked] = useState(false); // có bàn cần kêu mà trình duyệt chưa cho phát tiếng
   const [luckySpins, setLuckySpins] = useState([]);         // lượt quay HÔM NAY chưa vào bill (badge trên thẻ bàn) — /api/admin/lucky-status
   const [luckyModal, setLuckyModal] = useState(null);       // { hostTableId, tableNumber } đang xem chi tiết lượt quay
   const [luckyGrantBusy, setLuckyGrantBusy] = useState(null); // spinId đang cấp quà tay
@@ -1857,7 +1888,7 @@ export default function TablesPage() {
   }, []);
 
   // ── Giỏ khách chưa gửi: realtime kênh riêng (bảng chưa cài cũng không làm hỏng kênh chính),
-  //    hỏi lại mỗi 30 giây cho chắc, đồng hồ 15 giây để bàn chuyển sang chớp vàng đúng lúc. ──
+  //    hỏi lại mỗi 30 giây cho chắc, đồng hồ 10 giây để số phút và lúc chớp vàng + chuông đúng giờ. ──
   const fetchCustomerCarts = useCallback(async () => {
     const { data, error } = await supabase.rpc('get_customer_carts');
     if (error) {
@@ -1888,10 +1919,33 @@ export default function TablesPage() {
   }, [fetchCustomerCarts]);
   useEffect(() => {
     if (customerCarts.length === 0) return undefined;
-    const tick = setInterval(() => setCartClock(Date.now()), 15000);
+    const tick = setInterval(() => setCartClock(Date.now()), 10000);
     return () => clearInterval(tick);
   }, [customerCarts.length]);
   const cartsByTable = useMemo(() => customerCartsByTable(customerCarts, cartClock), [customerCarts, cartClock]);
+
+  // Chuông khi bàn bắt đầu chớp vàng (dùng lại chuông đơn mới ringBell): kêu ngay, nhắc lại mỗi 2 phút,
+  // tối đa 5 lần; nhân viên mở bàn đó xem thì thôi kêu (createCartBell). Trình duyệt chưa cho phát tiếng
+  // (chưa ai chạm trang từ lúc mở) → ô bàn ghi "🔇 Chạm để bật chuông", chạm xong kêu liền.
+  useEffect(() => {
+    const forgotIds = Object.keys(cartsByTable).filter(id => cartsByTable[id].forgot);
+    const ready = forgotIds.length ? bellAudioReady() : false;
+    const { ring, blocked } = cartBellRef.current.check(forgotIds, Date.now(), { canRing: ready === true });
+    setCartBellBlocked(blocked && ready === false);
+    if (ring.length) ringBell();
+  }, [cartsByTable]);
+  useEffect(() => {
+    const unlock = () => {
+      const opened = unlockBellAudio();
+      // Tiếng vừa mở → tính lại ngay (bàn đang chờ thì kêu, ẩn chữ "chạm để bật chuông").
+      if (opened) opened.then(() => setCartClock(Date.now())).catch(() => {});
+    };
+    const events = ['touchend', 'click', 'keydown'];
+    events.forEach(ev => document.addEventListener(ev, unlock, true));
+    return () => events.forEach(ev => document.removeEventListener(ev, unlock, true));
+  }, []);
+  // Nhân viên mở bàn → bàn đó thôi kêu chuông (vẫn chớp tới khi khách gửi món / giỏ trống / bấm Tắt).
+  const quietCartBell = (tableId) => cartBellRef.current?.quiet(tableId);
 
   // Nhân viên đã nhắc khách (hoặc đã gọi món giúp) → tắt báo của bàn; khách sửa giỏ thì báo lại.
   async function dismissCustomerCart(table) {
@@ -3097,7 +3151,7 @@ export default function TablesPage() {
             <div
               key={table.id}
               className={`table-flow-card${isKitchenAlerting ? ' kitchen-alert-blink' : custCart?.forgot ? ' cart-forgot-blink' : ''}`}
-              onClick={() => { setSelectedTable(table); if (!isOccupied) setAddingToOrder('admin'); }}
+              onClick={() => { quietCartBell(table.id); setSelectedTable(table); if (!isOccupied) setAddingToOrder('admin'); }}
               style={{
                 background: isKitchenAlerting ? 'linear-gradient(145deg, #ef4444, #b91c1c)' : groupColor ? groupColor.bg : isOccupied ? '#dbeafe' : 'white',
                 border: `2px solid ${isKitchenAlerting ? '#991b1b' : groupColor ? groupColor.border : isOccupied ? '#93c5fd' : '#e5e7eb'}`,
@@ -3178,10 +3232,10 @@ export default function TablesPage() {
                 )}
                 {custCart && !custCart.forgot && (
                   <div
-                    title={`Khách đang chọn ${custCart.count} món trên điện thoại, CHƯA bấm Gửi`}
-                    style={{ background: '#fef3c7', color: '#92400e', borderRadius: 100, padding: '3px 7px', display: 'flex', alignItems: 'center', gap: 3, border: '1px solid #fcd34d', fontSize: '0.65rem', fontWeight: 800, whiteSpace: 'nowrap' }}
+                    title={`Khách đã chọn ${custCart.count} món trên điện thoại ${cartMinutesText(custCart.ageMs)}, CHƯA bấm Gửi — đủ 5 phút thì bàn chớp vàng và kêu chuông`}
+                    style={{ background: '#fef3c7', color: '#92400e', borderRadius: 10, padding: '3px 7px', border: '1px solid #fcd34d', fontSize: '0.65rem', fontWeight: 800, lineHeight: 1.3, maxWidth: '100%', flexShrink: 1 }}
                   >
-                    🛒 {custCart.count} khách
+                    🛒 {custCart.count}&nbsp;món · {cartMinutesText(custCart.ageMs)}
                   </div>
                 )}
                 {unsentKitchenCount > 0 && (
@@ -3237,12 +3291,15 @@ export default function TablesPage() {
                 <button
                   type="button"
                   className="cart-forgot-bar"
-                  title="Khách để món trong giỏ mà chưa bấm Gửi — ra nhắc khách. Bấm để tắt báo (khách sửa giỏ sẽ báo lại)"
-                  onClick={(e) => { e.stopPropagation(); dismissCustomerCart(table); }}
+                  title={`Khách chọn ${custCart.forgotCount} món ${cartMinutesText(custCart.ageMs)} mà chưa bấm Gửi — ra hỗ trợ khách. Bấm Tắt để tắt báo (khách sửa giỏ sẽ báo lại)`}
+                  onClick={(e) => { e.stopPropagation(); quietCartBell(table.id); dismissCustomerCart(table); }}
                 >
-                  <span>🛒 Khách quên gửi {custCart.forgotCount} món · {idleMinutesText(custCart.idleMs)}</span>
+                  <span>🛒 Quên gửi {custCart.forgotCount}&nbsp;món · {cartMinutesText(custCart.ageMs)}</span>
                   <span className="cart-forgot-off">Tắt</span>
                 </button>
+              )}
+              {custCart?.forgot && cartBellBlocked && (
+                <div className="cart-forgot-mute" title="Trình duyệt chưa cho phát tiếng — chạm vào màn hình một lần để bật chuông">🔇 Chạm để bật chuông</div>
               )}
               {tableReviewReqs.length > 0 && (
                 <div style={{ display: 'flex', gap: 3, marginTop: 4, flexWrap: 'wrap' }}>
@@ -4023,7 +4080,7 @@ export default function TablesPage() {
                           return (
                             <div key={table.id}
                               className={isKitchenAlerting ? 'kitchen-alert-blink' : custCart?.forgot ? 'cart-forgot-blink' : ''}
-                              onClick={() => { setSelectedTable(table); setDesktopView('menu'); }}
+                              onClick={() => { quietCartBell(table.id); setSelectedTable(table); setDesktopView('menu'); }}
                               onMouseEnter={e => { if (!isSelected) { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = shadowHover; } }}
                               onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 8px 24px rgba(29,78,216,0.3)' : '0 1px 4px rgba(0,0,0,0.07)'; }}
                               style={{
@@ -4143,22 +4200,25 @@ export default function TablesPage() {
                                 )}
                                 {custCart && !custCart.forgot && (
                                   <div
-                                    title={`Khách đang chọn ${custCart.count} món trên điện thoại, CHƯA bấm Gửi`}
+                                    title={`Khách đã chọn ${custCart.count} món trên điện thoại ${cartMinutesText(custCart.ageMs)}, CHƯA bấm Gửi — đủ 5 phút thì bàn chớp vàng và kêu chuông`}
                                     style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fcd34d', borderRadius: 10, padding: '1px 6px', fontSize: '0.62rem', fontWeight: 800, lineHeight: 1.25, textAlign: 'center', maxWidth: '100%' }}
                                   >
-                                    🛒 {custCart.count} khách
+                                    🛒 {custCart.count}&nbsp;món · {cartMinutesText(custCart.ageMs)}
                                   </div>
                                 )}
                                 {custCart?.forgot && (
                                   <button
                                     type="button"
                                     className="cart-forgot-bar compact"
-                                    title={`Khách để ${custCart.forgotCount} món trong giỏ ${idleMinutesText(custCart.idleMs)} mà chưa bấm Gửi — ra nhắc khách. Bấm để tắt báo (khách sửa giỏ sẽ báo lại)`}
-                                    onClick={(e) => { e.stopPropagation(); dismissCustomerCart(table); }}
+                                    title={`Khách chọn ${custCart.forgotCount} món ${cartMinutesText(custCart.ageMs)} mà chưa bấm Gửi — ra hỗ trợ khách. Bấm Tắt để tắt báo (khách sửa giỏ sẽ báo lại)`}
+                                    onClick={(e) => { e.stopPropagation(); quietCartBell(table.id); dismissCustomerCart(table); }}
                                   >
-                                    <span>🛒 Quên gửi {custCart.forgotCount} món</span>
+                                    <span>🛒 Quên gửi {custCart.forgotCount}&nbsp;món · {cartMinutesText(custCart.ageMs)}</span>
                                     <span className="cart-forgot-off">Tắt</span>
                                   </button>
+                                )}
+                                {custCart?.forgot && cartBellBlocked && (
+                                  <div className="cart-forgot-mute compact" title="Trình duyệt chưa cho phát tiếng — chạm / bấm vào trang một lần để bật chuông">🔇 Bấm để bật chuông</div>
                                 )}
                               </div>
 
