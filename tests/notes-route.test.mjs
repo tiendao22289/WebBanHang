@@ -541,3 +541,47 @@ test('a bill photo already used on another note is refused; the same note may us
   state.staff_notes[0].created_at = new Date(Date.now() - 91 * 86400000).toISOString();
   assert.equal((await post(api, { action: 'create', note_type: 'expense', items: [{ _id: 'muc', name: 'Mực', price: '200k', qty: '1' }] }, [PHOTO], [{ file: SAME_BILL(), ids: ['muc'] }])).status, 200);
 });
+
+test('ticking "Đã trả chủ" when saving a new note records old leftovers and this note\'s own leftover as handed back', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state, STAFF);
+  await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Mực', qty: '1', price: '100k' }], input_amount: '300.000' });
+  const old = state.staff_notes[0]; // còn thừa 200k
+  assert.equal(noteLeftover(old, state.staff_note_payments), 200000);
+
+  const both = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Ốc hương', qty: '1', price: '200k' }], input_amount: '500.000',
+    carry_leftovers: [{ note_id: old.id, amount: 200000 }], return_leftovers: [{ note_id: old.id, amount: 200000 }] });
+  assert.match(both.body.error, /không vừa cộng vào phiếu mới vừa trả chủ/);
+  assert.equal(state.staff_notes.length, 1);
+
+  const r = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Ốc hương', qty: '1', price: '200k' }], input_amount: '500.000',
+    return_leftovers: [{ note_id: old.id, amount: 200000 }], return_now: true });
+  assert.equal(r.status, 200);
+  const before = state.staff_notes.find(n => n.id === old.id);
+  assert.equal(noteLeftover(before, state.staff_note_payments), 0, 'the old leftover is no longer held by the buyer');
+  assert.match(JSON.parse(before.content).history.at(-1).changes, /↩ Đã trả lại chủ 200\.000 đ tiền thừa/);
+  const now = state.staff_notes.find(n => n.id === r.body.note.id);
+  assert.deepEqual(JSON.parse(now.content).returned_logs.map(l => [l.amount, l.by]), [[300000, 'Thy']], 'the 300k left of this trip is handed back too');
+  assert.equal(noteLeftover(now, state.staff_note_payments), 0);
+
+  assert.match((await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Mực', qty: '1', price: '10k' }],
+    return_leftovers: [{ note_id: old.id, amount: 1000 }] })).body.error, /chỉ còn 0 đ/, 'cannot hand back the same leftover twice');
+  const noMoney = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Mực', qty: '1', price: '10k' }], return_now: true });
+  assert.equal(JSON.parse(state.staff_notes.find(n => n.id === noMoney.body.note.id).content).returned_logs, undefined, 'no money given → nothing to hand back');
+});
+
+test('"Đã trả chủ" on this note counts what is left after paying old debts from it; staff cannot hand back others\' leftovers', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const admin = load(state);
+  await post(admin, { action: 'create', note_type: 'expense', items: [{ name: 'Cua', qty: '1', price: '100k', paymentStatus: 'debt', creditor: 'Ba' }], input_amount: '50.000' });
+  const debtNote = state.staff_notes[0]; // nợ Ba 100k, còn thừa 50k của chủ
+  const staff = load(state, STAFF);
+  assert.equal((await post(staff, { action: 'create', note_type: 'expense', items: [{ name: 'Mực', qty: '1', price: '10k' }],
+    return_leftovers: [{ note_id: debtNote.id, amount: 50000 }] })).status, 403);
+  const r = await post(admin, { action: 'create', note_type: 'expense', items: [{ name: 'Mực', qty: '1', price: '200k' }], input_amount: '500.000',
+    pay_debts: [{ note_id: debtNote.id, item_index: 0, amount: 100000 }], return_now: true });
+  assert.equal(r.status, 200);
+  const now = state.staff_notes.find(n => n.id === r.body.note.id);
+  assert.equal(JSON.parse(now.content).returned_logs[0].amount, 200000, '500k − 200k goods − 100k old debt = 200k handed back');
+  assert.equal(noteLeftover(now, state.staff_note_payments), 0);
+});

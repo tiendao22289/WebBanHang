@@ -790,6 +790,14 @@
 .np-box-head svg.up { transform: rotate(180deg); }
 .np-box-line { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 0; font-size: 0.76rem; color: #374151; }
 .np-box-line b { color: #15803d; }
+/* Tích "Đã trả chủ" ở từng phiếu còn tiền thừa, và tiền thừa của chính phiếu đang ghi. */
+.np-return { cursor: pointer; min-height: 32px; }
+.np-return-tick { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; padding: 3px 8px; border: 1px solid #86efac; border-radius: 7px; background: #fff; color: #15803d; font-weight: 700; }
+.np-return-tick input { width: 16px; height: 16px; accent-color: #16a34a; }
+.np-return.on > span:first-child { color: #9ca3af; text-decoration: line-through; }
+.np-return.on .np-return-tick { background: #dcfce7; }
+.np-return-now { margin-top: 8px; }
+.np-return-now.on { background: #dcfce7; }
 .np-mini { flex-shrink: 0; min-height: 28px; padding: 2px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
 .np-mini.ok { border: 1px solid #86efac; background: #fff; color: #15803d; }
 .np-check { display: flex; align-items: center; gap: 6px; min-height: 32px; margin-top: 3px; padding: 3px 8px; border-radius: 7px; background: #fff; font-size: 0.78rem; font-weight: 700; cursor: pointer; }
