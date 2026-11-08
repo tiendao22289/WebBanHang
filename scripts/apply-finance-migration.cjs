@@ -250,9 +250,11 @@ async function main() {
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_expense_claims.sql'), 'utf8'));
   const [claims] = await query(`SELECT to_regclass('public.payroll_expense_claims') IS NOT NULL AS table_ok,
     NOT has_table_privilege('anon', 'public.payroll_expense_claims', 'SELECT') AND NOT has_table_privilege('authenticated', 'public.payroll_expense_claims', 'SELECT') AS anon_blocked,
-    EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'audit_staff_data' AND tgrelid = 'public.payroll_expense_claims'::regclass) AS audited`);
+    EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'audit_staff_data' AND tgrelid = 'public.payroll_expense_claims'::regclass) AS audited,
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payroll_expense_claims' AND column_name = 'given_amount') AS given_ok`);
   console.log(JSON.stringify(claims));
   if (!claims.table_ok || !claims.anon_blocked) throw new Error('Chưa cài được bảng khoản chi hộ.');
+  if (!claims.given_ok) throw new Error('Chưa cài được cột "chủ đưa trước" của khoản chi hộ.');
 
   // Báo lỗi chéo giữa nhân viên, chủ duyệt mới thành phạt (payroll_peer_reports.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_peer_reports.sql'), 'utf8'));

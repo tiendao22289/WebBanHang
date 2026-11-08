@@ -22,6 +22,11 @@ CREATE TABLE IF NOT EXISTS public.payroll_expense_claims (
   created_by_name text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+-- Chủ đưa tiền trước (vd đưa 100.000đ đi đổ xăng): given_amount = số chủ đưa, amount = số thật đã chi (vào Sổ thu chi).
+-- Chi lố (amount > given): phần lố trả lại nhân viên theo payout. Còn thừa (given > amount): nhân viên đưa lại chủ tiền mặt
+-- (payout 'cash'), chủ bấm duyệt khi đã nhận. 0 = nhân viên tự bỏ tiền như trước.
+ALTER TABLE public.payroll_expense_claims ADD COLUMN IF NOT EXISTS given_amount integer NOT NULL DEFAULT 0
+  CHECK (given_amount BETWEEN 0 AND 50000000);
 CREATE INDEX IF NOT EXISTS payroll_expense_claims_staff ON public.payroll_expense_claims(staff_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS payroll_expense_claims_month ON public.payroll_expense_claims(year, month) WHERE status = 'approved';
 CREATE INDEX IF NOT EXISTS payroll_expense_claims_pending ON public.payroll_expense_claims(created_at) WHERE status = 'pending';

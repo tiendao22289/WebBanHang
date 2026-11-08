@@ -800,10 +800,12 @@ function ApprovePanel({ inbox, failed, onReload, onChanged }) {
 
     <ApSection icon={Wallet} title="Chi hộ quán" list={claims}>
       {claims.map(c => <ApItem key={c.id} title={`${c.name} · ${c.item} · ${money(c.amount)}`}
-        lines={[`Chi ngày ${dayText(c.spent_on)} · muốn ${c.payout === 'cash' ? '💵 lấy tiền mặt' : '💰 cộng vào lương'}`, c.note]}>
+        lines={[`Chi ngày ${dayText(c.spent_on)} · ${c.given_amount > 0 ? `💵 ${c.settle}` : `muốn ${c.payout === 'cash' ? '💵 lấy tiền mặt' : '💰 cộng vào lương'}`}`, c.note]}>
         <ApBtn busy={busy} armed={armed} k={`c${c.id}`} onClick={() => act(`c${c.id}`, 'decide_claim', { id: c.id, status: 'approved' }, `Đã duyệt chi hộ của ${c.name}, vào Sổ thu chi.`)}>
-          {c.payout === 'cash' ? '✓ Duyệt · đưa tiền' : '✓ Duyệt · cộng lương'}</ApBtn>
+          {c.left > 0 ? `✓ Duyệt · đã nhận lại ${money(c.left)}` : c.given_amount > 0 && !c.owed ? '✓ Duyệt'
+            : c.payout === 'cash' ? (c.given_amount > 0 ? `✓ Duyệt · đưa ${money(c.owed)}` : '✓ Duyệt · đưa tiền') : '✓ Duyệt · cộng lương'}</ApBtn>
         {c.payout === 'salary' && <ApBtn busy={busy} armed={armed} k={`cc${c.id}`} tone="soft" onClick={() => act(`cc${c.id}`, 'decide_claim', { id: c.id, status: 'approved', cash: true }, `Đã duyệt, đưa tiền mặt cho ${c.name}.`)}>💵 Đưa tiền mặt</ApBtn>}
+        {c.left > 0 && <ApBtn busy={busy} armed={armed} k={`cl${c.id}`} tone="soft" onClick={twice(`cl${c.id}`, () => act(`cl${c.id}`, 'decide_claim', { id: c.id, status: 'approved', left_salary: true }, `Đã duyệt, trừ ${money(c.left)} tiền thừa vào lương ${c.name}.`))}>Chưa trả · trừ lương</ApBtn>}
         <ApBtn busy={busy} armed={armed} k={`cr${c.id}`} tone="no" onClick={twice(`cr${c.id}`, () => act(`cr${c.id}`, 'decide_claim', { id: c.id, status: 'rejected' }, 'Đã từ chối khoản chi.'))}>Từ chối</ApBtn>
       </ApItem>)}
     </ApSection>

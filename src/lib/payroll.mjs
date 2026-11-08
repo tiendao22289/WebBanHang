@@ -158,7 +158,8 @@ const ratesIn = (rates, staffId, key, unit) => [...new Set([(unit === 'day' ? da
  * (payroll_hourly_rates) của người đó; lateRules: luật đi trễ (của quán + của người đó); closedDays / holidayPaid /
  * employed: ngày quán nghỉ (xem holidayArgs); asOf: hôm nay (tháng đang chạy: phần chỉnh theo số ngày của tháng chỉ tính
  * tới hôm nay), không có = cả tháng. claims: khoản chi hộ quán (payroll_expense_claims) — khoản đã duyệt nhân viên chọn
- * "cộng vào lương" của tháng này cộng vào thực lĩnh (claimAmt); khoản lấy tiền mặt không đụng tới lương.
+ * "cộng vào lương" của tháng này cộng vào thực lĩnh (claimAmt; chủ đã đưa trước thì chỉ phần chi lố), tiền thừa chủ chọn trừ lương thì trừ
+ * ra (claimCut); khoản lấy tiền mặt không đụng tới lương.
  */
 export function computeSalary({ year, month, staffId, sessions = [], config = null, requests = [], violations = [], bonuses = [], rules = null, reviews = [], hourlyRates = [], lateRules = [],
   closedDays = [], holidayPaid = null, employed = null, asOf = null, claims = [] }) {
@@ -172,7 +173,9 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
   const absDays = approved.filter(r => r.request_type === 'absent').reduce((a, r) => a + Number(r.days || 0), 0);
   const vioAmt = violations.reduce((a, v) => a + Number(v.amount || 0), 0);
   const bonusAmt = bonuses.filter(b => Number(b.year) === year && Number(b.month) === month).reduce((a, b) => a + Number(b.amount || 0), 0);
-  const claimAmt = salaryClaims(claims, year, month).reduce((a, c) => a + Number(c.amount || 0), 0);
+  // Chi hộ cộng lương: phần chi lố cộng vào (claimAmt); tiền thừa chủ chọn trừ vào lương thì trừ ra (claimCut).
+  const monthClaims = salaryClaims(claims, year, month);
+  const claimAmt = monthClaims.reduce((a, c) => a + claimOwed(c), 0), claimCut = monthClaims.reduce((a, c) => a + claimLeft(c), 0);
   let totalWorkH = 0, otHours = 0, pendingMs = 0, workUnits = 0;
   const byDay = {};
 
@@ -336,8 +339,8 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
     }
     return { rule: 'days', base, standardDays, dayBase: DAY_BASE, workDays, workUnits, holidayDays, dayUnits, dayAmt, monthAdjust, hourly, dayWage, basePay, earlyAmt, earlyList,
       lateAmt, lateList,
-      totalWorkH: round1(totalWorkH), otHours, otAmt, bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, claimAmt, pendingH: round1(pendingMs / HOUR),
-      net: basePay - lateAmt - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt + claimAmt, byDay, daily, lateFree };
+      totalWorkH: round1(totalWorkH), otHours, otAmt, bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, claimAmt, claimCut, pendingH: round1(pendingMs / HOUR),
+      net: basePay - lateAmt - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt + claimAmt - claimCut, byDay, daily, lateFree };
   }
 
   // Cách cũ (giữ nguyên số của các tháng trước): tính từng ngày làm, làm tròn 0,1 giờ. Theo ngày làm như tháng
@@ -361,7 +364,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
   const otAmt = Math.round(otHours * otRate);
   const absAmt = Math.round(absDays * (base > 0 ? Math.round(base / STANDARD_DAYS) : 0));
   return { rule: 'hours', base, standardDays: STANDARD_DAYS, workDays, workUnits: workDays, hourly: null, basePay: base, earlyAmt: 0, earlyList: [], lateAmt: 0, lateList: [], totalWorkH, otHours, otAmt,
-    bonusAmt, advAmt, absDays, absAmt, vioAmt, claimAmt, pendingH: round1(pendingMs / HOUR), net: base + otAmt + bonusAmt - advAmt - absAmt - vioAmt + claimAmt, byDay };
+    bonusAmt, advAmt, absDays, absAmt, vioAmt, claimAmt, claimCut, pendingH: round1(pendingMs / HOUR), net: base + otAmt + bonusAmt - advAmt - absAmt - vioAmt + claimAmt - claimCut, byDay };
 }
 
 /**
@@ -462,8 +465,23 @@ export function fineSuggestions({ staffId, tallies, reviews = [], kinds = ['late
  * tháng lúc chủ duyệt). Hàm này lấy các khoản đã duyệt được cộng vào lương tháng đó.
  */
 export const CLAIM_PAYOUTS = { cash: 'Lấy tiền mặt', salary: 'Cộng vào lương' };
+// Chủ đưa tiền trước (given_amount): quán chỉ còn nợ nhân viên phần chi lố (claimOwed, trả theo payout); chi chưa hết thì
+// nhân viên đưa lại chủ phần thừa (claimLeft): đã trả thì payout 'cash', chưa trả thì chủ chọn trừ vào lương lúc duyệt ('salary').
+// claimPay: số cộng (+) / trừ (−) vào lương khi payout 'salary'. Nhân viên tự bỏ tiền: given 0 → nợ đủ số đã chi.
+export const claimGiven = c => Number(c?.given_amount) || 0;
+export const claimOwed = c => Math.max(0, (Number(c?.amount) || 0) - claimGiven(c));
+export const claimLeft = c => Math.max(0, claimGiven(c) - (Number(c?.amount) || 0));
+export const claimPay = c => claimOwed(c) - claimLeft(c);
+/** Một dòng nói khoản chi hộ được trả thế nào: "lấy tiền mặt" / "chủ đưa trước 100.000đ · đưa lại chủ 20.000đ"… */
+export function claimText(c) {
+  const vnd = n => `${Number(n).toLocaleString('vi-VN')}đ`, how = c?.payout === 'salary' ? 'cộng vào lương' : 'lấy tiền mặt';
+  if (!claimGiven(c)) return how;
+  const owed = claimOwed(c), left = claimLeft(c);
+  const back = c?.payout === 'salary' ? `trừ ${vnd(left)} tiền thừa vào lương` : `đưa lại chủ ${vnd(left)}`;
+  return `chủ đưa trước ${vnd(claimGiven(c))} · ${left ? back : owed ? `chi lố ${vnd(owed)}, ${how}` : 'chi vừa đủ'}`;
+}
 export const salaryClaims = (claims, year, month) => (claims || []).filter(c => c.status === 'approved' && c.payout === 'salary'
-  && Number(c.year) === Number(year) && Number(c.month) === Number(month));
+  && Number(c.year) === Number(year) && Number(c.month) === Number(month) && claimPay(c) !== 0);
 
 export const lateRulesOf = (rules, staffId) => (rules || []).filter(r => r.scope === 'shop' || r.scope === staffId);
 
@@ -509,7 +527,7 @@ export function staffMonthStats({ year, month, staff = [], configs = [], session
     totals: {
       staff: people.length,
       gross: sum(p => p.salary.basePay - (p.salary.lateAmt || 0) - (p.salary.earlyAmt || 0) + p.salary.otAmt + p.salary.bonusAmt),
-      net: sum(p => p.salary.net), advances: sum(p => p.salary.advAmt), fines: sum(p => p.salary.vioAmt), bonuses: sum(p => p.salary.bonusAmt), claims: sum(p => p.salary.claimAmt || 0),
+      net: sum(p => p.salary.net), advances: sum(p => p.salary.advAmt), fines: sum(p => p.salary.vioAmt), bonuses: sum(p => p.salary.bonusAmt), claims: sum(p => (p.salary.claimAmt || 0) - (p.salary.claimCut || 0)),
       earlyCuts: sum(p => p.salary.earlyAmt || 0), lateCuts: sum(p => p.salary.lateAmt || 0),
       otAmt: sum(p => p.salary.otAmt), hours: round1(sum(p => p.salary.totalWorkH)), pendingH: round1(sum(p => p.salary.pendingH)),
       late: sum(p => p.late.count), forgot: sum(p => p.forgot), closed: people.filter(p => p.salary.locked).length,

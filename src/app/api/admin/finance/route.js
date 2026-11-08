@@ -35,7 +35,7 @@ import { LINK_CODE_MINUTES, REPORT_SECTIONS, readReportSettings, reportPlan, rep
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
 import { signReceiptImages } from '@/lib/receiptImages.mjs';
 import { loadPayrollMonth, readClosedDays, readLateRules } from '@/lib/payrollMonth.mjs';
-import { payrollCost } from '@/lib/payroll.mjs';
+import { claimText, payrollCost } from '@/lib/payroll.mjs';
 import { addCosts, addItemCosts, namedCostList } from '@/lib/noteCategories.mjs';
 import { allOpenDebts } from '@/lib/notesDebts.mjs';
 import { FINANCE_START_DATE, FIXED_CATEGORIES, billHasStaff, billStaff, checkoutKey, closeDifferences, dailyReportText, dailyWarnings, groupPaidBills, isMonthKey, itemKey, shoppingParts, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, plainName, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
@@ -395,7 +395,7 @@ function reportKeyOk(request, purpose = 'finance-daily-report') {
 async function pendingStaffRequests(db) {
   const [reqs, claims, peers] = await Promise.all([
     db.from('payroll_requests').select('staff_id, request_type, amount, days, reason').eq('status', 'pending').then(r => r.data || []),
-    db.from('payroll_expense_claims').select('staff_id, item, amount, payout').eq('status', 'pending').then(r => (r.error ? [] : r.data || [])),
+    db.from('payroll_expense_claims').select('*').eq('status', 'pending').then(r => (r.error ? [] : r.data || [])),
     db.from('payroll_peer_reports').select('reporter_id, staff_id, reason').eq('status', 'pending').then(r => (r.error ? [] : r.data || [])),
   ]);
   // Báo lỗi đồng nghiệp: dòng của người báo, lý do ghi kèm tên người bị báo.
@@ -405,7 +405,7 @@ async function pendingStaffRequests(db) {
     names = new Map((data || []).map(p => [p.id, p.full_name || 'Nhân viên']));
   }
   return [...reqs, ...claims.map(c => ({ staff_id: c.staff_id, request_type: 'expense', amount: Number(c.amount) || 0, days: null,
-    reason: `${c.item} · ${c.payout === 'cash' ? 'lấy tiền mặt' : 'cộng vào lương'}` })),
+    reason: `${c.item} · ${claimText(c)}` })),
     ...peers.map(p => ({ staff_id: p.reporter_id, request_type: 'peer', amount: 0, days: null, reason: `${names.get(p.staff_id) || 'Nhân viên'}: ${p.reason}` }))];
 }
 

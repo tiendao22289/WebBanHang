@@ -192,3 +192,78 @@ test('before the table exists the claims part hides itself and says the web is u
   env.user = OWNER;
   assert.deepEqual(plain(await wf.GET({ url: 'http://x/api/admin/workforce?claims=1' })).body, { ready: false, claims: [] });
 });
+
+test('when the owner gave money first, only the overspend is owed and the leftover goes back to the owner', () => {
+  const { claimOwed, claimLeft, claimText } = payroll;
+  const left = { amount: 80000, given_amount: 100000, payout: 'cash' }, over = { amount: 130000, given_amount: 100000, payout: 'salary' };
+  const exact = { amount: 50000, given_amount: 50000, payout: 'cash' }, own = { amount: 40000, payout: 'salary' };
+  assert.deepEqual([claimOwed(left), claimLeft(left), claimOwed(over), claimLeft(over), claimOwed(exact), claimLeft(exact), claimOwed(own)], [0, 20000, 30000, 0, 0, 0, 40000]);
+  assert.equal(claimText(left), 'chủ đưa trước 100.000đ · đưa lại chủ 20.000đ');
+  assert.equal(claimText(over), 'chủ đưa trước 100.000đ · chi lố 30.000đ, cộng vào lương');
+  assert.equal(claimText(exact), 'chủ đưa trước 50.000đ · chi vừa đủ');
+  assert.equal(claimText(own), 'cộng vào lương');
+  const month = c => ({ ...c, status: 'approved', year: 2026, month: 11 });
+  const claims = [month(over), month({ ...left, payout: 'salary' }), month(own)];
+  assert.equal(claimText({ ...left, payout: 'salary' }), 'chủ đưa trước 100.000đ · trừ 20.000đ tiền thừa vào lương');
+  assert.equal(salaryClaims([...claims, month(exact)], 2026, 11).length, 3, 'a claim spent exactly as given changes nothing in pay');
+  const base = { year: 2026, month: 11, staffId: 's', config: { base_salary: 6000000, overtime_rate: 0 } };
+  const s = computeSalary({ ...base, claims }), plainPay = computeSalary(base);
+  assert.deepEqual([s.claimAmt, s.claimCut], [70000, 20000], 'overspend 30.000 + own money 40.000; unreturned leftover 20.000 is cut');
+  assert.equal(s.net - plainPay.net, 50000);
+});
+
+test('staff log a claim the owner paid for in advance; approving books the real spend and settles only the difference', async () => {
+  const state = {
+    staff: [OWNER, AN], payroll_config: [{ staff_id: AN.id, base_salary: 6000000, overtime_rate: 0 }],
+    checkin_settings: [{ id: 1, enforce: false, hours_from: '2026-10-25' }],
+    checkin_hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '00:00', grace_minutes: 10 }],
+    payroll_requests: [], payroll_violations: [], attendance_sessions: [], finance_entries: [], payroll_expense_claims: [], payroll_closes: [],
+  };
+  const wf = api(state);
+  const at = Date.UTC(2026, 10, 8, 5, 0);
+  const post = async (user, body) => { env.user = user; env.now = at; return plain(await wf.POST({ json: async () => body, headers: new Map() })); };
+  const get = async (user, q) => { env.user = user; env.now = at; return plain(await wf.GET({ url: `http://x/api/admin/workforce?${q}` })); };
+
+  // Còn thừa: không cần chọn cách nhận lại, tự là tiền mặt (đưa lại chủ).
+  const gas = await post(AN, { action: 'claim_expense', item: 'Xăng', amount: '80.000', given_amount: '100.000' });
+  assert.equal(gas.status, 200);
+  // Chi lố: phải chọn cách nhận lại phần lố.
+  assert.equal((await post(AN, { action: 'claim_expense', item: 'Đá', amount: 130000, given_amount: 100000 })).status, 400);
+  const ice = await post(AN, { action: 'claim_expense', item: 'Đá', amount: 130000, given_amount: 100000, payout: 'salary' });
+  assert.equal(ice.status, 200);
+  const exact = await post(AN, { action: 'claim_expense', item: 'Gas', amount: 50000, given_amount: 50000, payout: 'salary' });
+  assert.equal(exact.status, 200);
+  assert.equal((await post(AN, { action: 'claim_expense', item: 'Rau', amount: 50000, given_amount: 'abc', payout: 'cash' })).status, 400);
+  assert.deepEqual(plain(state.payroll_expense_claims.map(c => [c.item, c.amount, c.given_amount, c.payout])),
+    [['Xăng', 80000, 100000, 'cash'], ['Đá', 130000, 100000, 'salary'], ['Gas', 50000, 50000, 'cash']]);
+
+  const pending = (await get(OWNER, 'claims=1')).body.claims;
+  const view = pending.find(c => c.item === 'Xăng');
+  assert.deepEqual([view.given_amount, view.owed, view.left, view.settle], [100000, 0, 20000, 'chủ đưa trước 100.000đ · đưa lại chủ 20.000đ']);
+
+  for (const c of [gas, ice, exact]) assert.equal((await post(OWNER, { action: 'decide_claim', id: c.body.id, status: 'approved' })).status, 200);
+  assert.deepEqual(plain(state.finance_entries.map(e => [e.label, e.amount])), [['Xăng', 80000], ['Đá', 130000], ['Gas', 50000]], 'the book gets the real spend');
+  assert.match(state.finance_entries[0].note, /Chi hộ: An · chủ đưa trước 100\.000đ · đã nhận lại 20\.000đ tiền thừa/);
+  assert.match(state.finance_entries[1].note, /chủ đưa trước 100\.000đ · chi lố 30\.000đ cộng vào lương tháng 11\/2026/);
+  assert.match(state.finance_entries[2].note, /chủ đưa trước 50\.000đ · chi vừa đủ/);
+  assert.equal((await get(AN, 'me=1')).body.salary.claimAmt, 30000, 'only the overspend goes into pay');
+
+  // Chủ đưa 100.000đ, chi 50.000đ, nhân viên chưa trả lại: chủ chọn trừ 50.000đ vào lương; khoản chi vẫn vào Sổ thu chi.
+  const before = (await get(AN, 'me=1')).body.salary;
+  const unpaid = await post(AN, { action: 'claim_expense', item: 'Xăng xe', amount: 50000, given_amount: 100000 });
+  const cut = await post(OWNER, { action: 'decide_claim', id: unpaid.body.id, status: 'approved', left_salary: true });
+  assert.deepEqual([cut.status, cut.body.month], [200, 11]);
+  assert.equal(state.payroll_expense_claims.find(c => c.id === unpaid.body.id).payout, 'salary');
+  assert.deepEqual(plain([state.finance_entries.at(-1).label, state.finance_entries.at(-1).amount]), ['Xăng xe', 50000]);
+  assert.match(state.finance_entries.at(-1).note, /chủ đưa trước 100\.000đ · trừ 50\.000đ tiền thừa vào lương tháng 11\/2026/);
+  const after = (await get(AN, 'me=1')).body.salary;
+  assert.deepEqual([after.claimAmt, after.claimCut, before.net - after.net], [30000, 50000, 50000]);
+  // Lương đã chốt: không trừ thêm được, chủ thu tiền mặt thay.
+  const later = await post(AN, { action: 'claim_expense', item: 'Đá cây', amount: 20000, given_amount: 50000 });
+  state.payroll_closes.push({ year: 2026, month: 11, staff_id: AN.id, snapshot: { net: 1 } });
+  const refused = await post(OWNER, { action: 'decide_claim', id: later.body.id, status: 'approved', left_salary: true });
+  assert.equal(refused.status, 409);
+  assert.match(refused.body.error, /không trừ thêm được/);
+  assert.equal((await post(OWNER, { action: 'decide_claim', id: later.body.id, status: 'approved' })).status, 200, 'paid back in cash instead');
+  assert.equal(state.payroll_expense_claims.find(c => c.id === later.body.id).payout, 'cash');
+});
