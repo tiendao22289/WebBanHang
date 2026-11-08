@@ -176,6 +176,9 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
   // Chi hộ cộng lương: phần chi lố cộng vào (claimAmt); tiền thừa chủ chọn trừ vào lương thì trừ ra (claimCut).
   const monthClaims = salaryClaims(claims, year, month);
   const claimAmt = monthClaims.reduce((a, c) => a + claimOwed(c), 0), claimCut = monthClaims.reduce((a, c) => a + claimLeft(c), 0);
+  // Từng khoản (ngày chi, lúc ghi, chi gì) để phiếu lương ghi rõ khi chốt lương; pay: + cộng / − trừ vào lương.
+  const claimList = monthClaims.map(c => ({ id: c.id, day: String(c.spent_on).slice(0, 10), at: c.created_at || null, item: c.item, amount: Number(c.amount) || 0,
+    given: claimGiven(c), pay: claimPay(c), note: c.note || null })).sort((x, y) => `${x.day}${x.at}`.localeCompare(`${y.day}${y.at}`));
   let totalWorkH = 0, otHours = 0, pendingMs = 0, workUnits = 0;
   const byDay = {};
 
@@ -339,7 +342,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
     }
     return { rule: 'days', base, standardDays, dayBase: DAY_BASE, workDays, workUnits, holidayDays, dayUnits, dayAmt, monthAdjust, hourly, dayWage, basePay, earlyAmt, earlyList,
       lateAmt, lateList,
-      totalWorkH: round1(totalWorkH), otHours, otAmt, bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, claimAmt, claimCut, pendingH: round1(pendingMs / HOUR),
+      totalWorkH: round1(totalWorkH), otHours, otAmt, bonusAmt, advAmt, absDays, absAmt: 0, vioAmt, claimAmt, claimCut, claimList, pendingH: round1(pendingMs / HOUR),
       net: basePay - lateAmt - earlyAmt + otAmt + bonusAmt - advAmt - vioAmt + claimAmt - claimCut, byDay, daily, lateFree };
   }
 
@@ -364,7 +367,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
   const otAmt = Math.round(otHours * otRate);
   const absAmt = Math.round(absDays * (base > 0 ? Math.round(base / STANDARD_DAYS) : 0));
   return { rule: 'hours', base, standardDays: STANDARD_DAYS, workDays, workUnits: workDays, hourly: null, basePay: base, earlyAmt: 0, earlyList: [], lateAmt: 0, lateList: [], totalWorkH, otHours, otAmt,
-    bonusAmt, advAmt, absDays, absAmt, vioAmt, claimAmt, claimCut, pendingH: round1(pendingMs / HOUR), net: base + otAmt + bonusAmt - advAmt - absAmt - vioAmt + claimAmt - claimCut, byDay };
+    bonusAmt, advAmt, absDays, absAmt, vioAmt, claimAmt, claimCut, claimList, pendingH: round1(pendingMs / HOUR), net: base + otAmt + bonusAmt - advAmt - absAmt - vioAmt + claimAmt - claimCut, byDay };
 }
 
 /**
