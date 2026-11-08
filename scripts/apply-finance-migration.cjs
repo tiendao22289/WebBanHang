@@ -266,6 +266,14 @@ async function main() {
   if (!peer.table_ok || !peer.anon_blocked) throw new Error('Chưa cài được bảng báo lỗi chéo.');
   if (!peer.photo_ok) throw new Error('Chưa cài được cột ảnh làm chứng của báo lỗi chéo.');
 
+  // Nước / bia nhân viên tự ghi, trừ vào lương (payroll_staff_drinks.sql).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_staff_drinks.sql'), 'utf8'));
+  const [drinks] = await query(`SELECT to_regclass('public.payroll_staff_drinks') IS NOT NULL AS table_ok,
+    NOT has_table_privilege('anon', 'public.payroll_staff_drinks', 'SELECT') AND NOT has_table_privilege('authenticated', 'public.payroll_staff_drinks', 'SELECT') AS anon_blocked,
+    EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'audit_staff_data' AND tgrelid = 'public.payroll_staff_drinks'::regclass) AS audited`);
+  console.log(JSON.stringify(drinks));
+  if (!drinks.table_ok || !drinks.anon_blocked) throw new Error('Chưa cài được bảng nước uống của nhân viên.');
+
   // Chấm công bằng nút trên máy quầy cho người không có điện thoại (checkin_tap.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_tap.sql'), 'utf8'));
   const [tap] = await query(`SELECT to_regclass('public.checkin_tap_staff') IS NOT NULL AS table_ok,

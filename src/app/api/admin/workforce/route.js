@@ -47,7 +47,7 @@ import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { hashPin, isHashedPin, validPin } from '@/lib/staffPin.mjs';
 import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, KIOSK_COOKIE, newDeviceId, readKioskCookie, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
-import { closedDaysToDate, loadPayrollMonth, monthRange, readClosedDays, readHolidays, readHourlyRates, readLateRules, readMonthClaims, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
+import { closedDaysToDate, loadPayrollMonth, monthRange, readClosedDays, readHolidays, readHourlyRates, readLateRules, readMonthClaims, readMonthDrinks, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
 import { AUTO_CLOSE_BY, AUTO_EXTRA_FROM, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
 import { DAY_PAY_FROM, DEFAULT_OT_RATE, MAX_CYCLE_DAYS, addDays, claimGiven, claimLeft, claimOwed, claimPay, claimText, computeSalary, cycleDue, cycleDueTo, cyclePayday, cyclePeriod, holidayArgs, nothingDue, lateRulesOf, monthKey, monthTallies, payoutDetail,
   payoutPartOfMonth, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
@@ -75,6 +75,7 @@ const money = v => { const n = Math.round(Number(String(v ?? '').replace(/\./g, 
 const text = (v, max = 300) => String(v ?? '').trim().slice(0, max);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const CLAIMS_NOT_READY = 'Web đang cập nhật phần khoản chi hộ, thử lại sau ít phút.';
+const DRINKS_NOT_READY = 'Web đang cập nhật phần ghi nước uống, thử lại sau ít phút.';
 const PEER_NOT_READY = 'Web đang cập nhật phần báo lỗi đồng nghiệp, thử lại sau ít phút.';
 const ddmm = d => `${String(d).slice(8, 10)}/${String(d).slice(5, 7)}`;
 // Tháng đã hết chưa (giờ Việt Nam): thưởng chuyên cần chỉ duyệt khi đã hết tháng.
@@ -153,7 +154,8 @@ async function myStatus(db, staffId) {
   const open = last && !last.clock_out ? markFaceHolds([last], holds)[0] : null;
   return { open, sessions: markFaceHolds((today.data || []).filter(x => workDayOf(x, settings) === day), holds), fixes: fixes.data || [], auto_closed: autoClosed, reviews: reviews.data || [],
     leave_days: leaveDays.data || [], face_holds: [...holds], rules, ...await mySalary(db, staffId, settings, reviews.data || [], autoClosed),
-    payments: await myPayments(db, staffId), claims: await myClaims(db, staffId), peer: { ...await myPeerReports(db, staffId), workDay: day } };
+    payments: await myPayments(db, staffId), claims: await myClaims(db, staffId), peer: { ...await myPeerReports(db, staffId), workDay: day },
+    drinks: await myDrinks(db, staffId) };
 }
 
 // Người còn làm (không phải chủ quán, không phải mình, chưa nghỉ việc) để chọn khi báo lỗi đồng nghiệp.
@@ -164,6 +166,22 @@ async function colleaguesOf(db, staffId) {
   return (people.data || []).filter(p => p.id !== staffId && p.role !== 'admin' && !gone.has(p.id))
     .map(p => ({ id: p.id, name: String(p.full_name || '').trim() || 'Nhân viên' })).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
 }
+
+// Nước / bia mình đã tự ghi (40 ngày gần đây, mới nhất trước). Bảng chưa có: ready false (ẩn phần ghi).
+async function myDrinks(db, staffId) {
+  try {
+    const { data, error } = await db.from('payroll_staff_drinks').select('*').eq('staff_id', staffId).gte('drink_date', addDays(vnToday(), -40))
+      .order('drink_date', { ascending: false }).order('created_at', { ascending: false }).limit(200);
+    if (missingTable(error)) return { ready: false, list: [] };
+    if (error) throw error;
+    return { ready: true, list: (data || []).map(drinkView) };
+  } catch (error) {
+    console.error('[workforce] my drinks', error);
+    return { ready: false, list: [] };
+  }
+}
+const drinkView = d => ({ id: d.id, staff_id: d.staff_id, date: String(d.drink_date).slice(0, 10), name: d.name, qty: Number(d.qty) || 0, price: Number(d.unit_price) || 0,
+  amount: Number(d.amount) || 0, year: d.year, month: d.month, created_at: d.created_at, created_by_name: d.created_by_name || null });
 
 // Báo lỗi đồng nghiệp: các lần mình đã báo (60 ngày + còn chờ) kèm tên người bị báo. Bảng chưa có: ready false (ẩn phần này).
 async function myPeerReports(db, staffId) {
@@ -366,13 +384,13 @@ async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
       db.from('staff').select('id, created_at').eq('id', staffId).maybeSingle(),
       db.from('staff_departures').select('*').eq('staff_id', staffId),
     ]);
-    const claims = await readMonthClaims(db, year, month, staffId);
+    const claims = await readMonthClaims(db, year, month, staffId), drinks = await readMonthDrinks(db, year, month, staffId);
     for (const r of [sessions, config, requests, violations, closed, bonuses, meta]) if (r.error) throw r.error;
     const mine = markFaceHolds(sessions.data || [], await faceHolds(db, (sessions.data || []).map(x => x.id)));
     const closedDays = closedDaysToDate(holidays, start, end, vnToday());
     const live = computeSalary({ year, month, staffId, sessions: mine, config: config.data, requests: requests.data || [],
       violations: violations.data || [], bonuses: bonuses.data || [], rules: settings, reviews, hourlyRates, lateRules: lateRulesOf(lateRules, staffId),
-      ...holidayArgs(me.data || { id: staffId }, { closedDays, holidayPay: holidays.holidayPay, departures: left.data || [], returns: holidays.returns, asOf: vnToday() }), claims });
+      ...holidayArgs(me.data || { id: staffId }, { closedDays, holidayPay: holidays.holidayPay, departures: left.data || [], returns: holidays.returns, asOf: vnToday() }), claims, drinks });
     const salary = closed.data
       ? { bonusAmt: 0, ...closed.data.snapshot, year, month, locked: true, closed_at: closed.data.closed_at, paid_at: closed.data.paid_at || null }
       : { ...live, year, month, locked: false };
@@ -462,10 +480,10 @@ async function payrollMonth(db, year, month) {
   // reviews: lần duyệt giờ ngoài ca của các ca trong tháng (trang Lương tính bằng đúng dữ liệu máy chủ chốt).
   const ids = sessionIds.map(x => x.id);
   // faceHolds: ca chờ chủ duyệt mặt — trang Lương chưa tính lương các ca này. claims: chi hộ đã duyệt tính vào lương tháng này.
-  const claims = await readMonthClaims(db, year, month);
+  const claims = await readMonthClaims(db, year, month), drinks = await readMonthDrinks(db, year, month);
   // peerFines: khoản phạt từ báo lỗi đồng nghiệp trong tháng (ai báo, ảnh làm chứng) — chỉ trang Lương của chủ nhận.
   const peerFines = await peerFinesOf(db, start, end);
-  return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set(auto.map(r => r.attendance_id))], claims, peerFines,
+  return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set(auto.map(r => r.attendance_id))], claims, drinks, peerFines,
     reviews: await reviewsFor(db, ids), faceHolds: [...await faceHolds(db, ids)],
     bonuses: bonuses.data || [], bonusSettings, fineRules: fineRules.data || [], fineReviews: fineReviews.data || [], violationMeta: meta.data || [],
     hourlyRates, lateRules, ...holidays, payouts: payouts.error ? [] : payouts.data || [], monthOver: monthOver(year, month) };
@@ -506,7 +524,8 @@ function personMonth(m, k, id) {
   return { key: k, byDay: closed?.byDay ? { ...live, ...closed.byDay } : live,
     advances: reqs.filter(r => r.request_type === 'advance' && r.status === 'approved').map(r => ({ id: r.id, amount: Number(r.amount) || 0 })),
     fines: vios.map(v => ({ id: v.id, amount: Number(v.amount) || 0 })), bonus: gifts.reduce((a, b) => a + (Number(b.amount) || 0), 0),
-    claims: claims.filter(c => c.payout === 'salary' && claimPay(c) !== 0).map(c => ({ id: c.id, amount: claimPay(c) })) };
+    claims: claims.filter(c => c.payout === 'salary' && claimPay(c) !== 0).map(c => ({ id: c.id, amount: claimPay(c) })),
+    drinks: of(m.drinks || []).map(d => ({ id: d.id, amount: Number(d.amount) || 0 })) };
 }
 
 /**
@@ -568,7 +587,7 @@ async function cycleStates(db, staffId = null) {
     const open = (last?.sessions || []).find(x => x.staff_id === c.staff_id && !x.clock_out);
     return { staff_id: c.staff_id, every_days: period.every, start_day: String(c.start_day).slice(0, 10), payday_anchor: c.payday_anchor ? String(c.payday_anchor).slice(0, 10) : null,
       period: { start: period.start, payday: period.payday, daysLeft: period.daysLeft, fixed: period.fixed },
-      openDay: open ? workDayOf(open, last.rules) : null, days: due.days, advances: due.advances, fines: due.fines, bonuses: due.bonuses, claims: due.claims,
+      openDay: open ? workDayOf(open, last.rules) : null, days: due.days, advances: due.advances, fines: due.fines, bonuses: due.bonuses, claims: due.claims, drinks: due.drinks,
       payouts: mine.slice(-6).reverse().map(({ detail: _d, ...x }) => x) };
   }) };
 }
@@ -957,6 +976,33 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, id: r.data.id }, { headers });
     }
 
+    // Nước / bia mình uống ở quán: tự ghi uống gì, ngày nào (hôm nay hoặc tối đa 7 ngày trước), mấy chai, giá 1 chai (tự ghi). Trừ thẳng
+    // vào lương tháng của ngày uống, không chờ duyệt. Ghi xong không tự sửa / xoá: nhờ chủ quán xoá (delete_drink) rồi ghi lại.
+    if (body.action === 'log_drink') {
+      const name = text(body.name, 60), qty = Number(body.qty), price = money(body.unit_price);
+      const today = vnToday(), day = DATE.test(body.date || '') ? body.date : today;
+      if (!name) return fail('Ghi uống gì (vd: Bia Tiger, Coca).');
+      if (!Number.isInteger(qty) || qty < 1 || qty > 100) return fail('Số chai / lon phải từ 1 đến 100.');
+      if (!price || price < 1000 || price > 1000000) return fail('Ghi giá 1 chai / lon (từ 1.000đ).');
+      if (day > today || day < addDays(today, -7)) return fail('Chỉ ghi được nước uống trong 7 ngày gần đây.');
+      const year = Number(day.slice(0, 4)), month = Number(day.slice(5, 7));
+      const { data: closed, error: ce } = await db.from('payroll_closes').select('staff_id').eq('year', year).eq('month', month).eq('staff_id', user.id).maybeSingle();
+      if (ce) throw ce;
+      if (closed) return fail(`Lương tháng ${month}/${year} của bạn đã chốt. Nhờ chủ quán ghi giúp.`, 409);
+      const { data: recent, error: re } = await db.from('payroll_staff_drinks').select('*').eq('staff_id', user.id)
+        .gte('created_at', new Date(nowMs() - 86400000).toISOString());
+      if (missingTable(re)) return fail(DRINKS_NOT_READY, 503);
+      if (re) throw re;
+      // Bấm đúp / mạng chập chờn: y hệt lần vừa ghi trong 30 giây thì coi như đã ghi. Một ngày tối đa 30 lần ghi.
+      if ((recent || []).some(x => x.name === name && Number(x.qty) === qty && Number(x.unit_price) === price && String(x.drink_date).slice(0, 10) === day
+        && Date.parse(x.created_at) > nowMs() - 30000)) return NextResponse.json({ ok: true, duplicate: true }, { headers });
+      if ((recent || []).length >= 30) return fail('Hôm nay bạn đã ghi nhiều lần rồi. Nhờ chủ quán ghi giúp.', 429);
+      const r = await db.from('payroll_staff_drinks').insert({ staff_id: user.id, drink_date: day, name, qty, unit_price: price, amount: qty * price, year, month,
+        created_by_name: user.full_name || null, created_at: isoNow() }).select('id').single();
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true, id: r.data.id, amount: qty * price }, { headers });
+    }
+
     // Báo lỗi đồng nghiệp: chọn người (không phải mình, không phải chủ quán), lỗi theo danh sách chủ đặt hoặc lỗi khác, ngày (hôm nay
     // hoặc tối đa 7 ngày trước). CHƯA trừ tiền: chủ quán phạt hoặc bỏ qua ở Lương → Yêu cầu. Người bị báo không thấy tên người báo.
     if (body.action === 'report_peer') {
@@ -1285,12 +1331,12 @@ export async function POST(request) {
         const departure = m.departures.find(d => d.staff_id === p.id);
         if (!activeInMonth(departure, monthKey(year, month))) return null;
         const of = rows => rows.filter(x => x.staff_id === p.id);
-        const config = of(m.configs)[0] || null, mine = of(m.sessions), reqs = of(m.requests), vios = of(m.violations), claims = of(m.claims || []);
-        if (!config && !mine.length && !reqs.length && !vios.length && !claims.length) return null;
+        const config = of(m.configs)[0] || null, mine = of(m.sessions), reqs = of(m.requests), vios = of(m.violations), claims = of(m.claims || []), drinks = of(m.drinks || []);
+        if (!config && !mine.length && !reqs.length && !vios.length && !claims.length && !drinks.length) return null;
         // Tiền từng ngày (byDay) lưu cùng số đã chốt: Sổ thu chi theo đúng phiếu đã trả dù sau đó có sửa giờ. Chi tiết từng
         // ngày (trang Lương tự tính lại) không lưu.
         const { daily, ...salary } = computeSalary({ year, month, staffId: p.id, sessions: mine, config, requests: reqs, violations: vios, bonuses: of(m.bonuses), rules: m.rules, reviews: m.reviews, hourlyRates: of(m.hourlyRates), lateRules: lateRulesOf(m.lateRules, p.id),
-          ...holidayArgs(p, m), claims });
+          ...holidayArgs(p, m), claims, drinks });
         return { year, month, staff_id: p.id, snapshot: { name: p.full_name, ...salary }, closed_by: user.full_name || null, closed_at: closedAt };
       }).filter(Boolean);
       if (only) {
@@ -1555,6 +1601,21 @@ export async function POST(request) {
         return fail('Khoản chi này vừa được xử lý ở máy khác. Tải lại trang.', 409);
       }
       return NextResponse.json({ ok: true, status, year: patch.year || null, month: patch.month || null }, { headers });
+    }
+
+    // Chủ quán xoá lần ghi nước uống sai (người ghi không tự xoá được). Lương tháng đó đã chốt thì mở chốt người đó trước.
+    if (body.action === 'delete_drink') {
+      if (!UUID.test(body.id || '')) return fail('Thiếu lần ghi nước uống.');
+      const { data: drink, error } = await db.from('payroll_staff_drinks').select('*').eq('id', body.id).maybeSingle();
+      if (missingTable(error)) return fail(DRINKS_NOT_READY, 503);
+      if (error) throw error;
+      if (!drink) return NextResponse.json({ ok: true }, { headers });
+      const { data: closed, error: ce } = await db.from('payroll_closes').select('staff_id').eq('year', drink.year).eq('month', drink.month).eq('staff_id', drink.staff_id).maybeSingle();
+      if (ce) throw ce;
+      if (closed) return fail(`Lương tháng ${drink.month}/${drink.year} của người này đã chốt. Mở chốt người đó trước rồi mới xoá.`, 409);
+      const r = await db.from('payroll_staff_drinks').delete().eq('id', drink.id);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true }, { headers });
     }
 
     // Xoá khoản chi hộ ghi nhầm (cả khoản đã duyệt): bỏ luôn dòng trong Sổ thu chi. Khoản cộng lương của tháng đã chốt thì mở chốt

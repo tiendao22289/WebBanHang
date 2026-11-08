@@ -376,7 +376,7 @@ function RangeSheet({ staff, defaultFrom, defaultTo, today, onClose, onDone }) {
   const line = { display: 'flex', justifyContent: 'space-between', gap: 8, padding: '3px 0' };
   const box = { padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 8, fontSize: '0.88rem', background: 'white' };
   const work = data ? data.days.filter(x => x.due !== 0) : [];
-  const empty = data && !work.length && !data.advances.length && !data.fines.length && !data.bonuses.length && !(data.claims || []).length;
+  const empty = data && !work.length && !data.advances.length && !data.fines.length && !data.bonuses.length && !(data.claims || []).length && !(data.drinks || []).length;
   const pay = async () => {
     if (!data || busy) return;
     if (!confirm(`Đã trả lương cho ${staff.full_name} ${formatMoney(data.amount)} (từ ${ddmm(from)} tới hết ${ddmm(to)})?`)) return;
@@ -414,7 +414,8 @@ function RangeSheet({ staff, defaultFrom, defaultTo, today, onClose, onDone }) {
             {data.advances.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ ứng lương</span><b>−{formatMoney(sum(data.advances))}</b></div>}
             {data.fines.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ phạt</span><b>−{formatMoney(sum(data.fines))}</b></div>}
             {data.bonuses.length > 0 && <div style={{ ...line, color: '#16a34a' }}><span>Thưởng chuyên cần</span><b>+{formatMoney(sum(data.bonuses))}</b></div>}
-            {(data.claims || []).length > 0 && <div style={{ ...line, color: '#16a34a' }}><span>Hoàn tiền chi hộ</span><b>+{formatMoney(sum(data.claims))}</b></div>}
+            {(data.claims || []).length > 0 && <div style={{ ...line, color: sum(data.claims) < 0 ? '#dc2626' : '#16a34a' }}><span>Chi hộ</span><b>{sum(data.claims) < 0 ? '−' : '+'}{formatMoney(Math.abs(sum(data.claims)))}</b></div>}
+            {(data.drinks || []).length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ nước uống</span><b>−{formatMoney(sum(data.drinks))}</b></div>}
             <div style={{ ...line, borderTop: '1px dashed #cbd5e1', marginTop: 4, paddingTop: 6, fontSize: '0.98rem' }}>
               <strong>Cần trả</strong><strong style={{ color: data.amount < 0 ? '#dc2626' : '#15803d' }}>{formatMoney(data.amount)}</strong>
             </div>
@@ -485,7 +486,8 @@ function CycleBox({ people, today, nameOf, onPay, onUndo }) {
                   {d.advances.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ ứng lương</span><b>−{formatMoney(sum(d.advances))}</b></div>}
                   {d.fines.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ phạt</span><b>−{formatMoney(sum(d.fines))}</b></div>}
                   {d.bonuses.length > 0 && <div style={{ ...line, color: '#16a34a' }}><span>Thưởng chuyên cần</span><b>+{formatMoney(sum(d.bonuses))}</b></div>}
-                  {(d.claims || []).length > 0 && <div style={{ ...line, color: '#16a34a' }}><span>Hoàn tiền chi hộ ({d.claims.length} khoản)</span><b>+{formatMoney(sum(d.claims))}</b></div>}
+                  {(d.claims || []).length > 0 && <div style={{ ...line, color: sum(d.claims) < 0 ? '#dc2626' : '#16a34a' }}><span>Chi hộ ({d.claims.length} khoản)</span><b>{sum(d.claims) < 0 ? '−' : '+'}{formatMoney(Math.abs(sum(d.claims)))}</b></div>}
+                  {(d.drinks || []).length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ nước uống ({d.drinks.length} lần)</span><b>−{formatMoney(sum(d.drinks))}</b></div>}
                   <div style={{ ...line, borderTop: '1px dashed #cbd5e1', marginTop: 4, paddingTop: 4, fontSize: '0.95rem' }}>
                     <strong>Cần trả</strong><strong style={{ color: d.amount < 0 ? '#dc2626' : '#15803d' }}>{formatMoney(d.amount)}</strong>
                   </div>
@@ -520,6 +522,7 @@ function CycleBox({ people, today, nameOf, onPay, onUndo }) {
 const FORM_TILES = [
   ['fine', '⚠️', 'Tự ghi lỗi', 'Làm vỡ ly, ghi sai món…'],
   ['claim', '🧾', 'Chi hộ quán', 'Xăng, đá… lấy lại tiền'],
+  ['drink', '🍺', 'Uống nước / bia', 'Tự ghi, trừ vào lương'],
   ['advance', '💵', 'Ứng lương', 'Xin ứng trước tiền lương'],
   ['absent', '🏖', 'Báo nghỉ', 'Xin nghỉ ngày nào'],
   ['peer', '🚩', 'Báo lỗi người khác', 'Thấy bạn làm sai thì báo chủ'],
@@ -598,6 +601,10 @@ export default function PayrollPage({ staffSection = null } = {}) {
   const [showSelfFine, setShowSelfFine] = useState(false);
   // Khoản chi hộ quán của mình (máy chủ đọc): ready false = web chưa cài bảng, ẩn phần này.
   const [myClaims, setMyClaims] = useState({ ready: false, list: [] });
+  // Nước / bia tự ghi, trừ vào lương: uống gì, mấy chai, giá 1 chai (tự ghi), ngày uống.
+  const [myDrinks, setMyDrinks] = useState({ ready: false, list: [] });
+  const emptyDrink = () => ({ name: '', qty: 1, price: '', date: vnToday() });
+  const [drinkForm, setDrinkForm] = useState(emptyDrink);
   const emptyClaim = () => ({ item: '', amount: '', spent_on: vnToday(), note: '', payout: '', given: false, given_amount: '' });
   const [claimForm, setClaimForm] = useState(emptyClaim);
   const [showClaimForm, setShowClaimForm] = useState(false);
@@ -614,7 +621,7 @@ export default function PayrollPage({ staffSection = null } = {}) {
   const pickForm = k => {
     setFormTab(t => (t === k ? '' : k));
     setShowSelfFine(k === 'fine'); setShowClaimForm(k === 'claim'); setShowAdvForm(k === 'advance'); setShowAbsForm(k === 'absent');
-    setClaimForm(emptyClaim()); setPeerForm(emptyPeer()); setPeerPhoto(null);
+    setClaimForm(emptyClaim()); setPeerForm(emptyPeer()); setPeerPhoto(null); setDrinkForm(emptyDrink());
   };
   const [myMonth,    setMyMonth]    = useState({ y: now.getFullYear(), m: now.getMonth() + 1 }); // tháng của lịch sử chấm công
   const [myBonus,    setMyBonus]    = useState(null); // thưởng chuyên cần: đã trễ / quên ra ca chưa (khi chủ có dùng)
@@ -675,6 +682,7 @@ export default function PayrollPage({ staffSection = null } = {}) {
     setMyFineRules(meRes.fineRules || []);
     setMyPayments(meRes.payments || []);
     setMyClaims(meRes.claims || { ready: false, list: [] });
+    setMyDrinks(meRes.drinks || { ready: false, list: [] });
     setMyPeer(meRes.peer || { ready: false, colleagues: [], list: [] });
     setMyBonus(meRes.bonus || null);
     setMyAllSessions(monthRes.data || []);
@@ -751,6 +759,17 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     if (ok) say(`Đã báo lỗi của ${who.name}. Chủ quán sẽ xem và quyết định.`);
   };
 
+  // Ghi nước / bia đã uống: trừ thẳng vào lương, không chờ duyệt (ghi sai thì nhờ chủ quán xoá).
+  const handleSubmitDrink = async () => {
+    const name = drinkForm.name.trim(), qty = Number(drinkForm.qty) || 0, price = Number(String(drinkForm.price).replace(/\D/g, ''));
+    if (!name) return say('Ghi uống gì (vd: Bia Tiger, Coca).', false);
+    if (!(qty >= 1 && qty <= 100)) return say('Số chai / lon phải từ 1 đến 100.', false);
+    if (!(price >= 1000)) return say('Ghi giá 1 chai / lon (từ 1.000đ).', false);
+    const ok = await send('drink', 'log_drink', { name, qty, unit_price: price, date: drinkForm.date || vnToday() },
+      () => setDrinkForm(p => ({ ...emptyDrink(), date: p.date })));
+    if (ok) say(`Đã ghi ${name} × ${qty} — trừ ${formatMoney(qty * price)} vào lương.`);
+  };
+
   // Huỷ đơn của mình khi còn chờ duyệt (lỡ gửi nhầm).
   const handleCancel = async (id, kind) => {
     if (!confirm('Huỷ đơn này?')) return;
@@ -775,13 +794,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   }, []);
   // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
   // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
-  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], payouts: [], monthOver: false, claims: [], peerFines: [] });
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], payouts: [], monthOver: false, claims: [], drinks: [], peerFines: [] });
   const fetchPayrollMonth = useCallback(async () => {
     try {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], payouts: j.payouts || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [], claims: j.claims || [], peerFines: j.peerFines || [] });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], payouts: j.payouts || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [], claims: j.claims || [], drinks: j.drinks || [], peerFines: j.peerFines || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   // So khuôn mặt ở máy quầy (app): cài đặt, ai có mặt mẫu, ca sai mặt 3 lần chờ duyệt.
@@ -1007,6 +1026,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     violations: violations.filter(v => v.staff_id === staffId),
     bonuses: payrollMonth.bonuses.filter(b => b.staff_id === staffId),
     claims: (payrollMonth.claims || []).filter(x => x.staff_id === staffId),
+    drinks: (payrollMonth.drinks || []).filter(x => x.staff_id === staffId),
     rules, reviews: reviewList, hourlyRates: payrollMonth.hourlyRates.filter(r => r.staff_id === staffId),
     lateRules: lateRulesOf(payrollMonth.lateRules, staffId),
     // Ngày quán nghỉ chưa tới thì chưa tính (lương tạm tính đến hôm nay).
@@ -1068,13 +1088,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   const exportPayroll = async rows => {
     const XLSX = await import('xlsx');
     const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Chỉnh theo số ngày của tháng', 'Lương 1 ngày', 'Ngày theo ngày', 'Lương theo ngày', 'Lương 1 giờ', 'Giờ theo giờ', 'Lương theo giờ', 'Trừ vào trễ', 'Trừ về sớm', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
-      'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Chi hộ (cộng lương)', 'Chi hộ (trừ tiền thừa)', 'Thực lĩnh', 'Đã trả theo kỳ', 'Còn phải trả', 'Trạng thái', 'Nghỉ việc'];
+      'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Chi hộ (cộng lương)', 'Chi hộ (trừ tiền thừa)', 'Nước uống (trừ lương)', 'Thực lĩnh', 'Đã trả theo kỳ', 'Còn phải trả', 'Trạng thái', 'Nghỉ việc'];
     const data = rows.map(({ s, c }) => {
       const d = departureOf(s.id);
       return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.dayUnits ?? c.workUnits : c.workDays, c.dayAmt ?? c.basePay, c.monthAdjust || 0,
         c.dayWage?.rates?.join(' / ') || '', c.dayWage ? c.dayWage.days : '', c.dayWage?.amount || '',
         c.hourly?.rates?.join(' / ') || '', c.hourly ? Math.round(c.hourly.minutes / 6) / 10 : '', c.hourly?.amount || '', c.lateAmt || 0, c.earlyAmt || 0, c.totalWorkH, c.otHours, c.otAmt,
-        c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.claimAmt || 0, c.claimCut || 0, c.net, cyclePaidOf(s.id), c.net - cyclePaidOf(s.id), c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
+        c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.claimAmt || 0, c.claimCut || 0, c.drinkAmt || 0, c.net, cyclePaidOf(s.id), c.net - cyclePaidOf(s.id), c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
         d ? `Làm đến ${d.last_day.split('-').reverse().join('/')}` : ''];
     });
     const sheet = XLSX.utils.aoa_to_sheet([[`Bảng lương tháng ${selMonth}/${selYear}`], [], head, ...data]);
@@ -1527,7 +1547,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     return h.autoExtra ? { text: 'tự tính tăng ca', color: '#16a34a' } : { text: 'chờ duyệt', color: '#b45309' };
   };
   const DETAIL_TITLES = { early: '🌅 Vào sớm', late: '⏰ Vào trễ', stay: '🌙 Ra dư', leftEarly: '🚪 Về sớm', advance: '💵 Ứng lương', absent: '🛌 Nghỉ',
-    claims: '🧾 Chi hộ quán', claimcut: '🧾 Chi hộ quán' };
+    claims: '🧾 Chi hộ quán', claimcut: '🧾 Chi hộ quán', drinks: '🍺 Nước uống' };
   // Danh sách mở dưới dòng của người đó khi bấm một ô của Bảng lương.
   const detailPanel = (s, kind) => {
     if (kind === 'fines') return finesPanel(s);
@@ -1595,6 +1615,23 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         );
       });
       editHint = c.rule === 'days' ? 'Ngày nghỉ không trừ thêm tiền (ngày không đi làm thì không có ngày công). Xoá đơn ở ✏️ Sửa → Đơn báo nghỉ.' : 'Xoá đơn ở ✏️ Sửa → Đơn báo nghỉ.';
+    } else if (kind === 'drinks') {
+      // Nước / bia nhân viên tự ghi: ngày uống, lúc ghi, uống gì, mấy chai × giá; chủ xoá lần ghi sai.
+      const list = c.drinkList || [];
+      summary = `${list.length} lần, trừ ${formatMoney(c.drinkAmt || 0)}`;
+      head = ['Ngày uống', 'Ghi lúc', 'Uống gì', 'Trừ lương'];
+      rows = list.map(x => (
+        <tr key={x.id}>
+          {dayCell(x.day)}
+          <td data-label="Ghi lúc" style={{ ...td, whiteSpace: 'nowrap' }}>{x.at ? `${hhmm(x.at)}${vnDay(x.at) !== x.day ? ` ${ddmm(vnDay(x.at))}` : ''}` : '—'}</td>
+          <td data-label="Uống gì" style={td}><strong>{x.name}</strong> × {x.qty} · {formatMoney(x.price)}</td>
+          <td data-label="Trừ lương" className="detail-money" style={{ ...td, whiteSpace: 'nowrap', fontWeight: 700, color: '#dc2626' }}>
+            −{formatMoney(x.amount)}
+            {isAdmin && !c.locked && <div><button style={{ ...smallBtn, marginTop: 4 }} onClick={() => payrollAction('delete_drink', { id: x.id }, `Xoá lần ghi "${x.name} × ${x.qty}" (${formatMoney(x.amount)}) của ${s.full_name}?`)}>Xoá</button></div>}
+          </td>
+        </tr>
+      ));
+      editHint = c.locked ? 'Lương tháng này đã chốt: mở chốt người này trước rồi mới xoá được.' : 'Nhân viên tự ghi, không tự xoá được. Ghi sai thì bấm Xoá.';
     } else if (kind === 'claims' || kind === 'claimcut') {
       // Từng khoản chi hộ tính vào lương tháng này: ngày chi, lúc nhân viên ghi, chi gì, cộng / trừ bao nhiêu.
       const list = c.claimList || [];
@@ -2016,7 +2053,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
               : k === 'fine' ? 0 : empReqs.filter(r => r.request_type === k && r.status === 'pending').length;
             return (
               <div className="form-tiles">
-                {FORM_TILES.filter(([k]) => (k !== 'claim' || myClaims.ready) && (k !== 'peer' || myPeer.ready)).map(([k, icon, title, sub]) => (
+                {FORM_TILES.filter(([k]) => (k !== 'claim' || myClaims.ready) && (k !== 'peer' || myPeer.ready) && (k !== 'drink' || myDrinks.ready)).map(([k, icon, title, sub]) => (
                   <button key={k} type="button" className={`form-tile${formTab === k ? ' on' : ''}`} onClick={() => pickForm(k)} aria-pressed={formTab === k}>
                     <span className="form-tile-icon" aria-hidden="true">{icon}</span>
                     <span className="form-tile-title">{title}</span>
@@ -2326,6 +2363,12 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 {c.bonusAmt > 0 && row('⭐ Thưởng chuyên cần', `+${formatMoney(c.bonusAmt)}`, '#15803d')}
                 {c.claimAmt > 0 && row('🧾 Hoàn tiền chi hộ', `+${formatMoney(c.claimAmt)}`, '#15803d')}
                 {c.claimCut > 0 && row('🧾 Tiền thừa chi hộ chưa trả chủ', `−${formatMoney(c.claimCut)}`, '#dc2626')}
+                {c.drinkAmt > 0 && row(`🍺 Nước uống (${c.drinkList?.length || 0} lần)`, `−${formatMoney(c.drinkAmt)}`, '#dc2626')}
+                {(c.drinkList || []).length > 0 && (
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', padding: '2px 0 6px', borderBottom: '1px solid #f1f5f9' }}>
+                    {c.drinkList.map(d => <div key={d.id}>• {weekday(d.day)} {ddmm(d.day)} · {d.name} × {d.qty} · {formatMoney(d.price)} — −{formatMoney(d.amount)}</div>)}
+                  </div>
+                )}
                 {(c.claimList || []).length > 0 && (
                   <div style={{ fontSize: '0.76rem', color: '#64748b', padding: '2px 0 6px', borderBottom: '1px solid #f1f5f9' }}>
                     {c.claimList.map(x => <div key={x.id}>• {ddmm(x.day)}{x.at ? ` · ghi ${hhmm(x.at)}` : ''} · {x.item} {formatMoney(x.amount)}{x.given > 0 ? ` (chủ đưa ${formatMoney(x.given)})` : ''} — <span style={{ color: x.pay < 0 ? '#dc2626' : '#15803d', fontWeight: 600 }}>{x.pay < 0 ? `−${formatMoney(-x.pay)}` : `+${formatMoney(x.pay)}`}</span></div>)}
@@ -2492,6 +2535,57 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
               )}
             </div>
           )}
+
+          {/* Uống nước / bia: tự ghi uống gì, mấy chai, giá 1 chai, ngày uống — trừ thẳng vào lương; ghi sai thì nhờ chủ quán xoá. */}
+          {formsView && formTab === 'drink' && myDrinks.ready && (() => {
+            const qty = Number(drinkForm.qty) || 0, price = Number(String(drinkForm.price).replace(/\D/g, '')) || 0;
+            const monthKey = vnToday().slice(0, 7), mine = myDrinks.list.filter(d => d.date.slice(0, 7) === monthKey);
+            const input = { padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' };
+            const step = { width: 38, height: 38, borderRadius: 8, border: '1.5px solid #e5e7eb', background: 'white', fontSize: '1.1rem', fontWeight: 800, cursor: 'pointer' };
+            return (
+              <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div>
+                  <div style={{ fontWeight: 800 }}>🍺 Uống nước / bia</div>
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 2 }}>Uống nước, bia ở quán thì tự ghi vào đây. Tiền trừ thẳng vào lương, ghi sai thì nhờ chủ quán xoá.</div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {['Bia Tiger', 'Bia Sài Gòn', 'Bia Heineken', 'Coca', 'Pepsi', 'Sting', 'Nước suối', 'Trà xanh'].map(x => (
+                    <button key={x} type="button" onClick={() => setDrinkForm(p => ({ ...p, name: x }))}
+                      style={{ fontSize: '0.78rem', padding: '5px 10px', borderRadius: 999, cursor: 'pointer', fontWeight: 600,
+                        border: `1.5px solid ${drinkForm.name === x ? '#111827' : '#e5e7eb'}`, background: drinkForm.name === x ? '#111827' : 'white', color: drinkForm.name === x ? 'white' : '#374151' }}>{x}</button>
+                  ))}
+                </div>
+                <input type="text" placeholder="Uống gì? (vd: Bia Tiger)" value={drinkForm.name} maxLength={60} aria-label="Uống gì" onChange={e => setDrinkForm(p => ({ ...p, name: e.target.value }))} style={input} />
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.72rem', color: '#64748b' }}>Số chai / lon
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <button type="button" style={step} onClick={() => setDrinkForm(p => ({ ...p, qty: Math.max(1, (Number(p.qty) || 1) - 1) }))} aria-label="Bớt 1">−</button>
+                      <input type="text" inputMode="numeric" value={drinkForm.qty} aria-label="Số chai" onChange={e => setDrinkForm(p => ({ ...p, qty: e.target.value.replace(/\D/g, '').slice(0, 3) }))}
+                        style={{ ...input, width: 52, textAlign: 'center', padding: '9px 4px' }} />
+                      <button type="button" style={step} onClick={() => setDrinkForm(p => ({ ...p, qty: Math.min(100, (Number(p.qty) || 0) + 1) }))} aria-label="Thêm 1">+</button>
+                    </span></label>
+                  <label style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.72rem', color: '#64748b' }}>Giá 1 chai (đ)
+                    <input type="text" inputMode="numeric" placeholder="vd: 15.000" value={drinkForm.price} aria-label="Giá 1 chai"
+                      onChange={e => { const r = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setDrinkForm(p => ({ ...p, price: r ? Number(r).toLocaleString('vi-VN') : '' })); }}
+                      style={{ ...input, minWidth: 0 }} /></label>
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem', color: '#475569' }}>Ngày uống
+                  <input type="date" value={drinkForm.date} max={vnToday()} min={new Date(Date.parse(`${vnToday()}T00:00:00Z`) - 7 * 86400000).toISOString().slice(0, 10)}
+                    onChange={e => setDrinkForm(p => ({ ...p, date: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.85rem' }} /></label>
+                {qty > 0 && price > 0 && <div style={{ background: '#fef2f2', color: '#991b1b', borderRadius: 9, padding: '9px 12px', fontSize: '0.86rem' }}>
+                  {qty} × {formatMoney(price)} = <b>{formatMoney(qty * price)}</b> · trừ vào lương tháng {Number((drinkForm.date || vnToday()).slice(5, 7))}</div>}
+                <button onClick={handleSubmitDrink} disabled={sending === 'drink'} style={{ background: '#b91c1c', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer', opacity: sending === 'drink' ? 0.6 : 1 }}>
+                  {sending === 'drink' ? 'Đang ghi…' : 'Ghi vào lương'}
+                </button>
+                {mine.length > 0 && <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: 8 }}>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#374151', marginBottom: 4 }}>Tháng này đã ghi: {mine.length} lần · trừ {formatMoney(mine.reduce((a, d) => a + d.amount, 0))}</div>
+                  <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
+                    {mine.map(d => <div key={d.id}>• {weekday(d.date)} {ddmm(d.date)} · {d.name} × {d.qty} · {formatMoney(d.price)} — trừ {formatMoney(d.amount)}</div>)}
+                  </div>
+                </div>}
+              </div>
+            );
+          })()}
 
           {/* Ứng lương */}
           {formsView && formTab === 'advance' && <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 18 }}>
@@ -2877,6 +2971,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                                 tone: c.rule === 'days' || !c.absAmt ? 'muted' : 'red', kind: 'absent', has: abs.length > 0 })}
                               {slipRow(s, { label: 'Vi phạm', sub: fines.length ? `${fines.length} lỗi${unpriced ? ` · ${unpriced} chưa định tiền` : ''}` : null,
                                 value: fines.length ? `−${formatMoney(c.vioAmt)}` : '—', tone: fines.length ? 'red' : 'muted', kind: 'fines', has: fines.length > 0 })}
+                              {c.drinkAmt > 0 && slipRow(s, { label: 'Nước uống', sub: `${c.drinkList?.length || 0} lần, nhân viên tự ghi`, value: `−${formatMoney(c.drinkAmt)}`, tone: 'red', kind: 'drinks', has: !!c.drinkList?.length })}
                               <div className={`slip-total ${c.net < 0 ? 'negative' : ''}`}>
                                 <span>{c.locked ? 'Thực lĩnh (đã chốt)' : running ? 'Thực lĩnh (tạm tính)' : 'Thực lĩnh'}</span>
                                 <strong>{formatMoney(c.net)}</strong>
@@ -2935,7 +3030,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <td>{cellBtn(s.id, 'absent', monthRequests(s.id, 'absent').length > 0, c.rule === 'days'
                               ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không trừ)` : monthRequests(s.id, 'absent').length ? 'chờ duyệt' : '—'}</span>
                               : <><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.absDays)} ngày</div></>)}</td>
-                            <td>{vioCell(s.id, c)}</td>
+                            <td>{vioCell(s.id, c)}
+                              {c.drinkAmt > 0 && <div style={{ fontSize: '0.72rem', marginTop: 2 }}>{cellBtn(s.id, 'drinks', !!c.drinkList?.length, <span style={{ color: '#dc2626' }}>−{formatMoney(c.drinkAmt)} nước uống</span>)}</div>}</td>
                             <td>
                               <strong style={{color: c.net >= 0 ? '#16a34a' : '#ef4444', fontSize:'0.95rem'}}>{formatMoney(c.net)}</strong>
                               {c.locked && c.liveNet !== c.net && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>nay tính ra {formatMoney(c.liveNet)}</div>}
