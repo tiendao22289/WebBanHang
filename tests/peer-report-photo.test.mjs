@@ -26,7 +26,10 @@ const env = { now: 0, user: null };
 // Kho ảnh giả: nhớ file đã lưu, ký link như Supabase.
 function fakeStorage(files) {
   const bucket = {
-    upload: async (path, data, opts) => { files.set(path, { size: data.length, type: opts.contentType }); return { error: null }; },
+    upload: async (path, data, opts) => {
+      if (files.down) return { error: new Error('storage down') };
+      files.set(path, { size: data.length, type: opts.contentType }); return { error: null };
+    },
     remove: async list => { list.forEach(p => files.delete(p)); return { error: null }; },
     createSignedUrls: async list => ({ error: null, data: list.filter(p => files.has(p)).map(p => ({ path: p, signedUrl: `http://sb/storage/v1/object/sign/finance-receipts/${p}?token=aaa.bbb.ccc` })) }),
   };
@@ -67,6 +70,14 @@ test('a peer report can carry a photo that only the owner sees; cancelling remov
   const get = async (user, q) => { env.user = user; env.now = at; return plain(await wf.GET({ url: `http://x/api/admin/workforce?${q}` })); };
   const report = { action: 'report_peer', staff_id: BINH.id, reason: 'Làm vỡ ly', note: 'bàn 5' };
   const jpg = new File([new Uint8Array(2000)], 'a.jpg', { type: 'image/jpeg' });
+
+  // Kho ảnh lỗi: không ghi lần báo, báo rõ để gửi lại hoặc bỏ ảnh.
+  files.down = true;
+  const down = await withPhoto(AN, report, new File([new Uint8Array(2000)], 'a.jpg', { type: 'image/jpeg' }));
+  assert.equal(down.status, 503);
+  assert.match(down.body.error, /Xoá ảnh/);
+  assert.equal(state.payroll_peer_reports.length, 0);
+  files.down = false;
 
   // Ảnh sai loại: không ghi gì.
   const bad = await withPhoto(AN, report, new File(['x'], 'a.txt', { type: 'text/plain' }));
