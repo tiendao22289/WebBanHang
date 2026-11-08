@@ -7,6 +7,7 @@
 import { X } from 'lucide-react';
 import MenuNameInput from '@/lib/MenuNameInput';
 import { lineWarnings, parsePrice, parseQty } from '@/lib/notesMath.mjs';
+import { MAX_NOTE_PHOTOS, priceAlertText } from '@/lib/notesChecks.mjs';
 import { CategorySelect, isOtherLine } from './NoteKinds';
 
 export const vnd = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
@@ -41,12 +42,13 @@ export const ItemsHead = () => <div className="np-cols" aria-hidden="true"><span
  * Một dòng hàng. Dòng trống là dòng "＋ Thêm hàng" / "＋ Thêm khác" (viền đứt): gõ tên thì tự thêm dòng
  * trống mới. Dòng có sẵn (Tiền rau, Tiền gia vị) để trống giá thì không lưu. Bấm "Đủ" / "Nợ" để đổi.
  * other: dòng nhóm Khác (xăng xe, sửa chữa…) — tên gõ tự do, dòng nhỏ bên dưới để chọn loại.
+ * alert: giá cao bất thường so với các lần mua trước (notesChecks) — hiện đầu tiên, chủ cũng thấy.
  */
-export function NoteItemRow({ item, other, menuNames, categories, onField, onBlur, onRemove, onCategory }) {
+export function NoteItemRow({ item, other, alert, menuNames, categories, onField, onBlur, onRemove, onCategory }) {
   const empty = !item.preset && !String(item.name || '').trim() && !String(item.price || '').trim() && !String(item.qty || '').trim();
   const total = lineTotal(item);
   const debt = item.paymentStatus === 'debt';
-  const warnings = String(item.name || '').trim() ? lineWarnings(item) : [];
+  const warnings = String(item.name || '').trim() ? [...(alert ? [`${priceAlertText(alert)} — chủ sẽ thấy`] : []), ...lineWarnings(item)] : [];
   // minWidth 0: ô tên co lại trong cột lưới, không đẩy ô giá / số lượng ra ngoài.
   const nameProps = { className: 'np-name', style: { minWidth: 0 }, value: item.name, placeholder: empty ? (other ? '＋ Thêm khác: xăng, sửa xe…' : '＋ Thêm hàng') : 'Tên' };
   // Dòng phụ chỉ khi cần: chọn loại (nhóm Khác), số nợ / nợ ai, cảnh báo. Thành tiền nằm ngay dưới tên.
@@ -79,7 +81,7 @@ export function NoteItemRow({ item, other, menuNames, categories, onField, onBlu
           onChange={e => { const n = Number(digits(e.target.value)); onField('debtAmount', !n ? '' : (total > 0 ? Math.min(n, total) : n).toLocaleString('vi-VN')); }} />
         <input type="text" className="np-mini-input" placeholder="Nợ ai?" aria-label="Nợ của ai" value={item.creditor || ''} onChange={e => onField('creditor', e.target.value)} />
       </>}
-      {warnings.length > 0 && <span className="np-warn" title={warnings.join(' · ')}>⚠ {warnings[0]}</span>}
+      {warnings.length > 0 && <span className={`np-warn${alert ? ' price' : ''}`} title={warnings.join(' · ')}>⚠ {warnings[0]}</span>}
     </div>}
   </div>;
 }
@@ -87,8 +89,9 @@ export function NoteItemRow({ item, other, menuNames, categories, onField, onBlu
 /**
  * Mọi dòng hàng của phiếu trong một danh sách, chia 3 nhóm: hàng ốc (gõ thêm ở dòng "＋ Thêm hàng"),
  * rau / gia vị (dòng có sẵn), Khác (xăng xe, sửa chữa… — chọn loại ở từng dòng). Hàm on*(vị trí trong items, …).
+ * priceCheck(item): cảnh báo giá cao của dòng (hoặc null).
  */
-export function NoteItemsList({ items, menuNames, categories, onField, onBlur, onRemove, onCategory, isAdmin }) {
+export function NoteItemsList({ items, menuNames, categories, onField, onBlur, onRemove, onCategory, isAdmin, priceCheck }) {
   const rows = items.map((item, idx) => ({ item, idx }));
   const groups = [
     [null, rows.filter(({ item }) => !item.preset && !isOtherLine(item))],
@@ -100,7 +103,7 @@ export function NoteItemsList({ items, menuNames, categories, onField, onBlur, o
     <div className="np-items">
       {groups.map(([label, list]) => list.length > 0 && <div key={label || 'oc'} className="np-group">
         {label && <p className="np-group-label">{label}</p>}
-        {list.map(({ item, idx }) => <NoteItemRow key={item._id || idx} item={item} other={isOtherLine(item)} menuNames={menuNames} categories={categories}
+        {list.map(({ item, idx }) => <NoteItemRow key={item._id || idx} item={item} other={isOtherLine(item)} alert={priceCheck?.(item) || null} menuNames={menuNames} categories={categories}
           onField={(field, v) => onField(idx, field, v)} onBlur={(field, e) => onBlur(idx, field, e)}
           onRemove={() => onRemove(idx)} onCategory={v => onCategory(idx, v)} />)}
       </div>)}
@@ -136,5 +139,22 @@ export function TripSummary({ given, carried, paid, debt, payOldDebt, fromLeftov
             fromLeftover > 0 && `Trả nợ bằng tiền thừa cũ ${vnd(fromLeftover)}`].filter(Boolean).join(' · ')}
         </p>
       : null}
+  </div>;
+}
+
+/**
+ * Ảnh phiếu đi chợ: hàng trên cân ở quán hoặc giấy ghi của mối. saved = link ảnh đã lưu (ô sửa phiếu),
+ * photos = ảnh vừa chụp [{ url }]. Phiếu có hàng chợ mà chưa có ảnh thì bấm Lưu sẽ mở camera.
+ */
+export function TripPhotos({ saved = [], photos, required, onAdd, onRemove }) {
+  const count = saved.length + photos.length;
+  return <div className="np-photos">
+    {saved.map(link => <a key={link} href={link} target="_blank" rel="noreferrer" className="np-photo"><img src={link} alt="Ảnh phiếu đã lưu" /></a>)}
+    {photos.map((p, i) => <span key={p.url} className="np-photo">
+      <img src={p.url} alt={`Ảnh ${i + 1}`} />
+      <button type="button" className="np-photo-x" onClick={() => onRemove(i)} aria-label="Bỏ ảnh này"><X size={12} /></button>
+    </span>)}
+    {onAdd && count < MAX_NOTE_PHOTOS && <button type="button" className={`np-photo-add${required && !count ? ' need' : ''}`} onClick={onAdd}>📷 {count ? 'Thêm ảnh' : 'Chụp ảnh'}</button>}
+    {required && !count && <p className="np-photo-hint">Bắt buộc: chụp hàng trên cân ở quán, hoặc giấy ghi của mối.</p>}
   </div>;
 }

@@ -2,7 +2,7 @@
 // để route server và test dùng chung.
 
 // Sổ bắt đầu tính từ ngày này; dữ liệu trước đó không đưa vào.
-import { lineWarnings, noteTotals, parsePrice as linePrice, parseQty } from './notesMath.mjs';
+import { itemKey, lineWarnings, noteTotals, parsePrice as linePrice, parseQty } from './notesMath.mjs';
 import { dayCheckLines } from './dayCheck.mjs';
 import { addCosts, addItemCosts, addNamedCost, categoryName, lineCategory, namedCostList, noteOtherCosts, noteOtherItems, OTHER_ID, otherCostRows } from './noteCategories.mjs';
 
@@ -376,11 +376,8 @@ export function dailyWarnings({ day, accounts = [], alerts = {}, today = null, w
   return warnings;
 }
 
-/** Tên món / hàng để so khớp: bỏ dấu, chữ thường ("Ốc Hương" = "oc huong"). */
-export function itemKey(name) {
-  return String(name || '').replace(/[đĐ]/g, 'd').normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .toLowerCase().replace(/\s+/g, ' ').trim();
-}
+/** Tên món / hàng để so khớp (chung với Sổ tay, xem notesMath). */
+export { itemKey };
 
 const qtyNumber = qty => parseFloat(String(qty ?? '').replace(',', '.').replace(/[^0-9.]/g, '')) || 0;
 

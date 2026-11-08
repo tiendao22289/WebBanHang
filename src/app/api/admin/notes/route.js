@@ -18,10 +18,16 @@
  *       pay_item (item_id / item_index; item_index null = cả phiếu), return_leftover (đã trả tiền thừa cho chủ),
  *       delete (admin; hoàn lại nợ đã trả / tiền dư đã chuyển bằng phiếu đó),
  *       set_categories (admin; { categories: [{ id?, name }] } — tạo / đổi tên / xoá loại Khác)
+ *
+ * Ảnh phiếu đi chợ: create gửi dạng multipart (payload = JSON như trên, photo = 1–3 ảnh). Phiếu có hàng
+ * chợ mà không có ảnh thì không lưu (needsTripPhoto). Ảnh nằm trong bucket ảnh bill (kind 'note'),
+ * đường dẫn lưu ở content.photos; GET trả kèm photo_links { đường dẫn: link xem 1 giờ }.
  */
 import { NextResponse } from 'next/server';
-import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
+import { getStaffSession, staffDatabase, statusDatabase } from '@/lib/statusAuth';
 import { noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
+import { MAX_NOTE_PHOTOS, needsTripPhoto } from '@/lib/notesChecks.mjs';
+import { receiptImageProblem, removeReceiptImages, signReceiptImages, uploadReceiptImage } from '@/lib/receiptImages.mjs';
 import { findDebtLine, noteLeftover, noteMoney, openDebtLines, paymentItemIndex } from '@/lib/notesDebts.mjs';
 import { categoryName, cleanCategories, lineCategory } from '@/lib/noteCategories.mjs';
 import { seesAllNotes } from '@/lib/staffRoles.mjs';
@@ -109,6 +115,16 @@ async function readCategories(db) {
 }
 
 const parseContent = content => { try { const d = JSON.parse(content); return d && typeof d === 'object' ? d : null; } catch { return null; } };
+const notePhotos = note => { const p = parseContent(note?.content)?.photos; return Array.isArray(p) ? p.filter(x => typeof x === 'string') : []; };
+
+/** Thân request: JSON, hoặc multipart (payload = JSON, photo = ảnh) khi ghi phiếu kèm ảnh. */
+async function readBody(request) {
+  if (!/multipart\/form-data/i.test(request.headers?.get?.('content-type') || '')) return { body: await request.json().catch(() => ({})), photos: [] };
+  const form = await request.formData().catch(() => null);
+  let body = {};
+  try { body = JSON.parse(form?.get('payload') || '{}') || {}; } catch { /* payload hỏng → thao tác không hợp lệ */ }
+  return { body, photos: form ? form.getAll('photo').filter(f => f && typeof f !== 'string') : [] };
+}
 
 /**
  * Một thao tác = một lần ghi (hàm staff_notes_commit trong DB). Các phiếu bị đổi được
@@ -217,7 +233,10 @@ export async function GET(request) {
       const ids = new Set((notes || []).map(n => n.id));
       payments = (p.data || []).filter(x => ids.has(x.note_id) || ids.has(x.paid_from_note_id));
     }
-    return NextResponse.json({ notes: notes || [], payments, categories: await readCategories(db) }, { headers });
+    // Link xem ảnh phiếu (1 giờ); kho ảnh lỗi thì vẫn trả phiếu, chỉ thiếu ảnh.
+    const paths = (notes || []).flatMap(notePhotos);
+    const photoLinks = paths.length ? await signReceiptImages(statusDatabase(), paths).catch(() => ({})) : {};
+    return NextResponse.json({ notes: notes || [], payments, categories: await readCategories(db), photo_links: photoLinks }, { headers });
   } catch (error) {
     console.error('[notes] GET', error);
     return fail('Không tải được Sổ tay, thử lại.', 500);
@@ -231,7 +250,7 @@ export async function POST(request) {
     // Quản lý làm được như chủ quán trên phiếu (ghi, sửa, trả nợ phiếu của ai cũng được), trừ xoá phiếu và sửa loại.
     const user = s.user, isAdmin = user.role === 'admin', canManage = seesAllNotes(user.role);
     const db = staffDatabase(user.id);
-    const body = await request.json().catch(() => ({}));
+    const { body, photos } = await readBody(request);
     const changes = changeSet();
     const dm = iso => vnDay(iso).split('-').reverse().slice(0, 2).join('/');
 
@@ -239,6 +258,10 @@ export async function POST(request) {
       const type = TYPES.includes(body.note_type) ? body.note_type : 'other';
       const items = type === 'expense' ? cleanItems(body.items) : [];
       const noteText = str(body.note, 4000);
+      // Phiếu có hàng chợ phải có ảnh hàng trên cân / giấy ghi của mối (chống khai khống số ký, giá).
+      if (photos.length > MAX_NOTE_PHOTOS) return fail(`Tối đa ${MAX_NOTE_PHOTOS} ảnh một phiếu.`);
+      for (const photo of photos) { const problem = receiptImageProblem(photo); if (problem) return fail(problem); }
+      if (needsTripPhoto(items) && !photos.length) return fail('Chụp ảnh hàng trên cân ở quán (hoặc giấy ghi của mối) rồi mới lưu phiếu.');
       // Các khoản nợ cũ người ghi chọn trả bằng tiền của phiếu này — kiểm tra hết trước khi lưu.
       const requested = Array.isArray(body.pay_debts) ? body.pay_debts.slice(0, 60) : [];
       const carryReq = type === 'expense' && items.length && Array.isArray(body.carry_leftovers) ? body.carry_leftovers.slice(0, 30) : [];
@@ -290,11 +313,21 @@ export async function POST(request) {
       const sourceText = x => (x.from ? `, lấy tiền thừa phiếu ${dm(byId.get(x.from).created_at)}` : '');
       const notice = payTotal > 0 ? `[💰 Trả nợ cũ ${vnd(payTotal)}: ${plan.map(x => `${x.line.creditor || 'không ghi tên'} — ${x.line.name} ${vnd(x.pay)} (phiếu ${dm(x.target.created_at)}${sourceText(x)})`).join('; ')}]` : '';
       let content, amount = 0, debt = 0;
+      const storage = statusDatabase();
+      const photoPaths = [];
       if (items.length) {
         const t = noteTotals(items);
         amount = t.paid; debt = t.debt;
+        // Ảnh lưu trước, phiếu sau: ghi phiếu lỗi thì xoá ảnh vừa lưu (bên dưới).
+        try {
+          for (const photo of photos) photoPaths.push(await uploadReceiptImage(storage, photo, 'note'));
+        } catch (error) {
+          await removeReceiptImages(storage, photoPaths);
+          throw error;
+        }
         content = JSON.stringify({ type: 'structured_expense', items, note: [noteText, notice].filter(Boolean).join('\n\n'),
           input_amount: money(body.input_amount),
+          ...(photoPaths.length ? { photos: photoPaths } : {}),
           ...(carry.length ? { carried_in: carry.map(c => ({ from_note_id: c.id, from_at: byId.get(c.id).created_at, amount: c.amount })) } : {}) });
       } else {
         content = [noteText.trim(), notice].filter(Boolean).join('\n\n');
@@ -310,7 +343,13 @@ export async function POST(request) {
           logText: item => `💰 Khấu trừ ${vnd(x.pay)}${item?.name ? ` cho "${item.name}"` : ''} (${x.from ? `lấy tiền thừa phiếu ${dm(byId.get(x.from).created_at)}` : 'lấy từ phiếu đi chợ mới'})${item?.paymentStatus === 'full' ? ' — ✅ Đã trả đủ' : ''}` });
       }
       changes.insert = { id: newId, staff_id: user.id, note_type: type, content, amount, debt, status: 'approved' };
-      const created = await changes.commit(db);
+      let created;
+      try {
+        created = await changes.commit(db);
+      } catch (error) {
+        await removeReceiptImages(storage, photoPaths);
+        throw error;
+      }
       return NextResponse.json({ ok: true, note: created }, { headers });
     }
 
@@ -356,6 +395,7 @@ export async function POST(request) {
       changes.deletePayments = (pays || []).map(p => p.id);
       changes.remove = note;
       await changes.commit(db);
+      await removeReceiptImages(statusDatabase(), notePhotos(note));
       return NextResponse.json({ ok: true }, { headers });
     }
 
@@ -397,6 +437,16 @@ export async function POST(request) {
       const items = type === 'expense' ? cleanItems(body.items, storedItems) : [];
       const noteText = str(body.note, 4000);
       const ts = stamp(), by = user.full_name || 'Không rõ';
+      // Ảnh thêm lúc sửa (cả phiếu tối đa MAX_NOTE_PHOTOS). Phiếu chưa có hàng chợ mà sửa thêm hàng chợ
+      // thì cần ảnh như phiếu mới; phiếu cũ (ghi trước khi bắt ảnh) sửa giá / số lượng thì không bắt.
+      const storedPhotos = notePhotos(note);
+      if (storedPhotos.length + photos.length > MAX_NOTE_PHOTOS) return fail(`Tối đa ${MAX_NOTE_PHOTOS} ảnh một phiếu.`);
+      for (const photo of photos) { const problem = receiptImageProblem(photo); if (problem) return fail(problem); }
+      if (needsTripPhoto(items) && !needsTripPhoto(storedItems) && !storedPhotos.length && !photos.length) {
+        return fail('Phiếu thêm hàng chợ: chụp ảnh hàng trên cân ở quán (hoặc giấy ghi của mối) rồi mới lưu.');
+      }
+      const storage = statusDatabase();
+      const addedPhotos = [];
       let content, amount = 0, debt = 0;
       if (items.length) {
         const lines = diffItems(storedItems, items, stored?.note || '', noteText, await readCategories(db));
@@ -404,11 +454,13 @@ export async function POST(request) {
         amount = t.paid; debt = t.debt;
         const before = (Number(note.amount) || 0) + (Number(note.debt) || 0);
         if (Math.abs(before - (amount + debt)) >= 1) lines.push(`💲 Tổng phiếu: ${vnd(before)} → ${vnd(amount + debt)}`);
+        if (photos.length) lines.push(`📷 Thêm ${photos.length} ảnh`);
         const inputAmount = money(body.input_amount);
-        // Giữ sổ tiền dư (đã trả chủ, chuyển đi / nhận vào) khi sửa phiếu.
-        const moneyLogs = Object.fromEntries(['returned_logs', 'carried_in', 'carried_out'].filter(k => Array.isArray(stored?.[k])).map(k => [k, stored[k]]));
-        content = JSON.stringify({ type: 'structured_expense', items, note: noteText, ...(inputAmount > 0 ? { input_amount: inputAmount } : {}), ...moneyLogs,
-          history: [...(stored?.history || []), { ts, by, changes: lines.length ? lines.join('\n') : '✏️ Cập nhật ghi chú' }] });
+        // Giữ sổ tiền dư (đã trả chủ, chuyển đi / nhận vào) và ảnh hàng khi sửa phiếu.
+        const moneyLogs = Object.fromEntries(['returned_logs', 'carried_in', 'carried_out', 'photos'].filter(k => Array.isArray(stored?.[k])).map(k => [k, stored[k]]));
+        const doc = { type: 'structured_expense', items, note: noteText, ...(inputAmount > 0 ? { input_amount: inputAmount } : {}), ...moneyLogs,
+          history: [...(stored?.history || []), { ts, by, changes: lines.length ? lines.join('\n') : '✏️ Cập nhật ghi chú' }] };
+        content = JSON.stringify(doc);
         // Tiền dư đã trả chủ / chuyển sang phiếu khác phải vẫn còn sau khi sửa.
         const { data: pays, error: paysErr } = await db.from('staff_note_payments').select('paid_from_note_id, amount').eq('paid_from_note_id', note.id);
         if (paysErr) throw paysErr;
@@ -416,6 +468,15 @@ export async function POST(request) {
         const claimed = after.returned + after.carriedOut;
         if (claimed > 0 && after.balance < claimed) {
           return fail(`Phiếu này đã trả chủ / chuyển sang phiếu sau ${vnd(claimed)} tiền dư. Sau khi sửa, tiền giao trừ tiền đã chi phải còn ít nhất số này (hiện chỉ còn ${vnd(Math.max(0, after.balance))}).`);
+        }
+        if (photos.length) {
+          try {
+            for (const photo of photos) addedPhotos.push(await uploadReceiptImage(storage, photo, 'note'));
+          } catch (error) {
+            await removeReceiptImages(storage, addedPhotos);
+            throw error;
+          }
+          content = JSON.stringify({ ...doc, photos: [...storedPhotos, ...addedPhotos] });
         }
       } else if (stored) {
         content = JSON.stringify({ ...stored, history: [...(stored.history || []), { ts, by, changes: '✏️ Sửa nội dung' }], note: noteText });
@@ -429,7 +490,12 @@ export async function POST(request) {
       if (!content) return fail('Vui lòng nhập nội dung!');
       const row = changes.note(note);
       Object.assign(row, { note_type: type, content, amount, debt, paid_debt: Math.min(Number(note.paid_debt) || 0, debt) });
-      await changes.commit(db);
+      try {
+        await changes.commit(db);
+      } catch (error) {
+        await removeReceiptImages(storage, addedPhotos);
+        throw error;
+      }
       return NextResponse.json({ ok: true, note: await fresh(db, note.id) }, { headers });
     }
 
