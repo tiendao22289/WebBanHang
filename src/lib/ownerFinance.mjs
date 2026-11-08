@@ -4,7 +4,7 @@
 // Sổ bắt đầu tính từ ngày này; dữ liệu trước đó không đưa vào.
 import { lineWarnings, noteTotals, parsePrice as linePrice, parseQty } from './notesMath.mjs';
 import { dayCheckLines } from './dayCheck.mjs';
-import { addCosts, addItemCosts, addNamedCost, categoryName, lineCategory, noteOtherCosts, noteOtherItems, OTHER_ID, otherCostRows } from './noteCategories.mjs';
+import { addCosts, addItemCosts, addNamedCost, categoryName, lineCategory, namedCostList, noteOtherCosts, noteOtherItems, OTHER_ID, otherCostRows } from './noteCategories.mjs';
 
 export const FINANCE_START_DATE = '2026-10-23';
 
@@ -202,22 +202,24 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
 
   // Tab tự tạo: theo tháng thì chia đều như chi cố định, theo ngày thì tính đúng ngày.
   const monthlyTabs = new Set(categories.filter(c => c.scope === 'tab' && c.schedule === 'monthly').map(c => c.id));
-  const customMonthTotals = {};
+  const customMonthTotals = {}, customMonthWho = {};
   for (const e of entries) {
     if (e.kind !== 'custom' || !monthlyTabs.has(e.category) || e.entry_date < start || e.entry_date >= next) continue;
     customMonthTotals[e.category] = (customMonthTotals[e.category] || 0) + (Number(e.amount) || 0);
+    if (e.created_by_name) (customMonthWho[e.category] ||= []).push(e.created_by_name);
   }
   const customDailyShare = Object.fromEntries(Object.entries(customMonthTotals).map(([id, total]) => [id, total / daysInMonth]));
   // Chi cố định chia đều mỗi ngày, theo từng khoản (tiền nhà, điện, nước…): tên chủ ghi, không có thì tên loại.
   const tabName = id => categories.find(c => c.id === id)?.name || FIXED_CATEGORIES.find(c => c.key === id)?.label || '';
   const fixedItemsPerDay = {};
-  for (const e of fixedEntries) addNamedCost(fixedItemsPerDay, e.label || tabName(e.category) || 'Chi cố định', (Number(e.amount) || 0) / daysInMonth);
+  for (const e of fixedEntries) addNamedCost(fixedItemsPerDay, e.label || tabName(e.category) || 'Chi cố định', (Number(e.amount) || 0) / daysInMonth, e.created_by_name);
 
   const days = dates.map(date => ({
     date, revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {},
     purchases: 0, purchaseNotes: 0, notesOther: {}, notesOtherItems: {}, suspiciousNotes: 0, mismatchNotes: 0, drinks: 0, salary: Number(wages?.byDay?.[date]) || 0, fixedShare: fixedPerDay,
-    custom: { ...customDailyShare }, customTotal: 0, profit: 0, close: null, check: null,
-    costItems: { drinks: {}, fixed: structuredClone(fixedItemsPerDay), custom: {}, salary: structuredClone(wages?.byDayStaff?.[date] || {}) },
+    custom: { ...customDailyShare }, customWho: structuredClone(customMonthWho), customTotal: 0, profit: 0, close: null, check: null,
+    // shop: tiền đi chợ (hàng ốc, không gồm loại "Khác") theo người viết phiếu Sổ tay.
+    costItems: { drinks: {}, fixed: structuredClone(fixedItemsPerDay), custom: {}, shop: {}, salary: structuredClone(wages?.byDayStaff?.[date] || {}) },
   }));
   const byDate = new Map(days.map(d => [d.date, d]));
 
@@ -243,8 +245,11 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     if (!day || cost <= 0) continue;
     day.purchases += cost;
     day.purchaseNotes += 1;
-    addCosts(day.notesOther, noteOtherCosts(noteItems(note), cost, noteLineCost));
-    addItemCosts(day.notesOtherItems, noteOtherItems(noteItems(note), cost, noteLineCost));
+    const who = note.staff?.full_name || note.staff_name || null;
+    const other = noteOtherCosts(noteItems(note), cost, noteLineCost);
+    addCosts(day.notesOther, other);
+    addItemCosts(day.notesOtherItems, noteOtherItems(noteItems(note), cost, noteLineCost, who));
+    addNamedCost(day.costItems.shop, who || 'Không rõ người ghi', cost - Object.values(other).reduce((s, v) => s + (Number(v) || 0), 0));
     if (suspiciousNoteItems(noteItems(note)).length || noteLineWarnings(note).length) day.suspiciousNotes += 1;
     if (noteMismatch(note)) day.mismatchNotes += 1;
   }
@@ -253,10 +258,11 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     if (!day) continue;
     if (entry.kind === 'drink') {
       day.drinks += Number(entry.amount) || 0;
-      addNamedCost(day.costItems.drinks, entry.label || tabName(entry.category) || 'Chi trong ngày', Number(entry.amount) || 0);
+      addNamedCost(day.costItems.drinks, entry.label || tabName(entry.category) || 'Chi trong ngày', Number(entry.amount) || 0, entry.created_by_name);
     }
     if (entry.kind === 'custom' && !monthlyTabs.has(entry.category)) {
       day.custom[entry.category] = (day.custom[entry.category] || 0) + (Number(entry.amount) || 0);
+      if (entry.created_by_name) (day.customWho[entry.category] ||= []).push(entry.created_by_name);
     }
   }
 
@@ -268,10 +274,11 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
   }
 
   const totals = { revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {}, purchases: 0, notesOther: {}, notesOtherItems: {}, drinks: 0, salary: 0, fixedShare: 0,
-    custom: {}, customTotal: 0, profit: 0, costItems: { drinks: {}, fixed: {}, custom: {} } };
+    custom: {}, customTotal: 0, profit: 0, costItems: { drinks: {}, fixed: {}, custom: {}, shop: {} } };
   for (const day of days) {
     day.customTotal = Object.values(day.custom).reduce((sum, v) => sum + v, 0);
-    for (const [id, v] of Object.entries(day.custom)) addNamedCost(day.costItems.custom, tabName(id) || 'Khác', v);
+    for (const [id, v] of Object.entries(day.custom)) addNamedCost(day.costItems.custom, tabName(id) || 'Khác', v, day.customWho?.[id]);
+    delete day.customWho;
     day.profit = day.revenue - day.purchases - day.drinks - day.salary - day.fixedShare - day.customTotal;
     for (const key of ['revenue', 'bills', 'paperBills', 'paperRevenue', 'cash', 'transfer', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit', 'suspiciousNotes', 'mismatchNotes']) totals[key] = (totals[key] || 0) + day[key];
     for (const [acc, amount] of Object.entries(day.byAccount)) totals.byAccount[acc] = (totals.byAccount[acc] || 0) + amount;
@@ -308,7 +315,8 @@ export function costParts(day, categories = []) {
 export function shoppingParts(day, noteCategories = []) {
   const other = otherCostRows(day?.notesOther, noteCategories, day?.notesOtherItems || null);
   const otherSum = other.reduce((s, r) => s + r.amount, 0);
-  return [{ id: '', name: 'Đi chợ', amount: Math.max(0, (Number(day?.purchases) || 0) - otherSum) }, ...other];
+  const people = namedCostList(day?.costItems?.shop).map(x => ({ name: x.name, amount: x.amount, person: true }));
+  return [{ id: '', name: 'Đi chợ', amount: Math.max(0, (Number(day?.purchases) || 0) - otherSum), ...(people.length ? { items: people } : {}) }, ...other];
 }
 
 const vnd = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;
