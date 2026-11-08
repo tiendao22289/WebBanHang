@@ -731,7 +731,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     if (amount > given && !claimForm.payout) return say(given ? 'Chọn nhận lại phần chi lố: lấy tiền mặt hay cộng vào lương.' : 'Chọn nhận lại tiền: lấy tiền mặt hay cộng vào lương.', false);
     const ok = await send('claim', 'claim_expense', { item, amount, given_amount: given, spent_on: claimForm.spent_on || vnToday(), note: claimForm.note,
       payout: amount > given ? claimForm.payout : 'cash' }, () => { setClaimForm(emptyClaim()); setShowClaimForm(false); });
-    if (ok) say(given > amount ? `Đã gửi. Nhớ đưa lại chủ ${formatMoney(given - amount)} tiền thừa.` : 'Đã gửi khoản chi, chờ chủ quán duyệt.');
+    if (ok) say(given > amount ? `Đã gửi. Nhớ đưa lại chủ ${formatMoney(given - amount)} tiền thừa, chưa đưa thì chủ trừ vào lương.` : 'Đã gửi khoản chi, chờ chủ quán duyệt.');
   };
 
   // Báo lỗi đồng nghiệp: chưa trừ tiền, chủ quán xem rồi phạt hoặc bỏ qua; người bị báo không thấy tên người báo.
@@ -1063,13 +1063,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   const exportPayroll = async rows => {
     const XLSX = await import('xlsx');
     const head = ['Nhân viên', 'Số điện thoại', 'Lương cơ bản', 'Ngày công', 'Lương ngày công', 'Chỉnh theo số ngày của tháng', 'Lương 1 ngày', 'Ngày theo ngày', 'Lương theo ngày', 'Lương 1 giờ', 'Giờ theo giờ', 'Lương theo giờ', 'Trừ vào trễ', 'Trừ về sớm', 'Giờ làm', 'Tăng ca (giờ)', 'Tiền tăng ca',
-      'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Chi hộ (cộng lương)', 'Thực lĩnh', 'Đã trả theo kỳ', 'Còn phải trả', 'Trạng thái', 'Nghỉ việc'];
+      'Thưởng chuyên cần', 'Ứng lương', 'Nghỉ có đơn (ngày)', 'Trừ nghỉ', 'Phạt', 'Chi hộ (cộng lương)', 'Chi hộ (trừ tiền thừa)', 'Thực lĩnh', 'Đã trả theo kỳ', 'Còn phải trả', 'Trạng thái', 'Nghỉ việc'];
     const data = rows.map(({ s, c }) => {
       const d = departureOf(s.id);
       return [s.full_name, s.phone, c.base, c.rule === 'days' ? c.dayUnits ?? c.workUnits : c.workDays, c.dayAmt ?? c.basePay, c.monthAdjust || 0,
         c.dayWage?.rates?.join(' / ') || '', c.dayWage ? c.dayWage.days : '', c.dayWage?.amount || '',
         c.hourly?.rates?.join(' / ') || '', c.hourly ? Math.round(c.hourly.minutes / 6) / 10 : '', c.hourly?.amount || '', c.lateAmt || 0, c.earlyAmt || 0, c.totalWorkH, c.otHours, c.otAmt,
-        c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.claimAmt || 0, c.net, cyclePaidOf(s.id), c.net - cyclePaidOf(s.id), c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
+        c.bonusAmt || 0, c.advAmt, c.absDays, c.absAmt, c.vioAmt, c.claimAmt || 0, c.claimCut || 0, c.net, cyclePaidOf(s.id), c.net - cyclePaidOf(s.id), c.paid_at ? 'Đã trả' : c.locked ? 'Đã chốt' : 'Tạm tính',
         d ? `Làm đến ${d.last_day.split('-').reverse().join('/')}` : ''];
     });
     const sheet = XLSX.utils.aoa_to_sheet([[`Bảng lương tháng ${selMonth}/${selYear}`], [], head, ...data]);
@@ -2294,6 +2294,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 {row('Tăng ca', `${fmtNum(c.otHours)} giờ → +${formatMoney(c.otAmt)}`, '#15803d')}
                 {c.bonusAmt > 0 && row('⭐ Thưởng chuyên cần', `+${formatMoney(c.bonusAmt)}`, '#15803d')}
                 {c.claimAmt > 0 && row('🧾 Hoàn tiền chi hộ', `+${formatMoney(c.claimAmt)}`, '#15803d')}
+                {c.claimCut > 0 && row('🧾 Tiền thừa chi hộ chưa trả chủ', `−${formatMoney(c.claimCut)}`, '#dc2626')}
                 {c.pendingH > 0 && row('Ngoài ca chờ chủ duyệt', `${fmtNum(c.pendingH)} giờ (chưa tính)`, '#b45309')}
                 {c.advAmt > 0 && row('Ứng lương', `−${formatMoney(c.advAmt)}`, '#dc2626')}
                 {c.absDays > 0 && (c.rule === 'days'
@@ -2443,7 +2444,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                         style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />}
                       {!claimForm.given && <>{ask('Duyệt xong bạn muốn nhận lại tiền thế nào?')}{payoutChoices}</>}
                       {claimForm.given && given > 0 && spent > 0 && (given > spent
-                        ? box('#f0fdf4', '#166534', <>Còn thừa <b>{formatMoney(given - spent)}</b> → đưa lại chủ. Chủ bấm duyệt khi đã nhận lại tiền.</>)
+                        ? box('#f0fdf4', '#166534', <>Còn thừa <b>{formatMoney(given - spent)}</b> → đưa lại chủ. Chưa đưa thì chủ trừ vào lương.</>)
                         : given === spent ? box('#f8fafc', '#334155', <>Chi vừa đủ số chủ đưa, không ai nợ ai.</>)
                         : <>{box('#fff7ed', '#9a3412', <>Chi lố <b>{formatMoney(spent - given)}</b> so với số chủ đưa.</>)}{ask('Bạn muốn nhận lại phần lố thế nào?')}{payoutChoices}</>)}
                     </>;
@@ -2820,6 +2821,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                                 value: !c.otAmt && !overtimeOn(s.id) ? 'không tính' : `+${formatMoney(c.otAmt)}`, tone: !c.otAmt && !overtimeOn(s.id) ? 'muted' : 'green' })}
                               {c.bonusAmt > 0 && slipRow(s, { label: 'Thưởng chuyên cần', value: `+${formatMoney(c.bonusAmt)}`, tone: 'green' })}
                               {c.claimAmt > 0 && slipRow(s, { label: 'Hoàn tiền chi hộ', sub: 'cộng vào lương', value: `+${formatMoney(c.claimAmt)}`, tone: 'green' })}
+                              {c.claimCut > 0 && slipRow(s, { label: 'Tiền thừa chi hộ', sub: 'chưa trả chủ, trừ lương', value: `−${formatMoney(c.claimCut)}`, tone: 'red' })}
                               {slipRow(s, { label: 'Ứng lương', sub: adv.length ? `${adv.length} lần${advPending ? ` · ${advPending} chờ duyệt` : ''}` : null,
                                 value: adv.length ? `−${formatMoney(c.advAmt)}` : '—', tone: adv.length ? 'red' : 'muted', kind: 'advance', has: adv.length > 0 })}
                               {slipRow(s, { label: 'Nghỉ', sub: abs.length ? `${abs.length} đơn${c.rule === 'days' ? ' · không trừ thêm' : ''}` : null,
@@ -2878,7 +2880,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <td>{cellBtn(s.id, 'leftEarly', talliesOf(s.id).leftEarly.count > 0, tally(talliesOf(s.id).leftEarly, c.earlyAmt))}</td>
                             <td>{!c.otAmt && !overtimeOn(s.id) ? <span style={{color:'#94a3b8'}}>Không tính</span> : <span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span>}<div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.otHours)} giờ</div></td>
                             <td>{c.bonusAmt > 0 ? <span style={{color:'#16a34a'}}>+{formatMoney(c.bonusAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}
-                              {c.claimAmt > 0 && <div style={{ fontSize: '0.72rem', color: '#16a34a' }}>+{formatMoney(c.claimAmt)} chi hộ</div>}</td>
+                              {c.claimAmt > 0 && <div style={{ fontSize: '0.72rem', color: '#16a34a' }}>+{formatMoney(c.claimAmt)} chi hộ</div>}
+                              {c.claimCut > 0 && <div style={{ fontSize: '0.72rem', color: '#dc2626' }}>−{formatMoney(c.claimCut)} tiền thừa chi hộ</div>}</td>
                             <td>{cellBtn(s.id, 'advance', monthRequests(s.id, 'advance').length > 0, <span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span>)}</td>
                             <td>{cellBtn(s.id, 'absent', monthRequests(s.id, 'absent').length > 0, c.rule === 'days'
                               ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không trừ)` : monthRequests(s.id, 'absent').length ? 'chờ duyệt' : '—'}</span>
@@ -2954,7 +2957,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
               {/* Khoản chi hộ quán: duyệt → vào Sổ thu chi (Chi trong ngày, đúng ngày chi); tiền mặt thì đưa ngay, cộng lương thì vào lương tháng này. */}
               {[...claims.claims.filter(x => x.status === 'pending'), ...claims.claims.filter(x => x.status !== 'pending').slice(0, 20)].map(x => {
                 const who = staffList.find(st => st.id === x.staff_id)?.full_name || x.created_by_name || 'Không rõ', cash = x.payout === 'cash';
-                // Chủ đưa trước: duyệt = đã nhận lại tiền thừa / chi vừa đủ / trả phần chi lố (tiền mặt hay cộng lương).
+                // Chủ đưa trước: duyệt = đã nhận lại tiền thừa (chưa trả thì chủ chọn trừ lương) / chi vừa đủ / trả phần chi lố.
                 const given = x.given_amount > 0, owed = given ? x.owed : x.amount;
                 const approveLabel = x.left > 0 ? `✓ Duyệt · đã nhận lại ${formatMoney(x.left)}` : given && !owed ? '✓ Duyệt · chi vừa đủ'
                   : cash ? `✓ Duyệt · đưa ${given ? formatMoney(owed) : 'tiền mặt'}` : '✓ Duyệt · cộng lương';
@@ -2965,12 +2968,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                       <div className="name">{who}</div>
                       <div style={{ marginTop: 4 }}>
                         <span style={{ display: 'inline-block', background: '#dcfce7', color: '#166534', borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>🧾 Chi hộ quán</span>
-                        <span className={`status-badge ${x.status}`}>{x.status === 'pending' ? '⏳ Chờ duyệt' : x.status === 'approved' ? (given && (x.left > 0 || !owed) ? '✅ Đã duyệt'
+                        <span className={`status-badge ${x.status}`}>{x.status === 'pending' ? '⏳ Chờ duyệt' : x.status === 'approved' ? (x.left > 0 && !cash ? `✅ Đã duyệt · trừ lương ${x.month}/${x.year}`
+                          : given && (x.left > 0 || !owed) ? '✅ Đã duyệt'
                           : cash ? '✅ Đã duyệt · đã đưa tiền mặt' : `✅ Đã duyệt · cộng lương ${x.month}/${x.year}`) : '❌ Từ chối'}</span>
                       </div>
                       <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
                         <div><strong>{x.item}</strong>: <strong>{formatMoney(x.amount)}</strong> · chi ngày {ddmm(x.spent_on)}</div>
-                        {given ? <div>💵 Chủ đưa trước <strong>{formatMoney(x.given_amount)}</strong> → <strong>{x.left > 0 ? `đưa lại chủ ${formatMoney(x.left)}` : !owed ? 'chi vừa đủ'
+                        {given ? <div>💵 Chủ đưa trước <strong>{formatMoney(x.given_amount)}</strong> → <strong>{x.left > 0 ? (x.status === 'approved' && !cash ? `trừ ${formatMoney(x.left)} tiền thừa vào lương` : `đưa lại chủ ${formatMoney(x.left)}`) : !owed ? 'chi vừa đủ'
                           : `chi lố ${formatMoney(owed)}, ${cash ? 'lấy tiền mặt' : 'cộng vào lương'}`}</strong></div>
                           : <div>Muốn nhận lại: <strong>{cash ? '💵 Lấy tiền mặt tại chủ' : '💰 Cộng vào lương'}</strong></div>}
                         {x.note && <div>Ghi thêm: {x.note}</div>}
@@ -2982,6 +2986,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                     <div className="request-actions">
                       {x.status === 'pending' ? <>
                         <button className="btn-success" onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved' })}>{approveLabel}</button>
+                        {x.left > 0 && <button onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved', left_salary: true }, `${who} chưa trả lại ${formatMoney(x.left)} tiền thừa: trừ vào lương?`)}
+                          style={{ padding: '6px 10px', background: 'white', border: '1px solid #fecaca', borderRadius: 7, color: '#b91c1c', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer' }}>Chưa trả · trừ lương</button>}
                         {!cash && <button onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved', cash: true }, `Duyệt và đưa ${formatMoney(owed)} tiền mặt cho ${who} (không cộng vào lương)?`)}
                           style={{ padding: '6px 10px', background: 'white', border: '1px solid #bbf7d0', borderRadius: 7, color: '#15803d', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer' }}>💵 Đưa tiền mặt</button>}
                         <button className="btn-danger" onClick={() => { const note = prompt('Lý do từ chối (tuỳ chọn):'); if (note === null) return; claimAction('decide_claim', { id: x.id, status: 'rejected', admin_note: note }); }}>✗ Từ chối</button>

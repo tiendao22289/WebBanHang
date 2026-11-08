@@ -204,9 +204,12 @@ test('when the owner gave money first, only the overspend is owed and the leftov
   assert.equal(claimText(own), 'cộng vào lương');
   const month = c => ({ ...c, status: 'approved', year: 2026, month: 11 });
   const claims = [month(over), month({ ...left, payout: 'salary' }), month(own)];
-  assert.equal(salaryClaims(claims, 2026, 11).length, 2, 'a claim the owner fully paid for adds nothing to pay');
-  const s = computeSalary({ year: 2026, month: 11, staffId: 's', config: { base_salary: 6000000, overtime_rate: 0 }, claims });
-  assert.equal(s.claimAmt, 70000, 'overspend 30.000 + own money 40.000');
+  assert.equal(claimText({ ...left, payout: 'salary' }), 'chủ đưa trước 100.000đ · trừ 20.000đ tiền thừa vào lương');
+  assert.equal(salaryClaims([...claims, month(exact)], 2026, 11).length, 3, 'a claim spent exactly as given changes nothing in pay');
+  const base = { year: 2026, month: 11, staffId: 's', config: { base_salary: 6000000, overtime_rate: 0 } };
+  const s = computeSalary({ ...base, claims }), plainPay = computeSalary(base);
+  assert.deepEqual([s.claimAmt, s.claimCut], [70000, 20000], 'overspend 30.000 + own money 40.000; unreturned leftover 20.000 is cut');
+  assert.equal(s.net - plainPay.net, 50000);
 });
 
 test('staff log a claim the owner paid for in advance; approving books the real spend and settles only the difference', async () => {
@@ -244,4 +247,23 @@ test('staff log a claim the owner paid for in advance; approving books the real 
   assert.match(state.finance_entries[1].note, /chủ đưa trước 100\.000đ · chi lố 30\.000đ cộng vào lương tháng 11\/2026/);
   assert.match(state.finance_entries[2].note, /chủ đưa trước 50\.000đ · chi vừa đủ/);
   assert.equal((await get(AN, 'me=1')).body.salary.claimAmt, 30000, 'only the overspend goes into pay');
+
+  // Chủ đưa 100.000đ, chi 50.000đ, nhân viên chưa trả lại: chủ chọn trừ 50.000đ vào lương; khoản chi vẫn vào Sổ thu chi.
+  const before = (await get(AN, 'me=1')).body.salary;
+  const unpaid = await post(AN, { action: 'claim_expense', item: 'Xăng xe', amount: 50000, given_amount: 100000 });
+  const cut = await post(OWNER, { action: 'decide_claim', id: unpaid.body.id, status: 'approved', left_salary: true });
+  assert.deepEqual([cut.status, cut.body.month], [200, 11]);
+  assert.equal(state.payroll_expense_claims.find(c => c.id === unpaid.body.id).payout, 'salary');
+  assert.deepEqual(plain([state.finance_entries.at(-1).label, state.finance_entries.at(-1).amount]), ['Xăng xe', 50000]);
+  assert.match(state.finance_entries.at(-1).note, /chủ đưa trước 100\.000đ · trừ 50\.000đ tiền thừa vào lương tháng 11\/2026/);
+  const after = (await get(AN, 'me=1')).body.salary;
+  assert.deepEqual([after.claimAmt, after.claimCut, before.net - after.net], [30000, 50000, 50000]);
+  // Lương đã chốt: không trừ thêm được, chủ thu tiền mặt thay.
+  const later = await post(AN, { action: 'claim_expense', item: 'Đá cây', amount: 20000, given_amount: 50000 });
+  state.payroll_closes.push({ year: 2026, month: 11, staff_id: AN.id, snapshot: { net: 1 } });
+  const refused = await post(OWNER, { action: 'decide_claim', id: later.body.id, status: 'approved', left_salary: true });
+  assert.equal(refused.status, 409);
+  assert.match(refused.body.error, /không trừ thêm được/);
+  assert.equal((await post(OWNER, { action: 'decide_claim', id: later.body.id, status: 'approved' })).status, 200, 'paid back in cash instead');
+  assert.equal(state.payroll_expense_claims.find(c => c.id === later.body.id).payout, 'cash');
 });

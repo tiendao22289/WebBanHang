@@ -49,7 +49,7 @@ import { hashPin, isHashedPin, validPin } from '@/lib/staffPin.mjs';
 import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, KIOSK_COOKIE, newDeviceId, readKioskCookie, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
 import { closedDaysToDate, loadPayrollMonth, monthRange, readClosedDays, readHolidays, readHourlyRates, readLateRules, readMonthClaims, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
 import { AUTO_CLOSE_BY, AUTO_EXTRA_FROM, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { DAY_PAY_FROM, DEFAULT_OT_RATE, MAX_CYCLE_DAYS, addDays, claimGiven, claimLeft, claimOwed, claimText, computeSalary, cycleDue, cycleDueTo, cyclePayday, cyclePeriod, holidayArgs, nothingDue, lateRulesOf, monthKey, monthTallies, payoutDetail,
+import { DAY_PAY_FROM, DEFAULT_OT_RATE, MAX_CYCLE_DAYS, addDays, claimGiven, claimLeft, claimOwed, claimPay, claimText, computeSalary, cycleDue, cycleDueTo, cyclePayday, cyclePeriod, holidayArgs, nothingDue, lateRulesOf, monthKey, monthTallies, payoutDetail,
   payoutPartOfMonth, staffMonthStats, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import { normalizeRole } from '@/lib/staffRoles.mjs';
@@ -487,7 +487,7 @@ function personMonth(m, k, id) {
   return { key: k, byDay: closed?.byDay ? { ...live, ...closed.byDay } : live,
     advances: reqs.filter(r => r.request_type === 'advance' && r.status === 'approved').map(r => ({ id: r.id, amount: Number(r.amount) || 0 })),
     fines: vios.map(v => ({ id: v.id, amount: Number(v.amount) || 0 })), bonus: gifts.reduce((a, b) => a + (Number(b.amount) || 0), 0),
-    claims: claims.filter(c => c.payout === 'salary' && claimOwed(c) > 0).map(c => ({ id: c.id, amount: claimOwed(c) })) };
+    claims: claims.filter(c => c.payout === 'salary' && claimPay(c) !== 0).map(c => ({ id: c.id, amount: claimPay(c) })) };
 }
 
 /**
@@ -1483,26 +1483,31 @@ export async function POST(request) {
       if (status === 'approved') {
         // Chủ đổi sang đưa tiền mặt (vd lương tháng đó đã chốt / đã trả): khoản chi không cộng vào lương nữa.
         if (body.cash === true && claim.payout === 'salary') patch.payout = 'cash';
-        const payout = patch.payout || claim.payout, given = claimGiven(claim), owed = claimOwed(claim), left = claimLeft(claim);
+        // Chủ đưa trước, còn thừa: nhân viên đã trả lại thì duyệt như thường (tiền mặt); chưa trả thì chủ chọn trừ vào lương.
+        const given = claimGiven(claim), owed = claimOwed(claim), left = claimLeft(claim);
+        if (left > 0) patch.payout = body.left_salary === true ? 'salary' : 'cash';
+        const payout = patch.payout || claim.payout;
         patch.year = now.getUTCFullYear(); patch.month = now.getUTCMonth() + 1;
         const { data: who } = await db.from('staff').select('full_name').eq('id', claim.staff_id).maybeSingle();
         const name = who?.full_name || claim.created_by_name || 'nhân viên';
-        if (payout === 'salary' && owed > 0) {
-          // Người đã nghỉ việc trước tháng này: cộng vào lương tháng nghỉ việc (bảng lương các tháng sau không còn người đó).
-          const { data: left } = await db.from('staff_departures').select('last_day').eq('staff_id', claim.staff_id).maybeSingle();
-          const lastDay = left ? String(left.last_day).slice(0, 10) : null;
+        if (payout === 'salary' && claimPay(claim) !== 0) {
+          // Người đã nghỉ việc trước tháng này: cộng / trừ vào lương tháng nghỉ việc (bảng lương các tháng sau không còn người đó).
+          const { data: gone } = await db.from('staff_departures').select('last_day').eq('staff_id', claim.staff_id).maybeSingle();
+          const lastDay = gone ? String(gone.last_day).slice(0, 10) : null;
           if (lastDay && lastDay < `${patch.year}-${String(patch.month).padStart(2, '0')}-01`) {
             patch.year = Number(lastDay.slice(0, 4)); patch.month = Number(lastDay.slice(5, 7));
           }
           // Lương tháng đó đã chốt thì số đã chốt không có khoản này: không cộng lương được (khoản chi sẽ không bao giờ được trả).
           const { data: closed, error: ce } = await db.from('payroll_closes').select('staff_id').eq('year', patch.year).eq('month', patch.month).eq('staff_id', claim.staff_id).maybeSingle();
           if (ce) throw ce;
-          if (closed) return fail(`Lương tháng ${patch.month}/${patch.year} của ${name} đã chốt nên không cộng thêm được. Mở chốt người đó rồi duyệt, hoặc bấm "Đưa tiền mặt".`, 409);
+          if (closed) return fail(left > 0 ? `Lương tháng ${patch.month}/${patch.year} của ${name} đã chốt nên không trừ thêm được. Mở chốt người đó rồi duyệt, hoặc thu lại tiền thừa bằng tiền mặt.`
+            : `Lương tháng ${patch.month}/${patch.year} của ${name} đã chốt nên không cộng thêm được. Mở chốt người đó rồi duyệt, hoặc bấm "Đưa tiền mặt".`, 409);
         }
         // Sổ thu chi ghi số thật đã chi; ghi chú nói rõ chủ đưa trước bao nhiêu và phần chênh trả thế nào.
         const vnd = n => `${Number(n).toLocaleString('vi-VN')}đ`;
         const settle = !given ? (payout === 'cash' ? 'đã đưa tiền mặt' : `cộng vào lương tháng ${patch.month}/${patch.year}`)
-          : `chủ đưa trước ${vnd(given)} · ${left ? `đã nhận lại ${vnd(left)} tiền thừa` : !owed ? 'chi vừa đủ'
+          : `chủ đưa trước ${vnd(given)} · ${left ? (payout === 'salary' ? `trừ ${vnd(left)} tiền thừa vào lương tháng ${patch.month}/${patch.year}`
+            : `đã nhận lại ${vnd(left)} tiền thừa`) : !owed ? 'chi vừa đủ'
             : payout === 'cash' ? `đã đưa thêm ${vnd(owed)} tiền mặt` : `chi lố ${vnd(owed)} cộng vào lương tháng ${patch.month}/${patch.year}`}`;
         const entry = await db.from('finance_entries').insert({ entry_date: String(claim.spent_on).slice(0, 10), kind: 'drink', category: null, label: claim.item,
           amount: claim.amount, note: `Chi hộ: ${name} · ${settle}${claim.note ? ` · ${claim.note}` : ''}`.slice(0, 300),
