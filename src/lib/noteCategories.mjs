@@ -69,7 +69,7 @@ const itemLabel = s => { const t = String(s || '').replace(/\s+/g, ' ').trim().r
  * Như noteOtherCosts nhưng giữ từng khoản theo tên dòng hàng (tiền nhà, tiền điện…): { [id loại]: { [tên]: { name, amount } } }.
  * Cùng cách chặn tiền theo tổng phiếu nên cộng các khoản của một loại đúng bằng tiền loại đó.
  */
-export function noteOtherItems(items, total, lineCost) {
+export function noteOtherItems(items, total, lineCost, by = null) {
   const out = {};
   let left = Math.max(0, Number(total) || 0);
   for (const item of items || []) {
@@ -77,29 +77,35 @@ export function noteOtherItems(items, total, lineCost) {
     if (!id || !name) continue;
     const cost = Math.min(left, Math.max(0, lineCost(item) || 0));
     if (!cost) continue;
-    addNamedCost((out[id] ||= {}), name, cost);
+    addNamedCost((out[id] ||= {}), name, cost, by);
     left -= cost;
   }
   return out;
 }
 
 /** Cộng tiền vào khoản theo tên: map { [tên đã gộp]: { name, amount } } (tên hiện là cách viết gặp đầu tiên). */
-export function addNamedCost(map, name, amount) {
+// by: tên người ghi khoản đó (một tên hoặc danh sách) — gom lại không trùng, để hiện "ai điền".
+const whoList = (...lists) => [...new Set(lists.flatMap(x => [].concat(x || [])).map(x => String(x || '').trim()).filter(Boolean))];
+export function addNamedCost(map, name, amount, by = null) {
   const k = itemKey(name), v = Number(amount) || 0;
   if (!k || !(v > 0)) return map;
-  map[k] = { name: map[k]?.name || itemLabel(name), amount: (map[k]?.amount || 0) + v };
+  const who = whoList(map[k]?.by, by);
+  map[k] = { name: map[k]?.name || itemLabel(name), amount: (map[k]?.amount || 0) + v, ...(who.length ? { by: who } : {}) };
   return map;
 }
 
 /** Các khoản { [tên]: { name, amount } } → [{ name, amount }] nhiều tiền trước (làm tròn đồng). */
-export const namedCostList = map => Object.values(map || {}).map(x => ({ name: x.name, amount: Math.round(Number(x.amount) || 0) })).filter(x => x.amount > 0)
+export const namedCostList = map => Object.values(map || {}).map(x => ({ name: x.name, amount: Math.round(Number(x.amount) || 0), ...(x.by?.length ? { by: x.by } : {}) })).filter(x => x.amount > 0)
   .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name, 'vi'));
 
 /** Cộng dồn { id loại: { tên: { name, amount } } } của b vào a. */
 export function addItemCosts(a, b) {
   for (const [id, byName] of Object.entries(b || {})) {
     const into = (a[id] ||= {});
-    for (const [k, x] of Object.entries(byName || {})) into[k] = { name: into[k]?.name || x.name, amount: (into[k]?.amount || 0) + (Number(x.amount) || 0) };
+    for (const [k, x] of Object.entries(byName || {})) {
+      const who = whoList(into[k]?.by, x.by);
+      into[k] = { name: into[k]?.name || x.name, amount: (into[k]?.amount || 0) + (Number(x.amount) || 0), ...(who.length ? { by: who } : {}) };
+    }
   }
   return a;
 }

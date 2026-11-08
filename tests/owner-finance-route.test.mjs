@@ -772,7 +772,9 @@ test('Sổ tay "Khác" kinds (petrol, repairs) show as their own costs on /thong
   state.staff_notes.push({ id: 'k1', created_at: '2026-10-23T03:00:00.000Z', note_type: 'expense', amount: 350000, debt: 0, content, staff: { full_name: 'Lan' } });
   const api = load({ state });
   const report = (await get(api, 'report=2026-10-23')).body;
-  assert.deepEqual(plain(report.summary.costs.slice(0, 2)), [{ label: 'Đi chợ', amount: 300000 }, { label: 'Xăng xe (Sổ tay)', amount: 50000, items: [{ name: 'Đổ xăng', amount: 50000 }] }]);
+  // Kèm người viết phiếu: Đi chợ theo từng người, khoản "Khác" ghi ai điền.
+  assert.deepEqual(plain(report.summary.costs.slice(0, 2)), [{ label: 'Đi chợ', amount: 300000, items: [{ name: 'Lan', amount: 300000, person: true }] },
+    { label: 'Xăng xe (Sổ tay)', amount: 50000, items: [{ name: 'Đổ xăng', amount: 50000, by: ['Lan'] }] }]);
   assert.equal(report.summary.cost, 350000, 'same total as before');
   const week = (await get(api, 'period=week&date=2026-10-23')).body;
   assert.ok(week.totals.costs.some(c => c.label === 'Xăng xe (Sổ tay)' && c.amount === 50000));
@@ -781,7 +783,7 @@ test('Sổ tay "Khác" kinds (petrol, repairs) show as their own costs on /thong
   assert.deepEqual(plain(month.totals.notesOther), { xang: 50000 });
 });
 
-test('/thongke lists each cost by name: rent, electricity… in Sổ tay "Khác", fixed costs, daily costs and own tabs', async () => {
+test('/thongke lists each cost by name and who entered it: rent, electricity… in Sổ tay "Khác", fixed costs, daily costs and own tabs', async () => {
   const state = empty();
   const line = (name, price) => ({ name, price, category: 'other' });
   const note = (id, at, amount, items) => ({ id, created_at: at, note_type: 'expense', amount, debt: 0, content: JSON.stringify({ type: 'structured_expense', items }), staff: { full_name: 'Lan' } });
@@ -791,28 +793,31 @@ test('/thongke lists each cost by name: rent, electricity… in Sổ tay "Khác"
     note('b', '2026-10-24T03:00:00.000Z', 80000, [line('tiền  điện.', '30k'), line('Mua chổi', '50k')]));
   state.finance_categories = [{ id: 'gas', scope: 'tab', name: 'Gas bình', schedule: 'daily' }];
   state.finance_entries.push(
-    { id: 'f1', entry_date: '2026-10-01', kind: 'fixed', category: 'rent', label: '', amount: 3100000, created_at: '1' },
+    { id: 'f1', entry_date: '2026-10-01', kind: 'fixed', category: 'rent', label: '', amount: 3100000, created_at: '1', created_by_name: 'Chủ quán' },
     { id: 'f2', entry_date: '2026-10-01', kind: 'fixed', category: 'internet', label: 'Wifi', amount: 310000, created_at: '2' },
-    { id: 'd1', entry_date: '2026-10-23', kind: 'drink', label: 'Đá', amount: 40000, created_at: '3' },
-    { id: 'd2', entry_date: '2026-10-24', kind: 'drink', label: 'Coca', amount: 100000, created_at: '4' },
-    { id: 'g1', entry_date: '2026-10-24', kind: 'custom', category: 'gas', label: 'Gas bình', amount: 350000, created_at: '5' });
+    { id: 'd1', entry_date: '2026-10-23', kind: 'drink', label: 'Đá', amount: 40000, created_at: '3', created_by_name: 'Mai' },
+    { id: 'd2', entry_date: '2026-10-24', kind: 'drink', label: 'Coca', amount: 100000, created_at: '4', created_by_name: 'Chủ quán' },
+    { id: 'd3', entry_date: '2026-10-24', kind: 'drink', label: 'Đá', amount: 20000, created_at: '4b', created_by_name: 'Chủ quán' },
+    { id: 'g1', entry_date: '2026-10-24', kind: 'custom', category: 'gas', label: 'Gas bình', amount: 350000, created_at: '5', created_by_name: 'Mai' });
   const api = load({ state });
   const byLabel = costs => Object.fromEntries(plain(costs).map(c => [c.label, c]));
 
   const day = byLabel((await get(api, 'report=2026-10-23')).body.summary.costs);
-  assert.deepEqual(day['Đi chợ'], { label: 'Đi chợ', amount: 300000 });
-  assert.deepEqual(day['Khác (Sổ tay)'].items, [{ name: 'Tiền nhà', amount: 500000 }, { name: 'Tiền điện', amount: 300000 }]);
-  // Chi cố định chia đều 31 ngày: thuê nhà 100.000đ, wifi 10.000đ mỗi ngày.
-  assert.deepEqual(day['Chi cố định'].items, [{ name: 'Thuê nhà', amount: 100000 }, { name: 'Wifi', amount: 10000 }]);
-  assert.deepEqual(day['Chi trong ngày'].items, [{ name: 'Đá', amount: 40000 }]);
+  assert.deepEqual(day['Đi chợ'], { label: 'Đi chợ', amount: 300000, items: [{ name: 'Lan', amount: 300000, person: true }] });
+  assert.deepEqual(day['Khác (Sổ tay)'].items, [{ name: 'Tiền nhà', amount: 500000, by: ['Lan'] }, { name: 'Tiền điện', amount: 300000, by: ['Lan'] }]);
+  // Chi cố định chia đều 31 ngày: thuê nhà 100.000đ, wifi 10.000đ mỗi ngày (khoản không ghi người điền thì không có tên).
+  assert.deepEqual(day['Chi cố định'].items, [{ name: 'Thuê nhà', amount: 100000, by: ['Chủ quán'] }, { name: 'Wifi', amount: 10000 }]);
+  assert.deepEqual(day['Chi trong ngày'].items, [{ name: 'Đá', amount: 40000, by: ['Mai'] }]);
 
   const week = byLabel((await get(api, 'period=week&date=2026-10-24')).body.totals.costs);
   assert.deepEqual(week['Khác (Sổ tay)'], { label: 'Khác (Sổ tay)', amount: 880000,
-    items: [{ name: 'Tiền nhà', amount: 500000 }, { name: 'Tiền điện', amount: 330000 }, { name: 'Mua chổi', amount: 50000 }] });
+    items: [{ name: 'Tiền nhà', amount: 500000, by: ['Lan'] }, { name: 'Tiền điện', amount: 330000, by: ['Lan'] }, { name: 'Mua chổi', amount: 50000, by: ['Lan'] }] });
   // Tuần 19–25/10, sổ bắt đầu 23/10: 3 ngày chi cố định.
-  assert.deepEqual(week['Chi cố định'].items, [{ name: 'Thuê nhà', amount: 300000 }, { name: 'Wifi', amount: 30000 }]);
-  assert.deepEqual(week['Chi trong ngày'].items, [{ name: 'Coca', amount: 100000 }, { name: 'Đá', amount: 40000 }]);
-  assert.deepEqual(week['Khác'], { label: 'Khác', amount: 350000, items: [{ name: 'Gas bình', amount: 350000 }] });
+  assert.deepEqual(week['Chi cố định'].items, [{ name: 'Thuê nhà', amount: 300000, by: ['Chủ quán'] }, { name: 'Wifi', amount: 30000 }]);
+  // Cùng khoản "Đá" do 2 người ghi: cộng tiền, ghi cả 2 tên.
+  assert.deepEqual(week['Chi trong ngày'].items, [{ name: 'Coca', amount: 100000, by: ['Chủ quán'] }, { name: 'Đá', amount: 60000, by: ['Mai', 'Chủ quán'] }]);
+  assert.deepEqual(week['Khác'], { label: 'Khác', amount: 350000, items: [{ name: 'Gas bình', amount: 350000, by: ['Mai'] }] });
+  assert.deepEqual(week['Đi chợ'].items, [{ name: 'Lan', amount: 300000, person: true }]);
   // Từng khoản cộng lại đúng bằng nhóm.
   for (const c of Object.values(week)) if (c.items) assert.equal(c.items.reduce((a, i) => a + i.amount, 0), Math.round(c.amount), c.label);
 });

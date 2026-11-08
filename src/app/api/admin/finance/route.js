@@ -646,7 +646,7 @@ async function readNoteCategories(db) {
 // Chi của ngày / kỳ để hiện: đi chợ (hàng ốc), từng loại Khác của Sổ tay (kèm từng khoản theo tên: tiền nhà, tiền điện…),
 // rồi các khoản còn lại.
 const costList = (d, noteCategories) => [
-  ...shoppingParts(d, noteCategories).map(p => [p.id ? `${p.name} (Sổ tay)` : 'Đi chợ', p.amount, p.id ? p.items : null]),
+  ...shoppingParts(d, noteCategories).map(p => [p.id ? `${p.name} (Sổ tay)` : 'Đi chợ', p.amount, p.items || null]),
   ['Chi trong ngày', d.drinks, namedCostList(d.costItems?.drinks)], ['Lương', d.salary], ['Chi cố định', d.fixedShare, namedCostList(d.costItems?.fixed)],
   ['Khác', d.customTotal, namedCostList(d.costItems?.custom)],
 ].filter(([, amount]) => amount > 0).map(([label, amount, items]) => ({ label, amount, ...(items?.length ? { items } : {}) }));
@@ -827,7 +827,7 @@ export async function GET(request) {
       const monthExtra = (a, b) => (period !== 'month' ? 0 : loaded.map(l => l.summary)
         .filter(s => s.days.length && a <= s.from && b >= s.to).reduce((total, s) => total + (Number(s.totals.salaryExtra) || 0), 0));
       const sum = (list, extra = 0) => {
-        const t = { revenue: 0, bills: 0, paperBills: 0, cash: 0, byAccount: {}, purchases: 0, notesOther: {}, notesOtherItems: {}, costItems: { drinks: {}, fixed: {}, custom: {} }, drinks: 0, salary: 0, fixedShare: 0, customTotal: 0, profit: 0, closedDays: 0 };
+        const t = { revenue: 0, bills: 0, paperBills: 0, cash: 0, byAccount: {}, purchases: 0, notesOther: {}, notesOtherItems: {}, costItems: { drinks: {}, fixed: {}, custom: {}, shop: {} }, drinks: 0, salary: 0, fixedShare: 0, customTotal: 0, profit: 0, closedDays: 0 };
         for (const d of list) {
           for (const k of ['revenue', 'bills', 'paperBills', 'cash', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit']) t[k] += Number(d[k]) || 0;
           for (const [id, v] of Object.entries(d.byAccount || {})) t.byAccount[id] = (t.byAccount[id] || 0) + v;

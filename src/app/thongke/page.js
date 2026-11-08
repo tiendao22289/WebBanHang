@@ -131,7 +131,7 @@ function CostItems({ cost }) {
   if (!items.length || (items.length === 1 && sameName(cost.label, items[0].name))) return null;
   const rest = items.slice(COST_ITEMS_SHOWN);
   return <ul className="tk-cost-items">
-    {items.slice(0, COST_ITEMS_SHOWN).map(i => <li key={i.name}><span>{i.name}</span><b>{money(i.amount)}</b></li>)}
+    {items.slice(0, COST_ITEMS_SHOWN).map(i => <li key={i.name}><span>{i.person ? `👤 ${i.name}` : i.name}{i.by?.length > 0 && <small className="tk-cost-by">{i.by.join(', ')}</small>}</span><b>{money(i.amount)}</b></li>)}
     {rest.length > 0 && <li className="tk-cost-more"><span>+{rest.length} khoản khác</span><b>{money(rest.reduce((a, i) => a + i.amount, 0))}</b></li>}
   </ul>;
 }
