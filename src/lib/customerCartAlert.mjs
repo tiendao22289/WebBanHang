@@ -154,6 +154,16 @@ export function cartMinutesText(ms) {
   return m < 60 ? `${m} phút` : `${Math.floor(m / 60)} giờ ${m % 60} phút`;
 }
 
+/**
+ * "7p" / "1g 5p": bản ngắn cho ô bàn màn hình PC (ô chỉ rộng ~66px), cùng kiểu "31p" của giờ ngồi trên
+ * ô bàn. Chủ quán (2026-11-09): PC phải đọc được giỏ khách như trên điện thoại.
+ */
+export function cartMinutesShort(ms) {
+  const m = Math.floor(Math.max(0, Number(ms) || 0) / 60000);
+  if (m < 1) return '<1p';
+  return m < 60 ? `${m}p` : `${Math.floor(m / 60)}g ${m % 60}p`;
+}
+
 // ── Chuông trang Bàn khi bàn bắt đầu chớp vàng ─────────────────────────────────
 // Kêu ngay lúc bàn đủ 5 phút, nhắc lại mỗi 2 phút, tối đa 5 lần (~8 phút) rồi chỉ còn chớp — có chừng
 // mực, không kêu suốt 2 tiếng nếu khách bỏ đi. Nhiều bàn tới lượt cùng lúc chỉ kêu 1 lần, 2 lần kêu cách

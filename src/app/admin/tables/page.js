@@ -19,7 +19,7 @@ import { getTableGroupOrders, OPEN_BILL_STATUSES, representativeBill, shopDaySta
 import { promoGiftStatus } from '@/lib/promoGifts.mjs';
 import { isPrintJobBad, isUnresolvedBadJob } from '@/lib/printJobStatus.mjs';
 import { NO_DRAFT, updateDraftOf, addDraftLine, decreaseDraftLine, setDraftItemTotal, removeSentLines } from '@/lib/draftCart.mjs';
-import { cartMinutesText, createCartBell, customerCartsByTable, customerCartsFromServer } from '@/lib/customerCartAlert.mjs';
+import { cartMinutesShort, cartMinutesText, createCartBell, customerCartsByTable, customerCartsFromServer } from '@/lib/customerCartAlert.mjs';
 import { resolvePrintCategory, isKitchenItem, unsentKitchenItems, nextKitchenCheckIn } from '@/lib/kitchenTicket.mjs';
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
@@ -3792,6 +3792,24 @@ export default function TablesPage() {
                 </div>
               )}
 
+              {/* Bàn khách quên gửi món: ở tab Thực đơn lưới bàn bị che (bấm bàn là PC tự sang Thực đơn) →
+                  hiện đúng bàn đó trên thanh nav, bấm = về Phòng bàn thấy ô đang chớp. Chỉ bàn đang báo. */}
+              {desktopView === 'menu' && tables.some(t => cartsByTable[t.id]?.forgot) && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 10, flexShrink: 0 }}>
+                  {tables.filter(t => cartsByTable[t.id]?.forgot).map(t => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className="cart-nav-chip cart-forgot-blink"
+                      onClick={() => setDesktopView('tables')}
+                      title={`B${t.table_number}: khách chọn ${cartsByTable[t.id].forgotCount} món ${cartMinutesText(cartsByTable[t.id].ageMs)} mà chưa bấm Gửi — bấm để về Phòng bàn`}
+                    >
+                      🛒 B{t.table_number} quên gửi · {cartMinutesShort(cartsByTable[t.id].ageMs)}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {/* Search Bar & Actions */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 10, flex: 1 }}>
                 <div style={{ position: 'relative', width: '100%', maxWidth: 350 }}>
@@ -4198,27 +4216,40 @@ export default function TablesPage() {
                                 ) : (
                                   <div style={{ fontSize: '0.68rem', color: isSelected ? '#93c5fd' : (isOccupied || isMergedGroup) ? 'rgba(255,255,255,0.4)' : '#cbd5e1', fontWeight: 500 }}>— trống —</div>
                                 )}
+                                {/* Ô bàn PC chỉ rộng ~66px: dải rộng hết ô, mỗi ý một dòng (số món to,
+                                    số phút ngắn "7p") để đọc được như ô bàn điện thoại. */}
                                 {custCart && !custCart.forgot && (
                                   <div
+                                    className="cart-pc-band"
                                     title={`Khách đã chọn ${custCart.count} món trên điện thoại ${cartMinutesText(custCart.ageMs)}, CHƯA bấm Gửi — đủ 5 phút thì bàn chớp vàng và kêu chuông`}
-                                    style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fcd34d', borderRadius: 10, padding: '1px 6px', fontSize: '0.62rem', fontWeight: 800, lineHeight: 1.25, textAlign: 'center', maxWidth: '100%' }}
                                   >
-                                    🛒 {custCart.count}&nbsp;món · {cartMinutesText(custCart.ageMs)}
+                                    <b>🛒 {custCart.count}&nbsp;món</b>
+                                    <span>{cartMinutesShort(custCart.ageMs)}</span>
                                   </div>
                                 )}
                                 {custCart?.forgot && (
                                   <button
                                     type="button"
-                                    className="cart-forgot-bar compact"
+                                    className="cart-pc-band forgot"
                                     title={`Khách chọn ${custCart.forgotCount} món ${cartMinutesText(custCart.ageMs)} mà chưa bấm Gửi — ra hỗ trợ khách. Bấm Tắt để tắt báo (khách sửa giỏ sẽ báo lại)`}
                                     onClick={(e) => { e.stopPropagation(); quietCartBell(table.id); dismissCustomerCart(table); }}
                                   >
-                                    <span>🛒 Quên gửi {custCart.forgotCount}&nbsp;món · {cartMinutesText(custCart.ageMs)}</span>
-                                    <span className="cart-forgot-off">Tắt</span>
+                                    <b>QUÊN GỬI</b>
+                                    <b>🛒 {custCart.forgotCount}&nbsp;món</b>
+                                    <span className="cart-pc-row">
+                                      {cartMinutesShort(custCart.ageMs)}
+                                      <span className="cart-forgot-off">Tắt</span>
+                                    </span>
                                   </button>
                                 )}
                                 {custCart?.forgot && cartBellBlocked && (
-                                  <div className="cart-forgot-mute compact" title="Trình duyệt chưa cho phát tiếng — chạm / bấm vào trang một lần để bật chuông">🔇 Bấm để bật chuông</div>
+                                  <div
+                                    className="cart-pc-band mute"
+                                    title="Trình duyệt chưa cho phát tiếng — bấm vào trang một lần để bật chuông"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    🔇 Bấm để bật chuông
+                                  </div>
                                 )}
                               </div>
 
