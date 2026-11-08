@@ -15,10 +15,15 @@ async function readResult(response) {
 export const workforce = (action, body) => call('/api/admin/workforce', action, body);
 export const notesApi = (action, body) => call('/api/admin/notes', action, body);
 
-/** Sổ tay kèm ảnh (phiếu đi chợ): multipart payload = JSON, photo = ảnh. Mạng yếu thì báo lỗi sau 45 giây. */
-export async function notesApiWithPhotos(action, body, photos) {
+/**
+ * Sổ tay kèm ảnh (phiếu đi chợ): multipart payload = JSON, photo = ảnh hàng trên cân,
+ * bill = ảnh bill của mối, bill_items = _id các dòng hàng của từng bill. Mạng yếu thì báo lỗi sau 45 giây.
+ */
+export async function notesApiWithPhotos(action, body, photos, bills = []) {
   const form = new FormData();
   form.append('payload', JSON.stringify({ action, ...body }));
   photos.forEach((photo, i) => form.append('photo', photo, `phieu-${i + 1}.jpg`));
+  bills.forEach((b, i) => form.append('bill', b.blob, `bill-${i + 1}.jpg`));
+  form.append('bill_items', JSON.stringify(bills.map(b => b.ids)));
   return readResult(await fetchWithTimeout('/api/admin/notes', { method: 'POST', body: form, cache: 'no-store' }));
 }

@@ -834,3 +834,22 @@
   .np-sheet { max-height: 92vh; }
   .np-sheet .np-footer { position: sticky; bottom: 0; border-top: 1px solid #f3f4f6; }
 }
+/* Bill từng dòng hàng (Sổ tay) */
+.np-bill-cell { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; }
+.np-bill { height: 24px; display: inline-flex; align-items: center; padding: 0 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 800; white-space: nowrap; text-decoration: none; cursor: pointer; border: 1px solid transparent; }
+.np-bill.need { background: #fef2f2; border-color: #f87171; color: #b91c1c; }
+.np-bill.opt { background: #f9fafb; border-color: #e5e7eb; color: #6b7280; }
+.np-bill.ok { background: #ecfdf5; border-color: #6ee7b7; color: #047857; }
+.np-bill.none { background: #fff7ed; border-color: #fdba74; color: #c2410c; overflow: hidden; text-overflow: ellipsis; max-width: 220px; cursor: default; }
+.np-bill-x { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 50%; background: #f3f4f6; color: #6b7280; cursor: pointer; }
+.np-bill-skip { padding: 0 2px; border: 0; background: none; color: #9ca3af; font-size: 0.7rem; text-decoration: underline; cursor: pointer; }
+.np-bill-pick { z-index: 1100; padding: 16px; }
+.np-bill-pick-box { width: 100%; max-width: 380px; background: #fff; border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.np-bill-pick-box p { margin: 0; font-size: 0.8rem; color: #6b7280; }
+.np-bill-pick-list { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }
+.np-bill-pick-list label { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 10px; cursor: pointer; }
+.np-bill-pick-list label.on { border-color: #34d399; background: #ecfdf5; }
+.np-bill-pick-list span { flex: 1; font-weight: 700; }
+.np-bill-pick-list small { color: #6b7280; }
+.note-bill { font-size: 0.7rem; font-weight: 700; margin-left: 4px; white-space: nowrap; text-decoration: none; color: #047857; }
+.note-flag.nobill { color: #c2410c; background: #fff7ed; border-color: #fdba74; }

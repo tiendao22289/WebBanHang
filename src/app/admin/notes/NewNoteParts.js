@@ -43,8 +43,9 @@ export const ItemsHead = () => <div className="np-cols" aria-hidden="true"><span
  * trống mới. Dòng có sẵn (Tiền rau, Tiền gia vị) để trống giá thì không lưu. Bấm "Đủ" / "Nợ" để đổi.
  * other: dòng nhóm Khác (xăng xe, sửa chữa…) — tên gõ tự do, dòng nhỏ bên dưới để chọn loại.
  * alert: giá cao bất thường so với các lần mua trước (notesChecks) — hiện đầu tiên, chủ cũng thấy.
+ * bill: ô bill của mối cho dòng có giá { required, photo, saved, reason, onShoot, onNoBill, onClear } (BillCell).
  */
-export function NoteItemRow({ item, other, alert, menuNames, categories, onField, onBlur, onRemove, onCategory }) {
+export function NoteItemRow({ item, other, alert, bill, menuNames, categories, onField, onBlur, onRemove, onCategory }) {
   const empty = !item.preset && !String(item.name || '').trim() && !String(item.price || '').trim() && !String(item.qty || '').trim();
   const total = lineTotal(item);
   const debt = item.paymentStatus === 'debt';
@@ -52,7 +53,7 @@ export function NoteItemRow({ item, other, alert, menuNames, categories, onField
   // minWidth 0: ô tên co lại trong cột lưới, không đẩy ô giá / số lượng ra ngoài.
   const nameProps = { className: 'np-name', style: { minWidth: 0 }, value: item.name, placeholder: empty ? (other ? '＋ Thêm khác: xăng, sửa xe…' : '＋ Thêm hàng') : 'Tên' };
   // Dòng phụ chỉ khi cần: chọn loại (nhóm Khác), số nợ / nợ ai, cảnh báo. Thành tiền nằm ngay dưới tên.
-  const sub = !empty && (other || debt || warnings.length > 0);
+  const sub = !empty && (other || debt || warnings.length > 0 || !!bill);
   return <div className={`np-row${empty ? ' add' : ''}${debt ? ' debt' : ''}${item.preset && !total ? ' idle' : ''}`}>
     <div className="np-line">
       <span className="np-name-cell">
@@ -81,6 +82,7 @@ export function NoteItemRow({ item, other, alert, menuNames, categories, onField
           onChange={e => { const n = Number(digits(e.target.value)); onField('debtAmount', !n ? '' : (total > 0 ? Math.min(n, total) : n).toLocaleString('vi-VN')); }} />
         <input type="text" className="np-mini-input" placeholder="Nợ ai?" aria-label="Nợ của ai" value={item.creditor || ''} onChange={e => onField('creditor', e.target.value)} />
       </>}
+      {bill && <BillCell {...bill} />}
       {warnings.length > 0 && <span className={`np-warn${alert ? ' price' : ''}`} title={warnings.join(' · ')}>⚠ {warnings[0]}</span>}
     </div>}
   </div>;
@@ -89,9 +91,9 @@ export function NoteItemRow({ item, other, alert, menuNames, categories, onField
 /**
  * Mọi dòng hàng của phiếu trong một danh sách, chia 3 nhóm: hàng ốc (gõ thêm ở dòng "＋ Thêm hàng"),
  * rau / gia vị (dòng có sẵn), Khác (xăng xe, sửa chữa… — chọn loại ở từng dòng). Hàm on*(vị trí trong items, …).
- * priceCheck(item): cảnh báo giá cao của dòng (hoặc null).
+ * priceCheck(item): cảnh báo giá cao của dòng (hoặc null). billFor(item, vị trí): ô bill của dòng (hoặc null).
  */
-export function NoteItemsList({ items, menuNames, categories, onField, onBlur, onRemove, onCategory, isAdmin, priceCheck }) {
+export function NoteItemsList({ items, menuNames, categories, onField, onBlur, onRemove, onCategory, isAdmin, priceCheck, billFor }) {
   const rows = items.map((item, idx) => ({ item, idx }));
   const groups = [
     [null, rows.filter(({ item }) => !item.preset && !isOtherLine(item))],
@@ -103,7 +105,7 @@ export function NoteItemsList({ items, menuNames, categories, onField, onBlur, o
     <div className="np-items">
       {groups.map(([label, list]) => list.length > 0 && <div key={label || 'oc'} className="np-group">
         {label && <p className="np-group-label">{label}</p>}
-        {list.map(({ item, idx }) => <NoteItemRow key={item._id || idx} item={item} other={isOtherLine(item)} alert={priceCheck?.(item) || null} menuNames={menuNames} categories={categories}
+        {list.map(({ item, idx }) => <NoteItemRow key={item._id || idx} item={item} other={isOtherLine(item)} alert={priceCheck?.(item) || null} bill={billFor?.(item, idx) || null} menuNames={menuNames} categories={categories}
           onField={(field, v) => onField(idx, field, v)} onBlur={(field, e) => onBlur(idx, field, e)}
           onRemove={() => onRemove(idx)} onCategory={v => onCategory(idx, v)} />)}
       </div>)}
@@ -143,7 +145,7 @@ export function TripSummary({ given, carried, paid, debt, payOldDebt, fromLeftov
 }
 
 /**
- * Ảnh phiếu đi chợ: hàng trên cân ở quán hoặc giấy ghi của mối. saved = link ảnh đã lưu (ô sửa phiếu),
+ * Ảnh hàng trên cân ở quán của phiếu đi chợ (bill của mối chụp ở từng dòng — BillCell). saved = link ảnh đã lưu (ô sửa phiếu),
  * photos = ảnh vừa chụp [{ url }]. Phiếu có hàng chợ mà chưa có ảnh thì bấm Lưu sẽ mở camera.
  */
 export function TripPhotos({ saved = [], photos, required, onAdd, onRemove }) {
@@ -155,6 +157,42 @@ export function TripPhotos({ saved = [], photos, required, onAdd, onRemove }) {
       <button type="button" className="np-photo-x" onClick={() => onRemove(i)} aria-label="Bỏ ảnh này"><X size={12} /></button>
     </span>)}
     {onAdd && count < MAX_NOTE_PHOTOS && <button type="button" className={`np-photo-add${required && !count ? ' need' : ''}`} onClick={onAdd}>📷 {count ? 'Thêm ảnh' : 'Chụp ảnh'}</button>}
-    {required && !count && <p className="np-photo-hint">Bắt buộc: chụp hàng trên cân ở quán, hoặc giấy ghi của mối.</p>}
+    {required && !count && <p className="np-photo-hint">Bắt buộc: chụp hàng trên cân ở quán (bill của mối chụp ở từng dòng).</p>}
+  </div>;
+}
+
+/**
+ * Ô bill của một dòng: đã có bill (ảnh vừa chụp hoặc đã lưu — bấm để xem), ghi "không có bill" kèm lý do,
+ * hoặc nút chụp (đỏ khi bắt buộc — dòng hàng ốc) và "Không có bill?" để ghi lý do.
+ */
+export function BillCell({ required, photo, saved, reason, onShoot, onNoBill, onClear }) {
+  if (photo || saved) return <span className="np-bill-cell">
+    {photo ? <a className="np-bill ok" href={photo} target="_blank" rel="noreferrer">🧾 bill ✓</a> : <span className="np-bill ok">🧾 bill ✓</span>}
+    {onClear && <button type="button" className="np-bill-x" onClick={onClear} aria-label="Bỏ bill của dòng này"><X size={11} /></button>}
+  </span>;
+  if (reason) return <span className="np-bill-cell">
+    <span className="np-bill none" title={reason}>🧾 Không bill: {reason}</span>
+    <button type="button" className="np-bill-x" onClick={onClear} aria-label="Bỏ ghi không có bill"><X size={11} /></button>
+  </span>;
+  return <span className="np-bill-cell">
+    <button type="button" className={`np-bill ${required ? 'need' : 'opt'}`} onClick={onShoot}>🧾 Chụp bill</button>
+    {required && <button type="button" className="np-bill-skip" onClick={onNoBill}>Không có bill?</button>}
+  </span>;
+}
+
+/** Sau khi chụp 1 tờ bill: tích các món khác cùng tờ bill đó (cùng mối) để khỏi chụp lại. */
+export function BillPicker({ name, items, chosen, onToggle, onDone }) {
+  return <div className="modal-overlay np-bill-pick" role="dialog" aria-label="Bill này có cả món nào">
+    <div className="np-bill-pick-box">
+      <b>🧾 Bill của "{name}" có cả món nào?</b>
+      <p>Tích các món cùng tờ bill này (cùng mối) — khỏi chụp lại.</p>
+      <div className="np-bill-pick-list">
+        {items.map(i => <label key={i._id} className={chosen.includes(i._id) ? 'on' : ''}>
+          <input type="checkbox" checked={chosen.includes(i._id)} onChange={() => onToggle(i._id)} />
+          <span>{i.name}</span><small>{i.price}{i.qty ? ` × ${i.qty}` : ''}</small>
+        </label>)}
+      </div>
+      <button type="button" className="btn btn-primary" onClick={onDone}>{chosen.length ? `Xong · thêm ${chosen.length} món` : 'Không có món nào khác'}</button>
+    </div>
   </div>;
 }

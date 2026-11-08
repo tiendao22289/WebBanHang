@@ -6,11 +6,15 @@
  *    hàng chợ có giá; không so dòng gộp Tiền rau / Tiền gia vị và dòng Khác (xăng xe, sửa chữa…).
  *  - Ảnh: phiếu có hàng chợ (hàng ốc, rau, gia vị có giá) phải kèm ảnh hàng trên cân ở quán
  *    hoặc giấy ghi của mối. Phiếu chỉ có dòng Khác / chỉ trả nợ / chỉ ghi chữ thì không cần.
+ *  - Bill từng dòng: mỗi dòng hàng ốc (dòng so giá) phải có ảnh bill của mối (item.bill_photo; một
+ *    tờ bill dùng chung được cho nhiều dòng) hoặc lý do mối không đưa bill (item.no_bill — chủ thấy).
+ *    Ảnh hàng trên cân chống khai thừa số ký / hàng không về quán; bill chống khai giá cao.
  */
 import { itemKey, parsePrice } from './notesMath.mjs';
 
 export const PRICE_ALERT_PCT = 15;
 export const MAX_NOTE_PHOTOS = 3;
+export const MAX_BILL_PHOTOS = 15;
 const LOOKBACK_MS = 45 * 86400000;
 const RECENT = 5;
 const MIN_TIMES = 2;
@@ -24,6 +28,13 @@ export const isMarketLine = item => priced(item) && !item.category;
 export const needsTripPhoto = items => (Array.isArray(items) ? items : []).some(isMarketLine);
 /** Dòng so được giá với các lần mua trước. */
 export const comparableLine = item => isMarketLine(item) && !item.preset;
+/** Dòng hàng ốc cần bill của mối. */
+export const needsBill = comparableLine;
+export const noBillReason = item => String(item?.no_bill || '').trim();
+/** Dòng cần bill mà chưa có ảnh bill, cũ hay vừa chụp (billed(item)), cũng chưa ghi lý do. */
+export const missingBills = (items, billed = () => false) =>
+  (Array.isArray(items) ? items : []).filter(i => needsBill(i) && !i.bill_photo && !billed(i) && !noBillReason(i));
+export const noBillText = item => `Không có bill: ${noBillReason(item)}`;
 
 function noteItems(note) {
   if (note?.note_type !== 'expense') return [];

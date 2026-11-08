@@ -76,11 +76,48 @@ export async function signReceiptImages(db, paths) {
     .map(d => [d.path, receiptImageLink(d.path, d.signedUrl)]).filter(([, link]) => link));
 }
 
+// Ảnh phiếu Sổ tay (hàng trên cân 'note-…', bill từng dòng 'notebill-…') có từ tháng 11/2026.
+const NOTE_PHOTOS_SINCE = '2026-11';
+const NOTE_PURGE_EVERY_MS = 6 * 3600000;
+let notePurgedAt = 0;
+
+/** Các thư mục tháng YYYY-MM từ since tới tháng của cutoff (gồm cả hai đầu). */
+export function monthFolders(since, cutoff) {
+  const out = [];
+  let [y, m] = since.split('-').map(Number);
+  const end = cutoff.toISOString().slice(0, 7);
+  for (let guard = 0; guard < 240; guard++) {
+    const key = `${y}-${String(m).padStart(2, '0')}`;
+    if (key > end) break;
+    out.push(key);
+    if (++m > 12) { m = 1; y += 1; }
+  }
+  return out;
+}
+
+/**
+ * Xoá ảnh phiếu Sổ tay quá RECEIPT_IMAGE_DAYS ngày (giống ảnh bill). Phiếu vẫn giữ đường dẫn: link ký
+ * cho ảnh đã xoá báo lỗi nên trang không hiện ảnh đó. Chạy tối đa 6 tiếng một lần.
+ */
+export async function purgeOldNotePhotos(db, now = Date.now()) {
+  if (now - notePurgedAt < NOTE_PURGE_EVERY_MS) return;
+  notePurgedAt = now;
+  const cutoff = new Date(now - RECEIPT_IMAGE_DAYS * 86400000);
+  const bucket = db.storage.from(RECEIPT_BUCKET);
+  for (const folder of monthFolders(NOTE_PHOTOS_SINCE, cutoff)) {
+    const { data, error } = await bucket.list(folder, { limit: 1000, search: 'note' });
+    if (error) { console.error('[receipt images] list', error); return; }
+    const old = (data || []).filter(f => /^note(bill)?-/.test(f.name) && f.created_at && Date.parse(f.created_at) < cutoff.getTime());
+    await removeReceiptImages(db, old.slice(0, 100).map(f => `${folder}/${f.name}`));
+  }
+}
+
 /**
  * Xoá ảnh quá hạn (mỗi lần tối đa 100 dòng để không chậm trang). Số tiền và
  * dòng sổ vẫn giữ, chỉ bỏ ảnh.
  */
 export async function purgeOldReceiptImages(db) {
+  await purgeOldNotePhotos(db).catch(error => console.error('[receipt images] note purge', error));
   const cutoff = new Date(Date.now() - RECEIPT_IMAGE_DAYS * 86400000).toISOString();
   const paper = await db.from('finance_manual_receipts').select('id, image_path, transfer_image_path')
     .lt('received_at', cutoff).is('images_purged_at', null).limit(100);
