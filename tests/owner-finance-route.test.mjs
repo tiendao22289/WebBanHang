@@ -881,9 +881,11 @@ test('the day audit run by the shop machine reads one day and writes nothing; it
 });
 
 test('Sổ tay prices like "250.000" or "1tr2" do not make the 05:00 check report the day', async () => {
-  const today = finance.vnDate(Date.now());
+  // Ngày của phiếu (không phải "bây giờ"): chạy test lúc 00:00–00:05 thì phiếu 5 phút trước là của hôm qua.
+  const at = later(-5);
+  const today = finance.vnDate(Date.parse(at));
   const state = empty();
-  state.staff_notes.push({ id: 'p1', created_at: later(-5), note_type: 'expense', amount: 1450000, debt: 0, staff: { full_name: 'Lan' },
+  state.staff_notes.push({ id: 'p1', created_at: at, note_type: 'expense', amount: 1450000, debt: 0, staff: { full_name: 'Lan' },
     content: JSON.stringify({ type: 'structured_expense', items: [{ name: 'Ốc hương', price: '250.000', qty: '1' }, { name: 'Cua', price: '1tr2', qty: '1' }] }) });
   const api = load({ state });
   const res = await post(api, { action: 'check_day', date: today });
