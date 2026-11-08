@@ -105,6 +105,9 @@ function parseNoteItems(note) {
     return (data.items || []).filter(i => i.name && String(i.price || '').trim()).map(i => ({
       name: i.name, qty: i.qty || '', price: i.price || '', paymentStatus: i.paymentStatus || 'full', creditor: i.creditor || '',
       debtAmount: i.debtAmount || '', paid_amount: Number(i.paid_amount) || 0,
+      // Bill của mối (đường dẫn ảnh; trang ngày đổi thành link xem billUrl), ảnh chọn từ máy, lý do không có bill.
+      ...(typeof i.bill_photo === 'string' ? { bill: i.bill_photo, ...(i.bill_from === 'gallery' ? { billFrom: 'gallery' } : {}) } : {}),
+      ...(String(i.no_bill || '').trim() ? { noBill: String(i.no_bill).trim() } : {}),
     }));
   } catch { return null; }
 }
@@ -938,7 +941,9 @@ export async function GET(request) {
         readCheck(db, date),
         openNoteDebts(db).catch(error => { console.error('[admin/finance] debts', error); return null; }),
       ]);
-      const urls = await signReceiptImages(db, [...bills.flatMap(b => [b.transfer_image_path, b.cash_image_path]), ...paper.flatMap(r => [r.image_path, r.transfer_image_path])]);
+      const noteViews = notes.map(noteView).filter(n => n.cost > 0);
+      const urls = await signReceiptImages(db, [...bills.flatMap(b => [b.transfer_image_path, b.cash_image_path]), ...paper.flatMap(r => [r.image_path, r.transfer_image_path]),
+        ...noteViews.flatMap(n => (n.items || []).map(i => i.bill))]);
       const day = { cash: 0, byAccount: {} };
       for (const bill of [...bills, ...paper]) {
         const amount = Number(bill.amount) || 0;
@@ -951,7 +956,8 @@ export async function GET(request) {
         paperBills: paper.map(r => ({ id: r.id, receivedAt: r.received_at, amount: Number(r.amount), paymentMethod: r.payment_method,
           accountId: r.account_id, tableLabel: r.table_label, note: r.note, createdByName: r.created_by_name,
           imageUrl: urls[r.image_path] || null, transferImageUrl: urls[r.transfer_image_path] || null, imagesPurged: !!r.images_purged_at, verified: !!r.verified_at })),
-        notes: notes.map(noteView).filter(n => n.cost > 0), entries, debts,
+        // Dòng có bill của mối: link xem ảnh (1 giờ) thay cho đường dẫn ảnh — chủ bấm xem để đối chiếu.
+        notes: noteViews.map(n => (n.items ? { ...n, items: n.items.map(({ bill, ...i }) => (bill ? { ...i, billUrl: urls[bill] || null } : i)) } : n)), entries, debts,
         close, closeDiff: closeDifferences(day, close), dayCash: day.cash, dayByAccount: day.byAccount, check }, { headers });
     }
 

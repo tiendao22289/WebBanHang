@@ -297,7 +297,8 @@ const dayCost = d => d.purchases + d.drinks + d.salary + d.fixedShare + d.custom
 
 // Chi tiết Nhập hàng của một ngày: từng phiếu Sổ tay — từng món (số lượng × giá = thành tiền, món nào nợ ai), đã trả / nợ của
 // phiếu; cuối là nợ trong ngày và tổng nợ Sổ tay tới giờ (theo người bán). Cảnh báo phiếu lệch tiền / giá đáng ngờ như cũ.
-function NotesDetail({ notes, debts, parts }) {
+// Dòng có bill của mối: nút "🧾 bill" mở ảnh (onView) kèm các dòng của tờ bill đó để đối chiếu.
+function NotesDetail({ notes, debts, parts, onView }) {
   if (!notes) return <p className="fin-empty">Đang tải…</p>;
   const dayDebt = notes.reduce((s, n) => s + (Number(n.debt) || 0), 0), dayLeft = notes.reduce((s, n) => s + (Number(n.debtLeft) || 0), 0);
   return <div className="fin-notes-detail">
@@ -310,8 +311,14 @@ function NotesDetail({ notes, debts, parts }) {
         <tbody>{note.items.map((item, i) => {
           const price = parsePrice(item.price), qty = parseQty(item.qty), total = Math.round(price * qty);
           const owed = lineDebtBase(item), left = Math.max(0, owed - (Number(item.paid_amount) || 0));
+          const showBill = () => onView?.({ url: item.billUrl, from: item.billFrom, title: `🧾 Bill · ${clock(note.createdAt)} · ${note.staffName || 'Nhân viên'}`,
+            lines: note.items.filter(x => x.billUrl === item.billUrl).map(x => ({ name: x.name, qty: x.qty || '1', price: parsePrice(x.price), total: Math.round(parsePrice(x.price) * parseQty(x.qty)) })) });
           return <tr key={i}>
-            <td>{item.name}{owed > 0 && <small className={left > 0 ? 'debt' : 'paid'}>{left > 0 ? `nợ ${money(left)}` : `đã trả nợ ${money(owed)}`}{item.creditor ? ` · ${item.creditor}` : ''}</small>}</td>
+            <td>{item.name}{owed > 0 && <small className={left > 0 ? 'debt' : 'paid'}>{left > 0 ? `nợ ${money(left)}` : `đã trả nợ ${money(owed)}`}{item.creditor ? ` · ${item.creditor}` : ''}</small>}
+              {'billUrl' in item && (item.billUrl
+                ? <button type="button" className={`fin-note-bill${item.billFrom === 'gallery' ? ' gallery' : ''}`} onClick={showBill}>🧾 bill{item.billFrom === 'gallery' ? ' · ảnh có sẵn' : ''}</button>
+                : <small className="fin-note-nobill">🧾 có bill nhưng không mở được ảnh (quá 90 ngày?)</small>)}
+              {item.noBill && <small className="fin-note-nobill">🧾 không bill: {item.noBill}</small>}</td>
             <td className="num">{item.qty || '1'} × {money(price)}</td>
             <td className="num"><b>{money(total)}</b></td>
           </tr>;
@@ -334,7 +341,7 @@ function NotesDetail({ notes, debts, parts }) {
 
 // Chi của một ngày (tab Hôm nay): 4 nhóm — Chi trong ngày, Nhập hàng, Lương, Cố định — mỗi nhóm một dòng, bấm để xem từng
 // khoản. Cố định ghi rõ tiền cả tháng và phần chia cho mỗi ngày (cả tháng ÷ số ngày của tháng).
-function DayCosts({ day, month, spend = null, notes = null, debts = null, openTick = 0 }) {
+function DayCosts({ day, month, spend = null, notes = null, debts = null, openTick = 0, onView }) {
   const [open, setOpen] = useState(null);
   // "Xem phiếu" ở Việc trong ngày (phiếu Sổ tay cần xem lại): mở dòng Nhập hàng và cuộn tới.
   useEffect(() => {
@@ -374,7 +381,7 @@ function DayCosts({ day, month, spend = null, notes = null, debts = null, openTi
         {isOpen && <div className="fin-costs-body">
           {g.key !== 'daily' && g.key !== 'purchases' && <p className="fin-costs-hint">{g.hint}</p>}
           {g.key === 'daily' && (spend || (dailyItems.length ? list(dailyItems) : <p className="fin-empty">Đang tải…</p>))}
-          {g.key === 'purchases' && <NotesDetail notes={notes} debts={debts} parts={shop} />}
+          {g.key === 'purchases' && <NotesDetail notes={notes} debts={debts} parts={shop} onView={onView} />}
           {g.key === 'salary' && (staff.length ? list(staff) : <p className="fin-empty">Chưa tách được theo người.</p>)}
           {g.key === 'fixed' && <table className="fin-costs-table">
             <thead><tr><th>Khoản</th><th>Cả tháng</th><th>Mỗi ngày</th></tr></thead>
@@ -625,7 +632,7 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
         <span>💵 Tiền mặt {money(summary.cash)}</span>
         {Object.entries(summary.byAccount || {}).map(([id, amount]) => <span key={id}>💳 {cardName(id)} {money(amount)}</span>)}
       </div>
-      <DayCosts day={summary} month={data} notes={detail ? detail.notes : null} debts={detail?.debts || null} openTick={purchasesTick}
+      <DayCosts day={summary} month={data} notes={detail ? detail.notes : null} debts={detail?.debts || null} openTick={purchasesTick} onView={setView}
         spend={detail ? <DailySpend embedded date={date} entries={detail.entries || []} history={data?.entries || []} categories={categories} onSaved={changed} /> : null} />
     </div>}
 
@@ -715,15 +722,25 @@ function DayPage({ date, today, summary, data, accounts, onDate, onChanged, onSe
 
       {/* Chưa có số của tháng (đang tải / ngoài tháng): phiếu Sổ tay đứng riêng như trước. */}
       {!summary && <div id="fin-notes"><Fold title="Đi chợ / nhập hàng (Sổ tay)" openTick={notesTick} sub={detail.notes.length ? `${detail.notes.length} phiếu · ${money(detail.notes.reduce((s, n) => s + n.cost, 0))}` : 'Không có phiếu'}>
-        <NotesDetail notes={detail.notes} debts={detail.debts || null} parts={[]} />
+        <NotesDetail notes={detail.notes} debts={detail.debts || null} parts={[]} onView={setView} />
       </Fold></div>}
     </>}
     <input ref={attachInput} type="file" accept="image/*" onChange={attach} hidden />
     <input ref={attachCapture} type="file" accept="image/*" capture="environment" onChange={attach} hidden />
     {cameraFor && <CameraCapture onCapture={blob => uploadProof(cameraFor, blob)} onClose={() => setCameraFor(null)} />}
-    {view && <div className="rc-viewer" onClick={() => setView(null)} onContextMenu={e => e.preventDefault()} role="dialog" aria-label="Xem ảnh">
+    {view && typeof view === 'string' && <div className="rc-viewer" onClick={() => setView(null)} onContextMenu={e => e.preventDefault()} role="dialog" aria-label="Xem ảnh">
       <button className="fin-icon" aria-label="Đóng"><X size={20} /></button>
       <img src={view} alt="Ảnh" draggable={false} />
+    </div>}
+    {/* Bill của mối (phiếu Sổ tay): ảnh kèm các dòng hàng của tờ bill (SL × giá = tiền, cộng) để đối chiếu. */}
+    {view && typeof view === 'object' && <div className="rc-viewer fin-bill-view" onClick={() => setView(null)} onContextMenu={e => e.preventDefault()} role="dialog" aria-label="Xem bill">
+      <button className="fin-icon" aria-label="Đóng"><X size={20} /></button>
+      <div className="fin-bill-view-info">
+        <b>{view.title}</b>{view.from === 'gallery' && <small>Ảnh chọn từ máy (không chụp trực tiếp)</small>}
+        <ul>{view.lines.map((l, k) => <li key={k}><span>{l.name} <small>{l.qty} × {money(l.price)}</small></span><b>{money(l.total)}</b></li>)}
+          {view.lines.length > 1 && <li className="sum"><span>Cộng</span><b>{money(view.lines.reduce((a, l) => a + l.total, 0))}</b></li>}</ul>
+      </div>
+      <div className="fin-bill-view-img"><img src={view.url} alt="Ảnh bill" draggable={false} /></div>
     </div>}
   </section>;
 }
