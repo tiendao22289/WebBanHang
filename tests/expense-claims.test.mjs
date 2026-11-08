@@ -210,7 +210,15 @@ test('when the owner gave money first, only the overspend is owed and the leftov
   const s = computeSalary({ ...base, claims }), plainPay = computeSalary(base);
   assert.deepEqual([s.claimAmt, s.claimCut], [70000, 20000], 'overspend 30.000 + own money 40.000; unreturned leftover 20.000 is cut');
   assert.equal(s.net - plainPay.net, 50000);
+  // Phiếu lương liệt kê từng khoản: ngày chi, lúc ghi, chi gì, cộng / trừ bao nhiêu (sắp theo ngày).
+  const dated = [month({ ...over, id: 'o', item: 'Đá', spent_on: '2026-11-07', created_at: '2026-11-07T11:42:00Z' }),
+    month({ ...left, id: 'l', item: 'Xăng', payout: 'salary', spent_on: '2026-11-03', created_at: '2026-11-03T09:05:00Z', note: 'xe máy' })];
+  assert.deepEqual(plainList(computeSalary({ ...base, claims: dated }).claimList), [
+    { id: 'l', day: '2026-11-03', at: '2026-11-03T09:05:00Z', item: 'Xăng', amount: 80000, given: 100000, pay: -20000, note: 'xe máy' },
+    { id: 'o', day: '2026-11-07', at: '2026-11-07T11:42:00Z', item: 'Đá', amount: 130000, given: 100000, pay: 30000, note: null },
+  ]);
 });
+const plainList = v => JSON.parse(JSON.stringify(v));
 
 test('staff log a claim the owner paid for in advance; approving books the real spend and settles only the difference', async () => {
   const state = {

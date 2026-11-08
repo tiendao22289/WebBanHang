@@ -1513,7 +1513,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     if (r) return r.status === 'approved' ? { text: 'đã cho tính tăng ca', color: '#16a34a' } : { text: 'không tính', color: '#64748b' };
     return h.autoExtra ? { text: 'tự tính tăng ca', color: '#16a34a' } : { text: 'chờ duyệt', color: '#b45309' };
   };
-  const DETAIL_TITLES = { early: '🌅 Vào sớm', late: '⏰ Vào trễ', stay: '🌙 Ra dư', leftEarly: '🚪 Về sớm', advance: '💵 Ứng lương', absent: '🛌 Nghỉ' };
+  const DETAIL_TITLES = { early: '🌅 Vào sớm', late: '⏰ Vào trễ', stay: '🌙 Ra dư', leftEarly: '🚪 Về sớm', advance: '💵 Ứng lương', absent: '🛌 Nghỉ',
+    claims: '🧾 Chi hộ quán', claimcut: '🧾 Chi hộ quán' };
   // Danh sách mở dưới dòng của người đó khi bấm một ô của Bảng lương.
   const detailPanel = (s, kind) => {
     if (kind === 'fines') return finesPanel(s);
@@ -1581,6 +1582,23 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         );
       });
       editHint = c.rule === 'days' ? 'Ngày nghỉ không trừ thêm tiền (ngày không đi làm thì không có ngày công). Xoá đơn ở ✏️ Sửa → Đơn báo nghỉ.' : 'Xoá đơn ở ✏️ Sửa → Đơn báo nghỉ.';
+    } else if (kind === 'claims' || kind === 'claimcut') {
+      // Từng khoản chi hộ tính vào lương tháng này: ngày chi, lúc nhân viên ghi, chi gì, cộng / trừ bao nhiêu.
+      const list = c.claimList || [];
+      summary = `${list.length} khoản${c.claimAmt > 0 ? `, cộng ${formatMoney(c.claimAmt)}` : ''}${c.claimCut > 0 ? `, trừ ${formatMoney(c.claimCut)}` : ''}`;
+      head = ['Ngày chi', 'Ghi lúc', 'Chi gì', 'Lương'];
+      rows = list.map(x => (
+        <tr key={x.id}>
+          {dayCell(x.day)}
+          <td data-label="Ghi lúc" style={{ ...td, whiteSpace: 'nowrap' }}>{x.at ? `${hhmm(x.at)}${vnDay(x.at) !== x.day ? ` ${ddmm(vnDay(x.at))}` : ''}` : '—'}</td>
+          <td data-label="Chi gì" style={td}><strong>{x.item}</strong> {formatMoney(x.amount)}{x.given > 0 ? ` · chủ đưa trước ${formatMoney(x.given)}` : ''}{x.note ? <div style={{ fontSize: '0.72rem', color: '#64748b' }}>{x.note}</div> : null}</td>
+          <td data-label="Lương" className="detail-money" style={{ ...td, whiteSpace: 'nowrap', fontWeight: 700, color: x.pay < 0 ? '#dc2626' : '#16a34a' }}>
+            {x.pay < 0 ? `−${formatMoney(-x.pay)}` : `+${formatMoney(x.pay)}`}
+            <div style={{ fontSize: '0.7rem', fontWeight: 400, color: '#64748b' }}>{x.pay < 0 ? 'tiền thừa chưa trả chủ' : x.given > 0 ? 'chi lố' : 'tự bỏ tiền'}</div>
+          </td>
+        </tr>
+      ));
+      editHint = 'Khoản ghi sai thì xoá ở Lương → Yêu cầu (mục Chi hộ quán).';
     }
     return (
       <div style={{ background: '#f8fbff', borderTop: '1px solid #dbeafe', padding: '10px 12px' }}>
@@ -2295,6 +2313,11 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 {c.bonusAmt > 0 && row('⭐ Thưởng chuyên cần', `+${formatMoney(c.bonusAmt)}`, '#15803d')}
                 {c.claimAmt > 0 && row('🧾 Hoàn tiền chi hộ', `+${formatMoney(c.claimAmt)}`, '#15803d')}
                 {c.claimCut > 0 && row('🧾 Tiền thừa chi hộ chưa trả chủ', `−${formatMoney(c.claimCut)}`, '#dc2626')}
+                {(c.claimList || []).length > 0 && (
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', padding: '2px 0 6px', borderBottom: '1px solid #f1f5f9' }}>
+                    {c.claimList.map(x => <div key={x.id}>• {ddmm(x.day)}{x.at ? ` · ghi ${hhmm(x.at)}` : ''} · {x.item} {formatMoney(x.amount)}{x.given > 0 ? ` (chủ đưa ${formatMoney(x.given)})` : ''} — <span style={{ color: x.pay < 0 ? '#dc2626' : '#15803d', fontWeight: 600 }}>{x.pay < 0 ? `−${formatMoney(-x.pay)}` : `+${formatMoney(x.pay)}`}</span></div>)}
+                  </div>
+                )}
                 {c.pendingH > 0 && row('Ngoài ca chờ chủ duyệt', `${fmtNum(c.pendingH)} giờ (chưa tính)`, '#b45309')}
                 {c.advAmt > 0 && row('Ứng lương', `−${formatMoney(c.advAmt)}`, '#dc2626')}
                 {c.absDays > 0 && (c.rule === 'days'
@@ -2820,8 +2843,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                               {slipRow(s, { label: 'Tăng ca', sub: c.otHours ? `${fmtNum(c.otHours)} giờ ngoài ca` : null,
                                 value: !c.otAmt && !overtimeOn(s.id) ? 'không tính' : `+${formatMoney(c.otAmt)}`, tone: !c.otAmt && !overtimeOn(s.id) ? 'muted' : 'green' })}
                               {c.bonusAmt > 0 && slipRow(s, { label: 'Thưởng chuyên cần', value: `+${formatMoney(c.bonusAmt)}`, tone: 'green' })}
-                              {c.claimAmt > 0 && slipRow(s, { label: 'Hoàn tiền chi hộ', sub: 'cộng vào lương', value: `+${formatMoney(c.claimAmt)}`, tone: 'green' })}
-                              {c.claimCut > 0 && slipRow(s, { label: 'Tiền thừa chi hộ', sub: 'chưa trả chủ, trừ lương', value: `−${formatMoney(c.claimCut)}`, tone: 'red' })}
+                              {c.claimAmt > 0 && slipRow(s, { label: 'Hoàn tiền chi hộ', sub: 'cộng vào lương', value: `+${formatMoney(c.claimAmt)}`, tone: 'green', kind: 'claims', has: !!c.claimList?.length })}
+                              {c.claimCut > 0 && slipRow(s, { label: 'Tiền thừa chi hộ', sub: 'chưa trả chủ, trừ lương', value: `−${formatMoney(c.claimCut)}`, tone: 'red', kind: 'claimcut', has: !!c.claimList?.length })}
                               {slipRow(s, { label: 'Ứng lương', sub: adv.length ? `${adv.length} lần${advPending ? ` · ${advPending} chờ duyệt` : ''}` : null,
                                 value: adv.length ? `−${formatMoney(c.advAmt)}` : '—', tone: adv.length ? 'red' : 'muted', kind: 'advance', has: adv.length > 0 })}
                               {slipRow(s, { label: 'Nghỉ', sub: abs.length ? `${abs.length} đơn${c.rule === 'days' ? ' · không trừ thêm' : ''}` : null,
@@ -2880,8 +2903,9 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <td>{cellBtn(s.id, 'leftEarly', talliesOf(s.id).leftEarly.count > 0, tally(talliesOf(s.id).leftEarly, c.earlyAmt))}</td>
                             <td>{!c.otAmt && !overtimeOn(s.id) ? <span style={{color:'#94a3b8'}}>Không tính</span> : <span style={{color:'#16a34a'}}>+{formatMoney(c.otAmt)}</span>}<div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.otHours)} giờ</div></td>
                             <td>{c.bonusAmt > 0 ? <span style={{color:'#16a34a'}}>+{formatMoney(c.bonusAmt)}</span> : <span style={{color:'#94a3b8'}}>—</span>}
-                              {c.claimAmt > 0 && <div style={{ fontSize: '0.72rem', color: '#16a34a' }}>+{formatMoney(c.claimAmt)} chi hộ</div>}
-                              {c.claimCut > 0 && <div style={{ fontSize: '0.72rem', color: '#dc2626' }}>−{formatMoney(c.claimCut)} tiền thừa chi hộ</div>}</td>
+                              {(c.claimAmt > 0 || c.claimCut > 0) && <div style={{ fontSize: '0.72rem', marginTop: 2 }}>{cellBtn(s.id, 'claims', !!c.claimList?.length, <>
+                                {c.claimAmt > 0 && <div style={{ color: '#16a34a' }}>+{formatMoney(c.claimAmt)} chi hộ</div>}
+                                {c.claimCut > 0 && <div style={{ color: '#dc2626' }}>−{formatMoney(c.claimCut)} tiền thừa chi hộ</div>}</>)}</div>}</td>
                             <td>{cellBtn(s.id, 'advance', monthRequests(s.id, 'advance').length > 0, <span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span>)}</td>
                             <td>{cellBtn(s.id, 'absent', monthRequests(s.id, 'absent').length > 0, c.rule === 'days'
                               ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không trừ)` : monthRequests(s.id, 'absent').length ? 'chờ duyệt' : '—'}</span>
