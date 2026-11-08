@@ -49,7 +49,7 @@ import { hashPin, isHashedPin, validPin } from '@/lib/staffPin.mjs';
 import { DEVICE_COOKIE, DEVICE_COOKIE_SECONDS, KIOSK_COOKIE, newDeviceId, readKioskCookie, readKioskQrToken, validDeviceId } from '@/lib/checkinToken.mjs';
 import { closedDaysToDate, loadPayrollMonth, monthRange, readClosedDays, readHolidays, readHourlyRates, readLateRules, readMonthClaims, readPayrollSettings, reviewsFor } from '@/lib/payrollMonth.mjs';
 import { AUTO_CLOSE_BY, AUTO_EXTRA_FROM, MIN_TOGGLE_MS, autoClosedIds, clientIp, closeForgottenSessions, currentWorkDay, hhmm, hoursOn, onKioskNetwork, readCheckinSettings, sessionHours, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { DAY_PAY_FROM, DEFAULT_OT_RATE, MAX_CYCLE_DAYS, addDays, computeSalary, cycleDue, cycleDueTo, cyclePeriod, holidayArgs, lateRulesOf, monthKey, monthTallies, payoutDetail, payoutPartOfMonth, staffMonthStats,
+import { DAY_PAY_FROM, DEFAULT_OT_RATE, MAX_CYCLE_DAYS, addDays, computeSalary, cycleDue, cycleDueTo, cyclePayday, cyclePeriod, holidayArgs, nothingDue, lateRulesOf, monthKey, monthTallies, payoutDetail, payoutPartOfMonth, staffMonthStats,
   usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import { normalizeRole } from '@/lib/staffRoles.mjs';
@@ -512,7 +512,8 @@ async function cycleStates(db, staffId = null) {
     const due = cycleDue({ cycle: c, payouts: mine, months: keys.filter(k => k >= from.slice(0, 7)).map(k => monthOf(k, c.staff_id)), to: today, periodStart: period.start });
     // Ca đang mở (chưa ra ca): tiền ngày đó chưa tính, trả tới ngày đó thì phần còn lại vào lần trả sau.
     const open = (last?.sessions || []).find(x => x.staff_id === c.staff_id && !x.clock_out);
-    return { staff_id: c.staff_id, every_days: period.every, start_day: String(c.start_day).slice(0, 10), period: { start: period.start, payday: period.payday, daysLeft: period.daysLeft },
+    return { staff_id: c.staff_id, every_days: period.every, start_day: String(c.start_day).slice(0, 10), payday_anchor: c.payday_anchor ? String(c.payday_anchor).slice(0, 10) : null,
+      period: { start: period.start, payday: period.payday, daysLeft: period.daysLeft, fixed: period.fixed },
       openDay: open ? workDayOf(open, last.rules) : null, days: due.days, advances: due.advances, fines: due.fines, bonuses: due.bonuses, claims: due.claims,
       payouts: mine.slice(-6).reverse().map(({ detail: _d, ...x }) => x) };
   }) };
@@ -1704,9 +1705,22 @@ export async function POST(request) {
       const start = DATE.test(body.start_day || '') ? body.start_day : old[0] ? String(old[0].start_day).slice(0, 10) : today;
       if (start < `${DAY_PAY_FROM}-01`) return fail(`Ngày bắt đầu kỳ từ ${ddmm(`${DAY_PAY_FROM}-01`)}/${DAY_PAY_FROM.slice(0, 4)} trở đi.`);
       if (start > addDays(today, MAX_CYCLE_DAYS)) return fail('Ngày bắt đầu kỳ quá xa hôm nay.');
-      const r = await db.from('payroll_pay_cycles').upsert({ staff_id: staffId, every_days: every, start_day: start, updated_by: user.full_name || null, updated_at: isoNow() },
-        { onConflict: 'staff_id' });
-      if (missingTable(r.error)) return fail(CYCLE_NOT_READY, 503);
+      // Ngày phát cố định: payday_weekday (0 = CN … 6 = T7, kỳ 7 ngày) → thứ đó gần nhất từ hôm nay; payday_anchor: một ngày phát;
+      // '' / null = không cố định. Không gửi gì = giữ như đang cài.
+      const row = { staff_id: staffId, every_days: every, start_day: start, updated_by: user.full_name || null, updated_at: isoNow() };
+      if ('payday_weekday' in body || 'payday_anchor' in body) {
+        const wd = body.payday_weekday === '' || body.payday_weekday === null || body.payday_weekday === undefined ? null : Number(body.payday_weekday);
+        if (wd !== null) {
+          if (!(Number.isInteger(wd) && wd >= 0 && wd <= 6) || every !== 7) return fail('Chọn thứ phát lương cho kỳ 7 ngày.');
+          row.payday_anchor = addDays(today, (wd - new Date(`${today}T00:00:00Z`).getUTCDay() + 7) % 7);
+        } else if (DATE.test(body.payday_anchor || '')) {
+          row.payday_anchor = body.payday_anchor;
+        } else {
+          row.payday_anchor = null;
+        }
+      }
+      const r = await db.from('payroll_pay_cycles').upsert(row, { onConflict: 'staff_id' });
+      if (missingTable(r.error) || /payday_anchor/.test(String(r.error?.message || ''))) return fail(CYCLE_NOT_READY, 503);
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true }, { headers });
     }
@@ -1724,6 +1738,7 @@ export async function POST(request) {
       if (body.to_day > today) return fail('Chỉ trả tới hết hôm nay.');
       const due = cycleDueTo(me, body.to_day, me.period.start);
       const vnd = n => `${Number(n).toLocaleString('vi-VN')}đ`;
+      if (nothingDue(due)) return fail(`Từ ${ddmm(me.period.start)} tới hết ${ddmm(body.to_day)} chưa có ngày công hay khoản nào để trả (0đ), không cần bấm đã thanh toán.`, 409);
       if (Math.round(Number(body.amount)) !== due.amount) return fail(`Số tiền vừa thay đổi, nay là ${vnd(due.amount)}. Xem lại rồi bấm lại.`, 409);
       if (due.amount < 0) return fail(`Tiền ứng / phạt nhiều hơn tiền công ${vnd(-due.amount)} nên chưa phải trả; lần trả sau sẽ trừ tiếp.`, 409);
       const r = await db.from('payroll_payouts').insert({ staff_id: me.staff_id, from_day: me.period.start, to_day: body.to_day, amount: due.amount, detail: payoutDetail(due),
