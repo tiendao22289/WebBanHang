@@ -70,19 +70,23 @@ test('the daily report says "trừ lương" for leaving early only when the rule
 });
 
 test('the owner types how much one late / early minute costs; empty keeps "by the day pay"', () => {
-  const late = [ses('2026-11-05', '22:47', '02:00')]; // trễ 47 phút
-  const typed = pay(late, rule({ per_minute: true, minute_amount: 1000 }));
-  assert.deepEqual([typed.lateAmt, typed.byDay['2026-11-05'], typed.lateList[0].perMinute, typed.lateList[0].fixed], [47000 + 50000, 120000 - 97000, 47000, 50000],
-    '47 minutes × 1.000đ + 50.000đ once');
-  assert.equal(pay(late, rule({ per_minute: true, minute_amount: 1000, fixed_amount: 0 })).lateAmt, 47000, 'only per minute');
-  assert.equal(pay(late, rule({ per_minute: true })).lateAmt, 47 * 500 + 50000, 'no amount typed: by the day pay (120.000đ ÷ 240 phút)');
+  const late = [ses('2026-11-05', '22:47', '02:00')]; // trễ 47 phút (ca 240 phút, 120.000đ/ngày, nửa ngày 60.000đ)
+  // Còn trên nửa ngày: trừ đúng như luật.
+  assert.equal(pay(late, rule({ per_minute: true, minute_amount: 1000, fixed_amount: 0 })).lateAmt, 47000, 'only per minute: 120.000 − 47.000 = 73.000đ');
   assert.equal(pay(late, rule({ per_minute: false, minute_amount: 1000 })).lateAmt, 50000, 'per minute off: the typed amount is not used');
-  // Về sớm 40 phút × 2.000đ.
+  const small = pay(late, rule({ per_minute: true, minute_amount: 200 }));
+  assert.deepEqual([small.lateAmt, small.lateList[0].perMinute, small.lateList[0].fixed], [9400 + 50000, 9400, 50000], '47 × 200đ + 50.000đ once');
+  // Trừ quá nửa ngày (có mặt từ nửa ca trở lên): tính nghỉ nửa buổi — ½ ngày công 60.000đ, không trừ trễ, không gợi ý phạt.
+  for (const [lr, why] of [[rule({ per_minute: true, minute_amount: 1000 }), '47.000 + 50.000'], [rule({ per_minute: true }), 'by the day pay 23.500 + 50.000'],
+    [rule({ per_minute: true, minute_amount: 5000 }), 'more than the whole day']]) {
+    const c = pay(late, lr);
+    assert.deepEqual([c.lateAmt, c.byDay['2026-11-05'], c.lateList, c.daily[0].unit, c.daily[0].halfDay, c.lateFree], [0, 60000, [], 0.5, true, ['2026-11-05']], why);
+  }
+  // Về sớm 40 phút × 2.000đ = 80.000đ: còn 40.000đ dưới nửa ngày → ½ ngày công, không trừ.
   const early = pay([ses('2026-11-05', '22:00', '01:20')], rule({ early_on: true, early_allowed_minutes: 30, early_per_minute: true, early_fixed_amount: 0, early_minute_amount: 2000 }));
-  assert.deepEqual([early.earlyAmt, early.byDay['2026-11-05']], [80000, 40000]);
-  // Không trừ quá tiền của ngày đó.
-  const big = pay(late, rule({ per_minute: true, minute_amount: 5000 }));
-  assert.deepEqual([big.lateAmt, big.byDay['2026-11-05']], [120000, 0]);
+  assert.deepEqual([early.earlyAmt, early.byDay['2026-11-05'], early.daily[0].halfDay], [0, 60000, true]);
+  const earlyLess = pay([ses('2026-11-05', '22:00', '01:20')], rule({ early_on: true, early_allowed_minutes: 30, early_per_minute: true, early_fixed_amount: 0, early_minute_amount: 1000 }));
+  assert.deepEqual([earlyLess.earlyAmt, earlyLess.byDay['2026-11-05']], [40000, 80000], '40 × 1.000đ: still above half a day');
   // Trả theo giờ: đã mất đúng số phút trễ, chỉ trừ tiền mỗi lần.
   const hourly = [{ staff_id: 'a', valid_from: '2026-11-01', hourly_rate: 30000, unit: 'hour' }];
   assert.equal(pay(late, rule({ per_minute: true, minute_amount: 1000 }), hourly).lateAmt, 50000);
@@ -132,4 +136,25 @@ test('the owner saves a late / early rule from a chosen day this month; later ru
   assert.equal(payroll.lateRuleOn(state.payroll_late_rules, CO7, '2026-11-06').minuteAmount, 1000);
   assert.equal((await post({ action: 'save_late_rule', ...typed, per_minute: false })).status, 200);
   assert.equal(state.payroll_late_rules.find(x => x.scope === CO7 && x.valid_from === '2026-11-06').minute_amount, null, 'per minute off: no amount kept');
+});
+
+test('half a day off (Phát 07/11): late so much the cut leaves under half a day → ½ ngày công, no late cut; under half a shift stays as before', () => {
+  // Lương 7.500.000đ (250.000đ/ngày), ca riêng 13:30 → 01:30 (720 phút), luật: cho trễ 10 phút, trừ theo phút + 50.000đ mỗi lần.
+  const R = rules.normalizeRules({ hours_from: '2026-10-25' }, [{ staff_id: 'a', valid_from: '2026-11-01', start_time: '13:30', end_time: '01:30' }],
+    [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '00:00', grace_minutes: 10 }]);
+  const L = [{ scope: 'a', valid_from: '2026-11-01', allowed_minutes: 10, per_minute: true, fixed_amount: 50000, use_shop: false }];
+  const one = (inHm, outHm) => computeSalary({ year: 2026, month: 11, staffId: 'a', config: { base_salary: 7500000, overtime_rate: 0 }, rules: R, lateRules: L,
+    sessions: [ses('2026-11-07', inHm, outHm)] });
+  const phat = one('17:35', '01:29');
+  assert.deepEqual([phat.byDay['2026-11-07'], phat.lateAmt, phat.workUnits, phat.daily[0].unit, phat.daily[0].halfDay], [125000, 0, 0.5, 0.5, true],
+    'was 1 ngày công − 135.069đ = 114.931đ, less than half a day');
+  const tallies = monthTallies({ sessions: [ses('2026-11-07', '17:35', '01:29')], rules: R, key: '2026-11' });
+  assert.equal(fineSuggestions({ staffId: 'a', tallies, autoLateDays: phat.lateFree }).length, 0, 'no "late over 30 minutes" fine suggested either');
+  // Trễ 1 giờ: vẫn 1 ngày công, trừ trễ như luật (250.000 − 50 phút × 347đ − 50.000đ còn trên nửa ngày).
+  const hour = one('14:30', '01:30');
+  assert.deepEqual([hour.workUnits, hour.daily[0].halfDay, hour.lateAmt], [1, undefined, Math.round(250000 * 60 / 720) + 50000]);
+  // Có mặt dưới nửa ca (vào 20:00, 5,5 giờ): như cũ — tính theo thời gian có mặt, tối đa nửa ngày.
+  const short = one('20:00', '01:30');
+  assert.equal(short.daily[0].halfDay, undefined);
+  assert.equal(short.daily[0].unit, 0.5);
 });
