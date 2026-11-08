@@ -8,7 +8,7 @@
 import { lineWarnings, noteTotals, parsePrice, parseQty } from './notesMath.mjs';
 import { notesSummary } from './notesSummary.mjs';
 import { paymentItemIndex } from './notesDebts.mjs';
-import { notePriceAlert, priceAlertText, purchasePrices } from './notesChecks.mjs';
+import { noBillReason, noBillText, notePriceAlert, priceAlertText, purchasePrices } from './notesChecks.mjs';
 
 export const ZALO_TEXT_LIMIT = 1900;
 const vnd = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;
@@ -33,8 +33,8 @@ const historyOnDay = (ts, date) => {
   return !!m && `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` === date;
 };
 const historyClock = ts => /(\d{1,2}:\d{2})/.exec(String(ts || ''))?.[1] || '';
-// Cảnh báo của một dòng hàng: giá cao bất thường trước, rồi lỗi gõ giá / số lượng.
-const itemWarnings = (item, alert) => [...(alert ? [priceAlertText(alert)] : []), ...lineWarnings(item)];
+// Cảnh báo của một dòng hàng: giá cao bất thường, không có bill của mối, rồi lỗi gõ giá / số lượng.
+const itemWarnings = (item, alert) => [...(alert ? [priceAlertText(alert)] : []), ...(noBillReason(item) ? [noBillText(item)] : []), ...lineWarnings(item)];
 
 /** Một món: "• Mực 1,5kg × 200k = 300.000đ — nợ Chị Lan 300.000đ, đã trả 100.000đ, còn 200.000đ" */
 function itemLine(item) {
@@ -288,7 +288,7 @@ export function notesRangeData({ allNotes = [], payments = [], staffNames = {}, 
     if (data?.type !== 'structured_expense') continue;
     const items = named(data.items);
     const alertOf = notePriceAlert(n, prices);
-    if (Math.abs((Number(n.amount) || 0) + (Number(n.debt) || 0) - noteTotals(items).total) >= 1000 || items.some(i => lineWarnings(i).length || alertOf(i))) warnings += 1;
+    if (Math.abs((Number(n.amount) || 0) + (Number(n.debt) || 0) - noteTotals(items).total) >= 1000 || items.some(i => lineWarnings(i).length || alertOf(i) || noBillReason(i))) warnings += 1;
     for (const item of items) {
       const total = lineTotal(item);
       if (!total) continue;

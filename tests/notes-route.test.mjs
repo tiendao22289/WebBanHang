@@ -34,12 +34,22 @@ function load(state, user = ADMIN) {
 }
 const plain = v => JSON.parse(JSON.stringify(v));
 const PHOTO = { size: 1000, type: 'image/jpeg', arrayBuffer: async () => new ArrayBuffer(8) };
-// Phiếu mới gửi kèm 1 ảnh (phiếu đi chợ bắt buộc ảnh); thao tác khác gửi JSON. photos = [] để gửi không ảnh.
-const request = (body, photos) => (photos.length
+// Phiếu mới gửi như trang Sổ tay: dòng nào cũng có _id, 1 ảnh hàng trên cân, 1 tờ bill cho mọi dòng hàng ốc.
+// Thao tác khác gửi JSON. photos = [] / bills = [] để gửi thiếu; bills: [{ file, ids: [_id dòng] }].
+const withIds = body => (Array.isArray(body.items) ? { ...body, items: body.items.map((i, k) => ({ _id: `row-${k}-${Math.random().toString(36).slice(2, 8)}`, ...i })) } : body);
+// Tờ bill phủ mọi dòng có giá (trừ Tiền rau / gia vị) — dòng Khác kèm bill cũng được.
+const allBills = body => { const ids = (body.items || []).filter(i => String(i.name || '').trim() && math.parsePrice(i.price) > 0 && !i.preset).map(i => i._id); return ids.length ? [{ file: PHOTO, ids }] : []; };
+const request = (body, photos, bills) => (photos.length || bills.length
   ? { headers: { get: () => 'multipart/form-data; boundary=x' },
-    formData: async () => ({ get: k => (k === 'payload' ? JSON.stringify(body) : null), getAll: k => (k === 'photo' ? photos : []) }) }
+    formData: async () => ({
+      get: k => (k === 'payload' ? JSON.stringify(body) : k === 'bill_items' ? JSON.stringify(bills.map(b => b.ids)) : null),
+      getAll: k => (k === 'photo' ? photos : k === 'bill' ? bills.map(b => b.file) : []) }) }
   : { headers: { get: () => 'application/json' }, json: async () => body });
-const post = async (api, body, photos = body.action === 'create' ? [PHOTO] : []) => plain(await api.POST(request(body, photos)));
+const post = async (api, raw, photos, bills) => {
+  const create = raw.action === 'create';
+  const body = create ? withIds(raw) : raw;
+  return plain(await api.POST(request(body, photos ?? (create ? [PHOTO] : []), bills ?? (create ? allBills(body) : []))));
+};
 const items = () => [
   { name: 'Ốc hương', qty: '2 ký', price: '220k', paymentStatus: 'full' },
   { name: 'Sò điệp', qty: '3 ký', price: '90k', paymentStatus: 'debt', creditor: 'Chị Lan' },
@@ -186,9 +196,10 @@ test('old leftover can be carried into a new trip note, and survives later edits
   assert.match(JSON.parse(old.content).history.at(-1).changes, /Chuyển 65\.000/);
   assert.equal(noteLeftover(next, state.staff_note_payments), 115000);
   // Sửa phiếu không làm mất sổ tiền dư.
-  assert.equal((await post(api, { action: 'edit', id: trip.id, note_type: 'expense', items: [{ name: 'Ốc', qty: '1', price: '435k' }], note: 'sửa', input_amount: 500000 })).status, 200);
+  const rows = id => math.editRows(JSON.parse(state.staff_notes.find(n => n.id === id).content).items);
+  assert.equal((await post(api, { action: 'edit', id: trip.id, note_type: 'expense', items: rows(trip.id), note: 'sửa', input_amount: 500000 })).status, 200);
   assert.equal(noteLeftover(state.staff_notes.find(n => n.id === trip.id), state.staff_note_payments), 0);
-  assert.equal((await post(api, { action: 'edit', id: next.id, note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '50k' }], note: 'sửa', input_amount: 100000 })).status, 200);
+  assert.equal((await post(api, { action: 'edit', id: next.id, note_type: 'expense', items: rows(next.id), note: 'sửa', input_amount: 100000 })).status, 200);
   assert.equal(noteLeftover(state.staff_notes.find(n => n.id === next.id), state.staff_note_payments), 115000);
 });
 
@@ -348,7 +359,8 @@ test('an edit made on an out-of-date screen is refused instead of overwriting a 
   const id = state.staff_notes[0].id;
   // Hai máy cùng mở ô sửa một bản phiếu.
   const view = { items: JSON.parse(state.staff_notes[0].content).items, updated_at: state.staff_notes[0].updated_at };
-  const first = await post(api, { action: 'edit', id, note_type: 'expense', items: [...view.items, { name: 'Mực', price: '300k' }], note: '', updated_at: view.updated_at });
+  const first = await post(api, { action: 'edit', id, note_type: 'expense', items: [...view.items, { _id: 'muc', name: 'Mực', price: '300k' }], note: '', updated_at: view.updated_at },
+    [], [{ file: PHOTO, ids: ['muc'] }]);
   assert.equal(first.status, 200);
   const stale = await post(api, { action: 'edit', id, note_type: 'expense', items: view.items.map(i => ({ ...i, qty: '3' })), note: '', updated_at: view.updated_at });
   assert.equal(stale.status, 409);
@@ -394,7 +406,7 @@ test('a market trip needs a photo; only "Khác" lines, debt payments or plain te
   const ok = await post(api, { action: 'create', note_type: 'expense', items: items(), photos: ['2026-01/note-fake.jpg'] }, [PHOTO, PHOTO]);
   assert.equal(ok.status, 200);
   const photos = JSON.parse(state.staff_notes.at(-1).content).photos;
-  assert.deepEqual(plain(photos), plain(state.stored), 'the two uploaded photos are kept; a path sent by the browser is ignored');
+  assert.deepEqual(plain(photos), plain(state.stored.filter(p => p.includes('/note-'))), 'the two uploaded photos are kept; a path sent by the browser is ignored');
   const list = plain(await load(state).GET({}));
   assert.equal(list.body.photo_links[photos[0]], `/img?p=${photos[0]}`, 'GET returns a link to see each photo');
 });
@@ -425,15 +437,61 @@ test('editing keeps the photos; adding market lines to a note without any needs 
 
   await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Xăng xe', price: '50k', category: 'xang' }] }, []);
   const petrol = state.staff_notes[1];
-  const addOc = [...math.editRows(JSON.parse(petrol.content).items), { name: 'Ốc hương', price: '220k', qty: '2' }];
+  const addOc = [...math.editRows(JSON.parse(petrol.content).items), { _id: 'oc', name: 'Ốc hương', price: '220k', qty: '2' }];
   const blocked = await post(api, { action: 'edit', id: petrol.id, note_type: 'expense', items: addOc, note: '', updated_at: petrol.updated_at });
   assert.equal(blocked.status, 400, 'cannot slip market goods into a petrol note without a photo');
-  const withPhoto = await post(api, { action: 'edit', id: petrol.id, note_type: 'expense', items: addOc, note: '', updated_at: petrol.updated_at }, [PHOTO]);
+  const withPhoto = await post(api, { action: 'edit', id: petrol.id, note_type: 'expense', items: addOc, note: '', updated_at: petrol.updated_at }, [PHOTO], [{ file: PHOTO, ids: ['oc'] }]);
   assert.equal(withPhoto.status, 200);
   const saved = JSON.parse(state.staff_notes[1].content);
   assert.equal(saved.photos.length, 1);
   assert.match(saved.history.at(-1).changes, /📷 Thêm 1 ảnh/);
 
+  const billOf = [...new Set(JSON.parse(state.staff_notes[0].content).items.map(i => i.bill_photo).filter(Boolean))];
+  assert.equal(billOf.length, 1, 'one bill covers all the ốc lines of the trip');
   assert.equal((await post(api, { action: 'delete', id: note.id })).status, 200);
-  assert.deepEqual(plain(state.removed), plain(before), 'deleting a note deletes its photos');
+  assert.deepEqual(plain(state.removed), plain([...before, ...billOf]), 'deleting a note deletes its photo and its bills');
+});
+
+test('every ốc line needs a seller bill or a reason; one bill can cover several lines', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state, STAFF);
+  const lines = () => [
+    { _id: 'oc', name: 'Ốc hương', qty: '2 ký', price: '220k' },
+    { _id: 'so', name: 'Sò điệp', qty: '3 ký', price: '90k' },
+    { _id: 'muc', name: 'Mực', qty: '1', price: '200k' },
+    { _id: 'rau', name: 'Tiền rau', preset: true, price: '60k' },
+  ];
+  const missing = await post(api, { action: 'create', note_type: 'expense', items: lines() }, [PHOTO], [{ file: PHOTO, ids: ['oc', 'so'] }]);
+  assert.equal(missing.status, 400);
+  assert.match(missing.body.error, /Còn 1 món chưa có bill: Mực/);
+  assert.equal(state.staff_notes.length, 0);
+  assert.match((await post(api, { action: 'create', note_type: 'expense', items: lines() }, [PHOTO], [{ file: PHOTO, ids: ['khac'] }])).body.error, /không khớp/);
+
+  const items = lines().map(i => (i._id === 'muc' ? { ...i, no_bill: '  Mối quen, không viết bill  ' } : i));
+  items[0].bill_photo = '2026-01/notebill-trick.jpg';
+  const ok = await post(api, { action: 'create', note_type: 'expense', items }, [PHOTO], [{ file: PHOTO, ids: ['oc', 'so', 'rau'] }]);
+  assert.equal(ok.status, 200);
+  const saved = JSON.parse(state.staff_notes[0].content).items;
+  const bill = state.stored.find(p => p.includes('/notebill-'));
+  assert.deepEqual(saved.map(i => i.bill_photo || null), [bill, bill, null, bill], 'one bill for ốc, sò and rau; a path sent by the browser is ignored');
+  assert.equal(saved[2].no_bill, 'Mối quen, không viết bill');
+});
+
+test('editing: old lines keep their bill, a new ốc line needs one, a removed line takes its own bill with it', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  await post(api, { action: 'create', note_type: 'expense', items: [{ _id: 'oc', name: 'Ốc hương', price: '220k', qty: '2' }, { _id: 'so', name: 'Sò điệp', price: '90k', qty: '3' }] },
+    [PHOTO], [{ file: PHOTO, ids: ['oc'] }, { file: PHOTO, ids: ['so'] }]);
+  const note = state.staff_notes[0];
+  const [ocBill, soBill] = JSON.parse(note.content).items.map(i => i.bill_photo);
+  const rows = math.editRows(JSON.parse(note.content).items);
+  const add = [...rows.map(i => ({ ...i, bill_photo: undefined })), { _id: 'muc', name: 'Mực', price: '200k', qty: '1' }];
+  assert.match((await post(api, { action: 'edit', id: note.id, note_type: 'expense', items: add, note: '', updated_at: note.updated_at })).body.error, /chưa có bill: Mực/);
+  const r = await post(api, { action: 'edit', id: note.id, note_type: 'expense', items: add.filter(i => i._id !== 'so'), note: '', updated_at: note.updated_at }, [], [{ file: PHOTO, ids: ['muc'] }]);
+  assert.equal(r.status, 200);
+  const after = JSON.parse(state.staff_notes[0].content);
+  assert.deepEqual(after.items.map(i => [i._id, !!i.bill_photo]), [['oc', true], ['muc', true]]);
+  assert.equal(after.items[0].bill_photo, ocBill, 'the old bill stays even when the browser does not send it');
+  assert.match(after.history.at(-1).changes, /🧾 Thêm bill: Mực/);
+  assert.deepEqual(plain(state.removed), [soBill], 'the bill of the removed Sò điệp line is deleted');
 });

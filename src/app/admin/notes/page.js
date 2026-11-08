@@ -7,24 +7,26 @@ import './notes.css';
 import MenuNameInput from '@/lib/MenuNameInput';
 import { editRows, normalizePriceInput, noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
 import { notesApi, notesApiWithPhotos, workforce } from '@/lib/staffApi';
-import { needsTripPhoto, notePriceAlert, priceAlert, priceAlertText, purchasePrices } from '@/lib/notesChecks.mjs';
+import { missingBills, needsBill, needsTripPhoto, noBillReason, notePriceAlert, priceAlert, priceAlertText, purchasePrices } from '@/lib/notesChecks.mjs';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
 import { compressImage } from '@/lib/compressImage';
 import { filterRange, notesSummary } from './notesStats';
 import DebtPicker from './DebtPicker';
 import { KindTag, isOtherLine, newOtherLine } from './NoteKinds';
 import OtherCosts from './OtherCosts';
-import { MoneyInput, NoteItemsList, Section, TripPhotos, TripSummary, vnd } from './NewNoteParts';
+import { BillPicker, MoneyInput, NoteItemsList, Section, TripPhotos, TripSummary, vnd } from './NewNoteParts';
 import { allOpenDebts, debtKey, fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
 import { seesAllNotes } from '@/lib/staffRoles.mjs';
 
 // Chỉ tính tiền thừa của phiếu từ tháng 10/2026 (khớp ô "Trả lại chủ" của tháng; phiếu cũ hơn đã trả chủ).
 const LEFTOVER_SINCE = '2026-10-01';
 // Dòng sẵn của phiếu đi chợ mới: dòng gõ hàng ốc, Tiền rau, Tiền gia vị, dòng gõ Khác (xăng xe, sửa chữa…).
+// Mỗi dòng có mã riêng ngay từ đầu: ảnh bill của mối gắn vào dòng theo mã.
+const rowId = () => `new-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 const freshNoteRows = () => [
-  { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
-  { name: 'Tiền rau', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
-  { name: 'Tiền gia vị', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+  { _id: rowId(), name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+  { _id: rowId(), name: 'Tiền rau', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
+  { _id: rowId(), name: 'Tiền gia vị', preset: true, price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' },
   newOtherLine(),
 ];
 
@@ -62,7 +64,11 @@ export default function StaffNotesPage() {
   const [photoLinks, setPhotoLinks] = useState({});
   const [newPhotos, setNewPhotos] = useState([]);
   const [editPhotos, setEditPhotos] = useState([]);
-  const [camera, setCamera] = useState(null); // { target: 'new' | 'edit', note?, saveAfter }
+  const [camera, setCamera] = useState(null); // { target: 'new' | 'edit', kind: 'scale' | 'bill', itemId?, name?, note?, saveAfter }
+  // Bill của mối vừa chụp [{ blob, url, ids: _id các dòng của tờ bill }] và ô "bill này có cả món nào?".
+  const [newBills, setNewBills] = useState([]);
+  const [editBills, setEditBills] = useState([]);
+  const [billPick, setBillPick] = useState(null); // { ...shot, bills, index, chosen }
   const captureInput = useRef(null);
   const pendingShot = useRef(null);
 
@@ -367,7 +373,7 @@ export default function StaffNotesPage() {
     };
   };
 
-  const submitNewNote = async (photos = newPhotos) => {
+  const submitNewNote = async (photos = newPhotos, bills = newBills) => {
     // Các khoản nợ cũ đã chọn trả (máy chủ kiểm lại số còn nợ từng khoản).
     // Nguồn tiền: tiền thừa phiếu trước (nếu tích dùng) trước, rồi tiền của phiếu này.
     const leftovers = useLeftoverForDebt && !carryLeftover ? openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ id: l.note_id, left: l.left })) : [];
@@ -386,10 +392,17 @@ export default function StaffNotesPage() {
       return;
     }
     // Phiếu có hàng chợ phải có ảnh hàng trên cân / giấy của mối: chưa chụp thì mở camera, chụp xong tự lưu.
-    if (hasItems && needsTripPhoto(filled) && !photos.length) {
-      openCamera({ target: 'new', saveAfter: true });
+    // Lưu theo từng bước: dòng hàng ốc nào chưa có bill thì mở camera chụp bill dòng đó, xong mới tới ảnh cân.
+    const noBill = hasItems ? missingBills(filled, i => bills.some(b => b.ids.includes(i._id))) : [];
+    if (noBill.length) {
+      openCamera({ target: 'new', kind: 'bill', itemId: noBill[0]._id, name: noBill[0].name, saveAfter: true });
       return;
     }
+    if (hasItems && needsTripPhoto(filled) && !photos.length) {
+      openCamera({ target: 'new', kind: 'scale', saveAfter: true });
+      return;
+    }
+    const sendBills = billsForSave(bills, filled);
 
     setIsLoading(true);
     // Máy chủ tự tính tiền từ các dòng hàng, lưu phiếu trước rồi mới trừ nợ cũ.
@@ -403,7 +416,7 @@ export default function StaffNotesPage() {
         pay_debts: payDebts,
         carry_leftovers: carryLeftover && newNoteType === 'expense' ? openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ note_id: l.note_id, amount: l.left })) : [],
       };
-      if (photos.length) await notesApiWithPhotos('create', body, photos.map(p => p.blob));
+      if (photos.length || sendBills.length) await notesApiWithPhotos('create', body, photos.map(p => p.blob), sendBills);
       else await notesApi('create', body);
     } catch (err) { error = err; }
 
@@ -423,8 +436,9 @@ export default function StaffNotesPage() {
       setUseSurplusForDebt(false);
       setUseLeftoverForDebt(false);
       setCarryLeftover(false);
-      dropPhotos(photos);
+      dropPhotos([...photos, ...bills]);
       setNewPhotos([]);
+      setNewBills([]);
       fetchNotes(currentUser); // Refresh list
     } else {
       alert(error.message || 'Lỗi lưu báo cáo!');
@@ -495,6 +509,8 @@ export default function StaffNotesPage() {
   const closeEditNote = () => {
     dropPhotos(editPhotos);
     setEditPhotos([]);
+    dropPhotos(editBills);
+    setEditBills([]);
     setEditingNoteId(null);
     setEditNoteContent('');
     setEditExpenseItems([]);
@@ -554,7 +570,7 @@ export default function StaffNotesPage() {
     return { paid: totalPaid, debt: totalDebt };
   };
 
-  const submitEditNote = async (note, photos = editPhotos) => {
+  const submitEditNote = async (note, photos = editPhotos, bills = editBills) => {
     let finalContent;
     let paid = 0, debt = 0;
 
@@ -646,10 +662,19 @@ export default function StaffNotesPage() {
       ? debt  // always use calculated (even 0)
       : (manualDebt > 0 ? manualDebt : (note.debt || 0));
     // Phiếu chưa có hàng chợ (vd chỉ xăng xe) mà sửa thêm hàng chợ: cần ảnh như phiếu mới (máy chủ cũng chặn).
-    if (editNoteType === 'expense' && needsTripPhoto(validItems) && !needsTripPhoto(itemsOf(note)) && !photosOf(note).length && !photos.length) {
-      openCamera({ target: 'edit', note, saveAfter: true });
+    // Dòng hàng ốc mới thêm cần bill như phiếu mới; dòng cũ giữ bill / lý do cũ (máy chủ cũng kiểm tra).
+    const storedById = new Map(itemsOf(note).map((o, idx) => [o._id || `#${idx}`, o]));
+    const noBill = editNoteType === 'expense'
+      ? missingBills(validItems, i => bills.some(b => b.ids.includes(i._id))).filter(i => !needsBill(storedById.get(i._id))) : [];
+    if (noBill.length) {
+      openCamera({ target: 'edit', kind: 'bill', itemId: noBill[0]._id, name: noBill[0].name, note, saveAfter: true });
       return;
     }
+    if (editNoteType === 'expense' && needsTripPhoto(validItems) && !needsTripPhoto(itemsOf(note)) && !photosOf(note).length && !photos.length) {
+      openCamera({ target: 'edit', kind: 'scale', note, saveAfter: true });
+      return;
+    }
+    const sendBills = billsForSave(bills, validItems);
     setIsSavingEdit(true);
     // Máy chủ tính lại tiền từ các dòng (luôn lưu đúng số mới, kể cả 0), giữ số đã trả nợ
     // của từng dòng và tự ghi lịch sử chỉnh sửa.
@@ -660,11 +685,11 @@ export default function StaffNotesPage() {
         input_amount: editInputAmount, debt: editNoteType !== 'expense' ? finalDebtToSave : undefined,
         updated_at: editUpdatedAt,
       };
-      saved = (photos.length ? await notesApiWithPhotos('edit', body, photos.map(p => p.blob)) : await notesApi('edit', body)).note;
+      saved = (photos.length || sendBills.length ? await notesApiWithPhotos('edit', body, photos.map(p => p.blob), sendBills) : await notesApi('edit', body)).note;
     } catch (err) { error = err; }
     setIsSavingEdit(false);
     if (!error) {
-      dropPhotos(photos);
+      dropPhotos([...photos, ...bills]);
       closeEditNote();
       fetchNotes();
       setViewingNote(prev => prev && saved ? { ...prev, ...saved } : prev);
@@ -714,7 +739,7 @@ export default function StaffNotesPage() {
         const alreadyHasEmptyAfter = next && !next.preset && next.name.trim() === '' && isOtherLine(next) === other;
         if (!alreadyHasEmptyAfter) {
           newItems.splice(index + 1, 0, other ? newOtherLine(prev[index].category)
-            : { name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' });
+            : { _id: rowId(), name: '', price: '', qty: '', paymentStatus: 'full', creditor: '', debtAmount: '' });
         }
       }
       return newItems;
@@ -772,15 +797,71 @@ export default function StaffNotesPage() {
   const dropPhotos = list => list.forEach(p => URL.revokeObjectURL(p.url));
   // Máy không mở được camera trong trang → dùng ứng dụng camera của máy (như trang Mã QR).
   const openCamera = shot => {
-    if (cameraSupported()) setCamera(shot);
+    // Mỗi lần chụp một màn hình camera mới (key): chụp bill xong mở tiếp ảnh cân thì camera mở lại từ đầu.
+    if (cameraSupported()) setCamera({ ...shot, id: `${Date.now()}-${Math.random()}` });
     else { pendingShot.current = shot; captureInput.current?.click(); }
   };
+  const billsOf = target => (target === 'edit' ? editBills : newBills);
+  const setBillsOf = (target, list) => (target === 'edit' ? setEditBills : setNewBills)(list);
+  const itemsFor = target => (target === 'edit' ? editExpenseItems : expenseItems);
+  const setItemField = (target, idx, field, value) => (target === 'edit' ? updateEditExpenseItem : updateExpenseItem)(idx, field, value);
+  // Lưu tiếp sau khi chụp (ảnh / bill truyền thẳng vì state chưa kịp đổi).
+  const continueSave = (shot, { photos, bills } = {}) => (shot.target === 'edit'
+    ? submitEditNote(shot.note, photos ?? editPhotos, bills ?? editBills)
+    : submitNewNote(photos ?? newPhotos, bills ?? newBills));
+  // Chỉ gửi bill còn dòng (dòng bị xoá thì bỏ mã của dòng đó khỏi bill).
+  const billsForSave = (bills, items) => {
+    const ids = new Set(items.map(i => i._id));
+    return bills.map(b => ({ ...b, ids: b.ids.filter(id => ids.has(id)) })).filter(b => b.ids.length);
+  };
+  // Dòng có giá chưa có bill / lý do — để chọn chung tờ bill vừa chụp.
+  const billable = (target, bills, exceptId) => itemsFor(target).filter(i => String(i.name || '').trim() && parsePrice(i.price) > 0
+    && i._id !== exceptId && !i.bill_photo && !noBillReason(i) && !bills.some(b => b.ids.includes(i._id)));
+  // Camera tự đóng ngay sau khi chụp (onClose): bước lưu tiếp (có thể mở camera lần nữa) chạy sau một nhịp,
+  // khi camera cũ đã đóng hẳn và trả lại bước lịch sử của nút Back.
+  const later = fn => setTimeout(fn, 60);
   const addShot = (shot, blob) => {
     const photo = { blob, url: URL.createObjectURL(blob) };
     setCamera(null);
-    const next = [...(shot.target === 'edit' ? editPhotos : newPhotos), photo];
-    if (shot.target === 'edit') setEditPhotos(next); else setNewPhotos(next);
-    if (shot.saveAfter) (shot.target === 'edit' ? submitEditNote(shot.note, next) : submitNewNote(next));
+    if (shot.kind === 'bill') {
+      const bills = [...billsOf(shot.target), { ...photo, ids: [shot.itemId] }];
+      setBillsOf(shot.target, bills);
+      if (billable(shot.target, bills, shot.itemId).length) setBillPick({ ...shot, bills, index: bills.length - 1, chosen: [] });
+      else if (shot.saveAfter) later(() => continueSave(shot, { bills }));
+      return;
+    }
+    const photos = [...(shot.target === 'edit' ? editPhotos : newPhotos), photo];
+    if (shot.target === 'edit') setEditPhotos(photos); else setNewPhotos(photos);
+    if (shot.saveAfter) later(() => continueSave(shot, { photos }));
+  };
+  const finishBillPick = () => {
+    const pick = billPick;
+    const bills = pick.bills.map((b, i) => (i === pick.index ? { ...b, ids: [...b.ids, ...pick.chosen] } : b));
+    setBillsOf(pick.target, bills);
+    setBillPick(null);
+    if (pick.saveAfter) continueSave(pick, { bills });
+  };
+  // Ô bill của một dòng có giá (dòng hàng ốc bắt buộc, rau / gia vị / Khác chụp nếu muốn).
+  const billFor = target => (item, idx) => {
+    if (!String(item.name || '').trim() || parsePrice(item.price) <= 0) return null;
+    if (item.bill_photo) return { saved: true, photo: photoLinks[item.bill_photo] || null };
+    const bills = billsOf(target);
+    const local = bills.find(b => b.ids.includes(item._id));
+    return {
+      required: needsBill(item), photo: local?.url || null, reason: noBillReason(item),
+      onShoot: () => openCamera({ target, kind: 'bill', itemId: item._id, name: item.name, note: target === 'edit' ? viewingNote : undefined, saveAfter: false }),
+      onNoBill: () => {
+        const reason = prompt(`Mối không đưa bill cho "${item.name}"? Ghi lý do (chủ sẽ thấy):`);
+        if (reason?.trim()) setItemField(target, idx, 'no_bill', reason.trim().slice(0, 120));
+      },
+      onClear: local
+        ? () => {
+            const rest = local.ids.filter(id => id !== item._id);
+            if (!rest.length) dropPhotos([local]);
+            setBillsOf(target, rest.length ? bills.map(b => (b === local ? { ...b, ids: rest } : b)) : bills.filter(b => b !== local));
+          }
+        : () => setItemField(target, idx, 'no_bill', ''),
+    };
   };
   const pickedPhoto = async event => {
     const file = event.target.files?.[0];
@@ -819,7 +900,11 @@ export default function StaffNotesPage() {
         // Dòng ghi giá cao bất thường so với các lần mua trước phiếu này.
         const viewed = notes.find(n => n.id === noteId);
         const alertOf = viewed ? notePriceAlert(viewed, prices) : () => null;
-        const flag = item => { const a = alertOf(item); return a && <span className="note-flag" title={priceAlertText(a)}>⚠ giá +{a.pct}%</span>; };
+        const flag = item => { const a = alertOf(item); const link = item.bill_photo && photoLinks[item.bill_photo]; return <>
+          {a && <span className="note-flag" title={priceAlertText(a)}>⚠ giá +{a.pct}%</span>}
+          {noBillReason(item) && <span className="note-flag nobill" title={noBillReason(item)}>🧾 không bill: {noBillReason(item)}</span>}
+          {link && <a className="note-bill" href={link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>🧾 bill</a>}
+        </>; };
         rows.forEach(item => {
           const p = parseVal(item.price);
           const q = parseVal(item.qty, true) || 1;
@@ -1619,9 +1704,11 @@ export default function StaffNotesPage() {
                       {(() => {
                         // Chủ thấy ngay phiếu có dòng giá cao bất thường và phiếu có ảnh.
                         const high = itemsOf(note).filter(notePriceAlert(note, prices)).length;
+                        const unbilled = itemsOf(note).filter(i => noBillReason(i)).length;
                         const shots = photosOf(note).length;
                         return <>
                           {high > 0 && <span className="keep-tag" style={{ background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', fontWeight: 700 }}>⚠ {high} món giá cao</span>}
+                          {unbilled > 0 && <span className="keep-tag" style={{ background: '#fff7ed', color: '#c2410c', border: '1px solid #fdba74', fontWeight: 700 }}>🧾 {unbilled} món không bill</span>}
                           {shots > 0 && <span className="keep-tag" style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>📷 {shots} ảnh</span>}
                         </>;
                       })()}
@@ -1716,10 +1803,10 @@ export default function StaffNotesPage() {
                       <div className="np-edit-list">
                         <NoteItemsList items={editExpenseItems} menuNames={menuNames} categories={noteCategories} isAdmin={currentUser.role === 'admin'}
                           onField={updateEditExpenseItem} onBlur={handleEditExpenseBlur} onRemove={removeEditExpenseItem}
-                          onCategory={(idx, v) => updateEditExpenseItem(idx, 'category', v)} priceCheck={notePriceAlert(viewingNote, prices)} />
+                          onCategory={(idx, v) => updateEditExpenseItem(idx, 'category', v)} priceCheck={notePriceAlert(viewingNote, prices)} billFor={billFor('edit')} />
                       </div>
                       <div style={{ marginBottom: 8 }}>
-                        <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>📷 Ảnh hàng / giấy của mối</label>
+                        <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>📷 Ảnh hàng trên cân</label>
                         <TripPhotos saved={photosOf(viewingNote).map(p => photoLinks[p]).filter(Boolean)} photos={editPhotos}
                           required={needsTripPhoto(editExpenseItems) && !needsTripPhoto(itemsOf(viewingNote)) && !photosOf(viewingNote).length}
                           onAdd={() => openCamera({ target: 'edit', note: viewingNote, saveAfter: false })} onRemove={i => removePhoto('edit', i)} />
@@ -1784,7 +1871,7 @@ export default function StaffNotesPage() {
               <div style={{ marginBottom: 20, padding: 16, background: 'white', borderRadius: 12, border: '1px solid #f3f4f6', overflowX: 'auto' }}>
                 {renderNoteContent(viewingNote.content, viewingNote.id)}
                 {photosOf(viewingNote).length > 0 && <div style={{ marginTop: 10 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 4 }}>📷 Ảnh hàng / giấy của mối</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 4 }}>📷 Ảnh hàng trên cân</div>
                   <TripPhotos saved={photosOf(viewingNote).map(p => photoLinks[p]).filter(Boolean)} photos={[]} onAdd={null} />
                 </div>}
               </div>
@@ -1883,13 +1970,13 @@ export default function StaffNotesPage() {
               <Section step={2} title="Hàng đã mua" aside={goods > 0 ? <b className="np-goods">{vnd(goods)}</b> : null}>
                 <NoteItemsList items={expenseItems} menuNames={menuNames} categories={noteCategories} isAdmin={currentUser.role === 'admin'}
                   onField={updateExpenseItem} onBlur={handleExpenseBlur} onRemove={removeExpenseItem}
-                  onCategory={(idx, v) => updateExpenseItem(idx, 'category', v)} priceCheck={item => priceAlert(item, prices)} />
+                  onCategory={(idx, v) => updateExpenseItem(idx, 'category', v)} priceCheck={item => priceAlert(item, prices)} billFor={billFor('new')} />
                 {showNoteText
                   ? <textarea className="np-textarea" rows={2} placeholder="Ghi chú cho chủ (không bắt buộc)" value={newNoteContent} onChange={e => setNewNoteContent(e.target.value)} />
                   : <button type="button" className="np-link" onClick={() => setShowNoteText(true)}>＋ Ghi chú</button>}
               </Section>
 
-              <Section title="📷 Ảnh hàng trên cân / giấy của mối" aside={needsPhoto ? <span className="np-warn price">bắt buộc</span> : null}>
+              <Section title="📷 Ảnh hàng trên cân ở quán" aside={needsPhoto ? <span className="np-warn price">bắt buộc</span> : null}>
                 <TripPhotos photos={newPhotos} required={needsPhoto} onAdd={() => openCamera({ target: 'new', saveAfter: false })} onRemove={i => removePhoto('new', i)} />
               </Section>
 
@@ -1927,12 +2014,15 @@ export default function StaffNotesPage() {
 
       {/* Chụp ảnh phiếu đi chợ: camera trong trang, máy không mở được thì dùng ứng dụng camera của máy. */}
       <input ref={captureInput} type="file" accept="image/*" capture="environment" onChange={pickedPhoto} hidden />
-      {camera && <CameraCapture
-        title="Chụp hàng trên cân hoặc giấy ghi của mối"
-        subtitle={camera.saveAfter ? 'Phiếu đi chợ cần ảnh · chụp xong tự lưu phiếu' : 'Ảnh kèm phiếu đi chợ'}
+      {camera && <CameraCapture key={camera.id}
+        title={camera.kind === 'bill' ? `Chụp bill của mối: ${camera.name || 'món này'}` : 'Chụp hàng trên cân ở quán'}
+        subtitle={camera.kind === 'bill' ? 'Chụp rõ giá và số ký trên bill' : camera.saveAfter ? 'Phiếu đi chợ cần ảnh · chụp xong tự lưu phiếu' : 'Ảnh kèm phiếu đi chợ'}
         closeText="Huỷ"
         onClose={() => setCamera(null)}
         onCapture={blob => addShot(camera, blob)} />}
+      {billPick && <BillPicker name={billPick.name} items={billable(billPick.target, billPick.bills, billPick.itemId)} chosen={billPick.chosen}
+        onToggle={id => setBillPick(p => ({ ...p, chosen: p.chosen.includes(id) ? p.chosen.filter(x => x !== id) : [...p.chosen, id] }))}
+        onDone={finishBillPick} />}
 
       {/* ── Delete Confirm Modal ── */}
       {deleteConfirmId && (

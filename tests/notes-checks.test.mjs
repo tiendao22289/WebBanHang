@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { needsTripPhoto, notePriceAlert, priceAlert, priceAlertText, purchasePrices, usualPrice } from '../src/lib/notesChecks.mjs';
+import { missingBills, needsTripPhoto, notePriceAlert, priceAlert, priceAlertText, purchasePrices, usualPrice } from '../src/lib/notesChecks.mjs';
 import { notesDayData, notesRangeData, notesReportMessages } from '../src/lib/notesReport.mjs';
 
 const note = (id, at, items, extra = {}) => ({ id, staff_id: 's1', note_type: 'expense', created_at: at, staff: { full_name: 'Thy' },
@@ -63,4 +63,15 @@ test('the owner sees the high price in the Zalo report and in /thongke', () => {
   assert.deepEqual(day.notes[0].items.map(i => i.warnings), [['Giá cao hơn thường 25% (thường 240.000đ)'], []]);
   assert.equal(day.summary.warnings, 1);
   assert.equal(notesRangeData({ allNotes, payments: [], range }).summary.warnings, 1);
+});
+
+test('lines bought without a seller bill show the reason to the owner', () => {
+  const range = { start: new Date('2026-10-22T17:00:00Z'), end: new Date('2026-10-23T17:00:00Z') };
+  const today = note('t', '2026-10-23T01:00:00Z', [{ ...oc('240k'), no_bill: 'mối quen không viết bill' }], { amount: 480000 });
+  const text = notesReportMessages({ date: '2026-10-23', dayNotes: [today], allNotes: [...history, today], payments: [], range }).join('\n');
+  assert.match(text, /⚠ Không có bill: mối quen không viết bill/);
+  const day = notesDayData({ date: '2026-10-23', dayNotes: [today], allNotes: [...history, today], payments: [], range });
+  assert.deepEqual(day.notes[0].items[0].warnings, ['Không có bill: mối quen không viết bill']);
+  assert.equal(day.summary.warnings, 1);
+  assert.deepEqual(missingBills([oc('240k'), { ...oc('240k'), no_bill: 'x' }, { ...oc('240k'), bill_photo: 'p' }, { name: 'Tiền rau', preset: true, price: '50k' }]).length, 1);
 });
