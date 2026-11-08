@@ -482,7 +482,8 @@ export function staffMonthStats({ year, month, staff = [], configs = [], session
       late: t.late, early: t.early, leftEarly: t.leftEarly, stayed: t.stayed, forgot: t.forgot,
       warnings: myScans.filter(s => s.warnings?.length).length, blocked: myScans.filter(s => s.action === 'blocked').length,
       bonus: { ...bonusCheck({ year, month, salary: live, tallies: t, departure, settings: bonusSettings }), approved: gifts[0] || null },
-      fineSuggestions: fineSuggestions({ staffId: p.id, tallies: t, reviews: fineReviews, kinds: fineKinds, autoLateDays: [...(live.lateList || []).map(x => x.day), ...(live.lateFree || [])] }).length,
+      ...(items => ({ fineSuggestions: items.length, fineItems: items }))(fineSuggestions({ staffId: p.id, tallies: t, reviews: fineReviews, kinds: fineKinds,
+        autoLateDays: [...(live.lateList || []).map(x => x.day), ...(live.lateFree || [])] })),
     };
   }).filter(Boolean);
   const sum = f => people.reduce((a, p) => a + (Number(f(p)) || 0), 0);

@@ -187,6 +187,81 @@ async function myPeerReports(db, staffId) {
   }
 }
 
+/**
+ * Mọi việc đang chờ chủ quán quyết định, để duyệt ngay trên /thongke (mục Duyệt): đơn ứng lương / báo nghỉ, xin sửa giờ, giờ ngoài ca,
+ * khoản chi hộ, báo lỗi đồng nghiệp, gợi ý phạt từ chấm công (trễ quá 30 phút, quên ra ca), lỗi chưa định tiền, thưởng chuyên cần đủ
+ * điều kiện. Gợi ý phạt / lỗi / thưởng xét tháng này và tháng trước; người đã chốt lương tháng đó thì bỏ qua (ghi vào không trừ được).
+ * Bảng mới chưa có (chi hộ, báo lỗi) thì phần đó trống.
+ */
+async function inboxOverview(db) {
+  const today = vnToday(), cur = today.slice(0, 7), prev = addDays(`${cur}-01`, -1).slice(0, 7);
+  const optional = q => q.then(r => (missingTable(r.error) ? { data: [] } : r));
+  const [settings, people, reqs, fixes, claims, peers, rules] = await Promise.all([
+    readCheckinSettings(db),
+    db.from('staff').select('id, full_name, role'),
+    db.from('payroll_requests').select('*').eq('status', 'pending').order('created_at'),
+    db.from('attendance_fix_requests').select('*').eq('status', 'pending').order('created_at'),
+    optional(db.from('payroll_expense_claims').select('*').eq('status', 'pending').order('created_at')),
+    optional(db.from('payroll_peer_reports').select('*').eq('status', 'pending').order('created_at')),
+    db.from('payroll_fine_rules').select('kind, amount, active'),
+  ]);
+  for (const r of [people, reqs, fixes, claims, peers, rules]) if (r.error) throw r.error;
+  const nameOf = new Map((people.data || []).map(p => [p.id, String(p.full_name || '').trim() || 'Nhân viên']));
+  const who = id => nameOf.get(id) || 'Không rõ';
+  const reqIds = (reqs.data || []).map(r => r.id), fixIds = [...new Set((fixes.data || []).map(f => f.attendance_id))];
+  const [leave, fixSessions, extras] = await Promise.all([
+    reqIds.length ? db.from('payroll_leave_days').select('*').in('request_id', reqIds) : { data: [] },
+    fixIds.length ? db.from('attendance_sessions').select('id, clock_in, clock_out, date').in('id', fixIds) : { data: [] },
+    pendingExtras(db, settings),
+  ]);
+  if (leave.error) throw leave.error;
+  if (fixSessions.error) throw fixSessions.error;
+  const ruleAmount = Object.fromEntries((rules.data || []).filter(r => r.kind).map(r => [r.kind, Number(r.amount) || 0]));
+  const fines = [], bonuses = [], unpriced = [];
+  for (const key of [prev, cur]) {
+    const [year, month] = key.split('-').map(Number);
+    const m = await loadPayrollMonth(db, year, month, today);
+    const auto = await autoClosedInMonth(db, m.start, m.end);
+    const stats = staffMonthStats({ year, month, ...m, autoClosed: auto.map(r => r.attendance_id), scans: [] });
+    const open = new Set(stats.people.filter(p => !p.salary.locked).map(p => p.staff_id));
+    for (const p of stats.people) {
+      if (!open.has(p.staff_id)) continue;
+      for (const x of p.fineItems || []) fines.push({ ...x, name: p.name, suggested: ruleAmount[x.kind] || 0 });
+      if (monthOver(year, month) && m.bonusSettings?.bonus_amount > 0 && p.bonus?.eligible && !p.bonus?.approved) {
+        bonuses.push({ staff_id: p.staff_id, name: p.name, year, month, suggested: Number(m.bonusSettings.bonus_amount) || 0 });
+      }
+    }
+    const zero = m.violations.filter(v => !(Number(v.amount) > 0) && open.has(v.staff_id));
+    if (zero.length) {
+      const { data: meta, error } = await db.from('payroll_violation_meta').select('*').in('violation_id', zero.map(v => v.id));
+      if (error) throw error;
+      const metaOf = new Map((meta || []).map(x => [x.violation_id, x]));
+      for (const v of zero) {
+        const x = metaOf.get(v.id);
+        unpriced.push({ id: v.id, staff_id: v.staff_id, name: who(v.staff_id), reason: v.reason, date: x?.fine_date ? String(x.fine_date).slice(0, 10) : null,
+          note: x?.note || null, self: !!x?.self_reported, year, month });
+      }
+    }
+  }
+  const sessionOf = new Map((fixSessions.data || []).map(x => [x.id, x]));
+  const out = {
+    requests: (reqs.data || []).map(r => {
+      const l = (leave.data || []).find(x => x.request_id === r.id);
+      return { id: r.id, staff_id: r.staff_id, name: who(r.staff_id), type: r.request_type, amount: Number(r.amount) || 0, days: Number(r.days) || 0,
+        from: l ? String(l.from_date).slice(0, 10) : null, to: l ? String(l.to_date).slice(0, 10) : null, reason: r.reason || '', created_at: r.created_at };
+    }),
+    fixes: (fixes.data || []).map(f => ({ id: f.id, staff_id: f.staff_id, name: who(f.staff_id), clock_in: f.clock_in, clock_out: f.clock_out, reason: f.reason || '',
+      current: sessionOf.get(f.attendance_id) || null, created_at: f.created_at })),
+    extras: extras.map(x => ({ ...x, name: who(x.staff_id) })),
+    claims: (claims.data || []).map(c => ({ ...claimView(c), name: who(c.staff_id) })),
+    peers: (peers.data || []).map(r => ({ id: r.id, staff_id: r.staff_id, name: who(r.staff_id), reporter: r.reporter_name || who(r.reporter_id), date: String(r.report_date).slice(0, 10),
+      reason: r.reason, note: r.note || null, suggested: Number(r.suggested_amount) || 0, created_at: r.created_at })),
+    fines, unpriced, bonuses,
+  };
+  out.count = Object.values(out).reduce((a, list) => a + (Array.isArray(list) ? list.length : 0), 0);
+  return out;
+}
+
 // Trang Lương của chủ: báo lỗi đồng nghiệp còn chờ + đã xử lý 60 ngày gần đây (tên người báo / người bị báo, tiền gợi ý).
 async function peerOverview(db) {
   const { data, error } = await db.from('payroll_peer_reports').select('*')
@@ -557,10 +632,12 @@ export async function GET(request) {
     const params = new URL(request.url).searchParams;
     if (params.get('me')) return NextResponse.json(await myStatus(s.db, s.user.id), { headers });
     if (params.get('face_check')) return NextResponse.json(await faceCheckStatus(s.db, s.user.id, params.get('face_check')), { headers });
-    if (!params.get('checkin') && !params.get('payroll') && !params.get('stats') && !params.get('faces') && !params.get('cycles') && !params.get('claims') && !params.get('peer')) return fail('Thiếu yêu cầu.');
+    if (!params.get('checkin') && !params.get('payroll') && !params.get('stats') && !params.get('faces') && !params.get('cycles') && !params.get('claims') && !params.get('peer')
+      && !params.get('inbox')) return fail('Thiếu yêu cầu.');
     if (!s.isAdmin) return fail('Chỉ admin xem phần này.', 403);
     if (params.get('claims')) return NextResponse.json(await claimsOverview(s.db), { headers });
     if (params.get('peer')) return NextResponse.json(await peerOverview(s.db), { headers });
+    if (params.get('inbox')) return NextResponse.json(await inboxOverview(s.db), { headers });
     if (params.get('faces')) return NextResponse.json(await faceOverview(s.db), { headers });
     if (params.get('cycles')) return NextResponse.json(await cycleStates(s.db), { headers });
     if (params.get('payroll') || params.get('stats')) {
