@@ -472,6 +472,51 @@ async function readCycles(db, staffId = null) {
  * chênh của ngày đã trả mà sau đó sửa giờ), ứng / phạt / thưởng chưa trừ, ca đang mở, các lần trả gần đây. Tính lại từ tháng trước
  * (hoặc từ đầu kỳ nếu kỳ bắt đầu sớm hơn), cùng công thức bảng lương; tháng đã chốt thì theo tiền từng ngày đã chốt.
  */
+/**
+ * Tiền từng ngày (byDay) và các khoản (ứng, phạt, thưởng, chi hộ cộng lương) của một người trong tháng `k` đã nạp (loadPayrollMonth).
+ * Tháng đã chốt: ngày có trong số chốt theo số chốt; ngày sau lúc chốt (số chốt chưa có) theo chấm công hiện tại — chốt giữa tháng
+ * không làm mất các ngày sau đó khi trả lương theo kỳ / theo ngày chọn.
+ */
+function personMonth(m, k, id) {
+  const of = rows => (rows || []).filter(r => r.staff_id === id);
+  const person = m.staff.find(x => x.id === id) || { id };
+  const [year, month] = k.split('-').map(Number), reqs = of(m.requests), vios = of(m.violations), gifts = of(m.bonuses), claims = of(m.claims || []);
+  const closed = m.closes.find(x => x.staff_id === id)?.snapshot;
+  const live = computeSalary({ year, month, staffId: id, sessions: of(m.sessions), config: of(m.configs)[0] || null, requests: reqs, violations: vios, bonuses: gifts,
+    rules: m.rules, reviews: m.reviews, hourlyRates: of(m.hourlyRates), lateRules: lateRulesOf(m.lateRules, id), ...holidayArgs(person, m) }).byDay;
+  return { key: k, byDay: closed?.byDay ? { ...live, ...closed.byDay } : live,
+    advances: reqs.filter(r => r.request_type === 'advance' && r.status === 'approved').map(r => ({ id: r.id, amount: Number(r.amount) || 0 })),
+    fines: vios.map(v => ({ id: v.id, amount: Number(v.amount) || 0 })), bonus: gifts.reduce((a, b) => a + (Number(b.amount) || 0), 0),
+    claims: claims.filter(c => c.payout === 'salary').map(c => ({ id: c.id, amount: Number(c.amount) || 0 })) };
+}
+
+/**
+ * Trả lương theo ngày chọn (mọi người, kể cả lương tháng): số phải trả cho đúng các ngày from..to — tiền từng ngày (theo chấm công,
+ * như bảng lương) trừ phần đã trả của những ngày đó, trừ ứng / phạt chưa trừ, cộng thưởng / chi hộ chưa cộng của các tháng tới tháng
+ * của `to`. Bấm lúc nào cũng vậy; ngày đã trả không trả lại. → { ready, from, to, days, work, advances, fines, bonuses, claims, amount,
+ * openDay, payouts } hoặc { error }.
+ */
+async function rangeDue(db, staffId, from, to) {
+  const today = vnToday();
+  if (!DATE.test(from || '') || !DATE.test(to || '')) return { error: 'Chọn từ ngày và đến ngày.' };
+  if (from > to) return { error: 'Từ ngày phải trước đến ngày.' };
+  if (to > today) return { error: 'Chỉ trả tới hết hôm nay.' };
+  if (from < `${DAY_PAY_FROM}-01`) return { error: `Trả theo ngày từ ${ddmm(`${DAY_PAY_FROM}-01`)}/${DAY_PAY_FROM.slice(0, 4)} trở đi.` };
+  const keys = [];
+  for (let k = from.slice(0, 7); k <= to.slice(0, 7); k = nextMonthKey(k)) keys.push(k);
+  if (keys.length > CYCLE_MONTHS) return { error: `Chọn tối đa ${CYCLE_MONTHS} tháng một lần.` };
+  const { data: payouts, error } = await db.from('payroll_payouts').select('*').eq('staff_id', staffId).order('to_day');
+  if (missingTable(error)) return { ready: false, error: CYCLE_NOT_READY };
+  if (error) throw error;
+  const loaded = new Map(await Promise.all(keys.map(async k => [k, await loadPayrollMonth(db, Number(k.slice(0, 4)), Number(k.slice(5, 7)), today)])));
+  const due = cycleDue({ cycle: { start_day: from }, payouts: payouts || [], months: keys.map(k => personMonth(loaded.get(k), k, staffId)), to, periodStart: from });
+  const last = loaded.get(keys[keys.length - 1]);
+  const open = (last?.sessions || []).find(x => x.staff_id === staffId && !x.clock_out);
+  const openDay = open ? workDayOf(open, last.rules) : null;
+  return { ready: true, from, to, ...due, openDay: openDay && openDay >= from && openDay <= to ? openDay : null,
+    payouts: (payouts || []).slice(-8).reverse().map(({ detail: _d, ...x }) => x) };
+}
+
 async function cycleStates(db, staffId = null) {
   const cycles = await readCycles(db, staffId);
   if (cycles === null) return { ready: false, people: [] };
@@ -496,17 +541,7 @@ async function cycleStates(db, staffId = null) {
   const keys = [];
   for (let k = earliest.slice(0, 7); k <= today.slice(0, 7); k = nextMonthKey(k)) keys.push(k);
   const loaded = new Map(await Promise.all(keys.map(async k => [k, await loadPayrollMonth(db, Number(k.slice(0, 4)), Number(k.slice(5, 7)), today)])));
-  const monthOf = (k, id) => {
-    const m = loaded.get(k), of = rows => (rows || []).filter(r => r.staff_id === id);
-    const person = m.staff.find(x => x.id === id) || { id };
-    const [year, month] = k.split('-').map(Number), reqs = of(m.requests), vios = of(m.violations), gifts = of(m.bonuses), claims = of(m.claims || []);
-    const closed = m.closes.find(x => x.staff_id === id)?.snapshot;
-    const byDay = closed?.byDay || computeSalary({ year, month, staffId: id, sessions: of(m.sessions), config: of(m.configs)[0] || null, requests: reqs, violations: vios, bonuses: gifts,
-      rules: m.rules, reviews: m.reviews, hourlyRates: of(m.hourlyRates), lateRules: lateRulesOf(m.lateRules, id), ...holidayArgs(person, m) }).byDay;
-    return { key: k, byDay, advances: reqs.filter(r => r.request_type === 'advance' && r.status === 'approved').map(r => ({ id: r.id, amount: Number(r.amount) || 0 })),
-      fines: vios.map(v => ({ id: v.id, amount: Number(v.amount) || 0 })), bonus: gifts.reduce((a, b) => a + (Number(b.amount) || 0), 0),
-      claims: claims.filter(c => c.payout === 'salary').map(c => ({ id: c.id, amount: Number(c.amount) || 0 })) };
-  };
+  const monthOf = (k, id) => personMonth(loaded.get(k), k, id);
   const last = loaded.get(today.slice(0, 7));
   return { ready: true, today, people: plans.map(({ c, mine, period, from }) => {
     const due = cycleDue({ cycle: c, payouts: mine, months: keys.filter(k => k >= from.slice(0, 7)).map(k => monthOf(k, c.staff_id)), to: today, periodStart: period.start });
@@ -634,11 +669,17 @@ export async function GET(request) {
     if (params.get('me')) return NextResponse.json(await myStatus(s.db, s.user.id), { headers });
     if (params.get('face_check')) return NextResponse.json(await faceCheckStatus(s.db, s.user.id, params.get('face_check')), { headers });
     if (!params.get('checkin') && !params.get('payroll') && !params.get('stats') && !params.get('faces') && !params.get('cycles') && !params.get('claims') && !params.get('peer')
-      && !params.get('inbox')) return fail('Thiếu yêu cầu.');
+      && !params.get('inbox') && !params.get('range')) return fail('Thiếu yêu cầu.');
     if (!s.isAdmin) return fail('Chỉ admin xem phần này.', 403);
     if (params.get('claims')) return NextResponse.json(await claimsOverview(s.db), { headers });
     if (params.get('peer')) return NextResponse.json(await peerOverview(s.db), { headers });
     if (params.get('inbox')) return NextResponse.json(await inboxOverview(s.db), { headers });
+    if (params.get('range')) {
+      if (!UUID.test(params.get('staff_id') || '')) return fail('Thiếu nhân viên.');
+      const r = await rangeDue(s.db, String(params.get('staff_id')).toLowerCase(), params.get('from'), params.get('to'));
+      if (r.error) return fail(r.error, r.ready === false ? 503 : 400);
+      return NextResponse.json(r, { headers });
+    }
     if (params.get('faces')) return NextResponse.json(await faceOverview(s.db), { headers });
     if (params.get('cycles')) return NextResponse.json(await cycleStates(s.db), { headers });
     if (params.get('payroll') || params.get('stats')) {
@@ -1744,6 +1785,28 @@ export async function POST(request) {
       const r = await db.from('payroll_payouts').insert({ staff_id: me.staff_id, from_day: me.period.start, to_day: body.to_day, amount: due.amount, detail: payoutDetail(due),
         paid_at: isoNow(), paid_by: user.full_name || null }).select('id').single();
       if (r.error?.code === '23505') return fail('Kỳ này vừa được bấm đã trả rồi. Tải lại trang.', 409);
+      if (missingTable(r.error)) return fail(CYCLE_NOT_READY, 503);
+      if (r.error) throw r.error;
+      return NextResponse.json({ ok: true, id: r.data.id, amount: due.amount }, { headers });
+    }
+
+    // Trả lương theo ngày chọn (từ ngày → đến ngày): máy chủ tính lại; khác số trang đang hiện thì không lưu. Lưu một lần trả như trả
+    // theo kỳ (payroll_payouts) — bảng lương tháng trừ phần đã trả, nhân viên bấm "Tôi đã nhận".
+    if (body.action === 'pay_range') {
+      if (!UUID.test(body.staff_id || '')) return fail('Thiếu nhân viên.');
+      const staffId = String(body.staff_id).toLowerCase();
+      const { data: who, error: we } = await db.from('staff').select('id, full_name').eq('id', staffId).maybeSingle();
+      if (we) throw we;
+      if (!who) return fail('Không thấy nhân viên này.', 404);
+      const due = await rangeDue(db, staffId, body.from_day, body.to_day);
+      if (due.error) return fail(due.error, due.ready === false ? 503 : 400);
+      const vnd = n => `${Number(n).toLocaleString('vi-VN')}đ`;
+      if (nothingDue(due)) return fail(`Từ ${ddmm(due.from)} tới hết ${ddmm(due.to)} chưa có ngày công hay khoản nào để trả (hoặc đã trả hết rồi).`, 409);
+      if (Math.round(Number(body.amount)) !== due.amount) return fail(`Số tiền vừa thay đổi, nay là ${vnd(due.amount)}. Xem lại rồi bấm lại.`, 409);
+      if (due.amount < 0) return fail(`Tiền ứng / phạt nhiều hơn tiền công ${vnd(-due.amount)} nên chưa phải trả.`, 409);
+      const r = await db.from('payroll_payouts').insert({ staff_id: staffId, from_day: due.from, to_day: due.to, amount: due.amount, detail: payoutDetail(due),
+        paid_at: isoNow(), paid_by: user.full_name || null }).select('id').single();
+      if (r.error?.code === '23505') return fail(`Đã có một lần trả bắt đầu ngày ${ddmm(due.from)}. Bỏ lần đó trước, hoặc chọn từ ngày khác.`, 409);
       if (missingTable(r.error)) return fail(CYCLE_NOT_READY, 503);
       if (r.error) throw r.error;
       return NextResponse.json({ ok: true, id: r.data.id, amount: due.amount }, { headers });
