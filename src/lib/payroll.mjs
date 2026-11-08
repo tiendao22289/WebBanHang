@@ -538,17 +538,36 @@ const day10 = d => String(d ?? '').slice(0, 10);
 export const lastPayout = payouts => [...(payouts || [])].sort((a, b) => day10(b.to_day).localeCompare(day10(a.to_day)))[0] || null;
 
 /**
- * Kỳ đang chạy của một người: { every, start, payday, daysLeft (âm = quá ngày phát), last }; null = không trả theo kỳ.
- * Kỳ bắt đầu ngày sau lần trả gần nhất (trả sớm / trễ thì kỳ sau tính lại từ hôm sau ngày đã trả tới), không sớm hơn start_day.
+ * Ngày phát của kỳ bắt đầu `start`. Có ngày phát cố định (payday_anchor, vd một thứ 7): ngày phát đầu tiên từ `start` trở đi theo lịch
+ * payday_anchor + k × N (mỗi thứ 7 với N = 7) — trả sớm / trễ một lần không làm lệch thứ. Không có: ngày đầu kỳ + N − 1 như cũ.
+ */
+export function cyclePayday(cycle, start) {
+  const every = Math.round(Number(cycle?.every_days) || 0), anchor = day10(cycle?.payday_anchor);
+  if (!(every >= 1)) return null;
+  if (!anchor) return addDays(start, every - 1);
+  return addDays(anchor, Math.ceil(daysBetween(anchor, start) / every) * every);
+}
+
+/** Thứ (0 = CN … 6 = T7) của ngày phát cố định; null = không cố định. */
+export const paydayWeekday = cycle => (day10(cycle?.payday_anchor) ? new Date(`${day10(cycle.payday_anchor)}T00:00:00Z`).getUTCDay() : null);
+
+/**
+ * Kỳ đang chạy của một người: { every, start, payday, daysLeft (âm = quá ngày phát), last, fixed }; null = không trả theo kỳ.
+ * Kỳ bắt đầu ngày sau lần trả gần nhất (trả sớm / trễ thì kỳ sau tính lại từ hôm sau ngày đã trả tới), không sớm hơn start_day;
+ * ngày phát theo cyclePayday (cố định theo lịch khi chủ cài ngày phát, vd mỗi thứ 7).
  */
 export function cyclePeriod({ cycle, payouts = [], today }) {
   const every = Math.round(Number(cycle?.every_days) || 0);
   if (!(every >= 1) || !cycle?.start_day) return null;
   const last = lastPayout(payouts), first = day10(cycle.start_day);
   const after = last ? addDays(day10(last.to_day), 1) : first;
-  const start = after > first ? after : first, payday = addDays(start, every - 1);
-  return { every, start, payday, daysLeft: daysBetween(today, payday), last };
+  const start = after > first ? after : first, payday = cyclePayday(cycle, start);
+  return { every, start, payday, daysLeft: daysBetween(today, payday), last, fixed: !!day10(cycle.payday_anchor) };
 }
+
+/** Kỳ tới hết `to` không có gì để trả (không ngày công, ứng, phạt, thưởng, chi hộ nào) — không lưu lần trả 0đ. */
+export const nothingDue = due => !due || (!(due.days || []).length && !(due.advances || []).length && !(due.fines || []).length
+  && !(due.bonuses || []).length && !(due.claims || []).length);
 
 // Tổng đã trả / đã trừ trong các lần trả: tiền từng ngày, từng khoản ứng / phạt (theo mã), thưởng từng tháng.
 function payoutTotals(payouts) {

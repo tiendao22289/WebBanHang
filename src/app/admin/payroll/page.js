@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { workforce } from '@/lib/staffApi';
 import { currentWorkDay, dayFlags, dayInShiftMs, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { DEFAULT_OT_RATE, LATE_FINE_MINUTES, MAX_CYCLE_DAYS, STANDARD_DAYS, activeFineKinds, addDays, bonusCheck, computeSalary, cycleDueTo, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthDays, monthTallies,
+import { DEFAULT_OT_RATE, LATE_FINE_MINUTES, MAX_CYCLE_DAYS, STANDARD_DAYS, activeFineKinds, addDays, bonusCheck, computeSalary, cycleDueTo, cyclePayday, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthDays, monthTallies, nothingDue, paydayWeekday,
   payoutPartOfMonth, shopClosedDays, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
@@ -391,7 +391,9 @@ function CycleBox({ people, today, nameOf, onPay, onUndo }) {
                   </div>
                 </div>
                 {p.openDay && p.openDay <= to && <div style={{ color: '#b45309', fontSize: '0.78rem', marginTop: 4 }}>⏳ Ngày {ddmm(p.openDay)} {name} chưa ra ca nên chưa tính tiền ngày đó; trả xong thì phần đó tự cộng vào lần trả sau.</div>}
-                {d.amount < 0
+                {nothingDue(d)
+                  ? <div style={{ color: '#64748b', fontSize: '0.8rem', marginTop: 6 }}>Chưa có ngày công hay khoản nào để trả tới hết {ddmm(to)} — chưa cần bấm đã thanh toán.</div>
+                  : d.amount < 0
                   ? <div style={{ color: '#dc2626', fontSize: '0.8rem', marginTop: 6 }}>Tiền ứng / phạt nhiều hơn tiền công nên chưa phải trả; lần trả sau sẽ trừ tiếp.</div>
                   : <button className="btn-primary" style={{ marginTop: 8, width: '100%' }} onClick={() => onPay(p, to, d.amount, name)}>✅ Đã thanh toán lương {formatMoney(d.amount)}</button>}
               </>
@@ -934,7 +936,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   // Trả lương theo kỳ: "Đã thanh toán lương" tới hết ngày đã chọn. Máy chủ tính lại; khác số đang hiện thì báo và tải lại.
   const payCycle = async (p, to, amount, name) => {
     const next = addDays(to, 1);
-    if (!confirm(`Đã trả lương cho ${name} ${formatMoney(amount)} (từ ${ddmm(p.period.start)} tới hết ${ddmm(to)})?\n\nKỳ mới tính từ ${ddmm(next)}, ngày phát ${ddmm(addDays(next, p.every_days - 1))}.`)) return;
+    if (!confirm(`Đã trả lương cho ${name} ${formatMoney(amount)} (từ ${ddmm(p.period.start)} tới hết ${ddmm(to)})?\n\nKỳ mới tính từ ${ddmm(next)}, ngày phát ${ddmm(cyclePayday(p, next))}.`)) return;
     try { await workforce('pay_cycle', { staff_id: p.staff_id, to_day: to, amount }); } catch (err) { alert(err.message); fetchCycles(); return; }
     fetchCycles();
     fetchPayrollMonth();
@@ -1255,9 +1257,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     const every = choice === 'custom' ? Number(custom) || 0 : Number(choice);
     const name = staffList.find(x => x.id === staffId)?.full_name || '';
     const box = { padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', background: 'white' };
+    // Ngày phát cố định (kỳ 7 ngày): thứ trong tuần; '' = theo lần trả (không cố định).
+    const curWd = cur ? paydayWeekday(cur) : null;
+    const wdChoice = draftOf(k('wd'), curWd === null ? '' : String(curWd));
+    const wdChanged = every === 7 && wdChoice !== (curWd === null ? '' : String(curWd));
     const save = () => {
       if (choice === 'custom' && !(every >= 1 && every <= MAX_CYCLE_DAYS)) return alert(`Nhập số ngày của kỳ, từ 1 tới ${MAX_CYCLE_DAYS}.`);
-      return editAction('save_pay_cycle', { staff_id: staffId, every_days: every, ...(cur ? {} : { start_day: start }) },
+      return editAction('save_pay_cycle', { staff_id: staffId, every_days: every, ...(cur ? {} : { start_day: start }), ...(every === 7 ? { payday_weekday: wdChoice } : { payday_anchor: '' }) },
         every ? null : `Thôi trả lương theo kỳ cho ${name}? Lương chốt cuối tháng như cũ (các lần đã trả vẫn được trừ ở bảng lương tháng).`, `cycle:${staffId}:`);
     };
     return (
@@ -1273,9 +1279,17 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
             <input type="date" style={box} value={start} min="2026-11-01" onChange={e => setDraft(k('start'), e.target.value)} />
           </label>
         )}
-        {every !== curEvery && <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }} onClick={save}>Lưu kỳ</button>}
+        {every === 7 && (
+          <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>phát lương
+            <select style={box} value={wdChoice} onChange={e => setDraft(k('wd'), e.target.value)}>
+              <option value="">theo lần trả</option>
+              {['Chủ nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'].map((t, i) => <option key={i} value={i}>mỗi {t}</option>)}
+            </select>
+          </label>
+        )}
+        {(every !== curEvery || wdChanged) && <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }} onClick={save}>Lưu kỳ</button>}
         <span style={{ color: '#64748b' }}>
-          {cur ? `Kỳ này ${ddmm(cur.period.start)} → ${ddmm(cur.period.payday)}, phát lương ngày ${ddmm(cur.period.payday)}.`
+          {cur ? `Kỳ này ${ddmm(cur.period.start)} → ${ddmm(cur.period.payday)}, phát lương ngày ${ddmm(cur.period.payday)}${cur.period.fixed ? ' (ngày phát cố định)' : ''}.`
             : every > 0 ? `Kỳ đầu ${ddmm(start)} → ${ddmm(addDays(start, every - 1))}, phát lương ngày ${ddmm(addDays(start, every - 1))}.` : 'Chốt lương cuối tháng như cũ.'}
         </span>
       </div>

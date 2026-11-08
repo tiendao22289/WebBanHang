@@ -205,11 +205,16 @@ async function main() {
 
   // Trả lương theo kỳ (payroll_pay_cycles.sql): kỳ N ngày của từng người + các lần đã trả.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_pay_cycles.sql'), 'utf8'));
+  // Ngày phát cố định (payroll_cycle_payday.sql): vd mỗi thứ 7.
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_cycle_payday.sql'), 'utf8'));
   const [cycles] = await query(`SELECT to_regclass('public.payroll_pay_cycles') IS NOT NULL AS cycles_ok,
     to_regclass('public.payroll_payouts') IS NOT NULL AS payouts_ok,
     NOT has_table_privilege('anon', 'public.payroll_pay_cycles', 'SELECT') AND NOT has_table_privilege('anon', 'public.payroll_payouts', 'SELECT') AS anon_blocked`);
   console.log(JSON.stringify(cycles));
   if (!cycles.cycles_ok || !cycles.payouts_ok || !cycles.anon_blocked) throw new Error('Chưa cài được bảng trả lương theo kỳ.');
+  const [anchorCol] = await query(`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payroll_pay_cycles' AND column_name = 'payday_anchor') AS ok`);
+  console.log(JSON.stringify({ payday_anchor: anchorCol.ok }));
+  if (!anchorCol.ok) throw new Error('Chưa cài được ngày phát lương cố định.');
 
   // Nhân viên tự ghi lỗi (payroll_self_fines.sql): đánh dấu khoản tự ghi + ghi chú của nhân viên.
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_self_fines.sql'), 'utf8'));

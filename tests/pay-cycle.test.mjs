@@ -18,9 +18,29 @@ import { fakeDb } from './helpers/fakeSupabase.mjs';
 
 const { cyclePeriod, cycleDue, cycleDueTo, payoutDetail, payoutPartOfMonth } = payroll;
 
+test('a fixed payday (CÔ 7 every Saturday): one early or extra payout does not move the weekday; nothing to pay is not saved', () => {
+  const { cyclePayday, nothingDue, paydayWeekday } = payroll;
+  // Kỳ 7 ngày, ngày phát cố định thứ 7 (14/11/2026 là thứ 7).
+  const cycle = { every_days: 7, start_day: '2026-11-04', payday_anchor: '2026-11-14' };
+  assert.equal(paydayWeekday(cycle), 6);
+  const paid = [{ from_day: '2026-11-04', to_day: '2026-11-07' }];
+  assert.deepEqual([cyclePeriod({ cycle, payouts: paid, today: '2026-11-08' }).start, cyclePeriod({ cycle, payouts: paid, today: '2026-11-08' }).payday], ['2026-11-08', '2026-11-14']);
+  // Lỡ bấm trả thêm ngày CN 08/11: kỳ sau từ T2 09/11 nhưng vẫn phát T7 14/11 (không thành CN 15/11).
+  const extra = [...paid, { from_day: '2026-11-08', to_day: '2026-11-08' }];
+  const p = cyclePeriod({ cycle, payouts: extra, today: '2026-11-08' });
+  assert.deepEqual([p.start, p.payday, p.fixed], ['2026-11-09', '2026-11-14', true]);
+  // Trả sớm thứ 6 13/11: kỳ sau 14/11 → phát luôn T7 14/11; trả đúng T7 thì kỳ sau phát T7 21/11.
+  assert.equal(cyclePayday(cycle, '2026-11-14'), '2026-11-14');
+  assert.equal(cyclePayday(cycle, '2026-11-15'), '2026-11-21');
+  assert.equal(cyclePayday({ every_days: 7 }, '2026-11-09'), '2026-11-15', 'no fixed payday: start + 6 as before');
+  assert.equal(nothingDue({ days: [], advances: [], fines: [], bonuses: [], claims: [], amount: 0 }), true);
+  assert.equal(nothingDue({ days: [{ day: '2026-11-08', due: 120000 }], advances: [], fines: [], bonuses: [], amount: 120000 }), false);
+  assert.equal(nothingDue({ days: [{ day: '2026-11-08', due: 50000 }], advances: [{ id: 'a', amount: 50000 }], fines: [], bonuses: [], amount: 0 }), false, 'net 0 but something to settle');
+});
+
 test('the running period starts the day after the last payout and the payday is N days on', () => {
   const cycle = { every_days: 7, start_day: '2026-11-01' };
-  assert.deepEqual(cyclePeriod({ cycle, payouts: [], today: '2026-11-05' }), { every: 7, start: '2026-11-01', payday: '2026-11-07', daysLeft: 2, last: null });
+  assert.deepEqual(cyclePeriod({ cycle, payouts: [], today: '2026-11-05' }), { every: 7, start: '2026-11-01', payday: '2026-11-07', daysLeft: 2, last: null, fixed: false });
   // Trả sớm tới 06/11: kỳ sau từ 07/11, phát 13/11. Trả trễ (tới 09/11): kỳ sau từ 10/11.
   const early = cyclePeriod({ cycle, payouts: [{ to_day: '2026-11-06' }], today: '2026-11-07' });
   assert.deepEqual([early.start, early.payday, early.daysLeft], ['2026-11-07', '2026-11-13', 6]);
@@ -145,6 +165,33 @@ test('weekly pay for a day worker: pay on payday, late clock-out goes to the nex
   assert.equal((await post(T(10, '12:30'), { action: 'save_pay_cycle', staff_id: DUNG.id, every_days: 0 })).status, 200);
   assert.deepEqual((await get(T(10, '12:30'), 'cycles=1')).body.people, []);
   assert.equal(state.payroll_payouts.length, 1);
+});
+
+test('the owner fixes the payday to a weekday; a payout with nothing to pay is refused', async () => {
+  const state = {
+    staff: [OWNER, DUNG], payroll_config: [{ staff_id: DUNG.id, base_salary: 0, overtime_rate: 0 }],
+    payroll_hourly_rates: [{ staff_id: DUNG.id, valid_from: '2026-11-01', hourly_rate: 120000, unit: 'day' }],
+    checkin_settings: [{ id: 1, enforce: false, hours_from: '2026-10-25' }],
+    checkin_hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '00:00', grace_minutes: 10 }],
+    attendance_sessions: [], __clock: () => env.now,
+  };
+  const wf = api(state);
+  const post = async (t, body) => { env.user = OWNER; env.now = t; return plain(await wf.POST({ json: async () => body, headers: new Map() })); };
+  const get = async (t, q) => { env.user = OWNER; env.now = t; return plain(await wf.GET({ url: `http://x/api/admin/workforce?${q}` })); };
+  // Chủ nhật 08/11: kỳ 7 ngày từ 04/11, phát mỗi thứ 7.
+  assert.equal((await post(T(8, '13:00'), { action: 'save_pay_cycle', staff_id: DUNG.id, every_days: 7, start_day: '2026-11-04', payday_weekday: 6 })).status, 200);
+  assert.equal(state.payroll_pay_cycles[0].payday_anchor, '2026-11-14', 'the next Saturday');
+  assert.equal((await post(T(8, '13:00'), { action: 'save_pay_cycle', staff_id: DUNG.id, every_days: 5, payday_weekday: 6 })).status, 400, 'a weekday only for a 7-day cycle');
+  const st = (await get(T(8, '13:00'), 'cycles=1')).body.people[0];
+  assert.deepEqual([st.period.start, st.period.payday, st.period.fixed, st.payday_anchor], ['2026-11-04', '2026-11-07', true, '2026-11-14']);
+  // Không ngày công nào: không lưu lần trả 0đ.
+  const r = await post(T(8, '13:00'), { action: 'pay_cycle', staff_id: DUNG.id, to_day: '2026-11-08', amount: 0 });
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /chưa có ngày công/);
+  assert.equal((state.payroll_payouts || []).length, 0);
+  // Bỏ ngày phát cố định: như cũ.
+  assert.equal((await post(T(8, '13:00'), { action: 'save_pay_cycle', staff_id: DUNG.id, every_days: 7, payday_weekday: '' })).status, 200);
+  assert.equal(state.payroll_pay_cycles[0].payday_anchor, null);
 });
 
 test('before the migration runs the cycle parts say the web is updating', async () => {
