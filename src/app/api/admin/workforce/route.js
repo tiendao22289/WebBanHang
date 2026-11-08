@@ -268,6 +268,16 @@ async function inboxOverview(db) {
 const signPeerPhotos = (db, rows) => Promise.resolve().then(() => signReceiptImages(db, rows.map(r => r.photo_path)))
   .catch(error => { console.error('[workforce] peer photos', error); return {}; });
 
+// Khoản phạt sinh ra từ báo lỗi đồng nghiệp có ngày bị báo trong [start, end): violation_id → người báo, ghi thêm, link ảnh làm chứng.
+// Bảng chưa có / lỗi: [] (bảng lương vẫn hiện, chỉ thiếu phần này).
+async function peerFinesOf(db, start, end) {
+  const { data, error } = await db.from('payroll_peer_reports').select('*').eq('status', 'approved').gte('report_date', start).lt('report_date', end);
+  if (error) { if (!missingTable(error)) console.error('[workforce] peer fines', error); return []; }
+  const rows = (data || []).filter(r => r.violation_id);
+  const photos = await signPeerPhotos(db, rows);
+  return rows.map(r => ({ violation_id: r.violation_id, reporter: r.reporter_name || null, note: r.note || null, photo: photos[r.photo_path] || null }));
+}
+
 // Trang Lương của chủ: báo lỗi đồng nghiệp còn chờ + đã xử lý 60 ngày gần đây (tên người báo / người bị báo, tiền gợi ý).
 async function peerOverview(db) {
   const { data, error } = await db.from('payroll_peer_reports').select('*')
@@ -453,7 +463,9 @@ async function payrollMonth(db, year, month) {
   const ids = sessionIds.map(x => x.id);
   // faceHolds: ca chờ chủ duyệt mặt — trang Lương chưa tính lương các ca này. claims: chi hộ đã duyệt tính vào lương tháng này.
   const claims = await readMonthClaims(db, year, month);
-  return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set(auto.map(r => r.attendance_id))], claims,
+  // peerFines: khoản phạt từ báo lỗi đồng nghiệp trong tháng (ai báo, ảnh làm chứng) — chỉ trang Lương của chủ nhận.
+  const peerFines = await peerFinesOf(db, start, end);
+  return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set(auto.map(r => r.attendance_id))], claims, peerFines,
     reviews: await reviewsFor(db, ids), faceHolds: [...await faceHolds(db, ids)],
     bonuses: bonuses.data || [], bonusSettings, fineRules: fineRules.data || [], fineReviews: fineReviews.data || [], violationMeta: meta.data || [],
     hourlyRates, lateRules, ...holidays, payouts: payouts.error ? [] : payouts.data || [], monthOver: monthOver(year, month) };

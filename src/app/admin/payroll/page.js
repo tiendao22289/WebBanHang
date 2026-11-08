@@ -775,13 +775,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   }, []);
   // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
   // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
-  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], payouts: [], monthOver: false, claims: [] });
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], payouts: [], monthOver: false, claims: [], peerFines: [] });
   const fetchPayrollMonth = useCallback(async () => {
     try {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], payouts: j.payouts || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [], claims: j.claims || [] });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], payouts: j.payouts || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [], claims: j.claims || [], peerFines: j.peerFines || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   // So khuôn mặt ở máy quầy (app): cài đặt, ai có mặt mẫu, ca sai mặt 3 lần chờ duyệt.
@@ -1430,6 +1430,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     );
   };
   // Danh sách lỗi mở ra dưới dòng của người đó: ngày, lỗi (🤖 máy gợi ý, 🙋 nhân viên tự ghi), ghi chú, ai ghi lúc nào, số tiền.
+  // Khoản phạt từ báo lỗi đồng nghiệp: ai báo, ghi thêm, ảnh làm chứng (chỉ chủ thấy; link ảnh hết hạn sau 1 giờ, tải lại trang là có link mới).
+  const peerFineInfo = violationId => {
+    const p = (payrollMonth.peerFines || []).find(x => x.violation_id === violationId);
+    if (!p) return null;
+    return <div style={{ fontSize: '0.72rem', color: '#991b1b' }}>🚩 đồng nghiệp báo{p.reporter ? `: ${p.reporter}` : ''}{p.note ? ` · ${p.note}` : ''}
+      {p.photo && <> · <a href={p.photo} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontWeight: 700 }}>📷 Xem ảnh</a></>}</div>;
+  };
   const finesPanel = s => {
     const list = finesOf(s.id), total = list.reduce((a, x) => a + Number(x.v.amount || 0), 0);
     const dayOf = iso => ddmm(new Date(Date.parse(iso) + 7 * 3600000).toISOString().slice(0, 10));
@@ -1450,6 +1457,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   <td data-label="" className="detail-wide" style={{ padding: '6px 10px', verticalAlign: 'top' }}>
                     {m?.kind ? '🤖 ' : ''}{m?.self_reported ? '🙋 ' : ''}{v.reason || '(không ghi lý do)'}
                     {m?.note && <div style={{ fontSize: '0.74rem', color: '#475569' }}>{m.note}</div>}
+                    {peerFineInfo(v.id)}
                     <div style={{ fontSize: '0.7rem', color: m?.self_reported ? '#b45309' : '#94a3b8' }}>
                       {m?.self_reported ? 'nhân viên tự ghi' : m?.recorded_by ? `ghi bởi ${m.recorded_by}` : 'chủ ghi'}{m?.kind && !m?.self_reported ? ' · lỗi máy gợi ý' : ''}
                       {v.created_at ? ` lúc ${hhmm(v.created_at)} ${dayOf(v.created_at)}` : ''}
@@ -2331,7 +2339,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 {(c.vioAmt > 0 || myFines.length > 0) && row(`Phạt (${myFines.length} lỗi)`, `−${formatMoney(c.vioAmt)}`, '#dc2626')}
                 {myFines.length > 0 && (
                   <div style={{ fontSize: '0.76rem', color: '#64748b', padding: '2px 0 6px', borderBottom: '1px solid #f1f5f9' }}>
-                    {myFines.map((v, i) => <div key={v.id || i}>• {v.date ? `${ddmm(v.date)} · ` : ''}{v.self ? '🙋 ' : ''}{v.reason}{v.note ? ` (${v.note})` : ''} — {Number(v.amount) > 0 ? formatMoney(v.amount) : 'chờ chủ quán định tiền'}</div>)}
+                    {myFines.map((v, i) => <div key={v.id || i}>• {v.date ? `${weekday(v.date)} ${ddmm(v.date)} · ` : ''}{v.self ? '🙋 ' : ''}{v.reason}{v.note ? ` (${v.note})` : ''} — {Number(v.amount) > 0 ? `trừ ${formatMoney(v.amount)}` : 'chờ chủ quán định tiền'}</div>)}
                   </div>
                 )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, paddingTop: 10 }}>
@@ -3234,6 +3242,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <td>{v.staff?.full_name || nameOf(v.staff_id)}</td>
                             <td>{m?.kind ? '🤖 ' : ''}{m?.self_reported ? '🙋 ' : ''}{v.reason}
                               {m?.note && <div style={{ fontSize: '0.76rem', color: '#475569' }}>{m.note}</div>}
+                              {peerFineInfo(v.id)}
                               {m?.recorded_by && <div style={{ fontSize: '0.72rem', color: m?.self_reported ? '#b45309' : '#94a3b8' }}>
                                 {m?.self_reported ? 'nhân viên tự ghi' : `ghi bởi ${m.recorded_by}`}{v.created_at ? ` lúc ${hhmm(v.created_at)} ${ddmm(new Date(Date.parse(v.created_at) + 7 * 3600000).toISOString().slice(0, 10))}` : ''}
                               </div>}

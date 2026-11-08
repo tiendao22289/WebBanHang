@@ -51,7 +51,7 @@ test('a peer report can carry a photo that only the owner sees; cancelling remov
   const state = {
     staff: [OWNER, AN, BINH], payroll_config: [], checkin_settings: [{ id: 1, enforce: false, hours_from: '2026-10-25' }],
     checkin_hours: [{ valid_from: '2000-01-01', opening_time: '14:00', closing_time: '00:00', grace_minutes: 10 }],
-    payroll_fine_rules: [], payroll_peer_reports: [], payroll_violations: [], payroll_requests: [], attendance_sessions: [],
+    payroll_fine_rules: [], payroll_peer_reports: [], payroll_violations: [], payroll_violation_meta: [], payroll_requests: [], attendance_sessions: [], payroll_closes: [],
   };
   const files = new Map();
   const wf = api(state, files);
@@ -92,7 +92,21 @@ test('a peer report can carry a photo that only the owner sees; cancelling remov
   assert.deepEqual(mine.map(r => [r.reason, r.has_photo, r.photo]).sort(), [['Ghi sai món', false, undefined], ['Làm vỡ ly', true, undefined]]);
   assert.equal((await get(AN, 'peer=1')).status, 403, 'staff cannot open the owner list');
 
+  // Chủ phạt lần báo có ảnh: bảng lương của chủ biết khoản phạt đó do ai báo và mở được ảnh; người bị phạt thấy ngày + lỗi + tiền,
+  // không thấy người báo hay ảnh.
+  const second = await withPhoto(AN, { ...report, reason: 'Để khách chờ lâu', note: 'bàn 7' }, jpg);
+  const fined = await json(OWNER, { action: 'decide_peer', id: second.body.id, status: 'approved', amount: 20000 });
+  assert.equal(fined.status, 200);
+  const photoPath = state.payroll_peer_reports.find(r => r.id === second.body.id).photo_path;
+  const month = (await get(OWNER, 'payroll=1&year=2026&month=11')).body;
+  assert.deepEqual(month.peerFines, [{ violation_id: fined.body.violation_id, reporter: 'An', note: 'bàn 7',
+    photo: `/api/admin/receipts/image?p=${encodeURIComponent(photoPath)}&token=aaa.bbb.ccc` }]);
+  const binh = (await get(BINH, 'me=1')).body.violations;
+  assert.deepEqual(binh.map(v => [v.date, v.reason, v.amount]), [['2026-11-08', 'Để khách chờ lâu', 20000]]);
+  assert.ok(!JSON.stringify(binh).includes('An') && !JSON.stringify(binh).includes('peer-'), 'the fined person sees neither the reporter nor the photo');
+  assert.equal((await get(BINH, 'payroll=1&year=2026&month=11')).status, 403);
+
   // Người báo huỷ khi còn chờ: xoá luôn ảnh.
   assert.equal((await json(AN, { action: 'cancel_request', kind: 'peer', id: ok.body.id })).status, 200);
-  assert.equal(files.size, 0);
+  assert.deepEqual([...files.keys()], [photoPath], 'only the cancelled report loses its photo');
 });
