@@ -33,7 +33,9 @@ function load(state, user = ADMIN) {
   });
 }
 const plain = v => JSON.parse(JSON.stringify(v));
-const PHOTO = { size: 1000, type: 'image/jpeg', arrayBuffer: async () => new ArrayBuffer(8) };
+// Mỗi lần đọc ra một ảnh khác (máy chủ so mã ảnh bill để chặn dùng lại ảnh cũ); SAME_BILL() = luôn cùng một tấm ảnh.
+const PHOTO = { size: 1000, type: 'image/jpeg', arrayBuffer: async () => crypto.getRandomValues(new Uint8Array(8)).buffer };
+const SAME_BILL = () => ({ size: 1000, type: 'image/jpeg', arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer });
 // Phiếu mới gửi như trang Sổ tay: dòng nào cũng có _id, 1 ảnh hàng trên cân, 1 tờ bill cho mọi dòng hàng ốc.
 // Thao tác khác gửi JSON. photos = [] / bills = [] để gửi thiếu; bills: [{ file, ids: [_id dòng] }].
 const withIds = body => (Array.isArray(body.items) ? { ...body, items: body.items.map((i, k) => ({ _id: `row-${k}-${Math.random().toString(36).slice(2, 8)}`, ...i })) } : body);
@@ -42,7 +44,8 @@ const allBills = body => { const ids = (body.items || []).filter(i => String(i.n
 const request = (body, photos, bills) => (photos.length || bills.length
   ? { headers: { get: () => 'multipart/form-data; boundary=x' },
     formData: async () => ({
-      get: k => (k === 'payload' ? JSON.stringify(body) : k === 'bill_items' ? JSON.stringify(bills.map(b => b.ids)) : null),
+      get: k => (k === 'payload' ? JSON.stringify(body) : k === 'bill_items' ? JSON.stringify(bills.map(b => b.ids))
+        : k === 'bill_from' ? JSON.stringify(bills.map(b => b.from || 'camera')) : null),
       getAll: k => (k === 'photo' ? photos : k === 'bill' ? bills.map(b => b.file) : []) }) }
   : { headers: { get: () => 'application/json' }, json: async () => body });
 const post = async (api, raw, photos, bills) => {
@@ -494,4 +497,53 @@ test('editing: old lines keep their bill, a new ốc line needs one, a removed l
   assert.equal(after.items[0].bill_photo, ocBill, 'the old bill stays even when the browser does not send it');
   assert.match(after.history.at(-1).changes, /🧾 Thêm bill: Mực/);
   assert.deepEqual(plain(state.removed), [soBill], 'the bill of the removed Sò điệp line is deleted');
+});
+
+test('a bill picked from the phone is marked for the owner; the browser cannot set the mark or the image code', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state, STAFF);
+  const items = [
+    { _id: 'oc', name: 'Ốc hương', price: '220k', qty: '2', bill_hash: 'fake', bill_from: 'gallery' },
+    { _id: 'so', name: 'Sò điệp', price: '90k', qty: '3' },
+  ];
+  const r = await post(api, { action: 'create', note_type: 'expense', items }, [PHOTO], [{ file: PHOTO, ids: ['oc'] }, { file: PHOTO, ids: ['so'], from: 'gallery' }]);
+  assert.equal(r.status, 200);
+  const [oc, so] = JSON.parse(state.staff_notes[0].content).items;
+  assert.match(oc.bill_hash, /^[\da-f]{64}$/, 'the server works out the image code itself');
+  assert.equal(oc.bill_from, undefined, 'a bill shot with the camera has no mark, whatever the browser sent');
+  assert.equal(so.bill_from, 'gallery');
+  assert.notEqual(oc.bill_hash, so.bill_hash);
+
+  // Sửa phiếu: dòng cũ giữ bill, mã ảnh và dấu "ảnh có sẵn" dù trình duyệt không gửi.
+  const note = state.staff_notes[0];
+  const rows = math.editRows(JSON.parse(note.content).items).map(i => ({ ...i, bill_hash: undefined, bill_from: undefined }));
+  const add = [...rows, { _id: 'muc', name: 'Mực', price: '200k', qty: '1' }];
+  assert.equal((await post(api, { action: 'edit', id: note.id, note_type: 'expense', items: add, note: '', updated_at: note.updated_at }, [], [{ file: PHOTO, ids: ['muc'], from: 'gallery' }])).status, 200);
+  const after = JSON.parse(state.staff_notes[0].content);
+  assert.deepEqual(after.items.map(i => [i._id, i.bill_from || null, i.bill_hash === (i._id === 'oc' ? oc.bill_hash : i._id === 'so' ? so.bill_hash : i.bill_hash)]),
+    [['oc', null, true], ['so', 'gallery', true], ['muc', 'gallery', true]]);
+  assert.match(after.history.at(-1).changes, /🧾 Thêm bill: Mực \(ảnh có sẵn\)/);
+});
+
+test('a bill photo already used on another note is refused; the same note may use it again', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state, STAFF);
+  const oc = () => [{ _id: 'oc', name: 'Ốc hương', price: '220k', qty: '2' }];
+  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: oc() }, [PHOTO], [{ file: SAME_BILL(), ids: ['oc'] }])).status, 200);
+  const first = state.staff_notes[0];
+  const uploads = state.stored.length;
+
+  const again = await post(api, { action: 'create', note_type: 'expense', items: [{ _id: 'muc', name: 'Mực', price: '200k', qty: '1' }] }, [PHOTO], [{ file: SAME_BILL(), ids: ['muc'], from: 'gallery' }]);
+  assert.equal(again.status, 400);
+  assert.match(again.body.error, /Ảnh bill của Mực đã dùng ở phiếu ngày \d\d\/\d\d/);
+  assert.equal(state.staff_notes.length, 1, 'nothing saved');
+  assert.equal(state.stored.length, uploads, 'no photo uploaded');
+
+  // Cùng phiếu: thêm dòng cùng tờ bill thì được.
+  const rows = [...math.editRows(JSON.parse(first.content).items), { _id: 'so', name: 'Sò điệp', price: '90k', qty: '3' }];
+  assert.equal((await post(api, { action: 'edit', id: first.id, note_type: 'expense', items: rows, note: '', updated_at: first.updated_at }, [], [{ file: SAME_BILL(), ids: ['so'], from: 'gallery' }])).status, 200);
+
+  // Ảnh bill của phiếu hơn 90 ngày trước (ảnh đã bị xoá) thì không so nữa.
+  state.staff_notes[0].created_at = new Date(Date.now() - 91 * 86400000).toISOString();
+  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: [{ _id: 'muc', name: 'Mực', price: '200k', qty: '1' }] }, [PHOTO], [{ file: SAME_BILL(), ids: ['muc'] }])).status, 200);
 });
