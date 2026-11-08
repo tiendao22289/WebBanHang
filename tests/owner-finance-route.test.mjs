@@ -783,6 +783,17 @@ test('Sổ tay "Khác" kinds (petrol, repairs) show as their own costs on /thong
   assert.deepEqual(plain(month.totals.notesOther), { xang: 50000 });
 });
 
+test('/thongke Sổ tay: each line with a seller bill comes with a link to open the photo', async () => {
+  const state = empty();
+  const content = JSON.stringify({ type: 'structured_expense', items: [
+    { name: 'Ốc hương', qty: '1', price: '300k', bill_photo: '2026-10/notebill-a.jpg', bill_from: 'gallery' },
+    { name: 'Mực', qty: '1', price: '200k', no_bill: 'mối quen' }] });
+  state.staff_notes.push({ id: 'b1', created_at: '2026-10-23T03:00:00.000Z', note_type: 'expense', amount: 500000, debt: 0, content, staff: { full_name: 'Lan' } });
+  const notes = (await get(load({ state }), 'report=2026-10-23')).body.notes;
+  assert.deepEqual(plain(notes.notes[0].items.map(i => [i.bill || null, i.billFrom || null])), [['2026-10/notebill-a.jpg', 'gallery'], [null, null]]);
+  assert.deepEqual(plain(notes.photo_links), { '2026-10/notebill-a.jpg': 'signed:2026-10/notebill-a.jpg' });
+});
+
 test('/thongke lists each cost by name and who entered it: rent, electricity… in Sổ tay "Khác", fixed costs, daily costs and own tabs', async () => {
   const state = empty();
   const line = (name, price) => ({ name, price, category: 'other' });

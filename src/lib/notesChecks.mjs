@@ -4,11 +4,10 @@
  *  - Giá cao bất thường: so với giá các lần mua trước của CÙNG mặt hàng (trung vị 5 lần gần nhất
  *    trong 45 ngày, cần ít nhất 2 lần). Cao hơn từ PRICE_ALERT_PCT% thì cảnh báo. Chỉ so dòng
  *    hàng chợ có giá; không so dòng gộp Tiền rau / Tiền gia vị và dòng Khác (xăng xe, sửa chữa…).
- *  - Ảnh: phiếu có hàng chợ (hàng ốc, rau, gia vị có giá) phải kèm ảnh hàng trên cân ở quán
- *    hoặc giấy ghi của mối. Phiếu chỉ có dòng Khác / chỉ trả nợ / chỉ ghi chữ thì không cần.
- *  - Bill từng dòng: mỗi dòng hàng ốc (dòng so giá) phải có ảnh bill của mối (item.bill_photo; một
- *    tờ bill dùng chung được cho nhiều dòng) hoặc lý do mối không đưa bill (item.no_bill — chủ thấy).
- *    Ảnh hàng trên cân chống khai thừa số ký / hàng không về quán; bill chống khai giá cao.
+ *  - Bill từng dòng: mỗi dòng hàng ốc (dòng so giá) phải có ảnh bill của mối (item.bill_photo, chụp hoặc
+ *    chọn ảnh có sẵn; một tờ bill dùng chung được cho nhiều dòng) hoặc lý do mối không đưa bill
+ *    (item.no_bill — chủ thấy). Bill chống khai giá cao. (Ảnh hàng trên cân: bắt chụp 08/11/2026, chủ quán
+ *    bỏ cùng ngày — phiếu cũ vẫn giữ ảnh đã chụp, MAX_NOTE_PHOTOS còn dùng khi trang cũ chưa tải lại gửi lên.)
  */
 import { itemKey, parsePrice } from './notesMath.mjs';
 
@@ -23,9 +22,8 @@ const vnd = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+
 const named = item => !!String(item?.name || '').trim();
 const priced = item => named(item) && parsePrice(item.price) > 0;
 
-/** Dòng hàng chợ (cần ảnh): có giá, không phải dòng Khác. */
+/** Dòng hàng chợ: có giá, không phải dòng Khác. */
 export const isMarketLine = item => priced(item) && !item.category;
-export const needsTripPhoto = items => (Array.isArray(items) ? items : []).some(isMarketLine);
 /** Dòng so được giá với các lần mua trước. */
 export const comparableLine = item => isMarketLine(item) && !item.preset;
 /** Dòng hàng ốc cần bill của mối. */

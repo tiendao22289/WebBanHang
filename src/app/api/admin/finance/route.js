@@ -901,6 +901,9 @@ export async function GET(request) {
       const textOf = key => insights.find(b => b.key === key)?.text || null;
       // Tin Sổ tay đã chia cho Zalo → gộp lại, bỏ dòng đầu "(tiếp)".
       const notesText = notes.map((m, i) => (i && /\(tiếp\)$/.test(m.split('\n')[0]) ? m.split('\n').slice(1).join('\n').trim() : m)).join('\n\n');
+      // Ảnh bill từng dòng / ảnh hàng của phiếu Sổ tay trong ngày: link xem 1 giờ để chủ đối chiếu trên /thongke.
+      const notePhotoPaths = (notesData?.notes || []).flatMap(n => [...(n.photos || []), ...n.items.map(i => i.bill)]).filter(Boolean);
+      const notePhotoLinks = notePhotoPaths.length ? await signReceiptImages(db, notePhotoPaths) : {};
       return NextResponse.json({
         date: reportDate, today, startDate: FINANCE_START_DATE,
         summary: {
@@ -915,7 +918,8 @@ export async function GET(request) {
         sections: [['loss', 'Thất thoát', textOf('loss')], ['staff', 'Nhân viên', textOf('staff')], ['notes', 'Sổ tay', notesText || null]]
           .filter(([, , text]) => text).map(([key, title, text]) => ({ key, title, text })),
         // Cùng số liệu dạng dữ liệu (trang /thongke vẽ thẻ số, bảng).
-        loss: insights.find(b => b.key === 'loss')?.data || null, staff: insights.find(b => b.key === 'staff')?.data || null, notes: notesData,
+        loss: insights.find(b => b.key === 'loss')?.data || null, staff: insights.find(b => b.key === 'staff')?.data || null,
+        notes: notesData && { ...notesData, photo_links: notePhotoLinks },
       }, { headers });
     }
 

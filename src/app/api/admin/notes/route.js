@@ -19,8 +19,8 @@
  *       delete (admin; hoàn lại nợ đã trả / tiền dư đã chuyển bằng phiếu đó),
  *       set_categories (admin; { categories: [{ id?, name }] } — tạo / đổi tên / xoá loại Khác)
  *
- * Ảnh phiếu đi chợ: create gửi dạng multipart (payload = JSON như trên, photo = 1–3 ảnh). Phiếu có hàng
- * chợ mà không có ảnh thì không lưu (needsTripPhoto). Ảnh nằm trong bucket ảnh bill (kind 'note'),
+ * Ảnh phiếu đi chợ: create / edit gửi dạng multipart (payload = JSON như trên, photo = ảnh hàng trên cân, không bắt buộc
+ * — chủ quán bỏ bắt chụp ngày 08/11/2026, chỉ trang cũ chưa tải lại còn gửi). Ảnh nằm trong bucket ảnh bill (kind 'note'),
  * đường dẫn lưu ở content.photos; GET trả kèm photo_links { đường dẫn: link xem 1 giờ }.
  * Bill của mối ở từng dòng hàng (item.bill_photo, kind 'notebill'): chụp trực tiếp hoặc chọn ảnh có sẵn trong máy
  * (item.bill_from = 'gallery', chủ thấy "ảnh có sẵn"). item.bill_hash = mã ảnh: ảnh bill đã dùng ở phiếu khác
@@ -29,7 +29,7 @@
 import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase, statusDatabase } from '@/lib/statusAuth';
 import { noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
-import { MAX_BILL_PHOTOS, MAX_NOTE_PHOTOS, missingBills, needsBill, needsTripPhoto } from '@/lib/notesChecks.mjs';
+import { MAX_BILL_PHOTOS, MAX_NOTE_PHOTOS, missingBills, needsBill } from '@/lib/notesChecks.mjs';
 import { receiptImageProblem, removeReceiptImages, signReceiptImages, uploadReceiptImage } from '@/lib/receiptImages.mjs';
 import { findDebtLine, noteLeftover, noteMoney, openDebtLines, paymentItemIndex } from '@/lib/notesDebts.mjs';
 import { categoryName, cleanCategories, lineCategory } from '@/lib/noteCategories.mjs';
@@ -347,7 +347,7 @@ export async function POST(request) {
       const type = TYPES.includes(body.note_type) ? body.note_type : 'other';
       const items = type === 'expense' ? cleanItems(body.items) : [];
       const noteText = str(body.note, 4000);
-      // Phiếu có hàng chợ phải có ảnh hàng trên cân / giấy ghi của mối (chống khai khống số ký, giá).
+      // Ảnh hàng trên cân: không bắt buộc nữa (trang cũ chưa tải lại vẫn gửi được).
       if (photos.length > MAX_NOTE_PHOTOS) return fail(`Tối đa ${MAX_NOTE_PHOTOS} ảnh một phiếu.`);
       for (const photo of photos) { const problem = receiptImageProblem(photo); if (problem) return fail(problem); }
       // Mỗi dòng hàng ốc: ảnh bill của mối hoặc lý do không có bill (chống khai giá cao).
@@ -356,7 +356,6 @@ export async function POST(request) {
       const covered = new Set(bill.plan.flatMap(p => p.ids));
       const noBill = missingBills(items, i => covered.has(i._id));
       if (noBill.length) return fail(missingText(noBill));
-      if (needsTripPhoto(items) && !photos.length) return fail('Chụp ảnh hàng trên cân ở quán rồi mới lưu phiếu.');
       // Các khoản nợ cũ người ghi chọn trả bằng tiền của phiếu này — kiểm tra hết trước khi lưu.
       const requested = Array.isArray(body.pay_debts) ? body.pay_debts.slice(0, 60) : [];
       const carryReq = type === 'expense' && items.length && Array.isArray(body.carry_leftovers) ? body.carry_leftovers.slice(0, 30) : [];
@@ -536,8 +535,7 @@ export async function POST(request) {
       const items = type === 'expense' ? cleanItems(body.items, storedItems) : [];
       const noteText = str(body.note, 4000);
       const ts = stamp(), by = user.full_name || 'Không rõ';
-      // Ảnh thêm lúc sửa (cả phiếu tối đa MAX_NOTE_PHOTOS). Phiếu chưa có hàng chợ mà sửa thêm hàng chợ
-      // thì cần ảnh như phiếu mới; phiếu cũ (ghi trước khi bắt ảnh) sửa giá / số lượng thì không bắt.
+      // Ảnh hàng trên cân thêm lúc sửa (không bắt buộc; cả phiếu tối đa MAX_NOTE_PHOTOS).
       const storedPhotos = scalePhotos(note);
       if (storedPhotos.length + photos.length > MAX_NOTE_PHOTOS) return fail(`Tối đa ${MAX_NOTE_PHOTOS} ảnh một phiếu.`);
       for (const photo of photos) { const problem = receiptImageProblem(photo); if (problem) return fail(problem); }
@@ -549,9 +547,6 @@ export async function POST(request) {
       const storedById = new Map(storedItems.map((o, idx) => [o._id || `#${idx}`, o]));
       const noBill = missingBills(items, i => covered.has(i._id)).filter(i => !needsBill(storedById.get(i._id)));
       if (noBill.length) return fail(missingText(noBill));
-      if (needsTripPhoto(items) && !needsTripPhoto(storedItems) && !storedPhotos.length && !photos.length) {
-        return fail('Phiếu thêm hàng chợ: chụp ảnh hàng trên cân ở quán rồi mới lưu.');
-      }
       const reused = await reusedBill(db, items, bill.plan, note.id);
       if (reused) return fail(reusedText(reused, dm));
       const storage = statusDatabase();

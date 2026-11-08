@@ -36,7 +36,7 @@ const plain = v => JSON.parse(JSON.stringify(v));
 // Mỗi lần đọc ra một ảnh khác (máy chủ so mã ảnh bill để chặn dùng lại ảnh cũ); SAME_BILL() = luôn cùng một tấm ảnh.
 const PHOTO = { size: 1000, type: 'image/jpeg', arrayBuffer: async () => crypto.getRandomValues(new Uint8Array(8)).buffer };
 const SAME_BILL = () => ({ size: 1000, type: 'image/jpeg', arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer });
-// Phiếu mới gửi như trang Sổ tay: dòng nào cũng có _id, 1 ảnh hàng trên cân, 1 tờ bill cho mọi dòng hàng ốc.
+// Phiếu mới gửi như trang Sổ tay: dòng nào cũng có _id, 1 tờ bill cho mọi dòng hàng ốc (ảnh hàng trên cân không còn bắt buộc).
 // Thao tác khác gửi JSON. photos = [] / bills = [] để gửi thiếu; bills: [{ file, ids: [_id dòng] }].
 const withIds = body => (Array.isArray(body.items) ? { ...body, items: body.items.map((i, k) => ({ _id: `row-${k}-${Math.random().toString(36).slice(2, 8)}`, ...i })) } : body);
 // Tờ bill phủ mọi dòng có giá (trừ Tiền rau / gia vị) — dòng Khác kèm bill cũng được.
@@ -51,7 +51,7 @@ const request = (body, photos, bills) => (photos.length || bills.length
 const post = async (api, raw, photos, bills) => {
   const create = raw.action === 'create';
   const body = create ? withIds(raw) : raw;
-  return plain(await api.POST(request(body, photos ?? (create ? [PHOTO] : []), bills ?? (create ? allBills(body) : []))));
+  return plain(await api.POST(request(body, photos ?? [], bills ?? (create ? allBills(body) : []))));
 };
 const items = () => [
   { name: 'Ốc hương', qty: '2 ký', price: '220k', paymentStatus: 'full' },
@@ -393,18 +393,12 @@ test('changing the quantity of a debt line keeps the whole line as debt (the edi
   assert.deepEqual(plain(math.editRows([{ name: 'Cũ', price: '10k' }, { _id: 'x', name: 'Mới' }]).map(i => i._id)), ['#0', 'x'], 'old lines get "#position"');
 });
 
-test('a market trip needs a photo; only "Khác" lines, debt payments or plain text do not', async () => {
+test('a market trip saves without a scale photo; a page not yet reloaded may still send one', async () => {
   const state = { staff_notes: [], staff_note_payments: [] };
   const api = load(state, STAFF);
-  const noPhoto = await post(api, { action: 'create', note_type: 'expense', items: items() }, []);
-  assert.equal(noPhoto.status, 400);
-  assert.match(noPhoto.body.error, /Chụp ảnh hàng trên cân/);
-  assert.equal(state.staff_notes.length, 0, 'nothing saved without the photo');
-  const rauOnly = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Tiền rau', price: '60k', preset: true }] }, []);
-  assert.equal(rauOnly.status, 400, 'buying vegetables is a market trip too');
-
-  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Xăng xe', price: '50k', category: 'xang' }] }, [])).status, 200, 'petrol only: no photo');
-  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: [], note: 'Gas sắp hết' }, [])).status, 200, 'plain text: no photo');
+  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: items() }, [])).status, 200, 'bills only, no scale photo');
+  assert.equal(JSON.parse(state.staff_notes[0].content).photos, undefined);
+  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Tiền rau', price: '60k', preset: true }] }, [])).status, 200, 'vegetables only');
 
   const ok = await post(api, { action: 'create', note_type: 'expense', items: items(), photos: ['2026-01/note-fake.jpg'] }, [PHOTO, PHOTO]);
   assert.equal(ok.status, 200);
@@ -428,10 +422,10 @@ test('photo limits: at most 3, images only; a failed save removes the uploaded p
   assert.equal((state.stored || []).length, 0, 'photos are only stored after every check passed');
 });
 
-test('editing keeps the photos; adding market lines to a note without any needs a photo; delete removes them', async () => {
+test('editing keeps the photos; adding market lines needs only their bill; delete removes photos and bills', async () => {
   const state = { staff_notes: [], staff_note_payments: [] };
   const api = load(state);
-  await post(api, { action: 'create', note_type: 'expense', items: items() });
+  await post(api, { action: 'create', note_type: 'expense', items: items() }, [PHOTO]);
   const note = state.staff_notes[0];
   const before = JSON.parse(note.content).photos;
   const rows = math.editRows(JSON.parse(note.content).items).map(i => (i.name === 'Mực' ? { ...i, qty: '2kg' } : i));
@@ -442,12 +436,12 @@ test('editing keeps the photos; adding market lines to a note without any needs 
   const petrol = state.staff_notes[1];
   const addOc = [...math.editRows(JSON.parse(petrol.content).items), { _id: 'oc', name: 'Ốc hương', price: '220k', qty: '2' }];
   const blocked = await post(api, { action: 'edit', id: petrol.id, note_type: 'expense', items: addOc, note: '', updated_at: petrol.updated_at });
-  assert.equal(blocked.status, 400, 'cannot slip market goods into a petrol note without a photo');
-  const withPhoto = await post(api, { action: 'edit', id: petrol.id, note_type: 'expense', items: addOc, note: '', updated_at: petrol.updated_at }, [PHOTO], [{ file: PHOTO, ids: ['oc'] }]);
-  assert.equal(withPhoto.status, 200);
+  assert.match(blocked.body.error, /chưa có bill: Ốc hương/, 'cannot slip market goods into a petrol note without their bill');
+  const withBill = await post(api, { action: 'edit', id: petrol.id, note_type: 'expense', items: addOc, note: '', updated_at: petrol.updated_at }, [], [{ file: PHOTO, ids: ['oc'] }]);
+  assert.equal(withBill.status, 200, 'no scale photo needed');
   const saved = JSON.parse(state.staff_notes[1].content);
-  assert.equal(saved.photos.length, 1);
-  assert.match(saved.history.at(-1).changes, /📷 Thêm 1 ảnh/);
+  assert.equal(saved.photos, undefined);
+  assert.match(saved.history.at(-1).changes, /🧾 Thêm bill: Ốc hương/);
 
   const billOf = [...new Set(JSON.parse(state.staff_notes[0].content).items.map(i => i.bill_photo).filter(Boolean))];
   assert.equal(billOf.length, 1, 'one bill covers all the ốc lines of the trip');
