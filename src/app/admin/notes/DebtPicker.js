@@ -9,6 +9,10 @@
  * chuyển hẳn sang phiếu mới (hiện tách dư cũ / dư mới). Cuối mục: tích "Đã trả chủ" tiền thừa của chính
  * phiếu đang ghi (newLeft). Mọi lựa chọn ghi lại khi bấm Lưu phiếu.
  *
+ * Phiếu người đi chợ bỏ thêm tiền túi (shortages) hiện ngay trong khung tiền thừa: chủ quán chọn
+ * "trừ vào tiền thừa" — tích "Đã trả chủ" thì tiền thừa của chính người đó giữ lại phần bỏ thêm trước,
+ * phần còn lại mới đưa chủ (handover = { toOwnerOld, offsetOld, offsetsByTo, newOffset } do trang tính).
+ *
  * Danh sách nợ và danh sách tiền thừa thu gọn, bấm để mở (tự mở khi đã chọn khoản trả).
  * value: { [debtKey]: số tiền } — khoản đang chọn trả.
  */
@@ -22,7 +26,7 @@ const digits = v => String(v ?? '').replace(/\D/g, '');
 
 export default function DebtPicker({ notes, value, onChange, surplus, useSurplus, onUseSurplus,
   leftovers = [], useLeftover, onUseLeftover, returned = [], onReturned, canCarry, carry, onCarry, surplusOld = 0,
-  newLeft = 0, returnNow, onReturnNow, step = 3 }) {
+  newLeft = 0, returnNow, onReturnNow, shortages = [], handover = null, step = 3 }) {
   const [openLines, setOpenLines] = useState(false);
   const [openLeft, setOpenLeft] = useState(false);
   const lines = useMemo(() => allOpenDebts(notes || []), [notes]);
@@ -32,6 +36,10 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
   const kept = leftovers.filter(l => !returned.includes(l.note_id));
   const leftoverTotal = kept.reduce((a, l) => a + l.left, 0);
   const returnedTotal = leftovers.reduce((a, l) => a + (returned.includes(l.note_id) ? l.left : 0), 0);
+  // Tiền thừa đang cầm − tiền bỏ thêm chưa bù = số còn phải đưa chủ (âm = chủ còn nợ người đi chợ).
+  const heldTotal = leftovers.reduce((a, l) => a + l.left, 0);
+  const shortTotal = shortages.reduce((a, l) => a + l.short, 0);
+  const net = heldTotal - shortTotal;
 
   // "Lấy tiền dư / tiền thừa trả nợ": chia vào khoản đã tích trước, rồi phiếu cũ nhất.
   useEffect(() => {
@@ -42,7 +50,7 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useSurplus, useLeftover, surplus, leftoverTotal, lines]);
 
-  if (!lines.length && !leftovers.length && !(newLeft > 0)) return null;
+  if (!lines.length && !leftovers.length && !shortages.length && !(newLeft > 0)) return null;
   const toggle = line => {
     const key = debtKey(line);
     const next = { ...(value || {}) };
@@ -65,11 +73,15 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
     <section className="np-section">
       <div className="np-section-head"><span className="np-step">{step}</span><b>Tiền thừa & nợ cũ</b>
         {chosen > 0 && <span className="np-aside violet">Trả {money(chosen)}</span>}</div>
-      {leftovers.length > 0 && (
+      {(leftovers.length > 0 || shortages.length > 0) && (
         <div className="np-box ok">
           <button type="button" className="np-box-head" onClick={() => setOpenLeft(o => !o)} aria-expanded={showLeft}>
             <span>💵 Tiền thừa phiếu trước{returnedTotal > 0 && <small> · đã trả chủ {money(returnedTotal)}</small>}</span><b>{money(leftoverTotal)}</b><ChevronDown size={16} className={showLeft ? 'up' : ''} />
           </button>
+          {shortTotal > 0 && <div className={`np-net${net < 0 ? ' owe' : ''}`}>
+            <span>{net >= 0 ? 'Còn phải đưa chủ' : 'Chủ còn nợ người đi chợ'} <small>= thừa {money(heldTotal)} − bỏ thêm {money(shortTotal)}</small></span>
+            <b>{money(Math.abs(net))}</b>
+          </div>}
           {showLeft && leftovers.map(l => {
             const back = returned.includes(l.note_id);
             return <label key={l.note_id} className={`np-box-line np-return${back ? ' on' : ''}`}>
@@ -78,6 +90,17 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
                 onChange={e => onReturned?.(e.target.checked ? [...returned, l.note_id] : returned.filter(id => id !== l.note_id))} /> Đã trả chủ</span>
             </label>;
           })}
+          {shortages.map(l => {
+            const done = handover?.offsetsByTo?.[l.note_id] || 0;
+            return <div key={l.note_id} className="np-box-line np-short">
+              <span>Phiếu {dayMonth(l.created_at)}{l.writer ? ` · ${l.writer}` : ''} · bỏ thêm <b>{money(l.short)}</b></span>
+              <small>{done > 0 ? `✓ trừ ${money(done)} vào tiền thừa` : 'trừ vào tiền thừa khi trả chủ'}</small>
+            </div>;
+          })}
+          {handover && (handover.toOwnerOld > 0 || handover.offsetOld > 0) && returned.length > 0 && <div className="np-net done">
+            <span>Đưa chủ lần này{handover.offsetOld > 0 && <small> (đã trừ {money(handover.offsetOld)} bỏ thêm)</small>}</span>
+            <b>{money(handover.toOwnerOld)}</b>
+          </div>}
           {showLeft && canCarry && kept.length > 0 && (
             <label className="np-check ok">
               <input type="checkbox" checked={!!carry} onChange={e => { onCarry?.(e.target.checked); if (e.target.checked) onUseLeftover?.(false); }} />
@@ -126,7 +149,8 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
       {newLeft > 0 && (
         <label className={`np-check ok np-return-now${returnNow ? ' on' : ''}`}>
           <input type="checkbox" checked={!!returnNow} onChange={e => onReturnNow?.(e.target.checked)} />
-          <span>Tiền thừa phiếu này <b>{money(newLeft)}</b>: đã trả chủ</span>
+          <span>Tiền thừa phiếu này <b>{money(newLeft)}</b>: đã trả chủ
+            {returnNow && handover?.newOffset > 0 && <small> · giữ lại {money(handover.newOffset)} bù tiền bỏ thêm, đưa chủ {money(newLeft - handover.newOffset)}</small>}</span>
         </label>
       )}
     </section>

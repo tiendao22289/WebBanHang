@@ -15,11 +15,13 @@ import DebtPicker from './DebtPicker';
 import { KindTag, isOtherLine, newOtherLine } from './NoteKinds';
 import OtherCosts from './OtherCosts';
 import { BillPicker, MoneyInput, NoteItemsList, Section, TripPhotos, TripSummary, vnd } from './NewNoteParts';
-import { allOpenDebts, debtKey, fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
+import { allOpenDebts, debtKey, fundDebtPayments, openLeftovers, openShortages, planOffsets } from '@/lib/notesDebts.mjs';
 import { seesAllNotes } from '@/lib/staffRoles.mjs';
 
 // Chỉ tính tiền thừa của phiếu từ tháng 10/2026 (khớp ô "Trả lại chủ" của tháng; phiếu cũ hơn đã trả chủ).
 const LEFTOVER_SINCE = '2026-10-01';
+// Tiền người đi chợ bỏ thêm (phiếu âm) tính từ tháng 11/2026 — trừ vào tiền thừa khi trả chủ.
+const SHORTAGE_SINCE = '2026-11-01';
 // Dòng sẵn của phiếu đi chợ mới: dòng gõ hàng ốc, Tiền rau, Tiền gia vị, dòng gõ Khác (xăng xe, sửa chữa…).
 // Mỗi dòng có mã riêng ngay từ đầu: ảnh bill của mối gắn vào dòng theo mã.
 const rowId = () => `new-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -376,6 +378,36 @@ export default function StaffNotesPage() {
     };
   };
 
+  // Tiền của phiếu đi chợ đang ghi (cùng số cho các mục trong form và lúc lưu).
+  const tripMoney = () => {
+    const { paid: thucChi, debt: tienNo } = calculateTotals();
+    const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/./g, '')) : 0;
+    const leftoverList = openLeftovers(notes, payments, LEFTOVER_SINCE);
+    // Phiếu đã tích "Đã trả chủ" thì không cộng sang phiếu này / không lấy trả nợ.
+    const keptLeftovers = leftoverList.filter(l => !returnedLeftovers.includes(l.note_id));
+    const carried = carryLeftover ? keptLeftovers.reduce((a, l) => a + l.left, 0) : 0;
+    // Phần trả nợ lấy từ tiền thừa phiếu trước không trừ vào tiền của phiếu này.
+    const fromLeftover = useLeftoverForDebt && !carryLeftover ? fundDebtPayments(Object.entries(debtPays).map(([key, amount]) => ({ key, amount })),
+      keptLeftovers.map(l => ({ id: l.note_id, left: l.left }))).filter(x => x.from_note_id).reduce((a, x) => a + x.amount, 0) : 0;
+    const payOldDebt = debtPayTotal - fromLeftover;
+    const balance = inputAmt + carried - thucChi - payOldDebt;
+    return { thucChi, tienNo, inputAmt, leftoverList, keptLeftovers, carried, fromLeftover, payOldDebt, balance,
+      surplus: (inputAmt > 0 ? inputAmt - thucChi : 0) + carried, goods: thucChi + tienNo };
+  };
+  // Trả chủ có trừ tiền bỏ thêm (chủ quán chọn "trừ vào tiền thừa"): tiền thừa phiếu trước đã tích + tiền thừa
+  // phiếu này (nếu tích) giữ lại phần người đó đã bỏ thêm trước, còn lại mới đưa chủ.
+  const handoverOf = (leftoverList, newLeft) => {
+    const shortages = openShortages(notes, payments, SHORTAGE_SINCE);
+    const sources = [...leftoverList.filter(l => returnedLeftovers.includes(l.note_id)).map(l => ({ id: l.note_id, staff_id: l.staff_id, amount: l.left })),
+      ...(returnNow && newLeft > 0 ? [{ id: null, staff_id: currentUser?.id, amount: newLeft }] : [])];
+    const { offsets, returns } = planOffsets(sources, shortages);
+    const sum = (list, keep) => list.filter(keep).reduce((a, x) => a + x.amount, 0);
+    const offsetsByTo = {};
+    offsets.forEach(o => { offsetsByTo[o.to_note_id] = (offsetsByTo[o.to_note_id] || 0) + o.amount; });
+    return { shortages, offsets, returns, offsetsByTo, toOwnerOld: sum(returns, r => r.id), offsetOld: sum(offsets, o => o.from_note_id),
+      newOffset: sum(offsets, o => !o.from_note_id), toOwnerNew: sum(returns, r => !r.id) };
+  };
+
   const submitNewNote = async () => {
     const bills = newBills;
     // Các khoản nợ cũ đã chọn trả (máy chủ kiểm lại số còn nợ từng khoản).
@@ -401,6 +433,7 @@ export default function StaffNotesPage() {
     const noBill = hasItems ? missingBills(filled, i => bills.some(b => b.ids.includes(i._id))) : [];
     if (noBill.length) { alert(missingBillsText(noBill)); return; }
     const sendBills = billsForSave(bills, filled);
+    const handover = handoverOf(allLeftovers, Math.max(0, tripMoney().balance));
 
     setIsLoading(true);
     // Máy chủ tự tính tiền từ các dòng hàng, lưu phiếu trước rồi mới trừ nợ cũ.
@@ -413,7 +446,9 @@ export default function StaffNotesPage() {
         input_amount: newNoteInputAmount,
         pay_debts: payDebts,
         carry_leftovers: carryLeftover && newNoteType === 'expense' ? keptLeftovers.map(l => ({ note_id: l.note_id, amount: l.left })) : [],
-        return_leftovers: allLeftovers.filter(l => returnedLeftovers.includes(l.note_id)).map(l => ({ note_id: l.note_id, amount: l.left })),
+        // Tiền thật đưa chủ (đã trừ phần giữ lại bù tiền bỏ thêm) và các khoản bù.
+        return_leftovers: handover.returns.filter(r => r.id && r.amount > 0).map(r => ({ note_id: r.id, amount: r.amount })),
+        offsets: handover.offsets,
         return_now: returnNow,
       };
       if (sendBills.length) await notesApiWithPhotos('create', body, [], sendBills);
@@ -1112,6 +1147,7 @@ export default function StaffNotesPage() {
                 const carriedIn = sumOf(data.carried_in), carriedOut = sumOf(data.carried_out);
                 const balance = (Number(data.input_amount) || 0) + carriedIn - paidAtPurchase - fundedDebt;
                 const returned = sumOf(data.returned_logs);
+                const offsetOut = sumOf(data.offset_out), settled = sumOf(data.short_settled);
                 const dm = iso => new Date(new Date(iso).getTime() + 7 * 3600000).toISOString().slice(5, 10).split('-').reverse().join('/');
                 return (
                   <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 10, background: balance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1.5px solid ${balance >= 0 ? '#86efac' : '#fca5a5'}` }}>
@@ -1155,7 +1191,15 @@ export default function StaffNotesPage() {
                         <strong>{formatMoney(carriedOut)}</strong>
                       </div>
                     )}
-                    {(returned > 0 || carriedOut > 0) && (
+                    {/* Tiền thừa giữ lại bù tiền người đi chợ đã bỏ thêm ở phiếu khác (trừ vào tiền thừa). */}
+                    {(data.offset_out || []).map((o, i) => {
+                      const to = notes.find(n => n.id === o.to_note_id);
+                      return <div key={`o${i}`} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginTop: 4 }}>
+                        <span style={{ color: '#c2410c' }}>↔ Giữ lại bù tiền bỏ thêm{to ? ` (phiếu ${dm(to.created_at)})` : ''}:</span>
+                        <strong style={{ color: '#c2410c' }}>{formatMoney(o.amount)}</strong>
+                      </div>;
+                    })}
+                    {(returned > 0 || carriedOut > 0 || offsetOut > 0) && balance >= 0 && (
                       <>
                         {returned > 0 && (
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginTop: 4 }}>
@@ -1165,7 +1209,23 @@ export default function StaffNotesPage() {
                         )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem' }}>
                           <span style={{ color: '#6b7280' }}>Còn cầm chưa trả chủ:</span>
-                          <strong>{formatMoney(Math.max(0, balance - returned - carriedOut))}</strong>
+                          <strong>{formatMoney(Math.max(0, balance - returned - carriedOut - offsetOut))}</strong>
+                        </div>
+                      </>
+                    )}
+                    {/* Phiếu bỏ thêm: đã bù bằng tiền thừa phiếu nào, còn bao nhiêu chưa bù. */}
+                    {balance < 0 && (
+                      <>
+                        {(data.short_settled || []).map((o, i) => {
+                          const from = notes.find(n => n.id === o.from_note_id);
+                          return <div key={`s${i}`} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginTop: 4 }}>
+                            <span style={{ color: '#15803d' }}>✅ Đã bù bằng tiền thừa{from ? ` phiếu ${dm(from.created_at)}` : ''}:</span>
+                            <strong style={{ color: '#15803d' }}>{formatMoney(o.amount)}</strong>
+                          </div>;
+                        })}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', marginTop: 2 }}>
+                          <span style={{ color: '#6b7280' }}>{-balance - settled > 0 ? 'Chưa bù (trừ vào tiền thừa lần sau):' : 'Đã bù đủ tiền bỏ thêm'}</span>
+                          {-balance - settled > 0 && <strong style={{ color: '#c2410c' }}>{formatMoney(-balance - settled)}</strong>}
                         </div>
                       </>
                     )}
@@ -1333,6 +1393,12 @@ export default function StaffNotesPage() {
   // "Còn nợ" là tổng nợ còn lại tính tới cuối khoảng (cả nợ cũ).
   const staffNotes = notes.filter(n => !seesAllNotes(currentUser.role) || selectedStaff === 'ALL' || n.staff?.full_name === selectedStaff);
   const summary = notesSummary(staffNotes, payments, filterRange(filterDay, filterMonth, filterYear));
+  // Ô "Còn phải đưa chủ": tiền thừa người đi chợ đang cầm − tiền họ đã bỏ thêm chưa bù, tính tới giờ.
+  const handNow = (() => {
+    const held = openLeftovers(staffNotes, payments, LEFTOVER_SINCE).reduce((a, l) => a + l.left, 0);
+    const short = openShortages(staffNotes, payments, SHORTAGE_SINCE).reduce((a, l) => a + l.short, 0);
+    return { held, short, net: held - short };
+  })();
   const totalInputAmount = summary.given;
   const totalSpent = summary.cash;
   const totalDebt = summary.debtLeft;
@@ -1556,10 +1622,13 @@ export default function StaffNotesPage() {
             <div style={{ fontWeight: 800, color: '#16a34a', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(totalSpent)}</div>
             {summary.debtPaid > 0 && <div style={{ fontSize: 9, color: '#7c3aed', marginTop: 1 }}>gồm {formatMoney(summary.debtPaid).replace('₫', 'đ')} trả nợ</div>}
           </div>
-          {summary.hasGiven && (
-          <div style={{ background: summary.giveBack >= 0 ? '#f0fdf4' : '#fff1f2', borderRadius: 9, padding: '8px 10px', border: `1px solid ${summary.giveBack >= 0 ? '#86efac' : '#fca5a5'}`, textAlign: 'center', minWidth: 0 }}>
-            <div style={{ fontSize: 10, color: summary.giveBack >= 0 ? '#15803d' : '#dc2626', fontWeight: 500, marginBottom: 2 }}>{summary.giveBack >= 0 ? '↩ Trả lại chủ' : '⚠️ Bỏ thêm'}</div>
-            <div style={{ fontWeight: 800, color: summary.giveBack >= 0 ? '#15803d' : '#dc2626', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(Math.abs(summary.giveBack))}</div>
+          {/* Tiền người đi chợ còn phải đưa chủ TỚI GIỜ = tiền thừa đang cầm − tiền đã bỏ thêm chưa bù (trừ vào tiền thừa).
+              Khớp số ở phiếu mới; tích "Đã trả chủ" thì giảm ngay. */}
+          {(summary.hasGiven || handNow.held > 0 || handNow.short > 0) && (
+          <div style={{ background: handNow.net >= 0 ? '#f0fdf4' : '#fff7ed', borderRadius: 9, padding: '8px 10px', border: `1px solid ${handNow.net >= 0 ? '#86efac' : '#fdba74'}`, textAlign: 'center', minWidth: 0 }}>
+            <div style={{ fontSize: 10, color: handNow.net >= 0 ? '#15803d' : '#c2410c', fontWeight: 500, marginBottom: 2 }}>{handNow.net > 0 ? '↩ Còn phải đưa chủ' : handNow.net < 0 ? '⚠️ Chủ còn nợ NV' : '✅ Đã đưa chủ hết'}</div>
+            <div style={{ fontWeight: 800, color: handNow.net >= 0 ? '#15803d' : '#c2410c', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(Math.abs(handNow.net))}</div>
+            <div style={{ fontSize: 9, color: '#6b7280', marginTop: 1 }}>{handNow.short > 0 ? `thừa ${formatMoney(handNow.held).replace('₫', 'đ')} − bỏ thêm ${formatMoney(handNow.short).replace('₫', 'đ')}` : 'tới giờ'}</div>
           </div>
           )}
           <div style={{ background: totalDebt > 0 ? '#fff1f2' : '#f0fdf4', borderRadius: 9, padding: '8px 10px', border: `1px solid ${totalDebt > 0 ? '#fca5a5' : '#86efac'}`, textAlign: 'center', minWidth: 0 }}>
@@ -1912,21 +1981,10 @@ export default function StaffNotesPage() {
 
       {/* ── Phiếu đi chợ mới: 1 tiền chủ giao → 2 hàng đã mua → 3 tiền thừa & nợ cũ → 4 tổng kết ── */}
       {showAddModal && (() => {
-        const { paid: thucChi, debt: tienNo } = calculateTotals();
-        const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0;
-        const leftoverList = openLeftovers(notes, payments, LEFTOVER_SINCE);
-        // Phiếu đã tích "Đã trả chủ" thì không cộng sang phiếu này / không lấy trả nợ.
-        const keptLeftovers = leftoverList.filter(l => !returnedLeftovers.includes(l.note_id));
-        const carried = carryLeftover ? keptLeftovers.reduce((a, l) => a + l.left, 0) : 0;
-        // Phần trả nợ lấy từ tiền thừa phiếu trước không trừ vào tiền của phiếu này.
-        const fromLeftover = useLeftoverForDebt && !carryLeftover ? fundDebtPayments(Object.entries(debtPays).map(([key, amount]) => ({ key, amount })),
-          keptLeftovers.map(l => ({ id: l.note_id, left: l.left }))).filter(x => x.from_note_id).reduce((a, x) => a + x.amount, 0) : 0;
-        const payOldDebt = debtPayTotal - fromLeftover;
-        const balance = inputAmt + carried - thucChi - payOldDebt;
-        const surplus = (inputAmt > 0 ? inputAmt - thucChi : 0) + carried;
-        const goods = thucChi + tienNo;
-        // Mục 3 "Tiền thừa & nợ cũ": có tiền thừa phiếu trước, nợ cũ, hoặc phiếu này còn thừa (tích đã trả chủ).
-        const hasDebtStep = leftoverList.length > 0 || allOpenDebts(notes).length > 0 || balance > 0;
+        const { thucChi, tienNo, inputAmt, leftoverList, carried, fromLeftover, payOldDebt, balance, surplus, goods } = tripMoney();
+        const handover = handoverOf(leftoverList, Math.max(0, balance));
+        // Mục 3 "Tiền thừa & nợ cũ": có tiền thừa phiếu trước, tiền bỏ thêm chưa bù, nợ cũ, hoặc phiếu này còn thừa.
+        const hasDebtStep = leftoverList.length > 0 || handover.shortages.length > 0 || allOpenDebts(notes).length > 0 || balance > 0;
         const now = new Date();
         const when = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
         return (
@@ -1961,12 +2019,13 @@ export default function StaffNotesPage() {
                     // Mọi phiếu thừa đều đã trả chủ: bỏ "cộng vào phiếu này" / "dùng trả nợ".
                     if (!leftoverList.some(l => !ids.includes(l.note_id))) { setCarryLeftover(false); setUseLeftoverForDebt(false); }
                   }}
-                  newLeft={Math.max(0, balance)} returnNow={returnNow} onReturnNow={setReturnNow} />
+                  newLeft={Math.max(0, balance)} returnNow={returnNow} onReturnNow={setReturnNow}
+                  shortages={handover.shortages} handover={handover} />
               )}
 
               {(inputAmt > 0 || carried > 0 || goods > 0 || debtPayTotal > 0) && (
                 <Section step={hasDebtStep ? 4 : 3} title="Tổng kết">
-                  <TripSummary given={inputAmt} carried={carried} paid={thucChi} debt={tienNo} payOldDebt={payOldDebt} fromLeftover={fromLeftover} returned={returnNow} />
+                  <TripSummary given={inputAmt} carried={carried} paid={thucChi} debt={tienNo} payOldDebt={payOldDebt} fromLeftover={fromLeftover} returned={returnNow} keptBack={handover.newOffset} />
                 </Section>
               )}
             </div>
@@ -1974,7 +2033,7 @@ export default function StaffNotesPage() {
             <div className="modal-footer np-footer">
               <div className="np-footer-sum">
                 <span>Tiền hàng <b>{vnd(goods)}</b></span>
-                {(inputAmt > 0 || carried > 0) && <span className={balance >= 0 ? 'ok' : 'bad'}>{balance >= 0 ? 'Thừa' : 'Thiếu'} <b>{vnd(Math.abs(balance))}</b>{returnNow && balance > 0 ? ' · đã trả chủ' : ''}</span>}
+                {(inputAmt > 0 || carried > 0) && <span className={balance >= 0 ? 'ok' : 'bad'}>{balance >= 0 ? 'Thừa' : 'Thiếu'} <b>{vnd(Math.abs(balance))}</b>{returnNow && balance > 0 ? (handover.newOffset > 0 ? ` · đưa chủ ${vnd(handover.toOwnerNew)}` : ' · đã trả chủ') : ''}</span>}
               </div>
               <button type="button" className="btn btn-primary np-save" onClick={() => submitNewNote()} disabled={isLoading}>{isLoading ? 'Đang lưu…' : 'Lưu phiếu'}</button>
             </div>

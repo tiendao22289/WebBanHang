@@ -585,3 +585,61 @@ test('"Đã trả chủ" on this note counts what is left after paying old debts
   assert.equal(JSON.parse(now.content).returned_logs[0].amount, 200000, '500k − 200k goods − 100k old debt = 200k handed back');
   assert.equal(noteLeftover(now, state.staff_note_payments), 0);
 });
+
+test('"Đã trả chủ" keeps back what the buyer added on an earlier trip, then hands over the rest; deleting undoes it', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state, STAFF);
+  await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Mực', qty: '1', price: '400k' }], input_amount: '300.000' });
+  const short = state.staff_notes[0]; // Thy bỏ thêm 100k
+  await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Mực', qty: '1', price: '100k' }], input_amount: '400.000' });
+  const left = state.staff_notes[1]; // còn thừa 300k
+  assert.deepEqual([noteMoney(short, []).short, noteLeftover(left, [])], [100000, 300000]);
+
+  // Bù vượt số bỏ thêm / vượt tiền thừa / bù cho người khác → không lưu.
+  const tooMuch = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '10k' }],
+    offsets: [{ from_note_id: left.id, to_note_id: short.id, amount: 150000 }] });
+  assert.match(tooMuch.body.error, /chỉ còn 100\.000 đ tiền bỏ thêm chưa bù/);
+  const admin = load(state);
+  await post(admin, { action: 'create', note_type: 'expense', items: [{ name: 'Mực', qty: '1', price: '100k' }], input_amount: '200.000' });
+  const adminLeft = state.staff_notes[2];
+  assert.match((await post(admin, { action: 'create', note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '10k' }],
+    offsets: [{ from_note_id: adminLeft.id, to_note_id: short.id, amount: 100000 }] })).body.error, /chính người đi chợ đó/);
+  assert.equal(state.staff_notes.length, 3);
+
+  // Như trang Sổ tay: tích "Đã trả chủ" phiếu thừa 300k → giữ lại 100k bù, đưa chủ 200k.
+  const r = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '10k' }],
+    return_leftovers: [{ note_id: left.id, amount: 200000 }], offsets: [{ from_note_id: left.id, to_note_id: short.id, amount: 100000 }] });
+  assert.equal(r.status, 200);
+  const shortNow = state.staff_notes.find(n => n.id === short.id), leftNow = state.staff_notes.find(n => n.id === left.id);
+  assert.deepEqual([noteMoney(shortNow, []).short, noteLeftover(leftNow, [])], [0, 0]);
+  assert.deepEqual(JSON.parse(leftNow.content).returned_logs.map(l => l.amount), [200000]);
+  assert.match(JSON.parse(leftNow.content).history.at(-1).changes, /Đã trả lại chủ 200\.000 đ|Giữ lại 100\.000 đ/);
+  assert.match(JSON.parse(shortNow.content).history.at(-1).changes, /↔ Đã bù 100\.000 đ tiền bỏ thêm/);
+
+  // Sửa phiếu bỏ thêm: không được bớt dưới số đã bù; sửa phiếu vẫn giữ sổ bù.
+  const fewer = math.editRows(JSON.parse(shortNow.content).items).map(i => ({ ...i, price: '320k' }));
+  assert.match((await post(api, { action: 'edit', id: short.id, note_type: 'expense', items: fewer, note: '', input_amount: '300.000', updated_at: shortNow.updated_at })).body.error,
+    /đã được bù 100\.000 đ/);
+  const same = math.editRows(JSON.parse(shortNow.content).items);
+  assert.equal((await post(api, { action: 'edit', id: short.id, note_type: 'expense', items: same, note: 'sửa ghi chú', input_amount: '300.000', updated_at: shortNow.updated_at })).status, 200);
+  assert.equal(noteMoney(state.staff_notes.find(n => n.id === short.id), []).short, 0, 'the settlement survives an edit');
+
+  // Xoá phiếu thừa → phiếu bỏ thêm lại chưa được bù.
+  assert.equal((await post(admin, { action: 'delete', id: left.id })).status, 200);
+  assert.equal(noteMoney(state.staff_notes.find(n => n.id === short.id), []).short, 100000);
+});
+
+test('"Đã trả chủ" on this trip keeps back the buyer\'s earlier top-up and records only the rest as handed over', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state, STAFF);
+  await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Mực', qty: '1', price: '400k' }], input_amount: '300.000' });
+  const short = state.staff_notes[0]; // bỏ thêm 100k
+  const r = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Ốc hương', qty: '1', price: '200k' }], input_amount: '500.000',
+    return_now: true, offsets: [{ from_note_id: null, to_note_id: short.id, amount: 100000 }] });
+  assert.equal(r.status, 200);
+  const now = JSON.parse(state.staff_notes.find(n => n.id === r.body.note.id).content);
+  assert.deepEqual([now.offset_out[0].amount, now.returned_logs[0].amount], [100000, 200000], '300k left: 100k kept back, 200k handed over');
+  assert.equal(noteMoney(state.staff_notes.find(n => n.id === short.id), []).short, 0);
+  assert.match((await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '10k' }], input_amount: '20.000',
+    offsets: [{ from_note_id: null, to_note_id: short.id, amount: 5000 }] })).body.error, /chỉ còn 0 đ tiền bỏ thêm chưa bù/);
+});

@@ -117,7 +117,7 @@ export function NoteItemsList({ items, menuNames, categories, onField, onBlur, o
  * Tổng kết chuyến chợ như hoá đơn (gọn): tiền chủ giao (+ dư cũ) − tiền hàng trả ngay − nợ cũ trả lần này
  * = còn thừa trả chủ / còn thiếu nhân viên bỏ thêm. Dòng phụ: mua nợ, trả nợ bằng tiền thừa phiếu cũ.
  */
-export function TripSummary({ given, carried, paid, debt, payOldDebt, fromLeftover, returned = false }) {
+export function TripSummary({ given, carried, paid, debt, payOldDebt, fromLeftover, returned = false, keptBack = 0 }) {
   if (!given && !carried && !paid && !debt && !payOldDebt) return null;
   const hasMoney = given > 0 || carried > 0;
   const balance = given + carried - paid - payOldDebt;
@@ -134,6 +134,7 @@ export function TripSummary({ given, carried, paid, debt, payOldDebt, fromLeftov
           <span>{balance >= 0 ? (returned && balance > 0 ? 'Còn thừa · đã trả lại chủ ✓' : 'Còn thừa · trả lại chủ') : 'Còn thiếu · nhân viên bỏ thêm'}</span><b>{vnd(Math.abs(balance))}</b>
         </div>
       : <div className="np-sum-total"><span>Tổng tiền chi</span><b>{vnd(paid + payOldDebt)}</b></div>}
+    {returned && balance > 0 && keptBack > 0 && <p className="np-sum-note">Giữ lại {vnd(keptBack)} bù tiền đã bỏ thêm phiếu trước · đưa chủ {vnd(Math.max(0, balance - keptBack))}</p>}
     {(carried > 0 && balance > 0) || debt > 0 || fromLeftover > 0
       ? <p className="np-sum-note">
           {[carried > 0 && balance > 0 && `Dư mới ${vnd(Math.max(0, newPart))} · dư cũ ${vnd(oldLeft)}`,
