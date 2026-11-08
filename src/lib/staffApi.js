@@ -25,5 +25,7 @@ export async function notesApiWithPhotos(action, body, photos, bills = []) {
   photos.forEach((photo, i) => form.append('photo', photo, `phieu-${i + 1}.jpg`));
   bills.forEach((b, i) => form.append('bill', b.blob, `bill-${i + 1}.jpg`));
   form.append('bill_items', JSON.stringify(bills.map(b => b.ids)));
+  // Bill chụp trực tiếp hay chọn ảnh có sẵn trong máy (chủ thấy "ảnh có sẵn").
+  form.append('bill_from', JSON.stringify(bills.map(b => (b.from === 'gallery' ? 'gallery' : 'camera'))));
   return readResult(await fetchWithTimeout('/api/admin/notes', { method: 'POST', body: form, cache: 'no-store' }));
 }

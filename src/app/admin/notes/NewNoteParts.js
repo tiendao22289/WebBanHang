@@ -43,7 +43,7 @@ export const ItemsHead = () => <div className="np-cols" aria-hidden="true"><span
  * trống mới. Dòng có sẵn (Tiền rau, Tiền gia vị) để trống giá thì không lưu. Bấm "Đủ" / "Nợ" để đổi.
  * other: dòng nhóm Khác (xăng xe, sửa chữa…) — tên gõ tự do, dòng nhỏ bên dưới để chọn loại.
  * alert: giá cao bất thường so với các lần mua trước (notesChecks) — hiện đầu tiên, chủ cũng thấy.
- * bill: ô bill của mối cho dòng có giá { required, photo, saved, reason, onShoot, onNoBill, onClear } (BillCell).
+ * bill: ô bill của mối cho dòng có giá { required, photo, saved, reason, onShoot, onPick, onNoBill, onClear } (BillCell).
  */
 export function NoteItemRow({ item, other, alert, bill, menuNames, categories, onField, onBlur, onRemove, onCategory }) {
   const empty = !item.preset && !String(item.name || '').trim() && !String(item.price || '').trim() && !String(item.qty || '').trim();
@@ -163,9 +163,10 @@ export function TripPhotos({ saved = [], photos, required, onAdd, onRemove }) {
 
 /**
  * Ô bill của một dòng: đã có bill (ảnh vừa chụp hoặc đã lưu — bấm để xem), ghi "không có bill" kèm lý do,
- * hoặc nút chụp (đỏ khi bắt buộc — dòng hàng ốc) và "Không có bill?" để ghi lý do.
+ * hoặc nút chụp (đỏ khi bắt buộc — dòng hàng ốc), nút chọn ảnh bill có sẵn trong máy (nhận qua Zalo / Facebook)
+ * và "Không có bill?" để ghi lý do.
  */
-export function BillCell({ required, photo, saved, reason, onShoot, onNoBill, onClear }) {
+export function BillCell({ required, photo, saved, reason, onShoot, onPick, onNoBill, onClear }) {
   if (photo || saved) return <span className="np-bill-cell">
     {photo ? <a className="np-bill ok" href={photo} target="_blank" rel="noreferrer">🧾 bill ✓</a> : <span className="np-bill ok">🧾 bill ✓</span>}
     {onClear && <button type="button" className="np-bill-x" onClick={onClear} aria-label="Bỏ bill của dòng này"><X size={11} /></button>}
@@ -176,6 +177,7 @@ export function BillCell({ required, photo, saved, reason, onShoot, onNoBill, on
   </span>;
   return <span className="np-bill-cell">
     <button type="button" className={`np-bill ${required ? 'need' : 'opt'}`} onClick={onShoot}>🧾 Chụp bill</button>
+    {onPick && <button type="button" className="np-bill opt" onClick={onPick} aria-label="Chọn ảnh bill có sẵn trong máy">🖼 Chọn ảnh</button>}
     {required && <button type="button" className="np-bill-skip" onClick={onNoBill}>Không có bill?</button>}
   </span>;
 }

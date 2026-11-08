@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { Camera, X } from 'lucide-react';
+import { Camera, Images, X } from 'lucide-react';
 import { useBackClose } from './useBackClose';
 import { compressImage } from './compressImage';
 import { cameraErrorText, rememberCameraFailure } from './cameraErrors.mjs';
@@ -57,10 +57,12 @@ async function openCamera() {
   throw last;
 }
 
-// choices: [{ key, label }] → chọn đang chụp gì (vd. màn hình khách / tờ bill); onCapture(blob, key).
-export default function CameraCapture({ onCapture, onClose, title, subtitle, closeText, choices }) {
+// choices: [{ key, label }] → chọn đang chụp gì (vd. màn hình khách / tờ bill); onCapture(blob, key, from).
+// gallery: thêm nút chọn ảnh có sẵn trong máy (vd. bill nhân viên gửi qua Zalo) — from = 'gallery', chụp = 'camera'.
+export default function CameraCapture({ onCapture, onClose, title, subtitle, closeText, choices, gallery }) {
   const video = useRef(null);
   const nativeInput = useRef(null);
+  const galleryInput = useRef(null);
   const [choice, setChoice] = useState(choices?.[0]?.key);
   const stream = useRef(null);
   const [ready, setReady] = useState(false);
@@ -101,20 +103,22 @@ export default function CameraCapture({ onCapture, onClose, title, subtitle, clo
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', QUALITY));
     setBusy(false);
     if (!blob) { setError('Không chụp được, thử lại.'); return; }
-    onCapture(blob, choice);
+    onCapture(blob, choice, 'camera');
     onClose();
   }
 
-  // Ảnh chụp bằng ứng dụng camera của máy (khi camera trong web không mở được).
-  async function picked(event) {
+  // Ảnh chụp bằng ứng dụng camera của máy (khi camera trong web không mở được), hoặc ảnh có sẵn (gallery).
+  async function picked(event, from = 'camera') {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
     setBusy(true);
-    try { const blob = await compressImage(file); onCapture(blob, choice); onClose(); }
+    try { const blob = await compressImage(file); onCapture(blob, choice, from); onClose(); }
     catch (err) { setError(err.message || 'Không đọc được ảnh, chụp lại.'); }
     finally { setBusy(false); }
   }
+  const pickGallery = () => galleryInput.current?.click();
+  const galleryText = typeof gallery === 'string' ? gallery : 'Chọn ảnh có sẵn';
 
   return <div className="cam" role="dialog" aria-label={title || 'Chụp ảnh'}>
     {title && <div className="cam-title">{title}{subtitle && <small>{subtitle}</small>}</div>}
@@ -124,17 +128,21 @@ export default function CameraCapture({ onCapture, onClose, title, subtitle, clo
     </div>}
     <video ref={video} playsInline muted autoPlay className="cam-video" />
     <input ref={nativeInput} type="file" accept="image/*" capture="environment" onChange={picked} hidden />
+    {gallery && <input ref={galleryInput} type="file" accept="image/*" onChange={e => picked(e, 'gallery')} hidden />}
     {!ready && !error && <p className="cam-msg">Đang mở camera...</p>}
     {error && <div className="cam-msg error">
       <p>{error}</p>
       <button type="button" className="cam-native" onClick={() => nativeInput.current?.click()} disabled={busy}>
         <Camera size={20} /> {busy ? 'Đang xử lý ảnh...' : 'Dùng camera của máy'}
       </button>
+      {gallery && !busy && <button type="button" className="cam-native alt" onClick={pickGallery}><Images size={20} /> {galleryText}</button>}
     </div>}
     <div className="cam-bar">
       <button type="button" className="cam-close" onClick={onClose} aria-label={closeText || 'Huỷ'}><X size={22} />{closeText}</button>
       <button type="button" className="cam-shoot" onClick={shoot} disabled={!ready || busy} aria-label="Chụp"><Camera size={30} /></button>
-      <span className="cam-spacer" />
+      {gallery && !error
+        ? <button type="button" className="cam-gallery" onClick={pickGallery} disabled={busy}><Images size={20} />{busy ? 'Đang xử lý...' : galleryText}</button>
+        : <span className="cam-spacer" />}
     </div>
   </div>;
 }

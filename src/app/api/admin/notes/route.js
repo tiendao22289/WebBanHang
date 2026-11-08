@@ -22,6 +22,9 @@
  * Ảnh phiếu đi chợ: create gửi dạng multipart (payload = JSON như trên, photo = 1–3 ảnh). Phiếu có hàng
  * chợ mà không có ảnh thì không lưu (needsTripPhoto). Ảnh nằm trong bucket ảnh bill (kind 'note'),
  * đường dẫn lưu ở content.photos; GET trả kèm photo_links { đường dẫn: link xem 1 giờ }.
+ * Bill của mối ở từng dòng hàng (item.bill_photo, kind 'notebill'): chụp trực tiếp hoặc chọn ảnh có sẵn trong máy
+ * (item.bill_from = 'gallery', chủ thấy "ảnh có sẵn"). item.bill_hash = mã ảnh: ảnh bill đã dùng ở phiếu khác
+ * trong 90 ngày thì không nhận.
  */
 import { NextResponse } from 'next/server';
 import { getStaffSession, staffDatabase, statusDatabase } from '@/lib/statusAuth';
@@ -63,8 +66,13 @@ function cleanItems(items, stored = []) {
     // Dòng tab "Khác" (xăng xe, sửa chữa…): id loại; dòng hàng ốc không có trường này.
     const category = lineCategory(i);
     if (category) row.category = category;
-    // Bill của dòng chỉ lấy từ dòng đang lưu (ảnh mới gắn sau khi lưu ảnh) — trình duyệt không tự đặt đường dẫn ảnh.
-    if (typeof old?.bill_photo === 'string') row.bill_photo = old.bill_photo;
+    // Bill của dòng chỉ lấy từ dòng đang lưu (ảnh mới gắn sau khi lưu ảnh) — trình duyệt không tự đặt đường dẫn ảnh,
+    // mã ảnh (bill_hash) hay nguồn ảnh (bill_from).
+    if (typeof old?.bill_photo === 'string') {
+      row.bill_photo = old.bill_photo;
+      if (typeof old.bill_hash === 'string') row.bill_hash = old.bill_hash;
+      if (old.bill_from === 'gallery') row.bill_from = 'gallery';
+    }
     const noBill = str(i.no_bill, 120).trim();
     if (noBill) row.no_bill = noBill;
     if (old?.paid_amount) {
@@ -131,22 +139,23 @@ function notePhotos(note) {
 
 /**
  * Thân request: JSON, hoặc multipart khi ghi phiếu kèm ảnh: payload = JSON, photo = ảnh hàng trên cân,
- * bill = ảnh bill, bill_items = JSON [[_id dòng hàng của bill 1], [… bill 2], …].
+ * bill = ảnh bill, bill_items = JSON [[_id dòng hàng của bill 1], [… bill 2], …],
+ * bill_from = JSON ['camera' | 'gallery', …] (bill chụp trực tiếp hay chọn ảnh có sẵn trong máy).
  */
 async function readBody(request) {
-  if (!/multipart\/form-data/i.test(request.headers?.get?.('content-type') || '')) return { body: await request.json().catch(() => ({})), photos: [], bills: [], billItems: [] };
+  if (!/multipart\/form-data/i.test(request.headers?.get?.('content-type') || '')) return { body: await request.json().catch(() => ({})), photos: [], bills: [], billItems: [], billFrom: [] };
   const form = await request.formData().catch(() => null);
   const json = (key, fallback) => { try { return JSON.parse(form?.get(key) || 'null') ?? fallback; } catch { return fallback; } };
   const files = key => (form ? form.getAll(key).filter(f => f && typeof f !== 'string') : []);
-  const billItems = json('bill_items', []);
-  return { body: json('payload', {}), photos: files('photo'), bills: files('bill'), billItems: Array.isArray(billItems) ? billItems : [] };
+  const billItems = json('bill_items', []), billFrom = json('bill_from', []);
+  return { body: json('payload', {}), photos: files('photo'), bills: files('bill'), billItems: Array.isArray(billItems) ? billItems : [], billFrom: Array.isArray(billFrom) ? billFrom : [] };
 }
 
 /**
- * Ảnh bill gửi lên → [{ file, ids }] (mỗi bill phủ ít nhất 1 dòng của phiếu chưa có bill), hoặc { error }.
+ * Ảnh bill gửi lên → [{ file, ids, from }] (mỗi bill phủ ít nhất 1 dòng của phiếu chưa có bill), hoặc { error }.
  * Dòng đã có bill (lưu từ trước) giữ bill cũ.
  */
-function billPlan(items, bills, billItems) {
+function billPlan(items, bills, billItems, billFrom = []) {
   if (bills.length > MAX_BILL_PHOTOS) return { error: `Tối đa ${MAX_BILL_PHOTOS} ảnh bill một phiếu.` };
   const open = new Set(items.filter(i => !i.bill_photo).map(i => i._id));
   const plan = [];
@@ -156,21 +165,55 @@ function billPlan(items, bills, billItems) {
     const ids = (Array.isArray(billItems[k]) ? billItems[k] : []).filter(id => typeof id === 'string' && open.has(id));
     if (!ids.length) return { error: 'Ảnh bill không khớp dòng hàng nào của phiếu, tải lại trang rồi thử lại.' };
     ids.forEach(id => open.delete(id));
-    plan.push({ file, ids });
+    plan.push({ file, ids, from: billFrom[k] === 'gallery' ? 'gallery' : 'camera' });
   }
   return { plan };
 }
 
-/** Lưu ảnh bill rồi gắn đường dẫn vào các dòng; lỗi giữa chừng thì xoá ảnh đã lưu (uploaded nhận mọi đường dẫn). */
+/** Mã của tấm ảnh (SHA-256): chọn lại đúng tấm ảnh cũ trong máy thì ra cùng mã. */
+async function imageHash(file) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()));
+  return [...digest].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+const BILL_REUSE_DAYS = 90; // ảnh phiếu cũng chỉ giữ 90 ngày
+/**
+ * Ảnh bill đã dùng ở phiếu khác trong 90 ngày (chọn lại ảnh bill cũ trong máy để khai lần đi chợ mới)
+ * → { note: phiếu đó, names: các món của bill }, không trùng → null. Cùng phiếu (sửa phiếu, thêm dòng
+ * cùng tờ bill) thì được. Ghi mã ảnh vào từng bill (entry.hash) để lưu vào dòng hàng.
+ */
+async function reusedBill(db, items, plan, noteId) {
+  for (const entry of plan) entry.hash = await imageHash(entry.file);
+  const since = new Date(Date.now() - BILL_REUSE_DAYS * 86400000).toISOString();
+  for (const hash of new Set(plan.map(p => p.hash))) {
+    let query = db.from('staff_notes').select('id, created_at').gte('created_at', since).like('content', `%${hash}%`);
+    if (noteId) query = query.neq('id', noteId);
+    const { data, error } = await query.limit(1);
+    if (error) throw error;
+    if (data?.[0]) {
+      const ids = plan.filter(p => p.hash === hash).flatMap(p => p.ids);
+      return { note: data[0], names: items.filter(i => ids.includes(i._id)).map(i => i.name) };
+    }
+  }
+  return null;
+}
+
+/** Lưu ảnh bill rồi gắn đường dẫn (và mã ảnh, nguồn ảnh) vào các dòng; lỗi giữa chừng thì xoá ảnh đã lưu (uploaded nhận mọi đường dẫn). */
 async function uploadBills(storage, items, plan, uploaded) {
-  for (const { file, ids } of plan) {
+  for (const { file, ids, from, hash } of plan) {
     const path = await uploadReceiptImage(storage, file, 'notebill');
     uploaded.push(path);
-    for (const item of items) if (ids.includes(item._id)) item.bill_photo = path;
+    for (const item of items) {
+      if (!ids.includes(item._id)) continue;
+      item.bill_photo = path;
+      if (hash) item.bill_hash = hash;
+      if (from === 'gallery') item.bill_from = 'gallery';
+    }
   }
 }
 
 const missingText = list => `Còn ${list.length} món chưa có bill: ${list.map(i => i.name).join(', ')}. Bấm 🧾 ở từng dòng để chụp bill của mối (hoặc ghi lý do mối không đưa bill).`;
+const reusedText = (reused, dm) => `Ảnh bill của ${reused.names.join(', ')} đã dùng ở phiếu ngày ${dm(reused.note.created_at)}. Chọn đúng bill của lần đi chợ này (hoặc bấm "Không có bill?" ghi lý do).`;
 
 /**
  * Một thao tác = một lần ghi (hàm staff_notes_commit trong DB). Các phiếu bị đổi được
@@ -296,7 +339,7 @@ export async function POST(request) {
     // Quản lý làm được như chủ quán trên phiếu (ghi, sửa, trả nợ phiếu của ai cũng được), trừ xoá phiếu và sửa loại.
     const user = s.user, isAdmin = user.role === 'admin', canManage = seesAllNotes(user.role);
     const db = staffDatabase(user.id);
-    const { body, photos, bills, billItems } = await readBody(request);
+    const { body, photos, bills, billItems, billFrom } = await readBody(request);
     const changes = changeSet();
     const dm = iso => vnDay(iso).split('-').reverse().slice(0, 2).join('/');
 
@@ -308,7 +351,7 @@ export async function POST(request) {
       if (photos.length > MAX_NOTE_PHOTOS) return fail(`Tối đa ${MAX_NOTE_PHOTOS} ảnh một phiếu.`);
       for (const photo of photos) { const problem = receiptImageProblem(photo); if (problem) return fail(problem); }
       // Mỗi dòng hàng ốc: ảnh bill của mối hoặc lý do không có bill (chống khai giá cao).
-      const bill = billPlan(items, bills, billItems);
+      const bill = billPlan(items, bills, billItems, billFrom);
       if (bill.error) return fail(bill.error);
       const covered = new Set(bill.plan.flatMap(p => p.ids));
       const noBill = missingBills(items, i => covered.has(i._id));
@@ -359,6 +402,9 @@ export async function POST(request) {
           changes.note(source);
         }
       }
+      // Ảnh bill cũ (đã dùng ở phiếu khác) chọn lại từ máy thì không nhận.
+      const reused = await reusedBill(db, items, bill.plan, null);
+      if (reused) return fail(reusedText(reused, dm));
       const newId = crypto.randomUUID();
       const today = dm(new Date().toISOString());
       const payTotal = plan.reduce((a, x) => a + x.pay, 0);
@@ -497,7 +543,7 @@ export async function POST(request) {
       for (const photo of photos) { const problem = receiptImageProblem(photo); if (problem) return fail(problem); }
       // Bill: chỉ bắt với dòng hàng ốc mới thêm (hoặc vừa đổi thành hàng ốc); dòng cũ giữ bill / lý do cũ,
       // phiếu ghi trước khi bắt bill sửa giá / số lượng thì không bắt chụp lại.
-      const bill = billPlan(items, bills, billItems);
+      const bill = billPlan(items, bills, billItems, billFrom);
       if (bill.error) return fail(bill.error);
       const covered = new Set(bill.plan.flatMap(p => p.ids));
       const storedById = new Map(storedItems.map((o, idx) => [o._id || `#${idx}`, o]));
@@ -506,6 +552,8 @@ export async function POST(request) {
       if (needsTripPhoto(items) && !needsTripPhoto(storedItems) && !storedPhotos.length && !photos.length) {
         return fail('Phiếu thêm hàng chợ: chụp ảnh hàng trên cân ở quán rồi mới lưu.');
       }
+      const reused = await reusedBill(db, items, bill.plan, note.id);
+      if (reused) return fail(reusedText(reused, dm));
       const storage = statusDatabase();
       const addedPhotos = [];
       let content, amount = 0, debt = 0;
@@ -516,7 +564,10 @@ export async function POST(request) {
         const before = (Number(note.amount) || 0) + (Number(note.debt) || 0);
         if (Math.abs(before - (amount + debt)) >= 1) lines.push(`💲 Tổng phiếu: ${vnd(before)} → ${vnd(amount + debt)}`);
         if (photos.length) lines.push(`📷 Thêm ${photos.length} ảnh`);
-        if (bill.plan.length) lines.push(`🧾 Thêm bill: ${items.filter(i => covered.has(i._id)).map(i => i.name).join(', ')}`);
+        if (bill.plan.length) {
+          const fromPhone = new Set(bill.plan.filter(p => p.from === 'gallery').flatMap(p => p.ids));
+          lines.push(`🧾 Thêm bill: ${items.filter(i => covered.has(i._id)).map(i => `${i.name}${fromPhone.has(i._id) ? ' (ảnh có sẵn)' : ''}`).join(', ')}`);
+        }
         const inputAmount = money(body.input_amount);
         // Giữ sổ tiền dư (đã trả chủ, chuyển đi / nhận vào) và ảnh hàng khi sửa phiếu.
         const moneyLogs = Object.fromEntries(['returned_logs', 'carried_in', 'carried_out', 'photos'].filter(k => Array.isArray(stored?.[k])).map(k => [k, stored[k]]));

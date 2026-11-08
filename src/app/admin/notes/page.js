@@ -65,11 +65,13 @@ export default function StaffNotesPage() {
   const [newPhotos, setNewPhotos] = useState([]);
   const [editPhotos, setEditPhotos] = useState([]);
   const [camera, setCamera] = useState(null); // { target: 'new' | 'edit', kind: 'scale' | 'bill', itemId?, name?, note?, saveAfter }
-  // Bill của mối vừa chụp [{ blob, url, ids: _id các dòng của tờ bill }] và ô "bill này có cả món nào?".
+  // Bill của mối vừa chụp / chọn [{ blob, url, ids: _id các dòng của tờ bill, from: 'camera' | 'gallery' }]
+  // và ô "bill này có cả món nào?".
   const [newBills, setNewBills] = useState([]);
   const [editBills, setEditBills] = useState([]);
   const [billPick, setBillPick] = useState(null); // { ...shot, bills, index, chosen }
   const captureInput = useRef(null);
+  const galleryInput = useRef(null);
   const pendingShot = useRef(null);
 
   // New Note State
@@ -801,6 +803,8 @@ export default function StaffNotesPage() {
     if (cameraSupported()) setCamera({ ...shot, id: `${Date.now()}-${Math.random()}` });
     else { pendingShot.current = shot; captureInput.current?.click(); }
   };
+  // Bill có sẵn trong máy (nhân viên đi chợ gửi qua Zalo / Facebook): mở thư viện ảnh, không mở camera.
+  const pickBillFile = shot => { pendingShot.current = { ...shot, from: 'gallery' }; galleryInput.current?.click(); };
   const billsOf = target => (target === 'edit' ? editBills : newBills);
   const setBillsOf = (target, list) => (target === 'edit' ? setEditBills : setNewBills)(list);
   const itemsFor = target => (target === 'edit' ? editExpenseItems : expenseItems);
@@ -820,11 +824,11 @@ export default function StaffNotesPage() {
   // Camera tự đóng ngay sau khi chụp (onClose): bước lưu tiếp (có thể mở camera lần nữa) chạy sau một nhịp,
   // khi camera cũ đã đóng hẳn và trả lại bước lịch sử của nút Back.
   const later = fn => setTimeout(fn, 60);
-  const addShot = (shot, blob) => {
+  const addShot = (shot, blob, from = 'camera') => {
     const photo = { blob, url: URL.createObjectURL(blob) };
     setCamera(null);
     if (shot.kind === 'bill') {
-      const bills = [...billsOf(shot.target), { ...photo, ids: [shot.itemId] }];
+      const bills = [...billsOf(shot.target), { ...photo, ids: [shot.itemId], from: from === 'gallery' ? 'gallery' : 'camera' }];
       setBillsOf(shot.target, bills);
       if (billable(shot.target, bills, shot.itemId).length) setBillPick({ ...shot, bills, index: bills.length - 1, chosen: [] });
       else if (shot.saveAfter) later(() => continueSave(shot, { bills }));
@@ -847,9 +851,11 @@ export default function StaffNotesPage() {
     if (item.bill_photo) return { saved: true, photo: photoLinks[item.bill_photo] || null };
     const bills = billsOf(target);
     const local = bills.find(b => b.ids.includes(item._id));
+    const shot = { target, kind: 'bill', itemId: item._id, name: item.name, note: target === 'edit' ? viewingNote : undefined, saveAfter: false };
     return {
       required: needsBill(item), photo: local?.url || null, reason: noBillReason(item),
-      onShoot: () => openCamera({ target, kind: 'bill', itemId: item._id, name: item.name, note: target === 'edit' ? viewingNote : undefined, saveAfter: false }),
+      onShoot: () => openCamera(shot),
+      onPick: () => pickBillFile(shot),
       onNoBill: () => {
         const reason = prompt(`Mối không đưa bill cho "${item.name}"? Ghi lý do (chủ sẽ thấy):`);
         if (reason?.trim()) setItemField(target, idx, 'no_bill', reason.trim().slice(0, 120));
@@ -869,7 +875,7 @@ export default function StaffNotesPage() {
     const shot = pendingShot.current;
     pendingShot.current = null;
     if (!file || !shot) return;
-    try { addShot(shot, await compressImage(file)); } catch (err) { alert(err.message); }
+    try { addShot(shot, await compressImage(file), shot.from); } catch (err) { alert(err.message); }
   };
   const removePhoto = (target, index) => {
     const list = target === 'edit' ? editPhotos : newPhotos;
@@ -903,7 +909,8 @@ export default function StaffNotesPage() {
         const flag = item => { const a = alertOf(item); const link = item.bill_photo && photoLinks[item.bill_photo]; return <>
           {a && <span className="note-flag" title={priceAlertText(a)}>⚠ giá +{a.pct}%</span>}
           {noBillReason(item) && <span className="note-flag nobill" title={noBillReason(item)}>🧾 không bill: {noBillReason(item)}</span>}
-          {link && <a className="note-bill" href={link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>🧾 bill</a>}
+          {link && <a className="note-bill" href={link} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
+            title={item.bill_from === 'gallery' ? 'Ảnh bill chọn từ máy (không chụp trực tiếp)' : undefined}>🧾 bill{item.bill_from === 'gallery' ? ' · ảnh có sẵn' : ''}</a>}
         </>; };
         rows.forEach(item => {
           const p = parseVal(item.price);
@@ -2014,12 +2021,15 @@ export default function StaffNotesPage() {
 
       {/* Chụp ảnh phiếu đi chợ: camera trong trang, máy không mở được thì dùng ứng dụng camera của máy. */}
       <input ref={captureInput} type="file" accept="image/*" capture="environment" onChange={pickedPhoto} hidden />
+      {/* Bill có sẵn trong máy (nhận qua Zalo / Facebook). Ảnh hàng trên cân vẫn chỉ chụp trực tiếp ở quán. */}
+      <input ref={galleryInput} type="file" accept="image/*" onChange={pickedPhoto} hidden />
       {camera && <CameraCapture key={camera.id}
         title={camera.kind === 'bill' ? `Chụp bill của mối: ${camera.name || 'món này'}` : 'Chụp hàng trên cân ở quán'}
-        subtitle={camera.kind === 'bill' ? 'Chụp rõ giá và số ký trên bill' : camera.saveAfter ? 'Phiếu đi chợ cần ảnh · chụp xong tự lưu phiếu' : 'Ảnh kèm phiếu đi chợ'}
+        subtitle={camera.kind === 'bill' ? 'Chụp rõ giá và số ký trên bill · bill gửi qua Zalo thì bấm "Chọn ảnh có sẵn"' : camera.saveAfter ? 'Phiếu đi chợ cần ảnh · chụp xong tự lưu phiếu' : 'Ảnh kèm phiếu đi chợ'}
+        gallery={camera.kind === 'bill' ? 'Chọn ảnh có sẵn' : undefined}
         closeText="Huỷ"
         onClose={() => setCamera(null)}
-        onCapture={blob => addShot(camera, blob)} />}
+        onCapture={(blob, _key, from) => addShot(camera, blob, from)} />}
       {billPick && <BillPicker name={billPick.name} items={billable(billPick.target, billPick.bills, billPick.itemId)} chosen={billPick.chosen}
         onToggle={id => setBillPick(p => ({ ...p, chosen: p.chosen.includes(id) ? p.chosen.filter(x => x !== id) : [...p.chosen, id] }))}
         onDone={finishBillPick} />}
