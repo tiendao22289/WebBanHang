@@ -318,8 +318,9 @@ function FineRules({ rules, onAction }) {
 }
 
 // Ở từng dòng bảng lương: kết toán người nghỉ việc trong tháng, đánh dấu đã trả lương khi đã chốt.
-function PayActions({ s, c, left, onClose, onPaid, compact }) {
-  if (!left && !c.locked) return null;
+// Nút của từng người: chốt lương riêng người đó (Kết toán với người nghỉ việc), mở chốt riêng (khi chưa đánh dấu đã trả), đánh dấu đã trả.
+function PayActions({ s, c, left, onClose, onReopen, onPaid, compact, canClose }) {
+  if (!left && !c.locked && !canClose) return null;
   const btn = { fontSize: '0.75rem', padding: '3px 10px', borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap', border: '1px solid #e2e8f0', background: '#f8fafc' };
   const paidDay = c.paid_at ? ddmm(new Date(Date.parse(c.paid_at) + 7 * 3600000).toISOString().slice(0, 10)) : null;
   return (
@@ -327,8 +328,11 @@ function PayActions({ s, c, left, onClose, onPaid, compact }) {
       ? { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4, alignItems: 'flex-start' }
       : { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: '8px 12px', borderTop: '1px solid #f1f5f9', fontSize: '0.8rem' }}>
       {left && <span style={{ color: '#9a3412', fontWeight: 600, fontSize: '0.75rem' }}>🚪 Nghỉ việc, làm đến {ddmm(left.last_day)}</span>}
-      {left && !c.locked && (
-        <button style={{ ...btn, background: '#fff7ed', borderColor: '#fed7aa', color: '#9a3412', fontWeight: 700 }} onClick={() => onClose(s.id, s.full_name)}>🔒 Kết toán</button>
+      {!c.locked && (
+        <button style={{ ...btn, background: '#fff7ed', borderColor: '#fed7aa', color: '#9a3412', fontWeight: 700 }} onClick={() => onClose(s.id, s.full_name)}>🔒 {left ? 'Kết toán' : 'Chốt lương'}</button>
+      )}
+      {c.locked && !c.paid_at && onReopen && (
+        <button style={{ ...btn, color: '#475569' }} title="Mở chốt riêng người này: lương tính lại theo chấm công hiện tại" onClick={() => onReopen(s.id, s.full_name)}>🔓 Mở chốt</button>
       )}
       {c.locked && paidDay && (c.received_at
         ? <span style={{ fontSize: '0.74rem', color: '#15803d', fontWeight: 700 }}>🤝 NV đã xác nhận nhận {whenText(c.received_at)}</span>
@@ -924,6 +928,12 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     return closed ? { ...closed.snapshot, locked: true, liveNet: live.net, paid_at: closed.paid_at || null, received_at: closed.received_at || null } : { ...live, locked: false };
   };
   // Kết toán riêng một người (vd. nghỉ việc giữa tháng) và đánh dấu đã trả lương.
+  // Mở chốt riêng một người (chưa đánh dấu đã trả): lương người đó tính lại theo chấm công hiện tại, người khác giữ số đã chốt.
+  const reopenOne = async (staffId, name) => {
+    if (!confirm(`Mở chốt lương tháng ${selMonth}/${selYear} của ${name}? Lương người này tính lại theo chấm công hiện tại; người khác giữ nguyên.`)) return;
+    try { await workforce('reopen_month', { year: selYear, month: selMonth, staff_id: staffId }); } catch (err) { return alert(err.message); }
+    fetchPayrollMonth();
+  };
   const closeOne = async (staffId, name) => {
     if (!confirm(`Kết toán (chốt lương) tháng ${selMonth}/${selYear} cho ${name}? Số lương lúc này sẽ được lưu lại.`)) return;
     try { await workforce('close_month', { year: selYear, month: selMonth, staff_id: staffId }); } catch (err) { return alert(err.message); }
@@ -2696,7 +2706,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             </div>
                           );
                         })()}
-                        {isAdmin && <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} />}
+                        {isAdmin && <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onReopen={reopenOne} onPaid={markPaid} canClose={hasPay(s.id) || c.net !== 0} />}
                         {isAdmin && cardOpen && (
                           <button
                             onClick={() => setExpandedSalaryStaff(expandedSalaryStaff === s.id ? null : s.id)}
@@ -2749,7 +2759,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             </td>
                             {isAdmin && <td><button onClick={() => setExpandedSalaryStaff(expandedSalaryStaff === s.id ? null : s.id)}
                               style={{ fontSize: '0.75rem', padding: '3px 10px', background: expandedSalaryStaff === s.id ? '#dbeafe' : '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', color: '#1d4ed8', whiteSpace: 'nowrap' }}>{expandedSalaryStaff === s.id ? '▴ Ẩn' : '✏️ Sửa'}</button>
-                              <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onPaid={markPaid} compact /></td>}
+                              <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onReopen={reopenOne} onPaid={markPaid} canClose={hasPay(s.id) || c.net !== 0} compact /></td>}
                           </tr>
                           {detail?.id === s.id && (
                             <tr><td colSpan="15" style={{ padding: 0, borderBottom: `2px solid ${detail.kind === 'fines' ? '#fca5a5' : '#93c5fd'}` }}>{detailPanel(s, detail.kind)}</td></tr>
