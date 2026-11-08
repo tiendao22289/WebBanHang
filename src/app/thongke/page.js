@@ -8,8 +8,9 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle, Banknote, BarChart3, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight,
-  Clock, CreditCard, Gift, LogOut, NotebookPen, RefreshCw, ShieldAlert, Users, UtensilsCrossed, Wallet,
+  Clock, CreditCard, Gift, ListChecks, LogOut, NotebookPen, RefreshCw, ShieldAlert, Users, UtensilsCrossed, Wallet,
 } from 'lucide-react';
+import { workforce } from '@/lib/staffApi';
 
 const vnToday = () => new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
 const vnHour = () => new Date(Date.now() + 7 * 3600000).getUTCHours();
@@ -230,7 +231,7 @@ const minutesText = m => (m >= 60 ? `${Math.floor(m / 60)} giờ${m % 60 ? ` ${m
 const num = n => String(n ?? 0).replace('.', ',');
 
 // Nhân sự & lương của tháng đang xem: quỹ lương, so với doanh thu, ai hay trễ / quên ra ca, việc chờ duyệt.
-function StaffReport({ date, monthRevenue }) {
+function StaffReport({ date, monthRevenue, onApprove }) {
   const year = Number(date.slice(0, 4)), month = Number(date.slice(5, 7));
   const [data, setData] = useState(null);
   const [failed, setFailed] = useState(false);
@@ -260,7 +261,7 @@ function StaffReport({ date, monthRevenue }) {
       <div><span>Quỹ lương (lương + tăng ca + thưởng)</span><b>{money(t.gross)}</b></div>
       <div><span>So với doanh thu tháng</span><b>{ratio === null ? '—' : `${ratio}%`}</b></div>
       <div><span>Đã ứng</span><b>{money(t.advances)}</b>{(t.fines > 0 || t.bonuses > 0) && <small>{[t.bonuses > 0 && `thưởng ${money(t.bonuses)}`, t.fines > 0 && `phạt ${money(t.fines)}`].filter(Boolean).join(' · ')}</small>}</div>
-      <div><span>Chờ bạn duyệt</span><b className={pending ? 'warn' : ''}>{pending}</b></div>
+      <div><span>Chờ bạn duyệt</span><b className={pending ? 'warn' : ''}>{pending}</b>{pending > 0 && onApprove && <button type="button" className="tk-link-btn" onClick={onApprove}>Duyệt ngay →</button>}</div>
     </div>
     {watch.length > 0 && <ul className="tk-warns" style={{ marginBottom: 10 }}>{watch.map(w => <li key={w}>{w}</li>)}</ul>}
     {people.length ? <ul className="tk-people">{people.map(p => {
@@ -408,7 +409,7 @@ function PromoCard({ loss, range }) {
 }
 
 // Nhân viên trong ngày: ai làm giờ nào, bao nhiêu giờ, trễ / sớm / quên ra ca, cảnh báo khi quét, việc chờ duyệt.
-function StaffDayCard({ staff }) {
+function StaffDayCard({ staff, onApprove }) {
   if (!staff) return null;
   const totalHours = Math.round(staff.people.reduce((a, p) => a + p.hours, 0) * 10) / 10;
   const late = staff.people.filter(p => p.flags.late).length;
@@ -448,7 +449,7 @@ function StaffDayCard({ staff }) {
         {staff.fixes.map((f, i) => <li key={`f${i}`}><span className="tk-cell-main"><b>{f.name}</b><small>xin sửa giờ chấm công{f.reason ? ` — ${f.reason}` : ''}</small></span></li>)}
         {staff.outside.map(o => <li key={`o${o.id}`}><span className="tk-cell-main"><b>{o.name}</b><small>{minutes(o.minutes)} ngoài ca chưa tính lương</small></span></li>)}
       </ul>
-      <a className="tk-link" href="/admin/payroll">Mở trang Lương để duyệt →</a>
+      {onApprove && <button type="button" className="tk-link tk-link-btn" onClick={onApprove}>Duyệt ngay →</button>}
     </div>}
     {(staff.selfFines || []).length > 0 && <div className="tk-sub">
       <h3>🙋 Nhân viên tự ghi lỗi</h3>
@@ -683,6 +684,7 @@ const SECTIONS = [
   ['promo', 'Khuyến mãi', Gift],
   ['staff', 'Nhân viên', Users],
   ['notes', 'Sổ tay', NotebookPen],
+  ['approve', 'Duyệt', ListChecks],
 ];
 function SectionBar({ tab, onPick, badges }) {
   return <nav className="tk-tabbar" aria-label="Các mục">
@@ -707,12 +709,153 @@ const sectionBadges = (report, period) => {
 };
 const NoData = ({ text }) => <div className="tk-empty-state"><CalendarDays size={28} /><p>{text}</p></div>;
 
+// ── Mục Duyệt: mọi việc chờ chủ quán quyết định, bấm duyệt ngay tại đây (không cần sang trang Lương).
+// Từ chối / bỏ qua bấm 2 lần (lần đầu nút đổi thành "Bấm lần nữa"), không hỏi bằng hộp thoại.
+const dayText = d => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}` : '');
+const timeText = ts => (ts ? new Date(new Date(ts).getTime() + 7 * 3600000).toISOString().slice(11, 16) : '—');
+const dayTimeText = ts => (ts ? `${dayText(new Date(new Date(ts).getTime() + 7 * 3600000).toISOString().slice(0, 10))} ${timeText(ts)}` : '—');
+const digits = v => Number(String(v ?? '').replace(/\D/g, '')) || 0;
+const moneyInput = v => { const n = String(v ?? '').replace(/\D/g, ''); return n ? Number(n).toLocaleString('vi-VN') : ''; };
+
+// Khối dùng trong mục Duyệt (định nghĩa ngoài ApprovePanel để ô nhập tiền không bị dựng lại mỗi lần gõ).
+function ApBtn({ k, tone = 'ok', onClick, children, busy, armed }) {
+  return <button type="button" className={`tk-ap-btn ${tone}${armed === k ? ' armed' : ''}`} disabled={!!busy} onClick={onClick}>
+    {busy === k ? 'Đang lưu…' : armed === k ? 'Bấm lần nữa' : children}</button>;
+}
+function ApItem({ title, lines = [], children }) {
+  return <li className="tk-ap">
+    <div className="tk-ap-main"><b>{title}</b>{lines.filter(Boolean).map((l, i) => <small key={i}>{l}</small>)}</div>
+    <div className="tk-ap-actions">{children}</div>
+  </li>;
+}
+function ApSection({ icon, title, list, children }) {
+  return list.length ? <Card icon={icon} title={title} aside={`${list.length}`}><ul className="tk-ap-list">{children}</ul></Card> : null;
+}
+
+function ApprovePanel({ inbox, failed, onReload, onChanged }) {
+  const [busy, setBusy] = useState('');
+  const [armed, setArmed] = useState('');
+  const [amounts, setAmounts] = useState({});
+  const [note, setNote] = useState(null);
+  if (failed) return <div className="tk-alert" role="alert">Không tải được danh sách chờ duyệt.<button onClick={onReload}>Thử lại</button></div>;
+  if (!inbox) return <Skeleton />;
+  const act = async (key, action, body, done) => {
+    if (busy) return;
+    setBusy(key); setArmed('');
+    try {
+      await workforce(action, body);
+      setNote({ ok: true, text: done });
+      await onChanged();
+    } catch (err) { setNote({ ok: false, text: err.message }); }
+    finally { setBusy(''); }
+  };
+  // Nút bấm 2 lần: lần đầu chỉ "lên cò" 5 giây.
+  const twice = (key, run) => () => {
+    if (armed === key) { run(); return; }
+    setArmed(key);
+    setTimeout(() => setArmed(a => (a === key ? '' : a)), 5000);
+  };
+  const amountOf = (key, fallback) => amounts[key] ?? moneyInput(fallback);
+  const amountBox = (key, fallback, label = 'Tiền') => <input className="tk-ap-amt" inputMode="numeric" placeholder={label} aria-label={label} value={amountOf(key, fallback)}
+    onChange={e => setAmounts(m => ({ ...m, [key]: moneyInput(e.target.value) }))} />;
+  const { requests = [], fixes = [], extras = [], claims = [], peers = [], fines = [], unpriced = [], bonuses = [] } = inbox;
+  return <>
+    {note && <div className={`tk-ap-note ${note.ok ? 'ok' : 'bad'}`} role="status" onClick={() => setNote(null)}>{note.ok ? '✅' : '⚠'} {note.text}</div>}
+    {!inbox.count && <p className="tk-good tk-ap-empty"><CheckCircle2 size={18} /> Không có việc nào chờ bạn duyệt.</p>}
+
+    <ApSection icon={Wallet} title="Chi hộ quán" list={claims}>
+      {claims.map(c => <ApItem key={c.id} title={`${c.name} · ${c.item} · ${money(c.amount)}`}
+        lines={[`Chi ngày ${dayText(c.spent_on)} · muốn ${c.payout === 'cash' ? '💵 lấy tiền mặt' : '💰 cộng vào lương'}`, c.note]}>
+        <ApBtn busy={busy} armed={armed} k={`c${c.id}`} onClick={() => act(`c${c.id}`, 'decide_claim', { id: c.id, status: 'approved' }, `Đã duyệt chi hộ của ${c.name}, vào Sổ thu chi.`)}>
+          {c.payout === 'cash' ? '✓ Duyệt · đưa tiền' : '✓ Duyệt · cộng lương'}</ApBtn>
+        {c.payout === 'salary' && <ApBtn busy={busy} armed={armed} k={`cc${c.id}`} tone="soft" onClick={() => act(`cc${c.id}`, 'decide_claim', { id: c.id, status: 'approved', cash: true }, `Đã duyệt, đưa tiền mặt cho ${c.name}.`)}>💵 Đưa tiền mặt</ApBtn>}
+        <ApBtn busy={busy} armed={armed} k={`cr${c.id}`} tone="no" onClick={twice(`cr${c.id}`, () => act(`cr${c.id}`, 'decide_claim', { id: c.id, status: 'rejected' }, 'Đã từ chối khoản chi.'))}>Từ chối</ApBtn>
+      </ApItem>)}
+    </ApSection>
+
+    <ApSection icon={Banknote} title="Ứng lương · Báo nghỉ" list={requests}>
+      {requests.map(r => <ApItem key={r.id} title={`${r.name} · ${r.type === 'advance' ? `xin ứng ${money(r.amount)}` : `báo nghỉ ${r.days} ngày`}`}
+        lines={[r.type === 'absent' && r.from ? `Nghỉ ${dayText(r.from)}${r.to && r.to !== r.from ? ` – ${dayText(r.to)}` : ''}` : null, r.reason, `Gửi lúc ${dayTimeText(r.created_at)}`]}>
+        <ApBtn busy={busy} armed={armed} k={`r${r.id}`} onClick={() => act(`r${r.id}`, 'decide_request', { id: r.id, status: 'approved' }, `Đã duyệt đơn của ${r.name}.`)}>✓ Duyệt</ApBtn>
+        <ApBtn busy={busy} armed={armed} k={`rr${r.id}`} tone="no" onClick={twice(`rr${r.id}`, () => act(`rr${r.id}`, 'decide_request', { id: r.id, status: 'rejected' }, 'Đã từ chối đơn.'))}>Từ chối</ApBtn>
+      </ApItem>)}
+    </ApSection>
+
+    <ApSection icon={Clock} title="Xin sửa giờ chấm công" list={fixes}>
+      {fixes.map(f => <ApItem key={f.id} title={f.name}
+        lines={[f.current ? `Đang ghi: vào ${dayTimeText(f.current.clock_in)} → ra ${f.current.clock_out ? timeText(f.current.clock_out) : 'chưa ra'}` : null,
+          `Xin sửa: ${f.clock_in ? `vào ${dayTimeText(f.clock_in)} ` : ''}${f.clock_out ? `ra ${dayTimeText(f.clock_out)}` : ''}`, f.reason && `Lý do: ${f.reason}`]}>
+        <ApBtn busy={busy} armed={armed} k={`f${f.id}`} onClick={() => act(`f${f.id}`, 'decide_fix', { id: f.id, status: 'approved' }, `Đã sửa giờ cho ${f.name}.`)}>✓ Sửa giờ</ApBtn>
+        <ApBtn busy={busy} armed={armed} k={`fr${f.id}`} tone="no" onClick={twice(`fr${f.id}`, () => act(`fr${f.id}`, 'decide_fix', { id: f.id, status: 'rejected' }, 'Đã từ chối đơn sửa giờ.'))}>Từ chối</ApBtn>
+      </ApItem>)}
+    </ApSection>
+
+    <ApSection icon={Clock} title="Giờ ngoài ca chờ tính" list={extras}>
+      {extras.map(x => <ApItem key={x.attendance_id} title={`${x.name} · ${minutes(x.early_minutes + x.stay_minutes)}`}
+        lines={[`Ca ${dayText(x.date)}: vào ${timeText(x.clock_in)}${x.early_minutes ? ` (sớm ${minutes(x.early_minutes)})` : ''} → ra ${timeText(x.clock_out)}${x.stay_minutes ? ` (ở lại ${minutes(x.stay_minutes)})` : ''}`]}>
+        <ApBtn busy={busy} armed={armed} k={`x${x.attendance_id}`} onClick={() => act(`x${x.attendance_id}`, 'decide_extra', { attendance_id: x.attendance_id, status: 'approved' }, 'Đã cho tính giờ ngoài ca.')}>✓ Cho tính</ApBtn>
+        <ApBtn busy={busy} armed={armed} k={`xr${x.attendance_id}`} tone="no" onClick={twice(`xr${x.attendance_id}`, () => act(`xr${x.attendance_id}`, 'decide_extra', { attendance_id: x.attendance_id, status: 'rejected' }, 'Không tính giờ ngoài ca.'))}>Không tính</ApBtn>
+      </ApItem>)}
+    </ApSection>
+
+    <ApSection icon={ShieldAlert} title="Báo lỗi đồng nghiệp" list={peers}>
+      {peers.map(r => { const k = `p${r.id}`; return <ApItem key={r.id} title={`${r.name} · ${r.reason}`}
+        lines={[`Ngày ${dayText(r.date)} · người báo: ${r.reporter} (chỉ bạn thấy)`, r.note && `Ghi thêm: ${r.note}`]}>
+        {amountBox(k, r.suggested, 'Tiền phạt')}
+        <ApBtn busy={busy} armed={armed} k={k} tone="bad" onClick={() => act(k, 'decide_peer', { id: r.id, status: 'approved', amount: digits(amountOf(k, r.suggested)) }, `Đã ghi phạt ${r.name}.`)}>
+          {digits(amountOf(k, r.suggested)) ? `✓ Phạt ${money(digits(amountOf(k, r.suggested)))}` : '✓ Ghi lỗi'}</ApBtn>
+        <ApBtn busy={busy} armed={armed} k={`pr${r.id}`} tone="no" onClick={twice(`pr${r.id}`, () => act(`pr${r.id}`, 'decide_peer', { id: r.id, status: 'rejected' }, 'Đã bỏ qua lần báo lỗi.'))}>Bỏ qua</ApBtn>
+      </ApItem>; })}
+    </ApSection>
+
+    <ApSection icon={AlertTriangle} title="Gợi ý phạt từ chấm công" list={fines}>
+      {fines.map(x => { const k = `g${x.attendance_id}${x.kind}`; return <ApItem key={k} title={`${x.name} · ${x.kind === 'late' ? `trễ ${minutes(x.minutes)}` : 'quên bấm ra ca'}`}
+        lines={[`Ngày ${dayText(x.day)}${x.kind === 'forgot' && x.clock_out ? ` · máy tự ra ca lúc ${timeText(x.clock_out)}` : ''}`]}>
+        {amountBox(k, x.suggested, 'Tiền phạt')}
+        <ApBtn busy={busy} armed={armed} k={k} tone="bad" onClick={() => { const amount = digits(amountOf(k, x.suggested)); if (!amount) { setNote({ ok: false, text: 'Nhập số tiền phạt.' }); return; }
+          act(k, 'decide_fine', { attendance_id: x.attendance_id, kind: x.kind, status: 'fined', amount }, `Đã phạt ${x.name}.`); }}>✓ Phạt</ApBtn>
+        <ApBtn busy={busy} armed={armed} k={`${k}s`} tone="no" onClick={twice(`${k}s`, () => act(`${k}s`, 'decide_fine', { attendance_id: x.attendance_id, kind: x.kind, status: 'skipped' }, 'Đã bỏ qua gợi ý.'))}>Bỏ qua</ApBtn>
+      </ApItem>; })}
+    </ApSection>
+
+    <ApSection icon={NotebookPen} title="Lỗi chưa định tiền" list={unpriced}>
+      {unpriced.map(v => { const k = `u${v.id}`; return <ApItem key={v.id} title={`${v.name} · ${v.reason}`}
+        lines={[[v.date && `Ngày ${dayText(v.date)}`, v.self && 'nhân viên tự ghi', v.note].filter(Boolean).join(' · ')]}>
+        {amountBox(k, 0, 'Tiền phạt')}
+        <ApBtn busy={busy} armed={armed} k={k} tone="bad" onClick={() => { const amount = digits(amountOf(k, 0)); if (!amount) { setNote({ ok: false, text: 'Nhập số tiền phạt.' }); return; }
+          act(k, 'edit_violation', { id: v.id, amount }, `Đã định tiền phạt cho ${v.name}.`); }}>✓ Lưu tiền phạt</ApBtn>
+      </ApItem>; })}
+    </ApSection>
+
+    <ApSection icon={Users} title="Thưởng chuyên cần" list={bonuses}>
+      {bonuses.map(b => { const k = `b${b.staff_id}${b.year}${b.month}`; return <ApItem key={k} title={`${b.name} · tháng ${b.month}/${b.year}`}
+        lines={['Cả tháng không trễ, không quên ra ca, đủ ngày công.']}>
+        {amountBox(k, b.suggested, 'Tiền thưởng')}
+        <ApBtn busy={busy} armed={armed} k={k} onClick={() => { const amount = digits(amountOf(k, b.suggested)); if (!amount) { setNote({ ok: false, text: 'Nhập số tiền thưởng.' }); return; }
+          act(k, 'decide_bonus', { staff_id: b.staff_id, year: b.year, month: b.month, amount }, `Đã duyệt thưởng cho ${b.name}.`); }}>✓ Duyệt thưởng</ApBtn>
+      </ApItem>; })}
+    </ApSection>
+    <p className="tk-caption tk-ap-foot">Duyệt ở đây giống hệt duyệt ở trang Lương. Chi hộ duyệt xong tự vào Sổ thu chi; phạt / thưởng vào lương tháng đó.</p>
+  </>;
+}
+
+
 export default function ThongKePage() {
   const [user, setUser] = useState(undefined); // undefined = đang kiểm tra
   const [sessionError, setSessionError] = useState('');
   const [date, setDate] = useState(null);
   const [period, setPeriod] = useState('day');
   const [tab, setTab] = useState('overview');
+  // Mục Duyệt: việc đang chờ chủ quán (máy chủ gom), số đỏ trên thanh menu.
+  const [inbox, setInbox] = useState(null);
+  const [inboxFailed, setInboxFailed] = useState(false);
+  const loadInbox = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/workforce?inbox=1', { cache: 'no-store' });
+      if (!res.ok) throw new Error(String(res.status));
+      setInbox(await res.json()); setInboxFailed(false);
+    } catch { setInboxFailed(true); }
+  }, []);
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -750,11 +893,12 @@ export default function ThongKePage() {
     if (!user || user.role !== 'admin' || !date) return;
     load(date, period);
   }, [user, date, period, load]);
+  useEffect(() => { if (user?.role === 'admin') loadInbox(); }, [user, loadInbox]);
   useEffect(() => {
     if (!user || user.role !== 'admin' || !date) return;
     window.history.replaceState(null, '', `/thongke?date=${date}${period === 'day' ? '' : `&p=${period}`}${tab === 'overview' ? '' : `&t=${tab}`}`);
   }, [user, date, period, tab]);
-  const pickTab = key => { setTab(key); window.scrollTo({ top: 0 }); };
+  const pickTab = key => { setTab(key); window.scrollTo({ top: 0 }); if (key === 'approve') loadInbox(); };
 
   async function logout() {
     await fetch('/api/admin/session', { method: 'DELETE' }).catch(() => {});
@@ -810,9 +954,13 @@ export default function ThongKePage() {
     <div className="tk-shell">
       {error && <div className="tk-alert" role="alert">{error}<button onClick={() => load(date, period)}>Thử lại</button></div>}
       {!error && report?.view === period && report?.date === date && report.error && <div className="tk-empty-state"><CalendarDays size={32} /><p>{report.error}</p></div>}
-      {!ready && !error && !(report?.view === period && report?.date === date && report.error) && <Skeleton />}
+      {tab !== 'approve' && !ready && !error && !(report?.view === period && report?.date === date && report.error) && <Skeleton />}
 
-      {ready && period === 'day' && <div className={loading ? 'tk-content dim' : 'tk-content'}>
+      {tab === 'approve' && <div className="tk-content">
+        <ApprovePanel inbox={inbox} failed={inboxFailed} onReload={loadInbox} onChanged={async () => { await loadInbox(); load(date, period); }} />
+      </div>}
+
+      {tab !== 'approve' && ready && period === 'day' && <div className={loading ? 'tk-content dim' : 'tk-content'}>
         {tab === 'overview' && <>
           <Hero date={date} summary={report.summary} compare={report.compare} trend={report.trend || []} onPick={setDate} />
           <DayKpis summary={report.summary} />
@@ -828,7 +976,7 @@ export default function ThongKePage() {
           <PromoCard loss={report.loss} />
           <LossCard loss={report.loss} />
         </> : <NoData text="Chưa đọc được khuyến mãi trong ngày." />)}
-        {tab === 'staff' && (report.staff ? <StaffDayCard staff={report.staff} /> : <NoData text="Chưa đọc được chấm công trong ngày." />)}
+        {tab === 'staff' && (report.staff ? <StaffDayCard staff={report.staff} onApprove={() => pickTab('approve')} /> : <NoData text="Chưa đọc được chấm công trong ngày." />)}
         {tab === 'notes' && (report.notes ? <NotesDayCard notes={report.notes} /> : <NoData text="Chưa đọc được Sổ tay trong ngày." />)}
         <footer className="tk-foot">
           {loadedAt && <span>Cập nhật {loadedAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>}
@@ -836,7 +984,7 @@ export default function ThongKePage() {
         </footer>
       </div>}
 
-      {ready && period !== 'day' && <div className={loading ? 'tk-content dim' : 'tk-content'}>
+      {tab !== 'approve' && ready && period !== 'day' && <div className={loading ? 'tk-content dim' : 'tk-content'}>
         {tab === 'overview' && <>
           <PeriodHero data={report} onPick={openDay} />
           {report.wagesMissing && <div className="tk-alert" role="status">Chưa đọc được chấm công — lãi chưa trừ lương<button onClick={() => load(date, period)}>Tải lại</button></div>}
@@ -855,7 +1003,7 @@ export default function ThongKePage() {
         </> : <NoData text="Chưa đọc được khuyến mãi trong kỳ." />)}
         {tab === 'staff' && (report.staff || period === 'month' ? <>
           <StaffRangeCard staff={report.staff} label={rangeLabel} />
-          {period === 'month' && <StaffReport date={date} monthRevenue={report.totals.revenue} />}
+          {period === 'month' && <StaffReport date={date} monthRevenue={report.totals.revenue} onApprove={() => pickTab('approve')} />}
         </> : <NoData text="Chưa đọc được chấm công trong kỳ." />)}
         {tab === 'notes' && (report.notes ? <NotesRangeCard notes={report.notes} label={rangeLabel} /> : <NoData text="Chưa đọc được Sổ tay trong kỳ." />)}
         <footer className="tk-foot">
@@ -864,6 +1012,6 @@ export default function ThongKePage() {
         </footer>
       </div>}
     </div>
-    <SectionBar tab={tab} onPick={pickTab} badges={ready ? sectionBadges(report, period) : {}} />
+    <SectionBar tab={tab} onPick={pickTab} badges={{ ...(ready ? sectionBadges(report, period) : {}), approve: inbox?.count || 0 }} />
   </main>;
 }
