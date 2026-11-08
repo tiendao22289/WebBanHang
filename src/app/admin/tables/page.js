@@ -19,6 +19,7 @@ import { getTableGroupOrders, OPEN_BILL_STATUSES, representativeBill, shopDaySta
 import { promoGiftStatus } from '@/lib/promoGifts.mjs';
 import { isPrintJobBad, isUnresolvedBadJob } from '@/lib/printJobStatus.mjs';
 import { NO_DRAFT, updateDraftOf, addDraftLine, decreaseDraftLine, setDraftItemTotal, removeSentLines } from '@/lib/draftCart.mjs';
+import { customerCartsByTable, customerCartsFromServer, idleMinutesText } from '@/lib/customerCartAlert.mjs';
 import { resolvePrintCategory, isKitchenItem, unsentKitchenItems, nextKitchenCheckIn } from '@/lib/kitchenTicket.mjs';
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
@@ -401,6 +402,9 @@ export default function TablesPage() {
   const [printToast, setPrintToast] = useState(''); // '' | 'sending' | 'ok' | 'err'
   // ── Ưu đãi đánh giá Google Maps ──
   const [reviewRequests, setReviewRequests] = useState([]); // các yêu cầu đang chờ duyệt hôm nay
+  // Giỏ khách chọn trên điện thoại chưa gửi (lib/customerCartAlert.mjs): 🛒 trên bàn, để yên 5 phút thì chớp vàng.
+  const [customerCarts, setCustomerCarts] = useState([]);
+  const [cartClock, setCartClock] = useState(() => Date.now());
   const [luckySpins, setLuckySpins] = useState([]);         // lượt quay HÔM NAY chưa vào bill (badge trên thẻ bàn) — /api/admin/lucky-status
   const [luckyModal, setLuckyModal] = useState(null);       // { hostTableId, tableNumber } đang xem chi tiết lượt quay
   const [luckyGrantBusy, setLuckyGrantBusy] = useState(null); // spinId đang cấp quà tay
@@ -1852,6 +1856,55 @@ export default function TablesPage() {
     setReviewRequests(data || []);
   }, []);
 
+  // ── Giỏ khách chưa gửi: realtime kênh riêng (bảng chưa cài cũng không làm hỏng kênh chính),
+  //    hỏi lại mỗi 30 giây cho chắc, đồng hồ 15 giây để bàn chuyển sang chớp vàng đúng lúc. ──
+  const fetchCustomerCarts = useCallback(async () => {
+    const { data, error } = await supabase.rpc('get_customer_carts');
+    if (error) {
+      if (!['PGRST202', '42883', '42P01'].includes(error.code)) console.warn('[customerCarts]', error.message);
+      return;
+    }
+    const now = Date.now();
+    setCustomerCarts(customerCartsFromServer(data, now));
+    setCartClock(now);
+  }, []);
+  useEffect(() => {
+    let timer = null;
+    const refetch = () => { clearTimeout(timer); timer = setTimeout(fetchCustomerCarts, 400); };
+    fetchCustomerCarts();
+    const channel = supabase
+      .channel(`customer-carts-${Date.now()}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'customer_cart_drafts' }, refetch)
+      .subscribe();
+    const poll = setInterval(() => { if (document.visibilityState === 'visible') fetchCustomerCarts(); }, 30000);
+    const onVisible = () => { if (document.visibilityState === 'visible') fetchCustomerCarts(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(poll);
+      document.removeEventListener('visibilitychange', onVisible);
+      supabase.removeChannel(channel);
+    };
+  }, [fetchCustomerCarts]);
+  useEffect(() => {
+    if (customerCarts.length === 0) return undefined;
+    const tick = setInterval(() => setCartClock(Date.now()), 15000);
+    return () => clearInterval(tick);
+  }, [customerCarts.length]);
+  const cartsByTable = useMemo(() => customerCartsByTable(customerCarts, cartClock), [customerCarts, cartClock]);
+
+  // Nhân viên đã nhắc khách (hoặc đã gọi món giúp) → tắt báo của bàn; khách sửa giỏ thì báo lại.
+  async function dismissCustomerCart(table) {
+    setCustomerCarts(prev => prev.filter(c => c.tableId !== table.id));
+    const { error } = await supabase.rpc('dismiss_customer_carts', { p_table_id: table.id });
+    if (error) {
+      fetchCustomerCarts();
+      Swal.fire({ title: 'Chưa tắt được báo', text: error.message, icon: 'error', toast: true, position: 'top-end', showConfirmButton: false, timer: 3000 });
+      return;
+    }
+    Swal.fire({ title: `Đã tắt báo B${table.table_number}`, text: 'Khách sửa giỏ thì sẽ báo lại.', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2500 });
+  }
+
   // Cấu hình KM "mua N tặng 1" + danh sách món tặng — tải 1 lần lúc vào trang,
   // để tính "bàn đã đủ điều kiện nhận quà chưa" ngay trên lưới bàn.
   const fetchPromoAndGifts = useCallback(async () => {
@@ -2889,7 +2942,10 @@ export default function TablesPage() {
   }
 
   const availableCount = tables.filter(t => t.status === 'available' && t.table_type !== 'takeaway').length;
-  const occupiedCount = tables.filter(t => t.status === 'occupied' && t.table_type !== 'takeaway').length;
+  // Bàn trống mà khách đã chọn món trên điện thoại (chưa gửi lần nào) cũng tính là đang dùng, để lọc
+  // "Sử dụng" vẫn thấy 🛒 / "Khách quên gửi món".
+  const isTableInUse = t => t.status === 'occupied' || !!cartsByTable[t.id];
+  const occupiedCount = tables.filter(t => isTableInUse(t) && t.table_type !== 'takeaway').length;
 
   const fetchTakeawayOrders = async () => {
     const takeawayTable = tables.find(t => t.table_type === 'takeaway');
@@ -2978,7 +3034,7 @@ export default function TablesPage() {
         const takeawayTable = tables.find(t => t.table_type === 'takeaway');
         const filteredTables = tables.filter(t => {
           if (t.table_type === 'takeaway') return false; // always shown as pinned card
-          if (filterTab === 'OCCUPIED') return t.status === 'occupied';
+          if (filterTab === 'OCCUPIED') return isTableInUse(t);
           if (filterTab === 'EMPTY') return t.status !== 'occupied';
           return true;
         });
@@ -3005,6 +3061,8 @@ export default function TablesPage() {
           // Cộng dồn orders của cả nhóm gộp (host + satellites) để hiển thị tổng tiền chính xác
           const tableBills = getTableGroupOrders(table, tables, orders);
           const isKitchenAlerting = !!kitchenAlertTables[table.id] || !!kitchenAlertTables[hostIdCard];
+          // Giỏ khách chọn trên điện thoại chưa gửi (đúng bàn khách quét mã)
+          const custCart = cartsByTable[table.id] || null;
           // Yêu cầu ưu đãi — hiện ĐỦ mọi kênh đang chờ, chỉ trên thẻ bàn host của nhóm
           const tableReviewReqs = isMergedSatellite
             ? []
@@ -3038,7 +3096,7 @@ export default function TablesPage() {
           return (
             <div
               key={table.id}
-              className={`table-flow-card${isKitchenAlerting ? ' kitchen-alert-blink' : ''}`}
+              className={`table-flow-card${isKitchenAlerting ? ' kitchen-alert-blink' : custCart?.forgot ? ' cart-forgot-blink' : ''}`}
               onClick={() => { setSelectedTable(table); if (!isOccupied) setAddingToOrder('admin'); }}
               style={{
                 background: isKitchenAlerting ? 'linear-gradient(145deg, #ef4444, #b91c1c)' : groupColor ? groupColor.bg : isOccupied ? '#dbeafe' : 'white',
@@ -3118,6 +3176,14 @@ export default function TablesPage() {
                     🛒 {(draftsByTable[table.id] || []).reduce((s, d) => s + d.qty, 0)} chưa gửi
                   </div>
                 )}
+                {custCart && !custCart.forgot && (
+                  <div
+                    title={`Khách đang chọn ${custCart.count} món trên điện thoại, CHƯA bấm Gửi`}
+                    style={{ background: '#fef3c7', color: '#92400e', borderRadius: 100, padding: '3px 7px', display: 'flex', alignItems: 'center', gap: 3, border: '1px solid #fcd34d', fontSize: '0.65rem', fontWeight: 800, whiteSpace: 'nowrap' }}
+                  >
+                    🛒 {custCart.count} khách
+                  </div>
+                )}
                 {unsentKitchenCount > 0 && (
                   <div
                     className="review-req-blink"
@@ -3167,6 +3233,17 @@ export default function TablesPage() {
                 </div>
                 )}
               </div>
+              {custCart?.forgot && (
+                <button
+                  type="button"
+                  className="cart-forgot-bar"
+                  title="Khách để món trong giỏ mà chưa bấm Gửi — ra nhắc khách. Bấm để tắt báo (khách sửa giỏ sẽ báo lại)"
+                  onClick={(e) => { e.stopPropagation(); dismissCustomerCart(table); }}
+                >
+                  <span>🛒 Khách quên gửi {custCart.forgotCount} món · {idleMinutesText(custCart.idleMs)}</span>
+                  <span className="cart-forgot-off">Tắt</span>
+                </button>
+              )}
               {tableReviewReqs.length > 0 && (
                 <div style={{ display: 'flex', gap: 3, marginTop: 4, flexWrap: 'wrap' }}>
                   {tableReviewReqs.map(req => {
@@ -3888,6 +3965,7 @@ export default function TablesPage() {
                           const isSelected = selectedTable?.id === table.id;
                           const alertHostId = table.merged_with || table.id;
                           const isKitchenAlerting = !!kitchenAlertTables[table.id] || !!kitchenAlertTables[alertHostId];
+                          const custCart = cartsByTable[table.id] || null;
                           // Yêu cầu ưu đãi — hiện đủ mọi kênh, chỉ gắn lên thẻ bàn host của nhóm
                           const tableReviewReqs = isChild
                             ? []
@@ -3944,7 +4022,7 @@ export default function TablesPage() {
 
                           return (
                             <div key={table.id}
-                              className={isKitchenAlerting ? 'kitchen-alert-blink' : ''}
+                              className={isKitchenAlerting ? 'kitchen-alert-blink' : custCart?.forgot ? 'cart-forgot-blink' : ''}
                               onClick={() => { setSelectedTable(table); setDesktopView('menu'); }}
                               onMouseEnter={e => { if (!isSelected) { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = shadowHover; } }}
                               onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = isSelected ? '0 8px 24px rgba(29,78,216,0.3)' : '0 1px 4px rgba(0,0,0,0.07)'; }}
@@ -4062,6 +4140,25 @@ export default function TablesPage() {
                                   </div>
                                 ) : (
                                   <div style={{ fontSize: '0.68rem', color: isSelected ? '#93c5fd' : (isOccupied || isMergedGroup) ? 'rgba(255,255,255,0.4)' : '#cbd5e1', fontWeight: 500 }}>— trống —</div>
+                                )}
+                                {custCart && !custCart.forgot && (
+                                  <div
+                                    title={`Khách đang chọn ${custCart.count} món trên điện thoại, CHƯA bấm Gửi`}
+                                    style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fcd34d', borderRadius: 10, padding: '1px 6px', fontSize: '0.62rem', fontWeight: 800, lineHeight: 1.25, textAlign: 'center', maxWidth: '100%' }}
+                                  >
+                                    🛒 {custCart.count} khách
+                                  </div>
+                                )}
+                                {custCart?.forgot && (
+                                  <button
+                                    type="button"
+                                    className="cart-forgot-bar compact"
+                                    title={`Khách để ${custCart.forgotCount} món trong giỏ ${idleMinutesText(custCart.idleMs)} mà chưa bấm Gửi — ra nhắc khách. Bấm để tắt báo (khách sửa giỏ sẽ báo lại)`}
+                                    onClick={(e) => { e.stopPropagation(); dismissCustomerCart(table); }}
+                                  >
+                                    <span>🛒 Quên gửi {custCart.forgotCount} món</span>
+                                    <span className="cart-forgot-off">Tắt</span>
+                                  </button>
                                 )}
                               </div>
 

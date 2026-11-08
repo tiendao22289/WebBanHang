@@ -187,6 +187,67 @@
   }
 }
 
+/* Khách để món trong giỏ trên điện thoại ≥ 5 phút mà chưa gửi (lib/customerCartAlert.mjs) */
+.cart-forgot-blink {
+  animation: cartForgotBlink 0.9s ease-in-out infinite;
+}
+
+@keyframes cartForgotBlink {
+  0%, 100% {
+    outline: 3px solid rgba(250, 204, 21, 0.35);
+    box-shadow: 0 0 0 0 rgba(250, 204, 21, 0);
+  }
+  50% {
+    outline: 5px solid #facc15;
+    box-shadow: 0 0 18px 6px rgba(250, 204, 21, 0.75);
+  }
+}
+
+.cart-forgot-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 3px 4px 3px 7px;
+  border: 1px solid #eab308;
+  border-radius: 8px;
+  background: #fde047;
+  color: #713f12;
+  font-size: 0.64rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Ô bàn hẹp (danh sách bàn màn hình PC): chữ xuống dòng, nút Tắt ở dưới */
+.cart-forgot-bar.compact {
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  margin-top: 0;
+  padding: 2px 3px;
+  font-size: 0.58rem;
+  text-align: center;
+}
+
+.cart-forgot-off {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(113, 63, 18, 0.14);
+  font-size: 0.6rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cart-forgot-blink {
+    animation: none;
+    outline: 4px solid #facc15;
+  }
+}
+
 .table-card.occupied {
   background: white;
 }
