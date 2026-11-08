@@ -1556,6 +1556,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
       const cell = { verticalAlign: 'top', padding: '8px 10px', background: attention ? '#fffbeb' : undefined };
       const unitNote = !d || d.holiday || !list.some(a => a.clock_out) ? null
         : d.hourly ? small(`${durationText(d.inShiftMin)} trong ca`)
+          : d.halfDay ? small('½ ngày công: nghỉ nửa buổi — trừ trễ / về sớm sẽ còn dưới nửa ngày, nên tính nửa ngày, không trừ', '#b45309')
           : d.unit === 0.5 ? small(`½ ngày công: trong ca ${durationText(d.inShiftMin)}, chưa tới nửa ca (${durationText(Math.round(d.shiftMin / 2))})`, '#b45309')
             : d.unit === 0 ? small('0 ngày công: không có phút nào trong ca', '#b45309') : small('1 ngày công');
       return (
@@ -1592,12 +1593,12 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
             <td style={cell}>
               {f.late > 0 && (
                 <div style={{ color: '#c2410c' }}>Trễ {durationText(f.late)}
-                  {d?.lateCut > 0 ? <strong style={{ color: '#dc2626' }}> −{formatMoney(d.lateCut)}</strong> : d ? <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}> (không trừ)</span> : null}
+                  {d?.lateCut > 0 ? <strong style={{ color: '#dc2626' }}> −{formatMoney(d.lateCut)}</strong> : d ? <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}> {d.halfDay ? '(nghỉ nửa buổi, không trừ)' : '(không trừ)'}</span> : null}
                 </div>
               )}
               {f.leftEarly > 0 && (
                 <div style={{ color: '#c2410c' }}>Về sớm {durationText(f.leftEarly)}
-                  {d?.earlyCut > 0 ? <strong style={{ color: '#dc2626' }}> −{formatMoney(d.earlyCut)}</strong> : d ? <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}> (không trừ)</span> : null}
+                  {d?.earlyCut > 0 ? <strong style={{ color: '#dc2626' }}> −{formatMoney(d.earlyCut)}</strong> : d ? <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}> {d.halfDay ? '(nghỉ nửa buổi, không trừ)' : '(không trừ)'}</span> : null}
                 </div>
               )}
               {f.early > 0 && <div>Vào sớm {durationText(f.early)}</div>}
@@ -2195,7 +2196,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   {c.rule === 'days'
                     ? hourOnly(c)
                       ? 'Lương = số giờ có mặt trong ca × lương 1 giờ (đi trễ / về sớm thì không tính phần đó). Tăng ca là giờ vào sớm / ở lại ngoài ca.'
-                      : `Lương = ${monthPart(c) ? `lương cơ bản ÷ ${c.dayBase || c.standardDays}` : 'lương 1 ngày'} × số ngày công (ngày làm dưới nửa ca tính nửa ngày${monthPart(c) ? (c.dayBase ? '; ngày quán nghỉ cũng được tính công; tháng 31 ngày trừ bớt 1 ngày, tháng 2 cộng thêm, nên đi làm đủ tháng = đúng lương cơ bản' : '') : '; ngày không chấm công là nghỉ, không lương'}). Đi trễ bị trừ theo luật đi trễ của quán; về sớm từ 30 phút bị trừ theo số phút về sớm.${monthPart(c) && c.dayWage ? ' Ngày trả theo ngày: lương 1 ngày mỗi ngày công.' : ''}${c.hourly ? ' Ngày làm theo giờ: số giờ trong ca × lương 1 giờ.' : ''} Tăng ca là giờ vào sớm / ở lại ngoài ca.`
+                      : `Lương = ${monthPart(c) ? `lương cơ bản ÷ ${c.dayBase || c.standardDays}` : 'lương 1 ngày'} × số ngày công (ngày làm dưới nửa ca tính nửa ngày${monthPart(c) ? (c.dayBase ? '; ngày quán nghỉ cũng được tính công; tháng 31 ngày trừ bớt 1 ngày, tháng 2 cộng thêm, nên đi làm đủ tháng = đúng lương cơ bản' : '') : '; ngày không chấm công là nghỉ, không lương'}). Đi trễ bị trừ theo luật đi trễ của quán; về sớm từ 30 phút bị trừ theo số phút về sớm. Có mặt từ nửa ca trở lên mà trừ trễ / về sớm làm ngày đó còn dưới nửa ngày công thì tính nghỉ nửa buổi: nửa ngày công, không trừ.${monthPart(c) && c.dayWage ? ' Ngày trả theo ngày: lương 1 ngày mỗi ngày công.' : ''}${c.hourly ? ' Ngày làm theo giờ: số giờ trong ca × lương 1 giờ.' : ''} Tăng ca là giờ vào sớm / ở lại ngoài ca.`
                     : 'Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca là giờ làm quá 8 tiếng mỗi ngày.'}
                   {!c.locked && ' Số còn thay đổi tới khi chủ quán chốt lương cuối tháng.'}
                 </div>

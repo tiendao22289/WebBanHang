@@ -10,6 +10,9 @@
  *   ÷ 26: quán chỉ nghỉ 2 ngày một tháng, đi làm đủ được 30–31 công, hơn lương cơ bản), tăng ca = giờ ngoài ca (vào sớm / ở lại,
  *   tự tính từ AUTO_EXTRA_FROM trừ ca chủ bấm không tính) × giá tăng ca. Đơn báo nghỉ chỉ để ghi
  *   lý do, không trừ thêm.
+ *   Nghỉ nửa buổi (chủ chọn 2026-11-08): ngày có mặt từ nửa ca trở lên mà tiền trừ trễ / về sớm làm tiền ngày đó còn dưới
+ *   nửa ngày công thì tính nửa ngày công, không trừ trễ / về sớm (cả tiền cố định mỗi lần), không gợi ý phạt trễ — vd ca
+ *   13:30–01:30, vào 17:35: ½ ngày công thay vì 1 ngày công trừ 135.069đ còn ít hơn nửa ngày. Dưới nửa ca: như cũ.
  *   Đi trễ theo luật đi trễ (payroll_late_rules: mặc định cả quán hoặc riêng từng người): trễ quá số phút
  *   cho phép thì trừ số tiền cố định mỗi lần và / hoặc trừ đúng số phút trễ (tắt trừ tiền = được phép đi trễ). Về sớm:
  *   luật cùng dòng (cho phép về sớm bao nhiêu phút, trừ theo phút về sớm và / hoặc tiền cố định mỗi lần, tắt được); dòng chưa
@@ -179,7 +182,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
     const days = [...groupByWorkDay(sessions, rules).entries()].filter(([day]) => day.slice(0, 7) === key);
     const workDays = days.filter(([, list]) => list.some(s => s.clock_out)).length;
     const standardDays = monthDays(year, month), dayRate = base / DAY_BASE;
-    // lateFree: ngày đi trễ mà luật tắt trừ tiền (được phép đi trễ) — không gợi ý phạt trễ.
+    // lateFree: ngày đi trễ mà luật tắt trừ tiền (được phép đi trễ) hoặc tính nghỉ nửa buổi — không gợi ý phạt trễ.
     const earlyList = [], lateList = [], daily = [], lateFree = [];
     let otMs = 0, dayUnits = 0, hourMin = 0, hourPay = 0, wageUnits = 0, wagePay = 0;
     // Ngày quán nghỉ: người được nhận lương ngày nghỉ (trong thời gian làm việc, trừ lúc đã nghỉ rồi đi làm lại; mặc định
@@ -199,7 +202,8 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
       // Đi làm đúng ngày quán nghỉ (chủ gọi vào dọn dẹp...): không trừ trễ / về sớm, và người được lương ngày nghỉ ít nhất
       // vẫn đủ 1 ngày công như ở nhà.
       const closedDay = closedSet.has(day), holidayFull = closedDay && holidayOk(day, rate, wage) && (base > 0 || !!rate || !!wage);
-      const worked = inShiftMs > 0 ? (inShiftMs >= (w.end - w.start) / 2 ? 1 : 0.5) : 0, unit = holidayFull ? 1 : worked;
+      const worked = inShiftMs > 0 ? (inShiftMs >= (w.end - w.start) / 2 ? 1 : 0.5) : 0;
+      let unit = holidayFull ? 1 : worked, halfDay = false;
       // Ngày công (cả ngày trả theo giờ) để xét thưởng chuyên cần và hiện số ngày đi làm.
       workUnits += unit;
       // Đi trễ so với giờ vào ca (đủ phút, kể cả trong số phút cho lệch của quán); quá số phút luật cho phép thì bị trừ.
@@ -248,8 +252,20 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
         lateFixed = fixedOf(full - cut);
         const earlyFixed = earlyFixedOf(full - cut - lateFixed);
         earlyCut += earlyFixed;
-        if (earlyCut > 0) earlyList.push({ day, minutes: flags.leftEarly, amount: earlyCut });
         pay = full - cut - lateFixed - earlyFixed;
+        // Nghỉ nửa buổi: có mặt từ nửa ca trở lên (1 ngày công) mà trừ trễ / về sớm làm ngày này còn dưới nửa ngày công → nửa ngày
+        // công, không trừ gì (không phạt cố định, không gợi ý phạt trễ). Ngày có mặt dưới nửa ca vẫn tính theo thời gian có mặt
+        // như cũ (tối đa nửa ngày) — đến ít phút không thành nửa ngày công.
+        if (unit === 1 && lateCut + earlyCut + lateFixed > 0 && pay < oneDay / 2) {
+          const drop = 0.5;
+          if (wage) { wageUnits -= drop; wagePay -= wage * drop; } else dayUnits -= drop;
+          workUnits -= drop;
+          unit = 0.5; halfDay = true;
+          lateCut = 0; earlyCut = 0; lateFixed = 0;
+          pay = oneDay / 2;
+          if (lateHit) lateFree.push(day);
+        }
+        if (earlyCut > 0) earlyList.push({ day, minutes: flags.leftEarly, amount: earlyCut });
       }
       // Tiền trừ vì đi trễ của ngày: phần theo phút + tiền cố định mỗi lần trễ.
       if (lateCut + lateFixed > 0) lateList.push({ day, minutes: rawLate, amount: lateCut + lateFixed, perMinute: lateCut, fixed: lateFixed });
@@ -260,7 +276,8 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
       const last = list[list.length - 1];
       // Ngày quán nghỉ không có trễ / về sớm (chủ gọi vào làm giờ nào cũng được).
       // unit: ngày công của ngày đó (1, 0,5 khi giờ trong ca chưa tới nửa ca, 0 khi không có phút nào trong ca); shiftMin: ca dài bao nhiêu phút.
-      daily.push({ day, in: list[0].clock_in, out: last.clock_out || null, hourly: !!rate, ...(wage ? { wage } : {}), ...(closedDay ? { closed: true } : {}),
+      // halfDay: nghỉ nửa buổi (trừ trễ / về sớm sẽ còn dưới nửa ngày công) — tính ½ ngày công, không trừ.
+      daily.push({ day, in: list[0].clock_in, out: last.clock_out || null, hourly: !!rate, ...(wage ? { wage } : {}), ...(closedDay ? { closed: true } : {}), ...(halfDay ? { halfDay: true } : {}),
         unit, shiftMin: Math.round((w.end - w.start) / 60000),
         early: flags.early, late: lateHit ? rawLate : closedDay ? 0 : flags.late, stay: flags.stayed, leftEarly: closedDay ? 0 : flags.leftEarly,
         inShiftMin: Math.round(inShiftMs / 60000), extraMin: Math.round(dayOtMs / 60000), extraAmt: Math.round(dayOtMs / HOUR * otRate),
