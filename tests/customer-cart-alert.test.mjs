@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import {
   CART_BELL_GAP_MS, CART_BELL_MAX_RINGS, CART_BELL_REPEAT_MS, CART_FORGOT_MS, CART_REMIND_MS, cartAlertItems,
-  cartMinutesText, createCartBell, createCartReminder, createCartReporter, customerCartsByTable, customerCartsFromServer,
+  cartMinutesShort, cartMinutesText, createCartBell, createCartReminder, createCartReporter, customerCartsByTable, customerCartsFromServer,
 } from '../src/lib/customerCartAlert.mjs';
 
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -268,8 +268,8 @@ test('table card says "N món · M phút" (not "khách"), blinks the whole card 
   const page = readFileSync(new URL('../src/app/admin/tables/page.js', import.meta.url), 'utf8');
   const css = readFileSync(new URL('../src/app/admin/tables/tables.css', import.meta.url), 'utf8');
   assert.doesNotMatch(page, /custCart\.count\}\s*khách/, 'số trong giỏ là số món, không phải số khách');
-  assert.equal(page.match(/🛒 \{custCart\.count\}&nbsp;món · \{cartMinutesText\(custCart\.ageMs\)\}/g)?.length, 2, 'ô bàn điện thoại + PC');
-  assert.equal(page.match(/Quên gửi \{custCart\.forgotCount\}&nbsp;món · \{cartMinutesText\(custCart\.ageMs\)\}/g)?.length, 2);
+  assert.equal(page.match(/🛒 \{custCart\.count\}&nbsp;món · \{cartMinutesText\(custCart\.ageMs\)\}/g)?.length, 1, 'ô bàn điện thoại');
+  assert.equal(page.match(/Quên gửi \{custCart\.forgotCount\}&nbsp;món · \{cartMinutesText\(custCart\.ageMs\)\}/g)?.length, 1);
   assert.equal(page.match(/onClick=\{\(\) => \{ quietCartBell\(table\.id\); setSelectedTable\(table\)/g)?.length, 2, 'mở bàn (điện thoại + PC) → thôi kêu');
   assert.match(page, /if \(ring\.length\) ringBell\(\);/, 'dùng lại chuông đơn mới của trang');
   assert.match(page, /\['touchend', 'click', 'keydown'\]/, 'chạm trang lần đầu thì mở tiếng');
@@ -280,6 +280,29 @@ test('table card says "N món · M phút" (not "khách"), blinks the whole card 
   for (const block of css.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g) || []) {
     assert.doesNotMatch(block, /cart-forgot-blink/, 'máy bật "giảm hiệu ứng" vẫn phải chớp');
   }
+});
+
+test('PC table grid: wide cart band one idea per line, Tắt on the band, and a chip while the Thực đơn tab hides the grid', () => {
+  const page = readFileSync(new URL('../src/app/admin/tables/page.js', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/admin/tables/tables.css', import.meta.url), 'utf8');
+  // Ô bàn PC ~66px: không còn viên chữ li ti vỡ 4 dòng; dải rộng hết ô, số món một dòng, số phút ngắn một dòng.
+  assert.doesNotMatch(page, /cart-forgot-bar compact/);
+  assert.match(page, /className="cart-pc-band"[\s\S]{0,400}<b>🛒 \{custCart\.count\}&nbsp;món<\/b>\s*<span>\{cartMinutesShort\(custCart\.ageMs\)\}<\/span>/);
+  assert.match(page, /className="cart-pc-band forgot"[\s\S]{0,300}onClick=\{\(e\) => \{ e\.stopPropagation\(\); quietCartBell\(table\.id\); dismissCustomerCart\(table\); \}\}[\s\S]{0,200}<b>QUÊN GỬI<\/b>/);
+  assert.match(css, /\.cart-pc-band \{[^}]*align-self: stretch;[^}]*margin: 0 -8px;/, 'tràn hết bề ngang ô (qua lề 8px của thân ô)');
+  // Bấm bàn trên PC tự sang tab Thực đơn (lưới bàn bị che) → bàn quên gửi hiện trên thanh nav, bấm = về Phòng bàn.
+  assert.match(page, /desktopView === 'menu' && tables\.some\(t => cartsByTable\[t\.id\]\?\.forgot\)/);
+  assert.match(page, /className="cart-nav-chip cart-forgot-blink"\s*onClick=\{\(\) => setDesktopView\('tables'\)\}/);
+});
+
+test('short minutes for the narrow PC card', () => {
+  const plain = ms => cartMinutesShort(ms).replace(/ /g, ' ');
+  assert.equal(plain(0), '<1p');
+  assert.equal(plain(59_999), '<1p');
+  assert.equal(plain(7 * 60_000 + 30_000), '7p');
+  assert.equal(plain(65 * 60_000), '1g 5p');
+  assert.equal(plain(NaN), '<1p');
+  assert.equal(cartMinutesShort(65 * 60_000), '1g 5p', 'không ngắt "1g" và "5p" ra 2 dòng');
 });
 
 // ── SQL ─────────────────────────────────────────────────────────────────────

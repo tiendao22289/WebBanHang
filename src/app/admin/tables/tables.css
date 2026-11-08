@@ -243,17 +243,6 @@
   margin-left: auto;
 }
 
-/* Ô bàn hẹp (danh sách bàn màn hình PC): chữ xuống dòng, nút Tắt ở dưới */
-.cart-forgot-bar.compact {
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-  margin-top: 0;
-  padding: 2px 3px;
-  font-size: 0.58rem;
-  text-align: center;
-}
-
 .cart-forgot-off {
   flex-shrink: 0;
   padding: 1px 6px;
@@ -279,10 +268,80 @@
   text-align: center;
 }
 
-.cart-forgot-mute.compact {
-  margin-top: 0;
-  padding: 1px 3px;
-  font-size: 0.56rem;
+/* Ô bàn màn hình PC (lưới 8 cột, ô chỉ ~66px ở màn 1366): dải giỏ khách rộng hết ô (tràn qua lề 8px
+   của thân ô), mỗi ý một dòng, chữ không vỡ vụn như viên nhỏ cũ. Chủ quán 2026-11-09. */
+.cart-pc-band {
+  align-self: stretch;
+  margin: 0 -8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 3px 2px;
+  border: 0;
+  border-top: 1px solid #fcd34d;
+  border-bottom: 1px solid #fcd34d;
+  background: #fef3c7;
+  color: #92400e;
+  font: inherit;
+  font-size: 0.66rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.cart-pc-band .cart-pc-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cart-pc-band b {
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+/* Quá 5 phút: nền nâu chữ trắng (đọc được cả lúc ô bàn chớp vàng), cả dải = nút Tắt */
+.cart-pc-band.forgot {
+  position: relative;
+  z-index: 1;
+  border-color: #713f12;
+  background: #92400e;
+  color: #fff;
+  cursor: pointer;
+}
+
+.cart-pc-band.forgot b:first-child {
+  font-size: 0.66rem;
+  letter-spacing: 0.03em;
+}
+
+.cart-pc-band.forgot .cart-forgot-off {
+  font-size: 0.64rem;
+  font-weight: 800;
+}
+
+.cart-pc-band.mute {
+  margin-top: -4px;
+  border: 1px dashed #b45309;
+  background: #fff;
+  font-size: 0.6rem;
+  font-weight: 800;
+  white-space: normal;
+  cursor: default;
+}
+
+/* Thanh nav PC: bàn quên gửi khi đang ở tab Thực đơn (lưới bàn bị che). Chớp cùng nhịp ô bàn. */
+.cart-nav-chip {
+  padding: 6px 14px;
+  border: 1.5px solid #a16207;
+  border-radius: 100px;
+  background: #fef9c3;
+  color: #713f12;
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .table-card.occupied {
