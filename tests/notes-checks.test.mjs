@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { missingBills, needsTripPhoto, notePriceAlert, priceAlert, priceAlertText, purchasePrices, usualPrice } from '../src/lib/notesChecks.mjs';
+import { missingBills, notePriceAlert, priceAlert, priceAlertText, purchasePrices, usualPrice } from '../src/lib/notesChecks.mjs';
 import { notesDayData, notesRangeData, notesReportMessages } from '../src/lib/notesReport.mjs';
 
 const note = (id, at, items, extra = {}) => ({ id, staff_id: 's1', note_type: 'expense', created_at: at, staff: { full_name: 'Thy' },
@@ -45,12 +45,10 @@ test('a saved note is compared with notes written before it, not with itself or 
   assert.equal(notePriceAlert(history[0], prices)(oc('230k')), null, 'the first purchases have nothing to compare with');
 });
 
-test('which notes need a photo: any priced market line, not Khác only', () => {
-  assert.equal(needsTripPhoto([oc('240k')]), true);
-  assert.equal(needsTripPhoto([{ name: 'Tiền rau', preset: true, price: '50k' }]), true);
-  assert.equal(needsTripPhoto([{ name: 'Tiền rau', preset: true, price: '' }, { name: 'Xăng xe', price: '50k', category: 'xang' }]), false);
-  assert.equal(needsTripPhoto([{ name: 'Ốc hương', price: '' }]), false, 'no price yet');
-  assert.equal(needsTripPhoto(undefined), false);
+test('which lines need a bill: priced ốc lines only, not rau / gia vị lump sums, Khác or unpriced lines', () => {
+  const lines = [oc('240k'), { name: 'Tiền rau', preset: true, price: '50k' }, { name: 'Xăng xe', price: '50k', category: 'xang' }, { name: 'Ốc hương', price: '' }];
+  assert.deepEqual(missingBills(lines).map(i => i.price), ['240k']);
+  assert.deepEqual(missingBills(undefined), []);
 });
 
 test('the owner sees the high price in the Zalo report and in /thongke', () => {
@@ -74,4 +72,19 @@ test('lines bought without a seller bill show the reason to the owner', () => {
   assert.deepEqual(day.notes[0].items[0].warnings, ['Không có bill: mối quen không viết bill']);
   assert.equal(day.summary.warnings, 1);
   assert.deepEqual(missingBills([oc('240k'), { ...oc('240k'), no_bill: 'x' }, { ...oc('240k'), bill_photo: 'p' }, { name: 'Tiền rau', preset: true, price: '50k' }]).length, 1);
+});
+
+test('/thongke gets each line\'s bill photo (and old scale photos) so the owner can open them', () => {
+  const range = { start: new Date('2026-10-22T17:00:00Z'), end: new Date('2026-10-23T17:00:00Z') };
+  const today = note('t', '2026-10-23T01:00:00Z', [
+    { ...oc('240k'), bill_photo: '2026-10/notebill-a.jpg', bill_from: 'gallery' },
+    { name: 'Sò điệp', qty: '3', price: '90k', bill_photo: '2026-10/notebill-a.jpg' },
+    { name: 'Mực', qty: '1', price: '200k', no_bill: 'mối quen' },
+  ], { amount: 950000 });
+  const day = notesDayData({ date: '2026-10-23', dayNotes: [today], allNotes: [today], payments: [], range });
+  assert.deepEqual(day.notes[0].items.map(i => [i.name, i.bill || null, i.billFrom || null]),
+    [['Ốc hương', '2026-10/notebill-a.jpg', 'gallery'], ['Sò điệp', '2026-10/notebill-a.jpg', null], ['Mực', null, null]]);
+  assert.equal(day.notes[0].photos, undefined, 'no scale photo on this note');
+  const old = { ...today, content: JSON.stringify({ ...JSON.parse(today.content), photos: ['2026-10/note-x.jpg', 42] }) };
+  assert.deepEqual(notesDayData({ date: '2026-10-23', dayNotes: [old], allNotes: [old], payments: [], range }).notes[0].photos, ['2026-10/note-x.jpg']);
 });

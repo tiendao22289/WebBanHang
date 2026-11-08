@@ -233,12 +233,18 @@ export function notesDayData({ date, dayNotes = [], allNotes = [], payments = []
     const funded = fundedBy.get(n.id) || 0;
     const carriedIn = sumOf(data.carried_in), carriedOut = sumOf(data.carried_out);
     const itemsTotal = noteTotals(named(data.items)).total;
+    const alertOf = notePriceAlert(n, prices);
+    // Ảnh bill của mối từng dòng (bill = đường dẫn ảnh; billFrom 'gallery' = ảnh chọn từ máy) và ảnh hàng
+    // trên cân của phiếu cũ — trang /thongke lấy link xem (photo_links) để chủ đối chiếu.
+    const billOf = i => (typeof i.bill_photo === 'string' ? { bill: i.bill_photo, ...(i.bill_from === 'gallery' ? { billFrom: 'gallery' } : {}) } : {});
+    const photos = (Array.isArray(data.photos) ? data.photos : []).filter(p => typeof p === 'string');
     return {
       id: n.id, at: n.created_at, who: nameOf(n), kind: '🛒 Đi chợ', given, carriedIn, carriedOut, saved, paidNow, debt: Number(n.debt) || 0, funded,
       // Dư (≥ 0, trả lại chủ) hoặc thiếu (< 0, người đi chợ bỏ thêm); null = không có tiền chủ đưa.
       left: given || carriedIn ? given + carriedIn - paidNow - funded : null,
       mismatch: Math.abs(saved - itemsTotal) >= 1000 ? { saved, items: itemsTotal } : null,
-      items: named(data.items).filter(i => lineTotal(i) || String(i.price || '').trim()).map(i => itemMoney(i, notePriceAlert(n, prices)(i))),
+      items: named(data.items).filter(i => lineTotal(i) || String(i.price || '').trim()).map(i => ({ ...itemMoney(i, alertOf(i)), ...billOf(i) })),
+      ...(photos.length ? { photos } : {}),
       note: String(data.note || '').replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200),
       edits: (data.history || []).filter(h => historyOnDay(h.ts, date)).map(h => ({ at: historyClock(h.ts), by: h.by || '', changes: String(h.changes || '').replace(/\n+/g, '; ') })),
     };

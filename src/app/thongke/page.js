@@ -8,9 +8,10 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle, Banknote, BarChart3, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight,
-  Clock, CreditCard, Gift, ListChecks, LogOut, NotebookPen, RefreshCw, ShieldAlert, Users, UtensilsCrossed, Wallet,
+  Clock, CreditCard, Gift, ListChecks, LogOut, NotebookPen, RefreshCw, ShieldAlert, Users, UtensilsCrossed, Wallet, X,
 } from 'lucide-react';
 import { workforce } from '@/lib/staffApi';
+import { useBackClose } from '@/lib/useBackClose';
 
 const vnToday = () => new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
 const vnHour = () => new Date(Date.now() + 7 * 3600000).getUTCHours();
@@ -529,20 +530,57 @@ function OwedList({ owed }) {
   </div>;
 }
 
+// Ảnh bill của mối (hoặc ảnh hàng của phiếu cũ) to cả màn hình, kèm các dòng hàng của tờ bill để đối chiếu
+// giá, số ký, thành tiền. Đóng bằng X hoặc nút Back của điện thoại.
+function PhotoViewer({ view, onClose }) {
+  useBackClose(true, onClose);
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const sum = view.lines.reduce((a, l) => a + (Number(l.total) || 0), 0);
+  return <div className="tk-photo" role="dialog" aria-label={view.title}>
+    <div className="tk-photo-head">
+      <div><b>{view.title}</b>{view.sub && <small>{view.sub}</small>}</div>
+      <button type="button" onClick={onClose} aria-label="Đóng"><X size={22} /></button>
+    </div>
+    {view.lines.length > 0 && <ul className="tk-photo-lines">
+      {view.lines.map((l, k) => <li key={k}><span>{l.name}<small>{[l.qty, l.price && `× ${l.price}`].filter(Boolean).join(' ')}</small></span><b>{money(l.total)}</b></li>)}
+      {view.lines.length > 1 && <li className="sum"><span>Cộng</span><b>{money(sum)}</b></li>}
+    </ul>}
+    <div className="tk-photo-img">
+      {view.url ? <img src={view.url} alt={view.title} /> : <p>Không mở được ảnh: ảnh đã quá 90 ngày, hoặc link hết hạn (tải lại trang).</p>}
+    </div>
+    {view.url && <div className="tk-photo-foot"><a href={view.url} target="_blank" rel="noreferrer">Mở ảnh riêng để phóng to</a></div>}
+  </div>;
+}
+
 // Sổ tay trong ngày: tổng, từng phiếu (từng món: trả đủ / nợ ai / còn nợ), dư thiếu tiền chủ đưa, trả nợ, sửa xoá.
+// Dòng có bill của mối: nút "🧾 Xem bill" mở ảnh kèm các dòng của tờ bill đó để chủ đối chiếu.
 function NotesDayCard({ notes }) {
   const [open, setOpen] = useState(null);
+  const [viewing, setViewing] = useState(null);
+  const closeViewer = useCallback(() => setViewing(null), []);
   if (!notes) return null;
   const s = notes.summary;
+  const links = notes.photo_links || {};
+  const showBill = (n, item) => {
+    const lines = n.items.filter(x => x.bill === item.bill);
+    setViewing({ url: links[item.bill] || null, lines, title: `🧾 Bill · ${lines.map(l => l.name).join(', ')}`,
+      sub: `${clockOf(n.at)} · ${n.who}${item.billFrom === 'gallery' ? ' · ảnh chọn từ máy (không chụp trực tiếp)' : ''}` });
+  };
+  const showPhoto = (n, path, k) => setViewing({ url: links[path] || null, lines: [], title: `📷 Ảnh hàng ${k + 1}`, sub: `${clockOf(n.at)} · ${n.who}` });
   return <Card icon={NotebookPen} title="Sổ tay trong ngày" aside={s.warnings ? <span className="tk-warn-text">⚠ {s.warnings} phiếu cần xem</span> : `${s.count} phiếu`}>
     <NotesTiles s={s} />
     {notes.notes.length ? <ul className="tk-notes">{notes.notes.map(n => {
       const isOpen = open === n.id;
       const warn = n.mismatch || n.items.some(i => i.warnings.length);
+      const billCount = new Set(n.items.map(i => i.bill).filter(Boolean)).size;
       return <li key={n.id} className={warn ? 'bad' : ''}>
         <button type="button" className="tk-note-head" onClick={() => setOpen(isOpen ? null : n.id)} aria-expanded={isOpen}>
           <span className="tk-cell-main"><b>{clockOf(n.at)} · {n.who}</b>
-            <small>{n.items.length ? `${n.items.length} món` : n.kind}{n.given ? ` · chủ đưa ${money(n.given)}` : ''}{n.debt ? ` · nợ ${money(n.debt)}` : ''}{warn ? ' · ⚠ cần xem' : ''}</small></span>
+            <small>{n.items.length ? `${n.items.length} món` : n.kind}{billCount ? ` · 🧾 ${billCount} bill` : ''}{n.given ? ` · chủ đưa ${money(n.given)}` : ''}{n.debt ? ` · nợ ${money(n.debt)}` : ''}{warn ? ' · ⚠ cần xem' : ''}</small></span>
           <span className="tk-cell-end"><b>{money(n.saved)}</b></span>
           <ChevronDown size={16} className={isOpen ? 'tk-chev on' : 'tk-chev'} />
         </button>
@@ -550,7 +588,9 @@ function NotesDayCard({ notes }) {
           {n.text && <p className="tk-note-text">{n.text}</p>}
           {n.items.length > 0 && <ul className="tk-items">{n.items.map((i, k) => <li key={k}>
             <span><b>{i.name}</b>{(i.qty || i.price) && <small>{[i.qty, i.price && `× ${i.price}`].filter(Boolean).join(' ')}</small>}
-              {i.warnings.map(w => <em key={w} className="tk-warn-text">⚠ {w}</em>)}</span>
+              {i.warnings.map(w => <em key={w} className="tk-warn-text">⚠ {w}</em>)}
+              {i.bill && <button type="button" className={`tk-bill-btn${i.billFrom === 'gallery' ? ' gallery' : ''}`} onClick={() => showBill(n, i)}>
+                🧾 Xem bill{i.billFrom === 'gallery' ? ' · ảnh có sẵn' : ''}</button>}</span>
             <span className="tk-item-end"><b>{money(i.total)}</b>
               {i.owed ? <Pill tone={i.left ? 'bad' : 'good'}>{i.left ? `nợ ${i.creditor || 'chưa ghi tên'} còn ${money(i.left)}` : `đã trả hết nợ ${i.creditor}`}</Pill> : <Pill tone="good">trả đủ</Pill>}</span>
           </li>)}</ul>}
@@ -558,6 +598,7 @@ function NotesDayCard({ notes }) {
             <span>Trả ngay {money(n.paidNow || 0)}{n.debt ? ` · nợ ${money(n.debt)}` : ''}{n.funded ? ` · trả nợ cũ ${money(n.funded)}` : ''}</span>
             {n.left !== null && n.left !== undefined && <b className={n.left >= 0 ? 'tk-good-text' : 'tk-bad-text'}>{n.left >= 0 ? `Dư ${money(n.left)} trả lại chủ` : `Thiếu ${money(-n.left)} (bỏ thêm)`}</b>}
           </div>
+          {n.photos?.length > 0 && <div className="tk-note-photos">{n.photos.map((p, k) => <button key={p} type="button" className="tk-bill-btn" onClick={() => showPhoto(n, p, k)}>📷 Ảnh hàng {k + 1}</button>)}</div>}
           {n.mismatch && <p className="tk-warn-box">⚠ Phiếu lệch tiền: tổng ghi {money(n.mismatch.saved)} nhưng các món cộng lại {money(n.mismatch.items)}.</p>}
           {n.note && <p className="tk-note-text">Ghi chú: {n.note}</p>}
           {n.edits?.length > 0 && <ul className="tk-edits">{n.edits.map((e, k) => <li key={k}>✎ {e.at} {e.by}: {e.changes}</li>)}</ul>}
@@ -574,6 +615,7 @@ function NotesDayCard({ notes }) {
     </ul></div>}
     <OwedList owed={notes.owed} />
     <a className="tk-link" href="/admin/notes">Mở Sổ tay →</a>
+    {viewing && <PhotoViewer view={viewing} onClose={closeViewer} />}
   </Card>;
 }
 

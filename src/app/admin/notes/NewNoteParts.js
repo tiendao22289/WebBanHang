@@ -7,7 +7,7 @@
 import { X } from 'lucide-react';
 import MenuNameInput from '@/lib/MenuNameInput';
 import { lineWarnings, parsePrice, parseQty } from '@/lib/notesMath.mjs';
-import { MAX_NOTE_PHOTOS, priceAlertText } from '@/lib/notesChecks.mjs';
+import { priceAlertText } from '@/lib/notesChecks.mjs';
 import { CategorySelect, isOtherLine } from './NoteKinds';
 
 export const vnd = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
@@ -145,19 +145,12 @@ export function TripSummary({ given, carried, paid, debt, payOldDebt, fromLeftov
 }
 
 /**
- * Ảnh hàng trên cân ở quán của phiếu đi chợ (bill của mối chụp ở từng dòng — BillCell). saved = link ảnh đã lưu (ô sửa phiếu),
- * photos = ảnh vừa chụp [{ url }]. Phiếu có hàng chợ mà chưa có ảnh thì bấm Lưu sẽ mở camera.
+ * Ảnh hàng trên cân của phiếu cũ (08/11/2026 bắt chụp, chủ quán bỏ cùng ngày — giờ chỉ còn bill từng dòng).
+ * saved = link ảnh đã lưu, bấm để xem.
  */
-export function TripPhotos({ saved = [], photos, required, onAdd, onRemove }) {
-  const count = saved.length + photos.length;
+export function TripPhotos({ saved = [] }) {
   return <div className="np-photos">
     {saved.map(link => <a key={link} href={link} target="_blank" rel="noreferrer" className="np-photo"><img src={link} alt="Ảnh phiếu đã lưu" /></a>)}
-    {photos.map((p, i) => <span key={p.url} className="np-photo">
-      <img src={p.url} alt={`Ảnh ${i + 1}`} />
-      <button type="button" className="np-photo-x" onClick={() => onRemove(i)} aria-label="Bỏ ảnh này"><X size={12} /></button>
-    </span>)}
-    {onAdd && count < MAX_NOTE_PHOTOS && <button type="button" className={`np-photo-add${required && !count ? ' need' : ''}`} onClick={onAdd}>📷 {count ? 'Thêm ảnh' : 'Chụp ảnh'}</button>}
-    {required && !count && <p className="np-photo-hint">Bắt buộc: chụp hàng trên cân ở quán (bill của mối chụp ở từng dòng).</p>}
   </div>;
 }
 
