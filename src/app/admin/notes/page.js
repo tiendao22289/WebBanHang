@@ -1,17 +1,20 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { ChefHat, FileText, CheckCircle, XCircle, LogOut, Plus, Clock, Trash2, User, CornerDownRight } from 'lucide-react';
 import './notes.css';
 import MenuNameInput from '@/lib/MenuNameInput';
 import { editRows, normalizePriceInput, noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
-import { notesApi, workforce } from '@/lib/staffApi';
+import { notesApi, notesApiWithPhotos, workforce } from '@/lib/staffApi';
+import { needsTripPhoto, notePriceAlert, priceAlert, priceAlertText, purchasePrices } from '@/lib/notesChecks.mjs';
+import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
+import { compressImage } from '@/lib/compressImage';
 import { filterRange, notesSummary } from './notesStats';
 import DebtPicker from './DebtPicker';
 import { KindTag, isOtherLine, newOtherLine } from './NoteKinds';
 import OtherCosts from './OtherCosts';
-import { MoneyInput, NoteItemsList, Section, TripSummary, vnd } from './NewNoteParts';
+import { MoneyInput, NoteItemsList, Section, TripPhotos, TripSummary, vnd } from './NewNoteParts';
 import { allOpenDebts, debtKey, fundDebtPayments, openLeftovers } from '@/lib/notesDebts.mjs';
 import { seesAllNotes } from '@/lib/staffRoles.mjs';
 
@@ -53,6 +56,15 @@ export default function StaffNotesPage() {
 
   const [notes, setNotes] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
+  // Giá các lần mua trước theo mặt hàng → cảnh báo dòng ghi giá cao bất thường (notesChecks).
+  const prices = useMemo(() => purchasePrices(notes), [notes]);
+  // Ảnh phiếu đi chợ: link xem ảnh đã lưu (máy chủ ký, 1 giờ) và ảnh vừa chụp [{ blob, url }] của phiếu mới / ô sửa.
+  const [photoLinks, setPhotoLinks] = useState({});
+  const [newPhotos, setNewPhotos] = useState([]);
+  const [editPhotos, setEditPhotos] = useState([]);
+  const [camera, setCamera] = useState(null); // { target: 'new' | 'edit', note?, saveAfter }
+  const captureInput = useRef(null);
+  const pendingShot = useRef(null);
 
   // New Note State
   const [newNoteType, setNewNoteType] = useState('expense'); // 'expense' | 'stock' | 'repair' | 'other'
@@ -282,6 +294,7 @@ export default function StaffNotesPage() {
       setNotes(result.notes || []);
       setPayments(result.payments || []);
       setNoteCategories(result.categories || []);
+      setPhotoLinks(result.photo_links || {});
     } catch { /* mạng chập chờn → giữ danh sách đang có */ }
   };
 
@@ -354,7 +367,7 @@ export default function StaffNotesPage() {
     };
   };
 
-  const submitNewNote = async () => {
+  const submitNewNote = async (photos = newPhotos) => {
     // Các khoản nợ cũ đã chọn trả (máy chủ kiểm lại số còn nợ từng khoản).
     // Nguồn tiền: tiền thừa phiếu trước (nếu tích dùng) trước, rồi tiền của phiếu này.
     const leftovers = useLeftoverForDebt && !carryLeftover ? openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ id: l.note_id, left: l.left })) : [];
@@ -372,19 +385,26 @@ export default function StaffNotesPage() {
       alert('Chưa ghi hàng nào: ghi ít nhất 1 dòng hàng có giá.');
       return;
     }
+    // Phiếu có hàng chợ phải có ảnh hàng trên cân / giấy của mối: chưa chụp thì mở camera, chụp xong tự lưu.
+    if (hasItems && needsTripPhoto(filled) && !photos.length) {
+      openCamera({ target: 'new', saveAfter: true });
+      return;
+    }
 
     setIsLoading(true);
     // Máy chủ tự tính tiền từ các dòng hàng, lưu phiếu trước rồi mới trừ nợ cũ.
     let error = null;
     try {
-      await notesApi('create', {
+      const body = {
         note_type: newNoteType,
         items: newNoteType === 'expense' ? filled : [],
         note: newNoteContent,
         input_amount: newNoteInputAmount,
         pay_debts: payDebts,
         carry_leftovers: carryLeftover && newNoteType === 'expense' ? openLeftovers(notes, payments, LEFTOVER_SINCE).map(l => ({ note_id: l.note_id, amount: l.left })) : [],
-      });
+      };
+      if (photos.length) await notesApiWithPhotos('create', body, photos.map(p => p.blob));
+      else await notesApi('create', body);
     } catch (err) { error = err; }
 
     setIsLoading(false);
@@ -403,6 +423,8 @@ export default function StaffNotesPage() {
       setUseSurplusForDebt(false);
       setUseLeftoverForDebt(false);
       setCarryLeftover(false);
+      dropPhotos(photos);
+      setNewPhotos([]);
       fetchNotes(currentUser); // Refresh list
     } else {
       alert(error.message || 'Lỗi lưu báo cáo!');
@@ -471,6 +493,8 @@ export default function StaffNotesPage() {
   };
 
   const closeEditNote = () => {
+    dropPhotos(editPhotos);
+    setEditPhotos([]);
     setEditingNoteId(null);
     setEditNoteContent('');
     setEditExpenseItems([]);
@@ -530,7 +554,7 @@ export default function StaffNotesPage() {
     return { paid: totalPaid, debt: totalDebt };
   };
 
-  const submitEditNote = async (note) => {
+  const submitEditNote = async (note, photos = editPhotos) => {
     let finalContent;
     let paid = 0, debt = 0;
 
@@ -621,19 +645,26 @@ export default function StaffNotesPage() {
     const finalDebtToSave = (editNoteType === 'expense' && validItems.length > 0)
       ? debt  // always use calculated (even 0)
       : (manualDebt > 0 ? manualDebt : (note.debt || 0));
+    // Phiếu chưa có hàng chợ (vd chỉ xăng xe) mà sửa thêm hàng chợ: cần ảnh như phiếu mới (máy chủ cũng chặn).
+    if (editNoteType === 'expense' && needsTripPhoto(validItems) && !needsTripPhoto(itemsOf(note)) && !photosOf(note).length && !photos.length) {
+      openCamera({ target: 'edit', note, saveAfter: true });
+      return;
+    }
     setIsSavingEdit(true);
     // Máy chủ tính lại tiền từ các dòng (luôn lưu đúng số mới, kể cả 0), giữ số đã trả nợ
     // của từng dòng và tự ghi lịch sử chỉnh sửa.
     let saved = null, error = null;
     try {
-      saved = (await notesApi('edit', {
+      const body = {
         id: note.id, note_type: editNoteType, items: validItems, note: editNoteContent,
         input_amount: editInputAmount, debt: editNoteType !== 'expense' ? finalDebtToSave : undefined,
         updated_at: editUpdatedAt,
-      })).note;
+      };
+      saved = (photos.length ? await notesApiWithPhotos('edit', body, photos.map(p => p.blob)) : await notesApi('edit', body)).note;
     } catch (err) { error = err; }
     setIsSavingEdit(false);
     if (!error) {
+      dropPhotos(photos);
       closeEditNote();
       fetchNotes();
       setViewingNote(prev => prev && saved ? { ...prev, ...saved } : prev);
@@ -734,6 +765,37 @@ export default function StaffNotesPage() {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
   };
 
+  // ── Ảnh phiếu đi chợ ──
+  const readNote = note => { try { return JSON.parse(note?.content || ''); } catch { return null; } };
+  const photosOf = note => { const p = readNote(note)?.photos; return Array.isArray(p) ? p : []; };
+  const itemsOf = note => { const d = readNote(note); return Array.isArray(d?.items) ? d.items : []; };
+  const dropPhotos = list => list.forEach(p => URL.revokeObjectURL(p.url));
+  // Máy không mở được camera trong trang → dùng ứng dụng camera của máy (như trang Mã QR).
+  const openCamera = shot => {
+    if (cameraSupported()) setCamera(shot);
+    else { pendingShot.current = shot; captureInput.current?.click(); }
+  };
+  const addShot = (shot, blob) => {
+    const photo = { blob, url: URL.createObjectURL(blob) };
+    setCamera(null);
+    const next = [...(shot.target === 'edit' ? editPhotos : newPhotos), photo];
+    if (shot.target === 'edit') setEditPhotos(next); else setNewPhotos(next);
+    if (shot.saveAfter) (shot.target === 'edit' ? submitEditNote(shot.note, next) : submitNewNote(next));
+  };
+  const pickedPhoto = async event => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    const shot = pendingShot.current;
+    pendingShot.current = null;
+    if (!file || !shot) return;
+    try { addShot(shot, await compressImage(file)); } catch (err) { alert(err.message); }
+  };
+  const removePhoto = (target, index) => {
+    const list = target === 'edit' ? editPhotos : newPhotos;
+    dropPhotos([list[index]]);
+    (target === 'edit' ? setEditPhotos : setNewPhotos)(list.filter((_, i) => i !== index));
+  };
+
   const renderNoteContent = (content, noteId = null) => {
     try {
       let jsonContent = content;
@@ -754,6 +816,10 @@ export default function StaffNotesPage() {
         // compute totals
         let grandTotal = 0, paidTotal = 0, debtTotal = 0;
         const rows = data.items.filter(i => i.name?.trim());
+        // Dòng ghi giá cao bất thường so với các lần mua trước phiếu này.
+        const viewed = notes.find(n => n.id === noteId);
+        const alertOf = viewed ? notePriceAlert(viewed, prices) : () => null;
+        const flag = item => { const a = alertOf(item); return a && <span className="note-flag" title={priceAlertText(a)}>⚠ giá +{a.pct}%</span>; };
         rows.forEach(item => {
           const p = parseVal(item.price);
           const q = parseVal(item.qty, true) || 1;
@@ -805,7 +871,7 @@ export default function StaffNotesPage() {
                       <tr key={idx}>
                         <td style={{ textAlign: 'center' }}>{idx + 1}</td>
                         <td style={{ fontWeight: 600 }}>
-                          {item.name} <KindTag item={item} categories={noteCategories} />
+                          {item.name} <KindTag item={item} categories={noteCategories} />{flag(item)}
                           {isDebt && item.creditor?.trim() && (
                             <div style={{ fontSize: '0.75rem', color: '#dc2626', fontWeight: 400, marginTop: 1 }}>👤 {item.creditor}</div>
                           )}
@@ -859,7 +925,7 @@ export default function StaffNotesPage() {
                   }}>
                     {/* Top row: name + Trả nợ button — full width */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{idx + 1}. {item.name} <KindTag item={item} categories={noteCategories} /></div>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#111827' }}>{idx + 1}. {item.name} <KindTag item={item} categories={noteCategories} />{flag(item)}</div>
                       <div style={{ paddingLeft: 10 }}>
                         {isDebt && remaining > 0 ? (
                           <button
@@ -1550,6 +1616,15 @@ export default function StaffNotesPage() {
                           </span>
                         );
                       })()}
+                      {(() => {
+                        // Chủ thấy ngay phiếu có dòng giá cao bất thường và phiếu có ảnh.
+                        const high = itemsOf(note).filter(notePriceAlert(note, prices)).length;
+                        const shots = photosOf(note).length;
+                        return <>
+                          {high > 0 && <span className="keep-tag" style={{ background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', fontWeight: 700 }}>⚠ {high} món giá cao</span>}
+                          {shots > 0 && <span className="keep-tag" style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>📷 {shots} ảnh</span>}
+                        </>;
+                      })()}
                       {hasDebt && (
                         <span className="keep-tag" style={{ background: '#fee2e2', color: '#dc2626', border: '1px solid #fca5a5', fontWeight: 700 }}>⚠️ Còn nợ: {formatMoney(debtRemaining)}</span>
                       )}
@@ -1641,7 +1716,13 @@ export default function StaffNotesPage() {
                       <div className="np-edit-list">
                         <NoteItemsList items={editExpenseItems} menuNames={menuNames} categories={noteCategories} isAdmin={currentUser.role === 'admin'}
                           onField={updateEditExpenseItem} onBlur={handleEditExpenseBlur} onRemove={removeEditExpenseItem}
-                          onCategory={(idx, v) => updateEditExpenseItem(idx, 'category', v)} />
+                          onCategory={(idx, v) => updateEditExpenseItem(idx, 'category', v)} priceCheck={notePriceAlert(viewingNote, prices)} />
+                      </div>
+                      <div style={{ marginBottom: 8 }}>
+                        <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>📷 Ảnh hàng / giấy của mối</label>
+                        <TripPhotos saved={photosOf(viewingNote).map(p => photoLinks[p]).filter(Boolean)} photos={editPhotos}
+                          required={needsTripPhoto(editExpenseItems) && !needsTripPhoto(itemsOf(viewingNote)) && !photosOf(viewingNote).length}
+                          onAdd={() => openCamera({ target: 'edit', note: viewingNote, saveAfter: false })} onRemove={i => removePhoto('edit', i)} />
                       </div>
                       <div style={{ marginBottom: 8 }}>
                         <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Ghi chú thêm</label>
@@ -1702,6 +1783,10 @@ export default function StaffNotesPage() {
               )}
               <div style={{ marginBottom: 20, padding: 16, background: 'white', borderRadius: 12, border: '1px solid #f3f4f6', overflowX: 'auto' }}>
                 {renderNoteContent(viewingNote.content, viewingNote.id)}
+                {photosOf(viewingNote).length > 0 && <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 4 }}>📷 Ảnh hàng / giấy của mối</div>
+                  <TripPhotos saved={photosOf(viewingNote).map(p => photoLinks[p]).filter(Boolean)} photos={[]} onAdd={null} />
+                </div>}
               </div>
               {(viewingNote.amount > 0 || viewingNote.debt > 0) && (() => {
                 const vDebtRemain = Math.max(0, (viewingNote.debt || 0) - (viewingNote.paid_debt || 0));
@@ -1781,6 +1866,7 @@ export default function StaffNotesPage() {
         const surplus = (inputAmt > 0 ? inputAmt - thucChi : 0) + carried;
         const goods = thucChi + tienNo;
         const hasDebtStep = leftoverList.length > 0 || allOpenDebts(notes).length > 0;
+        const needsPhoto = needsTripPhoto(expenseItems);
         const now = new Date();
         const when = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
         return (
@@ -1797,10 +1883,14 @@ export default function StaffNotesPage() {
               <Section step={2} title="Hàng đã mua" aside={goods > 0 ? <b className="np-goods">{vnd(goods)}</b> : null}>
                 <NoteItemsList items={expenseItems} menuNames={menuNames} categories={noteCategories} isAdmin={currentUser.role === 'admin'}
                   onField={updateExpenseItem} onBlur={handleExpenseBlur} onRemove={removeExpenseItem}
-                  onCategory={(idx, v) => updateExpenseItem(idx, 'category', v)} />
+                  onCategory={(idx, v) => updateExpenseItem(idx, 'category', v)} priceCheck={item => priceAlert(item, prices)} />
                 {showNoteText
                   ? <textarea className="np-textarea" rows={2} placeholder="Ghi chú cho chủ (không bắt buộc)" value={newNoteContent} onChange={e => setNewNoteContent(e.target.value)} />
                   : <button type="button" className="np-link" onClick={() => setShowNoteText(true)}>＋ Ghi chú</button>}
+              </Section>
+
+              <Section title="📷 Ảnh hàng trên cân / giấy của mối" aside={needsPhoto ? <span className="np-warn price">bắt buộc</span> : null}>
+                <TripPhotos photos={newPhotos} required={needsPhoto} onAdd={() => openCamera({ target: 'new', saveAfter: false })} onRemove={i => removePhoto('new', i)} />
               </Section>
 
               {hasDebtStep && (
@@ -1827,13 +1917,22 @@ export default function StaffNotesPage() {
                 <span>Tiền hàng <b>{vnd(goods)}</b></span>
                 {(inputAmt > 0 || carried > 0) && <span className={balance >= 0 ? 'ok' : 'bad'}>{balance >= 0 ? 'Thừa' : 'Thiếu'} <b>{vnd(Math.abs(balance))}</b></span>}
               </div>
-              <button type="button" className="btn btn-primary np-save" onClick={submitNewNote} disabled={isLoading}>{isLoading ? 'Đang lưu…' : 'Lưu phiếu'}</button>
+              <button type="button" className="btn btn-primary np-save" onClick={() => submitNewNote()} disabled={isLoading}>{isLoading ? 'Đang lưu…' : needsPhoto && !newPhotos.length ? '📷 Chụp ảnh & lưu' : 'Lưu phiếu'}</button>
             </div>
           </div>
         </div>
         );
       })()}
       </>)}
+
+      {/* Chụp ảnh phiếu đi chợ: camera trong trang, máy không mở được thì dùng ứng dụng camera của máy. */}
+      <input ref={captureInput} type="file" accept="image/*" capture="environment" onChange={pickedPhoto} hidden />
+      {camera && <CameraCapture
+        title="Chụp hàng trên cân hoặc giấy ghi của mối"
+        subtitle={camera.saveAfter ? 'Phiếu đi chợ cần ảnh · chụp xong tự lưu phiếu' : 'Ảnh kèm phiếu đi chợ'}
+        closeText="Huỷ"
+        onClose={() => setCamera(null)}
+        onCapture={blob => addShot(camera, blob)} />}
 
       {/* ── Delete Confirm Modal ── */}
       {deleteConfirmId && (

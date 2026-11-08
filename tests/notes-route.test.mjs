@@ -8,21 +8,38 @@ import { noteLeftover, noteMoney, openDebtLines } from '../src/lib/notesDebts.mj
 import * as categoriesLib from '../src/lib/noteCategories.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
 import { seesAllNotes } from '../src/lib/staffRoles.mjs';
+import * as checks from '../src/lib/notesChecks.mjs';
+import { receiptImageProblem } from '../src/lib/receiptImages.mjs';
 
 const source = readFileSync(new URL('../src/app/api/admin/notes/route.js', import.meta.url), 'utf8')
   .replace(/^import [\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
 const ADMIN = { id: '00000000-0000-4000-8000-00000000aaaa', full_name: 'Chủ quán', role: 'admin' };
 const STAFF = { id: '00000000-0000-4000-8000-00000000bbbb', full_name: 'Thy', role: 'staff' };
 
+// Kho ảnh giả: state.stored = ảnh đang có, state.removed = ảnh đã xoá.
 function load(state, user = ADMIN) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...math, ...categoriesLib, ...debts, seesAllNotes, crypto: globalThis.crypto, Object, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
-    getStaffSession: async () => ({ code: 200, user }), staffDatabase: () => fakeDb(state),
+    NextResponse, ...math, ...categoriesLib, ...debts, ...checks, seesAllNotes, receiptImageProblem, crypto: globalThis.crypto, Object, URL, Number, Math, String, JSON, Date, Map, Set, Array, Promise, console: { error() {} },
+    getStaffSession: async () => ({ code: 200, user }), staffDatabase: () => fakeDb(state), statusDatabase: () => ({}),
+    uploadReceiptImage: async (db, file, kind) => {
+      if (state.storageDown) throw new Error('storage down');
+      const path = `2026-11/${kind}-${crypto.randomUUID()}.jpg`;
+      state.stored = [...(state.stored || []), path];
+      return path;
+    },
+    removeReceiptImages: async (db, paths) => { state.removed = [...(state.removed || []), ...paths.filter(Boolean)]; },
+    signReceiptImages: async (db, paths) => Object.fromEntries(paths.map(p => [p, `/img?p=${p}`])),
   });
 }
 const plain = v => JSON.parse(JSON.stringify(v));
-const post = async (api, body) => plain(await api.POST({ json: async () => body }));
+const PHOTO = { size: 1000, type: 'image/jpeg', arrayBuffer: async () => new ArrayBuffer(8) };
+// Phiếu mới gửi kèm 1 ảnh (phiếu đi chợ bắt buộc ảnh); thao tác khác gửi JSON. photos = [] để gửi không ảnh.
+const request = (body, photos) => (photos.length
+  ? { headers: { get: () => 'multipart/form-data; boundary=x' },
+    formData: async () => ({ get: k => (k === 'payload' ? JSON.stringify(body) : null), getAll: k => (k === 'photo' ? photos : []) }) }
+  : { headers: { get: () => 'application/json' }, json: async () => body });
+const post = async (api, body, photos = body.action === 'create' ? [PHOTO] : []) => plain(await api.POST(request(body, photos)));
 const items = () => [
   { name: 'Ốc hương', qty: '2 ký', price: '220k', paymentStatus: 'full' },
   { name: 'Sò điệp', qty: '3 ký', price: '90k', paymentStatus: 'debt', creditor: 'Chị Lan' },
@@ -359,4 +376,64 @@ test('changing the quantity of a debt line keeps the whole line as debt (the edi
   assert.deepEqual(plain(openDebtLines(saved).map(l => l.left)), [360000]);
   assert.equal(noteLeftover(saved, state.staff_note_payments), 500000, 'the cash handed out is all still left');
   assert.deepEqual(plain(math.editRows([{ name: 'Cũ', price: '10k' }, { _id: 'x', name: 'Mới' }]).map(i => i._id)), ['#0', 'x'], 'old lines get "#position"');
+});
+
+test('a market trip needs a photo; only "Khác" lines, debt payments or plain text do not', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state, STAFF);
+  const noPhoto = await post(api, { action: 'create', note_type: 'expense', items: items() }, []);
+  assert.equal(noPhoto.status, 400);
+  assert.match(noPhoto.body.error, /Chụp ảnh hàng trên cân/);
+  assert.equal(state.staff_notes.length, 0, 'nothing saved without the photo');
+  const rauOnly = await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Tiền rau', price: '60k', preset: true }] }, []);
+  assert.equal(rauOnly.status, 400, 'buying vegetables is a market trip too');
+
+  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Xăng xe', price: '50k', category: 'xang' }] }, [])).status, 200, 'petrol only: no photo');
+  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: [], note: 'Gas sắp hết' }, [])).status, 200, 'plain text: no photo');
+
+  const ok = await post(api, { action: 'create', note_type: 'expense', items: items(), photos: ['2026-01/note-fake.jpg'] }, [PHOTO, PHOTO]);
+  assert.equal(ok.status, 200);
+  const photos = JSON.parse(state.staff_notes.at(-1).content).photos;
+  assert.deepEqual(plain(photos), plain(state.stored), 'the two uploaded photos are kept; a path sent by the browser is ignored');
+  const list = plain(await load(state).GET({}));
+  assert.equal(list.body.photo_links[photos[0]], `/img?p=${photos[0]}`, 'GET returns a link to see each photo');
+});
+
+test('photo limits: at most 3, images only; a failed save removes the uploaded photos', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state, STAFF);
+  assert.match((await post(api, { action: 'create', note_type: 'expense', items: items() }, [PHOTO, PHOTO, PHOTO, PHOTO])).body.error, /Tối đa 3 ảnh/);
+  assert.match((await post(api, { action: 'create', note_type: 'expense', items: items() }, [{ ...PHOTO, type: 'application/pdf' }])).body.error, /JPG, PNG/);
+  state.storageDown = true;
+  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: items() })).status, 500);
+  assert.equal(state.staff_notes.length, 0);
+  state.storageDown = false;
+  // Ghi phiếu thất bại (trả nợ vượt số còn nợ được kiểm tra trước) → không có ảnh nào được lưu.
+  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: items(), pay_debts: [{ note_id: '00000000-0000-4000-8000-000000000999', amount: 1000 }] })).status, 400);
+  assert.equal((state.stored || []).length, 0, 'photos are only stored after every check passed');
+});
+
+test('editing keeps the photos; adding market lines to a note without any needs a photo; delete removes them', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  await post(api, { action: 'create', note_type: 'expense', items: items() });
+  const note = state.staff_notes[0];
+  const before = JSON.parse(note.content).photos;
+  const rows = math.editRows(JSON.parse(note.content).items).map(i => (i.name === 'Mực' ? { ...i, qty: '2kg' } : i));
+  assert.equal((await post(api, { action: 'edit', id: note.id, note_type: 'expense', items: rows, note: '', updated_at: note.updated_at })).status, 200);
+  assert.deepEqual(plain(JSON.parse(state.staff_notes[0].content).photos), plain(before), 'editing a price or quantity keeps the photo');
+
+  await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Xăng xe', price: '50k', category: 'xang' }] }, []);
+  const petrol = state.staff_notes[1];
+  const addOc = [...math.editRows(JSON.parse(petrol.content).items), { name: 'Ốc hương', price: '220k', qty: '2' }];
+  const blocked = await post(api, { action: 'edit', id: petrol.id, note_type: 'expense', items: addOc, note: '', updated_at: petrol.updated_at });
+  assert.equal(blocked.status, 400, 'cannot slip market goods into a petrol note without a photo');
+  const withPhoto = await post(api, { action: 'edit', id: petrol.id, note_type: 'expense', items: addOc, note: '', updated_at: petrol.updated_at }, [PHOTO]);
+  assert.equal(withPhoto.status, 200);
+  const saved = JSON.parse(state.staff_notes[1].content);
+  assert.equal(saved.photos.length, 1);
+  assert.match(saved.history.at(-1).changes, /📷 Thêm 1 ảnh/);
+
+  assert.equal((await post(api, { action: 'delete', id: note.id })).status, 200);
+  assert.deepEqual(plain(state.removed), plain(before), 'deleting a note deletes its photos');
 });

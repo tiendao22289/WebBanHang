@@ -51,6 +51,12 @@ export function parseQty(value) {
   return n > 0 ? n : 1;
 }
 
+/** Tên món / hàng để so khớp: bỏ dấu, chữ thường ("Ốc Hương" = "oc huong"). */
+export function itemKey(name) {
+  return String(name || '').replace(/[đĐ]/g, 'd').normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 /** Những điểm đáng ngờ của một dòng hàng (hiện cảnh báo, không tự sửa). */
 export function lineWarnings(item) {
   const warnings = [];

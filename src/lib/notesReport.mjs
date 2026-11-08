@@ -8,6 +8,7 @@
 import { lineWarnings, noteTotals, parsePrice, parseQty } from './notesMath.mjs';
 import { notesSummary } from './notesSummary.mjs';
 import { paymentItemIndex } from './notesDebts.mjs';
+import { notePriceAlert, priceAlertText, purchasePrices } from './notesChecks.mjs';
 
 export const ZALO_TEXT_LIMIT = 1900;
 const vnd = n => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}đ`;
@@ -32,6 +33,8 @@ const historyOnDay = (ts, date) => {
   return !!m && `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` === date;
 };
 const historyClock = ts => /(\d{1,2}:\d{2})/.exec(String(ts || ''))?.[1] || '';
+// Cảnh báo của một dòng hàng: giá cao bất thường trước, rồi lỗi gõ giá / số lượng.
+const itemWarnings = (item, alert) => [...(alert ? [priceAlertText(alert)] : []), ...lineWarnings(item)];
 
 /** Một món: "• Mực 1,5kg × 200k = 300.000đ — nợ Chị Lan 300.000đ, đã trả 100.000đ, còn 200.000đ" */
 function itemLine(item) {
@@ -61,9 +64,10 @@ function noteBlock(note, index, ctx) {
   const items = named(data.items).filter(i => lineTotal(i) || String(i.price || '').trim());
   const given = Number(data.input_amount) || 0;
   const lines = [`${index}. ${clock(note.created_at)} · ${who}${given ? ` · chủ đưa ${vnd(given)}` : ''}`];
+  const alertOf = notePriceAlert(note, ctx.prices);
   for (const item of items) {
     lines.push(itemLine(item));
-    for (const w of lineWarnings(item)) lines.push(`  ⚠ ${w}`);
+    for (const w of itemWarnings(item, alertOf(item))) lines.push(`  ⚠ ${w}`);
   }
   const saved = (Number(note.amount) || 0) + (Number(note.debt) || 0);
   const paidNow = Number(note.amount) || 0;
@@ -97,7 +101,7 @@ export function notesReportMessages({ date, dayNotes = [], allNotes = [], paymen
   const inDay = iso => { const t = new Date(iso).getTime(); return t >= range.start.getTime() && t < range.end.getTime(); };
   const fundedBy = new Map();
   for (const p of payments) if (p.paid_from_note_id) fundedBy.set(p.paid_from_note_id, (fundedBy.get(p.paid_from_note_id) || 0) + Number(p.amount || 0));
-  const ctx = { date, fundedBy, staffName: id => staffNames[id] };
+  const ctx = { date, fundedBy, staffName: id => staffNames[id], prices: purchasePrices(allNotes) };
   const byId = new Map(allNotes.map(n => [n.id, n]));
   const sorted = [...dayNotes].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   const s = notesSummary(allNotes, payments, range);
@@ -179,13 +183,13 @@ export function packMessages(head, blocks) {
 
 // ── Dữ liệu cho trang /thongke (thẻ số, bảng) — cùng cách tính với tin Zalo ở trên.
 
-/** Tiền của một món: tổng, phần nợ, đã trả bớt, còn nợ, chủ nợ. */
-function itemMoney(item) {
+/** Tiền của một món: tổng, phần nợ, đã trả bớt, còn nợ, chủ nợ; alert = giá cao bất thường (notesChecks). */
+function itemMoney(item, alert = null) {
   const total = lineTotal(item);
   const owed = debtBase(item);
   const paid = Math.min(owed, Number(item.paid_amount) || 0);
   return { name: String(item.name).trim(), qty: String(item.qty || '').trim(), price: String(item.price || '').trim(), total,
-    payNow: total - owed, owed, paid, left: owed - paid, creditor: String(item.creditor || '').trim(), warnings: lineWarnings(item) };
+    payNow: total - owed, owed, paid, left: owed - paid, creditor: String(item.creditor || '').trim(), warnings: itemWarnings(item, alert) };
 }
 
 // Còn nợ theo chủ nợ (từng món, từ ngày nào), nợ nhiều nhất trước — chủ nợ lẫn từng món của chủ nợ đó.
@@ -216,6 +220,7 @@ export function notesDayData({ date, dayNotes = [], allNotes = [], payments = []
   const s = notesSummary(allNotes, payments, range);
   const newDebt = sorted.reduce((a, n) => a + (Number(n.debt) || 0), 0);
   const sumOf = list => (Array.isArray(list) ? list : []).reduce((a, r) => a + (Number(r?.amount) || 0), 0);
+  const prices = purchasePrices(allNotes);
 
   const notes = sorted.map(n => {
     const data = readContent(n.content);
@@ -233,7 +238,7 @@ export function notesDayData({ date, dayNotes = [], allNotes = [], payments = []
       // Dư (≥ 0, trả lại chủ) hoặc thiếu (< 0, người đi chợ bỏ thêm); null = không có tiền chủ đưa.
       left: given || carriedIn ? given + carriedIn - paidNow - funded : null,
       mismatch: Math.abs(saved - itemsTotal) >= 1000 ? { saved, items: itemsTotal } : null,
-      items: named(data.items).filter(i => lineTotal(i) || String(i.price || '').trim()).map(itemMoney),
+      items: named(data.items).filter(i => lineTotal(i) || String(i.price || '').trim()).map(i => itemMoney(i, notePriceAlert(n, prices)(i))),
       note: String(data.note || '').replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200),
       edits: (data.history || []).filter(h => historyOnDay(h.ts, date)).map(h => ({ at: historyClock(h.ts), by: h.by || '', changes: String(h.changes || '').replace(/\n+/g, '; ') })),
     };
@@ -272,6 +277,7 @@ export function notesRangeData({ allNotes = [], payments = [], staffNames = {}, 
   const notes = allNotes.filter(inRange);
   const s = notesSummary(allNotes, payments, range);
   const byStaff = new Map(), bought = new Map();
+  const prices = purchasePrices(allNotes);
   let warnings = 0;
   for (const n of notes) {
     const who = n.staff?.full_name || staffNames[n.staff_id] || 'Không rõ';
@@ -281,7 +287,8 @@ export function notesRangeData({ allNotes = [], payments = [], staffNames = {}, 
     const data = readContent(n.content);
     if (data?.type !== 'structured_expense') continue;
     const items = named(data.items);
-    if (Math.abs((Number(n.amount) || 0) + (Number(n.debt) || 0) - noteTotals(items).total) >= 1000 || items.some(i => lineWarnings(i).length)) warnings += 1;
+    const alertOf = notePriceAlert(n, prices);
+    if (Math.abs((Number(n.amount) || 0) + (Number(n.debt) || 0) - noteTotals(items).total) >= 1000 || items.some(i => lineWarnings(i).length || alertOf(i))) warnings += 1;
     for (const item of items) {
       const total = lineTotal(item);
       if (!total) continue;
