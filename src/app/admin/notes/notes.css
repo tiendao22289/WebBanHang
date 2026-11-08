@@ -798,6 +798,13 @@
 .np-return.on .np-return-tick { background: #dcfce7; }
 .np-return-now { margin-top: 8px; }
 .np-return-now.on { background: #dcfce7; }
+/* Tiền người đi chợ bỏ thêm (trừ vào tiền thừa) và số còn phải đưa chủ. */
+.np-net { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 4px 0; padding: 6px 8px; border-radius: 7px; background: #fff; border: 1px solid #86efac; font-size: 0.78rem; font-weight: 700; color: #15803d; }
+.np-net small { font-weight: 500; color: #6b7280; }
+.np-net.owe { border-color: #fdba74; color: #c2410c; }
+.np-net.done { background: #dcfce7; }
+.np-short span b { color: #c2410c; }
+.np-short small { color: #c2410c; font-size: 0.7rem; flex-shrink: 0; }
 .np-mini { flex-shrink: 0; min-height: 28px; padding: 2px 8px; border-radius: 6px; font-size: 0.72rem; font-weight: 700; cursor: pointer; }
 .np-mini.ok { border: 1px solid #86efac; background: #fff; color: #15803d; }
 .np-check { display: flex; align-items: center; gap: 6px; min-height: 32px; margin-top: 3px; padding: 3px 8px; border-radius: 7px; background: #fff; font-size: 0.78rem; font-weight: 700; cursor: pointer; }

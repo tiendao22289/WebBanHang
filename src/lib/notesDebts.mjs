@@ -86,8 +86,11 @@ const sumAmounts = list => (Array.isArray(list) ? list : []).reduce((a, r) => a 
 /**
  * Tiền của một phiếu đi chợ: given (chủ giao), carriedIn (tiền dư phiếu cũ cộng vào),
  * spent (trả ngay), funded (phiếu này dùng trả nợ cũ), returned (đã trả lại chủ),
- * carriedOut (đã chuyển sang phiếu sau). balance = given + carriedIn − spent − funded
+ * carriedOut (đã chuyển sang phiếu sau), offsetOut (tiền thừa giữ lại bù tiền người đi chợ
+ * đã bỏ thêm ở phiếu khác — offset_out). balance = given + carriedIn − spent − funded
  * (âm = bỏ thêm); left = số người đi chợ còn cầm chưa trả chủ.
+ * Phiếu âm: short = tiền người đi chợ bỏ thêm chưa được bù (chủ còn nợ), settled = đã bù
+ * bằng tiền thừa phiếu khác (short_settled). Chủ quán chọn "trừ vào tiền thừa" (09/11/2026).
  */
 export function noteMoney(note, payments = []) {
   const data = note?.note_type === 'expense' ? readContent(note.content) : null;
@@ -97,9 +100,51 @@ export function noteMoney(note, payments = []) {
   const funded = payments.filter(p => p.paid_from_note_id === note?.id).reduce((a, p) => a + (Number(p.amount) || 0), 0);
   const returned = sumAmounts(data?.returned_logs);
   const carriedOut = sumAmounts(data?.carried_out);
+  const offsetOut = sumAmounts(data?.offset_out);
+  const settled = sumAmounts(data?.short_settled);
   const balance = given + carriedIn - spent - funded;
-  const left = given + carriedIn > 0 ? Math.max(0, balance - returned - carriedOut) : 0;
-  return { given, carriedIn, spent, funded, returned, carriedOut, balance, left };
+  const hasMoney = given + carriedIn > 0;
+  const left = hasMoney ? Math.max(0, balance - returned - carriedOut - offsetOut) : 0;
+  const short = hasMoney ? Math.max(0, -balance - settled) : 0;
+  return { given, carriedIn, spent, funded, returned, carriedOut, offsetOut, settled, balance, left, short };
+}
+
+/** Tiền người đi chợ bỏ thêm ở phiếu này chưa được bù (chủ còn nợ người đó). */
+export const noteShortage = (note, payments = []) => noteMoney(note, payments).short;
+
+/**
+ * Các phiếu từ ngày `since` (giờ VN) người đi chợ bỏ thêm tiền chưa được bù, cũ nhất trước.
+ * Bù bằng tiền thừa của chính người đó khi trả chủ (planOffsets).
+ */
+export function openShortages(notes, payments, since) {
+  const from = since ? Date.parse(`${since}T00:00:00+07:00`) : 0;
+  return notes.filter(n => Date.parse(n.created_at) >= from)
+    .map(n => ({ note_id: n.id, created_at: n.created_at, writer: n.staff?.full_name || '', staff_id: n.staff_id, short: noteShortage(n, payments) }))
+    .filter(l => l.short > 0)
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+}
+
+/**
+ * Trả chủ tiền thừa có trừ tiền bỏ thêm: sources = tiền thừa đem trả [{ id (null = phiếu đang ghi),
+ * staff_id, amount }] (cũ trước), shortages = openShortages. Tiền thừa của ai chỉ bù cho phiếu
+ * bỏ thêm của chính người đó, phiếu cũ nhất trước.
+ * → { offsets: [{ from_note_id, to_note_id, amount }], returns: [{ id, staff_id, amount }] (số thật đưa chủ) }.
+ */
+export function planOffsets(sources, shortages) {
+  const owed = shortages.map(s => ({ ...s, need: s.short }));
+  const offsets = [], returns = [];
+  for (const src of sources) {
+    let amount = Math.max(0, Math.round(Number(src.amount) || 0));
+    for (const s of owed) {
+      if (amount <= 0) break;
+      if (s.need <= 0 || s.staff_id !== src.staff_id) continue;
+      const take = Math.min(amount, s.need);
+      offsets.push({ from_note_id: src.id ?? null, to_note_id: s.note_id, amount: take });
+      s.need -= take; amount -= take;
+    }
+    returns.push({ id: src.id ?? null, staff_id: src.staff_id, amount });
+  }
+  return { offsets, returns };
 }
 
 /** Tiền thừa người đi chợ còn cầm (chưa trả chủ, chưa chuyển sang phiếu sau). */

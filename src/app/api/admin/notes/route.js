@@ -33,7 +33,7 @@ import { getStaffSession, staffDatabase, statusDatabase } from '@/lib/statusAuth
 import { noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
 import { MAX_BILL_PHOTOS, MAX_NOTE_PHOTOS, missingBills, needsBill } from '@/lib/notesChecks.mjs';
 import { receiptImageProblem, removeReceiptImages, signReceiptImages, uploadReceiptImage } from '@/lib/receiptImages.mjs';
-import { findDebtLine, noteLeftover, noteMoney, openDebtLines, paymentItemIndex } from '@/lib/notesDebts.mjs';
+import { findDebtLine, noteLeftover, noteMoney, noteShortage, openDebtLines, paymentItemIndex } from '@/lib/notesDebts.mjs';
 import { categoryName, cleanCategories, lineCategory } from '@/lib/noteCategories.mjs';
 import { seesAllNotes } from '@/lib/staffRoles.mjs';
 
@@ -363,8 +363,10 @@ export async function POST(request) {
       const carryReq = type === 'expense' && items.length && Array.isArray(body.carry_leftovers) ? body.carry_leftovers.slice(0, 30) : [];
       // Tiền thừa phiếu trước người đi chợ đã đưa lại chủ (tích "Đã trả chủ" lúc ghi phiếu mới).
       const returnReq = Array.isArray(body.return_leftovers) ? body.return_leftovers.slice(0, 30) : [];
-      const targetIds = [...new Set([...requested.flatMap(r => [r?.note_id, r?.from_note_id]), ...carryReq.map(c => c?.note_id), ...returnReq.map(r => r?.note_id)]
-        .filter(id => UUID.test(id || '')))];
+      // Tiền thừa giữ lại bù tiền người đi chợ đã bỏ thêm ở phiếu trước (from_note_id null = tiền thừa phiếu này).
+      const offsetReq = Array.isArray(body.offsets) ? body.offsets.slice(0, 30) : [];
+      const targetIds = [...new Set([...requested.flatMap(r => [r?.note_id, r?.from_note_id]), ...carryReq.map(c => c?.note_id), ...returnReq.map(r => r?.note_id),
+        ...offsetReq.flatMap(o => [o?.from_note_id, o?.to_note_id])].filter(id => UUID.test(id || '')))];
       const { data: targets, error: targetErr } = targetIds.length ? await db.from('staff_notes').select('*').in('id', targetIds) : { data: [], error: null };
       if (targetErr) throw targetErr;
       const byId = new Map((targets || []).map(n => [n.id, n]));
@@ -397,21 +399,42 @@ export async function POST(request) {
         if (carry.some(c => c.id === r.note_id)) return fail(`Tiền thừa phiếu ${dm(byId.get(r.note_id).created_at)} không vừa cộng vào phiếu mới vừa trả chủ được.`);
         returns.push({ id: r.note_id, amount });
       }
-      // Tiền thừa phiếu trước: phiếu nguồn phải còn đủ tiền thừa chưa trả chủ.
-      const sourceIds = [...new Set([...plan.map(x => x.from), ...carry.map(c => c.id), ...returns.map(r => r.id)].filter(Boolean))];
-      if (sourceIds.length) {
-        const { data: sourcePays, error: sourceErr } = await db.from('staff_note_payments').select('paid_from_note_id, amount').in('paid_from_note_id', sourceIds);
+      // Bù tiền bỏ thêm: tiền thừa của ai chỉ bù cho phiếu bỏ thêm của chính người đó.
+      const offsets = [];
+      for (const o of offsetReq) {
+        const amount = money(o?.amount);
+        const to = byId.get(o?.to_note_id);
+        const from = o?.from_note_id ? byId.get(o.from_note_id) : null;
+        if (!to || !amount || (o?.from_note_id && !from)) return fail('Khoản bù tiền bỏ thêm không hợp lệ.');
+        if (from && carry.some(c => c.id === from.id)) return fail(`Tiền thừa phiếu ${dm(from.created_at)} không vừa cộng vào phiếu mới vừa bù tiền bỏ thêm được.`);
+        if (to.staff_id !== (from ? from.staff_id : user.id)) return fail('Tiền thừa chỉ bù được tiền bỏ thêm của chính người đi chợ đó.');
+        if (!canManage && to.staff_id !== user.id) return fail('Không bù được tiền bỏ thêm trên phiếu của người khác.', 403);
+        offsets.push({ from: from ? from.id : null, to: to.id, amount });
+      }
+      const offsetsFromNew = offsets.filter(o => !o.from).reduce((a, o) => a + o.amount, 0);
+      // Tiền thừa phiếu trước: phiếu nguồn phải còn đủ tiền thừa chưa trả chủ; phiếu bỏ thêm phải còn số chưa bù.
+      const sourceIds = [...new Set([...plan.map(x => x.from), ...carry.map(c => c.id), ...returns.map(r => r.id), ...offsets.map(o => o.from)].filter(Boolean))];
+      const shortIds = [...new Set(offsets.map(o => o.to))];
+      if (sourceIds.length || shortIds.length) {
+        const { data: sourcePays, error: sourceErr } = await db.from('staff_note_payments').select('paid_from_note_id, amount').in('paid_from_note_id', [...new Set([...sourceIds, ...shortIds])]);
         if (sourceErr) throw sourceErr;
         for (const id of sourceIds) {
           const source = byId.get(id);
           if (!source) return fail('Phiếu lấy tiền thừa không hợp lệ.');
           if (!canManage && source.staff_id !== user.id) return fail('Không dùng được tiền thừa trên phiếu của người khác.', 403);
           const want = plan.filter(x => x.from === id).reduce((a, x) => a + x.pay, 0) + carry.filter(c => c.id === id).reduce((a, c) => a + c.amount, 0)
-            + returns.filter(r => r.id === id).reduce((a, r) => a + r.amount, 0);
+            + returns.filter(r => r.id === id).reduce((a, r) => a + r.amount, 0) + offsets.filter(o => o.from === id).reduce((a, o) => a + o.amount, 0);
           const left = noteLeftover(source, sourcePays || []);
           if (want > left) return fail(`Tiền thừa phiếu ${dm(source.created_at)} chỉ còn ${vnd(left)}.`);
           // Phiếu nguồn cũng được khoá khi ghi: hai lần lấy cùng lúc thì lần sau bị từ chối.
           changes.note(source);
+        }
+        for (const id of shortIds) {
+          const owed = byId.get(id);
+          const want = offsets.filter(o => o.to === id).reduce((a, o) => a + o.amount, 0);
+          const short = noteShortage(owed, sourcePays || []);
+          if (want > short) return fail(`Phiếu ${dm(owed.created_at)} chỉ còn ${vnd(short)} tiền bỏ thêm chưa bù.`);
+          changes.note(owed);
         }
       }
       // Ảnh bill cũ (đã dùng ở phiếu khác) chọn lại từ máy thì không nhận.
@@ -440,17 +463,34 @@ export async function POST(request) {
           input_amount: money(body.input_amount),
           ...(photoPaths.length ? { photos: photoPaths } : {}),
           ...(carry.length ? { carried_in: carry.map(c => ({ from_note_id: c.id, from_at: byId.get(c.id).created_at, amount: c.amount })) } : {}) };
-        // Tích "đã trả chủ" tiền thừa của chính phiếu này: ghi đúng số còn thừa sau khi trả hàng và trả nợ cũ.
+        // Tiền thừa phiếu này: giữ lại bù tiền bỏ thêm phiếu trước (offsets), rồi tích "đã trả chủ" thì ghi
+        // đúng số còn thừa sau khi trả hàng, trả nợ cũ và bù.
+        const newPays = plan.filter(x => !x.from).map(x => ({ paid_from_note_id: newId, amount: x.pay }));
+        if (offsetsFromNew > 0) {
+          const before = noteLeftover({ id: newId, note_type: type, content: JSON.stringify(doc), amount }, newPays);
+          if (offsetsFromNew > before) return fail(`Tiền thừa phiếu này chỉ còn ${vnd(before)}, không đủ bù tiền bỏ thêm.`);
+          doc.offset_out = offsets.filter(o => !o.from).map(o => ({ amount: o.amount, to_note_id: o.to, ts: stamp(), by: user.full_name || 'Không rõ' }));
+        }
         if (body.return_now === true) {
-          const left = noteLeftover({ id: newId, note_type: type, content: JSON.stringify(doc), amount },
-            plan.filter(x => !x.from).map(x => ({ paid_from_note_id: newId, amount: x.pay })));
+          const left = noteLeftover({ id: newId, note_type: type, content: JSON.stringify(doc), amount }, newPays);
           if (left > 0) doc.returned_logs = [{ amount: left, ts: stamp(), by: user.full_name || 'Không rõ' }];
         }
         content = JSON.stringify(doc);
       } else {
+        if (offsetsFromNew > 0) return fail('Phiếu không có tiền thừa để bù tiền bỏ thêm.');
         content = [noteText.trim(), notice].filter(Boolean).join('\n\n');
       }
       if (!content) return fail('Vui lòng nhập nội dung!');
+      // Bù tiền bỏ thêm: phiếu bỏ tiền thừa ghi "giữ lại", phiếu bỏ thêm ghi "đã bù".
+      for (const o of offsets) {
+        const from = o.from ? byId.get(o.from) : null, to = byId.get(o.to);
+        if (from) {
+          logInto(changes, from, user, `↔ Giữ lại ${vnd(o.amount)} tiền thừa bù tiền bỏ thêm phiếu ${dm(to.created_at)}`,
+            data => { data.offset_out = [...(data.offset_out || []), { amount: o.amount, to_note_id: to.id, ts: stamp(), by: user.full_name || 'Không rõ' }]; });
+        }
+        logInto(changes, to, user, `↔ Đã bù ${vnd(o.amount)} tiền bỏ thêm (từ tiền thừa phiếu ${from ? dm(from.created_at) : today})`,
+          data => { data.short_settled = [...(data.short_settled || []), { amount: o.amount, from_note_id: from ? from.id : newId, ts: stamp(), by: user.full_name || 'Không rõ' }]; });
+      }
       // Phiếu cũ ghi lại số tiền dư đã chuyển sang phiếu mới.
       for (const c of carry) {
         logInto(changes, byId.get(c.id), user, `➡ Chuyển ${vnd(c.amount)} tiền dư sang phiếu ${today}`,
@@ -498,7 +538,8 @@ export async function POST(request) {
       const { data: pays, error: paysErr } = await db.from('staff_note_payments').select('*').or(`paid_from_note_id.eq.${note.id},note_id.eq.${note.id}`);
       if (paysErr) throw paysErr;
       const funded = (pays || []).filter(p => p.paid_from_note_id === note.id && p.note_id !== note.id);
-      const linkIds = [...new Set([...funded.map(p => p.note_id), ...(data.carried_in || []).map(c => c.from_note_id), ...(data.carried_out || []).map(c => c.to_note_id)].filter(id => UUID.test(id || '')))];
+      const linkIds = [...new Set([...funded.map(p => p.note_id), ...(data.carried_in || []).map(c => c.from_note_id), ...(data.carried_out || []).map(c => c.to_note_id),
+        ...(data.offset_out || []).map(o => o.to_note_id), ...(data.short_settled || []).map(o => o.from_note_id)].filter(id => UUID.test(id || '')))];
       const { data: linked, error: linkErr } = linkIds.length ? await db.from('staff_notes').select('*').in('id', linkIds) : { data: [], error: null };
       if (linkErr) throw linkErr;
       const byId = new Map((linked || []).map(n => [n.id, n]));
@@ -513,6 +554,17 @@ export async function POST(request) {
         const receiver = byId.get(c.to_note_id);
         if (receiver) logInto(changes, receiver, user, `↩ Bỏ ${vnd(c.amount)} tiền dư cũ (${why})`,
           d => { d.carried_in = (d.carried_in || []).filter(i => i.from_note_id !== note.id); });
+      }
+      // Bù tiền bỏ thêm: xoá phiếu bỏ tiền thừa → phiếu bỏ thêm chưa được bù lại; xoá phiếu bỏ thêm → tiền thừa đã giữ lại trả về.
+      for (const o of data.offset_out || []) {
+        const owed = byId.get(o.to_note_id);
+        if (owed) logInto(changes, owed, user, `↩ Bỏ ${vnd(o.amount)} đã bù tiền bỏ thêm (${why})`,
+          d => { d.short_settled = (d.short_settled || []).filter(x => x.from_note_id !== note.id); });
+      }
+      for (const o of data.short_settled || []) {
+        const source = byId.get(o.from_note_id);
+        if (source) logInto(changes, source, user, `↩ Nhận lại ${vnd(o.amount)} tiền thừa đã giữ lại bù (${why})`,
+          d => { d.offset_out = (d.offset_out || []).filter(x => x.to_note_id !== note.id); });
       }
       changes.deletePayments = (pays || []).map(p => p.id);
       changes.remove = note;
@@ -589,7 +641,7 @@ export async function POST(request) {
         }
         const inputAmount = money(body.input_amount);
         // Giữ sổ tiền dư (đã trả chủ, chuyển đi / nhận vào) và ảnh hàng khi sửa phiếu.
-        const moneyLogs = Object.fromEntries(['returned_logs', 'carried_in', 'carried_out', 'photos'].filter(k => Array.isArray(stored?.[k])).map(k => [k, stored[k]]));
+        const moneyLogs = Object.fromEntries(['returned_logs', 'carried_in', 'carried_out', 'offset_out', 'short_settled', 'photos'].filter(k => Array.isArray(stored?.[k])).map(k => [k, stored[k]]));
         const doc = { type: 'structured_expense', items, note: noteText, ...(inputAmount > 0 ? { input_amount: inputAmount } : {}), ...moneyLogs,
           history: [...(stored?.history || []), { ts, by, changes: lines.length ? lines.join('\n') : '✏️ Cập nhật ghi chú' }] };
         content = JSON.stringify(doc);
@@ -597,9 +649,13 @@ export async function POST(request) {
         const { data: pays, error: paysErr } = await db.from('staff_note_payments').select('paid_from_note_id, amount').eq('paid_from_note_id', note.id);
         if (paysErr) throw paysErr;
         const after = noteMoney({ ...note, note_type: type, content, amount }, pays || []);
-        const claimed = after.returned + after.carriedOut;
+        const claimed = after.returned + after.carriedOut + after.offsetOut;
         if (claimed > 0 && after.balance < claimed) {
-          return fail(`Phiếu này đã trả chủ / chuyển sang phiếu sau ${vnd(claimed)} tiền dư. Sau khi sửa, tiền giao trừ tiền đã chi phải còn ít nhất số này (hiện chỉ còn ${vnd(Math.max(0, after.balance))}).`);
+          return fail(`Phiếu này đã trả chủ / chuyển sang phiếu sau / bù tiền bỏ thêm ${vnd(claimed)} tiền dư. Sau khi sửa, tiền giao trừ tiền đã chi phải còn ít nhất số này (hiện chỉ còn ${vnd(Math.max(0, after.balance))}).`);
+        }
+        // Tiền bỏ thêm đã được bù bằng tiền thừa phiếu khác: sửa xong vẫn phải bỏ thêm ít nhất số đã bù.
+        if (after.settled > 0 && -after.balance < after.settled) {
+          return fail(`Tiền bỏ thêm của phiếu này đã được bù ${vnd(after.settled)}. Sau khi sửa, phiếu phải còn thiếu ít nhất số này (hiện thiếu ${vnd(Math.max(0, -after.balance))}).`);
         }
         if (photos.length || bill.plan.length) {
           const addedScale = [];
