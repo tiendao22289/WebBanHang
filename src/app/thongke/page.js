@@ -418,7 +418,8 @@ function StaffDayCard({ staff, onApprove }) {
     <div className="tk-tiles three">
       <Tile label="Đi làm" value={staff.people.length} sub={`${num(totalHours)} giờ`} />
       <Tile label="Đi trễ" value={late} sub={late ? 'người' : 'không ai'} tone={late ? 'bad' : 'zero'} />
-      <Tile label="Chờ duyệt" value={waiting} sub={waiting ? 'xem bên dưới' : 'không có'} tone={waiting ? 'warn' : 'zero'} />
+      {/* Việc chờ duyệt nằm ở mục Duyệt: bấm ô này để sang đó. */}
+      <Tile label="Chờ duyệt" value={waiting} sub={waiting ? 'bấm để duyệt' : 'không có'} tone={waiting ? 'warn' : 'zero'} onClick={waiting && onApprove ? onApprove : null} />
     </div>
     {staff.people.length ? <ul className="tk-table">{staff.people.map(p => <li key={p.id} className="tk-person">
       <span className="tk-avatar" aria-hidden="true">{(p.name || '?').trim().charAt(0).toUpperCase()}</span>
@@ -441,15 +442,6 @@ function StaffDayCard({ staff, onApprove }) {
       <h3><AlertTriangle size={15} /> Cảnh báo khi quét mã</h3>
       <ul className="tk-table">{staff.alerts.map(a => <li key={a.id}><span className="tk-cell-main"><b>{a.name}</b>
         <span className="tk-pills">{a.items.map(it => <Pill key={it.text} tone="bad">{it.text}{it.count > 1 ? ` ×${it.count}` : ''}</Pill>)}</span></span></li>)}</ul>
-    </div>}
-    {waiting > 0 && <div className="tk-sub">
-      <h3>Chờ bạn duyệt</h3>
-      <ul className="tk-table">
-        {staff.pending.map((r, i) => <li key={`p${i}`}><span className="tk-cell-main"><b>{r.name}</b><small>{r.kind === 'advance' ? `xin ứng ${money(r.amount)}` : r.kind === 'expense' ? `ghi chi hộ quán ${money(r.amount)}` : r.kind === 'peer' ? 'báo lỗi đồng nghiệp' : `báo nghỉ ${r.days} ngày`}{r.reason ? ` — ${r.reason}` : ''}</small></span></li>)}
-        {staff.fixes.map((f, i) => <li key={`f${i}`}><span className="tk-cell-main"><b>{f.name}</b><small>xin sửa giờ chấm công{f.reason ? ` — ${f.reason}` : ''}</small></span></li>)}
-        {staff.outside.map(o => <li key={`o${o.id}`}><span className="tk-cell-main"><b>{o.name}</b><small>{minutes(o.minutes)} ngoài ca chưa tính lương</small></span></li>)}
-      </ul>
-      {onApprove && <button type="button" className="tk-link tk-link-btn" onClick={onApprove}>Duyệt ngay →</button>}
     </div>}
     {(staff.selfFines || []).length > 0 && <div className="tk-sub">
       <h3>🙋 Nhân viên tự ghi lỗi</h3>
@@ -698,12 +690,13 @@ function SectionBar({ tab, onPick, badges }) {
 }
 const sectionBadges = (report, period) => {
   if (!report) return {};
-  const { loss, staff, notes } = report;
+  const { loss, notes } = report;
   const check = period === 'day' ? report.summary?.check : null;
   return {
     overview: period === 'day' ? (check?.issues || []).filter(i => i.level !== 'info').length + (report.summary?.warnings?.length || 0) : 0,
     promo: loss ? (loss.cancelled?.count || 0) + (loss.removed?.rows?.length || 0) : 0,
-    staff: period === 'day' && staff ? (staff.pending?.length || 0) + (staff.fixes?.length || 0) + (staff.outside?.length || 0) : 0,
+    // Việc chờ duyệt đếm ở mục Duyệt (không đếm lặp ở mục Nhân viên).
+    staff: 0,
     notes: notes?.summary?.warnings || 0,
   };
 };
