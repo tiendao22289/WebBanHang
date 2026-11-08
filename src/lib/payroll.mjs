@@ -158,7 +158,7 @@ const ratesIn = (rates, staffId, key, unit) => [...new Set([(unit === 'day' ? da
  * (payroll_hourly_rates) của người đó; lateRules: luật đi trễ (của quán + của người đó); closedDays / holidayPaid /
  * employed: ngày quán nghỉ (xem holidayArgs); asOf: hôm nay (tháng đang chạy: phần chỉnh theo số ngày của tháng chỉ tính
  * tới hôm nay), không có = cả tháng. claims: khoản chi hộ quán (payroll_expense_claims) — khoản đã duyệt nhân viên chọn
- * "cộng vào lương" của tháng này cộng vào thực lĩnh (claimAmt); khoản lấy tiền mặt không đụng tới lương.
+ * "cộng vào lương" của tháng này cộng vào thực lĩnh (claimAmt; chủ đã đưa trước thì chỉ phần chi lố); khoản lấy tiền mặt không đụng tới lương.
  */
 export function computeSalary({ year, month, staffId, sessions = [], config = null, requests = [], violations = [], bonuses = [], rules = null, reviews = [], hourlyRates = [], lateRules = [],
   closedDays = [], holidayPaid = null, employed = null, asOf = null, claims = [] }) {
@@ -172,7 +172,7 @@ export function computeSalary({ year, month, staffId, sessions = [], config = nu
   const absDays = approved.filter(r => r.request_type === 'absent').reduce((a, r) => a + Number(r.days || 0), 0);
   const vioAmt = violations.reduce((a, v) => a + Number(v.amount || 0), 0);
   const bonusAmt = bonuses.filter(b => Number(b.year) === year && Number(b.month) === month).reduce((a, b) => a + Number(b.amount || 0), 0);
-  const claimAmt = salaryClaims(claims, year, month).reduce((a, c) => a + Number(c.amount || 0), 0);
+  const claimAmt = salaryClaims(claims, year, month).reduce((a, c) => a + claimOwed(c), 0);
   let totalWorkH = 0, otHours = 0, pendingMs = 0, workUnits = 0;
   const byDay = {};
 
@@ -462,8 +462,20 @@ export function fineSuggestions({ staffId, tallies, reviews = [], kinds = ['late
  * tháng lúc chủ duyệt). Hàm này lấy các khoản đã duyệt được cộng vào lương tháng đó.
  */
 export const CLAIM_PAYOUTS = { cash: 'Lấy tiền mặt', salary: 'Cộng vào lương' };
+// Chủ đưa tiền trước (given_amount): quán chỉ còn nợ nhân viên phần chi lố (claimOwed, trả theo payout); chi chưa hết thì
+// nhân viên đưa lại chủ phần thừa (claimLeft, tiền mặt). Nhân viên tự bỏ tiền: given 0 → nợ đủ số đã chi.
+export const claimGiven = c => Number(c?.given_amount) || 0;
+export const claimOwed = c => Math.max(0, (Number(c?.amount) || 0) - claimGiven(c));
+export const claimLeft = c => Math.max(0, claimGiven(c) - (Number(c?.amount) || 0));
+/** Một dòng nói khoản chi hộ được trả thế nào: "lấy tiền mặt" / "chủ đưa trước 100.000đ · đưa lại chủ 20.000đ"… */
+export function claimText(c) {
+  const vnd = n => `${Number(n).toLocaleString('vi-VN')}đ`, how = c?.payout === 'salary' ? 'cộng vào lương' : 'lấy tiền mặt';
+  if (!claimGiven(c)) return how;
+  const owed = claimOwed(c), left = claimLeft(c);
+  return `chủ đưa trước ${vnd(claimGiven(c))} · ${left ? `đưa lại chủ ${vnd(left)}` : owed ? `chi lố ${vnd(owed)}, ${how}` : 'chi vừa đủ'}`;
+}
 export const salaryClaims = (claims, year, month) => (claims || []).filter(c => c.status === 'approved' && c.payout === 'salary'
-  && Number(c.year) === Number(year) && Number(c.month) === Number(month));
+  && Number(c.year) === Number(year) && Number(c.month) === Number(month) && claimOwed(c) > 0);
 
 export const lateRulesOf = (rules, staffId) => (rules || []).filter(r => r.scope === 'shop' || r.scope === staffId);
 

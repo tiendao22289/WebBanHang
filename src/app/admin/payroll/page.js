@@ -597,7 +597,7 @@ export default function PayrollPage({ staffSection = null } = {}) {
   const [showSelfFine, setShowSelfFine] = useState(false);
   // Khoản chi hộ quán của mình (máy chủ đọc): ready false = web chưa cài bảng, ẩn phần này.
   const [myClaims, setMyClaims] = useState({ ready: false, list: [] });
-  const emptyClaim = () => ({ item: '', amount: '', spent_on: vnToday(), note: '', payout: '' });
+  const emptyClaim = () => ({ item: '', amount: '', spent_on: vnToday(), note: '', payout: '', given: false, given_amount: '' });
   const [claimForm, setClaimForm] = useState(emptyClaim);
   const [showClaimForm, setShowClaimForm] = useState(false);
   // Báo lỗi đồng nghiệp: người chọn được + các lần mình đã báo (máy chủ đọc; ready false = web chưa cài bảng).
@@ -720,15 +720,18 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     if (ok) say('Đã gửi báo nghỉ, chờ chủ quán duyệt.');
   };
 
-  // Ghi khoản tự bỏ tiền chi cho quán, gửi chủ duyệt; tự chọn nhận lại bằng tiền mặt hay cộng vào lương.
+  // Ghi khoản chi cho quán, gửi chủ duyệt. Tự bỏ tiền: chọn nhận lại bằng tiền mặt hay cộng vào lương. Chủ đưa trước: ghi chủ đưa
+  // bao nhiêu; chi lố thì chọn nhận lại phần lố, còn thừa thì đưa lại chủ.
   const handleSubmitClaim = async () => {
     const item = claimForm.item.trim(), amount = Number(String(claimForm.amount).replace(/\D/g, ''));
+    const given = claimForm.given ? Number(String(claimForm.given_amount).replace(/\D/g, '')) : 0;
     if (!item) return say('Ghi khoản chi gì (vd: Xăng đi chợ).', false);
     if (!(amount >= 1000)) return say('Nhập số tiền đã chi (từ 1.000đ).', false);
-    if (!claimForm.payout) return say('Chọn nhận lại tiền: lấy tiền mặt hay cộng vào lương.', false);
-    const ok = await send('claim', 'claim_expense', { item, amount, spent_on: claimForm.spent_on || vnToday(), note: claimForm.note, payout: claimForm.payout },
-      () => { setClaimForm(emptyClaim()); setShowClaimForm(false); });
-    if (ok) say('Đã gửi khoản chi, chờ chủ quán duyệt.');
+    if (claimForm.given && !(given >= 1000)) return say('Nhập số tiền chủ đã đưa trước.', false);
+    if (amount > given && !claimForm.payout) return say(given ? 'Chọn nhận lại phần chi lố: lấy tiền mặt hay cộng vào lương.' : 'Chọn nhận lại tiền: lấy tiền mặt hay cộng vào lương.', false);
+    const ok = await send('claim', 'claim_expense', { item, amount, given_amount: given, spent_on: claimForm.spent_on || vnToday(), note: claimForm.note,
+      payout: amount > given ? claimForm.payout : 'cash' }, () => { setClaimForm(emptyClaim()); setShowClaimForm(false); });
+    if (ok) say(given > amount ? `Đã gửi. Nhớ đưa lại chủ ${formatMoney(given - amount)} tiền thừa.` : 'Đã gửi khoản chi, chờ chủ quán duyệt.');
   };
 
   // Báo lỗi đồng nghiệp: chưa trừ tiền, chủ quán xem rồi phạt hoặc bỏ qua; người bị báo không thấy tên người báo.
@@ -2385,7 +2388,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: showClaimForm ? 12 : 0 }}>
                 <div>
                   <div style={{ fontWeight: 800 }}>🧾 Chi hộ quán</div>
-                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 2 }}>Bạn bỏ tiền ra chi cho quán thì ghi vào đây, chủ duyệt rồi trả lại.</div>
+                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 2 }}>Bạn chi tiền cho quán (tự bỏ tiền hay chủ đưa trước) thì ghi vào đây, chủ duyệt.</div>
                 </div>
                 <button onClick={() => { setShowClaimForm(p => !p); setClaimForm(emptyClaim()); }} style={{ fontSize: '0.8rem', background: showClaimForm ? '#f3f4f6' : '#111827', color: showClaimForm ? '#374151' : 'white', border: 'none', borderRadius: 8, padding: '6px 12px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                   {showClaimForm ? 'Huỷ' : '+ Ghi khoản chi'}
@@ -2403,7 +2406,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   <input type="text" placeholder="Chi gì? (vd: Xăng đi chợ)" value={claimForm.item} maxLength={80} onChange={e => setClaimForm(p => ({ ...p, item: e.target.value }))}
                     style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <input type="text" inputMode="numeric" placeholder="Số tiền (đ)" value={claimForm.amount}
+                    <input type="text" inputMode="numeric" placeholder="Số tiền đã chi (đ)" value={claimForm.amount}
                       onChange={e => { const r = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setClaimForm(p => ({ ...p, amount: r ? Number(r).toLocaleString('vi-VN') : '' })); }}
                       style={{ flex: 1, minWidth: 0, padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />
                     <label style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.72rem', color: '#64748b' }}>Ngày chi
@@ -2413,17 +2416,38 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   </div>
                   <input type="text" placeholder="Ghi thêm (tuỳ chọn): mua ở đâu, cho việc gì…" value={claimForm.note} maxLength={300} onChange={e => setClaimForm(p => ({ ...p, note: e.target.value }))}
                     style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.88rem' }} />
-                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#374151' }}>Duyệt xong bạn muốn nhận lại tiền thế nào?</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                    {[['cash', '💵 Lấy tiền mặt', 'chủ đưa khi duyệt'], ['salary', '💰 Cộng vào lương', 'trả cùng tiền lương']].map(([k, t, sub]) => (
-                      <button key={k} type="button" onClick={() => setClaimForm(p => ({ ...p, payout: k }))} aria-pressed={claimForm.payout === k}
-                        style={{ textAlign: 'left', padding: '10px 12px', borderRadius: 10, cursor: 'pointer', border: `2px solid ${claimForm.payout === k ? '#16a34a' : '#e5e7eb'}`,
-                          background: claimForm.payout === k ? '#f0fdf4' : 'white' }}>
+                  {/* Tiền tự bỏ ra hay chủ đưa trước; chủ đưa trước thì máy tính phần thừa (đưa lại chủ) / phần lố (nhận lại). */}
+                  {(() => {
+                    const choice = (key, on, t, sub, pick) => (
+                      <button key={key} type="button" onClick={pick} aria-pressed={on}
+                        style={{ textAlign: 'left', padding: '10px 12px', borderRadius: 10, cursor: 'pointer', border: `2px solid ${on ? '#16a34a' : '#e5e7eb'}`, background: on ? '#f0fdf4' : 'white' }}>
                         <div style={{ fontWeight: 800, fontSize: '0.86rem', color: '#111827' }}>{t}</div>
                         <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 2 }}>{sub}</div>
                       </button>
-                    ))}
-                  </div>
+                    );
+                    const ask = text => <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#374151' }}>{text}</div>;
+                    const payoutChoices = <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                      {[['cash', '💵 Lấy tiền mặt', 'chủ đưa khi duyệt'], ['salary', '💰 Cộng vào lương', 'trả cùng tiền lương']].map(([k, t, sub]) =>
+                        choice(k, claimForm.payout === k, t, sub, () => setClaimForm(p => ({ ...p, payout: k }))))}
+                    </div>;
+                    const spent = Number(String(claimForm.amount).replace(/\D/g, '')) || 0, given = Number(String(claimForm.given_amount).replace(/\D/g, '')) || 0;
+                    const box = (bg, color, children) => <div style={{ background: bg, color, borderRadius: 9, padding: '9px 12px', fontSize: '0.84rem', lineHeight: 1.45 }}>{children}</div>;
+                    return <>
+                      {ask('Tiền ở đâu ra?')}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        {choice('own', !claimForm.given, '🙋 Tôi tự bỏ tiền', 'chủ trả lại sau', () => setClaimForm(p => ({ ...p, given: false, given_amount: '' })))}
+                        {choice('given', claimForm.given, '💵 Chủ đưa trước', 'thừa thì đưa lại chủ', () => setClaimForm(p => ({ ...p, given: true })))}
+                      </div>
+                      {claimForm.given && <input type="text" inputMode="numeric" placeholder="Chủ đưa bao nhiêu (đ)" value={claimForm.given_amount} aria-label="Chủ đưa bao nhiêu"
+                        onChange={e => { const r = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setClaimForm(p => ({ ...p, given_amount: r ? Number(r).toLocaleString('vi-VN') : '' })); }}
+                        style={{ padding: '9px 12px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.9rem' }} />}
+                      {!claimForm.given && <>{ask('Duyệt xong bạn muốn nhận lại tiền thế nào?')}{payoutChoices}</>}
+                      {claimForm.given && given > 0 && spent > 0 && (given > spent
+                        ? box('#f0fdf4', '#166534', <>Còn thừa <b>{formatMoney(given - spent)}</b> → đưa lại chủ. Chủ bấm duyệt khi đã nhận lại tiền.</>)
+                        : given === spent ? box('#f8fafc', '#334155', <>Chi vừa đủ số chủ đưa, không ai nợ ai.</>)
+                        : <>{box('#fff7ed', '#9a3412', <>Chi lố <b>{formatMoney(spent - given)}</b> so với số chủ đưa.</>)}{ask('Bạn muốn nhận lại phần lố thế nào?')}{payoutChoices}</>)}
+                    </>;
+                  })()}
                   <button onClick={handleSubmitClaim} disabled={sending === 'claim'} style={{ background: '#16a34a', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer', opacity: sending === 'claim' ? 0.6 : 1 }}>
                     {sending === 'claim' ? 'Đang gửi…' : 'Gửi chủ duyệt'}
                   </button>
@@ -2518,7 +2542,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 title: r.request_type === 'advance' ? `💵 Ứng ${formatMoney(r.amount)}` : `🏖 Nghỉ ${r.days} ngày${leaveText(myLeaveDays.find(l => l.request_id === r.id))}`, sub: r.reason })),
               ...myClaims.list.map(x => ({ key: `c-${x.id}`, id: x.id, kind: 'claim', at: x.created_at, status: x.status, admin_note: x.admin_note,
                 title: `🧾 ${x.item} · ${formatMoney(x.amount)}`,
-                sub: `Chi hộ ngày ${ddmm(x.spent_on)} · ${x.payout === 'cash' ? '💵 lấy tiền mặt' : `💰 cộng vào lương${x.status === 'approved' && x.month ? ` tháng ${x.month}/${x.year}` : ''}`}${x.note ? ` · ${x.note}` : ''}` })),
+                sub: `Chi hộ ngày ${ddmm(x.spent_on)} · ${x.given_amount ? `💵 ${x.settle}` : x.payout === 'cash' ? '💵 lấy tiền mặt' : `💰 cộng vào lương${x.status === 'approved' && x.month ? ` tháng ${x.month}/${x.year}` : ''}`}${x.note ? ` · ${x.note}` : ''}` })),
               ...myPeer.list.map(x => ({ key: `p-${x.id}`, id: x.id, kind: 'peer', at: x.created_at, status: x.status, admin_note: x.admin_note,
                 title: `🚩 Báo lỗi ${x.staff_name}: ${x.reason}`, sub: `Ngày ${ddmm(x.date)}${x.note ? ` · ${x.note}` : ''}`,
                 label: x.status === 'approved' ? '✅ Chủ đã xử lý' : x.status === 'rejected' ? 'Chủ bỏ qua' : null })),
@@ -2930,6 +2954,10 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
               {/* Khoản chi hộ quán: duyệt → vào Sổ thu chi (Chi trong ngày, đúng ngày chi); tiền mặt thì đưa ngay, cộng lương thì vào lương tháng này. */}
               {[...claims.claims.filter(x => x.status === 'pending'), ...claims.claims.filter(x => x.status !== 'pending').slice(0, 20)].map(x => {
                 const who = staffList.find(st => st.id === x.staff_id)?.full_name || x.created_by_name || 'Không rõ', cash = x.payout === 'cash';
+                // Chủ đưa trước: duyệt = đã nhận lại tiền thừa / chi vừa đủ / trả phần chi lố (tiền mặt hay cộng lương).
+                const given = x.given_amount > 0, owed = given ? x.owed : x.amount;
+                const approveLabel = x.left > 0 ? `✓ Duyệt · đã nhận lại ${formatMoney(x.left)}` : given && !owed ? '✓ Duyệt · chi vừa đủ'
+                  : cash ? `✓ Duyệt · đưa ${given ? formatMoney(owed) : 'tiền mặt'}` : '✓ Duyệt · cộng lương';
                 const at = ts => (ts ? new Date(ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '');
                 return (
                   <div key={`claim-${x.id}`} className={`request-card ${x.status}`}>
@@ -2937,11 +2965,14 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                       <div className="name">{who}</div>
                       <div style={{ marginTop: 4 }}>
                         <span style={{ display: 'inline-block', background: '#dcfce7', color: '#166534', borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>🧾 Chi hộ quán</span>
-                        <span className={`status-badge ${x.status}`}>{x.status === 'pending' ? '⏳ Chờ duyệt' : x.status === 'approved' ? (cash ? '✅ Đã duyệt · đã đưa tiền mặt' : `✅ Đã duyệt · cộng lương ${x.month}/${x.year}`) : '❌ Từ chối'}</span>
+                        <span className={`status-badge ${x.status}`}>{x.status === 'pending' ? '⏳ Chờ duyệt' : x.status === 'approved' ? (given && (x.left > 0 || !owed) ? '✅ Đã duyệt'
+                          : cash ? '✅ Đã duyệt · đã đưa tiền mặt' : `✅ Đã duyệt · cộng lương ${x.month}/${x.year}`) : '❌ Từ chối'}</span>
                       </div>
                       <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
                         <div><strong>{x.item}</strong>: <strong>{formatMoney(x.amount)}</strong> · chi ngày {ddmm(x.spent_on)}</div>
-                        <div>Muốn nhận lại: <strong>{cash ? '💵 Lấy tiền mặt tại chủ' : '💰 Cộng vào lương'}</strong></div>
+                        {given ? <div>💵 Chủ đưa trước <strong>{formatMoney(x.given_amount)}</strong> → <strong>{x.left > 0 ? `đưa lại chủ ${formatMoney(x.left)}` : !owed ? 'chi vừa đủ'
+                          : `chi lố ${formatMoney(owed)}, ${cash ? 'lấy tiền mặt' : 'cộng vào lương'}`}</strong></div>
+                          : <div>Muốn nhận lại: <strong>{cash ? '💵 Lấy tiền mặt tại chủ' : '💰 Cộng vào lương'}</strong></div>}
                         {x.note && <div>Ghi thêm: {x.note}</div>}
                         <div style={{ color: '#94a3b8' }}>Ghi lúc {at(x.created_at)}{x.status !== 'pending' && x.decided_by ? ` · ${x.status === 'approved' ? 'duyệt' : 'từ chối'} bởi ${x.decided_by} ${at(x.decided_at)}` : ''}</div>
                         {x.status === 'approved' && <div style={{ color: '#475569' }}>Đã vào Sổ thu chi → Chi trong ngày {ddmm(x.spent_on)}.</div>}
@@ -2950,8 +2981,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                     </div>
                     <div className="request-actions">
                       {x.status === 'pending' ? <>
-                        <button className="btn-success" onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved' })}>{cash ? '✓ Duyệt · đưa tiền mặt' : '✓ Duyệt · cộng lương'}</button>
-                        {!cash && <button onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved', cash: true }, `Duyệt và đưa ${formatMoney(x.amount)} tiền mặt cho ${who} (không cộng vào lương)?`)}
+                        <button className="btn-success" onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved' })}>{approveLabel}</button>
+                        {!cash && <button onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved', cash: true }, `Duyệt và đưa ${formatMoney(owed)} tiền mặt cho ${who} (không cộng vào lương)?`)}
                           style={{ padding: '6px 10px', background: 'white', border: '1px solid #bbf7d0', borderRadius: 7, color: '#15803d', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer' }}>💵 Đưa tiền mặt</button>}
                         <button className="btn-danger" onClick={() => { const note = prompt('Lý do từ chối (tuỳ chọn):'); if (note === null) return; claimAction('decide_claim', { id: x.id, status: 'rejected', admin_note: note }); }}>✗ Từ chối</button>
                       </> : (
