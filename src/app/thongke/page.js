@@ -757,9 +757,10 @@ function ApBtn({ k, tone = 'ok', onClick, children, busy, armed }) {
   return <button type="button" className={`tk-ap-btn ${tone}${armed === k ? ' armed' : ''}`} disabled={!!busy} onClick={onClick}>
     {busy === k ? 'Đang lưu…' : armed === k ? 'Bấm lần nữa' : children}</button>;
 }
-function ApItem({ title, lines = [], children }) {
+function ApItem({ title, lines = [], photo = null, children }) {
   return <li className="tk-ap">
-    <div className="tk-ap-main"><b>{title}</b>{lines.filter(Boolean).map((l, i) => <small key={i}>{l}</small>)}</div>
+    <div className="tk-ap-main"><b>{title}</b>{lines.filter(Boolean).map((l, i) => <small key={i}>{l}</small>)}
+      {photo && <a className="tk-ap-photo" href={photo} target="_blank" rel="noreferrer" title="Bấm để xem ảnh lớn"><img src={photo} alt="Ảnh làm chứng" /></a>}</div>
     <div className="tk-ap-actions">{children}</div>
   </li>;
 }
@@ -836,7 +837,7 @@ function ApprovePanel({ inbox, failed, onReload, onChanged }) {
     </ApSection>
 
     <ApSection icon={ShieldAlert} title="Báo lỗi đồng nghiệp" list={peers}>
-      {peers.map(r => { const k = `p${r.id}`; return <ApItem key={r.id} title={`${r.name} · ${r.reason}`}
+      {peers.map(r => { const k = `p${r.id}`; return <ApItem key={r.id} title={`${r.name} · ${r.reason}`} photo={r.photo}
         lines={[`Ngày ${dayText(r.date)} · người báo: ${r.reporter} (chỉ bạn thấy)`, r.note && `Ghi thêm: ${r.note}`]}>
         {amountBox(k, r.suggested, 'Tiền phạt')}
         <ApBtn busy={busy} armed={armed} k={k} tone="bad" onClick={() => act(k, 'decide_peer', { id: r.id, status: 'approved', amount: digits(amountOf(k, r.suggested)) }, `Đã ghi phạt ${r.name}.`)}>

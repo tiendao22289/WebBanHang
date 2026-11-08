@@ -2,7 +2,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { workforce } from '@/lib/staffApi';
+import { workforce, workforceWithPhoto } from '@/lib/staffApi';
+import CameraCapture from '@/lib/CameraCapture';
 import { currentWorkDay, dayFlags, dayInShiftMs, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
 import { DEFAULT_OT_RATE, LATE_FINE_MINUTES, MAX_CYCLE_DAYS, STANDARD_DAYS, activeFineKinds, addDays, bonusCheck, computeSalary, cycleDueTo, cyclePayday, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthDays, monthTallies, nothingDue, paydayWeekday,
   payoutPartOfMonth, shopClosedDays, usesDayPay } from '@/lib/payroll.mjs';
@@ -604,12 +605,16 @@ export default function PayrollPage({ staffSection = null } = {}) {
   const [myPeer, setMyPeer] = useState({ ready: false, colleagues: [], list: [] });
   const emptyPeer = () => ({ staff_id: '', rule_id: '', reason: '', note: '', date: '' });
   const [peerForm, setPeerForm] = useState(emptyPeer);
+  // Ảnh làm chứng (không bắt buộc) kèm báo lỗi đồng nghiệp: { blob, url } để xem trước; peerCamera mở khung chụp.
+  const [peerPhoto, setPeerPhotoState] = useState(null);
+  const [peerCamera, setPeerCamera] = useState(false);
+  const setPeerPhoto = blob => setPeerPhotoState(old => { if (old) URL.revokeObjectURL(old.url); return blob ? { blob, url: URL.createObjectURL(blob) } : null; });
   // Trang Đơn từ: loại đơn đang mở ('fine' | 'claim' | 'advance' | 'absent' | 'peer').
   const [formTab, setFormTab] = useState('');
   const pickForm = k => {
     setFormTab(t => (t === k ? '' : k));
     setShowSelfFine(k === 'fine'); setShowClaimForm(k === 'claim'); setShowAdvForm(k === 'advance'); setShowAbsForm(k === 'absent');
-    setClaimForm(emptyClaim()); setPeerForm(emptyPeer());
+    setClaimForm(emptyClaim()); setPeerForm(emptyPeer()); setPeerPhoto(null);
   };
   const [myMonth,    setMyMonth]    = useState({ y: now.getFullYear(), m: now.getMonth() + 1 }); // tháng của lịch sử chấm công
   const [myBonus,    setMyBonus]    = useState(null); // thưởng chuyên cần: đã trễ / quên ra ca chưa (khi chủ có dùng)
@@ -623,12 +628,12 @@ export default function PayrollPage({ staffSection = null } = {}) {
   };
   // Gửi một đơn: không cho bấm lần 2 khi đang gửi (kể cả bấm đúp thật nhanh), báo kết quả ngay trên trang.
   const sendingRef = React.useRef('');
-  const send = async (key, action, body, done) => {
+  const send = async (key, action, body, done, photo = null) => {
     if (sendingRef.current) return false;
     sendingRef.current = key;
     setSending(key);
     try {
-      await workforce(action, body);
+      await (photo ? workforceWithPhoto(action, body, photo) : workforce(action, body));
       done?.();
       fetchStaffData(currentUser.id);
       return true;
@@ -742,7 +747,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     if (!who) return say('Chọn người bạn muốn báo lỗi.', false);
     if (!reason) return say('Chọn lỗi trong danh sách hoặc ghi rõ lỗi gì.', false);
     const ok = await send('peer', 'report_peer', { staff_id: who.id, rule_id: rule?.id || null, reason: rule ? '' : reason, note: peerForm.note, date: peerForm.date || null },
-      () => setPeerForm(emptyPeer()));
+      () => { setPeerForm(emptyPeer()); setPeerPhoto(null); }, peerPhoto?.blob || null);
     if (ok) say(`Đã báo lỗi của ${who.name}. Chủ quán sẽ xem và quyết định.`);
   };
 
@@ -770,13 +775,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   }, []);
   // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
   // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
-  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], payouts: [], monthOver: false, claims: [] });
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], payouts: [], monthOver: false, claims: [], peerFines: [] });
   const fetchPayrollMonth = useCallback(async () => {
     try {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], payouts: j.payouts || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [], claims: j.claims || [] });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], payouts: j.payouts || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [], claims: j.claims || [], peerFines: j.peerFines || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   // So khuôn mặt ở máy quầy (app): cài đặt, ai có mặt mẫu, ca sai mặt 3 lần chờ duyệt.
@@ -1425,6 +1430,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     );
   };
   // Danh sách lỗi mở ra dưới dòng của người đó: ngày, lỗi (🤖 máy gợi ý, 🙋 nhân viên tự ghi), ghi chú, ai ghi lúc nào, số tiền.
+  // Khoản phạt từ báo lỗi đồng nghiệp: ai báo, ghi thêm, ảnh làm chứng (chỉ chủ thấy; link ảnh hết hạn sau 1 giờ, tải lại trang là có link mới).
+  const peerFineInfo = violationId => {
+    const p = (payrollMonth.peerFines || []).find(x => x.violation_id === violationId);
+    if (!p) return null;
+    return <div style={{ fontSize: '0.72rem', color: '#991b1b' }}>🚩 đồng nghiệp báo{p.reporter ? `: ${p.reporter}` : ''}{p.note ? ` · ${p.note}` : ''}
+      {p.photo && <> · <a href={p.photo} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontWeight: 700 }}>📷 Xem ảnh</a></>}</div>;
+  };
   const finesPanel = s => {
     const list = finesOf(s.id), total = list.reduce((a, x) => a + Number(x.v.amount || 0), 0);
     const dayOf = iso => ddmm(new Date(Date.parse(iso) + 7 * 3600000).toISOString().slice(0, 10));
@@ -1445,6 +1457,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   <td data-label="" className="detail-wide" style={{ padding: '6px 10px', verticalAlign: 'top' }}>
                     {m?.kind ? '🤖 ' : ''}{m?.self_reported ? '🙋 ' : ''}{v.reason || '(không ghi lý do)'}
                     {m?.note && <div style={{ fontSize: '0.74rem', color: '#475569' }}>{m.note}</div>}
+                    {peerFineInfo(v.id)}
                     <div style={{ fontSize: '0.7rem', color: m?.self_reported ? '#b45309' : '#94a3b8' }}>
                       {m?.self_reported ? 'nhân viên tự ghi' : m?.recorded_by ? `ghi bởi ${m.recorded_by}` : 'chủ ghi'}{m?.kind && !m?.self_reported ? ' · lỗi máy gợi ý' : ''}
                       {v.created_at ? ` lúc ${hhmm(v.created_at)} ${dayOf(v.created_at)}` : ''}
@@ -2326,7 +2339,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 {(c.vioAmt > 0 || myFines.length > 0) && row(`Phạt (${myFines.length} lỗi)`, `−${formatMoney(c.vioAmt)}`, '#dc2626')}
                 {myFines.length > 0 && (
                   <div style={{ fontSize: '0.76rem', color: '#64748b', padding: '2px 0 6px', borderBottom: '1px solid #f1f5f9' }}>
-                    {myFines.map((v, i) => <div key={v.id || i}>• {v.date ? `${ddmm(v.date)} · ` : ''}{v.self ? '🙋 ' : ''}{v.reason}{v.note ? ` (${v.note})` : ''} — {Number(v.amount) > 0 ? formatMoney(v.amount) : 'chờ chủ quán định tiền'}</div>)}
+                    {myFines.map((v, i) => <div key={v.id || i}>• {v.date ? `${weekday(v.date)} ${ddmm(v.date)} · ` : ''}{v.self ? '🙋 ' : ''}{v.reason}{v.note ? ` (${v.note})` : ''} — {Number(v.amount) > 0 ? `trừ ${formatMoney(v.amount)}` : 'chờ chủ quán định tiền'}</div>)}
                   </div>
                 )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, paddingTop: 10 }}>
@@ -2553,6 +2566,18 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem', color: '#475569' }}>Ngày xảy ra
                 <input type="date" value={peerForm.date || myPeer.workDay || vnToday()} max={vnToday()} min={new Date(Date.parse(`${vnToday()}T00:00:00Z`) - 7 * 86400000).toISOString().slice(0, 10)}
                   onChange={e => setPeerForm(p => ({ ...p, date: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.85rem' }} /></label>
+              {/* Ảnh làm chứng: không bắt buộc, chỉ chủ quán xem (người bị báo không thấy). */}
+              {peerPhoto
+                ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 8, border: '1px solid #e5e7eb', borderRadius: 10 }}>
+                    <img src={peerPhoto.url} alt="Ảnh làm chứng" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8 }} />
+                    <span style={{ flex: 1, fontSize: '0.8rem', color: '#475569' }}>📷 Đã có ảnh làm chứng<br /><small style={{ color: '#94a3b8' }}>Chỉ chủ quán xem</small></span>
+                    <button type="button" onClick={() => setPeerPhoto(null)} style={{ fontSize: '0.78rem', padding: '6px 10px', background: 'white', border: '1px solid #e2e8f0', borderRadius: 8, color: '#64748b', cursor: 'pointer' }}>Xoá ảnh</button>
+                  </div>
+                : <button type="button" onClick={() => setPeerCamera(true)} style={{ padding: '10px', border: '1.5px dashed #cbd5e1', borderRadius: 9, background: '#f8fafc', fontWeight: 700, color: '#334155', cursor: 'pointer', fontSize: '0.86rem' }}>
+                    📷 Chụp ảnh làm chứng <span style={{ fontWeight: 400, color: '#64748b' }}>(không bắt buộc)</span>
+                  </button>}
+              {peerCamera && <CameraCapture title="Chụp ảnh làm chứng" subtitle='Chụp rõ chỗ làm sai (ly vỡ, món ghi sai…) · ảnh có sẵn thì bấm "Chọn ảnh có sẵn"'
+                gallery="Chọn ảnh có sẵn" closeText="Huỷ" onClose={() => setPeerCamera(false)} onCapture={blob => setPeerPhoto(blob)} />}
               <button onClick={handleSubmitPeer} disabled={sending === 'peer'} style={{ background: '#b91c1c', color: 'white', border: 'none', borderRadius: 9, padding: '11px', fontWeight: 800, cursor: 'pointer', opacity: sending === 'peer' ? 0.6 : 1 }}>
                 {sending === 'peer' ? 'Đang gửi…' : 'Gửi chủ quán xem'}
               </button>
@@ -2568,7 +2593,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 title: `🧾 ${x.item} · ${formatMoney(x.amount)}`,
                 sub: `Chi hộ ngày ${ddmm(x.spent_on)} · ${x.given_amount ? `💵 ${x.settle}` : x.payout === 'cash' ? '💵 lấy tiền mặt' : `💰 cộng vào lương${x.status === 'approved' && x.month ? ` tháng ${x.month}/${x.year}` : ''}`}${x.note ? ` · ${x.note}` : ''}` })),
               ...myPeer.list.map(x => ({ key: `p-${x.id}`, id: x.id, kind: 'peer', at: x.created_at, status: x.status, admin_note: x.admin_note,
-                title: `🚩 Báo lỗi ${x.staff_name}: ${x.reason}`, sub: `Ngày ${ddmm(x.date)}${x.note ? ` · ${x.note}` : ''}`,
+                title: `🚩 Báo lỗi ${x.staff_name}: ${x.reason}`, sub: `Ngày ${ddmm(x.date)}${x.has_photo ? ' · 📷 có ảnh' : ''}${x.note ? ` · ${x.note}` : ''}`,
                 label: x.status === 'approved' ? '✅ Chủ đã xử lý' : x.status === 'rejected' ? 'Chủ bỏ qua' : null })),
             ].sort((a, b) => String(b.at).localeCompare(String(a.at)));
             return (
@@ -2959,6 +2984,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                       <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
                         <div>Lỗi: <strong>{x.reason}</strong> · ngày {ddmm(x.date)}</div>
                         {x.note && <div>Ghi thêm: {x.note}</div>}
+                        {x.photo && <a href={x.photo} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 4 }} title="Bấm để xem ảnh lớn">
+                          <img src={x.photo} alt="Ảnh làm chứng" style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 8, border: '1px solid #e5e7eb', display: 'block' }} /></a>}
                         <div style={{ color: '#475569' }}>Người báo: <strong>{by}</strong> <span style={{ color: '#94a3b8' }}>(chỉ bạn thấy)</span></div>
                         <div style={{ color: '#94a3b8' }}>Báo lúc {at(x.created_at)}{x.status !== 'pending' && x.decided_by ? ` · ${x.decided_by} ${at(x.decided_at)}` : ''}</div>
                       </div>
@@ -3215,6 +3242,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <td>{v.staff?.full_name || nameOf(v.staff_id)}</td>
                             <td>{m?.kind ? '🤖 ' : ''}{m?.self_reported ? '🙋 ' : ''}{v.reason}
                               {m?.note && <div style={{ fontSize: '0.76rem', color: '#475569' }}>{m.note}</div>}
+                              {peerFineInfo(v.id)}
                               {m?.recorded_by && <div style={{ fontSize: '0.72rem', color: m?.self_reported ? '#b45309' : '#94a3b8' }}>
                                 {m?.self_reported ? 'nhân viên tự ghi' : `ghi bởi ${m.recorded_by}`}{v.created_at ? ` lúc ${hhmm(v.created_at)} ${ddmm(new Date(Date.parse(v.created_at) + 7 * 3600000).toISOString().slice(0, 10))}` : ''}
                               </div>}
