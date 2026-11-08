@@ -1,12 +1,15 @@
 /**
  * Giỏ của khách chưa gửi → trang Bàn biết (supabase/migrations/customer_cart_alert.sql).
  *
- * Trang gọi món QR báo giỏ lên máy chủ mỗi khi giỏ đổi (report_customer_cart). Trang Bàn hiện 🛒 trên
- * đúng bàn có giỏ; giỏ để yên CART_FORGOT_MS mà chưa gửi thì ô bàn chớp vàng "Khách quên gửi món".
+ * Trang gọi món QR báo giỏ lên máy chủ mỗi khi giỏ đổi (report_customer_cart). Trang Bàn hiện
+ * "🛒 10 món · 4 phút" trên đúng bàn có giỏ (số phút = từ lúc khách bỏ món đầu tiên vào giỏ). Đủ
+ * CART_FORGOT_MS mà chưa gửi thì cả ô bàn chớp vàng + kêu chuông (createCartBell) để nhân viên ra giúp.
  * Khách gửi đơn / xoá hết giỏ → dòng bị xoá, báo tắt. Nhân viên bấm "Tắt" (đã nhắc khách) → xoá dòng
  * của bàn, khách sửa giỏ thì báo lại. Trước đó (CART_REMIND_MS) điện thoại khách tự nhắc "chưa gửi món".
  */
 
+// Chủ quán (2026-11-08): khách chọn món quá 5 phút mà chưa gửi → bàn chớp vàng, kêu chuông. Đếm từ lúc
+// khách bỏ món đầu tiên vào giỏ — đúng số phút hiện trên ô bàn — chứ không phải từ lần sửa giỏ cuối.
 export const CART_FORGOT_MS = 5 * 60 * 1000;
 // Nhắc ngay trên điện thoại khách trước khi trang Bàn chớp vàng (khách tự gửi, nhân viên khỏi chạy ra).
 export const CART_REMIND_MS = 3 * 60 * 1000;
@@ -100,39 +103,93 @@ export function createCartReminder({ onChange, delayMs = CART_REMIND_MS, timers 
 }
 
 /**
- * Kết quả get_customer_carts → giỏ với mốc "đổi lần cuối" theo đồng hồ MÁY NÀY: máy chủ cho biết
- * giỏ đã để yên bao lâu (idle_ms), nên máy ở quán lệch giờ vẫn đếm đúng 5 phút.
+ * Kết quả get_customer_carts → giỏ với các mốc theo đồng hồ MÁY NÀY: máy chủ cho biết khách đã chọn
+ * bao lâu (age_ms, từ món đầu tiên) và để yên bao lâu (idle_ms), nên máy ở quán lệch giờ (đã gặp lệch
+ * 9 phút) vẫn đếm đúng 5 phút.
  */
 export function customerCartsFromServer(rows, now = Date.now()) {
   return (Array.isArray(rows) ? rows : [])
-    .map(r => ({
-      tableId: r?.table_id || null,
-      count: Math.max(0, Math.round(Number(r?.item_count) || 0)),
-      items: Array.isArray(r?.items) ? r.items : [],
-      changedAt: now - Math.max(0, Number(r?.idle_ms) || 0),
-    }))
+    .map(r => {
+      const idle = Math.max(0, Number(r?.idle_ms) || 0);
+      // age_ms luôn ≥ idle_ms; thiếu (máy chủ cũ) thì lấy idle_ms cho khỏi báo sai sớm.
+      const age = Math.max(idle, Number(r?.age_ms) || 0);
+      return {
+        tableId: r?.table_id || null,
+        count: Math.max(0, Math.round(Number(r?.item_count) || 0)),
+        items: Array.isArray(r?.items) ? r.items : [],
+        changedAt: now - idle,
+        startedAt: now - age,
+      };
+    })
     .filter(c => c.tableId && c.count > 0);
 }
 
 /**
- * Gộp theo bàn (1 bàn nhiều điện thoại): { [tableId]: { count, forgot, idleMs, forgotCount } }.
- * forgot: có giỏ để yên từ CART_FORGOT_MS trở lên; forgotCount: số món của các giỏ đó.
+ * Gộp theo bàn (1 bàn nhiều điện thoại): { [tableId]: { count, ageMs, forgot, forgotCount, idleMs } }.
+ * ageMs: khách chọn lâu nhất bao lâu (số phút hiện trên ô bàn); forgot: có giỏ chọn từ CART_FORGOT_MS
+ * trở lên mà chưa gửi (ô bàn chớp vàng + chuông); forgotCount: số món của các giỏ đó.
  */
 export function customerCartsByTable(carts, now = Date.now()) {
   const out = {};
   for (const c of Array.isArray(carts) ? carts : []) {
     if (!c?.tableId || !(c.count > 0)) continue;
     const idle = Math.max(0, now - c.changedAt);
-    const t = out[c.tableId] || (out[c.tableId] = { count: 0, forgot: false, idleMs: 0, forgotCount: 0 });
+    const age = Math.max(idle, now - (Number.isFinite(c.startedAt) ? c.startedAt : c.changedAt));
+    const t = out[c.tableId] || (out[c.tableId] = { count: 0, ageMs: 0, forgot: false, forgotCount: 0, idleMs: 0 });
     t.count += c.count;
-    if (idle >= CART_FORGOT_MS) { t.forgot = true; t.forgotCount += c.count; }
+    if (age >= CART_FORGOT_MS) { t.forgot = true; t.forgotCount += c.count; }
+    t.ageMs = Math.max(t.ageMs, age);
     t.idleMs = Math.max(t.idleMs, idle);
   }
   return out;
 }
 
-/** "7 phút" — giỏ để yên bao lâu, cho dòng chữ trên ô bàn. */
-export function idleMinutesText(ms) {
+/**
+ * "4 phút" — khách đã chọn món bao lâu, cho dòng chữ trên ô bàn ("<1 phút" khi vừa chọn). Dấu cách
+ * không ngắt dòng (ô bàn 375px hẹp: không để "4" một dòng, "phút" một dòng).
+ */
+export function cartMinutesText(ms) {
   const m = Math.floor(Math.max(0, Number(ms) || 0) / 60000);
-  return m < 60 ? `${m} phút` : `${Math.floor(m / 60)} giờ ${m % 60} phút`;
+  if (m < 1) return '<1 phút';
+  return m < 60 ? `${m} phút` : `${Math.floor(m / 60)} giờ ${m % 60} phút`;
+}
+
+// ── Chuông trang Bàn khi bàn bắt đầu chớp vàng ─────────────────────────────────
+// Kêu ngay lúc bàn đủ 5 phút, nhắc lại mỗi 2 phút, tối đa 5 lần (~8 phút) rồi chỉ còn chớp — có chừng
+// mực, không kêu suốt 2 tiếng nếu khách bỏ đi. Nhiều bàn tới lượt cùng lúc chỉ kêu 1 lần, 2 lần kêu cách
+// nhau ít nhất 30 giây.
+export const CART_BELL_REPEAT_MS = 2 * 60 * 1000;
+export const CART_BELL_MAX_RINGS = 5;
+export const CART_BELL_GAP_MS = 30 * 1000;
+
+/**
+ * Lịch chuông theo bàn. check(forgotIds, now, { canRing }) → { ring: các bàn kêu lần này, blocked }.
+ * canRing = false (trình duyệt chưa cho phát tiếng vì chưa ai chạm trang) → không tính là đã kêu,
+ * blocked = true khi có bàn tới lượt kêu; chạm trang xong thì lần check sau kêu ngay.
+ * quiet(tableId): nhân viên đã mở bàn xem → bàn đó thôi kêu (vẫn chớp) tới khi hết báo (khách gửi món,
+ * giỏ trống, bấm Tắt); lần sau bàn đó báo lại thì kêu lại.
+ */
+export function createCartBell({ repeatMs = CART_BELL_REPEAT_MS, maxRings = CART_BELL_MAX_RINGS, gapMs = CART_BELL_GAP_MS } = {}) {
+  let tables = new Map(); // tableId → { rings, lastAt, quiet }
+  let lastRingAt = -Infinity;
+  return {
+    check(forgotIds, now = Date.now(), { canRing = true } = {}) {
+      const next = new Map();
+      for (const id of Array.isArray(forgotIds) ? forgotIds : []) {
+        if (id && !next.has(id)) next.set(id, tables.get(id) || { rings: 0, lastAt: -Infinity, quiet: false });
+      }
+      tables = next; // bàn hết báo thì quên luôn → lần báo sau là lượt mới
+      const due = [...tables].filter(([, t]) => !t.quiet && t.rings < maxRings && now - t.lastAt >= repeatMs).map(([id]) => id);
+      if (!due.length) return { ring: [], blocked: false };
+      if (!canRing) return { ring: [], blocked: true };
+      if (now - lastRingAt < gapMs) return { ring: [], blocked: false };
+      for (const id of due) { const t = tables.get(id); tables.set(id, { ...t, rings: t.rings + 1, lastAt: now }); }
+      lastRingAt = now;
+      return { ring: due, blocked: false };
+    },
+    quiet(tableId) {
+      const t = tables.get(tableId);
+      if (t) tables.set(tableId, { ...t, quiet: true });
+    },
+  };
 }
