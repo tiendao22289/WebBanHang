@@ -187,23 +187,29 @@
   }
 }
 
-/* Khách để món trong giỏ trên điện thoại ≥ 5 phút mà chưa gửi (lib/customerCartAlert.mjs) */
+/* Khách chọn món trên điện thoại ≥ 5 phút mà chưa gửi (lib/customerCartAlert.mjs): CẢ ô bàn chớp vàng
+   liên tục (màu thường ↔ vàng). Hoạt ảnh thắng màu nền / viền / bóng ghi thẳng trên thẻ (style=…);
+   "background" (không phải background-color) để phủ cả ô nền gradient của danh sách bàn trên PC. */
 .cart-forgot-blink {
-  animation: cartForgotBlink 0.9s ease-in-out infinite;
+  animation: cartForgotBlink 0.55s ease-in-out infinite alternate;
 }
 
 @keyframes cartForgotBlink {
-  0%, 100% {
-    outline: 3px solid rgba(250, 204, 21, 0.35);
-    box-shadow: 0 0 0 0 rgba(250, 204, 21, 0);
-  }
-  50% {
-    outline: 5px solid #facc15;
-    box-shadow: 0 0 18px 6px rgba(250, 204, 21, 0.75);
+  to {
+    background: #facc15;
+    border-color: #a16207;
+    box-shadow: 0 0 0 4px rgba(250, 204, 21, 0.6), 0 0 22px 6px rgba(234, 179, 8, 0.8);
   }
 }
 
+/* KHÔNG tắt chớp khi máy bật "giảm hiệu ứng" (prefers-reduced-motion: Windows tắt hiệu ứng động,
+   iPhone Reduce Motion): bản đầu tắt ở đó nên máy thật chỉ thấy viền vàng đứng yên. Chủ quán muốn
+   chớp liên tục, giống bàn báo bếp (kitchen-alert-blink) vốn chớp trên mọi máy. */
+
+/* Chữ nền nâu đậm, đọc được cả lúc ô bàn đang vàng. Bấm = Tắt báo. */
 .cart-forgot-bar {
+  position: relative;
+  z-index: 1; /* nằm trên nút QR góc phải ô bàn */
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -211,15 +217,30 @@
   width: 100%;
   margin-top: 4px;
   padding: 3px 4px 3px 7px;
-  border: 1px solid #eab308;
+  border: 1px solid #713f12;
   border-radius: 8px;
-  background: #fde047;
-  color: #713f12;
+  background: #92400e;
+  color: #fff;
   font-size: 0.64rem;
   font-weight: 800;
   line-height: 1.25;
   text-align: left;
   cursor: pointer;
+}
+
+/* Ô bàn điện thoại (375px: ô ~110px): chữ chiếm cả bề ngang, hẹp thì nút Tắt xuống dòng (nằm bên
+   phải); chừa chỗ dưới cho nút QR góc phải ô bàn khỏi đè lên thanh. */
+.cart-forgot-bar:not(.compact) {
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.cart-forgot-bar:not(.compact) > span:first-child {
+  flex: 1 1 auto;
+}
+
+.cart-forgot-bar:not(.compact) .cart-forgot-off {
+  margin-left: auto;
 }
 
 /* Ô bàn hẹp (danh sách bàn màn hình PC): chữ xuống dòng, nút Tắt ở dưới */
@@ -237,15 +258,31 @@
   flex-shrink: 0;
   padding: 1px 6px;
   border-radius: 6px;
-  background: rgba(113, 63, 18, 0.14);
+  background: #fff;
+  color: #92400e;
   font-size: 0.6rem;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .cart-forgot-blink {
-    animation: none;
-    outline: 4px solid #facc15;
-  }
+/* Trình duyệt chưa cho phát tiếng (chưa ai chạm trang từ lúc mở) → nhắc chạm để chuông kêu được */
+.cart-forgot-mute {
+  position: relative;
+  z-index: 1;
+  margin-top: 3px;
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: #fff;
+  color: #92400e;
+  border: 1px dashed #b45309;
+  font-size: 0.6rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.cart-forgot-mute.compact {
+  margin-top: 0;
+  padding: 1px 3px;
+  font-size: 0.56rem;
 }
 
 .table-card.occupied {
