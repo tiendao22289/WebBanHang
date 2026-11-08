@@ -54,6 +54,7 @@ import { DAY_PAY_FROM, DEFAULT_OT_RATE, MAX_CYCLE_DAYS, addDays, claimGiven, cla
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import { normalizeRole } from '@/lib/staffRoles.mjs';
 import { applyClock, latestSession, sessionsOfDay } from '@/lib/clockApply.mjs';
+import { receiptImageProblem, removeReceiptImages, signReceiptImages, uploadReceiptImage } from '@/lib/receiptImages.mjs';
 import { ENROLL_MAX, ENROLL_MIN, ENROLL_SELF_MIN, FACE_LEVELS, FACE_MODEL, FACE_STREAK_MS, FACE_TRIES, FACE_WAIT_MS, bestScore, enrollConsistency, faceHolds, faceNeeded,
   faceThreshold, faceVector, faceVectors, markFaceHolds, missingTable, readFaceSettings, wrongStreak } from '@/lib/faceCheck.mjs';
 import { clockStatus, nowMs, refreshClock } from '@/lib/trueTime.mjs';
@@ -180,7 +181,7 @@ async function myPeerReports(db, staffId) {
     }
     // Người báo không cần biết số tiền chủ phạt.
     return { ready: true, colleagues, list: (data || []).map(r => ({ id: r.id, staff_id: r.staff_id, staff_name: nameOf.get(r.staff_id) || 'Nhân viên', date: String(r.report_date).slice(0, 10),
-      reason: r.reason, note: r.note || null, status: r.status, admin_note: r.admin_note || null, created_at: r.created_at })) };
+      reason: r.reason, note: r.note || null, has_photo: !!r.photo_path, status: r.status, admin_note: r.admin_note || null, created_at: r.created_at })) };
   } catch (error) {
     console.error('[workforce] my peer reports', error);
     return { ready: false, colleagues: [], list: [] };
@@ -206,6 +207,7 @@ async function inboxOverview(db) {
     db.from('payroll_fine_rules').select('kind, amount, active'),
   ]);
   for (const r of [people, reqs, fixes, claims, peers, rules]) if (r.error) throw r.error;
+  const peerPhotos = await signPeerPhotos(db, peers.data || []);
   const nameOf = new Map((people.data || []).map(p => [p.id, String(p.full_name || '').trim() || 'Nhân viên']));
   const who = id => nameOf.get(id) || 'Không rõ';
   const reqIds = (reqs.data || []).map(r => r.id), fixIds = [...new Set((fixes.data || []).map(f => f.attendance_id))];
@@ -255,12 +257,16 @@ async function inboxOverview(db) {
     extras: extras.map(x => ({ ...x, name: who(x.staff_id) })),
     claims: (claims.data || []).map(c => ({ ...claimView(c), name: who(c.staff_id) })),
     peers: (peers.data || []).map(r => ({ id: r.id, staff_id: r.staff_id, name: who(r.staff_id), reporter: r.reporter_name || who(r.reporter_id), date: String(r.report_date).slice(0, 10),
-      reason: r.reason, note: r.note || null, suggested: Number(r.suggested_amount) || 0, created_at: r.created_at })),
+      reason: r.reason, note: r.note || null, suggested: Number(r.suggested_amount) || 0, photo: peerPhotos[r.photo_path] || null, created_at: r.created_at })),
     fines, unpriced, bonuses,
   };
   out.count = Object.values(out).reduce((a, list) => a + (Array.isArray(list) ? list.length : 0), 0);
   return out;
 }
+
+// Link xem ảnh làm chứng của báo lỗi đồng nghiệp (ký tạm 1 giờ, chỉ trả cho chủ quán). Kho ảnh lỗi thì bỏ ảnh, không chặn trang.
+const signPeerPhotos = (db, rows) => Promise.resolve().then(() => signReceiptImages(db, rows.map(r => r.photo_path)))
+  .catch(error => { console.error('[workforce] peer photos', error); return {}; });
 
 // Trang Lương của chủ: báo lỗi đồng nghiệp còn chờ + đã xử lý 60 ngày gần đây (tên người báo / người bị báo, tiền gợi ý).
 async function peerOverview(db) {
@@ -268,7 +274,8 @@ async function peerOverview(db) {
     .or(`status.eq.pending,created_at.gte."${new Date(nowMs() - 60 * 86400000).toISOString()}"`).order('created_at', { ascending: false }).limit(300);
   if (missingTable(error)) return { ready: false, reports: [] };
   if (error) throw error;
-  return { ready: true, reports: (data || []).map(r => ({ id: r.id, reporter_id: r.reporter_id, reporter_name: r.reporter_name || null, staff_id: r.staff_id,
+  const photos = await signPeerPhotos(db, data || []);
+  return { ready: true, reports: (data || []).map(r => ({ id: r.id, reporter_id: r.reporter_id, reporter_name: r.reporter_name || null, staff_id: r.staff_id, photo: photos[r.photo_path] || null,
     date: String(r.report_date).slice(0, 10), rule_id: r.rule_id || null, reason: r.reason, note: r.note || null, suggested_amount: Number(r.suggested_amount) || 0,
     status: r.status, amount: r.amount ?? null, violation_id: r.violation_id || null, admin_note: r.admin_note || null, decided_by: r.decided_by || null,
     decided_at: r.decided_at || null, created_at: r.created_at })) };
@@ -697,7 +704,11 @@ export async function GET(request) {
 export async function POST(request) {
   try {
     await refreshClock();
-    const body = await request.json().catch(() => ({}));
+    // Báo lỗi đồng nghiệp kèm ảnh làm chứng gửi multipart (payload = JSON, photo = ảnh); mọi việc khác gửi JSON.
+    const form = /multipart\/form-data/i.test(request.headers?.get?.('content-type') || '') ? await request.formData().catch(() => null) : null;
+    let body = {};
+    if (form) { try { body = JSON.parse(String(form.get('payload') || '{}')); } catch { body = {}; } } else body = await request.json().catch(() => ({}));
+    const photo = form?.get('photo');
     if (body.action === 'hash_all_pins' && serverKeyOk(request)) {
       return NextResponse.json({ ok: true, hashed: await hashAllPins(staffDatabase(null)) }, { headers });
     }
@@ -872,6 +883,7 @@ export async function POST(request) {
       if (table === 'payroll_requests') {
         await db.from('payroll_leave_days').delete().eq('request_id', req.id).then(({ error: e }) => { if (e) console.error('[workforce] leave days', e); });
       }
+      if (req.photo_path) await removeReceiptImages(db, [req.photo_path]);
       return NextResponse.json({ ok: true }, { headers });
     }
 
@@ -937,6 +949,8 @@ export async function POST(request) {
     // hoặc tối đa 7 ngày trước). CHƯA trừ tiền: chủ quán phạt hoặc bỏ qua ở Lương → Yêu cầu. Người bị báo không thấy tên người báo.
     if (body.action === 'report_peer') {
       if (!UUID.test(body.staff_id || '')) return fail('Chọn người bạn muốn báo lỗi.');
+      const hasPhoto = photo && typeof photo !== 'string';
+      if (hasPhoto) { const problem = receiptImageProblem(photo); if (problem) return fail(problem); }
       if (String(body.staff_id).toLowerCase() === String(user.id).toLowerCase()) return fail('Lỗi của chính mình thì ghi ở "Tự ghi lỗi".');
       // Ngày xảy ra: ngày người báo chọn (theo lịch, tới hôm nay); không chọn thì ngày làm đang diễn ra (sau nửa đêm vẫn là ca hôm trước).
       const today = vnToday(), day = DATE.test(body.date || '') ? body.date : currentWorkDay(await readCheckinSettings(db), user.id, nowMs());
@@ -965,9 +979,15 @@ export async function POST(request) {
         return NextResponse.json({ ok: true, duplicate: true }, { headers });
       }
       if ((recent || []).length >= 10) return fail('Hôm nay bạn đã báo nhiều lần rồi. Nói trực tiếp với chủ quán nhé.', 429);
+      // Ảnh làm chứng (không bắt buộc): lưu vào kho ảnh riêng tư, chỉ chủ quán xem. Ghi lỗi không được thì xoá ảnh vừa lưu.
+      const photoPath = hasPhoto ? await uploadReceiptImage(db, photo, 'peer') : null;
       const r = await db.from('payroll_peer_reports').insert({ reporter_id: user.id, staff_id: target.id, report_date: day, rule_id: ruleId, reason, note,
-        suggested_amount: suggested, status: 'pending', reporter_name: user.full_name || null, created_at: isoNow() }).select('id').single();
-      if (r.error) throw r.error;
+        suggested_amount: suggested, status: 'pending', reporter_name: user.full_name || null, created_at: isoNow(), ...(photoPath ? { photo_path: photoPath } : {}) }).select('id').single();
+      if (r.error) {
+        if (photoPath) await removeReceiptImages(db, [photoPath]);
+        if (photoPath && /photo_path/.test(String(r.error.message || ''))) return fail(PEER_NOT_READY, 503);
+        throw r.error;
+      }
       return NextResponse.json({ ok: true, id: r.data.id, date: day }, { headers });
     }
 

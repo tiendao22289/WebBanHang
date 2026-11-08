@@ -13,6 +13,14 @@ async function readResult(response) {
 }
 
 export const workforce = (action, body) => call('/api/admin/workforce', action, body);
+
+/** Gửi kèm 1 ảnh (vd báo lỗi đồng nghiệp có ảnh làm chứng): multipart payload = JSON, photo = ảnh. Mạng yếu thì báo lỗi sau 45 giây. */
+export async function workforceWithPhoto(action, body, photo) {
+  const form = new FormData();
+  form.append('payload', JSON.stringify({ action, ...body }));
+  form.append('photo', photo, 'anh.jpg');
+  return readResult(await fetchWithTimeout('/api/admin/workforce', { method: 'POST', body: form, cache: 'no-store' }));
+}
 export const notesApi = (action, body) => call('/api/admin/notes', action, body);
 
 /**

@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS public.payroll_peer_reports (
   created_at timestamptz NOT NULL DEFAULT now(),
   CHECK (reporter_id <> staff_id)
 );
+-- Ảnh làm chứng (không bắt buộc) người báo chụp kèm: đường dẫn trong bucket finance-receipts ('YYYY-MM/peer-<uuid>.jpg'),
+-- chỉ chủ quán xem (link ký tạm). Người bị báo không thấy ảnh.
+ALTER TABLE public.payroll_peer_reports ADD COLUMN IF NOT EXISTS photo_path text CHECK (photo_path IS NULL OR length(photo_path) <= 200);
 CREATE INDEX IF NOT EXISTS payroll_peer_reports_reporter ON public.payroll_peer_reports(reporter_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS payroll_peer_reports_pending ON public.payroll_peer_reports(created_at) WHERE status = 'pending';
 

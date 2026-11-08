@@ -260,9 +260,11 @@ async function main() {
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_peer_reports.sql'), 'utf8'));
   const [peer] = await query(`SELECT to_regclass('public.payroll_peer_reports') IS NOT NULL AS table_ok,
     NOT has_table_privilege('anon', 'public.payroll_peer_reports', 'SELECT') AND NOT has_table_privilege('authenticated', 'public.payroll_peer_reports', 'SELECT') AS anon_blocked,
-    EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'audit_staff_data' AND tgrelid = 'public.payroll_peer_reports'::regclass) AS audited`);
+    EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'audit_staff_data' AND tgrelid = 'public.payroll_peer_reports'::regclass) AS audited,
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payroll_peer_reports' AND column_name = 'photo_path') AS photo_ok`);
   console.log(JSON.stringify(peer));
   if (!peer.table_ok || !peer.anon_blocked) throw new Error('Chưa cài được bảng báo lỗi chéo.');
+  if (!peer.photo_ok) throw new Error('Chưa cài được cột ảnh làm chứng của báo lỗi chéo.');
 
   // Chấm công bằng nút trên máy quầy cho người không có điện thoại (checkin_tap.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'checkin_tap.sql'), 'utf8'));
