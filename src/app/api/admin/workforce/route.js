@@ -988,7 +988,7 @@ export async function POST(request) {
       const year = Number(day.slice(0, 4)), month = Number(day.slice(5, 7));
       const { data: closed, error: ce } = await db.from('payroll_closes').select('staff_id').eq('year', year).eq('month', month).eq('staff_id', user.id).maybeSingle();
       if (ce) throw ce;
-      if (closed) return fail(`Lương tháng ${month}/${year} của bạn đã chốt. Nhờ chủ quán ghi giúp.`, 409);
+      if (closed) return fail(`Lương tháng ${month}/${year} của bạn đã chốt nên không ghi thêm được. Báo chủ quán để tính riêng.`, 409);
       const { data: recent, error: re } = await db.from('payroll_staff_drinks').select('*').eq('staff_id', user.id)
         .gte('created_at', new Date(nowMs() - 86400000).toISOString());
       if (missingTable(re)) return fail(DRINKS_NOT_READY, 503);
@@ -996,7 +996,7 @@ export async function POST(request) {
       // Bấm đúp / mạng chập chờn: y hệt lần vừa ghi trong 30 giây thì coi như đã ghi. Một ngày tối đa 30 lần ghi.
       if ((recent || []).some(x => x.name === name && Number(x.qty) === qty && Number(x.unit_price) === price && String(x.drink_date).slice(0, 10) === day
         && Date.parse(x.created_at) > nowMs() - 30000)) return NextResponse.json({ ok: true, duplicate: true }, { headers });
-      if ((recent || []).length >= 30) return fail('Hôm nay bạn đã ghi nhiều lần rồi. Nhờ chủ quán ghi giúp.', 429);
+      if ((recent || []).length >= 30) return fail('Hôm nay bạn đã ghi 30 lần rồi, không ghi thêm được. Báo chủ quán để tính riêng.', 429);
       const r = await db.from('payroll_staff_drinks').insert({ staff_id: user.id, drink_date: day, name, qty, unit_price: price, amount: qty * price, year, month,
         created_by_name: user.full_name || null, created_at: isoNow() }).select('id').single();
       if (r.error) throw r.error;
@@ -1038,7 +1038,13 @@ export async function POST(request) {
       }
       if ((recent || []).length >= 10) return fail('Hôm nay bạn đã báo nhiều lần rồi. Nói trực tiếp với chủ quán nhé.', 429);
       // Ảnh làm chứng (không bắt buộc): lưu vào kho ảnh riêng tư, chỉ chủ quán xem. Ghi lỗi không được thì xoá ảnh vừa lưu.
-      const photoPath = hasPhoto ? await uploadReceiptImage(db, photo, 'peer') : null;
+      let photoPath = null;
+      if (hasPhoto) {
+        try { photoPath = await uploadReceiptImage(db, photo, 'peer'); } catch (error) {
+          console.error('[workforce] peer photo upload', error);
+          return fail('Chưa lưu được ảnh. Bấm gửi lại, hoặc bấm "Xoá ảnh" rồi gửi không kèm ảnh.', 503);
+        }
+      }
       const r = await db.from('payroll_peer_reports').insert({ reporter_id: user.id, staff_id: target.id, report_date: day, rule_id: ruleId, reason, note,
         suggested_amount: suggested, status: 'pending', reporter_name: user.full_name || null, created_at: isoNow(), ...(photoPath ? { photo_path: photoPath } : {}) }).select('id').single();
       if (r.error) {

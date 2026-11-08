@@ -415,7 +415,7 @@ function RangeSheet({ staff, defaultFrom, defaultTo, today, onClose, onDone }) {
             {data.fines.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ phạt</span><b>−{formatMoney(sum(data.fines))}</b></div>}
             {data.bonuses.length > 0 && <div style={{ ...line, color: '#16a34a' }}><span>Thưởng chuyên cần</span><b>+{formatMoney(sum(data.bonuses))}</b></div>}
             {(data.claims || []).length > 0 && <div style={{ ...line, color: sum(data.claims) < 0 ? '#dc2626' : '#16a34a' }}><span>Chi hộ</span><b>{sum(data.claims) < 0 ? '−' : '+'}{formatMoney(Math.abs(sum(data.claims)))}</b></div>}
-            {(data.drinks || []).length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ nước uống</span><b>−{formatMoney(sum(data.drinks))}</b></div>}
+            {(data.drinks || []).length > 0 && <div style={{ ...line, color: sum(data.drinks) < 0 ? '#16a34a' : '#dc2626' }}><span>{sum(data.drinks) < 0 ? 'Trả lại nước uống đã xoá' : 'Trừ nước uống'}</span><b>{sum(data.drinks) < 0 ? '+' : '−'}{formatMoney(Math.abs(sum(data.drinks)))}</b></div>}
             <div style={{ ...line, borderTop: '1px dashed #cbd5e1', marginTop: 4, paddingTop: 6, fontSize: '0.98rem' }}>
               <strong>Cần trả</strong><strong style={{ color: data.amount < 0 ? '#dc2626' : '#15803d' }}>{formatMoney(data.amount)}</strong>
             </div>
@@ -487,7 +487,7 @@ function CycleBox({ people, today, nameOf, onPay, onUndo }) {
                   {d.fines.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ phạt</span><b>−{formatMoney(sum(d.fines))}</b></div>}
                   {d.bonuses.length > 0 && <div style={{ ...line, color: '#16a34a' }}><span>Thưởng chuyên cần</span><b>+{formatMoney(sum(d.bonuses))}</b></div>}
                   {(d.claims || []).length > 0 && <div style={{ ...line, color: sum(d.claims) < 0 ? '#dc2626' : '#16a34a' }}><span>Chi hộ ({d.claims.length} khoản)</span><b>{sum(d.claims) < 0 ? '−' : '+'}{formatMoney(Math.abs(sum(d.claims)))}</b></div>}
-                  {(d.drinks || []).length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ nước uống ({d.drinks.length} lần)</span><b>−{formatMoney(sum(d.drinks))}</b></div>}
+                  {(d.drinks || []).length > 0 && <div style={{ ...line, color: sum(d.drinks) < 0 ? '#16a34a' : '#dc2626' }}><span>{sum(d.drinks) < 0 ? 'Trả lại nước uống đã xoá' : `Trừ nước uống (${d.drinks.length} lần)`}</span><b>{sum(d.drinks) < 0 ? '+' : '−'}{formatMoney(Math.abs(sum(d.drinks)))}</b></div>}
                   <div style={{ ...line, borderTop: '1px dashed #cbd5e1', marginTop: 4, paddingTop: 4, fontSize: '0.95rem' }}>
                     <strong>Cần trả</strong><strong style={{ color: d.amount < 0 ? '#dc2626' : '#15803d' }}>{formatMoney(d.amount)}</strong>
                   </div>

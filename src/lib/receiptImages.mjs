@@ -76,7 +76,9 @@ export async function signReceiptImages(db, paths) {
     .map(d => [d.path, receiptImageLink(d.path, d.signedUrl)]).filter(([, link]) => link));
 }
 
-// Ảnh phiếu Sổ tay (hàng trên cân 'note-…', bill từng dòng 'notebill-…') có từ tháng 11/2026.
+// Ảnh phiếu Sổ tay (hàng trên cân 'note-…', bill từng dòng 'notebill-…') và ảnh làm chứng báo lỗi đồng nghiệp ('peer-…')
+// có từ tháng 11/2026; không có dòng sổ riêng nên dọn theo tên file trong từng thư mục tháng.
+const OLD_PHOTO_KINDS = [['note', /^note(bill)?-/], ['peer', /^peer-/]];
 const NOTE_PHOTOS_SINCE = '2026-11';
 const NOTE_PURGE_EVERY_MS = 6 * 3600000;
 let notePurgedAt = 0;
@@ -96,7 +98,7 @@ export function monthFolders(since, cutoff) {
 }
 
 /**
- * Xoá ảnh phiếu Sổ tay quá RECEIPT_IMAGE_DAYS ngày (giống ảnh bill). Phiếu vẫn giữ đường dẫn: link ký
+ * Xoá ảnh phiếu Sổ tay và ảnh làm chứng quá RECEIPT_IMAGE_DAYS ngày (giống ảnh bill). Dòng vẫn giữ đường dẫn: link ký
  * cho ảnh đã xoá báo lỗi nên trang không hiện ảnh đó. Chạy tối đa 6 tiếng một lần.
  */
 export async function purgeOldNotePhotos(db, now = Date.now()) {
@@ -105,10 +107,12 @@ export async function purgeOldNotePhotos(db, now = Date.now()) {
   const cutoff = new Date(now - RECEIPT_IMAGE_DAYS * 86400000);
   const bucket = db.storage.from(RECEIPT_BUCKET);
   for (const folder of monthFolders(NOTE_PHOTOS_SINCE, cutoff)) {
-    const { data, error } = await bucket.list(folder, { limit: 1000, search: 'note' });
-    if (error) { console.error('[receipt images] list', error); return; }
-    const old = (data || []).filter(f => /^note(bill)?-/.test(f.name) && f.created_at && Date.parse(f.created_at) < cutoff.getTime());
-    await removeReceiptImages(db, old.slice(0, 100).map(f => `${folder}/${f.name}`));
+    for (const [search, kind] of OLD_PHOTO_KINDS) {
+      const { data, error } = await bucket.list(folder, { limit: 1000, search });
+      if (error) { console.error('[receipt images] list', error); return; }
+      const old = (data || []).filter(f => kind.test(f.name) && f.created_at && Date.parse(f.created_at) < cutoff.getTime());
+      await removeReceiptImages(db, old.slice(0, 100).map(f => `${folder}/${f.name}`));
+    }
   }
 }
 

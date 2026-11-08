@@ -34,6 +34,19 @@ test('drinks come off the pay of the month they were drunk, listed one by one', 
   ]);
 });
 
+test('the finance book counts wages after drinks are taken off, like fines', () => {
+  const staff = [{ id: 's', full_name: 'An' }], configs = [{ staff_id: 's', base_salary: 6000000, overtime_rate: 0 }];
+  const drinks = [{ id: 'a', staff_id: 's', drink_date: '2026-11-05', name: 'Bia', qty: 2, unit_price: 15000, amount: 30000, year: 2026, month: 11 }];
+  const base = payroll.payrollCost({ year: 2026, month: 11, staff, configs });
+  const live = payroll.payrollCost({ year: 2026, month: 11, staff, configs, drinks });
+  assert.equal(base.monthExtra - live.monthExtra, 30000);
+  // Đã chốt: theo số chốt; số chốt cũ chưa có drinkAmt thì lấy theo bảng.
+  const closes = [{ staff_id: 's', snapshot: { byDay: {}, vioAmt: 0, bonusAmt: 0, monthAdjust: 0, drinkAmt: 12000 } }];
+  assert.equal(payroll.payrollCost({ year: 2026, month: 11, staff, configs, drinks, closes }).monthExtra, -12000);
+  const oldClose = [{ staff_id: 's', snapshot: { byDay: {}, vioAmt: 0, bonusAmt: 0, monthAdjust: 0 } }];
+  assert.equal(payroll.payrollCost({ year: 2026, month: 11, staff, configs, drinks, closes: oldClose }).monthExtra, -30000);
+});
+
 test('people paid every few days have drinks taken from the next payout, exactly once', () => {
   const cycle = { every_days: 7, start_day: '2026-11-01' };
   const months = [{ key: '2026-11', byDay: { '2026-11-02': 300000 }, advances: [], fines: [], bonus: 0, claims: [], drinks: [{ id: 'd1', amount: 30000 }] }];
