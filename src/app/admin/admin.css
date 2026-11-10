@@ -212,6 +212,38 @@
   color: white;
 }
 
+/* Số đơn chờ duyệt trên biểu tượng ví (Lương → Yêu cầu): góc trên bên phải biểu tượng. Dùng <b> vì menu thu gọn ẩn mọi <span>. */
+.nav-item {
+  position: relative;
+}
+
+.nav-badge {
+  position: absolute;
+  top: 3px;
+  left: calc(50% + 3px);
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  border: 2px solid white;
+  background: var(--color-primary);
+  color: white;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 14px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* Đang ở trang Lương (nền đỏ): số nền trắng chữ đỏ cho dễ thấy. */
+.nav-item.active .nav-badge {
+  background: white;
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
 .nav-label {
   display: inline;
 }
@@ -353,6 +385,18 @@
   .nav-item svg {
     width: 22px;
     height: 22px;
+  }
+
+  /* Thanh dưới: số nằm sát góc trên bên phải biểu tượng ví; mục đang mở nền trắng nên giữ số nền đỏ. */
+  .nav-badge {
+    top: 2px;
+    left: calc(50% + 4px);
+  }
+
+  .nav-item.active .nav-badge {
+    background: var(--color-primary);
+    color: white;
+    border-color: white;
   }
 
   /* Main content: no sidebar margin, add bottom padding for tab bar */

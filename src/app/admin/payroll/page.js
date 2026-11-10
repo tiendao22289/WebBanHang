@@ -12,6 +12,7 @@ import QrClockScanner from '@/components/QrClockScanner';
 import { unlockSpeech } from '@/lib/speak';
 import Link from 'next/link';
 import { ROLES, normalizeRole, roleLabel } from '@/lib/staffRoles.mjs';
+import { OPEN_REQUESTS_EVENT, PENDING_COUNT_EVENT, PENDING_REFRESH_EVENT, isPendingRequest, pendingRequestCounts, requestKind, takeOpenRequests, wantsRequestsTab } from '@/lib/payrollPending.mjs';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users } from 'lucide-react';
 import './payroll.css';
 
@@ -560,7 +561,6 @@ export default function PayrollPage({ staffSection = null } = {}) {
   const [loading, setLoading] = useState(false);
   const [hasSynced, setHasSynced] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
-  const [pendingCount, setPendingCount] = useState(0);
   const [currentUser, setCurrentUser] = useState(null);
   const router = useRouter();
 
@@ -792,12 +792,14 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   const [hoursEdit, setHoursEdit] = useState(null); // { opening_time, closing_time, grace_minutes }
   const [shiftEdit, setShiftEdit] = useState(null); // { staff_id, start, end }
   const [onlyWarnings, setOnlyWarnings] = useState(true);
-  const fetchCheckin = useCallback(async () => {
+  // quiet: chỉ tải lại danh sách (đơn mới ở tab Yêu cầu), không đặt lại ô giờ làm đang sửa.
+  const fetchCheckin = useCallback(async (quiet = false) => {
     try {
       const r = await fetch('/api/admin/workforce?checkin=1', { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) {
         setCheckin(j);
+        if (quiet === true) return;
         const h = hoursOn(j.settings, vnToday());
         setHoursEdit({ opening_time: h.opening, closing_time: h.closing, grace_minutes: h.grace });
       }
@@ -999,7 +1001,6 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     (cfgRes.data || []).forEach(c => { edits[c.staff_id] = { base_salary: c.base_salary, overtime_rate: c.overtime_rate, pay_day: c.pay_day }; });
     setConfigEdits(edits);
     setRequests(reqRes.data || []);
-    setPendingCount((reqRes.data || []).filter(r => r.status === 'pending').length);
     setViolations(vioRes.data || []);
     setAttendance(attRes.data || []);
     setHasSynced(true);
@@ -1028,6 +1029,48 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     if (hasSynced) fetchAll();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selMonth, selYear]);
+
+  // Đơn chờ duyệt ở tab Yêu cầu: cùng cách đếm với số trên biểu tượng ví ở thanh menu (src/lib/payrollPending.mjs).
+  const isOwner = currentUser?.role === 'admin';
+  const reqPending = pendingRequestCounts({ requests, fixes: checkin?.fixes, extras: checkin?.extras, faceReviews: faces?.reviews, claims: claims.claims, peers: peers.reports });
+  // Số đơn chờ vừa đổi (duyệt / từ chối xong, tải lại) → thanh menu hỏi máy chủ lại ngay cho số trên ví khớp với tab.
+  useEffect(() => {
+    if (isOwner && hasSynced) window.dispatchEvent(new Event(PENDING_REFRESH_EVENT));
+  }, [isOwner, hasSynced, reqPending.total]);
+  // Chỉ tải lại các danh sách của tab Yêu cầu (đơn ứng / nghỉ, sửa giờ, ngoài ca, sai mặt, chi hộ, báo lỗi), không tải lại cả bảng lương.
+  const requestListsAtRef = useRef(0);
+  const refreshRequestLists = useCallback(async () => {
+    requestListsAtRef.current = Date.now();
+    fetchCheckin(true); fetchFaces(); fetchClaims(); fetchPeers();
+    const { data, error } = await supabase.from('payroll_requests').select('*, staff(full_name,phone)').order('created_at', { ascending: false });
+    if (!error) setRequests(data || []);
+  }, [fetchCheckin, fetchFaces, fetchClaims, fetchPeers]);
+  const hasSyncedRef = useRef(false);
+  hasSyncedRef.current = hasSynced;
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  const reqTotalRef = useRef(0);
+  reqTotalRef.current = reqPending.total;
+  // Bấm biểu tượng ví (có đơn chờ): mở tab Yêu cầu — khi trang vừa mở (đường dẫn ?tab=requests / lời xin còn nhớ lúc chờ PIN)
+  // hoặc khi đang ở trang Lương (sự kiện). Bỏ ?tab=requests khỏi đường dẫn: tải lại trang thì về Bảng lương như thường.
+  useEffect(() => {
+    if (!isOwner) return undefined;
+    const open = () => {
+      setActiveTab('requests'); setConfigFocus(null); setReqView('pending'); setReqKind('all'); setReqOpen(null);
+      if (wantsRequestsTab(window.location.search)) window.history.replaceState(window.history.state, '', window.location.pathname);
+    };
+    if (takeOpenRequests() || wantsRequestsTab(window.location.search)) open();
+    const onOpen = () => { if (!takeOpenRequests()) return; open(); if (hasSyncedRef.current) refreshRequestLists(); };
+    // Thanh menu vừa có số mới mà tab Yêu cầu đang mở hiện số khác (đơn mới gửi / duyệt ở máy khác) → tải lại danh sách, tối đa 30 giây một lần.
+    const onCount = e => {
+      if (!hasSyncedRef.current || activeTabRef.current !== 'requests' || Number(e.detail) === reqTotalRef.current) return;
+      if (Date.now() - requestListsAtRef.current < 30000) return;
+      refreshRequestLists();
+    };
+    window.addEventListener(OPEN_REQUESTS_EVENT, onOpen);
+    window.addEventListener(PENDING_COUNT_EVENT, onCount);
+    return () => { window.removeEventListener(OPEN_REQUESTS_EVENT, onOpen); window.removeEventListener(PENDING_COUNT_EVENT, onCount); };
+  }, [isOwner, refreshRequestLists]);
 
   // Ngày quán nghỉ của tháng đang xem tới hôm nay (lịch âm lịch + ngày thêm tay, bỏ ngày mở cửa) — ngày chưa tới chưa tính lương.
   const monthLastDay = `${selYear}-${fmt(selMonth)}-${fmt(new Date(Date.UTC(selYear, selMonth, 0)).getUTCDate())}`;
@@ -2766,8 +2809,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         ['Việc hằng ngày', [
           { key: 'salary', icon: '📊', label: 'Bảng lương' },
           { key: 'attendance', icon: '⏰', label: 'Chấm công' },
-          { key: 'requests', icon: '📋', label: 'Yêu cầu', badge: pendingCount + (checkin?.fixes || []).filter(f => f.status === 'pending').length + (checkin?.extras || []).length + (faces?.reviews || []).length
-            + claims.claims.filter(x => x.status === 'pending').length + peers.reports.filter(x => x.status === 'pending').length },
+          { key: 'requests', icon: '📋', label: 'Yêu cầu', badge: reqPending.total },
           // Gợi ý phạt chưa xử lý + lỗi nhân viên tự ghi chưa có tiền (chờ chủ định tiền).
           { key: 'violations', icon: '⚠️', label: 'Vi phạm', badge: fineHints.length + violations.filter(v => !(Number(v.amount) > 0)).length },
         ]],
@@ -3090,7 +3132,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
 
             // Báo lỗi đồng nghiệp: chủ phạt (số tiền tự định) hoặc bỏ qua. Người bị báo không thấy tên người báo.
             peers.reports.forEach(x => {
-              const pending = x.status === 'pending';
+              const pending = isPendingRequest('peer', x);
               const typed = peerAmounts[x.id] ?? (x.suggested_amount ? x.suggested_amount.toLocaleString('vi-VN') : '');
               const amount = Number(String(typed).replace(/\D/g, '')) || 0;
               items.push({ key: `peer-${x.id}`, kind: 'peer', pending, at: ms(x.created_at), who: nameOf(x.staff_id),
@@ -3117,7 +3159,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
 
             // Chi hộ quán: duyệt → vào Sổ thu chi (Chi trong ngày, đúng ngày chi); tiền mặt thì đưa ngay, cộng lương thì vào lương tháng đó.
             claims.claims.forEach(x => {
-              const who = staffList.find(st => st.id === x.staff_id)?.full_name || x.created_by_name || 'Không rõ', cash = x.payout === 'cash', pending = x.status === 'pending';
+              const who = staffList.find(st => st.id === x.staff_id)?.full_name || x.created_by_name || 'Không rõ', cash = x.payout === 'cash', pending = isPendingRequest('claim', x);
               // Chủ đưa trước: duyệt = đã nhận lại tiền thừa (chưa trả thì chủ chọn trừ lương) / chi vừa đủ / trả phần chi lố.
               const given = x.given_amount > 0, owed = given ? x.owed : x.amount;
               const approveLabel = x.left > 0 ? `✓ Duyệt · đã nhận lại ${formatMoney(x.left)}` : given && !owed ? '✓ Duyệt · chi vừa đủ'
@@ -3150,7 +3192,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
             // Ca ghi sau 3 lần sai mặt ở máy quầy: chưa tính lương, chờ chủ xác nhận đúng người hay không.
             (faces?.reviews || []).forEach(r => {
               const s = r.session, out = r.clocked === 'out';
-              items.push({ key: `face-${r.attendance_id}-${r.clocked}`, kind: 'face', pending: true, at: ms(r.created_at || s.clock_in), who: nameOf(r.staff_id),
+              items.push({ key: `face-${r.attendance_id}-${r.clocked}`, kind: 'face', pending: isPendingRequest('face', r), at: ms(r.created_at || s.clock_in), who: nameOf(r.staff_id),
                 rows: [
                   [out ? 'Ra ca' : 'Vào ca', `${hm(out ? s.clock_out || r.created_at : s.clock_in)} · ngày ${dmy(s.date)}`],
                   ['Lý do', 'Máy quầy so mặt không khớp 3 lần liền'],
@@ -3165,7 +3207,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
 
             // Giờ ngoài ca chờ chủ cho tính hoặc không: chỉ còn ngày trước khi giờ ngoài ca tự tính (AUTO_EXTRA_FROM).
             (checkin?.extras || []).forEach(x => {
-              items.push({ key: `extra-${x.attendance_id}`, kind: 'extra', pending: true, at: ms(x.clock_out || x.clock_in), who: nameOf(x.staff_id),
+              items.push({ key: `extra-${x.attendance_id}`, kind: 'extra', pending: isPendingRequest('extra', x), at: ms(x.clock_out || x.clock_in), who: nameOf(x.staff_id),
                 head: durationText(x.early_minutes + x.stay_minutes),
                 rows: [
                   ['Ca', `ngày ${dmy(x.date)}: vào ${hm(x.clock_in)}${x.early_minutes ? ` (sớm ${durationText(x.early_minutes)})` : ''} → ra ${hm(x.clock_out)}${x.stay_minutes ? ` (ở lại ${durationText(x.stay_minutes)})` : ''}`],
@@ -3179,7 +3221,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
 
             // Đơn xin sửa giờ chấm công (duyệt thì giờ được sửa và ghi vào nhật ký sửa).
             (checkin?.fixes || []).forEach(f => {
-              const att = (checkin.fixSessions || []).find(x => x.id === f.attendance_id), pending = f.status === 'pending';
+              const att = (checkin.fixSessions || []).find(x => x.id === f.attendance_id), pending = isPendingRequest('fix', f);
               const t = ts => (ts ? at(ts) : '—');
               items.push({ key: `fix-${f.id}`, kind: 'fix', pending, at: ms(f.created_at), who: nameOf(f.staff_id),
                 status: pending ? null : f.status === 'approved' ? { text: 'Đã sửa', tone: 'ok' } : { text: 'Từ chối', tone: 'no' },
@@ -3197,7 +3239,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
 
             // Ứng lương / báo nghỉ.
             requests.forEach(req => {
-              const pending = req.status === 'pending', adv = req.request_type === 'advance';
+              const kind = requestKind(req), pending = isPendingRequest(kind, req), adv = kind === 'advance';
               // Duyệt ứng lương: xem người này đã làm ra bao nhiêu và đã ứng bao nhiêu trong tháng.
               let check = null;
               if (adv && pending && req.month === selMonth && req.year === selYear) {
@@ -3209,7 +3251,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   check = { text: `Đã làm ra ${formatMoney(earned)} · đã ứng ${formatMoney(c.advAmt)}${over ? ' · ⚠ duyệt đơn này thì ứng quá số đã làm' : ''}`, warn: over };
                 }
               }
-              items.push({ key: `req-${req.id}`, kind: adv ? 'advance' : 'absent', pending, at: ms(req.created_at), who: req.staff?.full_name || nameOf(req.staff_id),
+              items.push({ key: `req-${req.id}`, kind, pending, at: ms(req.created_at), who: req.staff?.full_name || nameOf(req.staff_id),
                 head: adv ? formatMoney(req.amount) : `${fmtNum(req.days)} ngày`,
                 status: pending ? null : req.status === 'approved' ? { text: 'Đã duyệt', tone: 'ok' } : { text: 'Từ chối', tone: 'no' },
                 rows: [
@@ -3225,6 +3267,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 </> });
             });
 
+            // Chờ duyệt: đúng số trên nút tab và trên biểu tượng ví (cùng pendingRequestCounts / isPendingRequest).
             const pend = items.filter(x => x.pending), done = items.filter(x => !x.pending);
             const showDone = reqView === 'done', view = showDone ? done : pend;
             const kind = view.some(x => x.kind === reqKind) ? reqKind : 'all';
