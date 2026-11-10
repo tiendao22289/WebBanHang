@@ -11,8 +11,8 @@
  *                    Nhân viên chỉ THÊM ảnh cho bill hôm nay chưa có ảnh; đổi ảnh đã có chỉ chủ quán.
  *   delete_paper     id — chỉ chủ quán (bill giấy đã lưu thì nhân viên không xoá / sửa được, 2026-10-27)
  *
- *   qr_confirm       code, amount, account_id, kind ('ck' | 'bill'), image, table_label?, bill_image? — trang Mã QR:
- *                    "Xác nhận đã nhận tiền". bill_image: ảnh tờ bill chụp sẵn ở khung (chỉ khi image là màn hình khách).
+ *   qr_confirm       code, amount, account_id, kind ('ck' | 'bill'), image, table_label? — trang Mã QR:
+ *                    "Xác nhận đã nhận tiền"
  *   qr_cash          receipt_id, amount, image (tờ bill), table_label? — trang Mã QR: "Nhận tiền mặt"
  *                    table_label: tên bàn (qrTableLabel: "5" → "Bàn 5") ghi vào bill giấy của khoản đó — thay tab
  *                    "Bill giấy" cũ (2026-11-10). Tiền vẫn chỉ vào Sổ thu chi, không vào Thống kê / S2a-HKD.
@@ -264,21 +264,14 @@ export async function POST(request) {
       const accountId = String(form.get('account_id') || '');
       if (cash ? !UUID.test(code) : (!/^[A-Z0-9]{8}$/.test(code) || !UUID.test(accountId))) return fail('Thiếu mã giao dịch.');
       const kind = !cash && form.get('kind') !== 'bill' ? 'ck' : 'bill';
-      // Chuyển khoản: ảnh tờ bill chụp sẵn ở khung (thay tab Bill giấy cũ) đi kèm ảnh màn hình khách.
-      const billImage = kind === 'ck' ? form.get('bill_image') : null;
-      const hasBillImage = !!billImage && typeof billImage !== 'string' && billImage.size > 0;
-      if (hasBillImage) { const p = receiptImageProblem(billImage); if (p) return fail(`Ảnh tờ bill: ${p}`); }
       const tableLabel = qrTableLabel(form.get('table_label'));
       // Lưu ảnh trước: tiền chỉ được ghi khi ảnh đã nằm trong kho.
       const path = await uploadReceiptImage(db, image, kind);
-      let billPath = null;
-      try { billPath = hasBillImage ? await uploadReceiptImage(db, billImage, 'bill') : null; } catch (err) { await removeReceiptImages(db, [path]); throw err; }
-      const uploaded = [path, billPath];
       const { data, error } = cash
         ? await db.rpc('record_custom_cash_receipt', { p_id: code, p_amount: amount })
         : await db.rpc('confirm_custom_qr_payment', { p_code: code, p_expected_amount: amount, p_account_id: accountId });
       if (error || !data?.success) {
-        await removeReceiptImages(db, uploaded);
+        await removeReceiptImages(db, [path]);
         // P0001 = câu báo lỗi tiếng Việt do hàm SQL tự đặt (mã không khớp, đã huỷ...).
         return fail(error?.code === 'P0001' ? error.message : 'Chưa ghi được tiền, thử lại.');
       }
@@ -288,16 +281,15 @@ export async function POST(request) {
       if (rowError || !row) {
         // Tiền đã ghi; chỉ thiếu dòng Sổ thu chi (trigger chưa cài / lỗi) → không giữ ảnh mồ côi.
         console.error('[receipts] QR page receipt missing', rowError || code);
-        await removeReceiptImages(db, uploaded);
+        await removeReceiptImages(db, [path]);
         return NextResponse.json({ ok: true, photoSaved: false, alreadyDone: !!data.already_completed }, { headers });
       }
       // Bàn chỉ ghi lần đầu: bấm lại (mạng chậm) mà gõ bàn khác thì không đổi bàn của khoản đã ghi.
       const patch = { [column]: path, created_by_name: `Trang Mã QR · ${session.user.full_name || 'nhân viên'}` };
-      if (billPath) patch.image_path = billPath;
       if (tableLabel && !row.table_label) patch.table_label = tableLabel;
       const update = await db.from('finance_manual_receipts').update(patch).eq('id', row.id);
-      if (update.error) { await removeReceiptImages(db, uploaded); throw update.error; }
-      await removeReceiptImages(db, [row[column], billPath ? row.image_path : null].filter(p => p && !uploaded.includes(p)));
+      if (update.error) { await removeReceiptImages(db, [path]); throw update.error; }
+      await removeReceiptImages(db, [row[column]]);
       return NextResponse.json({ ok: true, photoSaved: true, alreadyDone: !!data.already_completed }, { headers });
     }
 
