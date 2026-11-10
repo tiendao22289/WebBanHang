@@ -254,6 +254,77 @@
 .request-info .meta { font-size: 0.75rem; color: #64748b; margin-top: 3px; }
 .request-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; flex-wrap: wrap; }
 
+/* ── Yêu cầu (chủ): chờ duyệt / đã xử lý ───────────────────── */
+.rq { --k: #64748b; --kb: #f1f5f9; --kf: #334155; display: flex; flex-direction: column; gap: 10px; }
+.rq .k-peer    { --k: #dc2626; --kb: #fee2e2; --kf: #991b1b; }
+.rq .k-claim   { --k: #16a34a; --kb: #dcfce7; --kf: #166534; }
+.rq .k-advance { --k: #d97706; --kb: #fef3c7; --kf: #92400e; }
+.rq .k-absent  { --k: #2563eb; --kb: #dbeafe; --kf: #1e40af; }
+.rq .k-fix     { --k: #7c3aed; --kb: #ede9fe; --kf: #5b21b6; }
+.rq .k-extra   { --k: #ea580c; --kb: #ffedd5; --kf: #9a3412; }
+.rq .k-face    { --k: #e11d48; --kb: #ffe4e6; --kf: #9f1239; }
+.rq-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; background: #f1f5f9; border-radius: 12px; }
+.rq-seg button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 8px; border: none; border-radius: 9px; background: transparent; color: #64748b; font-size: 0.86rem; font-weight: 700; cursor: pointer; }
+.rq-seg button.on { background: white; color: #0f172a; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12); }
+.rq-seg b { min-width: 20px; padding: 1px 6px; border-radius: 999px; background: #ef4444; color: white; font-size: 0.7rem; line-height: 1.4; }
+.rq-seg-n { color: #94a3b8; font-size: 0.78rem; font-weight: 600; }
+.rq-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+.rq-chips::-webkit-scrollbar { display: none; }
+.rq-chips button { flex-shrink: 0; padding: 5px 11px; border: 1px solid #e2e8f0; border-radius: 999px; background: white; color: #475569; font-size: 0.78rem; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.rq-chips button span { margin-left: 2px; color: #94a3b8; }
+.rq-chips button.on { background: #0f172a; border-color: #0f172a; color: white; }
+.rq-chips button.on span { color: #cbd5e1; }
+.rq-cards { display: flex; flex-direction: column; gap: 10px; }
+.rq-card { padding: 12px 14px; background: white; border: 1px solid #e2e8f0; border-radius: 14px; box-shadow: inset 3px 0 0 var(--k), 0 1px 2px rgba(15, 23, 42, 0.04); }
+.rq-top { display: flex; align-items: center; gap: 10px; }
+.rq-avatar { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; background: var(--kb); color: var(--kf); font-size: 0.95rem; font-weight: 800; }
+.rq-avatar.sm { width: 30px; height: 30px; font-size: 0.8rem; }
+.rq-who { flex: 1; min-width: 0; }
+.rq-name { display: block; overflow: hidden; color: #0f172a; font-size: 0.92rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.rq-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; color: #94a3b8; font-size: 0.74rem; }
+.rq-kind { padding: 1px 7px; border-radius: 6px; background: var(--kb); color: var(--kf); font-size: 0.72rem; font-weight: 700; }
+.rq-amount { flex-shrink: 0; color: #0f172a; font-size: 1rem; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rq-amount.sm { font-size: 0.85rem; }
+.rq-dl { display: flex; flex-direction: column; gap: 5px; margin: 10px 0 0; padding-top: 10px; border-top: 1px dashed #e2e8f0; }
+.rq-dl > div { display: grid; grid-template-columns: 84px 1fr; gap: 8px; font-size: 0.8rem; line-height: 1.45; }
+.rq-dl dt { color: #94a3b8; font-weight: 600; }
+.rq-dl dd { min-width: 0; margin: 0; color: #334155; overflow-wrap: anywhere; }
+.rq-muted { color: #94a3b8; }
+.rq-warn { color: #b91c1c; font-weight: 600; }
+.rq-photo { display: block; width: 88px; height: 88px; object-fit: cover; border: 1px solid #e5e7eb; border-radius: 8px; }
+.rq-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+/* Nút chính rộng gấp đôi; không đủ chỗ thì nút chính một hàng, nút phụ chia đều hàng dưới. */
+.rq-btn { flex: 1 1 90px; padding: 9px 12px; border: 1px solid transparent; border-radius: 9px; font-size: 0.82rem; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.rq-btn.ok     { flex: 2 1 160px; background: #16a34a; color: white; }
+.rq-btn.danger { flex: 1 1 auto; background: #dc2626; color: white; }
+.rq-pair { display: flex; flex: 2 1 230px; gap: 6px; }
+.rq-pair .rq-money { flex: 0 0 96px; width: 96px; }
+.rq-btn.ghost  { background: white; border-color: #e2e8f0; color: #475569; }
+.rq-btn.alt    { background: white; border-color: #bbf7d0; color: #15803d; }
+.rq-btn.no     { background: white; border-color: #fecaca; color: #b91c1c; }
+.rq-btn.sm     { flex: 0 0 auto; padding: 5px 10px; font-size: 0.76rem; }
+.rq-btn:active { transform: translateY(1px); }
+.rq-money { width: 110px; padding: 8px 10px; border: 1.5px solid #e2e8f0; border-radius: 9px; font-size: 0.85rem; }
+.rq-rows { overflow: hidden; background: white; border: 1px solid #e2e8f0; border-radius: 14px; }
+.rq-row + .rq-row { border-top: 1px solid #f1f5f9; }
+.rq-row-main { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; background: none; border: none; font: inherit; text-align: left; cursor: pointer; }
+.rq-row.open .rq-row-main, .rq-row-detail { background: #f8fafc; }
+.rq-row-mid { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.rq-row-mid .rq-name { font-size: 0.86rem; }
+.rq-row-end { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; flex-shrink: 0; max-width: 46%; }
+.rq-st { max-width: 100%; overflow: hidden; font-size: 0.72rem; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.rq-st.ok { color: #15803d; }
+.rq-st.no { color: #dc2626; }
+.rq-st.bad { color: #b45309; }
+.rq-st.muted { color: #94a3b8; }
+.rq-caret { flex-shrink: 0; color: #cbd5e1; font-size: 0.8rem; }
+.rq-row-detail { padding: 0 12px 12px; }
+.rq-row-detail .rq-dl { margin-top: 0; }
+.rq-more { align-self: center; padding: 8px 16px; border: 1px solid #e2e8f0; border-radius: 999px; background: white; color: #475569; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
+@media (min-width: 900px) {
+  .rq-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); align-items: start; }
+}
+
 /* ── Buttons ───────────────────────────────────────────────── */
 .btn-primary  { padding: 9px 18px; background: #0f172a; color: white; border: none; border-radius: 8px; font-size: 0.85rem; font-weight: 700; cursor: pointer; }
 .btn-primary:hover { opacity: 0.85; }
