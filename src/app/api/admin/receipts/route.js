@@ -1,5 +1,6 @@
 /**
- * /api/admin/receipts — trang "Bill giấy" cho thu ngân (nhân viên + admin).
+ * /api/admin/receipts — ghi tiền + ảnh bill cho thu ngân (nhân viên + admin): trang Mã QR, trang Bàn, Sổ thu chi.
+ * Tab "Bill giấy" (create_paper, GET) đã bỏ khỏi giao diện 2026-11-10; giữ ở máy chủ cho trang cũ chưa tải lại.
  *
  * GET  → bill giấy hôm nay + bill chuyển khoản hôm nay (để thêm ảnh CK) +
  *        danh sách thẻ nhận tiền. Không trả lãi lỗ / tổng tháng.
@@ -10,8 +11,11 @@
  *                    Nhân viên chỉ THÊM ảnh cho bill hôm nay chưa có ảnh; đổi ảnh đã có chỉ chủ quán.
  *   delete_paper     id — chỉ chủ quán (bill giấy đã lưu thì nhân viên không xoá / sửa được, 2026-10-27)
  *
- *   qr_confirm       code, amount, account_id, kind ('ck' | 'bill'), image — trang Mã QR: "Xác nhận đã nhận tiền"
- *   qr_cash          receipt_id, amount, image — trang Mã QR: "Nhận tiền mặt"
+ *   qr_confirm       code, amount, account_id, kind ('ck' | 'bill'), image, table_label?, bill_image? — trang Mã QR:
+ *                    "Xác nhận đã nhận tiền". bill_image: ảnh tờ bill chụp sẵn ở khung (chỉ khi image là màn hình khách).
+ *   qr_cash          receipt_id, amount, image (tờ bill), table_label? — trang Mã QR: "Nhận tiền mặt"
+ *                    table_label: tên bàn (qrTableLabel: "5" → "Bàn 5") ghi vào bill giấy của khoản đó — thay tab
+ *                    "Bill giấy" cũ (2026-11-10). Tiền vẫn chỉ vào Sổ thu chi, không vào Thống kê / S2a-HKD.
  *   table_pay        table_id, order_ids, amount, method, account_id?, hide_stats, transaction_code?,
  *                    image | skip_reason — trang Bàn: đóng bàn (complete_table_payment_atomic). Chuyển khoản
  *                    chỉ khi có ảnh màn hình CK của khách, hoặc lý do không chụp được (máy lỗi...).
@@ -32,6 +36,7 @@ import { purgeOldReceiptImages, receiptImageProblem, removeReceiptImages, signRe
 import { issueNextVisitVoucher, sendVoucherZalo, voucherPayProblem } from '@/lib/voucherServer.mjs';
 import { voucherValueText } from '@/lib/voucher.mjs';
 import { sendOaText } from '@/lib/zaloOa';
+import { qrTableLabel } from '@/lib/qrTableLabel.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -259,29 +264,40 @@ export async function POST(request) {
       const accountId = String(form.get('account_id') || '');
       if (cash ? !UUID.test(code) : (!/^[A-Z0-9]{8}$/.test(code) || !UUID.test(accountId))) return fail('Thiếu mã giao dịch.');
       const kind = !cash && form.get('kind') !== 'bill' ? 'ck' : 'bill';
+      // Chuyển khoản: ảnh tờ bill chụp sẵn ở khung (thay tab Bill giấy cũ) đi kèm ảnh màn hình khách.
+      const billImage = kind === 'ck' ? form.get('bill_image') : null;
+      const hasBillImage = !!billImage && typeof billImage !== 'string' && billImage.size > 0;
+      if (hasBillImage) { const p = receiptImageProblem(billImage); if (p) return fail(`Ảnh tờ bill: ${p}`); }
+      const tableLabel = qrTableLabel(form.get('table_label'));
       // Lưu ảnh trước: tiền chỉ được ghi khi ảnh đã nằm trong kho.
       const path = await uploadReceiptImage(db, image, kind);
+      let billPath = null;
+      try { billPath = hasBillImage ? await uploadReceiptImage(db, billImage, 'bill') : null; } catch (err) { await removeReceiptImages(db, [path]); throw err; }
+      const uploaded = [path, billPath];
       const { data, error } = cash
         ? await db.rpc('record_custom_cash_receipt', { p_id: code, p_amount: amount })
         : await db.rpc('confirm_custom_qr_payment', { p_code: code, p_expected_amount: amount, p_account_id: accountId });
       if (error || !data?.success) {
-        await removeReceiptImages(db, [path]);
+        await removeReceiptImages(db, uploaded);
         // P0001 = câu báo lỗi tiếng Việt do hàm SQL tự đặt (mã không khớp, đã huỷ...).
         return fail(error?.code === 'P0001' ? error.message : 'Chưa ghi được tiền, thử lại.');
       }
       const column = kind === 'bill' ? 'image_path' : 'transfer_image_path';
-      const { data: row, error: rowError } = await db.from('finance_manual_receipts').select(`id, ${column}`)
+      const { data: row, error: rowError } = await db.from('finance_manual_receipts').select('id, image_path, transfer_image_path, table_label')
         .eq('source', `${cash ? 'cash' : 'qr'}:${code}`).maybeSingle();
       if (rowError || !row) {
         // Tiền đã ghi; chỉ thiếu dòng Sổ thu chi (trigger chưa cài / lỗi) → không giữ ảnh mồ côi.
         console.error('[receipts] QR page receipt missing', rowError || code);
-        await removeReceiptImages(db, [path]);
+        await removeReceiptImages(db, uploaded);
         return NextResponse.json({ ok: true, photoSaved: false, alreadyDone: !!data.already_completed }, { headers });
       }
-      const update = await db.from('finance_manual_receipts')
-        .update({ [column]: path, created_by_name: `Trang Mã QR · ${session.user.full_name || 'nhân viên'}` }).eq('id', row.id);
-      if (update.error) { await removeReceiptImages(db, [path]); throw update.error; }
-      await removeReceiptImages(db, [row[column]]);
+      // Bàn chỉ ghi lần đầu: bấm lại (mạng chậm) mà gõ bàn khác thì không đổi bàn của khoản đã ghi.
+      const patch = { [column]: path, created_by_name: `Trang Mã QR · ${session.user.full_name || 'nhân viên'}` };
+      if (billPath) patch.image_path = billPath;
+      if (tableLabel && !row.table_label) patch.table_label = tableLabel;
+      const update = await db.from('finance_manual_receipts').update(patch).eq('id', row.id);
+      if (update.error) { await removeReceiptImages(db, uploaded); throw update.error; }
+      await removeReceiptImages(db, [row[column], billPath ? row.image_path : null].filter(p => p && !uploaded.includes(p)));
       return NextResponse.json({ ok: true, photoSaved: true, alreadyDone: !!data.already_completed }, { headers });
     }
 

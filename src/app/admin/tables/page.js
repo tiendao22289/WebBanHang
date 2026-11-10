@@ -1398,7 +1398,7 @@ export default function TablesPage() {
       setSelectedTable(null);
       fetchTables(snapshot.groupTableIds);
       proof.onDone?.();
-      if (blob && !result.photoSaved) Swal.fire('Đã đóng bàn', 'Bàn đã thanh toán xong nhưng chưa lưu được ảnh. Thêm ảnh ở Sổ thu chi hoặc tab Bill giấy (trang Mã QR).', 'warning');
+      if (blob && !result.photoSaved) Swal.fire('Đã đóng bàn', 'Bàn đã thanh toán xong nhưng chưa lưu được ảnh. Báo chủ quán thêm ảnh ở Sổ thu chi.', 'warning');
       else if (result.nextVoucher) {
         // Máy vừa tặng mã "hẹn lần sau" → nhân viên báo khách một câu.
         const v = result.nextVoucher;

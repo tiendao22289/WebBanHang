@@ -33,7 +33,7 @@ import { AUTO_CHECK_BY, AUTO_CHECK_HOUR, dayCheck } from '@/lib/dayCheck.mjs';
 import { dayAudit } from '@/lib/dayAudit.mjs';
 import { LINK_CODE_MINUTES, REPORT_SECTIONS, readReportSettings, reportPlan, reportSections, reportStatus, saveReportSettings, validSendAt } from '@/lib/financeZaloLink.mjs';
 import { getStaffSession, statusDatabase } from '@/lib/statusAuth';
-import { signReceiptImages } from '@/lib/receiptImages.mjs';
+import { purgeOldReceiptImages, signReceiptImages } from '@/lib/receiptImages.mjs';
 import { loadPayrollMonth, readClosedDays, readLateRules } from '@/lib/payrollMonth.mjs';
 import { claimText, payrollCost } from '@/lib/payroll.mjs';
 import { addCosts, addItemCosts, namedCostList } from '@/lib/noteCategories.mjs';
@@ -1007,6 +1007,8 @@ export async function POST(request) {
       // Workflow gọi mỗi 30 phút; chỉ gửi khi tới giờ chủ quán chọn (mỗi ngày 1 lần).
       const db = statusDatabase();
       const today = vnDate(Date.now());
+      // Xoá ảnh bill / ảnh CK quá hạn (mỗi lần tối đa 100 dòng). Trước chạy khi mở tab Bill giấy (đã bỏ 2026-11-10).
+      purgeOldReceiptImages(db).catch(error => console.error('[admin/finance] purge images', error));
       // Sau 5 giờ sáng: máy tự kiểm tra ngày hôm qua (một lần), không cần chủ chốt sổ.
       if (new Date(Date.now() + 7 * 3600000).getUTCHours() >= AUTO_CHECK_HOUR) {
         await ensureDayCheck(db, addDays(today, -1), today).catch(error => console.error('[admin/finance] nightly check', error));

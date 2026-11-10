@@ -31,7 +31,7 @@ import { allowedPaths, canOpenPath, roleLabel } from '@/lib/staffRoles.mjs';
 const ALL_NAV = [
   { href: '/admin/tables', label: 'Quản lý bàn', icon: LayoutGrid },
   { href: '/admin/menu', label: 'Thực đơn', icon: UtensilsCrossed },
-  { href: '/admin/qr', label: 'Mã QR · Bill giấy', icon: QrCode },
+  { href: '/admin/qr', label: 'Mã QR', icon: QrCode },
 
   { href: '/admin/customers', label: 'Khách hàng', icon: UsersRound },
   { href: '/admin/vouchers', label: 'Voucher', icon: Ticket, adminOnly: true },
