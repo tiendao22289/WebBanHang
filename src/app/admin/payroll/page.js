@@ -529,6 +529,17 @@ const FORM_TILES = [
 ];
 
 // staffSection 'forms': trang Đơn từ (/admin/payroll/don) — nhân viên / quản lý chỉ thấy phần gửi đơn.
+// Loại đơn ở tab Yêu cầu (chủ): biểu tượng, tên đầy đủ trên thẻ, tên ngắn trên nút lọc / dòng đã xử lý.
+const REQ_KINDS = {
+  advance: { icon: '💵', label: 'Ứng lương', short: 'Ứng lương' },
+  absent: { icon: '🏖', label: 'Báo nghỉ', short: 'Báo nghỉ' },
+  claim: { icon: '🧾', label: 'Chi hộ quán', short: 'Chi hộ' },
+  peer: { icon: '🚩', label: 'Bị báo lỗi', short: 'Báo lỗi' },
+  fix: { icon: '✏️', label: 'Xin sửa giờ', short: 'Sửa giờ' },
+  extra: { icon: '⏱', label: 'Giờ ngoài ca', short: 'Ngoài ca' },
+  face: { icon: '🙂', label: 'Sai mặt 3 lần', short: 'Sai mặt' },
+};
+
 export default function PayrollPage({ staffSection = null } = {}) {
   const formsView = staffSection === 'forms';
   const [activeTab, setActiveTab] = useState('salary');
@@ -833,6 +844,11 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   // Báo lỗi đồng nghiệp: chờ chủ xem + đã xử lý 60 ngày gần đây (máy chủ đọc); ô tiền phạt từng lần báo (mặc định tiền gợi ý).
   const [peers, setPeers] = useState({ ready: true, reports: [] });
   const [peerAmounts, setPeerAmounts] = useState({});
+  // Tab Yêu cầu: xem đơn chờ duyệt hay đã xử lý, lọc theo loại, dòng đang mở, số dòng đã xử lý đang hiện.
+  const [reqView, setReqView] = useState('pending');
+  const [reqKind, setReqKind] = useState('all');
+  const [reqOpen, setReqOpen] = useState(null);
+  const [reqLimit, setReqLimit] = useState(30);
   const fetchPeers = useCallback(async () => {
     try {
       const r = await fetch('/api/admin/workforce?peer=1', { cache: 'no-store' });
@@ -2017,7 +2033,6 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   const months = Array.from({ length: 12 }, (_, i) => i + 1);
   const years = [2025, 2026, 2027];
 
-  const requestTypeMap = { advance: { label: '💵 Ứng lương', color: '#92400e', bg: '#fef9c3' }, absent: { label: '🏖 Báo nghỉ', color: '#1e40af', bg: '#dbeafe' } };
 
   // ── STAFF VIEW ──────────────────────────────────────────────────────────────
   if (currentUser && currentUser.role !== 'admin') {
@@ -3060,211 +3075,224 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           })()}
 
           {/* === YÊU CẦU === */}
-          {activeTab === 'requests' && (
-            <div className="request-list">
-              {/* Báo lỗi đồng nghiệp: chủ phạt (số tiền tự định) hoặc bỏ qua. Người bị báo không thấy tên người báo. */}
-              {[...peers.reports.filter(x => x.status === 'pending'), ...peers.reports.filter(x => x.status !== 'pending').slice(0, 20)].map(x => {
-                const nameOf = id => staffList.find(st => st.id === id)?.full_name || 'Không rõ';
-                const who = nameOf(x.staff_id), by = x.reporter_name || nameOf(x.reporter_id);
-                const at = ts => (ts ? new Date(ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '');
-                const typed = peerAmounts[x.id] ?? (x.suggested_amount ? x.suggested_amount.toLocaleString('vi-VN') : '');
-                const amount = Number(String(typed).replace(/\D/g, '')) || 0;
-                return (
-                  <div key={`peer-${x.id}`} className={`request-card ${x.status}`}>
-                    <div className="request-info">
-                      <div className="name">{who}</div>
-                      <div style={{ marginTop: 4 }}>
-                        <span style={{ display: 'inline-block', background: '#fee2e2', color: '#991b1b', borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>🚩 Bị báo lỗi</span>
-                        <span className={`status-badge ${x.status}`}>{x.status === 'pending' ? '⏳ Chờ xem' : x.status === 'approved' ? `✅ Đã phạt ${formatMoney(x.amount || 0)}` : '➖ Bỏ qua'}</span>
-                      </div>
-                      <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                        <div>Lỗi: <strong>{x.reason}</strong> · ngày {ddmm(x.date)}</div>
-                        {x.note && <div>Ghi thêm: {x.note}</div>}
-                        {x.photo && <a href={x.photo} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 4 }} title="Bấm để xem ảnh lớn">
-                          <img src={x.photo} alt="Ảnh làm chứng" style={{ width: 96, height: 96, objectFit: 'cover', borderRadius: 8, border: '1px solid #e5e7eb', display: 'block' }} /></a>}
-                        <div style={{ color: '#475569' }}>Người báo: <strong>{by}</strong> <span style={{ color: '#94a3b8' }}>(chỉ bạn thấy)</span></div>
-                        <div style={{ color: '#94a3b8' }}>Báo lúc {at(x.created_at)}{x.status !== 'pending' && x.decided_by ? ` · ${x.decided_by} ${at(x.decided_at)}` : ''}</div>
-                      </div>
-                      {x.admin_note && <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 4 }}>💬 {x.admin_note}</div>}
-                    </div>
-                    {x.status === 'pending' && (
-                      <div className="request-actions" style={{ flexShrink: 1, width: '100%' }}>
-                        <input type="text" inputMode="numeric" placeholder="Tiền phạt" value={typed} aria-label="Tiền phạt"
-                          onChange={e => { const r = e.target.value.replace(/\D/g, ''); setPeerAmounts(m => ({ ...m, [x.id]: r ? Number(r).toLocaleString('vi-VN') : '' })); }}
-                          style={{ width: 110, padding: '7px 10px', border: '1.5px solid #e5e7eb', borderRadius: 8, fontSize: '0.85rem' }} />
-                        <button className="btn-danger" onClick={() => peerAction({ id: x.id, status: 'approved', amount })}>{amount ? `✓ Phạt ${formatMoney(amount)}` : '✓ Ghi lỗi (định tiền sau)'}</button>
-                        <button className="btn-secondary" style={{ padding: '7px 12px', background: 'white', border: '1px solid #e2e8f0', borderRadius: 8, color: '#475569', cursor: 'pointer' }}
-                          onClick={() => { const note = prompt('Ghi chú khi bỏ qua (tuỳ chọn):'); if (note === null) return; peerAction({ id: x.id, status: 'rejected', admin_note: note }); }}>Bỏ qua</button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+          {/* Yêu cầu: đơn chờ duyệt (thẻ đủ chi tiết + nút) ở trên; đơn đã xử lý gom thành danh sách gọn, bấm để xem / xoá. Lọc theo loại. */}
+          {activeTab === 'requests' && (() => {
+            const nameOf = id => staffList.find(st => st.id === id)?.full_name || 'Không rõ';
+            // Giờ / ngày theo giờ VN, dạng "08:05 10/11".
+            const dayOf = ts => (ts ? ddmm(new Date(new Date(ts).getTime() + 7 * 3600000).toISOString().slice(0, 10)) : '');
+            const at = ts => (ts ? `${hhmm(ts)} ${dayOf(ts)}` : '');
+            const ms = ts => Date.parse(ts || '') || 0;
+            const hm = ts => new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+            const dmy = d => String(d || '').split('-').reverse().join('/');
+            // Bấm Huỷ ở hộp ghi chú thì không làm gì.
+            const askNote = (label, run) => { const note = prompt(label); if (note === null) return; run(note); };
+            const items = [];
 
-              {/* Khoản chi hộ quán: duyệt → vào Sổ thu chi (Chi trong ngày, đúng ngày chi); tiền mặt thì đưa ngay, cộng lương thì vào lương tháng này. */}
-              {[...claims.claims.filter(x => x.status === 'pending'), ...claims.claims.filter(x => x.status !== 'pending').slice(0, 20)].map(x => {
-                const who = staffList.find(st => st.id === x.staff_id)?.full_name || x.created_by_name || 'Không rõ', cash = x.payout === 'cash';
-                // Chủ đưa trước: duyệt = đã nhận lại tiền thừa (chưa trả thì chủ chọn trừ lương) / chi vừa đủ / trả phần chi lố.
-                const given = x.given_amount > 0, owed = given ? x.owed : x.amount;
-                const approveLabel = x.left > 0 ? `✓ Duyệt · đã nhận lại ${formatMoney(x.left)}` : given && !owed ? '✓ Duyệt · chi vừa đủ'
-                  : cash ? `✓ Duyệt · đưa ${given ? formatMoney(owed) : 'tiền mặt'}` : '✓ Duyệt · cộng lương';
-                const at = ts => (ts ? new Date(ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '');
-                return (
-                  <div key={`claim-${x.id}`} className={`request-card ${x.status}`}>
-                    <div className="request-info">
-                      <div className="name">{who}</div>
-                      <div style={{ marginTop: 4 }}>
-                        <span style={{ display: 'inline-block', background: '#dcfce7', color: '#166534', borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>🧾 Chi hộ quán</span>
-                        <span className={`status-badge ${x.status}`}>{x.status === 'pending' ? '⏳ Chờ duyệt' : x.status === 'approved' ? (x.left > 0 && !cash ? `✅ Đã duyệt · trừ lương ${x.month}/${x.year}`
-                          : given && (x.left > 0 || !owed) ? '✅ Đã duyệt'
-                          : cash ? '✅ Đã duyệt · đã đưa tiền mặt' : `✅ Đã duyệt · cộng lương ${x.month}/${x.year}`) : '❌ Từ chối'}</span>
-                      </div>
-                      <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                        <div><strong>{x.item}</strong>: <strong>{formatMoney(x.amount)}</strong> · chi ngày {ddmm(x.spent_on)}</div>
-                        {given ? <div>💵 Chủ đưa trước <strong>{formatMoney(x.given_amount)}</strong> → <strong>{x.left > 0 ? (x.status === 'approved' && !cash ? `trừ ${formatMoney(x.left)} tiền thừa vào lương` : `đưa lại chủ ${formatMoney(x.left)}`) : !owed ? 'chi vừa đủ'
-                          : `chi lố ${formatMoney(owed)}, ${cash ? 'lấy tiền mặt' : 'cộng vào lương'}`}</strong></div>
-                          : <div>Muốn nhận lại: <strong>{cash ? '💵 Lấy tiền mặt tại chủ' : '💰 Cộng vào lương'}</strong></div>}
-                        {x.note && <div>Ghi thêm: {x.note}</div>}
-                        <div style={{ color: '#94a3b8' }}>Ghi lúc {at(x.created_at)}{x.status !== 'pending' && x.decided_by ? ` · ${x.status === 'approved' ? 'duyệt' : 'từ chối'} bởi ${x.decided_by} ${at(x.decided_at)}` : ''}</div>
-                        {x.status === 'approved' && <div style={{ color: '#475569' }}>Đã vào Sổ thu chi → Chi trong ngày {ddmm(x.spent_on)}.</div>}
-                      </div>
-                      {x.admin_note && <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 4 }}>💬 {x.admin_note}</div>}
-                    </div>
-                    <div className="request-actions">
-                      {x.status === 'pending' ? <>
-                        <button className="btn-success" onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved' })}>{approveLabel}</button>
-                        {x.left > 0 && <button onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved', left_salary: true }, `${who} chưa trả lại ${formatMoney(x.left)} tiền thừa: trừ vào lương?`)}
-                          style={{ padding: '6px 10px', background: 'white', border: '1px solid #fecaca', borderRadius: 7, color: '#b91c1c', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer' }}>Chưa trả · trừ lương</button>}
-                        {!cash && <button onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved', cash: true }, `Duyệt và đưa ${formatMoney(owed)} tiền mặt cho ${who} (không cộng vào lương)?`)}
-                          style={{ padding: '6px 10px', background: 'white', border: '1px solid #bbf7d0', borderRadius: 7, color: '#15803d', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer' }}>💵 Đưa tiền mặt</button>}
-                        <button className="btn-danger" onClick={() => { const note = prompt('Lý do từ chối (tuỳ chọn):'); if (note === null) return; claimAction('decide_claim', { id: x.id, status: 'rejected', admin_note: note }); }}>✗ Từ chối</button>
-                      </> : (
-                        <button onClick={() => claimAction('delete_claim', { id: x.id }, `Xoá khoản chi "${x.item}" ${formatMoney(x.amount)} của ${who}?${x.status === 'approved' ? `\n\nDòng này trong Sổ thu chi cũng bị xoá${cash ? '' : ', tiền cộng lương bị bỏ'}.` : ''}`)}
-                          style={{ fontSize: '0.78rem', padding: '6px 10px', background: 'white', border: '1px solid #e2e8f0', borderRadius: 8, color: '#64748b', cursor: 'pointer' }}>🗑 Xoá</button>
-                      )}
-                    </div>
+            // Báo lỗi đồng nghiệp: chủ phạt (số tiền tự định) hoặc bỏ qua. Người bị báo không thấy tên người báo.
+            peers.reports.forEach(x => {
+              const pending = x.status === 'pending';
+              const typed = peerAmounts[x.id] ?? (x.suggested_amount ? x.suggested_amount.toLocaleString('vi-VN') : '');
+              const amount = Number(String(typed).replace(/\D/g, '')) || 0;
+              items.push({ key: `peer-${x.id}`, kind: 'peer', pending, at: ms(x.created_at), who: nameOf(x.staff_id),
+                head: x.status === 'approved' && x.amount ? formatMoney(x.amount) : null,
+                status: pending ? null : x.status === 'approved' ? { text: x.amount ? 'Đã phạt' : 'Đã ghi lỗi', tone: 'bad' } : { text: 'Bỏ qua', tone: 'muted' },
+                rows: [
+                  ['Lỗi', <><strong>{x.reason}</strong> · ngày {ddmm(x.date)}</>],
+                  x.note && ['Ghi thêm', x.note],
+                  x.photo && ['Ảnh', <a href={x.photo} target="_blank" rel="noreferrer" title="Bấm để xem ảnh lớn"><img src={x.photo} alt="Ảnh làm chứng" className="rq-photo" /></a>],
+                  ['Người báo', <><strong>{x.reporter_name || nameOf(x.reporter_id)}</strong> <span className="rq-muted">(chỉ bạn thấy)</span></>],
+                  ['Báo lúc', at(x.created_at)],
+                  !pending && x.decided_by && ['Xử lý', `${x.decided_by} · ${at(x.decided_at)}`],
+                  x.admin_note && ['Ghi chú', x.admin_note],
+                ],
+                actions: pending && <>
+                  <div className="rq-pair">
+                    <input className="rq-money" type="text" inputMode="numeric" placeholder="Tiền phạt" value={typed} aria-label="Tiền phạt"
+                      onChange={e => { const r = e.target.value.replace(/\D/g, ''); setPeerAmounts(m => ({ ...m, [x.id]: r ? Number(r).toLocaleString('vi-VN') : '' })); }} />
+                    <button className="rq-btn danger" onClick={() => peerAction({ id: x.id, status: 'approved', amount })}>{amount ? `✓ Phạt ${formatMoney(amount)}` : '✓ Ghi lỗi (định tiền sau)'}</button>
                   </div>
-                );
-              })}
-              {/* Ca ghi sau 3 lần sai mặt ở máy quầy: chưa tính lương, chờ chủ xác nhận đúng người hay không. */}
-              {(faces?.reviews || []).map(r => {
-                const t = ts => new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-                const s = r.session, out = r.clocked === 'out';
-                return (
-                  <div key={`${r.attendance_id}-${r.clocked}`} className="request-card pending">
-                    <div className="request-info">
-                      <div className="name">{staffList.find(x => x.id === r.staff_id)?.full_name || 'Không rõ'}</div>
-                      <div style={{ marginTop: 4 }}>
-                        <span style={{ display: 'inline-block', background: '#fee2e2', color: '#991b1b', borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>🙂 Sai mặt 3 lần</span>
-                        <span className="status-badge pending">⏳ Chờ duyệt</span>
-                      </div>
-                      <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                        <div>{out ? 'Ra ca' : 'Vào ca'} lúc {t(out ? s.clock_out || r.created_at : s.clock_in)} ngày {String(s.date).split('-').reverse().join('/')}: máy quầy so mặt không khớp 3 lần liền.</div>
-                        <div>Ca này <strong>chưa tính lương</strong> tới khi bạn duyệt.</div>
-                      </div>
-                    </div>
-                    <div className="request-actions">
-                      <button className="btn-success" onClick={() => faceAction('decide_face', { attendance_id: r.attendance_id, clocked: r.clocked, status: 'approved' })}>✓ Đúng người</button>
-                      <button className="btn-danger" onClick={() => faceAction('decide_face', { attendance_id: r.attendance_id, clocked: r.clocked, status: 'rejected' },
-                        out ? 'Không phải người này ra ca? Giờ ra ca bị bỏ: ca mở lại, máy tự đóng khi quên ra ca (hoặc bạn sửa giờ).' : 'Không phải người này vào ca? Ca này sẽ bị bỏ.')}>✗ Không phải</button>
-                    </div>
-                  </div>
-                );
-              })}
+                  <button className="rq-btn ghost" onClick={() => askNote('Ghi chú khi bỏ qua (tuỳ chọn):', note => peerAction({ id: x.id, status: 'rejected', admin_note: note }))}>Bỏ qua</button>
+                </> });
+            });
 
-              {/* Giờ ngoài ca chờ chủ cho tính hoặc không: chỉ còn ngày trước khi giờ ngoài ca tự tính (AUTO_EXTRA_FROM). */}
-              {(checkin?.extras || []).map(x => {
-                const t = ts => new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-                return (
-                  <div key={x.attendance_id} className="request-card pending">
-                    <div className="request-info">
-                      <div className="name">{staffList.find(s => s.id === x.staff_id)?.full_name || 'Không rõ'}</div>
-                      <div style={{ marginTop: 4 }}>
-                        <span style={{ display: 'inline-block', background: '#ffedd5', color: '#9a3412', borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>⏱ Giờ ngoài ca</span>
-                        <span className="status-badge pending">⏳ Chờ duyệt</span>
-                      </div>
-                      <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                        <div>Ca ngày {x.date.split('-').reverse().join('/')}: vào {t(x.clock_in)}{x.early_minutes ? ` (sớm ${durationText(x.early_minutes)})` : ''} → ra {t(x.clock_out)}{x.stay_minutes ? ` (ở lại ${durationText(x.stay_minutes)})` : ''}</div>
-                        <div>Chưa tính lương: <strong>{durationText(x.early_minutes + x.stay_minutes)}</strong></div>
-                      </div>
-                    </div>
-                    <div className="request-actions">
-                      <button className="btn-success" onClick={() => checkinAction('decide_extra', { attendance_id: x.attendance_id, status: 'approved' })}>✓ Cho tính</button>
-                      <button className="btn-danger" onClick={() => checkinAction('decide_extra', { attendance_id: x.attendance_id, status: 'rejected' })}>✗ Không tính</button>
-                    </div>
-                  </div>
-                );
-              })}
+            // Chi hộ quán: duyệt → vào Sổ thu chi (Chi trong ngày, đúng ngày chi); tiền mặt thì đưa ngay, cộng lương thì vào lương tháng đó.
+            claims.claims.forEach(x => {
+              const who = staffList.find(st => st.id === x.staff_id)?.full_name || x.created_by_name || 'Không rõ', cash = x.payout === 'cash', pending = x.status === 'pending';
+              // Chủ đưa trước: duyệt = đã nhận lại tiền thừa (chưa trả thì chủ chọn trừ lương) / chi vừa đủ / trả phần chi lố.
+              const given = x.given_amount > 0, owed = given ? x.owed : x.amount;
+              const approveLabel = x.left > 0 ? `✓ Duyệt · đã nhận lại ${formatMoney(x.left)}` : given && !owed ? '✓ Duyệt · chi vừa đủ'
+                : cash ? `✓ Duyệt · đưa ${given ? formatMoney(owed) : 'tiền mặt'}` : '✓ Duyệt · cộng lương';
+              const done = x.left > 0 && !cash ? `Trừ lương ${x.month}/${x.year}` : given && (x.left > 0 || !owed) ? 'Đã duyệt'
+                : cash ? 'Đã đưa tiền mặt' : `Cộng lương ${x.month}/${x.year}`;
+              items.push({ key: `claim-${x.id}`, kind: 'claim', pending, at: ms(x.created_at), who, head: formatMoney(x.amount),
+                status: pending ? null : x.status === 'approved' ? { text: done, tone: 'ok' } : { text: 'Từ chối', tone: 'no' },
+                rows: [
+                  ['Khoản chi', <><strong>{x.item}</strong> · chi ngày {ddmm(x.spent_on)}</>],
+                  given ? ['Chủ đưa trước', <><strong>{formatMoney(x.given_amount)}</strong> → {x.left > 0 ? (x.status === 'approved' && !cash ? `trừ ${formatMoney(x.left)} tiền thừa vào lương` : `đưa lại chủ ${formatMoney(x.left)}`)
+                    : !owed ? 'chi vừa đủ' : `chi lố ${formatMoney(owed)}, ${cash ? 'lấy tiền mặt' : 'cộng vào lương'}`}</>]
+                    : ['Nhận lại', <strong>{cash ? '💵 Lấy tiền mặt tại chủ' : '💰 Cộng vào lương'}</strong>],
+                  x.note && ['Ghi thêm', x.note],
+                  ['Ghi lúc', at(x.created_at)],
+                  !pending && x.decided_by && [x.status === 'approved' ? 'Duyệt' : 'Từ chối', `${x.decided_by} · ${at(x.decided_at)}`],
+                  x.status === 'approved' && ['Sổ thu chi', `Chi trong ngày ${ddmm(x.spent_on)}`],
+                  x.admin_note && ['Ghi chú', x.admin_note],
+                ],
+                actions: pending ? <>
+                  <button className="rq-btn ok" onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved' })}>{approveLabel}</button>
+                  {x.left > 0 && <button className="rq-btn no" onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved', left_salary: true }, `${who} chưa trả lại ${formatMoney(x.left)} tiền thừa: trừ vào lương?`)}>Chưa trả · trừ lương</button>}
+                  {!cash && <button className="rq-btn alt" onClick={() => claimAction('decide_claim', { id: x.id, status: 'approved', cash: true }, `Duyệt và đưa ${formatMoney(owed)} tiền mặt cho ${who} (không cộng vào lương)?`)}>💵 Đưa tiền mặt</button>}
+                  <button className="rq-btn no" onClick={() => askNote('Lý do từ chối (tuỳ chọn):', note => claimAction('decide_claim', { id: x.id, status: 'rejected', admin_note: note }))}>✗ Từ chối</button>
+                </> : (
+                  <button className="rq-btn ghost sm" onClick={() => claimAction('delete_claim', { id: x.id }, `Xoá khoản chi "${x.item}" ${formatMoney(x.amount)} của ${who}?${x.status === 'approved' ? `\n\nDòng này trong Sổ thu chi cũng bị xoá${cash ? '' : ', tiền cộng lương bị bỏ'}.` : ''}`)}>🗑 Xoá</button>
+                ) });
+            });
 
-              {/* Đơn xin sửa giờ chấm công (duyệt thì giờ được sửa và ghi vào nhật ký sửa). */}
-              {(checkin?.fixes || []).map(f => {
-                const att = (checkin.fixSessions || []).find(s => s.id === f.attendance_id);
-                const t = ts => ts ? new Date(ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '—';
-                return (
-                  <div key={f.id} className={`request-card ${f.status}`}>
-                    <div className="request-info">
-                      <div className="name">{staffList.find(s => s.id === f.staff_id)?.full_name || 'Không rõ'}</div>
-                      <div style={{ marginTop: 4 }}>
-                        <span style={{ display: 'inline-block', background: '#ede9fe', color: '#5b21b6', borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>✏️ Xin sửa giờ</span>
-                        <span className={`status-badge ${f.status}`}>{f.status === 'pending' ? '⏳ Chờ duyệt' : f.status === 'approved' ? '✅ Đã sửa' : '❌ Từ chối'}</span>
-                      </div>
-                      <div className="meta" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                        {att && <div>Đang ghi: vào {t(att.clock_in)} → ra {att.clock_out ? t(att.clock_out) : 'chưa ra'}{(checkin.autoClosed || []).includes(att.id) ? ' (máy tự đóng vì quên ra ca)' : ''}</div>}
-                        <div>Xin sửa: {f.clock_in ? `vào ${t(f.clock_in)} ` : ''}{f.clock_out ? `ra ${t(f.clock_out)}` : ''}</div>
-                        <div>Lý do: {f.reason}</div>
-                      </div>
-                      {f.admin_note && <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 4 }}>💬 {f.admin_note}</div>}
-                    </div>
-                    {f.status === 'pending' && (
-                      <div className="request-actions">
-                        <button className="btn-success" onClick={() => checkinAction('decide_fix', { id: f.id, status: 'approved' })}>✓ Duyệt</button>
-                        <button className="btn-danger" onClick={() => { const note = prompt('Lý do từ chối (tuỳ chọn):') || ''; checkinAction('decide_fix', { id: f.id, status: 'rejected', admin_note: note }); }}>✗ Từ chối</button>
-                      </div>
-                    )}
+            // Ca ghi sau 3 lần sai mặt ở máy quầy: chưa tính lương, chờ chủ xác nhận đúng người hay không.
+            (faces?.reviews || []).forEach(r => {
+              const s = r.session, out = r.clocked === 'out';
+              items.push({ key: `face-${r.attendance_id}-${r.clocked}`, kind: 'face', pending: true, at: ms(r.created_at || s.clock_in), who: nameOf(r.staff_id),
+                rows: [
+                  [out ? 'Ra ca' : 'Vào ca', `${hm(out ? s.clock_out || r.created_at : s.clock_in)} · ngày ${dmy(s.date)}`],
+                  ['Lý do', 'Máy quầy so mặt không khớp 3 lần liền'],
+                  ['Lương', <>Ca này <strong>chưa tính lương</strong> tới khi bạn duyệt</>],
+                ],
+                actions: <>
+                  <button className="rq-btn ok" onClick={() => faceAction('decide_face', { attendance_id: r.attendance_id, clocked: r.clocked, status: 'approved' })}>✓ Đúng người</button>
+                  <button className="rq-btn no" onClick={() => faceAction('decide_face', { attendance_id: r.attendance_id, clocked: r.clocked, status: 'rejected' },
+                    out ? 'Không phải người này ra ca? Giờ ra ca bị bỏ: ca mở lại, máy tự đóng khi quên ra ca (hoặc bạn sửa giờ).' : 'Không phải người này vào ca? Ca này sẽ bị bỏ.')}>✗ Không phải</button>
+                </> });
+            });
+
+            // Giờ ngoài ca chờ chủ cho tính hoặc không: chỉ còn ngày trước khi giờ ngoài ca tự tính (AUTO_EXTRA_FROM).
+            (checkin?.extras || []).forEach(x => {
+              items.push({ key: `extra-${x.attendance_id}`, kind: 'extra', pending: true, at: ms(x.clock_out || x.clock_in), who: nameOf(x.staff_id),
+                head: durationText(x.early_minutes + x.stay_minutes),
+                rows: [
+                  ['Ca', `ngày ${dmy(x.date)}: vào ${hm(x.clock_in)}${x.early_minutes ? ` (sớm ${durationText(x.early_minutes)})` : ''} → ra ${hm(x.clock_out)}${x.stay_minutes ? ` (ở lại ${durationText(x.stay_minutes)})` : ''}`],
+                  ['Chưa tính', <strong>{durationText(x.early_minutes + x.stay_minutes)}</strong>],
+                ],
+                actions: <>
+                  <button className="rq-btn ok" onClick={() => checkinAction('decide_extra', { attendance_id: x.attendance_id, status: 'approved' })}>✓ Cho tính</button>
+                  <button className="rq-btn no" onClick={() => checkinAction('decide_extra', { attendance_id: x.attendance_id, status: 'rejected' })}>✗ Không tính</button>
+                </> });
+            });
+
+            // Đơn xin sửa giờ chấm công (duyệt thì giờ được sửa và ghi vào nhật ký sửa).
+            (checkin?.fixes || []).forEach(f => {
+              const att = (checkin.fixSessions || []).find(x => x.id === f.attendance_id), pending = f.status === 'pending';
+              const t = ts => (ts ? at(ts) : '—');
+              items.push({ key: `fix-${f.id}`, kind: 'fix', pending, at: ms(f.created_at), who: nameOf(f.staff_id),
+                status: pending ? null : f.status === 'approved' ? { text: 'Đã sửa', tone: 'ok' } : { text: 'Từ chối', tone: 'no' },
+                rows: [
+                  att && ['Đang ghi', `vào ${t(att.clock_in)} → ra ${att.clock_out ? t(att.clock_out) : 'chưa ra'}${(checkin.autoClosed || []).includes(att.id) ? ' (máy tự đóng vì quên ra ca)' : ''}`],
+                  ['Xin sửa', `${f.clock_in ? `vào ${t(f.clock_in)} ` : ''}${f.clock_out ? `ra ${t(f.clock_out)}` : ''}`],
+                  f.reason && ['Lý do', f.reason],
+                  f.admin_note && ['Ghi chú', f.admin_note],
+                ],
+                actions: pending && <>
+                  <button className="rq-btn ok" onClick={() => checkinAction('decide_fix', { id: f.id, status: 'approved' })}>✓ Duyệt</button>
+                  <button className="rq-btn no" onClick={() => askNote('Lý do từ chối (tuỳ chọn):', note => checkinAction('decide_fix', { id: f.id, status: 'rejected', admin_note: note }))}>✗ Từ chối</button>
+                </> });
+            });
+
+            // Ứng lương / báo nghỉ.
+            requests.forEach(req => {
+              const pending = req.status === 'pending', adv = req.request_type === 'advance';
+              // Duyệt ứng lương: xem người này đã làm ra bao nhiêu và đã ứng bao nhiêu trong tháng.
+              let check = null;
+              if (adv && pending && req.month === selMonth && req.year === selYear) {
+                const c = calcSalary(req.staff_id);
+                // Cách cũ (tháng trước 11/2026) trả đủ lương cơ bản nên chỉ đếm ngày đi làm, không tính "đã làm ra".
+                if (c.rule !== 'days') check = { text: `Đã đi làm ${c.workDays} ngày · đã ứng ${formatMoney(c.advAmt)}` };
+                else {
+                  const earned = c.basePay + c.otAmt, over = c.advAmt + Number(req.amount || 0) > earned;
+                  check = { text: `Đã làm ra ${formatMoney(earned)} · đã ứng ${formatMoney(c.advAmt)}${over ? ' · ⚠ duyệt đơn này thì ứng quá số đã làm' : ''}`, warn: over };
+                }
+              }
+              items.push({ key: `req-${req.id}`, kind: adv ? 'advance' : 'absent', pending, at: ms(req.created_at), who: req.staff?.full_name || nameOf(req.staff_id),
+                head: adv ? formatMoney(req.amount) : `${fmtNum(req.days)} ngày`,
+                status: pending ? null : req.status === 'approved' ? { text: 'Đã duyệt', tone: 'ok' } : { text: 'Từ chối', tone: 'no' },
+                rows: [
+                  !adv && ['Nghỉ', <><strong>{fmtNum(req.days)} ngày</strong>{leaveText(payrollMonth.leaveDays.find(l => l.request_id === req.id))}</>],
+                  ['Tháng', `${req.month}/${req.year}`],
+                  req.reason && ['Lý do', req.reason],
+                  check && ['Tháng này', <span className={check.warn ? 'rq-warn' : ''}>{check.text}</span>],
+                  req.admin_note && ['Ghi chú', req.admin_note],
+                ],
+                actions: pending && <>
+                  <button className="rq-btn ok" onClick={() => handleDecision(req.id, 'approved')}>✓ Duyệt</button>
+                  <button className="rq-btn no" onClick={() => askNote('Lý do từ chối (tuỳ chọn):', note => handleDecision(req.id, 'rejected', note))}>✗ Từ chối</button>
+                </> });
+            });
+
+            const pend = items.filter(x => x.pending), done = items.filter(x => !x.pending);
+            const showDone = reqView === 'done', view = showDone ? done : pend;
+            const kind = view.some(x => x.kind === reqKind) ? reqKind : 'all';
+            const shown = view.filter(x => kind === 'all' || x.kind === kind).sort((a, b) => b.at - a.at);
+            const counts = Object.keys(REQ_KINDS).map(k => [k, view.filter(x => x.kind === k).length]).filter(([, n]) => n);
+            const initial = name => (String(name || '').trim().split(/\s+/).pop() || '?').charAt(0).toUpperCase();
+            const top = x => (
+              <div className="rq-top">
+                <span className="rq-avatar">{initial(x.who)}</span>
+                <div className="rq-who">
+                  <div className="rq-name">{x.who}</div>
+                  <div className="rq-sub"><span className="rq-kind">{REQ_KINDS[x.kind].icon} {REQ_KINDS[x.kind].label}</span>{x.at ? <span>{at(x.at)}</span> : null}</div>
+                </div>
+                {x.head && <div className="rq-amount">{x.head}</div>}
+              </div>
+            );
+            const details = x => <dl className="rq-dl">{x.rows.filter(Boolean).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>;
+            const card = x => (
+              <div key={x.key} className={`rq-card k-${x.kind}`}>{top(x)}{details(x)}{x.actions && <div className="rq-actions">{x.actions}</div>}</div>
+            );
+            const row = x => {
+              const open = reqOpen === x.key;
+              return (
+                <div key={x.key} className={`rq-row k-${x.kind}${open ? ' open' : ''}`}>
+                  <button type="button" className="rq-row-main" aria-expanded={open} onClick={() => setReqOpen(o => (o === x.key ? null : x.key))}>
+                    <span className="rq-avatar sm">{initial(x.who)}</span>
+                    <span className="rq-row-mid">
+                      <span className="rq-name">{x.who}</span>
+                      <span className="rq-sub">{REQ_KINDS[x.kind].icon} {REQ_KINDS[x.kind].short} · {dayOf(x.at)}</span>
+                    </span>
+                    <span className="rq-row-end">
+                      {x.head && <span className="rq-amount sm">{x.head}</span>}
+                      <span className={`rq-st ${x.status?.tone || ''}`}>{x.status?.text}</span>
+                    </span>
+                    <span className="rq-caret" aria-hidden="true">{open ? '▴' : '▾'}</span>
+                  </button>
+                  {open && <div className="rq-row-detail">{details(x)}{x.actions && <div className="rq-actions">{x.actions}</div>}</div>}
+                </div>
+              );
+            };
+            return (
+              <div className="rq">
+                <div className="rq-seg" role="tablist">
+                  <button type="button" role="tab" aria-selected={!showDone} className={!showDone ? 'on' : ''} onClick={() => { setReqView('pending'); setReqKind('all'); }}>
+                    Chờ duyệt{pend.length ? <b>{pend.length}</b> : null}
+                  </button>
+                  <button type="button" role="tab" aria-selected={showDone} className={showDone ? 'on' : ''} onClick={() => { setReqView('done'); setReqKind('all'); setReqLimit(30); setReqOpen(null); }}>
+                    Đã xử lý <span className="rq-seg-n">{done.length}</span>
+                  </button>
+                </div>
+                {counts.length > 1 && (
+                  <div className="rq-chips">
+                    <button type="button" className={kind === 'all' ? 'on' : ''} onClick={() => setReqKind('all')}>Tất cả <span>{view.length}</span></button>
+                    {counts.map(([k, n]) => (
+                      <button type="button" key={k} className={kind === k ? 'on' : ''} onClick={() => setReqKind(k)}>{REQ_KINDS[k].icon} {REQ_KINDS[k].short} <span>{n}</span></button>
+                    ))}
                   </div>
-                );
-              })}
-              {requests.length === 0 && !(checkin?.fixes || []).length && !(checkin?.extras || []).length && !claims.claims.length && !peers.reports.length && <div className="empty-state">Không có yêu cầu nào</div>}
-              {requests.map(req => {
-                const typeInfo = requestTypeMap[req.request_type] || {};
-                return (
-                  <div key={req.id} className={`request-card ${req.status}`}>
-                    <div className="request-info">
-                      <div className="name">{req.staff?.full_name} <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>({req.staff?.phone})</span></div>
-                      <div style={{ marginTop: 4 }}>
-                        <span style={{ display: 'inline-block', background: typeInfo.bg, color: typeInfo.color, borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem', fontWeight: 600, marginRight: 8 }}>{typeInfo.label}</span>
-                        <span className={`status-badge ${req.status}`}>{req.status === 'pending' ? '⏳ Chờ duyệt' : req.status === 'approved' ? '✅ Đã duyệt' : '❌ Từ chối'}</span>
-                      </div>
-                      <div className="meta" style={{ marginTop: 4 }}>
-                        {req.request_type === 'advance' && <span>💵 Ứng: <strong>{formatMoney(req.amount)}</strong> — </span>}
-                        {req.request_type === 'absent' && <span>🗓 Nghỉ: <strong>{fmtNum(req.days)} ngày</strong>{leaveText(payrollMonth.leaveDays.find(l => l.request_id === req.id))} — </span>}
-                        Tháng {req.month}/{req.year} • {req.reason}
-                      </div>
-                      {/* Duyệt ứng lương: xem người này đã làm ra bao nhiêu và đã ứng bao nhiêu trong tháng. */}
-                      {req.request_type === 'advance' && req.status === 'pending' && req.month === selMonth && req.year === selYear && (() => {
-                        const c = calcSalary(req.staff_id);
-                        // Cách cũ (tháng trước 11/2026) trả đủ lương cơ bản nên chỉ đếm ngày đi làm, không tính "đã làm ra".
-                        if (c.rule !== 'days') return <div style={{ fontSize: '0.78rem', marginTop: 4, color: '#475569' }}>Tháng này đã đi làm {c.workDays} ngày · đã ứng {formatMoney(c.advAmt)}</div>;
-                        const earned = c.basePay + c.otAmt, over = c.advAmt + Number(req.amount || 0) > earned;
-                        return (
-                          <div style={{ fontSize: '0.78rem', marginTop: 4, color: over ? '#b91c1c' : '#475569' }}>
-                            Tháng này đã làm ra {formatMoney(earned)} · đã ứng {formatMoney(c.advAmt)}{over ? ' · ⚠ duyệt đơn này thì ứng quá số đã làm' : ''}
-                          </div>
-                        );
-                      })()}
-                      {req.admin_note && <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 4 }}>💬 {req.admin_note}</div>}
-                    </div>
-                    {req.status === 'pending' && (
-                      <div className="request-actions">
-                        <button className="btn-success" onClick={() => handleDecision(req.id, 'approved')}>✓ Duyệt</button>
-                        <button className="btn-danger" onClick={() => { const note = prompt('Lý do từ chối (tuỳ chọn):') || ''; handleDecision(req.id, 'rejected', note); }}>✗ Từ chối</button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                )}
+                {!shown.length && <div className="empty-state">{showDone ? 'Chưa có đơn nào đã xử lý.' : '✅ Không còn đơn nào chờ duyệt.'}</div>}
+                {showDone
+                  ? shown.length > 0 && <div className="rq-rows">{shown.slice(0, reqLimit).map(row)}</div>
+                  : <div className="rq-cards">{shown.map(card)}</div>}
+                {showDone && shown.length > reqLimit && (
+                  <button type="button" className="rq-more" onClick={() => setReqLimit(n => n + 30)}>Xem thêm {Math.min(30, shown.length - reqLimit)} đơn</button>
+                )}
+              </div>
+            );
+          })()}
 
           {/* === VI PHẠM === */}
           {activeTab === 'violations' && (() => {
