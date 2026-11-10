@@ -8,7 +8,7 @@ import { newLuckyRequestId } from '@/lib/luckyRewardFlow';
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
 import { qrTableLabel, QR_TABLE_LABEL_MAX } from '@/lib/qrTableLabel.mjs';
-import { QrCode, RefreshCw, CheckCircle2, Banknote, X, Camera } from 'lucide-react';
+import { QrCode, RefreshCw, CheckCircle2, Banknote, X } from 'lucide-react';
 import Swal from 'sweetalert2';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -24,12 +24,12 @@ import Swal from 'sweetalert2';
 //   - BẮT BUỘC có ảnh: tiền mặt = tờ bill, chuyển khoản = màn hình ĐT khách (hoặc tờ bill). Chưa có ảnh thì
 //     bấm xác nhận / nhận tiền mặt là mở camera ngay; ảnh và việc ghi tiền gửi lên máy chủ cùng một lần
 //     (/api/admin/receipts qr_confirm / qr_cash) — đóng camera thì chưa ghi gì.
-//   - Thay tab "Bill giấy" cũ (bỏ 2026-11-10): ô "Bàn" và nút "Chụp bill" ngay trong khung. Ảnh bill chụp sẵn:
-//     tiền mặt ghi luôn bằng ảnh đó; chuyển khoản vẫn mở camera chụp màn hình khách, ảnh bill gửi kèm.
+//   - Thay tab "Bill giấy" cũ (bỏ 2026-11-10): ô "Bàn" ngay trong khung, ghi kèm khoản thu vào Sổ thu chi.
+//     Ảnh chụp ở camera mở khi ghi tiền (chủ quán bỏ nút "Chụp bill" riêng cùng ngày: thừa).
 //     Bill giấy cũ vẫn xem ở Sổ thu chi / Tra cứu.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// images: { image: [blob, kind], bill_image?: [blob, 'bill'] }
+// images: { image: [blob, kind] }
 async function postQrPayment(fields, images) {
   const form = new FormData();
   for (const [key, value] of Object.entries(fields)) form.set(key, String(value ?? ''));
@@ -70,28 +70,20 @@ export default function QrGeneratorPage() {
   const [activeQr, setActiveQr] = useState(null);
   const [paymentStatus, setPaymentStatus] = useState('idle'); // idle | pending | completed
   const [isGenerating, setIsGenerating] = useState(false);
-  // Camera mở cho việc gì: { method: 'transfer' | 'cash', amount, table } = ghi tiền; { method: 'bill' } = chụp sẵn tờ bill.
+  // Camera mở cho lần thu nào: { method: 'transfer' | 'cash', amount, table }
   const [camera, setCamera] = useState(null);
   const [saving, setSaving] = useState(false);
-  // Tên bàn + ảnh tờ bill chụp sẵn (thay tab "Bill giấy" cũ). Ảnh chỉ nằm trong trang tới lúc ghi tiền.
+  // Tên bàn ghi kèm khoản thu (thay tab "Bill giấy" cũ).
   const [tableLabel, setTableLabel] = useState('');
-  const [billPhoto, setBillPhoto] = useState(null); // { blob, preview }
   const captureInput = useRef(null);
   const pendingShot = useRef(null);
 
   const router = useRouter();
 
-  function keepBill(blob) {
-    setBillPhoto(previous => {
-      if (previous?.preview) URL.revokeObjectURL(previous.preview);
-      return blob ? { blob, preview: URL.createObjectURL(blob) } : null;
-    });
-  }
   // Ghi xong một khoản: khung trống lại cho khách sau.
   function clearForm() {
     setAmount('');
     setTableLabel('');
-    keepBill(null);
   }
 
   // Máy không mở được camera trong web → dùng ứng dụng camera của máy.
@@ -105,11 +97,8 @@ export default function QrGeneratorPage() {
     const shot = pendingShot.current;
     pendingShot.current = null;
     if (!file || !shot) return;
-    try {
-      const blob = await compressImage(file);
-      if (shot.method === 'bill') keepBill(blob);
-      else await saveShot(shot, blob, shot.method === 'cash' ? 'bill' : 'ck');
-    } catch (err) { Swal.fire('Lỗi ảnh', err.message, 'error'); }
+    try { await saveShot(shot, await compressImage(file), shot.method === 'cash' ? 'bill' : 'ck'); }
+    catch (err) { Swal.fire('Lỗi ảnh', err.message, 'error'); }
   }
 
   // Ảnh vừa chụp + ghi tiền, một lần gửi.
@@ -143,13 +132,11 @@ export default function QrGeneratorPage() {
   };
 
   // ─── Tiền mặt tạo phiếu thu riêng, không làm tăng số dư chuyển khoản ────
-  // Bấm "Nhận tiền mặt": đã chụp sẵn tờ bill thì ghi luôn bằng ảnh đó; chưa thì mở camera chụp tờ bill.
+  // Bấm "Nhận tiền mặt" → mở camera chụp tờ bill; chụp xong mới ghi tiền.
   const handleCashPayment = () => {
     const numAmount = parseInt(amount.replace(/\D/g, ''), 10) || 0;
     if (!Number.isSafeInteger(numAmount) || numAmount <= 0 || saving) return;
-    const shot = { method: 'cash', amount: numAmount, table: qrTableLabel(tableLabel) };
-    if (billPhoto) saveShot(shot, billPhoto.blob, 'bill');
-    else openCamera(shot);
+    openCamera({ method: 'cash', amount: numAmount, table: qrTableLabel(tableLabel) });
   };
 
   const saveCash = async ({ amount: numAmount, table }, blob) => {
@@ -277,13 +264,10 @@ export default function QrGeneratorPage() {
     openCamera({ method: 'transfer', amount: activeQr.amount, table: activeQr.table });
   };
 
-  // Ảnh bill chụp sẵn đi kèm ảnh màn hình khách; chọn "Tờ bill" trong camera thì ảnh mới thay ảnh chụp sẵn.
   const saveTransfer = async (blob, kind) => {
-    const images = { image: [blob, kind] };
-    if (kind === 'ck' && billPhoto) images.bill_image = [billPhoto.blob, 'bill'];
     const result = await postQrPayment({
       action: 'qr_confirm', code: transactionCode, amount: activeQr.amount, account_id: activeQr.account.id, kind, table_label: activeQr.table || '',
-    }, images);
+    }, { image: [blob, kind] });
     setPaymentStatus('completed');
     clearForm();
     Swal.fire({
@@ -304,30 +288,8 @@ export default function QrGeneratorPage() {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap',
   });
 
-  // Nút chụp sẵn tờ bill (khung nhập và lúc chờ khách chuyển). Có ảnh: bấm ảnh để chụp lại, ✕ để bỏ.
-  const billSlot = billPhoto
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, border: '1.5px solid #86efac', background: '#f0fdf4', borderRadius: 12, padding: 3 }}>
-        <button type="button" onClick={() => openCamera({ method: 'bill' })} aria-label="Chụp lại tờ bill" disabled={saving}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', padding: '0 4px 0 0', cursor: 'pointer', color: '#166534', fontWeight: 700, fontSize: '0.9rem', whiteSpace: 'nowrap' }}>
-          <img src={billPhoto.preview} alt="" draggable={false} style={{ width: 38, height: 38, objectFit: 'cover', borderRadius: 9, display: 'block' }} />
-          Đã chụp bill
-        </button>
-        <button type="button" onClick={() => keepBill(null)} aria-label="Bỏ ảnh tờ bill" disabled={saving}
-          style={{ width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'white', border: '1px solid #bbf7d0', borderRadius: 8, cursor: 'pointer', color: '#64748b' }}>
-          <X size={15} strokeWidth={2.5} />
-        </button>
-      </div>
-    : <button type="button" onClick={() => openCamera({ method: 'bill' })} disabled={saving}
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, flexShrink: 0, minHeight: 46, padding: '0 14px', borderRadius: 12,
-          border: '1.5px dashed #93c5fd', background: '#eff6ff', color: '#1d4ed8', fontWeight: 700, fontSize: '0.95rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-        <Camera size={18} /> Chụp bill
-      </button>;
-
-  const cameraTitle = camera?.method === 'bill' ? 'Chụp tờ bill'
-    : camera?.method === 'cash' ? 'Chụp tờ bill để ghi tiền mặt' : 'Chụp để xác nhận đã nhận tiền';
-  const cameraSubtitle = !camera ? '' : camera.method === 'bill' ? 'Ảnh gửi lên cùng lúc ghi tiền'
-    : [`${camera.amount.toLocaleString('vi-VN')}đ`, camera.table, camera.method === 'cash' ? 'tiền mặt' : 'chuyển khoản',
-      camera.method === 'transfer' && billPhoto ? 'đã có ảnh tờ bill' : null, 'chưa chụp thì chưa ghi tiền'].filter(Boolean).join(' · ');
+  const cameraSubtitle = camera ? [`${camera.amount.toLocaleString('vi-VN')}đ`, camera.table,
+    camera.method === 'cash' ? 'tiền mặt' : 'chuyển khoản', 'chưa chụp thì chưa ghi tiền'].filter(Boolean).join(' · ') : '';
 
   return (
     <div className="page-content" style={{ background: '#f8fafc', padding: 12 }}>
@@ -375,25 +337,22 @@ export default function QrGeneratorPage() {
                 onFocus={e => e.target.style.borderColor = '#3b82f6'}
                 onBlur={e => e.target.style.borderColor = '#cbd5e1'}
               />
-              <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
-                <input
-                  type="text"
-                  value={tableLabel}
-                  onChange={e => setTableLabel(e.target.value)}
-                  placeholder="Bàn, vd 5"
-                  aria-label="Tên bàn"
-                  maxLength={QR_TABLE_LABEL_MAX}
-                  enterKeyHint="done"
-                  autoComplete="off"
-                  style={{
-                    flex: 1, minWidth: 0, padding: '10px 12px', borderRadius: 12, border: '1.5px solid #cbd5e1',
-                    fontSize: '1.05rem', fontWeight: 700, color: '#0f172a', boxSizing: 'border-box', outline: 'none',
-                  }}
-                  onFocus={e => e.target.style.borderColor = '#3b82f6'}
-                  onBlur={e => e.target.style.borderColor = '#cbd5e1'}
-                />
-                {billSlot}
-              </div>
+              <input
+                type="text"
+                value={tableLabel}
+                onChange={e => setTableLabel(e.target.value)}
+                placeholder="Bàn, vd 5"
+                aria-label="Tên bàn"
+                maxLength={QR_TABLE_LABEL_MAX}
+                enterKeyHint="done"
+                autoComplete="off"
+                style={{
+                  width: '100%', padding: '10px 14px', borderRadius: 12, border: '1.5px solid #cbd5e1',
+                  fontSize: '1.05rem', fontWeight: 700, color: '#0f172a', boxSizing: 'border-box', outline: 'none',
+                }}
+                onFocus={e => e.target.style.borderColor = '#3b82f6'}
+                onBlur={e => e.target.style.borderColor = '#cbd5e1'}
+              />
               <div style={{ display: 'flex', gap: 8 }}>
                 <button onClick={handleGenerateQR} disabled={formOff} style={actionButton(!formOff, '#2563eb')}>
                   {isGenerating ? <RefreshCw className="animate-spin" size={18} /> : <QrCode size={18} />}
@@ -431,7 +390,6 @@ export default function QrGeneratorPage() {
                 <RefreshCw className="animate-spin" size={15} />
                 Đang chờ khách chuyển khoản...
               </div>
-              <div style={{ marginTop: 8, display: 'flex', justifyContent: 'center' }}>{billSlot}</div>
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                 <button
                   onClick={handleCancel}
@@ -452,12 +410,12 @@ export default function QrGeneratorPage() {
 
           <input ref={captureInput} type="file" accept="image/*" capture="environment" onChange={picked} hidden />
           {camera && <CameraCapture
-            title={cameraTitle}
+            title={camera.method === 'cash' ? 'Chụp tờ bill để ghi tiền mặt' : 'Chụp để xác nhận đã nhận tiền'}
             subtitle={cameraSubtitle}
             choices={camera.method === 'transfer' ? TRANSFER_SHOTS : undefined}
             closeText="Huỷ"
             onClose={() => setCamera(null)}
-            onCapture={(blob, kind) => camera.method === 'bill' ? keepBill(blob) : saveShot(camera, blob, kind || 'bill')}
+            onCapture={(blob, kind) => saveShot(camera, blob, kind || 'bill')}
           />}
           {saving && <div style={{ position: 'fixed', inset: 0, zIndex: 1900, background: 'rgba(15,23,42,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <div style={{ background: 'white', borderRadius: 16, padding: '18px 22px', display: 'flex', alignItems: 'center', gap: 10, fontWeight: 700, color: '#0f172a' }}>

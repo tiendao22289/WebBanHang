@@ -320,55 +320,36 @@ test('cash on the QR page is recorded only with a photo of the bill', async () =
   assert.equal((await post(staff.api, { action: 'qr_cash', receipt_id: 'not-a-uuid', amount: '120000', image: image() })).status, 400);
 });
 
-// Tab "Bill giấy" bỏ (2026-11-10): tên bàn + ảnh tờ bill ghi ngay trong khung Tạo mã QR.
-test('the QR page writes the table and the bill photo taken in the box onto the paper bill of that payment', async () => {
+// Tab "Bill giấy" bỏ (2026-11-10): tên bàn ghi ngay trong khung Tạo mã QR, ảnh chụp ở camera khi ghi tiền.
+test('the QR page writes the table typed in the box onto the paper bill of that transfer', async () => {
   const state = qrDb();
   const staff = load({ state });
-  let res = await confirmQr(staff.api, { table_label: ' 5 ', bill_image: image() });
+  let res = await confirmQr(staff.api, { table_label: ' 5 ' });
   assert.deepEqual([res.status, res.body.photoSaved], [200, true]);
   const row = state.finance_manual_receipts[0];
-  assert.deepEqual([row.table_label, row.transfer_image_path, row.image_path, row.amount, row.payment_method],
-    ['Bàn 5', '2026-10/ck-1.jpg', '2026-10/bill-2.jpg', 350000, 'transfer'], 'customer screen + bill photo, table "5" reads "Bàn 5" in the book');
+  assert.deepEqual([row.table_label, row.transfer_image_path, row.amount, row.payment_method],
+    ['Bàn 5', '2026-10/ck-1.jpg', 350000, 'transfer'], 'table "5" reads "Bàn 5" in the book');
 
-  // Bấm lại (mạng chậm) mà gõ bàn khác: không đổi bàn của khoản đã ghi; ảnh bill mới thay ảnh cũ.
-  res = await confirmQr(staff.api, { table_label: 'Bàn 7', bill_image: image() });
+  // Bấm lại (mạng chậm) mà gõ bàn khác: không đổi bàn của khoản đã ghi.
+  res = await confirmQr(staff.api, { table_label: 'Bàn 7', kind: 'bill' });
   assert.deepEqual([res.status, res.body.alreadyDone], [200, true]);
   assert.equal(state.finance_manual_receipts.length, 1, 'money is not booked twice');
-  assert.deepEqual([row.table_label, row.transfer_image_path, row.image_path], ['Bàn 5', '2026-10/ck-3.jpg', '2026-10/bill-4.jpg']);
-  assert.deepEqual(staff.removed, ['2026-10/ck-1.jpg', '2026-10/bill-2.jpg']);
+  assert.deepEqual([row.table_label, row.transfer_image_path, row.image_path], ['Bàn 5', '2026-10/ck-1.jpg', '2026-10/bill-2.jpg']);
 
-  // Chọn "Tờ bill" trong camera: ảnh đó là ảnh bill, không gửi kèm ảnh chụp sẵn.
+  // Không gõ bàn: sổ hiện "Bill giấy" như trước. Trang cũ còn gửi bill_image thì bỏ qua, chỉ lưu 1 ảnh.
   const other = qrDb();
   const second = load({ state: other });
-  res = await confirmQr(second.api, { code: 'QRCD5678', kind: 'bill', bill_image: image() });
+  res = await confirmQr(second.api, { code: 'QRCD5678', bill_image: image() });
   assert.equal(res.status, 200);
-  assert.deepEqual(second.uploads, ['2026-10/bill-1.jpg'], 'only one photo stored');
-  assert.deepEqual([other.finance_manual_receipts[0].image_path, other.finance_manual_receipts[0].transfer_image_path ?? null, other.finance_manual_receipts[0].table_label ?? null],
-    ['2026-10/bill-1.jpg', null, null], 'no table typed → the book shows "Bill giấy" as before');
-});
-
-test('a refused or bad QR confirmation with a bill photo keeps neither photo', async () => {
-  const state = qrDb();
-  const staff = load({ state });
-  let res = await confirmQr(staff.api, { bill_image: image('application/pdf'), table_label: '5' });
-  assert.deepEqual([res.status, res.body.error], [400, 'Ảnh tờ bill: Ảnh phải là JPG, PNG hoặc WebP.']);
-  assert.equal(staff.uploads.length, 0);
-  assert.equal(state.rpcCalls, undefined, 'money not confirmed');
-
-  res = await confirmQr(staff.api, { code: 'QRWRONG1', bill_image: image(), table_label: '5' });
-  assert.equal(res.status, 400);
-  assert.deepEqual(staff.removed, ['2026-10/ck-1.jpg', '2026-10/bill-2.jpg'], 'both uploaded photos are removed');
-  res = await confirmQr(staff.api, { code: 'QRNOROW1', bill_image: image() });
-  assert.deepEqual([res.status, res.body.photoSaved], [200, false]);
-  assert.deepEqual(staff.removed.slice(2), ['2026-10/ck-3.jpg', '2026-10/bill-4.jpg'], 'no orphan photos when the book row is missing');
-  assert.equal(state.finance_manual_receipts.length, 0);
+  assert.deepEqual(second.uploads, ['2026-10/ck-1.jpg'], 'only the camera photo is stored');
+  assert.equal(other.finance_manual_receipts[0].table_label ?? null, null);
 });
 
 test('cash on the QR page keeps the table typed in the box', async () => {
   const state = qrDb();
   const staff = load({ state });
   const id = '00000000-0000-4000-8000-0000000000c2';
-  const res = await post(staff.api, { action: 'qr_cash', receipt_id: id, amount: '280000', table_label: 'ban 12', image: image(), bill_image: image() });
+  const res = await post(staff.api, { action: 'qr_cash', receipt_id: id, amount: '280000', table_label: 'ban 12', image: image() });
   assert.deepEqual([res.status, res.body.photoSaved], [200, true]);
   const row = state.finance_manual_receipts[0];
   assert.deepEqual([row.source, row.payment_method, row.amount, row.table_label, row.image_path], [`cash:${id}`, 'cash', 280000, 'Bàn 12', '2026-10/bill-1.jpg']);
