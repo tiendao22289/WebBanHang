@@ -12,6 +12,7 @@
  * GET  ?cycles=1            → người trả lương theo kỳ: kỳ đang chạy, ngày phát, tiền từng ngày còn phải trả, ứng / phạt / thưởng chưa trừ (admin)
  * GET  ?face_check=<id>      → lượt quét đang chờ máy quầy so mặt của chính mình: chờ / đúng / sai / chờ duyệt
  * GET  ?faces=1              → so khuôn mặt: cài đặt, ai đã có mặt mẫu, ca chờ duyệt mặt, lượt so gần đây (admin)
+ * GET  ?pending=1            → số đơn chờ duyệt ở Lương → Yêu cầu theo loại + tổng (admin, số trên biểu tượng ví ở thanh menu)
  * POST {action}:
  *   clock {token}            → vào / ra ca bằng mã QR trên máy quầy: mỗi mã dùng 1 lần,
  *                              phải cùng wifi với máy quầy, đúng điện thoại đã đăng ký
@@ -58,6 +59,7 @@ import { receiptImageProblem, removeReceiptImages, signReceiptImages, uploadRece
 import { ENROLL_MAX, ENROLL_MIN, ENROLL_SELF_MIN, FACE_LEVELS, FACE_MODEL, FACE_STREAK_MS, FACE_TRIES, FACE_WAIT_MS, bestScore, enrollConsistency, faceHolds, faceNeeded,
   faceThreshold, faceVector, faceVectors, markFaceHolds, missingTable, readFaceSettings, wrongStreak } from '@/lib/faceCheck.mjs';
 import { clockStatus, nowMs, refreshClock } from '@/lib/trueTime.mjs';
+import { pendingRequestCounts } from '@/lib/payrollPending.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -77,6 +79,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const CLAIMS_NOT_READY = 'Web đang cập nhật phần khoản chi hộ, thử lại sau ít phút.';
 const DRINKS_NOT_READY = 'Web đang cập nhật phần ghi nước uống, thử lại sau ít phút.';
 const PEER_NOT_READY = 'Web đang cập nhật phần báo lỗi đồng nghiệp, thử lại sau ít phút.';
+// Đơn xin sửa giờ hiện ở Cài chấm công và Lương → Yêu cầu: 45 ngày gần đây (số trên biểu tượng ví đếm đúng khoảng này).
+const FIX_REQUEST_DAYS = 45;
 const ddmm = d => `${String(d).slice(8, 10)}/${String(d).slice(5, 7)}`;
 // Tháng đã hết chưa (giờ Việt Nam): thưởng chuyên cần chỉ duyệt khi đã hết tháng.
 const monthOver = (year, month) => vnToday() >= monthRange(year, month).end;
@@ -649,15 +653,12 @@ async function faceOverview(db) {
     db.from('staff').select('id, full_name, role').order('full_name'),
     db.from('staff_face_templates').select('*'),
     db.from('staff_departures').select('staff_id, last_day'),
-    db.from('attendance_face_reviews').select('*').eq('status', 'pending').order('created_at', { ascending: false }).limit(200),
+    pendingFaceReviews(db),
     db.from('checkin_face_checks').select('id, staff_id, kiosk_id, clocked, status, score, reason, attendance_id, created_at')
       .gte('created_at', new Date(nowMs() - 14 * 86400000).toISOString()).order('created_at', { ascending: false }).limit(300),
     db.from('checkin_kiosk_apps').select('*'),
   ]);
-  for (const r of [staff, templates, departures, reviews, checks, apps]) if (r.error) throw r.error;
-  const ids = [...new Set((reviews.data || []).map(r => r.attendance_id))];
-  const { data: sessions, error } = ids.length ? await db.from('attendance_sessions').select('*').in('id', ids) : { data: [] };
-  if (error) throw error;
+  for (const r of [staff, templates, departures, checks, apps]) if (r.error) throw r.error;
   const today = vnToday();
   const tplOf = new Map((templates.data || []).map(t => [t.staff_id, t]));
   const lastDay = new Map((departures.data || []).map(d => [d.staff_id, d.last_day]));
@@ -668,9 +669,37 @@ async function faceOverview(db) {
       return { id: p.id, full_name: p.full_name, role: p.role, departed: !!lastDay.get(p.id) && String(lastDay.get(p.id)) < today,
         face: t ? { count: (t.embeddings || []).length, created_at: t.created_at, enrolled_by: t.enrolled_by } : null };
     }),
-    reviews: (reviews.data || []).map(r => ({ ...r, session: (sessions || []).find(x => x.id === r.attendance_id) || null })).filter(r => r.session),
+    reviews,
     checks: checks.data || [], apps: apps.data || [], now: isoNow(),
   };
+}
+
+// Ca sai mặt 3 lần còn chờ chủ xác nhận, kèm ca (ca đã bị xoá thì bỏ) — tab Yêu cầu và số trên biểu tượng ví dùng chung.
+async function pendingFaceReviews(db) {
+  const { data, error } = await db.from('attendance_face_reviews').select('*').eq('status', 'pending').order('created_at', { ascending: false }).limit(200);
+  if (error) throw error;
+  const ids = [...new Set((data || []).map(r => r.attendance_id))];
+  const { data: sessions, error: e } = ids.length ? await db.from('attendance_sessions').select('*').in('id', ids) : { data: [] };
+  if (e) throw e;
+  return (data || []).map(r => ({ ...r, session: (sessions || []).find(x => x.id === r.attendance_id) || null })).filter(r => r.session);
+}
+
+// Biểu tượng ví ở thanh menu: số đơn chờ duyệt ở Lương → Yêu cầu. Cùng nguồn với các danh sách tab đang đọc (?checkin=1, ?faces=1,
+// ?claims=1, ?peer=1, bảng payroll_requests) và cùng cách đếm (pendingRequestCounts), chỉ lấy dòng còn chờ nên nhẹ hơn.
+async function pendingOverview(db) {
+  const optional = q => q.then(r => (missingTable(r.error) ? { data: [] } : r));
+  const [settings, face, reqs, fixes, claims, peers] = await Promise.all([
+    readCheckinSettings(db),
+    readFaceSettings(db),
+    db.from('payroll_requests').select('id, status, request_type').eq('status', 'pending'),
+    db.from('attendance_fix_requests').select('id, status').eq('status', 'pending').gte('created_at', new Date(nowMs() - FIX_REQUEST_DAYS * 86400000).toISOString()),
+    optional(db.from('payroll_expense_claims').select('id, status').eq('status', 'pending')),
+    optional(db.from('payroll_peer_reports').select('id, status').eq('status', 'pending')),
+  ]);
+  for (const r of [reqs, fixes, claims, peers]) if (r.error) throw r.error;
+  // Bảng so mặt chưa tạo: tab Yêu cầu không có ca sai mặt (như ?faces=1).
+  const [extras, faceReviews] = await Promise.all([pendingExtras(db, settings), face.missing ? [] : pendingFaceReviews(db)]);
+  return pendingRequestCounts({ requests: reqs.data, fixes: fixes.data, claims: claims.data, peers: peers.data, extras, faceReviews });
 }
 
 async function checkinOverview(db) {
@@ -680,7 +709,7 @@ async function checkinOverview(db) {
     db.from('checkin_kiosks').select('*').order('created_at', { ascending: false }),
     db.from('staff_checkin_devices').select('*'),
     db.from('checkin_scans').select('*').gte('created_at', since).order('created_at', { ascending: false }).limit(300),
-    db.from('attendance_fix_requests').select('*').gte('created_at', new Date(nowMs() - 45 * 86400000).toISOString()).order('created_at', { ascending: false }),
+    db.from('attendance_fix_requests').select('*').gte('created_at', new Date(nowMs() - FIX_REQUEST_DAYS * 86400000).toISOString()).order('created_at', { ascending: false }),
     // 1000 lần duyệt gần nhất (để hiện); tính lương dùng lần duyệt của đúng tháng (?payroll=1).
     db.from('attendance_extra_reviews').select('*').order('decided_at', { ascending: false }).limit(1000),
     db.from('staff_departures').select('*'),
@@ -707,8 +736,9 @@ export async function GET(request) {
     if (params.get('me')) return NextResponse.json(await myStatus(s.db, s.user.id), { headers });
     if (params.get('face_check')) return NextResponse.json(await faceCheckStatus(s.db, s.user.id, params.get('face_check')), { headers });
     if (!params.get('checkin') && !params.get('payroll') && !params.get('stats') && !params.get('faces') && !params.get('cycles') && !params.get('claims') && !params.get('peer')
-      && !params.get('inbox') && !params.get('range')) return fail('Thiếu yêu cầu.');
+      && !params.get('inbox') && !params.get('range') && !params.get('pending')) return fail('Thiếu yêu cầu.');
     if (!s.isAdmin) return fail('Chỉ admin xem phần này.', 403);
+    if (params.get('pending')) return NextResponse.json(await pendingOverview(s.db), { headers });
     if (params.get('claims')) return NextResponse.json(await claimsOverview(s.db), { headers });
     if (params.get('peer')) return NextResponse.json(await peerOverview(s.db), { headers });
     if (params.get('inbox')) return NextResponse.json(await inboxOverview(s.db), { headers });
