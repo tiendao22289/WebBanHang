@@ -93,7 +93,8 @@ export default function AdminPinGate({ section, children }) {
       <button type="button" className="pin-lock-now" onClick={lockNow} title="Khoá lại ngay" aria-label="Khoá lại ngay"><Lock size={16} /></button>
     </>;
   }
-  return <div className="pin-gate" role="dialog" aria-label="Nhập mã PIN">
+  // data-reload-safe: màn khoá PIN không phải khung đang dở — tab để ở đây vẫn tự lấy bản mới (useBuildRefresh).
+  return <div className="pin-gate" role="dialog" aria-label="Nhập mã PIN" data-reload-safe="">
     <div className="pin-card">
       <div className="pin-icon"><Lock size={26} /></div>
       <h2>{TITLES[section] || 'Khu vực của chủ quán'}</h2>

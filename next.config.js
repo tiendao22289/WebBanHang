@@ -1,5 +1,6 @@
-const { PHASE_DEVELOPMENT_SERVER } = require('next/constants');
+const { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } = require('next/constants');
 const { assertRuntimeEnvironment } = require('./src/lib/runtime-mode.cjs');
+const { makeBuildId } = require('./src/lib/buildId.cjs');
 /** @type {import('next').NextConfig} */
 const withPWA = require('next-pwa')({
   dest: 'public',
@@ -56,5 +57,13 @@ const nextConfig = {
 module.exports = phase => {
   const mode = phase === PHASE_DEVELOPMENT_SERVER ? 'dev' : 'prod';
   const settings = assertRuntimeEnvironment(mode, process.env);
-  return withPWA({ ...nextConfig, distDir: settings.distDir, env: { NEXT_PUBLIC_APP_ENV: mode } });
+  const env = { NEXT_PUBLIC_APP_ENV: mode };
+  // Mã bản nhúng lúc build vào cả trang lẫn /api/version (tab admin mở lâu tự tải bản mới — src/lib/buildRefresh.mjs).
+  // scripts/run-next.cjs đặt sẵn trước khi Next chạy để mọi tiến trình build dùng chung một mã; lúc `next start`
+  // không đặt lại (mã đã nằm sẵn trong bản build).
+  if (phase === PHASE_PRODUCTION_BUILD || phase === PHASE_DEVELOPMENT_SERVER) {
+    if (!process.env.NEXT_PUBLIC_BUILD_ID) process.env.NEXT_PUBLIC_BUILD_ID = makeBuildId(process.env);
+    env.NEXT_PUBLIC_BUILD_ID = process.env.NEXT_PUBLIC_BUILD_ID;
+  }
+  return withPWA({ ...nextConfig, distDir: settings.distDir, env });
 };

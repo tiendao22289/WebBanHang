@@ -19,6 +19,7 @@ import { getTableGroupOrders, OPEN_BILL_STATUSES, representativeBill, shopDaySta
 import { promoGiftStatus } from '@/lib/promoGifts.mjs';
 import { isPrintJobBad, isUnresolvedBadJob } from '@/lib/printJobStatus.mjs';
 import { NO_DRAFT, updateDraftOf, addDraftLine, decreaseDraftLine, setDraftItemTotal, removeSentLines } from '@/lib/draftCart.mjs';
+import { useReloadHold } from '@/lib/useBuildRefresh';
 import { cartMinutesShort, cartMinutesText, createCartBell, customerCartsByTable, customerCartsFromServer } from '@/lib/customerCartAlert.mjs';
 import { resolvePrintCategory, isKitchenItem, unsentKitchenItems, nextKitchenCheckIn } from '@/lib/kitchenTicket.mjs';
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
@@ -425,6 +426,10 @@ export default function TablesPage() {
   const [cashGiven, setCashGiven] = useState('');
   useEffect(() => { setCashGiven(''); }, [confirmPayment?.table?.id]);
   const [payingHostId, setPayingHostId] = useState(null); // để làm mờ & khoá nút khi đang xử lý
+  // Có bản mới thì tab tự tải lại (admin/layout.js) — nhưng không khi còn món nháp chưa gửi ở bất kỳ bàn nào,
+  // hay đang gửi món / thanh toán / đóng bàn.
+  useReloadHold(Object.values(draftsByTable).some(lines => Array.isArray(lines) && lines.length > 0), 'giỏ nháp');
+  useReloadHold(Boolean(isConfirmingDraft || payingHostId || payProof || paymentModal || confirmPayment), 'thanh toán / gửi món');
   const [isMobile, setIsMobile] = useState(true);
   const [printToast, setPrintToast] = useState(''); // '' | 'sending' | 'ok' | 'err'
   // ── Ưu đãi đánh giá Google Maps ──
@@ -3820,6 +3825,7 @@ export default function TablesPage() {
                       value={desktopSearch}
                       onChange={e => setDesktopSearch(e.target.value)}
                       placeholder="Tìm món (F3)"
+                      data-reload-safe=""
                       style={{
                         flex: 1, background: 'transparent', border: 'none', outline: 'none',
                         color: 'white', fontSize: '0.88rem', padding: '8px 12px 8px 0',

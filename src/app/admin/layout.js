@@ -27,6 +27,7 @@ import './admin.css';
 import AdminPinGate from './AdminPinGate';
 import { lockedSection } from '@/lib/adminLockPaths.mjs';
 import { allowedPaths, canOpenPath, roleLabel } from '@/lib/staffRoles.mjs';
+import { useBuildRefresh } from '@/lib/useBuildRefresh';
 
 const ALL_NAV = [
   { href: '/admin/tables', label: 'Quản lý bàn', icon: LayoutGrid },
@@ -50,6 +51,8 @@ const navFor = role => (allowedPaths(role) ? ALL_NAV.filter(n => canOpenPath(rol
 export default function AdminLayout({ children }) {
   const pathname = usePathname();
   const router = useRouter();
+  // Tab mở cả ngày (PC ở quầy) tự lấy bản mới sau khi "Đưa lên", chờ lúc không có việc dở (src/lib/buildRefresh.mjs).
+  useBuildRefresh();
 
   const [user, setUser] = useState(null);
   const [mounted, setMounted] = useState(false);
