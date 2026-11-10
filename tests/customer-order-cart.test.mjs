@@ -89,6 +89,7 @@ function orderHarness({ cart, gifts = [], rpc, state = {} }) {
     supabase: db, sessionStorage: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, v), removeItem: k => store.delete(k) },
     customerOrderLines, cartAfterSentOrder, applyOrderRefusal, JSON, Array, console: { error() {}, warn() {} },
     newLuckyRequestId: () => `order-${++n}`, bindOrderToDevice: async () => {},
+    reportCartNow: (c, g) => calls.push(['reportCartNow', c.map(x => [x.id, x.quantity]), g.length]),
     setGiftPromptPending() {}, setShowGiftModal() {}, setPromoNudge() {}, getAlmostThereSuggestion: () => null,
     setSubmitting() {}, setSubmitSlow() {}, setNotes() {}, setCustomerNote() {},
     setCart: v => { ui.cart = v; }, setGiftCart: v => { ui.gifts = v; }, setShowCart: v => { ui.showCart = v; },
@@ -120,8 +121,24 @@ test('a lost reply then an edited cart shows the first order as sent instead of 
   assert.equal(state.orders.length, 1, 'no second order');
   assert.deepEqual(h.calls.filter(c => c[0] === 'rpc'), [['rpc', 'order-1']]);
   assert.deepEqual(h.ui.finished, [['order-1', 1]], 'the first order is printed / shown as sent');
+  assert.deepEqual(h.calls.filter(c => c[0] === 'reportCartNow'), [['reportCartNow', [['bia', 1]], 0]],
+    'trang Bàn biết ngay phần giỏ còn lại (bàn thôi chớp "quên gửi" cho phần đã vào quán)');
   assert.deepEqual(h.ui.cart.map(c => [c.id, c.quantity]), [['bia', 1]], 'only the added beer stays in the cart');
   assert.match(h.ui.alerts[1], /Đơn trước của Quý khách đã tới quán/);
+});
+
+test('a saved order tells the Bàn page "cart empty" at once, before the cart clears and the kitchen ticket prints', async () => {
+  const order = [];
+  const h = orderHarness({
+    cart: [{ ...bia, quantity: 2, price: 20000 }],
+    rpc: async args => ({ data: { order_id: args.p_order_id }, error: null }),
+  });
+  h.context.reportCartNow = (c, g) => order.push(['report', c.length, g.length]);
+  h.context.setCart = v => { order.push(['setCart', v.length]); h.ui.cart = v; };
+  h.context.finishSentOrder = async id => order.push(['finish', id]);
+  await h.submit();
+  assert.deepEqual(h.ui.alerts, []);
+  assert.deepEqual(order, [['report', 0, 0], ['setCart', 0], ['finish', 'order-1']]);
 });
 
 test('a refused order updates the cart, reloads the menu and tells the customer, nothing is shown as sent', async () => {

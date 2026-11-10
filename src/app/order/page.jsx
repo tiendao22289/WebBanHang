@@ -1080,6 +1080,11 @@ function OrderContent() {
     const tableId = isTakeaway ? null : activeTableId;
     cartReporterRef.current?.update(tableId, tableId ? cartAlertItems(cart, giftCart) : []);
   }, [cart, giftCart, activeTableId, isTakeaway]);
+  // Đơn vừa vào quán: báo phần giỏ còn lại (thường là trống) liền, không đợi như lúc khách đang chọn món.
+  const reportCartNow = (cartLeft, giftsLeft) => {
+    const tableId = isTakeaway ? null : activeTableId;
+    cartReporterRef.current?.update(tableId, tableId ? cartAlertItems(cartLeft, giftsLeft) : [], { now: true });
+  };
 
   // Nhắc ngay trên điện thoại khách: giỏ có món để yên 3 phút mà chưa gửi → bong bóng "Quý khách chưa
   // gửi món" trên nút giỏ (+ rung nhẹ nếu máy hỗ trợ). Trang Bàn chỉ chớp vàng sau 5 phút.
@@ -3855,6 +3860,7 @@ function OrderContent() {
           let sentLines = [];
           try { sentLines = JSON.parse(previousAttempt.signature)?.submittedItems || []; } catch { /* chữ ký hỏng */ }
           const left = cartAfterSentOrder(effectiveCart, effectiveGifts, sentLines, notes);
+          reportCartNow(left.cart, left.gifts);
           setCart(left.cart);
           setGiftCart(left.gifts);
           setShowCart(false);
@@ -3896,6 +3902,9 @@ function OrderContent() {
       }
       if (!savedOrder?.order_id) throw new Error('Không nhận được mã đơn hàng');
       sessionStorage.removeItem(attemptKey);
+      // Món đã vào quán → báo "giỏ trống" NGAY (trong lúc chờ in phiếu), trang Bàn thôi chớp "quên gửi"
+      // trước khi khách thấy chữ Đã gửi — không đợi 1,2 giây sau khi giỏ trống, khách hay khoá máy liền.
+      reportCartNow([], []);
 
       // Xoá giỏ NGAY sau khi món đã vào DB — TRƯỚC lệnh in (chờ ~1s).
       // Nếu để sau, realtime listener nạp đơn vừa gửi vào groupOrders trong lúc chờ in,

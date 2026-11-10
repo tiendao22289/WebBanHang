@@ -140,6 +140,69 @@ test('reporter never lets a slow send overwrite a newer cart, and retries failur
   r.dispose();
 });
 
+test('order just sent: the empty cart goes out at once (no 1.2 s wait), even if a send is still running', async () => {
+  const timers = fakeTimers();
+  const calls = [];
+  let release = null;
+  const r = createCartReporter({
+    timers,
+    send: (t, items) => {
+      calls.push(items.length);
+      if (calls.length === 2) return new Promise(res => { release = () => res(true); });
+      return Promise.resolve(true);
+    },
+  });
+  r.update('T1', [{ id: 'a', q: 2 }, { id: 'b', q: 1 }]);
+  await timers.advance(1200);
+  assert.deepEqual(calls, [2]);
+
+  // Đơn vào quán → gửi liền, chưa cần đồng hồ chạy.
+  r.update('T1', [], { now: true });
+  assert.deepEqual(calls, [2, 0], 'không đợi 1,2 giây');
+  // Trang báo lại giỏ trống (sau setCart([])) trong lúc lần gửi liền còn chạy: không gửi trùng, không lùi lịch.
+  r.update('T1', []);
+  await timers.advance(5000);
+  assert.deepEqual(calls, [2, 0]);
+  release();
+  await new Promise(r2 => setImmediate(r2));
+  await timers.advance(600000);
+  assert.deepEqual(calls, [2, 0], 'đã nhận thì thôi');
+
+  // Khách chọn tiếp, rồi gửi lúc lần gửi trước chưa xong → gửi ngay khi lần đó xong, không đợi thêm.
+  let hold = null;
+  const calls2 = [];
+  const r2 = createCartReporter({
+    timers,
+    send: (t, items) => {
+      calls2.push(items.length);
+      if (calls2.length === 1) return new Promise(res => { hold = () => res(true); });
+      return Promise.resolve(true);
+    },
+  });
+  r2.update('T1', [{ id: 'a', q: 1 }]);
+  await timers.advance(1200);
+  r2.update('T1', [], { now: true });
+  assert.deepEqual(calls2, [1], 'lần trước chưa xong thì chờ');
+  hold();
+  await new Promise(res => setImmediate(res));
+  await timers.advance(0);
+  assert.deepEqual(calls2, [1, 0], 'xong lần trước là gửi giỏ trống liền');
+  r.dispose();
+  r2.dispose();
+});
+
+test('order page reports the cart left over the moment the order is saved', () => {
+  const page = readFileSync(new URL('../src/app/order/page.jsx', import.meta.url), 'utf8');
+  const submit = page.slice(page.indexOf('async function submitOrder('), page.indexOf('async function finishSentOrder('));
+  const saved = submit.indexOf("if (!savedOrder?.order_id) throw");
+  assert.ok(saved > 0);
+  const after = submit.slice(saved);
+  assert.ok(after.indexOf('reportCartNow([], [])') >= 0 && after.indexOf('reportCartNow([], [])') < after.indexOf('setCart([])'),
+    'báo giỏ trống trước khi xoá giỏ và chờ in phiếu');
+  assert.match(submit, /const left = cartAfterSentOrder\([^)]*\);\s*reportCartNow\(left\.cart, left\.gifts\);/, 'đơn trước đã vào quán → báo phần còn lại');
+  assert.match(page, /const reportCartNow = \(cartLeft, giftsLeft\) => \{[\s\S]{0,300}\{ now: true \}/);
+});
+
 // ── Trang khách: nhắc "chưa gửi món" ────────────────────────────────────────
 test('the phone reminds the customer after 3 idle minutes, before the staff page starts blinking', async () => {
   assert.ok(CART_REMIND_MS < CART_FORGOT_MS, 'khách được nhắc trước, nhân viên mới phải ra');

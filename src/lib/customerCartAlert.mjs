@@ -51,9 +51,12 @@ export function cartAlertDeviceKey() {
  * mới hơn), giỏ giống lần đã gửi thì thôi. Lỗi mạng thì thử lại thưa dần (15 giây → tối đa 5 phút).
  * isReady(): trang đã nạp lại giỏ cũ chưa (chưa thì giỏ trống lúc mới mở không được xoá báo cũ).
  * send(tableId, items) → true khi máy chủ nhận.
+ * update(..., { now: true }): gửi liền, không đợi delayMs (đơn vừa vào quán → tắt báo "quên gửi" trên trang
+ * Bàn ngay lúc đó; khách hay khoá máy / sang Zalo liền sau khi gửi, đợi 1,2 giây thì có khi không kịp báo).
+ * Đang có lần gửi khác chạy dở thì gửi ngay khi lần đó xong.
  */
 export function createCartReporter({ send, isReady = () => true, delayMs = 1200, timers = globalThis }) {
-  let want = null, sent = null, busy = false, timer = null, failures = 0, disposed = false;
+  let want = null, sent = null, busy = false, timer = null, failures = 0, disposed = false, urgent = null;
   const sig = w => JSON.stringify([w.tableId || null, w.items]);
   const schedule = ms => {
     if (disposed) return;
@@ -71,11 +74,27 @@ export function createCartReporter({ send, isReady = () => true, delayMs = 1200,
     let ok = false;
     try { ok = !!(await send(target.tableId || null, target.items)); } catch { ok = false; }
     busy = false;
-    if (ok) { sent = s; failures = 0; } else failures++;
-    if (want && sig(want) !== sent) schedule(ok ? delayMs : Math.min(15000 * 2 ** (failures - 1), 300000));
+    if (ok) { sent = s; failures = 0; if (urgent === s) urgent = null; } else failures++;
+    if (want && sig(want) !== sent) {
+      schedule(!ok ? Math.min(15000 * 2 ** (failures - 1), 300000) : sig(want) === urgent ? 0 : delayMs);
+    }
   }
   return {
-    update(tableId, items) { want = { tableId: tableId || null, items: Array.isArray(items) ? items : [] }; schedule(delayMs); },
+    update(tableId, items, { now = false } = {}) {
+      want = { tableId: tableId || null, items: Array.isArray(items) ? items : [] };
+      const s = sig(want);
+      if (now) urgent = s;
+      // Cùng giỏ với lần "gửi liền" (trang báo lại sau khi xoá giỏ) → không lùi về đợi delayMs.
+      if (urgent === s) {
+        if (disposed) return;
+        timers.clearTimeout(timer);
+        timer = null;
+        flush();
+        return;
+      }
+      urgent = null;
+      schedule(delayMs);
+    },
     dispose() { disposed = true; timers.clearTimeout(timer); },
   };
 }
