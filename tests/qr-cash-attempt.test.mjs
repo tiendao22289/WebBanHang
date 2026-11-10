@@ -12,17 +12,17 @@ const saveCashSource = page.slice(page.indexOf('  const saveCash = async'), page
 const amountSource = page.slice(page.indexOf('  const handleAmountChange = '), page.indexOf('  const handleCancel = '));
 
 function qrPage(server) {
-  const env = { now: Date.parse('2026-11-04T12:00:00Z'), posts: [], prompts: [], toasts: [], store: new Map(), answer: false, seq: 0 };
+  const env = { now: Date.parse('2026-11-04T12:00:00Z'), posts: [], sent: [], prompts: [], toasts: [], store: new Map(), answer: false, seq: 0 };
   const context = {
     sessionStorage: { getItem: k => env.store.get(k) ?? null, setItem: (k, v) => env.store.set(k, v), removeItem: k => env.store.delete(k) },
     Date: { now: () => env.now }, JSON, Number, Error,
     newLuckyRequestId: () => `receipt-${++env.seq}`,
-    postQrPayment: async fields => { env.posts.push(fields.receipt_id); return server(fields); },
+    postQrPayment: async (fields, images) => { env.posts.push(fields.receipt_id); env.sent.push({ fields, images }); return server(fields); },
     Swal: { fire: async opts => {
       if (opts.showCancelButton) { env.prompts.push(opts.title); return { isConfirmed: env.answer }; }
       env.toasts.push(opts.title); return {};
     } },
-    setIsGenerating() {}, setAmount() {}, setPaymentStatus() {}, setTransactionCode() {}, setActiveQr() {},
+    setIsGenerating() {}, setAmount() {}, setPaymentStatus() {}, setTransactionCode() {}, setActiveQr() {}, clearForm() {},
   };
   const api = vm.runInNewContext(`${helpers}\n${saveCashSource}\n${amountSource}\n({ saveCash, handleAmountChange })`, context);
   return { ...api, env };
@@ -36,10 +36,10 @@ test('a lost reply that staff do not retry no longer swallows the next cash paym
     if (receipt_id === 'receipt-1' && !already) throw new Error('mạng rớt'); // ghi được nhưng mất phản hồi
     return { ok: true, alreadyDone: already };
   });
-  await assert.rejects(h.saveCash(200000, 'photo-1'), /mạng rớt/);
+  await assert.rejects(h.saveCash({ amount: 200000 }, 'photo-1'), /mạng rớt/);
   // Khách sau cũng trả 200.000đ: nhân viên gõ lại số tiền → lần thu mới, mã mới.
   h.handleAmountChange({ target: { value: '200000' } });
-  await h.saveCash(200000, 'photo-2');
+  await h.saveCash({ amount: 200000 }, 'photo-2');
   assert.deepEqual(h.env.posts, ['receipt-1', 'receipt-2']);
   assert.equal(saved.size, 2, 'both payments are in the book');
 });
@@ -53,10 +53,10 @@ test('retrying right after an error reuses the receipt code, and the "already sa
     if (lose) { lose = false; throw new Error('mạng rớt'); }
     return { ok: true, alreadyDone: already };
   });
-  await assert.rejects(h.saveCash(150000, 'photo'));
+  await assert.rejects(h.saveCash({ amount: 150000 }, 'photo'));
   h.env.now += 60000;
   h.env.answer = false; // "Đúng, cùng khoản đó"
-  await h.saveCash(150000, 'photo');
+  await h.saveCash({ amount: 150000 }, 'photo');
   assert.deepEqual(h.env.posts, ['receipt-1', 'receipt-1'], 'same code → the server never records it twice');
   assert.deepEqual(h.env.prompts, ['Khoản này đã ghi từ lần bấm trước']);
   assert.equal(saved.size, 1);
@@ -69,18 +69,26 @@ test('when staff say it is a new customer, the payment is saved under a new code
   h.env.store.set('custom-cash-receipt', JSON.stringify({ id: 'receipt-1', amount: 90000, at: h.env.now - 60000 }));
   h.env.seq = 1;
   h.env.answer = true; // "Ghi khoản mới"
-  await h.saveCash(90000, 'photo');
+  await h.saveCash({ amount: 90000 }, 'photo');
   assert.deepEqual(h.env.posts, ['receipt-1', 'receipt-2']);
   assert.ok(saved.has('receipt-2'));
   assert.deepEqual(h.env.toasts, ['✅ Nhận tiền mặt!']);
 });
 
+test('the table typed in the QR box goes with the cash payment, the bill photo as its one photo', async () => {
+  const h = qrPage(() => ({ ok: true, alreadyDone: false }));
+  await h.saveCash({ amount: 90000, table: 'Bàn 3' }, 'bill-photo');
+  await h.saveCash({ amount: 40000 }, 'p2');
+  assert.deepEqual(JSON.parse(JSON.stringify(h.env.sent.map(s => [s.fields.amount, s.fields.table_label, s.images]))),
+    [[90000, 'Bàn 3', { image: ['bill-photo', 'bill'] }], [40000, '', { image: ['p2', 'bill'] }]]);
+});
+
 test('an old code is not reused after 5 minutes or for another amount', async () => {
   const h = qrPage(() => ({ ok: true, alreadyDone: false }));
   h.env.store.set('custom-cash-receipt', JSON.stringify({ id: 'old', amount: 50000, at: h.env.now - 6 * 60000 }));
-  await h.saveCash(50000, 'p');
+  await h.saveCash({ amount: 50000 }, 'p');
   h.env.store.set('custom-cash-receipt', JSON.stringify({ id: 'old', amount: 50000, at: h.env.now - 60000 }));
-  await h.saveCash(60000, 'p');
+  await h.saveCash({ amount: 60000 }, 'p');
   assert.deepEqual(h.env.posts, ['receipt-1', 'receipt-2']);
 });
 

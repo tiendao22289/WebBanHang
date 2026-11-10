@@ -85,6 +85,7 @@ function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFai
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
     statusDatabase: () => fakeDb(state, { failTable }),
     signReceiptImages: async (_db, paths) => Object.fromEntries(paths.filter(Boolean).map(p => [p, `signed:${p}`])),
+    purgeOldReceiptImages: async () => { state.imagePurges = (state.imagePurges || 0) + 1; },
     // Dữ liệu trang Lương (chấm công) của tháng; mặc định chưa ai đi làm.
     // state.payrollFails: như đọc chấm công bị lỗi (mạng / DB).
     loadPayrollMonth: async () => {
@@ -587,6 +588,7 @@ test('the owner links Zalo with a short code and gets one daily report a day', a
   assert.equal((await cron(key)).body.ok, true);
   assert.equal((await cron(key)).body.skipped, true, 'the morning report goes out once a day');
   assert.equal(sent.length, 6, 'three messages, twice');
+  assert.equal(state.imagePurges, 2, 'each run of the job clears expired bill photos (the removed Bill giấy tab used to do it), never on a wrong key');
 
   const failing = load({ state, sent, zaloFails: true });
   const res = await post(failing, { action: 'zalo_test' });

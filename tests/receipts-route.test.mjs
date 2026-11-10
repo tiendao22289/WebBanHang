@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import * as finance from '../src/lib/ownerFinance.mjs';
+import { qrTableLabel } from '../src/lib/qrTableLabel.mjs';
 
 const source = readFileSync(new URL('../src/app/api/admin/receipts/route.js', import.meta.url), 'utf8')
   .replace(/^import [\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
@@ -47,7 +48,7 @@ function load({ state, role = 'staff', userId = STAFF, code = 200 }) {
   const uploads = [], removed = [];
   const api = vm.runInNewContext(`${source}\n({ GET, POST })`, {
     NextResponse: { json: (body, init = {}) => ({ status: init.status || 200, body }) },
-    ...finance, Number, Math, String, Promise, Date, JSON, console: { error() {} },
+    ...finance, qrTableLabel, Number, Math, String, Promise, Date, JSON, console: { error() {} },
     getStaffSession: async () => code === 200 ? { code, user: { id: userId, full_name: 'Thu ngân', role } } : { code },
     statusDatabase: () => fakeDb(state),
     receiptImageProblem: file => !file || !file.size ? 'Thiếu ảnh.' : (file.type.startsWith('image/') ? (file.size > 2097152 ? 'Ảnh quá lớn (tối đa 2MB).' : null) : 'Ảnh phải là JPG, PNG hoặc WebP.'),
@@ -317,6 +318,70 @@ test('cash on the QR page is recorded only with a photo of the bill', async () =
   assert.deepEqual(plain(state.rpcCalls), [['record_custom_cash_receipt', { p_id: id, p_amount: 120000 }]]);
   assert.deepEqual([state.finance_manual_receipts[0].image_path, state.finance_manual_receipts[0].transfer_image_path], ['2026-10/bill-1.jpg', undefined], 'cash photo is always the bill');
   assert.equal((await post(staff.api, { action: 'qr_cash', receipt_id: 'not-a-uuid', amount: '120000', image: image() })).status, 400);
+});
+
+// Tab "Bill giấy" bỏ (2026-11-10): tên bàn + ảnh tờ bill ghi ngay trong khung Tạo mã QR.
+test('the QR page writes the table and the bill photo taken in the box onto the paper bill of that payment', async () => {
+  const state = qrDb();
+  const staff = load({ state });
+  let res = await confirmQr(staff.api, { table_label: ' 5 ', bill_image: image() });
+  assert.deepEqual([res.status, res.body.photoSaved], [200, true]);
+  const row = state.finance_manual_receipts[0];
+  assert.deepEqual([row.table_label, row.transfer_image_path, row.image_path, row.amount, row.payment_method],
+    ['Bàn 5', '2026-10/ck-1.jpg', '2026-10/bill-2.jpg', 350000, 'transfer'], 'customer screen + bill photo, table "5" reads "Bàn 5" in the book');
+
+  // Bấm lại (mạng chậm) mà gõ bàn khác: không đổi bàn của khoản đã ghi; ảnh bill mới thay ảnh cũ.
+  res = await confirmQr(staff.api, { table_label: 'Bàn 7', bill_image: image() });
+  assert.deepEqual([res.status, res.body.alreadyDone], [200, true]);
+  assert.equal(state.finance_manual_receipts.length, 1, 'money is not booked twice');
+  assert.deepEqual([row.table_label, row.transfer_image_path, row.image_path], ['Bàn 5', '2026-10/ck-3.jpg', '2026-10/bill-4.jpg']);
+  assert.deepEqual(staff.removed, ['2026-10/ck-1.jpg', '2026-10/bill-2.jpg']);
+
+  // Chọn "Tờ bill" trong camera: ảnh đó là ảnh bill, không gửi kèm ảnh chụp sẵn.
+  const other = qrDb();
+  const second = load({ state: other });
+  res = await confirmQr(second.api, { code: 'QRCD5678', kind: 'bill', bill_image: image() });
+  assert.equal(res.status, 200);
+  assert.deepEqual(second.uploads, ['2026-10/bill-1.jpg'], 'only one photo stored');
+  assert.deepEqual([other.finance_manual_receipts[0].image_path, other.finance_manual_receipts[0].transfer_image_path ?? null, other.finance_manual_receipts[0].table_label ?? null],
+    ['2026-10/bill-1.jpg', null, null], 'no table typed → the book shows "Bill giấy" as before');
+});
+
+test('a refused or bad QR confirmation with a bill photo keeps neither photo', async () => {
+  const state = qrDb();
+  const staff = load({ state });
+  let res = await confirmQr(staff.api, { bill_image: image('application/pdf'), table_label: '5' });
+  assert.deepEqual([res.status, res.body.error], [400, 'Ảnh tờ bill: Ảnh phải là JPG, PNG hoặc WebP.']);
+  assert.equal(staff.uploads.length, 0);
+  assert.equal(state.rpcCalls, undefined, 'money not confirmed');
+
+  res = await confirmQr(staff.api, { code: 'QRWRONG1', bill_image: image(), table_label: '5' });
+  assert.equal(res.status, 400);
+  assert.deepEqual(staff.removed, ['2026-10/ck-1.jpg', '2026-10/bill-2.jpg'], 'both uploaded photos are removed');
+  res = await confirmQr(staff.api, { code: 'QRNOROW1', bill_image: image() });
+  assert.deepEqual([res.status, res.body.photoSaved], [200, false]);
+  assert.deepEqual(staff.removed.slice(2), ['2026-10/ck-3.jpg', '2026-10/bill-4.jpg'], 'no orphan photos when the book row is missing');
+  assert.equal(state.finance_manual_receipts.length, 0);
+});
+
+test('cash on the QR page keeps the table typed in the box', async () => {
+  const state = qrDb();
+  const staff = load({ state });
+  const id = '00000000-0000-4000-8000-0000000000c2';
+  const res = await post(staff.api, { action: 'qr_cash', receipt_id: id, amount: '280000', table_label: 'ban 12', image: image(), bill_image: image() });
+  assert.deepEqual([res.status, res.body.photoSaved], [200, true]);
+  const row = state.finance_manual_receipts[0];
+  assert.deepEqual([row.source, row.payment_method, row.amount, row.table_label, row.image_path], [`cash:${id}`, 'cash', 280000, 'Bàn 12', '2026-10/bill-1.jpg']);
+  assert.equal(staff.uploads.length, 1, 'cash: the bill photo is the one photo');
+});
+
+test('table names from the QR page read the same way in the finance book', () => {
+  for (const [typed, saved] of [['5', 'Bàn 5'], [' 05 ', 'Bàn 5'], ['ban 7', 'Bàn 7'], ['BÀN  12', 'Bàn 12'], ['Bàn12', 'Bàn 12'],
+    ['Mang  về', 'Mang về'], ['VIP 2', 'VIP 2'], ['Bàn 5A', 'Bàn 5A'], ['', null], ['   ', null], [null, null], [undefined, null]]) {
+    assert.equal(qrTableLabel(typed), saved, JSON.stringify(typed));
+  }
+  assert.equal(qrTableLabel('x'.repeat(60)).length, 40, 'at most 40 characters, like the old paper bill box');
+  assert.equal(qrTableLabel('Bàn 3'), 'Bàn 3', 'decomposed accents from some phone keyboards');
 });
 
 // Trang Bàn: như DB thật — đóng bàn trong 1 giao dịch, trigger ghi bill vào Sổ thu chi.
