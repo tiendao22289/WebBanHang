@@ -111,7 +111,7 @@ test('a peer report can carry a photo that only the owner sees; cancelling remov
   const photoPath = state.payroll_peer_reports.find(r => r.id === second.body.id).photo_path;
   const month = (await get(OWNER, 'payroll=1&year=2026&month=11')).body;
   assert.deepEqual(month.peerFines, [{ violation_id: fined.body.violation_id, reporter: 'An', note: 'bàn 7',
-    photo: `/api/admin/receipts/image?p=${encodeURIComponent(photoPath)}&token=aaa.bbb.ccc` }]);
+    photo: `/api/admin/receipts/image?p=${encodeURIComponent(photoPath)}&token=aaa.bbb.ccc`, seen_at: null }]);
   const binh = (await get(BINH, 'me=1')).body.violations;
   assert.deepEqual(binh.map(v => [v.date, v.reason, v.amount]), [['2026-11-08', 'Để khách chờ lâu', 20000]]);
   assert.ok(!JSON.stringify(binh).includes('An') && !JSON.stringify(binh).includes('peer-'), 'the fined person sees neither the reporter nor the photo');

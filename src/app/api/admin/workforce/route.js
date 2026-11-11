@@ -13,12 +13,16 @@
  * GET  ?face_check=<id>      → lượt quét đang chờ máy quầy so mặt của chính mình: chờ / đúng / sai / chờ duyệt
  * GET  ?faces=1              → so khuôn mặt: cài đặt, ai đã có mặt mẫu, ca chờ duyệt mặt, lượt so gần đây (admin)
  * GET  ?pending=1            → số đơn chờ duyệt ở Lương → Yêu cầu theo loại + tổng (admin, số trên biểu tượng ví ở thanh menu)
+ * GET  ?notices=1[&count=1]  → thông báo lỗi của chính mình: lần bị báo đã xử lý + tháng chốt lương có phạt, số chưa xem
+ *                              (count=1: không ký link ảnh, cho số đỏ trên thanh menu)
  * POST {action}:
  *   clock {token}            → vào / ra ca bằng mã QR trên máy quầy: mỗi mã dùng 1 lần,
  *                              phải cùng wifi với máy quầy, đúng điện thoại đã đăng ký
  *   request {type, amount | from_date, to_date, reason} → ứng lương / báo nghỉ (có ngày nghỉ) của chính mình
  *   request_fix {attendance_id, clock_in, clock_out, reason} → xin sửa giờ một ca của mình
  *   cancel_request {id, kind}  → huỷ đơn của mình khi còn chờ duyệt (kind 'fix' = đơn xin sửa giờ)
+ *   notice_seen {kind: 'peer', id | kind: 'close', year, month} → nhân viên bấm "Tôi đã xem" một thông báo lỗi của mình
+ *                              (ghi giờ một lần, không bỏ được)
  *   confirm_received {kind: 'month', year, month | kind: 'payout', id} → nhân viên xác nhận đã nhận lương chủ đánh dấu đã trả
  *                              (không đổi lại được; đã xác nhận thì chủ không bỏ dấu đã trả / không bỏ lần trả được)
  *   report_violation {rule_id?, reason?, note?} → tự ghi một lỗi của chính mình hôm nay (tiền theo danh sách lỗi; lỗi khác 0đ
@@ -60,6 +64,7 @@ import { ENROLL_MAX, ENROLL_MIN, ENROLL_SELF_MIN, FACE_LEVELS, FACE_MODEL, FACE_
   faceThreshold, faceVector, faceVectors, markFaceHolds, missingTable, readFaceSettings, wrongStreak } from '@/lib/faceCheck.mjs';
 import { clockStatus, nowMs, refreshClock } from '@/lib/trueTime.mjs';
 import { pendingRequestCounts } from '@/lib/payrollPending.mjs';
+import { NOTICE_CLOSE_DAYS, NOTICE_LIMIT, buildNotices, unseenCount } from '@/lib/errorNotices.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -79,6 +84,9 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const CLAIMS_NOT_READY = 'Web đang cập nhật phần khoản chi hộ, thử lại sau ít phút.';
 const DRINKS_NOT_READY = 'Web đang cập nhật phần ghi nước uống, thử lại sau ít phút.';
 const PEER_NOT_READY = 'Web đang cập nhật phần báo lỗi đồng nghiệp, thử lại sau ít phút.';
+const NOTICES_NOT_READY = 'Web đang cập nhật phần thông báo lỗi, thử lại sau ít phút.';
+// Cột mới chưa có trong DB (web lên trước khi chạy migration).
+const missingColumn = e => e?.code === '42703' || e?.code === 'PGRST204' || /column .* does not exist|Could not find the '.*' column/i.test(e?.message || '');
 // Đơn xin sửa giờ hiện ở Cài chấm công và Lương → Yêu cầu: 45 ngày gần đây (số trên biểu tượng ví đếm đúng khoảng này).
 const FIX_REQUEST_DAYS = 45;
 const ddmm = d => `${String(d).slice(8, 10)}/${String(d).slice(5, 7)}`;
@@ -211,6 +219,48 @@ async function myPeerReports(db, staffId) {
 }
 
 /**
+ * Thông báo lỗi của chính mình (mục 🔔 Thông báo lỗi, src/lib/errorNotices.mjs): các lần mình bị đồng nghiệp báo mà chủ đã xử lý
+ * (phạt / bỏ qua — không có tên, ghi chú của người báo; có ảnh làm chứng) và các tháng chốt lương có khoản phạt (100 ngày gần đây).
+ * light: chỉ cần số chưa xem (số đỏ trên thanh menu) → không ký link ảnh. Bảng / cột chưa có: ready false (ẩn mục này).
+ */
+async function myNotices(db, staffId, light = false) {
+  const none = { ready: false, unseen: 0, list: [] };
+  const reps = await db.from('payroll_peer_reports').select('id, staff_id, report_date, reason, status, amount, violation_id, photo_path, decided_at, seen_at, created_at')
+    .eq('staff_id', staffId).in('status', ['approved', 'rejected']).order('decided_at', { ascending: false }).limit(NOTICE_LIMIT);
+  if (missingTable(reps.error) || missingColumn(reps.error)) return none;
+  if (reps.error) throw reps.error;
+  const closes = await db.from('payroll_closes').select('year, month, closed_at, fines_seen_at').eq('staff_id', staffId)
+    .gte('closed_at', new Date(nowMs() - NOTICE_CLOSE_DAYS * 86400000).toISOString());
+  if (missingTable(closes.error) || missingColumn(closes.error)) return none;
+  if (closes.error) throw closes.error;
+  const reports = reps.data || [];
+  // Khoản phạt hiện tại của các lần bị phạt (chủ có thể sửa tiền / xoá sau) + khoản phạt của các tháng đã chốt.
+  const months = (closes.data || []).map(c => ({ year: Number(c.year), month: Number(c.month) }));
+  const linked = reports.map(r => r.violation_id).filter(Boolean);
+  const [byId, ofMonths] = await Promise.all([
+    linked.length ? db.from('payroll_violations').select('id, amount, month, year').in('id', linked) : { data: [] },
+    months.length ? db.from('payroll_violations').select('id, amount, reason, month, year, created_at').eq('staff_id', staffId).in('year', [...new Set(months.map(m => m.year))]) : { data: [] },
+  ]);
+  for (const r of [byId, ofMonths]) if (r.error) throw r.error;
+  const monthFines = (ofMonths.data || []).filter(v => months.some(m => m.year === Number(v.year) && m.month === Number(v.month)));
+  const meta = monthFines.length ? await db.from('payroll_violation_meta').select('violation_id, fine_date, self_reported').in('violation_id', monthFines.map(v => v.id)) : { data: [] };
+  if (meta.error) throw meta.error;
+  const metaOf = new Map((meta.data || []).map(m => [m.violation_id, m]));
+  const fromPeer = new Set(linked);
+  const photos = light ? {} : await signPeerPhotos(db, reports);
+  const list = buildNotices({
+    reports: reports.map(r => ({ ...r, photo: photos[r.photo_path] || null })),
+    violationsById: new Map((byId.data || []).map(v => [v.id, v])),
+    closes: closes.data || [],
+    finesOfClose: c => monthFines.filter(v => Number(v.year) === Number(c.year) && Number(v.month) === Number(c.month)).map(v => {
+      const m = metaOf.get(v.id);
+      return { id: v.id, date: m?.fine_date || String(v.created_at || '').slice(0, 10) || null, reason: v.reason, amount: v.amount, peer: fromPeer.has(v.id), self: !!m?.self_reported };
+    }),
+  });
+  return { ready: true, unseen: unseenCount(list), list: light ? [] : list };
+}
+
+/**
  * Mọi việc đang chờ chủ quán quyết định, để duyệt ngay trên /thongke (mục Duyệt): đơn ứng lương / báo nghỉ, xin sửa giờ, giờ ngoài ca,
  * khoản chi hộ, báo lỗi đồng nghiệp, gợi ý phạt từ chấm công (trễ quá 30 phút, quên ra ca), lỗi chưa định tiền, thưởng chuyên cần đủ
  * điều kiện. Gợi ý phạt / lỗi / thưởng xét tháng này và tháng trước; người đã chốt lương tháng đó thì bỏ qua (ghi vào không trừ được).
@@ -290,14 +340,20 @@ async function inboxOverview(db) {
 const signPeerPhotos = (db, rows) => Promise.resolve().then(() => signReceiptImages(db, rows.map(r => r.photo_path)))
   .catch(error => { console.error('[workforce] peer photos', error); return {}; });
 
-// Khoản phạt sinh ra từ báo lỗi đồng nghiệp có ngày bị báo trong [start, end): violation_id → người báo, ghi thêm, link ảnh làm chứng.
-// Bảng chưa có / lỗi: [] (bảng lương vẫn hiện, chỉ thiếu phần này).
-async function peerFinesOf(db, start, end) {
-  const { data, error } = await db.from('payroll_peer_reports').select('*').eq('status', 'approved').gte('report_date', start).lt('report_date', end);
-  if (error) { if (!missingTable(error)) console.error('[workforce] peer fines', error); return []; }
-  const rows = (data || []).filter(r => r.violation_id);
-  const photos = await signPeerPhotos(db, rows);
-  return rows.map(r => ({ violation_id: r.violation_id, reporter: r.reporter_name || null, note: r.note || null, photo: photos[r.photo_path] || null }));
+// Báo lỗi đồng nghiệp có ngày bị báo trong [start, end) đã xử lý — lịch sử trong bảng lương của chủ:
+// peerFines = lần bị phạt (violation_id → người báo, ghi thêm, link ảnh làm chứng, giờ người bị báo bấm "Tôi đã xem");
+// peerDismissed = lần chủ bỏ qua (nhắc nhở, không trừ tiền) — vẫn lưu để sau đối chiếu với nhân viên.
+// Bảng chưa có / lỗi: trống (bảng lương vẫn hiện, chỉ thiếu phần này).
+async function peerMonthOf(db, start, end) {
+  const { data, error } = await db.from('payroll_peer_reports').select('*').in('status', ['approved', 'rejected']).gte('report_date', start).lt('report_date', end);
+  if (error) { if (!missingTable(error)) console.error('[workforce] peer month', error); return { peerFines: [], peerDismissed: [] }; }
+  const photos = await signPeerPhotos(db, data || []);
+  const view = r => ({ reporter: r.reporter_name || null, note: r.note || null, photo: photos[r.photo_path] || null, seen_at: r.seen_at || null });
+  return {
+    peerFines: (data || []).filter(r => r.status === 'approved' && r.violation_id).map(r => ({ violation_id: r.violation_id, ...view(r) })),
+    peerDismissed: (data || []).filter(r => r.status === 'rejected').map(r => ({ id: r.id, staff_id: r.staff_id, date: String(r.report_date).slice(0, 10), reason: r.reason,
+      admin_note: r.admin_note || null, decided_by: r.decided_by || null, decided_at: r.decided_at || null, ...view(r) })),
+  };
 }
 
 // Trang Lương của chủ: báo lỗi đồng nghiệp còn chờ + đã xử lý 60 ngày gần đây (tên người báo / người bị báo, tiền gợi ý).
@@ -310,7 +366,7 @@ async function peerOverview(db) {
   return { ready: true, reports: (data || []).map(r => ({ id: r.id, reporter_id: r.reporter_id, reporter_name: r.reporter_name || null, staff_id: r.staff_id, photo: photos[r.photo_path] || null,
     date: String(r.report_date).slice(0, 10), rule_id: r.rule_id || null, reason: r.reason, note: r.note || null, suggested_amount: Number(r.suggested_amount) || 0,
     status: r.status, amount: r.amount ?? null, violation_id: r.violation_id || null, admin_note: r.admin_note || null, decided_by: r.decided_by || null,
-    decided_at: r.decided_at || null, created_at: r.created_at })) };
+    decided_at: r.decided_at || null, seen_at: r.seen_at || null, created_at: r.created_at })) };
 }
 
 // Khoản chi hộ quán của chính người đó (60 ngày gần đây + mọi khoản còn chờ duyệt). Bảng chưa có: ready false (ẩn phần ghi).
@@ -403,13 +459,18 @@ async function mySalary(db, staffId, settings, reviews, autoClosed = []) {
     const t = monthTallies({ sessions: mine, rules: settings, key: monthKey(year, month), autoClosed, closedDays });
     const bonus = payroll.bonus_amount > 0 && usesDayPay(year, month) ? { late: t.late.count, forgot: t.forgot, minDays: payroll.bonus_min_days, units: live.workUnits, approved: bonuses.data?.[0]?.amount || null } : null;
     const metaOf = new Map((meta.data || []).map(m => [m.violation_id, m]));
+    // Khoản phạt từ lần bị đồng nghiệp báo (chủ đã duyệt): phiếu lương ghi "🚩 bị báo" (không có tên người báo).
+    const vioIds = (violations.data || []).map(v => v.id);
+    const peerRows = vioIds.length ? await db.from('payroll_peer_reports').select('violation_id').in('violation_id', vioIds) : { data: [] };
+    if (peerRows.error && !missingTable(peerRows.error)) console.error('[workforce] my peer fines', peerRows.error);
+    const fromPeer = new Set((peerRows.error ? [] : peerRows.data || []).map(r => r.violation_id));
     // Danh sách lỗi để tự ghi (lỗi máy tự gợi ý từ chấm công — trễ, quên ra ca — không tự ghi).
     const { data: rules, error: re } = await db.from('payroll_fine_rules').select('id, name, amount, kind, active, sort').order('sort').order('created_at');
     if (re) console.error('[workforce] fine rules', re);
     return { salary, bonus, fineRules: (rules || []).filter(r => r.active && !r.kind).map(({ id, name, amount }) => ({ id, name, amount: Number(amount) || 0 })),
       violations: (violations.data || []).map(v => {
         const m = metaOf.get(v.id);
-        return { id: v.id, amount: v.amount, reason: v.reason, date: m?.fine_date || null, self: !!m?.self_reported, note: m?.note || null, at: v.created_at || null };
+        return { id: v.id, amount: v.amount, reason: v.reason, date: m?.fine_date || null, self: !!m?.self_reported, peer: fromPeer.has(v.id), note: m?.note || null, at: v.created_at || null };
       }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.at || '').localeCompare(String(a.at || ''))) };
   } catch (error) {
     console.error('[workforce] my salary', error);
@@ -485,9 +546,9 @@ async function payrollMonth(db, year, month) {
   const ids = sessionIds.map(x => x.id);
   // faceHolds: ca chờ chủ duyệt mặt — trang Lương chưa tính lương các ca này. claims: chi hộ đã duyệt tính vào lương tháng này.
   const claims = await readMonthClaims(db, year, month), drinks = await readMonthDrinks(db, year, month);
-  // peerFines: khoản phạt từ báo lỗi đồng nghiệp trong tháng (ai báo, ảnh làm chứng) — chỉ trang Lương của chủ nhận.
-  const peerFines = await peerFinesOf(db, start, end);
-  return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set(auto.map(r => r.attendance_id))], claims, drinks, peerFines,
+  // peerFines / peerDismissed: báo lỗi đồng nghiệp trong tháng đã phạt / bỏ qua (ai báo, ảnh, nhân viên đã xem chưa) — chỉ trang Lương của chủ nhận.
+  const { peerFines, peerDismissed } = await peerMonthOf(db, start, end);
+  return { closes: closes.data || [], leaveDays: leaveDays.data || [], autoClosed: [...new Set(auto.map(r => r.attendance_id))], claims, drinks, peerFines, peerDismissed,
     reviews: await reviewsFor(db, ids), faceHolds: [...await faceHolds(db, ids)],
     bonuses: bonuses.data || [], bonusSettings, fineRules: fineRules.data || [], fineReviews: fineReviews.data || [], violationMeta: meta.data || [],
     hourlyRates, lateRules, ...holidays, payouts: payouts.error ? [] : payouts.data || [], monthOver: monthOver(year, month) };
@@ -735,6 +796,7 @@ export async function GET(request) {
     const params = new URL(request.url).searchParams;
     if (params.get('me')) return NextResponse.json(await myStatus(s.db, s.user.id), { headers });
     if (params.get('face_check')) return NextResponse.json(await faceCheckStatus(s.db, s.user.id, params.get('face_check')), { headers });
+    if (params.get('notices')) return NextResponse.json(await myNotices(s.db, s.user.id, !!params.get('count')), { headers });
     if (!params.get('checkin') && !params.get('payroll') && !params.get('stats') && !params.get('faces') && !params.get('cycles') && !params.get('claims') && !params.get('peer')
       && !params.get('inbox') && !params.get('range') && !params.get('pending')) return fail('Thiếu yêu cầu.');
     if (!s.isAdmin) return fail('Chỉ admin xem phần này.', 403);
@@ -946,6 +1008,36 @@ export async function POST(request) {
       }
       if (req.photo_path) await removeReceiptImages(db, [req.photo_path]);
       return NextResponse.json({ ok: true }, { headers });
+    }
+
+    // Nhân viên bấm "Tôi đã xem" một thông báo lỗi của chính mình: ghi giờ một lần (đã có thì giữ giờ cũ), không bỏ được.
+    if (body.action === 'notice_seen') {
+      const at = isoNow();
+      if (body.kind === 'peer') {
+        if (!UUID.test(body.id || '')) return fail('Thiếu thông báo.');
+        const r = await db.from('payroll_peer_reports').update({ seen_at: at }).eq('id', body.id).eq('staff_id', user.id).in('status', ['approved', 'rejected'])
+          .is('seen_at', null).select('id');
+        if (missingTable(r.error) || missingColumn(r.error)) return fail(NOTICES_NOT_READY, 503);
+        if (r.error) throw r.error;
+        if (r.data?.length) return NextResponse.json({ ok: true, seen_at: at }, { headers });
+        const { data: x, error: xe } = await db.from('payroll_peer_reports').select('id, status, seen_at').eq('id', body.id).eq('staff_id', user.id).maybeSingle();
+        if (xe) throw xe;
+        if (!x || x.status === 'pending') return fail('Không thấy thông báo này.', 404);
+        return NextResponse.json({ ok: true, seen_at: x.seen_at }, { headers });
+      }
+      if (body.kind === 'close') {
+        const year = Number(body.year), month = Number(body.month);
+        if (!(month >= 1 && month <= 12) || !(year >= 2024 && year <= 2100)) return fail('Tháng không hợp lệ.');
+        const r = await db.from('payroll_closes').update({ fines_seen_at: at }).eq('staff_id', user.id).eq('year', year).eq('month', month).is('fines_seen_at', null).select('year');
+        if (missingTable(r.error) || missingColumn(r.error)) return fail(NOTICES_NOT_READY, 503);
+        if (r.error) throw r.error;
+        if (r.data?.length) return NextResponse.json({ ok: true, seen_at: at }, { headers });
+        const { data: x, error: xe } = await db.from('payroll_closes').select('year, fines_seen_at').eq('staff_id', user.id).eq('year', year).eq('month', month).maybeSingle();
+        if (xe) throw xe;
+        if (!x) return fail('Không thấy thông báo này.', 404);
+        return NextResponse.json({ ok: true, seen_at: x.fines_seen_at }, { headers });
+      }
+      return fail('Thông báo không hợp lệ.');
     }
 
     // Nhân viên xác nhận đã nhận lương chủ quán đánh dấu đã trả (của chính mình). Bấm một lần, không đổi lại được.

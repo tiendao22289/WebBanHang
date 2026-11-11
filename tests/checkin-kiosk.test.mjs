@@ -215,7 +215,9 @@ test('a person without a phone clocks by tapping their name on the kiosk, only i
   const state = { checkin_kiosks: [{ id: KIOSK, name: 'Quầy', revoked_at: null, recent_ips: [] }], checkin_nonces: [], checkin_scans: [], attendance_sessions: [], attendance_changes: [],
     staff: [STAFF, LAN], staff_departures: [], staff_shifts: [], checkin_settings: [{ id: 1, enforce: true, hours_from: '2026-10-25' }], checkin_hours: [SHOP_HOURS],
     checkin_tap_staff: [{ staff_id: STAFF.id, label: 'Phát (bếp)', photo: 'data:image/jpeg;base64,AAAA', updated_at: '2026-11-04T01:00:00Z' }] };
-  const api = load(state, null), cookie = token.signKioskCookie(KIOSK, SECRET);
+  // Giờ cố định trong giờ mở quán (19:00): chạy bằng giờ thật thì sau nửa đêm ca 5 tiếng bị coi là quên ra ca, test hỏng theo giờ chạy.
+  const NOW = Date.parse('2026-11-10T19:00:00+07:00');
+  const api = load(state, null, NOW), cookie = token.signKioskCookie(KIOSK, SECRET, NOW);
   const tap = (staffId, expect, c = cookie) => api.POST({ json: async () => ({ action: 'tap_clock', staff_id: staffId, expect }), headers: new Map([['cf-connecting-ip', '113.161.1.2']]),
     cookies: { get: k => (k === token.KIOSK_COOKIE && c ? { value: c } : undefined) } }).then(plain);
   const list = r => api.GET({ ...kioskReq(cookie), url: 'https://x/api/checkin/kiosk?tap=1', ...r }).then(plain);
@@ -233,7 +235,7 @@ test('a person without a phone clocks by tapping their name on the kiosk, only i
   assert.deepEqual(plain(await api.GET(kioskReq(cookie))).body.tap.open, [STAFF.id], 'the button now offers clock-out');
   assert.equal((await tap(STAFF.id, 'out')).status, 409, 'a second tap within 3 minutes does not clock out');
   assert.equal((await tap(STAFF.id, 'in')).status, 409, 'the kiosk showed clock-in but the person is already in');
-  state.attendance_sessions[0].clock_in = new Date(Date.now() - 5 * 3600000).toISOString();
+  state.attendance_sessions[0].clock_in = new Date(NOW - 5 * 3600000).toISOString();
   const out = await tap(STAFF.id, 'out');
   assert.deepEqual([out.status, out.body.clocked, state.attendance_sessions[0].clock_out !== null], [200, 'out', true]);
   // Từ mạng khác (cookie máy quầy bị mang đi nơi khác) thì không bấm được.
@@ -241,11 +243,11 @@ test('a person without a phone clocks by tapping their name on the kiosk, only i
     cookies: { get: k => (k === token.KIOSK_COOKIE ? { value: cookie } : undefined) } }).then(plain);
   assert.equal(away.status, 403, 'not from outside the kiosk network');
   // Bấm 2 lần cùng lúc (mạng gửi lại): chỉ một lần vào ca, lần kia báo đang trong ca.
-  state.attendance_sessions[0].clock_out = new Date(Date.now() - 10 * 60000).toISOString();
+  state.attendance_sessions[0].clock_out = new Date(NOW - 10 * 60000).toISOString();
   const both = await Promise.all([tap(STAFF.id, 'in'), tap(STAFF.id, 'in')]);
   assert.deepEqual(both.map(r => r.status).sort(), [200, 409]);
   assert.equal(state.attendance_sessions.filter(x => x.staff_id === STAFF.id && !x.clock_out).length, 1, 'one open shift');
-  state.attendance_sessions.forEach(x => { if (!x.clock_out) x.clock_out = new Date().toISOString(); });
+  state.attendance_sessions.forEach(x => { if (!x.clock_out) x.clock_out = new Date(NOW).toISOString(); });
   state.staff_departures.push({ staff_id: STAFF.id, last_day: '2026-01-01' });
   assert.equal((await tap(STAFF.id, 'in')).status, 403, 'someone who left cannot be clocked');
   assert.deepEqual((await list()).body.people, []);

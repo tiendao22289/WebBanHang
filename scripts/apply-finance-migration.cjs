@@ -266,6 +266,14 @@ async function main() {
   if (!peer.table_ok || !peer.anon_blocked) throw new Error('Chưa cài được bảng báo lỗi chéo.');
   if (!peer.photo_ok) throw new Error('Chưa cài được cột ảnh làm chứng của báo lỗi chéo.');
 
+  // Thông báo lỗi cho nhân viên: giờ bấm "Tôi đã xem" lần bị báo / thông báo chốt lương (payroll_error_notices.sql).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_error_notices.sql'), 'utf8'));
+  const [notices] = await query(`SELECT
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payroll_peer_reports' AND column_name = 'seen_at') AS peer_seen,
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'payroll_closes' AND column_name = 'fines_seen_at') AS close_seen`);
+  console.log(JSON.stringify(notices));
+  if (!notices.peer_seen || !notices.close_seen) throw new Error('Chưa cài được phần nhân viên xác nhận đã xem thông báo lỗi.');
+
   // Nước / bia nhân viên tự ghi, trừ vào lương (payroll_staff_drinks.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_staff_drinks.sql'), 'utf8'));
   const [drinks] = await query(`SELECT to_regclass('public.payroll_staff_drinks') IS NOT NULL AS table_ok,

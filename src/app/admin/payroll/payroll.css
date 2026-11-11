@@ -527,8 +527,8 @@ button.slip-row:active, .slip-row.open { background: #eff6ff; }
 .acct-actions { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 10px; border-top: 1px dashed #e2e8f0; }
 @media (min-width: 641px) { .acct-line input, .acct-line select { font-size: 0.88rem; } .acct-body .acct-field { max-width: 560px; } }
 
-/* Bảng lương trên điện thoại: mỗi người MỘT hàng — tên · công · trễ · ứng · phạt · thực lĩnh; tên cột ghi một lần ở đầu. */
-.sc-row { display: grid !important; grid-template-columns: minmax(0, 1.55fr) minmax(0, 0.6fr) minmax(0, 0.55fr) minmax(0, 0.85fr) minmax(0, 0.85fr) minmax(0, 1.55fr);
+/* Bảng lương trên điện thoại: mỗi người MỘT hàng — tên · công · trễ · ứng · phạt · nước uống · thực lĩnh; tên cột ghi một lần ở đầu. */
+.sc-row { display: grid !important; grid-template-columns: minmax(0, 1.45fr) minmax(0, 0.55fr) minmax(0, 0.5fr) minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1.5fr);
   align-items: center; column-gap: 4px; }
 .sc-head { padding: 0 12px 4px; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: #94a3b8; }
 .sc-head span { text-align: center; white-space: nowrap; }
@@ -596,3 +596,34 @@ button.slip-row:active, .slip-row.open { background: #eff6ff; }
 .hist-hours b { font-size: 0.82rem; color: #15803d; }
 .hist-hours small { font-size: 0.66rem; color: #0f766e; }
 .hist-fixform { grid-column: 1 / -1; }
+
+/* 🔔 Thông báo lỗi của nhân viên (StaffNotices): thẻ từng lần bị báo / tháng chốt lương có phạt, nút "Tôi đã xem". */
+.notice-head { padding: 16px 16px 12px; }
+.notice-head p { margin: 6px 0 0; font-size: 0.8rem; color: #64748b; line-height: 1.5; }
+.notice-count { align-self: flex-start; font-size: 0.76rem; font-weight: 800; color: #b91c1c; background: #fee2e2; border-radius: 999px; padding: 3px 10px; }
+.notice-error { background: #fee2e2; color: #b91c1c; border-radius: 10px; padding: 10px 12px; font-size: 0.84rem; font-weight: 600; }
+.notice-card { background: white; border: 1px solid #e5e7eb; border-left: 4px solid #cbd5e1; border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+.notice-card.new { box-shadow: 0 4px 14px rgba(220, 38, 38, 0.08); }
+.notice-card.bad { border-left-color: #dc2626; }
+.notice-card.amber { border-left-color: #f59e0b; }
+.notice-card.warn { border-left-color: #3b82f6; }
+.notice-card.close { border-left-color: #7c3aed; }
+.notice-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.notice-kind { font-size: 0.74rem; font-weight: 800; color: #475569; background: #f1f5f9; border-radius: 6px; padding: 2px 8px; }
+.notice-date { font-size: 0.76rem; color: #64748b; font-weight: 600; }
+.notice-reason { font-weight: 800; font-size: 0.95rem; color: #0f172a; }
+.notice-outcome { font-size: 0.84rem; font-weight: 700; border-radius: 8px; padding: 7px 10px; background: #f8fafc; color: #475569; }
+.notice-outcome.bad { background: #fef2f2; color: #b91c1c; }
+.notice-outcome.amber { background: #fffbeb; color: #92400e; }
+.notice-outcome.warn { background: #eff6ff; color: #1d4ed8; }
+.notice-photo { align-self: flex-start; }
+.notice-photo img { width: 96px; height: 96px; object-fit: cover; border-radius: 10px; border: 1px solid #e5e7eb; display: block; }
+.notice-meta { font-size: 0.74rem; color: #94a3b8; }
+.notice-fines { display: flex; flex-direction: column; border-top: 1px solid #f1f5f9; }
+.notice-fines > div { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid #f1f5f9; font-size: 0.82rem; color: #334155; }
+.notice-fines b { color: #dc2626; white-space: nowrap; }
+.notice-btn { align-self: stretch; min-height: 44px; border: none; border-radius: 10px; background: #111827; color: white; font: inherit; font-weight: 800; font-size: 0.92rem; cursor: pointer; }
+.notice-btn:disabled { opacity: 0.6; }
+.notice-seen { font-size: 0.8rem; font-weight: 700; color: #15803d; }
+.forms-shortcut.alert { border-color: #fecaca; background: #fff5f5; }
+.forms-shortcut-end em.red { color: #b91c1c; background: #fee2e2; }

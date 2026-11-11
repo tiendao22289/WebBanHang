@@ -13,6 +13,7 @@ import { unlockSpeech } from '@/lib/speak';
 import Link from 'next/link';
 import { ROLES, normalizeRole, roleLabel } from '@/lib/staffRoles.mjs';
 import { OPEN_REQUESTS_EVENT, PENDING_COUNT_EVENT, PENDING_REFRESH_EVENT, isPendingRequest, pendingRequestCounts, requestKind, takeOpenRequests, wantsRequestsTab } from '@/lib/payrollPending.mjs';
+import { NOTICES_HREF } from '@/lib/errorNotices.mjs';
 import { CheckCircle, XCircle, Clock, AlertTriangle, DollarSign, Calendar, Settings, Users } from 'lucide-react';
 import './payroll.css';
 
@@ -343,6 +344,10 @@ function PayActions({ s, c, left, onClose, onReopen, onPaid, onRange, compact, c
       {c.locked && paidDay && (c.received_at
         ? <span style={{ fontSize: '0.74rem', color: '#15803d', fontWeight: 700 }}>🤝 NV đã xác nhận nhận {whenText(c.received_at)}</span>
         : <span style={{ fontSize: '0.74rem', color: '#b45309' }}>⏳ chờ NV bấm &quot;Tôi đã nhận&quot;</span>)}
+      {/* Tháng đã chốt có khoản phạt: nhân viên nhận thông báo "lương tháng đã chốt: N lỗi, trừ X" ở mục Thông báo lỗi. */}
+      {c.locked && c.vioAmt > 0 && (c.fines_seen_at
+        ? <span style={{ fontSize: '0.74rem', color: '#15803d', fontWeight: 700 }}>👁 NV đã xem thông báo phạt {whenText(c.fines_seen_at)}</span>
+        : <span style={{ fontSize: '0.74rem', color: '#b45309' }}>⏳ NV chưa xem thông báo phạt</span>)}
       {c.locked && (paidDay
         ? <button style={{ ...btn, background: '#dcfce7', borderColor: '#bbf7d0', color: '#15803d', fontWeight: 700 }} title={c.received_at ? 'Nhân viên đã xác nhận nhận lương' : 'Bấm để bỏ đánh dấu'}
           disabled={!!c.received_at} onClick={() => onPaid(s.id, false)}>✅ Đã trả {paidDay}</button>
@@ -603,7 +608,9 @@ export default function PayrollPage({ staffSection = null } = {}) {
   const [myReviews,  setMyReviews]  = useState([]);   // chủ đã cho / không cho tính giờ ngoài ca
   const [myLeaveDays, setMyLeaveDays] = useState([]); // ngày nghỉ của các đơn báo nghỉ
   const [mySalary,   setMySalary]   = useState(null); // lương tạm tính tháng này (máy chủ tính)
-  const [myFines,    setMyFines]    = useState([]);   // tiền phạt tháng này kèm lý do (self: tự ghi, note: ghi thêm)
+  const [myFines,    setMyFines]    = useState([]);   // tiền phạt tháng này kèm lý do (self: tự ghi, peer: bị báo, note: ghi thêm)
+  // Thông báo lỗi chưa bấm "Tôi đã xem" (lối nhanh sang mục 🔔 Thông báo lỗi). null = chưa có mục này (web chưa cập nhật).
+  const [myNoticesUnseen, setMyNoticesUnseen] = useState(null);
   // Tự ghi lỗi của mình: danh sách lỗi chủ đặt (tiền có sẵn), ô đang điền.
   const [myFineRules, setMyFineRules] = useState([]);
   // Lương chủ quán đã đánh dấu trả cho mình: bấm "Tôi đã nhận" (không đổi lại được).
@@ -676,6 +683,8 @@ export default function PayrollPage({ staffSection = null } = {}) {
       if (r.status === 401) window.dispatchEvent(new Event('staff-session-expired'));
       return r.json();
     }).catch(() => ({}));
+    fetch('/api/admin/workforce?notices=1&count=1', { cache: 'no-store' }).then(r => r.json()).then(j => setMyNoticesUnseen(j?.ready === false ? null : Number(j?.unseen) || 0))
+      .catch(() => {});
     const [monthRes, reqRes] = await Promise.all([
       supabase.from('attendance_sessions').select('*').eq('staff_id', staffId).gte('date', mStart).lte('date', mEnd).order('clock_in'),
       // Đơn 60 ngày gần đây (đơn báo nghỉ thuộc tháng của ngày nghỉ, có thể là tháng sau).
@@ -807,13 +816,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   }, []);
   // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
   // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
-  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], payouts: [], monthOver: false, claims: [], drinks: [], peerFines: [] });
+  const [payrollMonth, setPayrollMonth] = useState({ closes: [], leaveDays: [], autoClosed: [], bonuses: [], bonusSettings: null, fineRules: [], fineReviews: [], violationMeta: [], hourlyRates: [], lateRules: [], closedRows: [], closedRules: [], holidayPay: [], returns: [], payouts: [], monthOver: false, claims: [], drinks: [], peerFines: [], peerDismissed: [] });
   const fetchPayrollMonth = useCallback(async () => {
     try {
       const r = await fetch(`/api/admin/workforce?payroll=1&year=${selYear}&month=${selMonth}`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.ok) setPayrollMonth({ closes: j.closes || [], leaveDays: j.leaveDays || [], autoClosed: j.autoClosed || [], bonuses: j.bonuses || [],
-        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], payouts: j.payouts || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [], claims: j.claims || [], drinks: j.drinks || [], peerFines: j.peerFines || [] });
+        bonusSettings: j.bonusSettings || null, fineRules: j.fineRules || [], fineReviews: j.fineReviews || [], violationMeta: j.violationMeta || [], hourlyRates: j.hourlyRates || [], lateRules: j.lateRules || [], closedRows: j.closedRows || [], closedRules: j.closedRules || [], holidayPay: j.holidayPay || [], returns: j.returns || [], payouts: j.payouts || [], monthOver: !!j.monthOver, reviews: j.reviews || [], faceHolds: j.faceHolds || [], claims: j.claims || [], drinks: j.drinks || [], peerFines: j.peerFines || [], peerDismissed: j.peerDismissed || [] });
     } catch { /* bảng lương vẫn tính được, chỉ thiếu số đã chốt */ }
   }, [selMonth, selYear]);
   // So khuôn mặt ở máy quầy (app): cài đặt, ai có mặt mẫu, ca sai mặt 3 lần chờ duyệt.
@@ -1109,7 +1118,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   const closeOf = id => payrollMonth.closes.find(c => c.staff_id === id);
   const salaryOf = id => {
     const live = calcSalary(id), closed = closeOf(id);
-    return closed ? { ...closed.snapshot, locked: true, liveNet: live.net, paid_at: closed.paid_at || null, received_at: closed.received_at || null } : { ...live, locked: false };
+    return closed ? { ...closed.snapshot, locked: true, liveNet: live.net, paid_at: closed.paid_at || null, received_at: closed.received_at || null,
+      fines_seen_at: closed.fines_seen_at || null } : { ...live, locked: false };
   };
   // Kết toán riêng một người (vd. nghỉ việc giữa tháng) và đánh dấu đã trả lương.
   // Mở chốt riêng một người (chưa đánh dấu đã trả): lương người đó tính lại theo chấm công hiện tại, người khác giữ số đã chốt.
@@ -1496,33 +1506,43 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     .map(v => ({ v, m: payrollMonth.violationMeta.find(x => x.violation_id === v.id) || null }))
     .sort((a, b) => String(b.m?.fine_date || '').localeCompare(String(a.m?.fine_date || '')));
   // Ô Vi phạm của Bảng lương: tổng tiền + số lỗi, bấm để mở / đóng danh sách.
+  // Lần bị báo lỗi chủ bỏ qua trong tháng (nhắc nhở, không trừ tiền) — vẫn lưu trong bảng lương để sau đối chiếu.
+  const dismissedOf = staffId => (payrollMonth.peerDismissed || []).filter(x => x.staff_id === staffId).sort((a, b) => String(b.date).localeCompare(String(a.date)));
   const vioCell = (staffId, c) => {
     const list = finesOf(staffId), open = detail?.id === staffId && detail.kind === 'fines', unpriced = list.filter(x => !(Number(x.v.amount) > 0)).length;
-    if (!list.length) return <span style={{ color: '#94a3b8' }}>—</span>;
+    const warned = dismissedOf(staffId).length;
+    if (!list.length && !warned) return <span style={{ color: '#94a3b8' }}>—</span>;
     return (
       <button onClick={() => setDetail(open ? null : { id: staffId, kind: 'fines' })} title="Bấm để xem từng lỗi"
         style={{ border: '1px solid #fecaca', background: open ? '#fee2e2' : '#fff5f5', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', textAlign: 'left', font: 'inherit' }}>
         <span style={{ color: '#ef4444', fontWeight: 700, whiteSpace: 'nowrap' }}>{c.vioAmt > 0 ? `-${formatMoney(c.vioAmt)}` : '0đ'}</span>
         <div style={{ fontSize: '0.72rem', color: '#b91c1c', whiteSpace: 'nowrap' }}>{list.length} lỗi {open ? '▴' : '▾'}</div>
         {unpriced > 0 && <div style={{ fontSize: '0.7rem', color: '#b45309', whiteSpace: 'nowrap' }}>{unpriced} chưa định tiền</div>}
+        {warned > 0 && <div style={{ fontSize: '0.7rem', color: '#1d4ed8', whiteSpace: 'nowrap' }}>{warned} nhắc nhở</div>}
       </button>
     );
   };
   // Danh sách lỗi mở ra dưới dòng của người đó: ngày, lỗi (🤖 máy gợi ý, 🙋 nhân viên tự ghi), ghi chú, ai ghi lúc nào, số tiền.
   // Khoản phạt từ báo lỗi đồng nghiệp: ai báo, ghi thêm, ảnh làm chứng (chỉ chủ thấy; link ảnh hết hạn sau 1 giờ, tải lại trang là có link mới).
+  // Người bị báo đã bấm "Tôi đã xem" ở mục Thông báo lỗi chưa (bằng chứng nhân viên đã biết).
+  const seenText = at => (at
+    ? <span style={{ color: '#15803d', fontWeight: 700 }}> · 👁 NV đã xem {whenText(at)}</span>
+    : <span style={{ color: '#b45309' }}> · NV chưa xem</span>);
   const peerFineInfo = violationId => {
     const p = (payrollMonth.peerFines || []).find(x => x.violation_id === violationId);
     if (!p) return null;
     return <div style={{ fontSize: '0.72rem', color: '#991b1b' }}>🚩 đồng nghiệp báo{p.reporter ? `: ${p.reporter}` : ''}{p.note ? ` · ${p.note}` : ''}
-      {p.photo && <> · <a href={p.photo} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontWeight: 700 }}>📷 Xem ảnh</a></>}</div>;
+      {p.photo && <> · <a href={p.photo} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontWeight: 700 }}>📷 Xem ảnh</a></>}
+      {seenText(p.seen_at)}</div>;
   };
   const finesPanel = s => {
-    const list = finesOf(s.id), total = list.reduce((a, x) => a + Number(x.v.amount || 0), 0);
+    const list = finesOf(s.id), total = list.reduce((a, x) => a + Number(x.v.amount || 0), 0), warned = dismissedOf(s.id);
     const dayOf = iso => ddmm(new Date(Date.parse(iso) + 7 * 3600000).toISOString().slice(0, 10));
     return (
       <div style={{ background: '#fffafa', borderTop: '1px solid #fee2e2', padding: '10px 12px' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
-          <strong style={{ fontSize: '0.85rem' }}>⚠️ Vi phạm tháng {selMonth}/{selYear} — {s.full_name}: {list.length} lỗi, trừ <span style={{ color: '#dc2626' }}>{formatMoney(total)}</span></strong>
+          <strong style={{ fontSize: '0.85rem' }}>⚠️ Vi phạm tháng {selMonth}/{selYear} — {s.full_name}: {list.length} lỗi, trừ <span style={{ color: '#dc2626' }}>{formatMoney(total)}</span>
+            {warned.length > 0 && <span style={{ color: '#1d4ed8' }}> · {warned.length} nhắc nhở</span>}</strong>
           <button style={smallBtn} onClick={() => { setDetail(null); setActiveTab('violations'); }}>Sửa / xoá ở tab Vi phạm</button>
           <button style={smallBtn} onClick={() => setDetail(null)}>Đóng</button>
         </div>
@@ -1547,10 +1567,23 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   </td>
                 </tr>
               ))}
+              {/* Bị báo lỗi nhưng chủ bỏ qua: không trừ tiền, vẫn lưu (ai báo, ảnh, NV đã xem chưa) để sau đối chiếu. */}
+              {warned.map(x => (
+                <tr key={`warn-${x.id}`} style={{ background: '#f8fbff' }}>
+                  <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', verticalAlign: 'top', fontWeight: 700 }}>{x.date ? `${weekday(x.date)} ${ddmm(x.date)}` : '—'}</td>
+                  <td data-label="" className="detail-wide" style={{ padding: '6px 10px', verticalAlign: 'top' }}>
+                    🚩 {x.reason}
+                    <div style={{ fontSize: '0.72rem', color: '#1e40af' }}>đồng nghiệp báo{x.reporter ? `: ${x.reporter}` : ''}{x.note ? ` · ${x.note}` : ''}
+                      {x.photo && <> · <a href={x.photo} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontWeight: 700 }}>📷 Xem ảnh</a></>}{seenText(x.seen_at)}</div>
+                    <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>bỏ qua{x.decided_by ? ` bởi ${x.decided_by}` : ''}{x.decided_at ? ` lúc ${whenText(x.decided_at)}` : ''}{x.admin_note ? ` · ${x.admin_note}` : ''}</div>
+                  </td>
+                  <td className="detail-money" style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', verticalAlign: 'top', color: '#1d4ed8', fontWeight: 700 }}>nhắc nhở</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
-        <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: 4 }}>🤖 lỗi máy gợi ý từ chấm công · 🙋 nhân viên tự ghi. Tiền trừ vì đi trễ / về sớm tự động nằm ở cột Vào trễ / Về sớm, không ở đây.</div>
+        <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: 4 }}>🤖 lỗi máy gợi ý từ chấm công · 🙋 nhân viên tự ghi · 🚩 đồng nghiệp báo (nhắc nhở = chủ bỏ qua, không trừ tiền). 👁 = người bị báo đã bấm &quot;Tôi đã xem&quot; ở mục Thông báo lỗi. Tiền trừ vì đi trễ / về sớm tự động nằm ở cột Vào trễ / Về sớm, không ở đây.</div>
       </div>
     );
   };
@@ -2440,7 +2473,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 {(c.vioAmt > 0 || myFines.length > 0) && row(`Phạt (${myFines.length} lỗi)`, `−${formatMoney(c.vioAmt)}`, '#dc2626')}
                 {myFines.length > 0 && (
                   <div style={{ fontSize: '0.76rem', color: '#64748b', padding: '2px 0 6px', borderBottom: '1px solid #f1f5f9' }}>
-                    {myFines.map((v, i) => <div key={v.id || i}>• {v.date ? `${weekday(v.date)} ${ddmm(v.date)} · ` : ''}{v.self ? '🙋 ' : ''}{v.reason}{v.note ? ` (${v.note})` : ''} — {Number(v.amount) > 0 ? `trừ ${formatMoney(v.amount)}` : 'chờ chủ quán định tiền'}</div>)}
+                    {myFines.map((v, i) => <div key={v.id || i}>• {v.date ? `${weekday(v.date)} ${ddmm(v.date)} · ` : ''}{v.self ? '🙋 ' : v.peer ? '🚩 bị báo · ' : ''}{v.reason}{v.note ? ` (${v.note})` : ''} — {Number(v.amount) > 0 ? `trừ ${formatMoney(v.amount)}` : 'chờ chủ quán định tiền'}</div>)}
+                    {myFines.some(v => v.peer) && <div>🚩 = bị đồng nghiệp báo, chủ quán đã duyệt — xem chi tiết ở <Link href={NOTICES_HREF} style={{ color: '#2563eb', fontWeight: 700 }}>Thông báo lỗi</Link>.</div>}
                   </div>
                 )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, paddingTop: 10 }}>
@@ -2465,6 +2499,14 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
               </div>
             );
           })()}
+
+          {/* Trang Lương: lối nhanh sang Thông báo lỗi (lần bị báo đã xử lý, tháng chốt có phạt) — số chưa xem nổi bật. */}
+          {!formsView && myNoticesUnseen !== null && (
+            <Link href={NOTICES_HREF} className={`forms-shortcut${myNoticesUnseen > 0 ? ' alert' : ''}`}>
+              <span><b>🔔 Thông báo lỗi</b><small>Lần bị báo lỗi chủ quán đã xử lý · Chốt lương có phạt</small></span>
+              <span className="forms-shortcut-end">{myNoticesUnseen > 0 && <em className="red">{myNoticesUnseen} chưa xem</em>}›</span>
+            </Link>
+          )}
 
           {/* Trang Lương: lối nhanh sang Đơn từ (tự ghi lỗi, chi hộ, ứng lương, báo nghỉ). */}
           {!formsView && (() => {
@@ -2970,7 +3012,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 <div className="mobile-cards">
                   {filtered.length > 0 && (
                     <div className="sc-row sc-head" aria-hidden="true">
-                      <span>Nhân viên</span><span>Công</span><span>Trễ</span><span>Ứng</span><span>Phạt</span><span>{running ? 'Tạm tính' : 'Thực lĩnh'}</span>
+                      <span>Nhân viên</span><span>Công</span><span>Trễ</span><span>Ứng</span><span>Phạt</span><span>Nước</span><span>{running ? 'Tạm tính' : 'Thực lĩnh'}</span>
                     </div>
                   )}
                   {filtered.length === 0 && <div className="empty-state">Chưa có nhân viên</div>}
@@ -2979,7 +3021,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                     const cardOpen = openSalaryCard === s.id;
                     return (
                       <div key={s.id} className="salary-card">
-                        {/* Một hàng: tên · công · trễ · ứng · phạt · thực lĩnh (tên cột ghi một lần ở đầu danh sách). Bấm để mở phiếu lương. */}
+                        {/* Một hàng: tên · công · trễ · ứng · phạt · nước uống · thực lĩnh (tên cột ghi một lần ở đầu danh sách). Bấm để mở phiếu lương. */}
                         {(() => {
                           const lt = lateTallyOf(s.id), advN = monthRequests(s.id, 'advance').length, fines = finesOf(s.id);
                           const unpriced = fines.filter(x => !(Number(x.v.amount) > 0)).length;
@@ -2992,6 +3034,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                               <span className="sc-num orange">{lt.count ? lt.count : none}</span>
                               <span className="sc-num red">{c.advAmt ? shortMoney(c.advAmt) : advN ? <small>chờ</small> : none}</span>
                               <span className="sc-num red">{c.vioAmt ? shortMoney(c.vioAmt) : unpriced ? <small>chưa định</small> : none}</span>
+                              <span className="sc-num red">{c.drinkAmt ? shortMoney(c.drinkAmt) : none}</span>
                               <span className={`sc-net ${c.net < 0 ? 'negative' : ''}`}>{formatMoney(c.net)}<i aria-hidden="true">{cardOpen ? '▴' : '▾'}</i></span>
                             </button>
                           );
@@ -3026,8 +3069,12 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                               {slipRow(s, { label: 'Nghỉ', sub: abs.length ? `${abs.length} đơn${c.rule === 'days' ? ' · không trừ thêm' : ''}` : null,
                                 value: c.rule === 'days' ? (c.absDays ? `${fmtNum(c.absDays)} ngày` : abs.length ? 'chờ duyệt' : '—') : `−${formatMoney(c.absAmt)}`,
                                 tone: c.rule === 'days' || !c.absAmt ? 'muted' : 'red', kind: 'absent', has: abs.length > 0 })}
-                              {slipRow(s, { label: 'Vi phạm', sub: fines.length ? `${fines.length} lỗi${unpriced ? ` · ${unpriced} chưa định tiền` : ''}` : null,
-                                value: fines.length ? `−${formatMoney(c.vioAmt)}` : '—', tone: fines.length ? 'red' : 'muted', kind: 'fines', has: fines.length > 0 })}
+                              {(() => {
+                                // Lần bị báo mà chủ bỏ qua (nhắc nhở) cũng mở được danh sách, để đối chiếu.
+                                const warned = dismissedOf(s.id).length;
+                                const sub = [fines.length && `${fines.length} lỗi`, unpriced && `${unpriced} chưa định tiền`, warned && `${warned} nhắc nhở`].filter(Boolean).join(' · ') || null;
+                                return slipRow(s, { label: 'Vi phạm', sub, value: fines.length ? `−${formatMoney(c.vioAmt)}` : '—', tone: fines.length ? 'red' : 'muted', kind: 'fines', has: fines.length + warned > 0 });
+                              })()}
                               {c.drinkAmt > 0 && slipRow(s, { label: 'Nước uống', sub: `${c.drinkList?.length || 0} lần, nhân viên tự ghi`, value: `−${formatMoney(c.drinkAmt)}`, tone: 'red', kind: 'drinks', has: !!c.drinkList?.length })}
                               <div className={`slip-total ${c.net < 0 ? 'negative' : ''}`}>
                                 <span>{c.locked ? 'Thực lĩnh (đã chốt)' : running ? 'Thực lĩnh (tạm tính)' : 'Thực lĩnh'}</span>
@@ -3061,6 +3108,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                     <thead><tr>
                       <th>Nhân viên</th><th>Lương CB</th><th>Ngày công</th><th>Giờ làm</th><th>Vào sớm</th><th>Vào trễ</th><th>Ra dư</th><th>Về sớm</th>
                       <th>Tăng ca</th><th>Thưởng</th><th>Ứng lương</th><th>Nghỉ</th><th>Vi phạm</th>
+                      <th title="Nước ngọt / bia nhân viên tự ghi ở Đơn từ, trừ thẳng vào lương">Nước uống</th>
                       <th style={{color:'#16a34a'}}>Thực lĩnh</th>
                       {isAdmin && <th></th>}
                     </tr></thead>
@@ -3087,8 +3135,12 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                             <td>{cellBtn(s.id, 'absent', monthRequests(s.id, 'absent').length > 0, c.rule === 'days'
                               ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không trừ)` : monthRequests(s.id, 'absent').length ? 'chờ duyệt' : '—'}</span>
                               : <><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.absDays)} ngày</div></>)}</td>
-                            <td>{vioCell(s.id, c)}
-                              {c.drinkAmt > 0 && <div style={{ fontSize: '0.72rem', marginTop: 2 }}>{cellBtn(s.id, 'drinks', !!c.drinkList?.length, <span style={{ color: '#dc2626' }}>−{formatMoney(c.drinkAmt)} nước uống</span>)}</div>}</td>
+                            <td>{vioCell(s.id, c)}</td>
+                            {/* Nước ngọt / bia nhân viên tự ghi: tổng tiền trừ + số lần, bấm để xem từng lần (chủ xoá lần ghi sai ở đó). */}
+                            <td>{c.drinkAmt > 0
+                              ? cellBtn(s.id, 'drinks', !!c.drinkList?.length, <><span style={{ color: '#dc2626' }}>−{formatMoney(c.drinkAmt)}</span>
+                                <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>{c.drinkList?.length || 0} lần</div></>)
+                              : <span style={{ color: '#94a3b8' }}>—</span>}</td>
                             <td>
                               <strong style={{color: c.net >= 0 ? '#16a34a' : '#ef4444', fontSize:'0.95rem'}}>{formatMoney(c.net)}</strong>
                               {c.locked && c.liveNet !== c.net && <div style={{ fontSize: '0.72rem', color: '#b45309' }}>nay tính ra {formatMoney(c.liveNet)}</div>}
@@ -3100,15 +3152,15 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                               <PayActions s={s} c={c} left={leftThisMonth(s)} onClose={closeOne} onReopen={reopenOne} onPaid={markPaid} onRange={setRangeFor} monthOver={payrollMonth.monthOver} canClose={hasPay(s.id) || c.net !== 0} compact /></td>}
                           </tr>
                           {detail?.id === s.id && (
-                            <tr><td colSpan="15" style={{ padding: 0, borderBottom: `2px solid ${detail.kind === 'fines' ? '#fca5a5' : '#93c5fd'}` }}>{detailPanel(s, detail.kind)}</td></tr>
+                            <tr><td colSpan="16" style={{ padding: 0, borderBottom: `2px solid ${detail.kind === 'fines' ? '#fca5a5' : '#93c5fd'}` }}>{detailPanel(s, detail.kind)}</td></tr>
                           )}
                           {isAdmin && expandedSalaryStaff === s.id && (
-                            <tr><td colSpan="15" style={{ padding: 0, borderBottom: '2px solid #3b82f6' }}>{payEditor(s)}</td></tr>
+                            <tr><td colSpan="16" style={{ padding: 0, borderBottom: '2px solid #3b82f6' }}>{payEditor(s)}</td></tr>
                           )}
                           </React.Fragment>
                         );
                       })}
-                      {filtered.length === 0 && <tr><td colSpan={isAdmin ? '15' : '14'} style={{textAlign:'center',color:'#94a3b8',padding:24}}>Chưa có nhân viên</td></tr>}
+                      {filtered.length === 0 && <tr><td colSpan={isAdmin ? '16' : '15'} style={{textAlign:'center',color:'#94a3b8',padding:24}}>Chưa có nhân viên</td></tr>}
                     </tbody>
                   </table>
                 </div>
@@ -3145,6 +3197,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   ['Người báo', <><strong>{x.reporter_name || nameOf(x.reporter_id)}</strong> <span className="rq-muted">(chỉ bạn thấy)</span></>],
                   ['Báo lúc', at(x.created_at)],
                   !pending && x.decided_by && ['Xử lý', `${x.decided_by} · ${at(x.decided_at)}`],
+                  !pending && ['NV xem', x.seen_at ? <span style={{ color: '#15803d', fontWeight: 700 }}>👁 đã xem {at(x.seen_at)}</span> : <span className="rq-muted">chưa bấm &quot;Tôi đã xem&quot;</span>],
                   x.admin_note && ['Ghi chú', x.admin_note],
                 ],
                 actions: pending && <>
