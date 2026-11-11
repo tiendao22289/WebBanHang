@@ -9,6 +9,7 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { buildQrUrl } from '@/lib/bankAccount';
 import { prepareTableStatsPayment } from '@/lib/tableStatsQuota';
+import { qrSetupProblem } from '@/lib/qrCardProblems.mjs';
 import { sendTableSummaryPrintJob, sendSmartPrintJobs, sendGiftItemPrintJob } from '@/lib/print';
 import {
   getChannel, fetchChannelConfig, calcReviewDiscount,
@@ -1816,7 +1817,8 @@ export default function TablesPage() {
       setPaymentModal(null);
       setQrAccount(null);
       setShowTransfer(false);
-      Swal.fire('Chưa thể tạo QR', 'Không đọc được đầy đủ bill. Vui lòng kiểm tra mạng rồi thử lại.', 'error');
+      const problem = qrSetupProblem(error);
+      Swal.fire(problem.title, problem.text, 'error');
     } finally {
       setQrLoading(false);
     }

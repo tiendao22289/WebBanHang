@@ -1,6 +1,7 @@
 'use client';
 
 import { statsQuotaProgress } from '@/lib/statsQuotaDisplay';
+import { cardOffWarning } from '@/lib/qrCardProblems.mjs';
 import ZaloReportPanel from '@/components/ZaloReportPanel';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
@@ -682,7 +683,10 @@ export default function SettingsPage() {
   }
 
   async function toggleActive(acc) {
-    await supabase.from('bank_accounts').update({ is_active: !acc.is_active }).eq('id', acc.id);
+    const warning = cardOffWarning(acc, secretAccounts);
+    if (warning && !window.confirm(warning)) return;
+    const { error } = await supabase.from('bank_accounts').update({ is_active: !acc.is_active }).eq('id', acc.id);
+    if (error) flash(error.message, true);
     fetchAccounts();
   }
 
