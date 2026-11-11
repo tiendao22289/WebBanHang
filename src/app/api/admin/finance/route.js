@@ -219,19 +219,20 @@ async function repairMissingBills(db) {
 
 // Bill chuyển khoản trong khoảng ngày: chưa có ảnh CK / chưa đối chiếu.
 // Chưa có ảnh = không ảnh CK và không ghi lý do lúc đóng bàn (như máy tự kiểm tra 5 giờ sáng: đóng bàn
-// có lý do được chấp nhận, báo riêng ở "Đóng bàn không chụp ảnh").
+// có lý do được chấp nhận, báo riêng ở "Đóng bàn không chụp ảnh"). Khoản ghi ở trang Mã QR / bill giấy: ảnh tờ bill
+// cũng tính là có ảnh (trang Mã QR cho chụp tờ bill thay màn hình ĐT khách; bill giấy bắt buộc ảnh tờ bill, ảnh CK không bắt buộc).
 // byDay: thêm số đếm của từng ngày (tab Hôm nay và danh sách "Các ngày trong tháng" ở cuối tab đó).
 async function transferAlerts(db, from, to, today, { byDay = false } = {}) {
   const keepFrom = photoKeepFrom(today);
   const [bills, paper] = await Promise.all([
     readAll(() => db.from('finance_revenue_ledger').select('order_id, business_date, transfer_image_path, photo_skip_reason, verified_at')
       .eq('payment_method', 'transfer').gte('business_date', from).lt('business_date', addDays(to, 1)).order('order_id')),
-    readAll(() => db.from('finance_manual_receipts').select('id, business_date, transfer_image_path, verified_at')
+    readAll(() => db.from('finance_manual_receipts').select('id, business_date, transfer_image_path, image_path, verified_at')
       .eq('payment_method', 'transfer').gte('business_date', from).lt('business_date', addDays(to, 1)).order('id'))
       .catch(error => { if (missingTable(error)) return []; throw error; }),
   ]);
   const rows = [...bills, ...paper];
-  const noPhoto = r => !r.transfer_image_path && !r.photo_skip_reason && r.business_date >= keepFrom;
+  const noPhoto = r => !r.transfer_image_path && !r.image_path && !r.photo_skip_reason && r.business_date >= keepFrom;
   const out = {
     missingPhoto: rows.filter(noPhoto).length,
     unchecked: rows.filter(r => !r.verified_at).length,
@@ -773,7 +774,7 @@ export async function GET(request) {
           && (!onlyWithImage || p.transfer_image_path || p.image_path)
           && (!transferOnly || p.payment_method === 'transfer')
           && (!account || p.account_id === account)
-          && (!missingImage || (!p.transfer_image_path && p.business_date >= keepFrom))
+          && (!missingImage || (!p.transfer_image_path && !p.image_path && p.business_date >= keepFrom))
           && (check !== 'unchecked' || !p.verified_at) && (check !== 'checked' || !!p.verified_at)).slice(0, LIMIT);
       }
       const urls = await signReceiptImages(db, [...bills.flatMap(b => [b.transfer_image_path, b.cash_image_path]), ...paper.flatMap(p => [p.image_path, p.transfer_image_path])]);

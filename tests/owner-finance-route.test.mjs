@@ -508,20 +508,22 @@ test('Tra cứu shows whole table checkouts: the table total finds them, filters
 test('transfer bills can be filtered by card, missing photo and checked state, and ticked off after checking the bank', async () => {
   const today = finance.vnDate(Date.now());
   const ACC_B = '00000000-0000-0000-0000-0000000000bb';
-  const P1 = '00000000-0000-0000-0000-000000000001';
+  const P1 = '00000000-0000-0000-0000-000000000001', P2 = '00000000-0000-0000-0000-000000000002';
   const state = empty();
   state.finance_revenue_ledger.push(
     { order_id: '00000000-0000-0000-0000-000000000b01', business_date: today, paid_at: later(-30), table_number: '3', amount: 50000, payment_method: 'transfer', account_id: ACC_A, transfer_image_path: 'ck.jpg' },
     { order_id: '00000000-0000-0000-0000-000000000b02', business_date: today, paid_at: later(-20), table_number: '4', amount: 70000, payment_method: 'transfer', account_id: ACC_B, transfer_image_path: null },
     { order_id: '00000000-0000-0000-0000-000000000b03', business_date: today, paid_at: later(-10), table_number: '5', amount: 90000, payment_method: 'cash' });
   state.finance_manual_receipts = [
-    { id: P1, business_date: today, received_at: later(-5), table_label: '6', amount: 30000, payment_method: 'transfer', account_id: ACC_B, image_path: 'b.jpg', transfer_image_path: null }];
+    // Trang Mã QR / bill giấy: ảnh tờ bill cũng tính là có ảnh (P1); không ảnh nào mới là thiếu (P2).
+    { id: P1, business_date: today, received_at: later(-5), table_label: '6', amount: 30000, payment_method: 'transfer', account_id: ACC_B, image_path: 'b.jpg', transfer_image_path: null },
+    { id: P2, business_date: today, received_at: later(-3), table_label: '7', amount: 20000, payment_method: 'transfer', account_id: ACC_A, image_path: null, transfer_image_path: null, verified_at: later(-1), verified_by: 'Chủ quán' }];
   const api = load({ state });
   const ids = async q => (await get(api, `search=1&from=${today}&to=${today}&${q}`)).body.results.map(r => r.id);
 
   let r = (await get(api, `search=1&from=${today}&to=${today}`)).body;
-  assert.deepEqual(plain(r.alerts), { missingPhoto: 2, unchecked: 3 }, 'cash bills never count');
-  assert.deepEqual(await ids('image=missing'), [P1, '00000000-0000-0000-0000-000000000b02']);
+  assert.deepEqual(plain(r.alerts), { missingPhoto: 2, unchecked: 3 }, 'cash bills never count; a paper / QR transfer with a bill photo has a photo');
+  assert.deepEqual(await ids('image=missing'), [P2, '00000000-0000-0000-0000-000000000b02']);
   assert.deepEqual(await ids(`account=${ACC_B}`), [P1, '00000000-0000-0000-0000-000000000b02']);
   assert.deepEqual(await ids(`account=${ACC_A}&type=cash`), [], 'a card filter means transfer bills only');
 
@@ -531,7 +533,7 @@ test('transfer bills can be filtered by card, missing photo and checked state, a
   assert.equal((await post(api, { action: 'verify', kind: 'paper', id: P1 })).status, 200);
   assert.equal((await post(api, { action: 'verify', kind: 'bill', id: '00000000-0000-0000-0000-000000000b03' })).status, 404, 'cash bills cannot be ticked');
   assert.deepEqual(await ids('check=unchecked'), ['00000000-0000-0000-0000-000000000b02']);
-  assert.deepEqual(await ids('check=checked'), [P1, '00000000-0000-0000-0000-000000000b01']);
+  assert.deepEqual(await ids('check=checked'), [P2, P1, '00000000-0000-0000-0000-000000000b01']);
   const checked = (await get(api, `search=1&from=${today}&to=${today}&check=checked`)).body.results[0];
   assert.ok(checked.verifiedAt && checked.verifiedBy === 'Chủ quán');
 

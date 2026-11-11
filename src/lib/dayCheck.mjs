@@ -32,7 +32,8 @@ export function dayCheck({ date, ledger = [], paper = [], unrecorded = [], recov
   if (date >= keepPhotosFrom) {
     add('ck_no_photo', 'Bill chuyển khoản chưa có ảnh', [
       ...ledger.filter(r => r.payment_method === 'transfer' && !r.transfer_image_path && !r.photo_skip_reason).map(bill),
-      ...paper.filter(r => r.payment_method === 'transfer' && !r.transfer_image_path && !r.images_purged_at).map(r => ({ ...bill(r), table: r.table_label || 'Bill giấy' })),
+      // Trang Mã QR / bill giấy: ảnh tờ bill cũng tính là có ảnh (Mã QR cho chụp tờ bill thay màn hình ĐT khách).
+      ...paper.filter(r => r.payment_method === 'transfer' && !r.transfer_image_path && !r.image_path && !r.images_purged_at).map(r => ({ ...bill(r), table: r.table_label || 'Bill giấy' })),
     ]);
   }
   add('no_photo', 'Đóng bàn không chụp ảnh', ledger.filter(r => r.photo_skip_reason)
