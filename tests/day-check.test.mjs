@@ -12,7 +12,9 @@ test('the nightly check lists only what needs a look: missing bills, transfer ph
     { order_id: 'c', table_number: '3', paid_at: '2026-10-24T13:00:00Z', amount: 150000, payment_method: 'cash', photo_skip_reason: 'Máy hỏng camera', photo_by: 'Lan' },
     { order_id: 'd', table_number: '4', paid_at: '2026-10-24T13:10:00Z', amount: 90000, payment_method: 'transfer', transfer_image_path: null, photo_skip_reason: 'Khách vội' },
   ];
-  const paper = [{ id: 'p', table_label: 'Bàn 9', received_at: '2026-10-24T14:00:00Z', amount: 50000, payment_method: 'transfer', transfer_image_path: null }];
+  const paper = [{ id: 'p', table_label: 'Bàn 9', received_at: '2026-10-24T14:00:00Z', amount: 50000, payment_method: 'transfer', transfer_image_path: null },
+    // Trang Mã QR chụp tờ bill thay màn hình ĐT khách: có ảnh, không báo thiếu.
+    { id: 'q', table_label: 'Bàn 10', received_at: '2026-10-24T14:10:00Z', amount: 70000, payment_method: 'transfer', transfer_image_path: null, image_path: 'bill-q.jpg' }];
   const loss = lossData({ printed: new Map([['x', [[{ id: 'i', name: 'Tôm', quantity: 1, unit_price: 80000 }]]]]),
     cancelled: [{ id: 'x', table_number: 7, cancelled_at: '2026-10-24T14:05:00Z', cancelled_by_name: 'Lan', total_amount: 80000 }] });
   const check = dayCheck({ date: D, ledger, paper, loss,
@@ -30,7 +32,7 @@ test('the nightly check lists only what needs a look: missing bills, transfer ph
   assert.equal(byKey.recovered.level, 'info');
   assert.equal(check.problems, 5, 'a recovered bill is only for information');
   assert.equal(check.ok, false);
-  assert.deepEqual(check.bills, { count: 5, amount: 790000 });
+  assert.deepEqual(check.bills, { count: 6, amount: 860000 });
 
   const lines = dayCheckLines(check);
   assert.equal(lines[0], '🤖 Máy tự kiểm tra: 5 việc cần xem');

@@ -490,7 +490,9 @@ function DayTasks({ date, detail, checking, onSearch, onOpenNotes, onOpenCheck, 
   const transfer = detail.bills.filter(b => b.payment_method === 'transfer');
   const paperTransfer = (detail.paperBills || []).filter(b => b.paymentMethod === 'transfer');
   // Đóng bàn có ghi lý do không chụp được thì không tính "chưa có ảnh" (như máy tự kiểm tra 5 giờ sáng).
-  const noPhoto = transfer.filter(b => !b.transfer_image_url && !b.photo_skip_reason).length + paperTransfer.filter(b => !b.transferImageUrl && !b.imagesPurged).length;
+  // Trang Mã QR / bill giấy: ảnh tờ bill cũng tính là có ảnh (như máy chủ đếm).
+  const noPhoto = transfer.filter(b => !b.transfer_image_url && !b.photo_skip_reason).length
+    + paperTransfer.filter(b => !b.transferImageUrl && !b.imageUrl && !b.imagesPurged).length;
   const unchecked = transfer.filter(b => !b.verified_at).length + paperTransfer.filter(b => !b.verified).length;
   const badNotes = detail.notes.filter(n => (n.mismatch && n.mismatch !== 0) || n.lineWarnings?.length || n.suspicious?.length).length;
   const check = detail.check;
