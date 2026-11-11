@@ -19,6 +19,7 @@ import {
   ScanQrCode,
   Ticket,
   ClipboardList,
+  Bell,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import QrClockScanner from '@/components/QrClockScanner';
@@ -29,7 +30,9 @@ import { lockedSection } from '@/lib/adminLockPaths.mjs';
 import { allowedPaths, canOpenPath, roleLabel } from '@/lib/staffRoles.mjs';
 import { useBuildRefresh } from '@/lib/useBuildRefresh';
 import { usePayrollPending } from '@/lib/usePayrollPending';
+import { usePolledCount } from '@/lib/usePolledCount';
 import { askOpenRequests, pendingBadgeText, walletHref } from '@/lib/payrollPending.mjs';
+import { NOTICES_HREF, NOTICES_REFRESH_EVENT } from '@/lib/errorNotices.mjs';
 
 const ALL_NAV = [
   { href: '/admin/tables', label: 'Quản lý bàn', icon: LayoutGrid },
@@ -42,10 +45,14 @@ const ALL_NAV = [
   { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
   // Đơn từ của nhân viên / quản lý: tự ghi lỗi, chi hộ quán, ứng lương, báo nghỉ (chủ quán duyệt ở Lương → Yêu cầu).
   { href: '/admin/payroll/don', label: 'Đơn từ', icon: ClipboardList, staffOnly: true },
+  // Thông báo lỗi của nhân viên / quản lý: lần bị báo lỗi chủ đã xử lý, tháng chốt lương có phạt — bấm "Tôi đã xem" từng cái.
+  { href: NOTICES_HREF, label: 'Thông báo lỗi', icon: Bell, staffOnly: true },
   { href: '/admin/stats', label: 'Thống kê', icon: BarChart3 },
   { href: '/admin/settings', label: 'Cài đặt', icon: Settings, adminOnly: true },
   { href: '/admin/logs', label: 'Lịch sử bàn', icon: History, adminOnly: true },
 ];
+
+const pickUnseen = j => (j?.ready === false ? 0 : j?.unseen);
 
 // Nhân viên / quản lý chỉ thấy các trang vai trò của mình được mở (src/lib/staffRoles.mjs).
 const navFor = role => (allowedPaths(role) ? ALL_NAV.filter(n => canOpenPath(role, n.href)) : ALL_NAV.filter(n => !n.staffOnly));
@@ -64,6 +71,8 @@ export default function AdminLayout({ children }) {
 
   // Số đơn chờ duyệt ở Lương → Yêu cầu: hiện trên biểu tượng ví để chủ quán biết vào duyệt (chỉ chủ quán duyệt được).
   const payrollPending = usePayrollPending(user?.role === 'admin');
+  // Nhân viên / quản lý: số thông báo lỗi chưa bấm "Tôi đã xem" (số đỏ trên chuông).
+  const noticesUnseen = usePolledCount('/api/admin/workforce?notices=1&count=1', !!user && user.role !== 'admin', { pick: pickUnseen, refreshEvent: NOTICES_REFRESH_EVENT });
 
   // Login form state
   const [phone, setPhone] = useState('');
@@ -265,18 +274,19 @@ export default function AdminLayout({ children }) {
             // Sáng mục khớp đường dẫn dài nhất (/admin/payroll/don sáng "Đơn từ", không sáng cả "Tính Lương").
             const best = all.filter(n => pathname === n.href || pathname.startsWith(`${n.href}/`)).sort((a, b) => b.href.length - a.href.length)[0];
             const isActive = best ? best.href === item.href : pathname.startsWith(item.href);
-            // Ví (Tính Lương) có đơn chờ duyệt: hiện số, bấm là mở thẳng tab Yêu cầu.
-            const badge = item.href === '/admin/payroll' ? pendingBadgeText(payrollPending) : '';
-            const label = badge ? `${item.label} — ${payrollPending} đơn chờ duyệt` : item.label;
+            // Ví (Tính Lương) có đơn chờ duyệt: hiện số, bấm là mở thẳng tab Yêu cầu. Chuông (Thông báo lỗi): số chưa xem.
+            const wallet = item.href === '/admin/payroll' && user.role === 'admin';
+            const badge = wallet ? pendingBadgeText(payrollPending) : item.href === NOTICES_HREF ? pendingBadgeText(noticesUnseen) : '';
+            const label = !badge ? item.label : wallet ? `${item.label} — ${payrollPending} đơn chờ duyệt` : `${item.label} — ${noticesUnseen} chưa xem`;
             return (
               <Link
                 key={item.href}
-                href={badge ? walletHref(payrollPending) : item.href}
+                href={wallet && badge ? walletHref(payrollPending) : item.href}
                 className={`nav-item ${isActive ? 'active' : ''}`}
                 title={label}
                 aria-label={label}
                 // Xin mở tab Yêu cầu (nhớ cả khi trang Lương còn chờ mã PIN). Đang ở trang Lương thì không chuyển trang, trang tự đổi tab.
-                onClick={badge ? e => { askOpenRequests(); if (pathname === item.href) e.preventDefault(); } : undefined}
+                onClick={wallet && badge ? e => { askOpenRequests(); if (pathname === item.href) e.preventDefault(); } : undefined}
               >
                 <Icon size={20} />
                 {badge && <b className="nav-badge" aria-hidden="true">{badge}</b>}
