@@ -185,19 +185,27 @@ test('only the server (logged-in staff) can take a cart; the browser key cannot 
 });
 
 // ── Trang Bàn + trang gọi món ──
-test('Bàn page: tapping 🛒 opens the cart (view only) with Gửi hộ / Sửa rồi gửi; sending takes the cart first', () => {
+test('Bàn page: tapping 🛒 opens the cart; −/+ and "+ Thêm món" edit it right there; sending takes the cart first', () => {
   const page = readFileSync(new URL('../src/app/admin/tables/page.js', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/app/admin/tables/tables.css', import.meta.url), 'utf8');
   assert.equal(page.match(/onClick=\{\(e\) => \{ e\.stopPropagation\(\); openCartView\(table\); \}\}/g)?.length, 4, '🛒 / quên gửi trên ô bàn điện thoại + PC');
-  assert.match(page, /onClick=\{\(\) => editCustomerCart\(table, cart\)\}>✏️ Sửa rồi gửi/);
+  assert.doesNotMatch(page, /Sửa rồi gửi<|editCustomerCart/, 'chủ quán: sửa ngay trong khung, không mở trang khác');
+  // −/+ ngay trên món của giỏ khách; giỏ đã sửa thì −/+ trên giỏ nháp; + Thêm món tìm món thêm vào.
+  assert.match(page, /stepper\(r\.qty, \(\) => editCartItem\(table, cart, r\.key, -1\), \(\) => editCartItem\(table, cart, r\.key, 1\)\)/);
+  assert.match(page, /stepper\(d\.qty, \(\) => changeDraftLineFor\(table\.id, d\.lineId, -1\), \(\) => changeDraftLineFor\(table\.id, d\.lineId, 1\)\)/);
+  assert.match(page, /onClick=\{\(\) => addMenuItemToCartDraft\(table, m\)\}/);
+  assert.match(page, /onClick=\{\(\) => sendCartDraft\(table\)\}/);
   assert.match(page, /onClick=\{\(\) => sendCustomerCartNow\(table, cart\)\}/);
+  // Bảng chọn LOẠI / KHẨU VỊ (z 1100) phải nổi trên khung giỏ khách.
+  assert.match(css, /\.cart-view-backdrop \{[^}]*z-index: 1090;/);
+  // Sửa chưa nhận giỏ của khách (điện thoại khách giữ nguyên tới lúc gửi).
+  const edit = page.slice(page.indexOf('function activeCartLinks('), page.indexOf('async function sendCartDraft('));
+  assert.doesNotMatch(edit, /takeCustomerCart/);
   // Nhận giỏ (máy chủ, có kiểm đăng nhập) trước khi ghi bill; khách vừa sửa / đã gửi → bỏ món giỏ khách khỏi nháp.
   const send = page.slice(page.indexOf('async function sendDraftLines('), page.indexOf('function handleConfirmOptions('));
   assert.ok(send.indexOf('await takeCustomerCart(link)') > 0 && send.indexOf('await takeCustomerCart(link)') < send.indexOf("supabase.rpc('confirm_draft_order'"));
   assert.match(send, /removeSentLines\(cur, \[\.\.\.link\.lineIds\]\)/);
   assert.match(page, /fetchWithTimeout\('\/api\/admin\/customer-cart'/);
-  // Sửa rồi gửi chỉ đưa vào giỏ nháp, chưa nhận giỏ của khách.
-  const edit = page.slice(page.indexOf('function editCustomerCart('), page.indexOf('async function sendDraftLines('));
-  assert.doesNotMatch(edit.replace(/sendCustomerCartNow\(table, cart\)/, ''), /takeCustomerCart/);
   const route = readFileSync(new URL('../src/app/api/admin/customer-cart/route.js', import.meta.url), 'utf8');
   assert.match(route, /getStaffSession\(request\)/);
   assert.match(route, /rpc\('take_customer_cart'/);

@@ -330,7 +330,7 @@
 .cart-view-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: 1090; /* trên khung gọi món của bàn (1050), dưới bảng chọn LOẠI / KHẨU VỊ (1100) */
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -463,8 +463,152 @@
 
 .cart-view-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.cart-view-edit { border: 1.5px solid #93c5fd; background: #eff6ff; color: #1d4ed8; }
 .cart-view-send { border: 0; background: linear-gradient(135deg, #16a34a, #15803d); color: #fff; }
+
+/* Sửa ngay trong khung: −/+ từng món, "+ Thêm món", Gửi hộ cả giỏ đã sửa */
+.cart-view-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.cart-view-step button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #bfdbfe;
+  border-radius: 50%;
+  background: #fff;
+  color: #1d4ed8;
+  font-size: 1.05rem;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cart-view-step button:disabled { opacity: 0.5; cursor: not-allowed; }
+.cart-view-step b { min-width: 18px; text-align: center; font-size: 0.9rem; color: #1d4ed8; }
+
+.cart-view-cart.editing { border-color: #86efac; background: #f0fdf4; }
+
+.cart-view-reset {
+  padding: 3px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  background: #fff;
+  color: #6b7280;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cart-view-added { font-size: 0.7rem; font-weight: 700; color: #15803d; }
+
+.cart-view-info {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.cart-view-info.off { background: #fef2f2; color: #b91c1c; }
+
+.cart-view-add { margin-bottom: 8px; }
+
+.cart-view-add-btn {
+  width: 100%;
+  padding: 10px;
+  border: 1.5px dashed #93c5fd;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.cart-view-add-head { display: flex; gap: 8px; }
+
+.cart-view-add-head input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1.5px solid #93c5fd;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.cart-view-add-head button {
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: #1d4ed8;
+  color: #fff;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.cart-view-add-list {
+  max-height: 240px;
+  margin: 6px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.cart-view-add-list li + li { border-top: 1px solid #f1f5f9; }
+
+.cart-view-add-list button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  background: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cart-view-add-name { flex: 1; min-width: 0; font-size: 0.86rem; font-weight: 700; color: #111827; }
+.cart-view-add-price { font-size: 0.78rem; color: #6b7280; white-space: nowrap; }
+
+.cart-view-add-plus {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #1d4ed8;
+  color: #fff;
+  font-weight: 800;
+  line-height: 26px;
+  text-align: center;
+}
+
+.cart-view-add-none { padding: 10px; color: #9ca3af; font-size: 0.82rem; text-align: center; }
+
+.cart-view-send-all {
+  margin: 0 14px 8px;
+  padding: 13px 10px;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.cart-view-send-all:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .cart-view-dismiss {
   margin: 0 14px calc(12px + env(safe-area-inset-bottom));
