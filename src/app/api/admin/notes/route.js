@@ -318,17 +318,31 @@ function logInto(changes, note, user, text, edit = d => d) {
 /** Phiếu sau khi ghi (trang Sổ tay hiện lại ngay). */
 const fresh = async (db, id) => (await db.from('staff_notes').select('*').eq('id', id).single()).data;
 
+// Máy chủ DB trả tối đa 1000 dòng mỗi lần: quá số đó thì phiếu cũ (nợ cũ, tiền thừa cũ) bị bỏ sót và số
+// thống kê sai → đọc theo trang cho đủ. build() phải có thứ tự cố định (thêm id) để các trang không trùng / sót.
+const PAGE = 1000;
+async function readPages(build) {
+  const rows = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await build().range(from, from + PAGE - 1);
+    if (error) return { data: rows, error };
+    rows.push(...(data || []));
+    if (!data || data.length < PAGE) return { data: rows, error: null };
+  }
+}
+
 export async function GET(request) {
   try {
     const s = await getStaffSession(request);
     if (s.code !== 200) return fail(s.code === 503 ? 'Không kiểm tra được đăng nhập.' : 'Cần đăng nhập.', s.code);
     const db = staffDatabase(s.user.id);
-    let q = db.from('staff_notes').select('*, staff ( full_name, phone )').order('created_at', { ascending: false });
-    if (!seesAllNotes(s.user.role)) q = q.eq('staff_id', s.user.id);
-    const { data: notes, error } = await q;
+    const { data: notes, error } = await readPages(() => {
+      const q = db.from('staff_notes').select('*, staff ( full_name, phone )').order('created_at', { ascending: false }).order('id');
+      return seesAllNotes(s.user.role) ? q : q.eq('staff_id', s.user.id);
+    });
     if (error) throw error;
     let payments = [];
-    const p = await db.from('staff_note_payments').select('id, note_id, item_index, amount, paid_at, paid_from_note_id, created_by_name').order('paid_at');
+    const p = await readPages(() => db.from('staff_note_payments').select('id, note_id, item_index, amount, paid_at, paid_from_note_id, created_by_name').order('paid_at').order('id'));
     if (!p.error) {
       const ids = new Set((notes || []).map(n => n.id));
       payments = (p.data || []).filter(x => ids.has(x.note_id) || ids.has(x.paid_from_note_id));

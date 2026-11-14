@@ -5,8 +5,8 @@
  * trang Sổ tay so với cộng thẳng và với Sổ thu chi.
  * Kho mã công khai: KHÔNG in tên, SĐT, nội dung phiếu — chỉ mã phiếu 8 ký tự, giờ VN, số tiền, NV-xxxx.
  */
-import { noteTotals } from './notesMath.mjs';
-import { lineDebtBase, noteMoney, paymentItemIndex } from './notesDebts.mjs';
+import { lineWarnings, noteTotals, parsePrice, parseQty } from './notesMath.mjs';
+import { handoverTotals, lineDebtBase, noteMoney, openLeftovers, openShortages, paymentItemIndex } from './notesDebts.mjs';
 import { notesSummary } from './notesSummary.mjs';
 
 const TOLERANCE = 1000; // lệch dưới 1.000đ coi như khớp (làm tròn)
@@ -36,7 +36,7 @@ export function notesAudit({ notes = [], payments = [], months = [] }) {
     counts: { notes: notes.length, expense: 0, withItems: 0, payments: payments.length },
     totalsMismatch: [], paidDebtMismatch: [], linePaidMismatch: [], overPaidLines: [], unmatchedPayments: [],
     orphanPayments: [], leftoverOverUsed: [], shortOverSettled: [], fundedWithoutMoney: [],
-    carryMismatch: [], offsetMismatch: [], costedOtherTypes: [], months: [],
+    carryMismatch: [], offsetMismatch: [], costedOtherTypes: [], suspiciousLines: [], months: [],
   };
   const push = (key, row) => { if (out[key].length < MAX_ROWS) out[key].push(row); else out[`${key}More`] = (out[`${key}More`] || 0) + 1; };
   const paysOf = new Map();
@@ -77,6 +77,10 @@ export function notesAudit({ notes = [], payments = [], months = [] }) {
         if (idx < 0) { push('unmatchedPayments', { ...base, payment: short(p.id), at: vnTime(p.paid_at), amount: Number(p.amount) || 0 }); continue; }
         linePays.set(idx, (linePays.get(idx) || 0) + (Number(p.amount) || 0));
       }
+      // Dòng gõ giá / số lượng nghi sai (giá dưới 1.000đ, "k" với số quá dài, số lượng nhiều số): tiền dòng có thể sai.
+      const odd = items.map((item, idx) => ({ idx, item })).filter(({ item }) => String(item?.name || '').trim() && lineWarnings(item).length);
+      if (odd.length) push('suspiciousLines', { ...base, lines: odd.map(({ idx }) => idx + 1),
+        amounts: odd.map(({ item }) => Math.round(parsePrice(item.price) * parseQty(item.qty))) });
       items.forEach((item, idx) => {
         if (!String(item?.name || '').trim()) return;
         const paid = Number(item.paid_amount) || 0;
@@ -126,16 +130,44 @@ export function notesAudit({ notes = [], payments = [], months = [] }) {
     const givenDirect = expense.reduce((a, n) => a + (Number(readContent(n.content)?.input_amount) || 0), 0);
     const paidInMonth = payments.filter(p => { const t = Date.parse(p.paid_at); return t >= range.start.getTime() && t < range.end.getTime(); })
       .reduce((a, p) => a + (Number(p.amount) || 0), 0);
+    // Tiền của các phiếu trong tháng so với tiền chủ đưa: phiếu dư (đã trả chủ / chuyển / giữ lại bù / còn cầm),
+    // phiếu thiếu (người đi chợ bỏ thêm, đã bù / chưa bù), phiếu không ghi tiền chủ đưa.
+    const cash = { duPhieu: 0, du: 0, daTraChu: 0, chuyenPhieuSau: 0, giuLaiBu: 0, conCam: 0, thieuPhieu: 0, thieu: 0, daBu: 0, chuaBu: 0, khongGhiTienGiao: 0 };
+    for (const n of expense) {
+      const m = noteMoney(n, payments);
+      if (m.given + m.carriedIn <= 0) { cash.khongGhiTienGiao += 1; continue; }
+      if (m.balance >= 0) {
+        cash.duPhieu += 1; cash.du += m.balance; cash.daTraChu += m.returned; cash.chuyenPhieuSau += m.carriedOut; cash.giuLaiBu += m.offsetOut; cash.conCam += m.left;
+      } else {
+        cash.thieuPhieu += 1; cash.thieu += -m.balance; cash.daBu += m.settled; cash.chuaBu += m.short;
+      }
+    }
+    // Từng ngày cộng lại phải bằng cả tháng (các ô cộng dồn được).
+    const dayKeys = ['given', 'goods', 'cashNow', 'debtPaid', 'giveBack'];
+    const daysSum = Object.fromEntries(dayKeys.map(k => [k, 0]));
+    for (let t = range.start.getTime(); t < range.end.getTime(); t += 86400000) {
+      const d = notesSummary(notes, payments, { start: new Date(t), end: new Date(t + 86400000) });
+      for (const k of dayKeys) daysSum[k] += d[k];
+    }
     out.months.push({
       month, notes: inMonth.length,
       tiles: { chuDua: s.given, tienHang: s.goods, chiTienMat: s.cash, traNo: s.debtPaid, conNo: s.debtLeft, traLaiChu: s.giveBack },
       direct: { chuDua: givenDirect, tienHangSoThuChi: goodsDirect, traNoTrongThang: paidInMonth },
       lech: { tienHang: s.goods - goodsDirect, chuDua: s.given - givenDirect },
+      lechCongTungNgay: Object.fromEntries(dayKeys.map(k => [k, daysSum[k] - s[k]])),
+      tienPhieu: cash,
     });
   }
+  // Ô "Còn phải đưa chủ" tới giờ (như trang Sổ tay: tiền thừa từ 01/10, tiền bỏ thêm từ 01/11, tính theo từng người).
+  const h = handoverTotals(openLeftovers(notes, payments, '2026-10-01'), openShortages(notes, payments, '2026-11-01'));
+  out.now = { tienThuaDangCam: h.held, tienBoThemChuaBu: h.short, conPhaiDuaChu: h.toOwner, chuConNoNguoiDiCho: h.owes };
+  const dayDrift = out.months.filter(m => Object.values(m.lechCongTungNgay).some(v => Math.abs(v) >= TOLERANCE)).map(m => `lechCongTungNgay ${m.month}`);
+  const tileDrift = out.months.filter(m => Math.abs(m.lech.tienHang) >= TOLERANCE || Math.abs(m.lech.chuDua) >= TOLERANCE).map(m => `lech o thang ${m.month}`);
   const problems = ['totalsMismatch', 'paidDebtMismatch', 'linePaidMismatch', 'overPaidLines', 'unmatchedPayments', 'orphanPayments',
     'leftoverOverUsed', 'shortOverSettled', 'fundedWithoutMoney', 'carryMismatch', 'offsetMismatch', 'costedOtherTypes']
     .filter(k => out[k].length).map(k => `${k}: ${out[k].length + (out[`${k}More`] || 0)}`);
-  out.summary = problems.length ? problems : ['Không thấy lệch'];
+  out.summary = [...problems, ...tileDrift, ...dayDrift].length ? [...problems, ...tileDrift, ...dayDrift] : ['Không thấy lệch'];
+  // Dòng gõ nghi sai không phải lệch sổ, chỉ cần người ghi xem lại.
+  if (out.suspiciousLines.length) out.summary.push(`xem lại giá gõ: ${out.suspiciousLines.length + (out.suspiciousLinesMore || 0)} phiếu`);
   return out;
 }

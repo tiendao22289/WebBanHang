@@ -52,3 +52,21 @@ test('each kind of mismatch is reported', () => {
   assert.equal(r.costedOtherTypes.length, 1);
   assert.ok(r.summary.length >= 7);
 });
+
+test('the check adds up each day against the month, splits leftovers / top-ups, and flags odd prices', () => {
+  const notes = [
+    note(A, '2026-11-01T03:00:00Z', { amount: 300000 }, { input_amount: 500000, carried_out: [{ to_note_id: B, amount: 150000 }],
+      items: [{ name: 'Ốc hương', price: '300k', qty: '1', paymentStatus: 'full' }] }),
+    note(B, '2026-11-02T03:00:00Z', { amount: 250 }, { input_amount: 0, carried_in: [{ from_note_id: A, amount: 150000 }],
+      items: [{ name: 'Hàu', price: '250', qty: '1' }] }),
+    note(C, '2026-11-20T03:00:00Z', { amount: 400000 }, { input_amount: 300000, items: [{ name: 'Mực', price: '400k', qty: '1' }] }),
+  ];
+  const r = notesAudit({ notes, payments: [], months: ['2026-11'] });
+  const m = r.months[0];
+  assert.ok(Object.values(m.lechCongTungNgay).every(v => v === 0), 'the days add up to the month');
+  assert.deepEqual([m.tienPhieu.duPhieu, m.tienPhieu.du, m.tienPhieu.chuyenPhieuSau, m.tienPhieu.conCam], [2, 349750, 150000, 199750]);
+  assert.deepEqual([m.tienPhieu.thieuPhieu, m.tienPhieu.thieu, m.tienPhieu.chuaBu], [1, 100000, 100000]);
+  assert.deepEqual(r.suspiciousLines.map(s => [s.note, s.lines, s.amounts]), [['bbbbbbbb', [1], [250]]], 'price "250" is 250đ — probably a missing k');
+  assert.deepEqual(r.now, { tienThuaDangCam: 199750, tienBoThemChuaBu: 100000, conPhaiDuaChu: 99750, chuConNoNguoiDiCho: 0 }, 'same person: top-up taken off the leftover');
+  assert.ok(r.summary.some(s => s.startsWith('xem lại giá gõ')));
+});
