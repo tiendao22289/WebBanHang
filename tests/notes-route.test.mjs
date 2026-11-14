@@ -689,3 +689,13 @@ test('a market note with money cannot be turned into another kind of note', asyn
   assert.equal(state.staff_notes[0].note_type, 'expense');
   assert.equal(state.staff_notes[0].amount, 800000);
 });
+
+test('the notes page gets every note and payment even past 1000 rows (old debts are not dropped)', async () => {
+  const state = { staff_notes: Array.from({ length: 1003 }, (_, i) => ({ id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, staff_id: STAFF.id, note_type: 'expense',
+    content: 'x', amount: 1000, debt: 0, paid_debt: 0, created_at: new Date(Date.UTC(2026, 0, 1) + i * 3600000).toISOString() })), staff_note_payments: [], maxRows: 1000 }; // như máy chủ DB: tối đa 1000 dòng một lần
+  state.staff_note_payments = state.staff_notes.slice(0, 1002).map((n, i) => ({ id: `p${i}`, note_id: n.id, item_index: null, amount: 1000, paid_at: n.created_at, paid_from_note_id: null }));
+  const r = plain(await load(state).GET({}));
+  assert.equal(r.body.notes.length, 1003);
+  assert.equal(new Set(r.body.notes.map(n => n.id)).size, 1003, 'no note twice');
+  assert.equal(r.body.payments.length, 1002);
+});

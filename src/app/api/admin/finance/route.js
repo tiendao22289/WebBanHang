@@ -127,7 +127,7 @@ function noteView(note) {
 // Nợ Sổ tay còn lại tới giờ (mọi phiếu chưa trả hết): tổng + theo chủ nợ (người bán) — như trang Sổ tay.
 async function openNoteDebts(db) {
   const rows = await readAll(() => db.from('staff_notes').select('id, created_at, content, debt, paid_debt, staff_id, staff ( full_name )')
-    .eq('note_type', 'expense').gt('debt', 0).order('created_at', { ascending: true }));
+    .eq('note_type', 'expense').gt('debt', 0).order('created_at', { ascending: true }).order('id'));
   const lines = allOpenDebts(rows.filter(n => (Number(n.debt) || 0) > (Number(n.paid_debt) || 0)));
   const by = {};
   for (const l of lines) { const k = l.creditor || 'Không ghi người bán'; by[k] = (by[k] || 0) + l.left; }
@@ -138,7 +138,7 @@ async function openNoteDebts(db) {
 const notesBetween = (db, fromIso, toIso) => readAll(() => db.from('staff_notes')
   .select('id, created_at, note_type, amount, debt, paid_debt, content, staff ( full_name )')
   .eq('note_type', 'expense').gte('created_at', fromIso).lt('created_at', toIso)
-  .order('created_at', { ascending: true }));
+  .order('created_at', { ascending: true }).order('id'));
 
 // Mục / tab tự đặt (kể cả đã ẩn, để khoản cũ vẫn có tên). Chưa cài bảng → [].
 const readCategories = db => db.from('finance_categories').select('*').order('created_at')
@@ -481,8 +481,9 @@ async function staffInputs(db, { from, to, range }) {
 async function notesInputs(db, range) {
   const [allNotes, payments, deleted, staff] = await Promise.all([
     readAll(() => db.from('staff_notes').select('id, staff_id, note_type, content, amount, debt, paid_debt, created_at, staff ( full_name )')
-      .lt('created_at', range.end.toISOString()).order('created_at')),
-    db.from('staff_note_payments').select('note_id, item_index, amount, paid_at, paid_from_note_id, created_by_name').then(r => (r.error ? [] : r.data || [])),
+      .lt('created_at', range.end.toISOString()).order('created_at').order('id')),
+    // Đọc theo trang: quá 1000 lần trả nợ thì không sót lần nào (số trả nợ, còn nợ tính từ đây).
+    readAll(() => db.from('staff_note_payments').select('note_id, item_index, amount, paid_at, paid_from_note_id, created_by_name').order('paid_at').order('id')).catch(() => []),
     // Phiếu bị xoá trong khoảng (nhật ký trong DB).
     db.from('staff_data_audit').select('changed_at, old_row, staff_id').eq('table_name', 'staff_notes').eq('op', 'DELETE')
       .gte('changed_at', range.start.toISOString()).lt('changed_at', range.end.toISOString()).then(r => (r.error ? [] : r.data || [])),

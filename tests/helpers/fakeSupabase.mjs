@@ -30,7 +30,7 @@ export function fakeDb(state) {
     return { data: structuredClone(created), error: null };
   },
   from(table) {
-    let op = 'read', values, single = false, maybe = false, max = Infinity, skip = 0, conflict = 'id';
+    let op = 'read', values, single = false, maybe = false, max = state.maxRows ?? Infinity, skip = 0, conflict = 'id';
     const conditions = [], orders = [];
     const q = {
       select() { return q; },
@@ -57,7 +57,7 @@ export function fakeDb(state) {
       },
       order(k, o) { orders.push([k, o?.ascending !== false]); return q; },
       limit(n) { max = n; return q; },
-      range(a, b) { skip = a; max = b - a + 1; return q; },
+      range(a, b) { skip = a; max = Math.min(b - a + 1, state.maxRows ?? Infinity); return q; },
       maybeSingle() { maybe = true; return q; },
       single() { single = true; return q; },
       insert(v) { op = 'insert'; values = v; return q; },
