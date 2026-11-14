@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { KITCHEN_GRACE_MS, resolvePrintCategory, kitchenPrinterFor, isKitchenItem, unsentKitchenItems, nextKitchenCheckIn } from '../src/lib/kitchenTicket.mjs';
+import { KITCHEN_GRACE_MS, resolvePrintCategory, kitchenPrinterFor, isKitchenItem, unsentKitchenItems, nextKitchenCheckIn, manualPrintJobs } from '../src/lib/kitchenTicket.mjs';
 
 // Giống máy in thật của quán: máy quầy (mặc định + hoá đơn) nhận nước/bia, 2 máy bếp.
 const PRINTERS = [
@@ -58,4 +58,21 @@ test('DB chưa cài migration (không có cột kitchen_sent_at) thì không bá
   const { kitchen_sent_at, ...old } = item('a', 'cat-nuong');
   assert.deepEqual(unsentKitchenItems([old], PRINTERS, optionsOf, NOW), []);
   assert.equal(nextKitchenCheckIn([old], NOW), null);
+});
+
+test('nút In món: món bếp ra máy bếp, nước / bia / khăn ra máy quầy, mỗi máy 1 phiếu đúng các dòng chọn', () => {
+  const items = [
+    item('bia', 'cat-bia', { created_at: ago(30) }),
+    item('khan', null, { created_at: ago(50) }),
+    item('so', 'cat-nuong', { created_at: ago(40) }),
+    item('oc', null, { menu_item_id: 'm-oc', item_options: [{ name: 'Kiểu', choice: 'Hấp' }] }),
+    { id: 'giam', menu_item_id: null, unit_price: -20000, item_options: [] },
+  ];
+  const jobs = manualPrintJobs('o1', items, PRINTERS, optionsOf);
+  assert.deepEqual(jobs, [
+    { order_id: 'o1', printer_id: 'xao', only_item_ids: ['oc'], status: 'pending' },
+    { order_id: 'o1', printer_id: 'quay', only_item_ids: ['khan', 'bia'], status: 'pending' },
+    { order_id: 'o1', printer_id: 'nuong', only_item_ids: ['so'], status: 'pending' },
+  ]);
+  assert.deepEqual(manualPrintJobs('o1', [], PRINTERS, optionsOf), []);
 });

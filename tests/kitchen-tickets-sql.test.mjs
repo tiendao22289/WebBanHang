@@ -56,6 +56,8 @@ await db.exec(migration('confirm_draft_order_lines.sql'));
 
 const oc = choice => ({ menu_item_id: OC, item_options: [{ name: 'Kiểu', choice }] });
 const line = (menu, qty, price, lineId, extra = {}) => ({ line_id: lineId, menu_item_id: menu, quantity: qty, unit_price: price, item_options: [], note: '', ...extra });
+// Món giỏ khách nhân viên Gửi hộ: "print": true → máy chủ tự in bếp.
+const cartLine = (...args) => ({ ...line(...args), print: true });
 async function confirm(table, items) {
   const { rows } = await db.query('SELECT confirm_draft_order($1, $2, $3, $4) AS r', [table, JSON.stringify(items), STAFF, 'NV']);
   return rows[0].r;
@@ -76,10 +78,10 @@ test('cài lần đầu: món đang trên bàn coi như đã báo bếp; chạy 
   assert.deepEqual(rows.map(r => r.sent), [true, false]);
 });
 
-test('nhân viên gửi món: mỗi máy bếp 1 phiếu đúng các dòng vừa gửi; bia, khăn không in', async () => {
+test('Gửi hộ giỏ khách: mỗi máy bếp 1 phiếu đúng các dòng vừa gửi; bia, khăn không in', async () => {
   const r = await confirm(TABLE, [
-    line(OC, 1, 50000, id(101), oc('Hấp')), line(OC, 2, 50000, id(102), oc('Nướng')),
-    line(SO_DIEP, 1, 60000, id(103)), line(BIA, 2, 17000, id(104)), line(KHAN, 1, 2000, id(105)),
+    cartLine(OC, 1, 50000, id(101), oc('Hấp')), cartLine(OC, 2, 50000, id(102), oc('Nướng')),
+    cartLine(SO_DIEP, 1, 60000, id(103)), cartLine(BIA, 2, 17000, id(104)), cartLine(KHAN, 1, 2000, id(105)),
   ]);
   assert.equal(r.kitchen_items, 3);
   assert.equal(r.print_jobs, 2);
@@ -95,7 +97,7 @@ test('nhân viên gửi món: mỗi máy bếp 1 phiếu đúng các dòng vừa
 });
 
 test('gửi thêm cùng món bếp: dòng mới + phiếu chỉ in phần mới; bia cộng dồn, không in; gửi lại không in lại', async () => {
-  const { order_id } = await confirm(TABLE, [line(SO_DIEP, 1, 60000, id(110)), line(BIA, 1, 17000, id(111))]);
+  const { order_id } = await confirm(TABLE, [cartLine(SO_DIEP, 1, 60000, id(110)), cartLine(BIA, 1, 17000, id(111))]);
   const rows = await itemsOf(order_id);
   const soDiep = rows.filter(x => x.menu_item_id === SO_DIEP);
   assert.equal(soDiep.length, 2);
@@ -104,9 +106,20 @@ test('gửi thêm cùng món bếp: dòng mới + phiếu chỉ in phần mới;
   assert.deepEqual(last, { printer_id: P_NUONG, only_item_ids: [soDiep[1].id] });
 
   const before = (await jobsOf(order_id)).length;
-  const again = await confirm(TABLE, [line(SO_DIEP, 1, 60000, id(110))]);
+  const again = await confirm(TABLE, [cartLine(SO_DIEP, 1, 60000, id(110))]);
   assert.equal(again.skipped_lines, 1);
   assert.equal((await jobsOf(order_id)).length, before);
+});
+
+test('nhân viên tự thêm món / nước / khăn (kể cả lúc tính tiền): không tự in, món bếp còn "chưa báo bếp"', async () => {
+  const { order_id } = await confirm(TABLE, [line(SO_DIEP, 1, 60000, id(115)), line(KHAN, 2, 2000, id(116))]);
+  const before = (await jobsOf(order_id)).length;
+  const r = await confirm(TABLE, [line(SO_DIEP, 2, 60000, id(117)), line(OC, 1, 50000, id(118), oc('Hấp')), line(BIA, 1, 17000, id(119))]);
+  assert.equal(r.kitchen_items, 0);
+  assert.equal(r.print_jobs, 0);
+  assert.equal((await jobsOf(order_id)).length, before);
+  const added = (await itemsOf(order_id)).filter(x => x.menu_item_id === SO_DIEP && x.quantity === 2).at(-1);
+  assert.equal(added.sent, false); // dòng riêng → nút In bếp in đúng phần này
 });
 
 test('phiếu khách QR theo danh mục chỉ đóng dấu món danh mục đó; hoá đơn / tạm tính không đóng dấu', async () => {
@@ -130,21 +143,25 @@ test('nút In bếp: chỉ in món chưa báo, bấm 2 lần không in trùng', 
   assert.equal((await one(`SELECT queue_kitchen_tickets($1, $2::uuid[]) AS n`, [order, `{${hap.id}}`])).n, 0);
 });
 
-test('bấm "+" món bếp đã báo: dòng mới + phiếu riêng; món chưa báo hoặc bia thì cộng vào dòng', async () => {
+test('bấm "+" món bếp đã báo: dòng mới chưa báo bếp, không tự in; món chưa báo hoặc bia thì cộng vào dòng', async () => {
   const { order_id } = await confirm(TABLE, [line(KHAN, 1, 2000, id(120))]);
   const rows = await itemsOf(order_id);
-  const soDiep = rows.find(x => x.menu_item_id === SO_DIEP);
+  const soDiep = rows.find(x => x.menu_item_id === SO_DIEP && x.sent);
+  const before = (await jobsOf(order_id)).length;
   const r = (await one(`SELECT add_item_portion($1, 2, $2, 'NV') AS r`, [soDiep.id, STAFF])).r;
   assert.equal(r.new_line, true);
-  assert.equal(r.print_jobs, 1);
+  assert.equal(r.print_jobs, 0);
   assert.equal((await one(`SELECT quantity FROM order_items WHERE id = $1`, [soDiep.id])).quantity, 1);
+  assert.equal((await jobsOf(order_id)).length, before);
+  assert.deepEqual({ ...(await one(`SELECT quantity, kitchen_sent_at IS NOT NULL AS sent FROM order_items WHERE id = $1`, [r.item_id])) }, { quantity: 2, sent: false });
+  // "Thêm & in bếp": trang gọi queue_kitchen_tickets cho đúng dòng mới.
+  assert.equal((await one(`SELECT queue_kitchen_tickets($1, $2::uuid[]) AS n`, [order_id, `{${r.item_id}}`])).n, 1);
   assert.deepEqual((await jobsOf(order_id)).at(-1), { printer_id: P_NUONG, only_item_ids: [r.item_id] });
-  assert.equal((await one(`SELECT quantity, kitchen_sent_at IS NOT NULL AS sent FROM order_items WHERE id = $1`, [r.item_id])).quantity, 2);
 
   const bia = rows.find(x => x.menu_item_id === BIA);
   const b = (await one(`SELECT add_item_portion($1, 1) AS r`, [bia.id])).r;
   assert.equal(b.new_line, false);
-  assert.equal((await one(`SELECT quantity FROM order_items WHERE id = $1`, [bia.id])).quantity, 4);
+  assert.equal((await one(`SELECT quantity FROM order_items WHERE id = $1`, [bia.id])).quantity, 5);
 
   const unsent = (await one(`INSERT INTO order_items(order_id, menu_item_id, quantity, unit_price) VALUES ($1, $2, 1, 60000) RETURNING id`, [order_id, SO_DIEP])).id;
   assert.equal((await one(`SELECT add_item_portion($1, 1) AS r`, [unsent])).r.new_line, false);
@@ -160,7 +177,7 @@ test('in lại phiếu của bill đã trả tiền không bị lỗi (không đ
 test('tạo phiếu lỗi thì món vẫn vào bill, còn dấu "chưa báo bếp"', async () => {
   await db.exec(`ALTER TABLE print_jobs ADD CONSTRAINT test_no_jobs CHECK (false) NOT VALID`);
   try {
-    const r = await confirm(TABLE, [line(SO_DIEP, 1, 60000, id(130))]);
+    const r = await confirm(TABLE, [cartLine(SO_DIEP, 1, 60000, id(130))]);
     assert.equal(r.print_jobs, 0);
     assert.match(r.print_error, /test_no_jobs/);
     const added = (await itemsOf(r.order_id)).filter(x => x.menu_item_id === SO_DIEP).at(-1);

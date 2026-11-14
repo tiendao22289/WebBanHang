@@ -11,8 +11,9 @@
 -- 4. queue_kitchen_tickets(): phiếu chỉ in ĐÚNG các dòng món đưa vào
 --    (only_item_ids), mỗi máy bếp 1 phiếu, dòng đã báo bếp thì bỏ qua.
 -- 5. add_item_portion(): nhân viên bấm "+" trên món bếp đã báo → thêm dòng mới
---    và in đúng phần thêm. PrintAgent in cả số lượng của dòng, nên cộng vào dòng
---    cũ thì bếp không biết (hoặc làm lại cả phần cũ nếu in lại).
+--    (chưa báo bếp), KHÔNG tự in — trang Bàn hỏi "Thêm" hay "Thêm & in bếp" rồi tự
+--    gọi queue_kitchen_tickets (14/11/2026). PrintAgent in cả số lượng của dòng, nên
+--    cộng vào dòng cũ thì bếp không biết (hoặc làm lại cả phần cũ nếu in lại).
 --
 -- confirm_draft_order (nút Gửi đi) dùng các hàm này: xem confirm_draft_order_lines.sql.
 -- Chạy lại được nhiều lần. Cài bằng workflow "Apply Finance Migration".
@@ -177,7 +178,6 @@ BEGIN
     v_item.order_id, v_item.menu_item_id, p_quantity, v_item.unit_price, v_item.item_options,
     v_item.note, v_item.item_name, p_staff_id, p_staff_name
   ) RETURNING id INTO v_new_id;
-  v_jobs := public.queue_kitchen_tickets(v_item.order_id, ARRAY[v_new_id]);
   RETURN jsonb_build_object('item_id', v_new_id, 'new_line', true, 'print_jobs', v_jobs);
 END $$;
 GRANT EXECUTE ON FUNCTION public.add_item_portion(uuid, integer, uuid, text) TO anon, authenticated;
