@@ -374,10 +374,24 @@ async function main() {
     NOT has_table_privilege('anon', 'public.customer_cart_drafts', 'INSERT')
       AND NOT has_table_privilege('anon', 'public.customer_cart_drafts', 'UPDATE')
       AND NOT has_table_privilege('anon', 'public.customer_cart_drafts', 'DELETE') AS anon_cannot_write,
-    EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'customer_cart_drafts') AS realtime`);
+    EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'customer_cart_drafts') AS realtime,
+    -- Nhân viên xem giỏ khách, Gửi hộ / Sửa rồi gửi (2026-11-14): chỉ máy chủ nhận giỏ, máy khách hỏi giỏ của mình.
+    to_regclass('public.customer_cart_taken') IS NOT NULL AS taken_table_ok,
+    has_function_privilege('service_role', 'public.take_customer_cart(uuid,text,timestamptz)', 'EXECUTE') AS server_can_take,
+    NOT has_function_privilege('anon', 'public.take_customer_cart(uuid,text,timestamptz)', 'EXECUTE') AS web_cannot_take,
+    has_function_privilege('anon', 'public.customer_cart_taken_get(text)', 'EXECUTE')
+      AND has_function_privilege('anon', 'public.customer_cart_taken_ack(text,timestamptz)', 'EXECUTE') AS phone_can_check_taken,
+    NOT has_table_privilege('anon', 'public.customer_cart_taken', 'SELECT') AS anon_cannot_read_taken,
+    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'customer_cart_taken' AND column_name = 'acked_at')
+      AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                  WHERE n.nspname = 'public' AND p.proname = 'get_customer_carts' AND pg_get_function_result(p.oid) LIKE '%cart_id%') AS take_columns_ok`);
   console.log(JSON.stringify(carts));
   if (!carts.table_ok || !carts.web_can_report || !carts.web_can_read || !carts.web_can_dismiss || !carts.anon_can_select || !carts.anon_cannot_write) {
     throw new Error('Chưa cài được phần báo giỏ khách chưa gửi.');
+  }
+  if (!carts.taken_table_ok || !carts.server_can_take || !carts.web_cannot_take || !carts.phone_can_check_taken
+      || !carts.anon_cannot_read_taken || !carts.take_columns_ok) {
+    throw new Error('Chưa cài được phần nhân viên Gửi hộ giỏ khách.');
   }
   if (!carts.realtime) console.log('Chưa bật realtime cho giỏ khách — trang Bàn vẫn tự hỏi lại mỗi 30 giây.');
 

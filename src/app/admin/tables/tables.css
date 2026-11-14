@@ -246,10 +246,237 @@
 .cart-forgot-off {
   flex-shrink: 0;
   padding: 1px 6px;
+  border: 0;
   border-radius: 6px;
   background: #fff;
   color: #92400e;
+  font: inherit;
   font-size: 0.6rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* Ô bàn điện thoại: "🛒 5 món · 2 phút" — bấm để xem giỏ khách */
+.cart-pill {
+  max-width: 100%;
+  flex-shrink: 1;
+  padding: 3px 7px;
+  border: 1px solid #fcd34d;
+  border-radius: 10px;
+  background: #fef3c7;
+  color: #92400e;
+  font: inherit;
+  font-size: 0.65rem;
+  font-weight: 800;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Giỏ nháp ở PC (trên thanh Xác nhận gọi món): từng món với −/+ */
+.draft-lines-pc {
+  max-height: 168px;
+  overflow-y: auto;
+  padding: 6px 12px;
+  border-top: 2px solid #e0e7ff;
+  background: #f8fafc;
+  flex-shrink: 0;
+}
+
+.draft-line-pc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px dashed #e5e7eb;
+}
+
+.draft-line-pc:last-child { border-bottom: 0; }
+
+.draft-line-pc-name {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: #111827;
+}
+
+.draft-line-pc-name span { font-size: 0.7rem; color: #ea580c; }
+
+.draft-line-pc-qty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.draft-line-pc-qty button {
+  width: 26px;
+  height: 26px;
+  border: 1px solid #bfdbfe;
+  border-radius: 50%;
+  background: #fff;
+  color: #1d4ed8;
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.draft-line-pc-qty b { min-width: 18px; text-align: center; font-size: 0.85rem; }
+
+/* ── Xem giỏ khách chưa gửi (bấm 🛒): Gửi hộ / Sửa rồi gửi ── */
+.cart-view-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.cart-view-sheet {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 480px;
+  max-height: 88vh;
+  border-radius: 18px 18px 0 0;
+  background: #fff;
+  box-shadow: 0 -10px 40px rgba(15, 23, 42, 0.25);
+  overflow: hidden;
+}
+
+@media (min-width: 769px) {
+  .cart-view-backdrop { align-items: center; }
+  .cart-view-sheet { border-radius: 18px; max-height: 80vh; }
+}
+
+.cart-view-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid #fde68a;
+  background: #fffbeb;
+}
+
+.cart-view-title { font-size: 1.05rem; font-weight: 900; color: #92400e; }
+.cart-view-sub { margin-top: 2px; font-size: 0.75rem; font-weight: 600; color: #b45309; }
+
+.cart-view-x {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #fde68a;
+  color: #92400e;
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cart-view-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+}
+
+.cart-view-empty { padding: 24px 8px; text-align: center; color: #6b7280; font-weight: 600; }
+
+.cart-view-cart {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+}
+
+.cart-view-cart-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: #6b7280;
+}
+
+.cart-view-lines { margin: 0; padding: 0; list-style: none; }
+
+.cart-view-lines li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 0;
+  border-top: 1px dashed #e5e7eb;
+}
+
+.cart-view-lines li:first-child { border-top: 0; }
+.cart-view-lines li.off { opacity: 0.55; }
+
+.cart-view-qty { min-width: 30px; font-weight: 900; color: #1d4ed8; }
+
+.cart-view-name {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  font-size: 0.88rem;
+  color: #111827;
+}
+
+.cart-view-choice { font-size: 0.75rem; font-weight: 600; color: #ea580c; }
+.cart-view-note { font-size: 0.75rem; color: #374151; }
+.cart-view-offtag { font-size: 0.72rem; font-weight: 800; color: #dc2626; }
+.cart-view-price { font-size: 0.82rem; font-weight: 800; color: #111827; white-space: nowrap; }
+
+.cart-view-total {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid #e5e7eb;
+  font-size: 0.85rem;
+  color: #374151;
+}
+
+.cart-view-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cart-view-actions button {
+  flex: 1;
+  padding: 11px 10px;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.cart-view-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.cart-view-edit { border: 1.5px solid #93c5fd; background: #eff6ff; color: #1d4ed8; }
+.cart-view-send { border: 0; background: linear-gradient(135deg, #16a34a, #15803d); color: #fff; }
+
+.cart-view-dismiss {
+  margin: 0 14px calc(12px + env(safe-area-inset-bottom));
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #f9fafb;
+  color: #6b7280;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 /* Trình duyệt chưa cho phát tiếng (chưa ai chạm trang từ lúc mở) → nhắc chạm để chuông kêu được */
@@ -288,6 +515,7 @@
   font-weight: 700;
   line-height: 1.2;
   text-align: center;
+  cursor: pointer; /* bấm = xem giỏ khách */
 }
 
 .cart-pc-band .cart-pc-row {

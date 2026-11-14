@@ -6,7 +6,11 @@
  * CART_FORGOT_MS mà chưa gửi thì cả ô bàn chớp vàng + kêu chuông (createCartBell) để nhân viên ra giúp.
  * Khách gửi đơn / xoá hết giỏ → dòng bị xoá, báo tắt. Nhân viên bấm "Tắt" (đã nhắc khách) → xoá dòng
  * của bàn, khách sửa giỏ thì báo lại. Trước đó (CART_REMIND_MS) điện thoại khách tự nhắc "chưa gửi món".
+ * Nhân viên bấm vào 🛒 xem được giỏ khách, bấm Gửi hộ / Sửa rồi gửi → máy chủ nhận giỏ
+ * (take_customer_cart), điện thoại khách bớt đúng các món đó khỏi giỏ (cartAfterTaken) để khỏi gửi trùng.
  */
+import { menuLinePrice } from './draftCart.mjs';
+import { isDishOff } from './menuAvailability.mjs';
 
 // Chủ quán (2026-11-08): khách chọn món quá 5 phút mà chưa gửi → bàn chớp vàng, kêu chuông. Đếm từ lúc
 // khách bỏ món đầu tiên vào giỏ — đúng số phút hiện trên ô bàn — chứ không phải từ lần sửa giỏ cuối.
@@ -17,20 +21,92 @@ const MAX_LINES = 60;
 const KEY_STORAGE = 'cart_alert_key';
 let memoryKey = null;
 
-/** Giỏ + quà khách chọn → các dòng gửi máy chủ: chỉ mã món, số phần, lựa chọn (không tiền, không tên khách). */
-export function cartAlertItems(cart, gifts) {
-  const choiceText = opts => (Array.isArray(opts) ? opts : [])
-    .map(o => o?.choice).filter(c => c != null && c !== '').join(', ').slice(0, 120);
-  const line = (id, q, opts, gift) => {
-    const o = choiceText(opts);
-    return { id, q, ...(o ? { o } : {}), ...(gift ? { g: true } : {}) };
-  };
+// Cắt theo KÝ TỰ như left() của Postgres (emoji 1 ký tự), để dòng máy chủ giữ y hệt dòng máy khách gửi
+// (máy khách dựa vào đó để bớt đúng món nhân viên đã nhận — cartAfterTaken).
+const cut = (s, n) => Array.from(String(s)).slice(0, n).join('');
+
+/** 1 dòng giỏ / quà → dòng gửi máy chủ (cùng luật lọc / cắt với report_customer_cart). */
+function alertLine(id, q, opts, note, gift) {
+  const list = Array.isArray(opts) ? opts : [];
+  const o = cut(list.map(x => x?.choice).filter(c => c != null && c !== '').join(', '), 120);
+  const p = list
+    .filter(x => typeof x?.name === 'string' && x.name !== '' && x.choice != null && String(x.choice) !== '')
+    .slice(0, 8)
+    .map(x => ({ n: cut(x.name, 60), c: cut(x.choice, 200) }));
+  const t = typeof note === 'string' ? cut(note.trim(), 120) : '';
+  return { id, q, ...(o ? { o } : {}), ...(p.length ? { p } : {}), ...(t ? { t } : {}), ...(gift ? { g: true } : {}) };
+}
+
+/**
+ * Giỏ + quà khách chọn → các dòng gửi máy chủ: mã món, số phần, lựa chọn (o: chữ để đọc, p: từng nhóm
+ * để nhân viên gửi hộ đúng món), ghi chú cho bếp (t), quà (g). Không tiền, không tên / SĐT khách.
+ * notes: ghi chú món không có lựa chọn ({ [mã món]: chữ }, như customerOrderLines).
+ */
+export function cartAlertItems(cart, gifts, notes = {}) {
   return [
     ...(Array.isArray(cart) ? cart : [])
       .filter(c => c?.id && Number(c.quantity) > 0)
-      .map(c => line(c.id, Math.min(99, Math.round(Number(c.quantity))), c._options)),
-    ...(Array.isArray(gifts) ? gifts : []).filter(g => g?.id).map(g => line(g.id, 1, g._options, true)),
+      .map(c => alertLine(c.id, Math.min(99, Math.round(Number(c.quantity))), c._options, c._note || notes?.[c.id], false)),
+    ...(Array.isArray(gifts) ? gifts : []).filter(g => g?.id).map(g => alertLine(g.id, 1, g._options, g._note, true)),
   ].slice(0, MAX_LINES);
+}
+
+// So theo giá trị, không theo thứ tự khoá: máy chủ (jsonb) trả { c, n } chứ không phải { n, c } như máy gửi.
+const takenKey = l => JSON.stringify([l.id, (Array.isArray(l.p) ? l.p : []).map(x => [x?.n ?? '', x?.c ?? '']), l.t || '', !!l.g]);
+
+/**
+ * Nhân viên đã nhận giỏ của máy này (Gửi hộ / Sửa rồi gửi): bớt khỏi giỏ đúng các dòng đã nhận (cùng
+ * món, lựa chọn, ghi chú; quà riêng), giữ phần khách thêm sau đó. taken: các dòng máy chủ giữ (cartAlertItems).
+ * → { cart, gifts, count: số phần đã bớt }
+ */
+export function cartAfterTaken(cart, gifts, notes, taken) {
+  const left = new Map();
+  for (const t of Array.isArray(taken) ? taken : []) {
+    if (t?.id) left.set(takenKey(t), (left.get(takenKey(t)) || 0) + (Number(t.q) || 0));
+  }
+  let count = 0;
+  const take = (line, qty) => {
+    const k = takenKey(line);
+    const n = Math.min(left.get(k) || 0, qty);
+    if (n > 0) { left.set(k, left.get(k) - n); count += n; }
+    return n;
+  };
+  const nextCart = (Array.isArray(cart) ? cart : []).map(c => {
+    if (!c?.id || !(Number(c.quantity) > 0)) return c;
+    const qty = Math.round(Number(c.quantity));
+    const n = take(alertLine(c.id, qty, c._options, c._note || notes?.[c.id], false), qty);
+    return n >= qty ? null : n > 0 ? { ...c, quantity: qty - n } : c;
+  }).filter(Boolean);
+  const nextGifts = (Array.isArray(gifts) ? gifts : []).filter(g => !(g?.id && take(alertLine(g.id, 1, g._options, g._note, true), 1)));
+  return { cart: nextCart, gifts: nextGifts, count };
+}
+
+/** Lựa chọn của 1 dòng giỏ khách → [{ name, choice }] như item_options của bill. */
+export function cartLineOptions(line) {
+  return (Array.isArray(line?.p) ? line.p : []).map(x => ({ name: x.n, choice: x.c }));
+}
+
+/**
+ * Giỏ khách → món cho nhân viên gửi hộ, theo thực đơn đang bán: giá tính lại như máy chủ tính đơn khách
+ * (menuLinePrice). Món / lựa chọn đã tắt, hoặc máy khách bản cũ không gửi đủ lựa chọn → skipped (không gửi).
+ * → { lines: [{ menuItem, options, qty, note, price }], gifts: [{ menuItem, options, note }], skipped: [chữ] }
+ */
+export function cartItemsToDraft(items, menuItems, now = Date.now()) {
+  const lines = [], gifts = [], skipped = [];
+  for (const it of Array.isArray(items) ? items : []) {
+    const menuItem = (Array.isArray(menuItems) ? menuItems : []).find(m => m.id === it?.id);
+    const options = cartLineOptions(it);
+    const choiceText = it?.o || options.map(o => o.choice).join(', ');
+    const label = `${menuItem?.name || 'Món không còn trên thực đơn'}${choiceText ? ` · ${choiceText}` : ''}`;
+    if (!menuItem || isDishOff(menuItem, now)) { skipped.push(label); continue; }
+    const needsChoice = (menuItem.options || []).some(o => Array.isArray(o?.choices) && o.choices.length > 0);
+    if (!options.length && it.o && needsChoice) { skipped.push(label); continue; }
+    const priced = menuLinePrice(menuItem, options, now);
+    if (priced.off) { skipped.push(label); continue; }
+    if (it.g) gifts.push({ menuItem, options, note: it.t || '' });
+    else lines.push({ menuItem, options, qty: Number(it.q) || 1, note: it.t || '', price: priced.price });
+  }
+  return { lines, gifts, skipped };
 }
 
 /** Mã bí mật riêng của máy khách (máy chủ chỉ giữ sha256 của nó). Không dùng chung mã voucher. */
@@ -138,6 +214,9 @@ export function customerCartsFromServer(rows, now = Date.now()) {
         items: Array.isArray(r?.items) ? r.items : [],
         changedAt: now - idle,
         startedAt: now - age,
+        // Bản giỏ đang xem: nhân viên Gửi hộ thì máy chủ chỉ nhận đúng bản này (khách sửa sau đó → từ chối).
+        cartId: typeof r?.cart_id === 'string' ? r.cart_id : null,
+        updatedAt: r?.updated_at || null,
       };
     })
     .filter(c => c.tableId && c.count > 0);

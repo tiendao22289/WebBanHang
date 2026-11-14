@@ -41,7 +41,7 @@ test('cartAlertItems keeps dish id, portions, choices and gifts — no prices or
   ];
   const gifts = [{ id: id(4), name: 'Nước tặng', price: 0, is_gift: true }];
   assert.deepEqual(cartAlertItems(cart, gifts), [
-    { id: id(1), q: 2, o: 'Xào bơ' },
+    { id: id(1), q: 2, o: 'Xào bơ', p: [{ n: 'Kiểu', c: 'Xào bơ' }] },
     { id: id(2), q: 99 },
     { id: id(4), q: 1, g: true },
   ]);
@@ -351,11 +351,11 @@ test('PC table grid: wide cart band one idea per line, Tắt on the band, and a 
   // Ô bàn PC ~66px: không còn viên chữ li ti vỡ 4 dòng; dải rộng hết ô, số món một dòng, số phút ngắn một dòng.
   assert.doesNotMatch(page, /cart-forgot-bar compact/);
   assert.match(page, /className="cart-pc-band"[\s\S]{0,400}<b>🛒 \{custCart\.count\}&nbsp;món<\/b>\s*<span>\{cartMinutesShort\(custCart\.ageMs\)\}<\/span>/);
-  assert.match(page, /className="cart-pc-band forgot"[\s\S]{0,300}onClick=\{\(e\) => \{ e\.stopPropagation\(\); quietCartBell\(table\.id\); dismissCustomerCart\(table\); \}\}[\s\S]{0,200}<b>QUÊN GỬI<\/b>/);
+  assert.match(page, /className="cart-pc-band forgot"[\s\S]{0,600}<b>QUÊN GỬI<\/b>[\s\S]{0,300}<button type="button" className="cart-forgot-off" onClick=\{\(e\) => \{ e\.stopPropagation\(\); quietCartBell\(table\.id\); dismissCustomerCart\(table\); \}\}>Tắt<\/button>/);
   assert.match(css, /\.cart-pc-band \{[^}]*align-self: stretch;[^}]*margin: 0 -8px;/, 'tràn hết bề ngang ô (qua lề 8px của thân ô)');
-  // Bấm bàn trên PC tự sang tab Thực đơn (lưới bàn bị che) → bàn quên gửi hiện trên thanh nav, bấm = về Phòng bàn.
+  // Bấm bàn trên PC tự sang tab Thực đơn (lưới bàn bị che) → bàn quên gửi hiện trên thanh nav, bấm = xem giỏ khách.
   assert.match(page, /desktopView === 'menu' && tables\.some\(t => cartsByTable\[t\.id\]\?\.forgot\)/);
-  assert.match(page, /className="cart-nav-chip cart-forgot-blink"\s*onClick=\{\(\) => setDesktopView\('tables'\)\}/);
+  assert.match(page, /className="cart-nav-chip cart-forgot-blink"\s*onClick=\{\(\) => openCartView\(t\)\}/);
 });
 
 test('short minutes for the narrow PC card', () => {

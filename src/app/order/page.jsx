@@ -7,7 +7,7 @@ import {
   openChoices, refreshSavedCart, selectionToItemOptions, toggleMultiChoice,
 } from '@/lib/draftCart.mjs';
 import { dishesDone, dishesLeft, promoHintText, promoStripState, promoStripText } from '@/lib/promoStrip.mjs';
-import { cartAlertDeviceKey, cartAlertItems, createCartReminder, createCartReporter } from '@/lib/customerCartAlert.mjs';
+import { cartAfterTaken, cartAlertDeviceKey, cartAlertItems, createCartReminder, createCartReporter } from '@/lib/customerCartAlert.mjs';
 import { removeVietnameseTones } from '@/lib/utils';
 import { createOrderRefresh } from '@/lib/orderRefresh.mjs';
 import { COOKING_WORDS, LOAI_SYNONYMS, KEYWORD_ALIASES } from '@/lib/quickMatch';
@@ -852,6 +852,7 @@ function OrderContent() {
         const { data, error } = await supabase.rpc('report_customer_cart', {
           p_device_key: cartAlertDeviceKey(), p_table_id: tableId, p_items: items,
         });
+        if (!error && data?.taken) checkCartTakenRef.current?.(); // nhân viên đã nhận giỏ máy này
         return !error && data?.ok !== false;
       },
     });
@@ -860,13 +861,58 @@ function OrderContent() {
   }, []);
   useEffect(() => {
     const tableId = isTakeaway ? null : activeTableId;
-    cartReporterRef.current?.update(tableId, tableId ? cartAlertItems(cart, giftCart) : []);
-  }, [cart, giftCart, activeTableId, isTakeaway]);
+    cartReporterRef.current?.update(tableId, tableId ? cartAlertItems(cart, giftCart, notes) : []);
+  }, [cart, giftCart, notes, activeTableId, isTakeaway]);
   // Đơn vừa vào quán: báo phần giỏ còn lại (thường là trống) liền, không đợi như lúc khách đang chọn món.
   const reportCartNow = (cartLeft, giftsLeft) => {
     const tableId = isTakeaway ? null : activeTableId;
-    cartReporterRef.current?.update(tableId, tableId ? cartAlertItems(cartLeft, giftsLeft) : [], { now: true });
+    cartReporterRef.current?.update(tableId, tableId ? cartAlertItems(cartLeft, giftsLeft, notes) : [], { now: true });
   };
+
+  // Nhân viên bấm Gửi hộ / Sửa rồi gửi trên trang Bàn (máy chủ đã nhận giỏ của máy này) → bớt đúng các
+  // món đó khỏi giỏ và báo khách, để khách không bấm Gửi lần nữa thành 2 đơn. Hỏi khi máy chủ báo
+  // (report_customer_cart → taken), mỗi 15 giây lúc giỏ còn món, khi mở lại trang và ngay trước khi gửi đơn.
+  // → true nếu vừa bớt món (người gọi dừng việc đang làm).
+  const cartStateRef = useRef({ cart, giftCart, notes });
+  cartStateRef.current = { cart, giftCart, notes };
+  const checkingTakenRef = useRef(null);
+  const checkCartTaken = useCallback(() => {
+    if (checkingTakenRef.current) return checkingTakenRef.current;
+    const run = (async () => {
+      try {
+        const key = cartAlertDeviceKey();
+        const { data, error } = await supabase.rpc('customer_cart_taken_get', { p_device_key: key });
+        if (error || !Array.isArray(data?.items)) return false;
+        // Đánh dấu "đã biết" trước rồi mới bớt: mất mạng giữa chừng thì lần sau hỏi lại, không bớt 2 lần.
+        const { data: acked, error: ackError } = await supabase.rpc('customer_cart_taken_ack', { p_device_key: key, p_at: data.at });
+        if (ackError || !acked) return false;
+        const { cart: nowCart, giftCart: nowGifts, notes: nowNotes } = cartStateRef.current;
+        const left = cartAfterTaken(nowCart, nowGifts, nowNotes, data.items);
+        setCart(left.cart);
+        setGiftCart(left.gifts);
+        setShowCart(false);
+        setCartTakenNotice(left.count || data.items.reduce((s, it) => s + (Number(it.q) || 0), 0));
+        return true;
+      } catch {
+        return false;
+      } finally {
+        checkingTakenRef.current = null;
+      }
+    })();
+    checkingTakenRef.current = run;
+    return run;
+  }, []);
+  const checkCartTakenRef = useRef(null);
+  checkCartTakenRef.current = checkCartTaken;
+  const [cartTakenNotice, setCartTakenNotice] = useState(0); // số món nhân viên đã nhận để gửi giúp
+  const watchTaken = !isTakeaway && (cart.length > 0 || giftCart.length > 0);
+  useEffect(() => {
+    if (!watchTaken) return undefined;
+    const tick = () => { if (document.visibilityState === 'visible') checkCartTaken(); };
+    const timer = setInterval(tick, 15000);
+    document.addEventListener('visibilitychange', tick);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
+  }, [watchTaken, checkCartTaken]);
 
   // Nhắc ngay trên điện thoại khách: giỏ có món để yên 3 phút mà chưa gửi → bong bóng "Quý khách chưa
   // gửi món" trên nút giỏ (+ rung nhẹ nếu máy hỗ trợ). Trang Bàn chỉ chớp vàng sau 5 phút.
@@ -3569,6 +3615,8 @@ function OrderContent() {
     const slowTimer = setTimeout(() => setSubmitSlow(true), 5000);
 
     try {
+      // Nhân viên vừa nhận giỏ này để gửi hộ → đã bớt các món đó khỏi giỏ, không gửi trùng thành 2 đơn.
+      if (!isTakeaway && await checkCartTaken()) return;
       let customerId = null;
       if (customerPhone.trim()) {
         const { data: existingCustomer } = await supabase
@@ -4655,6 +4703,18 @@ function OrderContent() {
             </div>
           )}
 
+          {/* Nhân viên đã nhận giỏ để gửi giúp (trang Bàn: Gửi hộ / Sửa rồi gửi) — các món đó đã bớt khỏi giỏ */}
+          {cartTakenNotice > 0 && (
+            <div className="co-cart-taken" role="status">
+              <div className="co-cart-taken-icon">🙋</div>
+              <div className="co-cart-taken-text">
+                <b>Nhân viên đã nhận {cartTakenNotice} món trong giỏ</b>
+                <span>để gửi giúp quý khách — không cần bấm Gửi lại ạ.</span>
+              </div>
+              <button type="button" onClick={() => setCartTakenNotice(0)}>OK</button>
+            </div>
+          )}
+
           {/* ─── Holiday Banner ─── */}
           {false && (
             <div style={{
@@ -4839,6 +4899,20 @@ function OrderContent() {
         }
         @media (prefers-reduced-motion: reduce) {
           .co-cart-reminder { animation: none; }
+        }
+        /* Nhân viên đã nhận giỏ để gửi giúp */
+        .co-cart-taken {
+          position: fixed; left: 12px; right: 12px; bottom: calc(96px + env(safe-area-inset-bottom)); z-index: 600;
+          max-width: 460px; margin: 0 auto; display: flex; align-items: center; gap: 10px;
+          padding: 12px 12px 12px 14px; border-radius: 16px; background: #ecfdf5; border: 1.5px solid #6ee7b7;
+          color: #065f46; box-shadow: 0 10px 30px rgba(6, 95, 70, 0.22); animation: co-cart-remind-in 0.35s ease-out;
+        }
+        .co-cart-taken-icon { font-size: 1.6rem; line-height: 1; }
+        .co-cart-taken-text { flex: 1; display: flex; flex-direction: column; gap: 2px; font-size: 0.84rem; line-height: 1.3; }
+        .co-cart-taken-text b { font-size: 0.92rem; }
+        .co-cart-taken button {
+          flex-shrink: 0; padding: 8px 14px; border: 0; border-radius: 12px; background: #059669; color: white;
+          font-weight: 800; font-size: 0.9rem; cursor: pointer;
         }
       `}</style>
 
