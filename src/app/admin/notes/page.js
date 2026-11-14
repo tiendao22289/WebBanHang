@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { ChefHat, FileText, CheckCircle, XCircle, LogOut, Plus, Clock, Trash2, User, CornerDownRight } from 'lucide-react';
 import './notes.css';
 import MenuNameInput from '@/lib/MenuNameInput';
-import { editRows, normalizePriceInput, noteTotals, parsePrice, parseQty } from '@/lib/notesMath.mjs';
+import { editRows, normalizePriceInput, noteTotals, parsePrice, parseQty, typedMoney } from '@/lib/notesMath.mjs';
 import { notesApi, notesApiWithPhotos, workforce } from '@/lib/staffApi';
 import { missingBills, needsBill, noBillReason, notePriceAlert, priceAlert, priceAlertText, purchasePrices } from '@/lib/notesChecks.mjs';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
@@ -339,7 +339,7 @@ export default function StaffNotesPage() {
       type: 'structured_expense',
       items: validItems,
       note: newNoteContent,
-      input_amount: newNoteInputAmount ? Number(newNoteInputAmount.replace(/\./g, '')) : 0,
+      input_amount: typedMoney(newNoteInputAmount),
     });
   };
 
@@ -381,7 +381,7 @@ export default function StaffNotesPage() {
   // Tiền của phiếu đi chợ đang ghi (cùng số cho các mục trong form và lúc lưu).
   const tripMoney = () => {
     const { paid: thucChi, debt: tienNo } = calculateTotals();
-    const inputAmt = newNoteInputAmount ? Number(newNoteInputAmount.replace(/./g, '')) : 0;
+    const inputAmt = typedMoney(newNoteInputAmount);
     const leftoverList = openLeftovers(notes, payments, LEFTOVER_SINCE);
     // Phiếu đã tích "Đã trả chủ" thì không cộng sang phiếu này / không lấy trả nợ.
     const keptLeftovers = leftoverList.filter(l => !returnedLeftovers.includes(l.note_id));
@@ -663,7 +663,7 @@ export default function StaffNotesPage() {
       : { ts, by: editor, changes: '✏️ Cập nhật ghi chú' };
 
     if (editNoteType === 'expense' && validItems.length > 0) {
-      const editInputAmtNum = editInputAmount ? Number(editInputAmount.replace(/\./g, '')) : 0;
+      const editInputAmtNum = typedMoney(editInputAmount);
       let oldHistory = [];
       try { oldHistory = JSON.parse(note.content).history || []; } catch {}
       finalContent = JSON.stringify({
@@ -1873,7 +1873,7 @@ export default function StaffNotesPage() {
                       {/* Tổng kết chi tiêu khi edit */}
                       {(() => {
                         const { paid: ePaid, debt: eDebt } = calculateEditTotals();
-                        const eInputAmt = editInputAmount ? Number(editInputAmount.replace(/\./g, '')) : 0;
+                        const eInputAmt = typedMoney(editInputAmount);
                         const eBalance = eInputAmt > 0 ? eInputAmt - ePaid : null;
                         if (ePaid === 0 && eDebt === 0 && eInputAmt === 0) return null;
                         return (

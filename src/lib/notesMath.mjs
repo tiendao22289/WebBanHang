@@ -106,6 +106,12 @@ export function noteTotals(items = []) {
  */
 export const editRows = items => (Array.isArray(items) ? items : []).map((item, idx) => ({ ...item, _id: item?._id || `#${idx}` }));
 
+/**
+ * Số tiền gõ ở ô tiền (Tiền chủ giao…): "10.000.000" → 10000000. Chỉ giữ chữ số — ô tiền tự chấm hàng nghìn,
+ * máy khác có thể chấm bằng dấu cách; trống / không có số → 0.
+ */
+export const typedMoney = value => Number(String(value ?? '').replace(/\D/g, '')) || 0;
+
 /** Ô giá khi bấm ra ngoài: số nhỏ không có chữ k thì thêm "k" (250 → 250k), số lớn giữ nguyên. */
 export function normalizePriceInput(value) {
   const v = String(value ?? '').trim();
