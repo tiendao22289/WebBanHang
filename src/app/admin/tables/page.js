@@ -18,9 +18,9 @@ import { getMenuCached, fetchMenuFromServer, watchMenuCache } from '@/lib/menuCa
 import { getTableGroupOrders, OPEN_BILL_STATUSES, representativeBill, shopDayStartISO } from '@/lib/tableGroupOrders';
 import { promoGiftStatus } from '@/lib/promoGifts.mjs';
 import { isPrintJobBad, isUnresolvedBadJob } from '@/lib/printJobStatus.mjs';
-import { NO_DRAFT, updateDraftOf, addDraftLine, decreaseDraftLine, setDraftItemTotal, removeSentLines } from '@/lib/draftCart.mjs';
+import { NO_DRAFT, updateDraftOf, addDraftLine, decreaseDraftLine, setDraftItemTotal, removeSentLines, newLineId } from '@/lib/draftCart.mjs';
 import { useReloadHold } from '@/lib/useBuildRefresh';
-import { cartMinutesShort, cartMinutesText, createCartBell, customerCartsByTable, customerCartsFromServer } from '@/lib/customerCartAlert.mjs';
+import { cartItemsToDraft, cartMinutesShort, cartMinutesText, createCartBell, customerCartsByTable, customerCartsFromServer } from '@/lib/customerCartAlert.mjs';
 import { resolvePrintCategory, isKitchenItem, unsentKitchenItems, nextKitchenCheckIn } from '@/lib/kitchenTicket.mjs';
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
@@ -441,7 +441,15 @@ export default function TablesPage() {
   const cartBellRef = useRef(null);
   if (!cartBellRef.current) cartBellRef.current = createCartBell();
   const [cartBellBlocked, setCartBellBlocked] = useState(false); // có bàn cần kêu mà trình duyệt chưa cho phát tiếng
-  const [luckySpins, setLuckySpins] = useState([]);         // lượt quay HÔM NAY chưa vào bill (badge trên thẻ bàn) — /api/admin/lucky-status
+  // Bấm 🛒 trên ô bàn → xem giỏ khách (chỉ xem), Gửi hộ hoặc Sửa rồi gửi.
+  const [cartViewTableId, setCartViewTableId] = useState(null);
+  const [cartViewBusy, setCartViewBusy] = useState(null); // cartId đang nhận / gửi
+  // Sửa rồi gửi: món khách đã đưa vào giỏ nháp của bàn, CHƯA nhận giỏ của khách. Lúc bấm gửi mới nhận
+  // (đúng bản giỏ đã xem) — đóng giỏ nháp không gửi thì giỏ trên điện thoại khách vẫn còn nguyên.
+  // { [tableId]: { cartId, updatedAt, lineIds: Set } }
+  const cartTakeByTableRef = useRef({});
+  useReloadHold(Boolean(cartViewTableId || cartViewBusy), 'giỏ khách');
+  const [luckySpins, setLuckySpins] = useState([]);       // lượt quay HÔM NAY chưa vào bill (badge trên thẻ bàn) — /api/admin/lucky-status
   const [luckyModal, setLuckyModal] = useState(null);       // { hostTableId, tableNumber } đang xem chi tiết lượt quay
   const [luckyGrantBusy, setLuckyGrantBusy] = useState(null); // spinId đang cấp quà tay
   const [reviewModal, setReviewModal] = useState(null);     // bản ghi đang xem
@@ -1951,6 +1959,8 @@ export default function TablesPage() {
   }, []);
   // Nhân viên mở bàn → bàn đó thôi kêu chuông (vẫn chớp tới khi khách gửi món / giỏ trống / bấm Tắt).
   const quietCartBell = (tableId) => cartBellRef.current?.quiet(tableId);
+  // Bấm 🛒 trên ô bàn / chip thanh nav → xem giỏ khách (đã xem thì thôi kêu chuông bàn đó, vẫn chớp).
+  const openCartView = (table) => { quietCartBell(table.id); fetchCustomerCarts(); setCartViewTableId(table.id); };
 
   // Nhân viên đã nhắc khách (hoặc đã gọi món giúp) → tắt báo của bàn; khách sửa giỏ thì báo lại.
   async function dismissCustomerCart(table) {
@@ -2693,6 +2703,19 @@ export default function TablesPage() {
     setDraftCart(prev => decreaseDraftLine(prev, menuItemId, sendingDraftLinesRef.current));
   }
 
+  // −/+ trên 1 dòng nháp (danh sách giỏ nháp ở PC). Dòng đã thử gửi (khoá) thì + mở dòng mới như addDraftLine.
+  function changeDraftLine(lineId, delta) {
+    setDraftCart(prev => {
+      const line = prev.find(d => d.lineId === lineId);
+      if (!line || sendingDraftLinesRef.current.has(lineId)) return prev;
+      if (delta > 0) {
+        return addDraftLine(prev, { menuItemId: line.menuItemId, menuItem: line.menuItem, qty: delta, options: line.options, note: line.note, price: line.price },
+          lockedDraftLinesRef.current);
+      }
+      return prev.map(d => (d.lineId === lineId ? { ...d, qty: d.qty + delta } : d)).filter(d => d.qty > 0);
+    });
+  }
+
   // Ô gõ số lượng hiện TỔNG mọi kiểu chế biến của món → chỉ thêm / bớt phần chênh lệch.
   function setDraftQuantity(menuItemId, newQty) {
     setDraftCart(prev => setDraftItemTotal(prev, menuItemId, Math.max(0, newQty),
@@ -2702,14 +2725,165 @@ export default function TablesPage() {
   // ─── Xác nhận draft: gửi tất cả items lên server 1 lần ─────────────────────
   async function confirmDraft() {
     if (draftCart.length === 0 || !selectedTable || isConfirmingDraft) return false;
-    const key = selectedTable.id;
-    const lines = draftCart;
-    const lineIds = lines.map(d => d.lineId);
+    return sendDraftLines(selectedTable, draftCart);
+  }
+  // Nút Gửi / Xác nhận gọi món: gửi xong mà trong đó có giỏ khách đã chọn quà → mở bảng chọn quà.
+  async function confirmDraftShowGifts() {
+    const table = selectedTable;
+    const sent = await confirmDraft();
+    if (sent?.takenGifts?.length && table) showCustomerGifts(table, sent.takenGifts);
+    return sent;
+  }
+
+  // ─── Giỏ khách chưa gửi: nhân viên Gửi hộ / Sửa rồi gửi ───────────────────
+  /** Máy chủ nhận giỏ của 1 máy khách (đúng bản đã xem) → điện thoại khách tự bớt các món đó. */
+  async function takeCustomerCart(link) {
+    let res;
+    try {
+      res = await fetchWithTimeout('/api/admin/customer-cart', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store',
+        body: JSON.stringify({ action: 'take', table_id: link.tableId, cart_id: link.cartId, updated_at: link.updatedAt }),
+      }, 15000);
+    } catch {
+      throw new Error('Mạng chập chờn, chưa nhận được giỏ khách — bấm gửi lại.');
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) window.dispatchEvent(new Event('staff-session-expired'));
+    if (!res.ok) throw new Error(data.message || 'Máy chủ chưa nhận được giỏ khách — bấm gửi lại.');
+    return data;
+  }
+
+  /**
+   * Giỏ khách → dòng nháp của bàn (giá theo thực đơn đang bán), ghi nhớ giỏ nào: lúc bấm gửi mới nhận
+   * giỏ của khách (sendDraftLines). → { draftLines, gifts, skipped }
+   */
+  function customerCartToDraft(table, cart) {
+    const { lines, gifts, skipped } = cartItemsToDraft(cart.items, menuItems);
+    const draftLines = lines.map(l => ({
+      lineId: newLineId(), menuItemId: l.menuItem.id, menuItem: l.menuItem,
+      qty: l.qty, options: l.options, note: l.note, price: l.price,
+    }));
+    const link = { tableId: cart.tableId, cartId: cart.cartId, updatedAt: cart.updatedAt, lineIds: new Set(draftLines.map(d => d.lineId)), gifts, taken: false };
+    if (draftLines.length) {
+      setDraftsByTable(prev => updateDraftOf(prev, table.id, cur => [...cur, ...draftLines]));
+      const others = (cartTakeByTableRef.current[table.id] || []).filter(l => l.cartId !== cart.cartId);
+      cartTakeByTableRef.current[table.id] = [...others, link];
+    }
+    return { draftLines, gifts, skipped, link };
+  }
+
+  /** Quà khách đã chọn trong giỏ (8 tặng 1): nhân viên thêm bằng bảng chọn quà của bàn. */
+  function showCustomerGifts(table, gifts) {
+    if (!gifts?.length) return;
+    const list = gifts.map(g => `${g.menuItem.name}${g.options.length ? ` (${g.options.map(o => o.choice).join(' · ')})` : ''}`).join(', ');
+    Swal.fire({
+      icon: 'info', title: 'Khách có chọn quà',
+      html: `Quà khách chọn: <b>${list.replace(/</g, '&lt;')}</b>.<br>Bấm <b>Chọn quà</b> để thêm vào bill.`,
+      showCancelButton: true, confirmButtonText: '🎁 Chọn quà', cancelButtonText: 'Để sau',
+    }).then(r => { if (r.isConfirmed) { setSelectedTable(table); setGiftPickerHostId(table.merged_with || table.id); } });
+  }
+
+  async function sendCustomerCartNow(table, cart) {
+    if (!cart?.cartId || cartViewBusy) return;
+    setCartViewBusy(cart.cartId);
+    try {
+      const { draftLines, gifts, skipped, link } = customerCartToDraft(table, cart);
+      if (!draftLines.length) {
+        if (!gifts.length) {
+          Swal.fire('Không gửi được', `Món trong giỏ khách đang tắt / hết: ${skipped.join(', ')}`, 'warning');
+          return;
+        }
+        // Giỏ chỉ có quà: nhận giỏ rồi mở bảng chọn quà của bàn.
+        const taken = await takeCustomerCart(link);
+        if (!taken.ok) { fetchCustomerCarts(); Swal.fire('Khách vừa sửa / đã gửi giỏ', 'Mở lại 🛒 trên bàn để xem giỏ mới.', 'info'); return; }
+        setCustomerCarts(prev => prev.filter(c => c.cartId !== cart.cartId));
+        setCartViewTableId(null);
+        showCustomerGifts(table, gifts);
+        return;
+      }
+      const sent = await sendDraftLines(table, draftLines);
+      if (!sent) {
+        // Đã nhận giỏ (hoặc mạng rớt lúc nhận) mà chưa ghi được bill: món nằm ở giỏ nháp của bàn → mở bàn
+        // để bấm gửi lại (gửi lại không cộng trùng, máy chủ vẫn nhận giỏ đó). Khách vừa sửa / đã gửi thì
+        // giữ khung giỏ khách để xem giỏ mới.
+        if ((cartTakeByTableRef.current[table.id] || []).includes(link)) {
+          setCartViewTableId(null);
+          setSelectedTable(table);
+          if (isMobile) setAddingToOrder('admin'); else setDesktopView('menu');
+        }
+        return;
+      }
+      setCartViewTableId(null);
+      const skippedText = skipped.length ? ` Không gửi (đang tắt / hết): ${skipped.join(', ')}.` : '';
+      if (sent.print_error) {
+        Swal.fire({ icon: 'warning', title: 'Đã gửi hộ lên bill, CHƯA in được phiếu bếp', text: `Bấm "In bếp" ở bill của bàn hoặc báo bếp.${skippedText}` })
+          .then(() => showCustomerGifts(table, gifts));
+      } else if (skipped.length || gifts.length) {
+        Swal.fire({ icon: 'success', title: `Đã gửi hộ ${draftLines.reduce((s, d) => s + d.qty, 0)} món`, text: skippedText.trim() || undefined })
+          .then(() => showCustomerGifts(table, gifts));
+      } else {
+        Swal.fire({ title: sent.print_jobs > 0 ? '✅ Đã gửi hộ, đã in bếp!' : '✅ Đã gửi hộ lên bill!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 1800 });
+      }
+    } catch (err) {
+      Swal.fire({ icon: 'error', title: 'Chưa gửi hộ được', text: err.message });
+    } finally {
+      setCartViewBusy(null);
+    }
+  }
+
+  /** Sửa rồi gửi: đưa món của khách vào giỏ nháp của bàn rồi mở bàn — gửi lúc nào nhận giỏ lúc đó. */
+  function editCustomerCart(table, cart) {
+    if (!cart?.cartId) return;
+    const { draftLines, gifts, skipped } = customerCartToDraft(table, cart);
+    if (!draftLines.length) { sendCustomerCartNow(table, cart); return; }
+    setCartViewTableId(null);
+    setSelectedTable(table);
+    if (isMobile) setAddingToOrder('admin'); else setDesktopView('menu');
+    const extra = [
+      skipped.length ? `Không đưa vào (đang tắt / hết): ${skipped.join(', ')}.` : '',
+      gifts.length ? 'Quà khách chọn sẽ hiện sau khi gửi.' : '',
+    ].filter(Boolean).join(' ');
+    Swal.fire({ icon: 'info', title: `Đã đưa ${draftLines.reduce((s, d) => s + d.qty, 0)} món của khách vào giỏ`, text: `Sửa xong bấm Gửi. ${extra}`.trim(), toast: true, position: 'top', showConfirmButton: false, timer: 3500 });
+  }
+
+  /**
+   * Gửi các dòng nháp của 1 bàn lên bill. Trong đó có món của giỏ khách (Gửi hộ / Sửa rồi gửi) → nhận giỏ
+   * của khách TRƯỚC (đúng bản đã xem) rồi mới ghi bill: khách vừa sửa / đã tự gửi thì bỏ các món đó khỏi
+   * nháp (khỏi gửi trùng), món còn lại vẫn gửi. Nhận rồi mà ghi bill lỗi → gửi lại máy chủ vẫn nhận (taken).
+   */
+  async function sendDraftLines(table, draftLines) {
+    if (isConfirmingDraft) return false;
+    const key = table.id;
+    let lines = draftLines;
+    let lineIds = lines.map(d => d.lineId);
     // Bàn có thể vừa bị gộp / tách trên máy khác — lấy nhóm bàn mới nhất.
-    const liveTable = (tablesStateRef.current || []).find(t => t.id === key) || selectedTable;
+    const liveTable = (tablesStateRef.current || []).find(t => t.id === key) || table;
     lineIds.forEach(id => { lockedDraftLinesRef.current.add(id); sendingDraftLinesRef.current.add(id); });
     setIsConfirmingDraft(true);
+    const takenLinks = [];
     try {
+      const links = cartTakeByTableRef.current[key] || [];
+      const dropped = [];
+      for (const link of links) {
+        if (!lineIds.some(id => link.lineIds.has(id))) continue; // đã bỏ hết món của giỏ này khỏi nháp → không nhận giỏ
+        const taken = await takeCustomerCart(link);
+        if (taken.ok) { link.taken = true; takenLinks.push(link); continue; }
+        dropped.push(taken.reason);
+        cartTakeByTableRef.current[key] = (cartTakeByTableRef.current[key] || []).filter(l => l !== link);
+        setDraftsByTable(prev => updateDraftOf(prev, key, cur => removeSentLines(cur, [...link.lineIds])));
+        lines = lines.filter(d => !link.lineIds.has(d.lineId));
+      }
+      if (dropped.length) {
+        fetchCustomerCarts();
+        Swal.fire({
+          icon: 'info', title: dropped.includes('changed') ? 'Khách vừa sửa giỏ' : 'Khách đã tự gửi / xoá giỏ',
+          html: `Món của giỏ khách đã bỏ khỏi giỏ nháp để khỏi gửi trùng${lines.length ? ', món còn lại vẫn gửi' : ''}.<br>Bấm 🛒 trên bàn để xem giỏ mới của khách.`,
+        });
+        if (!lines.length) return false;
+      }
+      if (takenLinks.length) setCustomerCarts(prev => prev.filter(c => !takenLinks.some(l => l.cartId === c.cartId)));
+      lineIds = lines.map(d => d.lineId);
+
       // Gộp toàn bộ luồng (tìm/tạo order Admin → ghi món → tính lại tổng) thành
       // 1 lệnh RPC duy nhất — trước đây 5 round-trip tuần tự, mạng quán chập
       // chờn làm độ trễ từng round-trip cộng dồn lại (xem confirm_draft_order_lines.sql).
@@ -2735,19 +2909,25 @@ export default function TablesPage() {
       // Chỉ bỏ các dòng vừa gửi — món bấm thêm trong lúc chờ vẫn nằm lại trong nháp.
       setDraftsByTable(prev => updateDraftOf(prev, key, cur => removeSentLines(cur, lineIds)));
       lineIds.forEach(id => lockedDraftLinesRef.current.delete(id));
+      // Giỏ khách đã nhận + đã vào bill → xong, quên giỏ đó.
+      if (takenLinks.length) cartTakeByTableRef.current[key] = (cartTakeByTableRef.current[key] || []).filter(l => !takenLinks.includes(l));
       setAddingToOrder(null);
       setAddItemSearch('');
       // Máy chủ tự in bếp món bếp vừa gửi (print_jobs / print_error) — người gọi báo lại cho nhân viên.
-      return data || true;
+      // takenGifts: quà khách đã chọn trong giỏ vừa nhận — người gọi mở bảng chọn quà (showCustomerGifts).
+      return { ...(data && typeof data === 'object' ? data : {}), takenGifts: takenLinks.flatMap(l => l.gifts || []) };
     } catch (err) {
       console.error('[confirmDraft] error:', err);
       Swal.fire({
         icon: 'error', title: 'Chưa chắc đã gửi được món',
-        html: 'Mạng chập chờn hoặc máy chủ báo lỗi — món vẫn nằm trong giỏ.<br>Xem bill của bàn rồi bấm <b>gửi lại</b>: món nào đã vào bill sẽ <b>không bị cộng thêm</b>.',
+        html: `${err?.message?.includes('giỏ khách') ? `${err.message}<br>` : ''}Mạng chập chờn hoặc máy chủ báo lỗi — món vẫn nằm trong giỏ.<br>Xem bill của bàn rồi bấm <b>gửi lại</b>: món nào đã vào bill sẽ <b>không bị cộng thêm</b>.`,
       });
       return false;
     } finally {
-      lineIds.forEach(id => sendingDraftLinesRef.current.delete(id));
+      draftLines.forEach(d => {
+        sendingDraftLinesRef.current.delete(d.lineId);
+        if (!lineIds.includes(d.lineId)) lockedDraftLinesRef.current.delete(d.lineId); // món giỏ khách bị bỏ ra
+      });
       setIsConfirmingDraft(false);
       fetchOrdersOnly([key]);
     }
@@ -3236,12 +3416,14 @@ export default function TablesPage() {
                   </div>
                 )}
                 {custCart && !custCart.forgot && (
-                  <div
-                    title={`Khách đã chọn ${custCart.count} món trên điện thoại ${cartMinutesText(custCart.ageMs)}, CHƯA bấm Gửi — đủ 5 phút thì bàn chớp vàng và kêu chuông`}
-                    style={{ background: '#fef3c7', color: '#92400e', borderRadius: 10, padding: '3px 7px', border: '1px solid #fcd34d', fontSize: '0.65rem', fontWeight: 800, lineHeight: 1.3, maxWidth: '100%', flexShrink: 1 }}
+                  <button
+                    type="button"
+                    className="cart-pill"
+                    title={`Khách đã chọn ${custCart.count} món trên điện thoại ${cartMinutesText(custCart.ageMs)}, CHƯA bấm Gửi — bấm để xem giỏ, Gửi hộ`}
+                    onClick={(e) => { e.stopPropagation(); openCartView(table); }}
                   >
                     🛒 {custCart.count}&nbsp;món · {cartMinutesText(custCart.ageMs)}
-                  </div>
+                  </button>
                 )}
                 {unsentKitchenCount > 0 && (
                   <div
@@ -3293,15 +3475,17 @@ export default function TablesPage() {
                 )}
               </div>
               {custCart?.forgot && (
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   className="cart-forgot-bar"
-                  title={`Khách chọn ${custCart.forgotCount} món ${cartMinutesText(custCart.ageMs)} mà chưa bấm Gửi — ra hỗ trợ khách. Bấm Tắt để tắt báo (khách sửa giỏ sẽ báo lại)`}
-                  onClick={(e) => { e.stopPropagation(); quietCartBell(table.id); dismissCustomerCart(table); }}
+                  title={`Khách chọn ${custCart.forgotCount} món ${cartMinutesText(custCart.ageMs)} mà chưa bấm Gửi — bấm để xem giỏ, Gửi hộ. Bấm Tắt để tắt báo (khách sửa giỏ sẽ báo lại)`}
+                  onClick={(e) => { e.stopPropagation(); openCartView(table); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openCartView(table); } }}
                 >
                   <span>🛒 Quên gửi {custCart.forgotCount}&nbsp;món · {cartMinutesText(custCart.ageMs)}</span>
-                  <span className="cart-forgot-off">Tắt</span>
-                </button>
+                  <button type="button" className="cart-forgot-off" onClick={(e) => { e.stopPropagation(); quietCartBell(table.id); dismissCustomerCart(table); }}>Tắt</button>
+                </div>
               )}
               {custCart?.forgot && cartBellBlocked && (
                 <div className="cart-forgot-mute" title="Trình duyệt chưa cho phát tiếng — chạm vào màn hình một lần để bật chuông">🔇 Chạm để bật chuông</div>
@@ -3806,8 +3990,8 @@ export default function TablesPage() {
                       key={t.id}
                       type="button"
                       className="cart-nav-chip cart-forgot-blink"
-                      onClick={() => setDesktopView('tables')}
-                      title={`B${t.table_number}: khách chọn ${cartsByTable[t.id].forgotCount} món ${cartMinutesText(cartsByTable[t.id].ageMs)} mà chưa bấm Gửi — bấm để về Phòng bàn`}
+                      onClick={() => openCartView(t)}
+                      title={`B${t.table_number}: khách chọn ${cartsByTable[t.id].forgotCount} món ${cartMinutesText(cartsByTable[t.id].ageMs)} mà chưa bấm Gửi — bấm để xem giỏ, Gửi hộ`}
                     >
                       🛒 B{t.table_number} quên gửi · {cartMinutesShort(cartsByTable[t.id].ageMs)}
                     </button>
@@ -3940,6 +4124,25 @@ export default function TablesPage() {
                           ))}
                       </div>
                     </div>
+                    {/* ── Món trong giỏ nháp (desktop): xem / bớt / thêm từng món — cần cho "Sửa rồi gửi" giỏ khách ── */}
+                    {draftCart.length > 0 && (
+                      <div className="draft-lines-pc">
+                        {draftCart.map(d => (
+                          <div key={d.lineId} className="draft-line-pc">
+                            <div className="draft-line-pc-name">
+                              <b>{d.menuItem?.name || 'Món'}</b>
+                              {(d.options || []).length > 0 && <span>{d.options.map(o => o.choice).join(' · ')}</span>}
+                              {d.note && <span>📝 {d.note}</span>}
+                            </div>
+                            <div className="draft-line-pc-qty">
+                              <button type="button" disabled={isConfirmingDraft} onClick={() => changeDraftLine(d.lineId, -1)} aria-label="Bớt 1">−</button>
+                              <b>{d.qty}</b>
+                              <button type="button" disabled={isConfirmingDraft} onClick={() => changeDraftLine(d.lineId, 1)} aria-label="Thêm 1">+</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {/* ── Draft confirm bar (desktop) ── */}
                     {draftCart.length > 0 && (
                       <div style={{
@@ -3954,7 +4157,7 @@ export default function TablesPage() {
                           style={{ padding: '6px 14px', borderRadius: 20, border: '1px solid #e5e7eb', background: 'white', color: '#6b7280', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer' }}
                         >Huỷ</button>
                         <button
-                          onClick={confirmDraft}
+                          onClick={confirmDraftShowGifts}
                           disabled={isConfirmingDraft}
                           style={{
                             padding: '6px 18px', borderRadius: 20, border: 'none',
@@ -4225,28 +4428,32 @@ export default function TablesPage() {
                                 {/* Ô bàn PC chỉ rộng ~66px: dải rộng hết ô, mỗi ý một dòng (số món to,
                                     số phút ngắn "7p") để đọc được như ô bàn điện thoại. */}
                                 {custCart && !custCart.forgot && (
-                                  <div
+                                  <button
+                                    type="button"
                                     className="cart-pc-band"
-                                    title={`Khách đã chọn ${custCart.count} món trên điện thoại ${cartMinutesText(custCart.ageMs)}, CHƯA bấm Gửi — đủ 5 phút thì bàn chớp vàng và kêu chuông`}
+                                    title={`Khách đã chọn ${custCart.count} món trên điện thoại ${cartMinutesText(custCart.ageMs)}, CHƯA bấm Gửi — bấm để xem giỏ, Gửi hộ`}
+                                    onClick={(e) => { e.stopPropagation(); openCartView(table); }}
                                   >
                                     <b>🛒 {custCart.count}&nbsp;món</b>
                                     <span>{cartMinutesShort(custCart.ageMs)}</span>
-                                  </div>
+                                  </button>
                                 )}
                                 {custCart?.forgot && (
-                                  <button
-                                    type="button"
+                                  <div
+                                    role="button"
+                                    tabIndex={0}
                                     className="cart-pc-band forgot"
-                                    title={`Khách chọn ${custCart.forgotCount} món ${cartMinutesText(custCart.ageMs)} mà chưa bấm Gửi — ra hỗ trợ khách. Bấm Tắt để tắt báo (khách sửa giỏ sẽ báo lại)`}
-                                    onClick={(e) => { e.stopPropagation(); quietCartBell(table.id); dismissCustomerCart(table); }}
+                                    title={`Khách chọn ${custCart.forgotCount} món ${cartMinutesText(custCart.ageMs)} mà chưa bấm Gửi — bấm để xem giỏ, Gửi hộ. Bấm Tắt để tắt báo (khách sửa giỏ sẽ báo lại)`}
+                                    onClick={(e) => { e.stopPropagation(); openCartView(table); }}
+                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openCartView(table); } }}
                                   >
                                     <b>QUÊN GỬI</b>
                                     <b>🛒 {custCart.forgotCount}&nbsp;món</b>
                                     <span className="cart-pc-row">
                                       {cartMinutesShort(custCart.ageMs)}
-                                      <span className="cart-forgot-off">Tắt</span>
+                                      <button type="button" className="cart-forgot-off" onClick={(e) => { e.stopPropagation(); quietCartBell(table.id); dismissCustomerCart(table); }}>Tắt</button>
                                     </span>
-                                  </button>
+                                  </div>
                                 )}
                                 {custCart?.forgot && cartBellBlocked && (
                                   <div
@@ -5180,10 +5387,14 @@ export default function TablesPage() {
                         disabled={pendingQty === 0 || isConfirmingDraft}
                         onClick={async () => {
                           if (pendingQty === 0 || isConfirmingDraft) return;
+                          const table = selectedTable;
                           const sent = await confirmDraft();
                           if (!sent) return;
                           if (sent.print_error) {
-                            Swal.fire({ icon: 'warning', title: 'Đã gửi lên bill, CHƯA in được phiếu bếp', text: 'Bấm "In bếp" ở bill của bàn hoặc báo bếp.' });
+                            Swal.fire({ icon: 'warning', title: 'Đã gửi lên bill, CHƯA in được phiếu bếp', text: 'Bấm "In bếp" ở bill của bàn hoặc báo bếp.' })
+                              .then(() => showCustomerGifts(table, sent.takenGifts));
+                          } else if (sent.takenGifts?.length) {
+                            showCustomerGifts(table, sent.takenGifts);
                           } else {
                             Swal.fire({ title: sent.print_jobs > 0 ? '✅ Đã gửi lên bill, đã in bếp!' : '✅ Đã gửi lên bill!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500 });
                           }
@@ -5622,6 +5833,84 @@ export default function TablesPage() {
         })()
       }
 
+      {/* Giỏ khách chưa gửi (bấm 🛒 trên ô bàn): xem món khách chọn, Gửi hộ hoặc Sửa rồi gửi */}
+      {cartViewTableId && (() => {
+        const table = tables.find(t => t.id === cartViewTableId);
+        if (!table) return null;
+        const carts = customerCarts.filter(c => c.tableId === table.id);
+        const close = () => setCartViewTableId(null);
+        const money = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
+        return (
+          <div className="cart-view-backdrop" onClick={close}>
+            <div className="cart-view-sheet" role="dialog" aria-label={`Giỏ khách bàn ${table.table_number}`} onClick={e => e.stopPropagation()}>
+              <div className="cart-view-head">
+                <div>
+                  <div className="cart-view-title">🛒 Giỏ khách B{table.table_number}</div>
+                  <div className="cart-view-sub">Khách đã chọn trên điện thoại, CHƯA bấm Gửi</div>
+                </div>
+                <button type="button" className="cart-view-x" onClick={close} aria-label="Đóng">×</button>
+              </div>
+              <div className="cart-view-body">
+                {carts.length === 0 && <div className="cart-view-empty">Khách đã gửi hoặc đã xoá giỏ.</div>}
+                {carts.map((cart, i) => {
+                  const rows = cart.items.map((it, k) => {
+                    const one = cartItemsToDraft([it], menuItems);
+                    const menuItem = menuItems.find(m => m.id === it.id);
+                    const line = one.lines[0];
+                    return {
+                      key: k, gift: !!it.g, qty: Number(it.q) || 1,
+                      name: menuItem?.name || 'Món không còn trên thực đơn',
+                      choices: (Array.isArray(it.p) && it.p.length ? it.p.map(x => x.c).join(' · ') : it.o) || '',
+                      note: it.t || '',
+                      off: one.skipped.length > 0,
+                      total: line ? line.price * line.qty : 0,
+                    };
+                  });
+                  const total = rows.reduce((s, r) => s + r.total, 0);
+                  const canSend = !!cart.cartId && rows.some(r => !r.off);
+                  const busy = cartViewBusy === cart.cartId;
+                  return (
+                    <div key={cart.cartId || i} className="cart-view-cart">
+                      <div className="cart-view-cart-head">
+                        <span>{carts.length > 1 ? `Điện thoại ${i + 1}` : 'Giỏ của khách'} · {cart.count} món</span>
+                        <span>chọn {cartMinutesText(Math.max(0, cartClock - cart.startedAt))}</span>
+                      </div>
+                      <ul className="cart-view-lines">
+                        {rows.map(r => (
+                          <li key={r.key} className={r.off ? 'off' : undefined}>
+                            <span className="cart-view-qty">{r.gift ? '🎁' : `${r.qty}×`}</span>
+                            <span className="cart-view-name">
+                              <b>{r.name}</b>
+                              {r.choices && <span className="cart-view-choice">{r.choices}</span>}
+                              {r.note && <span className="cart-view-note">📝 {r.note}</span>}
+                              {r.gift && <span className="cart-view-choice">Quà 8 tặng 1</span>}
+                              {r.off && <span className="cart-view-offtag">Đang tắt / hết — không gửi</span>}
+                            </span>
+                            <span className="cart-view-price">{r.gift ? '0đ' : r.off ? '' : money(r.total)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="cart-view-total"><span>Tạm tính</span><b>{money(total)}</b></div>
+                      <div className="cart-view-actions">
+                        <button type="button" className="cart-view-edit" disabled={!canSend || !!cartViewBusy}
+                          onClick={() => editCustomerCart(table, cart)}>✏️ Sửa rồi gửi</button>
+                        <button type="button" className="cart-view-send" disabled={!canSend || !!cartViewBusy}
+                          onClick={() => sendCustomerCartNow(table, cart)}>{busy ? '⏳ Đang gửi…' : '🚀 Gửi hộ'}</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {carts.length > 0 && (
+                <button type="button" className="cart-view-dismiss" onClick={() => { close(); quietCartBell(table.id); dismissCustomerCart(table); }}>
+                  Tắt báo (đã nhắc khách tự gửi)
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Admin Menu Modal */}
 
       {
@@ -5937,7 +6226,7 @@ export default function TablesPage() {
                     </button>
                     {/* Xác nhận gửi món */}
                     <button
-                      onClick={confirmDraft}
+                      onClick={confirmDraftShowGifts}
                       disabled={isConfirmingDraft}
                       style={{
                         flex: 2, padding: '10px 16px', borderRadius: 100,

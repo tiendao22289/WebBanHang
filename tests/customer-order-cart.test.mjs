@@ -91,6 +91,7 @@ function orderHarness({ cart, gifts = [], rpc, state = {} }) {
     customerOrderLines, cartAfterSentOrder, applyOrderRefusal, JSON, Array, console: { error() {}, warn() {} },
     newLuckyRequestId: () => `order-${++n}`, bindOrderToDevice: async () => {},
     reportCartNow: (c, g) => calls.push(['reportCartNow', c.map(x => [x.id, x.quantity]), g.length]),
+    checkCartTaken: async () => false,
     setGiftPromptPending() {}, setShowGiftModal() {}, setPromoNudge() {}, getAlmostThereSuggestion: () => null,
     setSubmitting() {}, setSubmitSlow() {}, setNotes() {}, setCustomerNote() {},
     setCart: v => { ui.cart = v; }, setGiftCart: v => { ui.gifts = v; }, setShowCart: v => { ui.showCart = v; },
@@ -140,6 +141,19 @@ test('a saved order tells the Bàn page "cart empty" at once, before the cart cl
   await h.submit();
   assert.deepEqual(h.ui.alerts, []);
   assert.deepEqual(order, [['report', 0, 0], ['setCart', 0], ['finish', 'order-1']]);
+});
+
+test('staff just took the cart to send it: pressing Gửi sends nothing, so the dishes never go twice', async () => {
+  const h = orderHarness({
+    cart: [{ ...bia, quantity: 2, price: 20000 }],
+    rpc: async args => ({ data: { order_id: args.p_order_id }, error: null }),
+  });
+  h.context.checkCartTaken = async () => true;
+  await h.submit();
+  assert.deepEqual(h.calls.filter(c => c[0] === 'rpc'), [], 'không tạo đơn');
+  assert.deepEqual(h.ui.finished, []);
+  assert.deepEqual(h.ui.alerts, []);
+  assert.equal(h.context.submittingRef.current, false, 'mở khoá nút Gửi cho phần khách thêm sau');
 });
 
 test('a refused order updates the cart, reloads the menu and tells the customer, nothing is shown as sent', async () => {
