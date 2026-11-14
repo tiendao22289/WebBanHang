@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import {
   openChoices, menuLinePrice, refreshSavedCart, customerOrderLines, applyOrderRefusal, cartAfterSentOrder,
+  initialOptionSelection, isMultiOption, multiChoices, toggleMultiChoice, selectionToItemOptions,
 } from '../src/lib/draftCart.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
 
@@ -158,7 +159,7 @@ test('a refused order updates the cart, reloads the menu and tells the customer,
 
 test('switched-off LOẠI choices are skipped by the choice window, quick search, "ghi nhiều món" and the wheel gift picker', () => {
   const addToCart = page.slice(page.indexOf('  function addToCart(item) {'), page.indexOf('  // Bấm gợi ý ở thanh tìm'));
-  assert.match(addToCart, /const first = openChoices\(opt\)\[0\];/);
+  assert.match(addToCart, /const init = initialOptionSelection\(item\.options\);/);
   assert.doesNotMatch(addToCart, /opt\.choices\[0\]/);
   const quick = page.slice(page.indexOf('  function getQuickSuggestions('), page.indexOf('  // Thêm nhanh 1 món đã xác định LOẠI'));
   assert.match(quick, /const loaiOpen = openChoices\(loaiOpt\);/);
@@ -166,6 +167,59 @@ test('switched-off LOẠI choices are skipped by the choice window, quick search
   const batch = page.slice(page.indexOf('  function matchOneLine('), page.indexOf('  // Tách số lượng khỏi dòng'));
   assert.doesNotMatch(batch, /loaiOpt\.choices\.map/);
   assert.match(page, /\{openChoices\(loaiOpt\)\.map\(\(c, ci\) => <option key=\{ci\} value=\{c\}>\{c\}<\/option>\)\}/);
-  assert.match(page, /init\[opt\.name\] = openChoices\(opt\)\[0\] \?\? '';/, 'the 8-for-1 gift window');
+  assert.match(page, /setSelectedOpts\(initialOptionSelection\(g\.options\)\);/, 'the 8-for-1 gift window');
   assert.match(page, /\{openChoices\(opt\)\.map\(choice => \{/, 'the wheel gift picker');
+});
+
+// ── Bảng chọn món quà "8 tặng 1" (báo lỗi bàn 10: đủ món tặng, bấm chọn quà thì báo "món đã hết") ──
+// Mọi món tặng của quán có LOẠI (chọn 1) + KHẨU VỊ (chọn nhiều). Bảng quà từng đặt sẵn KHẨU VỊ bằng
+// chữ "Bình Thường" thay vì mảng → khách bấm thêm 1 khẩu vị thì chữ bị tách từng ký tự, máy chủ không
+// thấy lựa chọn "B" trong thực đơn và trả "Món đã hết / tạm ngưng". Khách không bấm khẩu vị thì gửi được.
+const KHAU_VI = { name: 'KHẨU VỊ', choices: ['Bình Thường', 'Làm Cay', 'Không Cay'], prices: [null, null, null], hiddenChoices: [false, false, false] };
+const ocMon = { id: 'oc-mon', name: 'Ốc Môn', price: 50000, is_available: true, hidden_until: null, is_gift_item: true,
+  options: [{ name: 'LOẠI', choices: ['Nướng mỡ hành', 'Nướng phô mai'], prices: [50000, 50000], hiddenChoices: [true, false] }, KHAU_VI] };
+
+test('the choice window starts with the first open LOẠI and no taste ticked — for gifts the same as for dishes', () => {
+  assert.equal(isMultiOption(KHAU_VI), true);
+  assert.equal(isMultiOption({ name: 'Thêm topping' }), true);
+  assert.equal(isMultiOption(LOAI), false);
+  assert.deepEqual(initialOptionSelection(ocMon.options, NOW), { 'LOẠI': 'Nướng phô mai', 'KHẨU VỊ': [] });
+  assert.deepEqual(initialOptionSelection(oc.options, NOW), { 'LOẠI': 'Rang muối', 'THÊM': [] });
+  const allOff = [{ name: 'LOẠI', choices: ['A'], hiddenChoices: [true] }, { name: 'ghi', choices: [] }, { choices: ['x'] }];
+  assert.deepEqual(initialOptionSelection(allOff, NOW), { 'LOẠI': '' }, 'every LOẠI off → "" (window says tạm hết)');
+});
+
+test('ticking tastes on a gift sends real choices the server accepts', () => {
+  let sel = initialOptionSelection(ocMon.options, NOW);
+  sel = { ...sel, 'KHẨU VỊ': toggleMultiChoice(sel['KHẨU VỊ'], 'Làm Cay') };
+  sel = { ...sel, 'KHẨU VỊ': toggleMultiChoice(sel['KHẨU VỊ'], 'Không Cay') };
+  sel = { ...sel, 'KHẨU VỊ': toggleMultiChoice(sel['KHẨU VỊ'], 'Làm Cay') };
+  const opts = selectionToItemOptions(sel);
+  assert.deepEqual(opts, [{ name: 'LOẠI', choice: 'Nướng phô mai' }, { name: 'KHẨU VỊ', choice: 'Không Cay' }]);
+  const [line] = customerOrderLines([], [{ id: ocMon.id, name: ocMon.name, price: 0, is_gift: true, _options: opts }]);
+  assert.equal(line.is_gift, true);
+  assert.deepEqual(menuLinePrice(ocMon, line.item_options, NOW).off, null, 'no "hết" refusal');
+  assert.deepEqual(selectionToItemOptions({ 'LOẠI': 'Nướng phô mai', 'KHẨU VỊ': [] }), [{ name: 'LOẠI', choice: 'Nướng phô mai' }]);
+});
+
+test('a taste kept as text (the old gift window) is one ticked choice, never split into letters', () => {
+  assert.deepEqual(multiChoices('Bình Thường'), ['Bình Thường']);
+  assert.deepEqual(multiChoices(undefined), []);
+  assert.deepEqual(toggleMultiChoice('Bình Thường', 'Làm Cay'), ['Bình Thường', 'Làm Cay']);
+  assert.deepEqual(toggleMultiChoice('Bình Thường', 'Bình Thường'), [], 'untick works (used to throw: string has no .filter)');
+  // Cái lỗi cũ: [...'Bình Thường', 'Làm Cay'] → máy chủ không thấy lựa chọn "B".
+  const old = [...'Bình Thường', 'Làm Cay'].join(', ');
+  assert.deepEqual(menuLinePrice(ocMon, [{ name: 'KHẨU VỊ', choice: old }], NOW), { price: null, off: 'B' });
+  const fixed = toggleMultiChoice('Bình Thường', 'Làm Cay').join(', ');
+  assert.deepEqual(menuLinePrice(ocMon, [{ name: 'KHẨU VỊ', choice: fixed }], NOW).off, null);
+});
+
+test('the gift window and the dish window both open through initialOptionSelection and tick tastes with toggleMultiChoice', () => {
+  const gift = page.slice(page.indexOf('co-gift-add'), page.indexOf('{addedQty > 0 ? \'+ Thêm\' : \'Chọn\'}'));
+  assert.match(gift, /setIsGiftMode\(true\)/);
+  assert.match(gift, /setSelectedOpts\(initialOptionSelection\(g\.options\)\)/);
+  assert.doesNotMatch(gift, /openChoices\(opt\)\[0\]/, 'no hand-made start selection');
+  assert.match(page, /\[opt\.name\]: toggleMultiChoice\(selectedOpts\[opt\.name\], choice\)/);
+  assert.doesNotMatch(page, /\[\.\.\.currentArr, choice\]/, 'no spreading of the stored taste');
+  assert.match(page, /const optionsArr = selectionToItemOptions\(selectedOpts\);/);
 });
