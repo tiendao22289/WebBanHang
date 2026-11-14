@@ -2,6 +2,9 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
+import {
+  applyOrderRefusal, customerOrderLines, initialOptionSelection, selectionToItemOptions, toggleMultiChoice,
+} from '../src/lib/draftCart.mjs';
 
 // submit_customer_order_menu_check.sql: đơn khách gửi lên được đối chiếu với thực đơn — giá theo
 // menu_items (kể cả giá lựa chọn), món / lựa chọn đang tắt bị từ chối, và quà chỉ nhận khi là quà
@@ -170,4 +173,29 @@ test('open bills from before midnight still count; takeaway counts only the same
   await openBill(id(12), [line(SO, 16, 60000)], { table: id(3), phone: '0933333333', createdAt: `now() - interval '2 days'` });
   assert.equal((await submit(id(13), [gift(NUOC)], { table: id(3), phone: '0933333333' })).reason, 'gift_not_allowed');
   assert.equal((await submit(id(13), [gift(NUOC)], { table: id(3), phone: '0922222222' })).already_submitted, false);
+});
+
+test('a gift with LOẠI + tastes picked in the gift window is accepted; the old letter-split taste was the "hết" refusal', async () => {
+  // Bàn 10: đủ suất quà, khách chọn món quà có KHẨU VỊ và bấm thêm khẩu vị → máy chủ báo "hết".
+  await reset();
+  const OC_MON = id(26);
+  const options = [{ name: 'LOẠI', choices: ['Nướng mỡ hành', 'Nướng phô mai'], prices: [50000, 50000], hiddenChoices: [false, false] },
+    { name: 'KHẨU VỊ', choices: ['Bình Thường', 'Làm Cay', 'Không Cay'], prices: [null, null, null], hiddenChoices: [false, false, false] }];
+  await db.query(`INSERT INTO menu_items(id,name,price,options,counts_for_promotion,is_gift_item) VALUES ($1,'Ốc Môn',50000,$2,true,true)`,
+    [OC_MON, JSON.stringify(options)]);
+  await openBill(id(9), [line(SO, 16, 60000)]); // 8 món → 1 suất
+  // Cũ: bảng quà giữ KHẨU VỊ là chữ "Bình Thường", bấm "Làm Cay" → [...'Bình Thường', 'Làm Cay'].
+  const old = [{ name: 'LOẠI', choice: 'Nướng mỡ hành' }, { name: 'KHẨU VỊ', choice: [...'Bình Thường', 'Làm Cay'].join(', ') }];
+  const refused = await submit(id(10), customerOrderLines([], [{ id: OC_MON, _options: old }]));
+  assert.deepEqual([refused.reason, refused.lines[0].problem, refused.lines[0].choice], ['item_off', 'off', 'B']);
+  assert.match(applyOrderRefusal([], [{ id: OC_MON, name: 'Ốc Môn' }], refused.lines).message, /Món đã hết \/ tạm ngưng.*Ốc Môn · B/);
+  // Mới: cùng các bước bấm, qua đúng hàm trang gọi món dùng.
+  let sel = initialOptionSelection(options);
+  sel = { ...sel, 'KHẨU VỊ': toggleMultiChoice(sel['KHẨU VỊ'], 'Làm Cay') };
+  sel = { ...sel, 'KHẨU VỊ': toggleMultiChoice(sel['KHẨU VỊ'], 'Không Cay') };
+  const ok = await submit(id(10), customerOrderLines([], [{ id: OC_MON, _options: selectionToItemOptions(sel) }]));
+  assert.equal(ok.already_submitted, false);
+  assert.deepEqual(await savedLines(id(10)), [{ menu_item_id: OC_MON, quantity: 1, unit_price: 0, is_gift: true }]);
+  assert.deepEqual((await db.query('SELECT item_options FROM order_items WHERE order_id = $1', [id(10)])).rows[0].item_options,
+    [{ name: 'LOẠI', choice: 'Nướng mỡ hành' }, { name: 'KHẨU VỊ', choice: 'Làm Cay, Không Cay' }]);
 });

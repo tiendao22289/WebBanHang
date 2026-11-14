@@ -93,6 +93,49 @@ export function openChoices(opt, now = Date.now()) {
   return (Array.isArray(opt?.choices) ? opt.choices : []).filter((c, i) => c && !isChoiceOff(opt.hiddenChoices?.[i], now));
 }
 
+// ── Bảng chọn lựa chọn của món (món thường và món quà "8 tặng 1" dùng chung) ──
+
+/** Nhóm chọn nhiều (khẩu vị / thêm / topping) — giữ MẢNG lựa chọn; nhóm khác (LOẠI…) chọn 1. */
+export function isMultiOption(opt) {
+  const name = String(opt?.name || '').toLowerCase();
+  return name.includes('khẩu vị') || name.includes('thêm') || name.includes('topping');
+}
+
+/**
+ * Lựa chọn lúc mở bảng: nhóm chọn 1 → lựa chọn đang bán đầu tiên ('' nếu tắt hết), nhóm chọn nhiều → [].
+ * Trước đây bảng chọn QUÀ đặt sẵn KHẨU VỊ bằng chữ ("Bình Thường") thay vì mảng: khách bấm thêm
+ * khẩu vị thì chữ bị tách thành từng ký tự ("B, ì, n, h, …, Làm Cay") và máy chủ báo quà "đã hết".
+ */
+export function initialOptionSelection(options, now = Date.now()) {
+  const selected = {};
+  for (const opt of Array.isArray(options) ? options : []) {
+    if (!opt?.name || !Array.isArray(opt.choices) || opt.choices.length === 0) continue;
+    selected[opt.name] = isMultiOption(opt) ? [] : (openChoices(opt, now)[0] ?? '');
+  }
+  return selected;
+}
+
+/** Các lựa chọn đang tick của 1 nhóm chọn nhiều (giá trị cũ dạng chữ coi như 1 lựa chọn). */
+export function multiChoices(value) {
+  if (Array.isArray(value)) return value;
+  return typeof value === 'string' && value ? [value] : [];
+}
+
+/** Bấm 1 ô của nhóm chọn nhiều: tick / bỏ tick lựa chọn đó → mảng mới. */
+export function toggleMultiChoice(value, choice) {
+  const list = multiChoices(value);
+  return list.includes(choice) ? list.filter(c => c !== choice) : [...list, choice];
+}
+
+/** Lựa chọn trong bảng → item_options gửi máy chủ: [{ name, choice }], nhóm chọn nhiều ghép ", ". */
+export function selectionToItemOptions(selected) {
+  return Object.keys(selected || {}).map(name => {
+    const value = selected[name];
+    const choice = Array.isArray(value) ? value.join(', ') : value;
+    return choice ? { name, choice } : null;
+  }).filter(Boolean);
+}
+
 /**
  * Giá 1 phần của món với các lựa chọn đã chọn ([{ name, choice }], nhiều lựa chọn 1 nhóm ghép ", ").
  * Có lựa chọn đặt giá → tổng giá các lựa chọn đó, không thì giá món (như computeModalPrice).

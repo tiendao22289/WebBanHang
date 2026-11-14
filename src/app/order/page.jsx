@@ -2,7 +2,10 @@
 
 import { isPaidTableCheckout } from '@/lib/tableCheckout';
 import { fetchOpenGroupTotal, shopDayKey, shopDayStartISO } from '@/lib/tableGroupOrders';
-import { applyOrderRefusal, cartAfterSentOrder, customerOrderLines, openChoices, refreshSavedCart } from '@/lib/draftCart.mjs';
+import {
+  applyOrderRefusal, cartAfterSentOrder, customerOrderLines, initialOptionSelection, isMultiOption, multiChoices,
+  openChoices, refreshSavedCart, selectionToItemOptions, toggleMultiChoice,
+} from '@/lib/draftCart.mjs';
 import { cartAlertDeviceKey, cartAlertItems, createCartReminder, createCartReporter } from '@/lib/customerCartAlert.mjs';
 import { removeVietnameseTones } from '@/lib/utils';
 import { createOrderRefresh } from '@/lib/orderRefresh.mjs';
@@ -3356,23 +3359,13 @@ function OrderContent() {
       setIsGiftMode(false);
       setOptionModal(item);
       setModalError('');
-      const init = {};
-      let initPrice = null;
-      item.options.forEach(opt => {
-        if (!opt.name) return;
-        const isMulti = opt.name.toLowerCase().includes('khẩu vị') || opt.name.toLowerCase().includes('thêm') || opt.name.toLowerCase().includes('topping');
-        if (opt.choices && opt.choices.length > 0) {
-          // Chọn sẵn lựa chọn ĐANG BÁN đầu tiên — lựa chọn đã tắt bị ẩn khỏi bảng chọn.
-          const first = openChoices(opt)[0];
-          const firstPrice = first != null ? opt.prices?.[opt.choices.indexOf(first)] : null;
-          init[opt.name] = isMulti ? [] : (first ?? '');
-          if (!isMulti && initPrice === null && firstPrice != null && Number(firstPrice) > 0) {
-            initPrice = Number(firstPrice);
-          }
-        }
-      });
+      // Nhóm chọn 1 (LOẠI…) chọn sẵn lựa chọn ĐANG BÁN đầu tiên, nhóm khẩu vị / thêm để trống —
+      // cùng hàm với bảng chọn món quà.
+      const init = initialOptionSelection(item.options);
+      const pricedOpt = item.options.find(opt => opt.name && !isMultiOption(opt) && init[opt.name]
+        && Number(opt.prices?.[opt.choices.indexOf(init[opt.name])]) > 0);
       setSelectedOpts(init);
-      setChoicePrice(initPrice);
+      setChoicePrice(pricedOpt ? Number(pricedOpt.prices[pricedOpt.choices.indexOf(init[pricedOpt.name])]) : null);
       setOptionQty(1);
       setOptNote('');
       return;
@@ -3402,14 +3395,7 @@ function OrderContent() {
       setModalError(`${soldOutOpt.name} đang tạm hết, Quý khách chọn món khác giúp quán nhé.`);
       return;
     }
-    const optionsArr = Object.keys(selectedOpts).map(k => {
-      let choiceValue = selectedOpts[k];
-      if (Array.isArray(choiceValue)) {
-        if (choiceValue.length === 0) return null;
-        choiceValue = choiceValue.join(', ');
-      }
-      return { name: k, choice: choiceValue };
-    }).filter(o => o && o.choice !== '');
+    const optionsArr = selectionToItemOptions(selectedOpts);
     const label = optionsArr.map(o => o.choice).join(', ');
 
     if (isGiftMode) {
@@ -5356,11 +5342,8 @@ function OrderContent() {
                                 setIsGiftMode(true);
                                 setOptionModal(g);
                                 setModalError('');
-                                const init = {};
-                                g.options.forEach(opt => {
-                                  if (opt.name && opt.choices && opt.choices.length > 0) init[opt.name] = openChoices(opt)[0] ?? '';
-                                });
-                                setSelectedOpts(init);
+                                // Cùng cách mở bảng với món thường: KHẨU VỊ là mảng (trống), không phải chữ.
+                                setSelectedOpts(initialOptionSelection(g.options));
                                 setOptionQty(1);
                                 setOptNote('');
                               } else {
@@ -6345,7 +6328,7 @@ function OrderContent() {
               </div>
               <div className="co-sheet-body">
                 {/* Nhóm 1: Các option KHÔNG phải khẩu vị (Loại, v.v.) */}
-                {optionModal.options.filter(opt => opt.name && !opt.name.toLowerCase().includes('khẩu vị') && !opt.name.toLowerCase().includes('thêm') && !opt.name.toLowerCase().includes('topping')).map((opt, oi) => (
+                {optionModal.options.filter(opt => opt.name && !isMultiOption(opt)).map((opt, oi) => (
                   <div key={oi} style={{ marginBottom: 12, marginTop: oi === 0 ? 12 : 4, paddingBottom: 12, borderBottom: '1px solid #e5e7eb' }}>
                     <div style={{
                       fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
@@ -6397,7 +6380,7 @@ function OrderContent() {
 
 
                 {/* Nhóm 2: Các option Khẩu vị / Thêm / Topping */}
-                {optionModal.options.filter(opt => opt.name && (opt.name.toLowerCase().includes('khẩu vị') || opt.name.toLowerCase().includes('thêm') || opt.name.toLowerCase().includes('topping'))).map((opt, oi) => (
+                {optionModal.options.filter(opt => opt.name && isMultiOption(opt)).map((opt, oi) => (
                   <div key={oi} style={{ marginBottom: 12, marginTop: 12, paddingBottom: 12, borderBottom: '1px solid #e5e7eb' }}>
                     <div style={{
                       fontWeight: 800, fontSize: '0.68rem', textTransform: 'uppercase',
@@ -6414,15 +6397,10 @@ function OrderContent() {
                         const p = opt.prices?.[ci];
                         const hasPrice = p !== null && p !== '';
                         const displayPrice = hasPrice ? Number(p) : 0;
-                        const active = (selectedOpts[opt.name] || []).includes(choice);
+                        const active = multiChoices(selectedOpts[opt.name]).includes(choice);
                         return (
                           <button key={ci} onClick={() => {
-                            const currentArr = selectedOpts[opt.name] || [];
-                            if (currentArr.includes(choice)) {
-                              setSelectedOpts({ ...selectedOpts, [opt.name]: currentArr.filter(c => c !== choice) });
-                            } else {
-                              setSelectedOpts({ ...selectedOpts, [opt.name]: [...currentArr, choice] });
-                            }
+                            setSelectedOpts({ ...selectedOpts, [opt.name]: toggleMultiChoice(selectedOpts[opt.name], choice) });
                           }} style={{
                             padding: '6px 4px', border: 'none', background: 'transparent',
                             color: active ? '#1d4ed8' : '#4b5563', fontWeight: active ? 700 : 500,
