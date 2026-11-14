@@ -9,7 +9,7 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import { buildQrUrl } from '@/lib/bankAccount';
 import { prepareTableStatsPayment } from '@/lib/tableStatsQuota';
-import { sendTableSummaryPrintJob, sendSmartPrintJobs, sendGiftItemPrintJob } from '@/lib/print';
+import { sendTableSummaryPrintJob, sendGiftItemPrintJob } from '@/lib/print';
 import {
   getChannel, fetchChannelConfig, calcReviewDiscount,
   isReviewDiscountItem,
@@ -22,7 +22,7 @@ import { NO_DRAFT, updateDraftOf, addDraftLine, decreaseDraftLine, setDraftItemT
 import { useReloadHold } from '@/lib/useBuildRefresh';
 import { isDishOff } from '@/lib/menuAvailability.mjs';
 import { cartItemsToDraft, cartMinutesShort, cartMinutesText, createCartBell, customerCartsByTable, customerCartsFromServer } from '@/lib/customerCartAlert.mjs';
-import { resolvePrintCategory, isKitchenItem, unsentKitchenItems, nextKitchenCheckIn } from '@/lib/kitchenTicket.mjs';
+import { resolvePrintCategory, isKitchenItem, unsentKitchenItems, nextKitchenCheckIn, manualPrintJobs } from '@/lib/kitchenTicket.mjs';
 import { createTableOrderRefresh, createTableOrderRecovery, createTableOrderReadGuard, expandTableRefreshScope, getCachedOrderTableIds, getTableOrderChangeScope, readOpenTableOrders, withCachedMenuOptions } from '@/lib/tableOrderRefresh.mjs';
 import { isLuckyWheelItem } from '@/lib/luckyWheel';
 import PaymentProof from '@/components/PaymentProof';
@@ -967,7 +967,7 @@ export default function TablesPage() {
   const resolveItemCategory = item => resolvePrintCategory(item, menuOptionsOf(item));
 
   // Món bếp của 1 bill chưa có phiếu bếp nào (đơn QR mất mạng trước khi tạo phiếu,
-  // quà chưa in được...). Nhân viên gửi món thì máy chủ tự in — xem kitchen_tickets.sql.
+  // quà chưa in được, món nhân viên tự thêm — nhân viên thêm thì KHÔNG tự in, bấm In bếp khi cần).
   const unsentKitchenOf = order => unsentKitchenItems(order?.order_items, printers, menuOptionsOf);
 
   async function sendUnsentToKitchen(order, items) {
@@ -976,6 +976,44 @@ export default function TablesPage() {
     });
     if (error) Swal.fire('Chưa in bếp được', error.message || 'Vui lòng thử lại.', 'error');
     else Swal.fire({ title: jobs > 0 ? 'Đã gửi bếp!' : 'Món đã được báo bếp rồi', icon: jobs > 0 ? 'success' : 'info', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
+    fetchOrdersForBills([order.id]);
+  }
+
+  // Nút "🖨 In món" ở đầu bill: nhân viên tự chọn món cần in (thêm món / nước / khăn không tự in).
+  // Món bếp ra máy bếp, nước / bia / khăn ra máy quầy — mỗi máy 1 phiếu chỉ có đúng các dòng chọn.
+  // Món bếp chưa báo bếp được chọn sẵn.
+  async function openManualPrint(order) {
+    const items = (order.order_items || []).filter(i => i.menu_item_id || (Number(i.unit_price) || 0) >= 0);
+    if (!items.length) { Swal.fire('Bill chưa có món', '', 'info'); return; }
+    const unsent = new Set(unsentKitchenOf(order).map(i => i.id));
+    const esc = t => String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const rows = items.map(i => {
+      const opts = (i.item_options || []).map(o => o.choice).filter(c => c && c.toLowerCase() !== 'bình thường').join(' · ');
+      const tag = unsent.has(i.id) ? ' <span style="color:#c2410c;font-size:0.75em;font-weight:700">chưa báo bếp</span>' : '';
+      return `<label style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid #f1f5f9;text-align:left;cursor:pointer">
+        <input type="checkbox" class="mp-item" value="${i.id}" ${unsent.has(i.id) ? 'checked' : ''} style="width:20px;height:20px;flex-shrink:0">
+        <span style="flex:1;min-width:0"><b>${i.quantity}×</b> ${esc(i.menu_item?.name || i.item_name || 'Món')}${opts ? ` <span style="color:#d97706">(${esc(opts)})</span>` : ''}${i.is_gift ? ' 🎁' : ''}${tag}</span>
+      </label>`;
+    }).join('');
+    const { value: ids, isConfirmed } = await Swal.fire({
+      title: '🖨 In món',
+      html: `<div style="font-size:0.85rem;color:#6b7280;margin-bottom:6px">Chọn món cần in. Món bếp ra máy bếp, nước / bia / khăn ra máy quầy.</div>
+        <div style="max-height:50vh;overflow-y:auto;font-size:0.95rem">${rows}</div>`,
+      showCancelButton: true, confirmButtonText: '🖨 In', cancelButtonText: 'Huỷ',
+      confirmButtonColor: '#16a34a', reverseButtons: true,
+      preConfirm: () => {
+        const picked = [...document.querySelectorAll('.mp-item:checked')].map(el => el.value);
+        if (!picked.length) Swal.showValidationMessage('Chưa chọn món nào');
+        return picked;
+      },
+    });
+    if (!isConfirmed || !ids?.length) return;
+    const pickedSet = new Set(ids);
+    const jobs = manualPrintJobs(order.id, items.filter(i => pickedSet.has(i.id)), printers, menuOptionsOf);
+    if (!jobs.length) { Swal.fire('Không có máy in', 'Món đã chọn không có máy in nào đang bật.', 'error'); return; }
+    const { error } = await supabase.from('print_jobs').insert(jobs);
+    if (error) Swal.fire('Chưa in được', error.message || 'Vui lòng thử lại.', 'error');
+    else Swal.fire({ title: `Đã gửi ${jobs.length} phiếu in!`, icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
     fetchOrdersForBills([order.id]);
   }
 
@@ -2393,27 +2431,35 @@ export default function TablesPage() {
     }
   }
 
-  // Thêm phần cho món bếp ĐÃ báo bếp: phần thêm thành dòng mới + phiếu bếp riêng
-  // (add_item_portion). Cộng vào dòng cũ thì bếp không biết; hỏi trước vì bấm nhầm
-  // "+" giờ là bếp làm thêm món thật.
+  // Thêm phần cho món bếp ĐÃ báo bếp: phần thêm thành dòng mới (add_item_portion, không tự in)
+  // để In bếp in đúng phần thêm. Lúc tính tiền thêm món khách đã ăn thì chọn "Chỉ thêm";
+  // bếp phải làm thêm thì "Thêm & in bếp".
   async function addKitchenPortion(orderId, line, qty) {
-    const { value, isConfirmed } = await Swal.fire({
-      title: 'Thêm món & báo bếp?',
-      text: `${line.menu_item?.name || line.item_name || 'Món'}: in phiếu bếp cho phần thêm.`,
+    const { value, isConfirmed, isDenied } = await Swal.fire({
+      title: 'Thêm phần món?',
+      text: `${line.menu_item?.name || line.item_name || 'Món'}: bếp cần làm thêm thì bấm "Thêm & in bếp".`,
       input: 'number', inputValue: qty, inputAttributes: { min: 1, step: 1 },
-      showCancelButton: true, confirmButtonText: '🍳 Thêm & in bếp', cancelButtonText: 'Huỷ',
-      confirmButtonColor: '#ea580c', reverseButtons: true,
+      showCancelButton: true, showDenyButton: true,
+      confirmButtonText: '➕ Chỉ thêm', denyButtonText: '🍳 Thêm & in bếp', cancelButtonText: 'Huỷ',
+      confirmButtonColor: '#2563eb', denyButtonColor: '#ea580c', reverseButtons: true,
       inputValidator: v => (parseInt(v, 10) >= 1 ? undefined : 'Nhập số phần thêm'),
+      returnInputValueOnDeny: true,
     });
-    if (!isConfirmed) return;
+    if (!isConfirmed && !isDenied) return;
+    const portions = parseInt(value, 10);
+    if (!(portions >= 1)) return;
     try {
       const { data, error } = await supabase.rpc('add_item_portion', {
-        p_item_id: line.id, p_quantity: parseInt(value, 10),
+        p_item_id: line.id, p_quantity: portions,
         p_staff_id: currentStaff?.id || null, p_staff_name: currentStaff?.full_name || null,
       });
       if (error) throw error;
       await syncOrderPromotions(orderId);
-      if (data?.new_line && !data.print_jobs) Swal.fire('Đã thêm món, CHƯA in được phiếu bếp', 'Bấm In bếp ở đầu bill.', 'warning');
+      // Máy chủ bản cũ (chưa chạy migration) vẫn tự in → print_jobs > 0, khỏi in lần nữa.
+      if (isDenied && data?.new_line && !data.print_jobs) {
+        const { data: jobs, error: printErr } = await supabase.rpc('queue_kitchen_tickets', { p_order_id: data.order_id || orderId, p_item_ids: [data.item_id] });
+        if (printErr || !jobs) Swal.fire('Đã thêm món, CHƯA in được phiếu bếp', 'Bấm In bếp ở đầu bill.', 'warning');
+      }
     } catch (error) {
       Swal.fire('Chưa thêm được món', error.message || 'Vui lòng thử lại.', 'error');
     } finally {
@@ -2951,6 +2997,9 @@ export default function TablesPage() {
       // 1 lệnh RPC duy nhất — trước đây 5 round-trip tuần tự, mạng quán chập
       // chờn làm độ trễ từng round-trip cộng dồn lại (xem confirm_draft_order_lines.sql).
       // line_id: gửi lại dòng đã vào bill thì máy chủ bỏ qua, không cộng 2 lần.
+      // print: chỉ món của giỏ khách (Gửi hộ) tự in bếp. Nhân viên tự thêm món / nước / khăn
+      // (kể cả lúc tính tiền) thì không in — bấm In bếp / 🖨 In món khi cần.
+      const cartLineIds = new Set(takenLinks.flatMap(l => [...l.lineIds]));
       const { data, error } = await supabase.rpc('confirm_draft_order', {
         p_table_id: liveTable.merged_with || liveTable.id,
         p_items: lines.map(draft => ({
@@ -2960,6 +3009,7 @@ export default function TablesPage() {
           unit_price: draft.price,
           item_options: draft.options || [],
           note: draft.note || '',
+          ...(cartLineIds.has(draft.lineId) ? { print: true } : {}),
         })),
         p_staff_id: currentStaff?.id || null,
         p_staff_name: currentStaff?.full_name || null,
@@ -2976,7 +3026,7 @@ export default function TablesPage() {
       if (takenLinks.length) cartTakeByTableRef.current[key] = (cartTakeByTableRef.current[key] || []).filter(l => !takenLinks.includes(l));
       setAddingToOrder(null);
       setAddItemSearch('');
-      // Máy chủ tự in bếp món bếp vừa gửi (print_jobs / print_error) — người gọi báo lại cho nhân viên.
+      // Máy chủ tự in bếp món giỏ khách vừa gửi (print_jobs / print_error) — người gọi báo lại cho nhân viên.
       // takenGifts: quà khách đã chọn trong giỏ vừa nhận — người gọi mở bảng chọn quà (showCustomerGifts).
       return { ...(data && typeof data === 'object' ? data : {}), takenGifts: takenLinks.flatMap(l => l.gifts || []) };
     } catch (err) {
@@ -3722,18 +3772,11 @@ export default function TablesPage() {
                             {order.status === 'pending' ? 'Chờ' : 'Đang làm'}
                           </span>
                           <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-                            {/* In bếp */}
+                            {/* In món: tự chọn món cần in (bếp / quầy) */}
                             <button
-                              onClick={async () => {
-                                const { success, error: printErr } = await sendSmartPrintJobs(supabase, order.id);
-                                if (success) {
-                                  Swal.fire({ title: 'Đã gửi bếp!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
-                                } else {
-                                  Swal.fire('Lỗi in bếp', printErr || 'Không kết nối được máy in bếp', 'error');
-                                }
-                              }}
+                              onClick={() => openManualPrint(order)}
                               style={{ background: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 6, color: '#16a34a', cursor: 'pointer', padding: '3px 10px', fontSize: '0.76rem', fontWeight: 700 }}
-                            >In Bếp</button>
+                            >🖨 In món</button>
                             {/* In bill */}
                             <button
                               onClick={async () => {
@@ -5021,18 +5064,11 @@ export default function TablesPage() {
                         </div>
                         {/* Cancel this single bill */}
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', marginTop: 2, width: '100%' }}>
-                          {/* In bếp */}
+                          {/* In món: tự chọn món cần in (bếp / quầy) */}
                           <button
-                            onClick={async () => {
-                              const { success, error: printErr } = await sendSmartPrintJobs(supabase, order.id);
-                              if (success) {
-                                Swal.fire({ title: 'Đã gửi bếp!', icon: 'success', toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
-                              } else {
-                                Swal.fire('Lỗi in bếp', printErr || 'Không kết nối được máy in bếp', 'error');
-                              }
-                            }}
+                            onClick={() => openManualPrint(order)}
                             style={{ background: '#f0fdf4', border: '1.5px solid #86efac', borderRadius: 6, color: '#16a34a', cursor: 'pointer', padding: '3px 8px', fontSize: '0.7rem', fontWeight: 700 }}
-                          >In Bếp</button>
+                          >🖨 In món</button>
                           {/* In bill */}
                           <button
                             onClick={async () => {

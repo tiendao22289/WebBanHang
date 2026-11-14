@@ -7,10 +7,13 @@
 -- 2. Chỉ cộng dồn vào dòng CÙNG giá và KHÔNG phải quà: trước đây thêm 2 phần nghêu
 --    trả tiền mà bàn đã có nghêu quà 8 tặng 1 (0đ) thì bị cộng vào dòng quà → mất tiền.
 -- 3. Từ chối số lượng < 1 hoặc giá âm (trước đây số lượng âm làm bớt món đã ăn).
--- 4. Món bếp (đợt 2): luôn là dòng mới và tự in phiếu bếp ĐÚNG các dòng vừa gửi
+-- 4. Món bếp (đợt 2): luôn là dòng mới. Không cộng vào dòng cũ vì phiếu in cả số
+--    lượng của dòng — dòng riêng thì nút In bếp in đúng phần mới.
+-- 5. Chỉ dòng có "print": true (món giỏ khách nhân viên Gửi hộ) mới tự in phiếu bếp
 --    (queue_kitchen_tickets trong kitchen_tickets.sql — cài file đó TRƯỚC file này).
---    Không cộng vào dòng cũ vì phiếu in cả số lượng của dòng. Lỗi tạo phiếu không
---    làm mất món: món vẫn vào bill, trang Bàn hiện "chưa báo bếp".
+--    Nhân viên tự thêm món / nước / khăn (kể cả lúc tính tiền) thì KHÔNG tự in: món
+--    bếp hiện "chưa báo bếp", nhân viên bấm In bếp / In món khi cần (14/11/2026).
+--    Lỗi tạo phiếu không làm mất món: món vẫn vào bill.
 --
 -- Chạy lại được nhiều lần. Cài bằng workflow "Apply Finance Migration".
 -- ============================================================
@@ -134,11 +137,13 @@ BEGIN
         p_staff_id,
         p_staff_name
       ) RETURNING id INTO v_new_id;
-      IF v_printer IS NOT NULL THEN v_kitchen_ids := v_kitchen_ids || v_new_id; END IF;
+      IF v_printer IS NOT NULL AND COALESCE((v_item->>'print')::boolean, false) THEN
+        v_kitchen_ids := v_kitchen_ids || v_new_id;
+      END IF;
     END IF;
   END LOOP;
 
-  -- 3. Báo bếp đúng các dòng món bếp vừa ghi.
+  -- 3. Báo bếp đúng các dòng món bếp vừa ghi có "print": true.
   IF cardinality(v_kitchen_ids) > 0 THEN
     BEGIN
       v_print_jobs := queue_kitchen_tickets(v_order_id, v_kitchen_ids);

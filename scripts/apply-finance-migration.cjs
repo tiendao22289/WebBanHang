@@ -311,11 +311,11 @@ async function main() {
   console.log(JSON.stringify(kitchen));
   if (!kitchen.sent_col || !kitchen.trigger_on || !kitchen.web_can_print || !kitchen.web_can_add) throw new Error('Chưa cài được phần báo bếp.');
 
-  // Nhân viên gửi món: gửi lại không cộng 2 lần, không cộng vào dòng quà 0đ, tự in bếp món bếp (confirm_draft_order_lines.sql).
+  // Nhân viên gửi món: gửi lại không cộng 2 lần, không cộng vào dòng quà 0đ, chỉ tự in bếp món giỏ khách Gửi hộ (confirm_draft_order_lines.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'confirm_draft_order_lines.sql'), 'utf8'));
   const [draft] = await query(`SELECT
     to_regclass('public.draft_order_lines') IS NOT NULL AS lines,
-    position('queue_kitchen_tickets' in pg_get_functiondef('public.confirm_draft_order(uuid,jsonb,uuid,text)'::regprocedure)) > 0 AS fn_updated,
+    position($$v_item->>'print'$$ in pg_get_functiondef('public.confirm_draft_order(uuid,jsonb,uuid,text)'::regprocedure)) > 0 AS fn_updated,
     has_function_privilege('anon', 'public.confirm_draft_order(uuid,jsonb,uuid,text)', 'EXECUTE') AS web_can_call,
     NOT has_table_privilege('anon', 'public.draft_order_lines', 'SELECT') AS anon_blocked`);
   console.log(JSON.stringify(draft));

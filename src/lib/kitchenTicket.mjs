@@ -21,13 +21,34 @@ export function resolvePrintCategory(item, menuOptions = []) {
   return cat;
 }
 
-// Máy bếp nhận category này, hoặc null nếu món đi máy in hoá đơn / không có máy.
-export function kitchenPrinterFor(categoryId, printers) {
+// Máy đang bật nhận category này (máy bếp hoặc máy hoá đơn ở quầy), không có thì máy mặc định.
+export function printerForCategory(categoryId, printers) {
   const active = (printers || []).filter(p => p.is_active)
     .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const routed = (categoryId && active.find(p => (p.printer_categories || []).some(pc => pc.category_id === categoryId)))
+  return (categoryId && active.find(p => (p.printer_categories || []).some(pc => pc.category_id === categoryId)))
     || active.find(p => p.is_default) || null;
+}
+
+// Máy bếp nhận category này, hoặc null nếu món đi máy in hoá đơn / không có máy.
+export function kitchenPrinterFor(categoryId, printers) {
+  const routed = printerForCategory(categoryId, printers);
   return routed && !routed.is_bill_printer ? routed : null;
+}
+
+// Nút "In món" (nhân viên tự chọn món cần in): gom các dòng đã chọn theo máy in của từng
+// món — món bếp ra máy bếp, nước / bia / khăn ra máy quầy. Mỗi máy 1 phiếu chỉ in đúng
+// các dòng đó (only_item_ids). Dòng giảm giá (giá âm, không có món) không in.
+export function manualPrintJobs(orderId, items, printers, menuOptionsOf) {
+  const byPrinter = new Map();
+  const sorted = [...(items || [])].sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  for (const item of sorted) {
+    if (!item.menu_item_id && (Number(item.unit_price) || 0) < 0) continue;
+    const printer = printerForCategory(resolvePrintCategory(item, menuOptionsOf(item)), printers);
+    if (!printer) continue;
+    if (!byPrinter.has(printer.id)) byPrinter.set(printer.id, []);
+    byPrinter.get(printer.id).push(item.id);
+  }
+  return [...byPrinter].map(([printerId, ids]) => ({ order_id: orderId, printer_id: printerId, only_item_ids: ids, status: 'pending' }));
 }
 
 export function isKitchenItem(item, printers, menuOptions) {
