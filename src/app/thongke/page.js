@@ -20,6 +20,16 @@ const weekdayOf = d => new Date(`${d}T00:00:00Z`).getUTCDay();
 const WEEKDAYS = ['Chủ nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'];
 const SHORT_DAYS = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
 const money = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
+// Dư / thiếu của một phiếu đi chợ: dư đã trả chủ, chuyển phiếu sau, giữ lại bù thì không còn "phải trả lại chủ".
+// Phiếu cũ (báo cáo đã lưu trước đây) chỉ có left = dư gốc → hiện như trước.
+const noteCashText = n => {
+  const bal = n.balance ?? n.left;
+  if (bal < 0) return `Thiếu ${money(-bal)} (bỏ thêm)${n.settled ? ` · đã bù ${money(n.settled)}${-n.left > 0 ? ` · còn ${money(-n.left)}` : ''}` : ''}`;
+  const parts = [n.returned > 0 && `đã trả chủ ${money(n.returned)}`, n.carriedOut > 0 && `chuyển phiếu sau ${money(n.carriedOut)}`,
+    n.offsetOut > 0 && `giữ lại bù ${money(n.offsetOut)}`].filter(Boolean);
+  if (!parts.length) return `Dư ${money(bal)} trả lại chủ`;
+  return `Dư ${money(bal)} · ${parts.join(' · ')} · ${n.left > 0 ? `còn ${money(n.left)} chưa trả chủ` : 'hết dư'}`;
+};
 // Số gọn cho biểu đồ: 1,2tr · 850k.
 const compact = n => {
   const v = Math.abs(Number(n) || 0);
@@ -596,7 +606,7 @@ function NotesDayCard({ notes }) {
           </li>)}</ul>}
           <div className="tk-note-foot">
             <span>Trả ngay {money(n.paidNow || 0)}{n.debt ? ` · nợ ${money(n.debt)}` : ''}{n.funded ? ` · trả nợ cũ ${money(n.funded)}` : ''}</span>
-            {n.left !== null && n.left !== undefined && <b className={n.left >= 0 ? 'tk-good-text' : 'tk-bad-text'}>{n.left >= 0 ? `Dư ${money(n.left)} trả lại chủ` : `Thiếu ${money(-n.left)} (bỏ thêm)`}</b>}
+            {n.left !== null && n.left !== undefined && <b className={n.left >= 0 ? 'tk-good-text' : 'tk-bad-text'}>{noteCashText(n)}</b>}
           </div>
           {n.photos?.length > 0 && <div className="tk-note-photos">{n.photos.map((p, k) => <button key={p} type="button" className="tk-bill-btn" onClick={() => showPhoto(n, p, k)}>📷 Ảnh hàng {k + 1}</button>)}</div>}
           {n.mismatch && <p className="tk-warn-box">⚠ Phiếu lệch tiền: tổng ghi {money(n.mismatch.saved)} nhưng các món cộng lại {money(n.mismatch.items)}.</p>}

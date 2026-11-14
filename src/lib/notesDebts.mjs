@@ -147,6 +147,25 @@ export function planOffsets(sources, shortages) {
   return { offsets, returns };
 }
 
+/**
+ * "Còn phải đưa chủ" tính theo từng người: tiền thừa của ai chỉ trừ tiền bỏ thêm của chính người đó
+ * (như planOffsets). leftovers = openLeftovers, shortages = openShortages.
+ * → { held, short (tổng), toOwner (người đi chợ còn phải đưa chủ), owes (chủ còn nợ người đi chợ) }.
+ */
+export function handoverTotals(leftovers = [], shortages = []) {
+  const by = new Map();
+  const of = id => { if (!by.has(id)) by.set(id, { held: 0, short: 0 }); return by.get(id); };
+  for (const l of leftovers) of(l.staff_id).held += Number(l.left) || 0;
+  for (const s of shortages) of(s.staff_id).short += Number(s.short) || 0;
+  const out = { held: 0, short: 0, toOwner: 0, owes: 0 };
+  for (const p of by.values()) {
+    out.held += p.held; out.short += p.short;
+    out.toOwner += Math.max(0, p.held - p.short);
+    out.owes += Math.max(0, p.short - p.held);
+  }
+  return out;
+}
+
 /** Tiền thừa người đi chợ còn cầm (chưa trả chủ, chưa chuyển sang phiếu sau). */
 export const noteLeftover = (note, payments = []) => noteMoney(note, payments).left;
 

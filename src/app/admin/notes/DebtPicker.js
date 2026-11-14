@@ -18,7 +18,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { allOpenDebts, allocateToDebts, debtKey } from '@/lib/notesDebts.mjs';
+import { allOpenDebts, allocateToDebts, debtKey, handoverTotals } from '@/lib/notesDebts.mjs';
 
 const money = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
 const dayMonth = iso => { const d = new Date(new Date(iso).getTime() + 7 * 3600000).toISOString(); return `${d.slice(8, 10)}/${d.slice(5, 7)}`; };
@@ -36,10 +36,11 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
   const kept = leftovers.filter(l => !returned.includes(l.note_id));
   const leftoverTotal = kept.reduce((a, l) => a + l.left, 0);
   const returnedTotal = leftovers.reduce((a, l) => a + (returned.includes(l.note_id) ? l.left : 0), 0);
-  // Tiền thừa đang cầm − tiền bỏ thêm chưa bù = số còn phải đưa chủ (âm = chủ còn nợ người đi chợ).
-  const heldTotal = leftovers.reduce((a, l) => a + l.left, 0);
-  const shortTotal = shortages.reduce((a, l) => a + l.short, 0);
-  const net = heldTotal - shortTotal;
+  // Tiền thừa đang cầm − tiền bỏ thêm chưa bù = số còn phải đưa chủ (âm = chủ còn nợ người đi chợ),
+  // tính theo từng người: tiền thừa của ai chỉ trừ tiền bỏ thêm của chính người đó.
+  const hand = handoverTotals(leftovers, shortages);
+  const heldTotal = hand.held, shortTotal = hand.short;
+  const net = hand.toOwner > 0 ? hand.toOwner : -hand.owes;
 
   // "Lấy tiền dư / tiền thừa trả nợ": chia vào khoản đã tích trước, rồi phiếu cũ nhất.
   useEffect(() => {
@@ -79,7 +80,7 @@ export default function DebtPicker({ notes, value, onChange, surplus, useSurplus
             <span>💵 Tiền thừa phiếu trước{returnedTotal > 0 && <small> · đã trả chủ {money(returnedTotal)}</small>}</span><b>{money(leftoverTotal)}</b><ChevronDown size={16} className={showLeft ? 'up' : ''} />
           </button>
           {shortTotal > 0 && <div className={`np-net${net < 0 ? ' owe' : ''}`}>
-            <span>{net >= 0 ? 'Còn phải đưa chủ' : 'Chủ còn nợ người đi chợ'} <small>= thừa {money(heldTotal)} − bỏ thêm {money(shortTotal)}</small></span>
+            <span>{net >= 0 ? 'Còn phải đưa chủ' : 'Chủ còn nợ người đi chợ'} <small>= thừa {money(heldTotal)} − bỏ thêm {money(shortTotal)}{hand.toOwner > 0 && hand.owes > 0 ? ` (tính riêng từng người; chủ còn nợ ${money(hand.owes)})` : ''}</small></span>
             <b>{money(Math.abs(net))}</b>
           </div>}
           {showLeft && leftovers.map(l => {

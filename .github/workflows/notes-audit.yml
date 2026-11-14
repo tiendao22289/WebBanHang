@@ -1,0 +1,28 @@
+name: Notes Audit
+# Chạy tay: kiểm tra Sổ tay trên DB thật (chỉ đọc) — tiền từng phiếu, nợ / trả nợ, tiền thừa / trả chủ / bù,
+# ô thống kê theo tháng. Không in tên / SĐT / nội dung phiếu (nhân viên ghi NV-xxxx).
+on:
+  workflow_dispatch:
+    inputs:
+      months:
+        description: 'Tháng YYYY-MM, cách nhau dấu phẩy (bỏ trống = tháng trước và tháng này)'
+        required: false
+permissions:
+  contents: read
+jobs:
+  audit:
+    if: github.ref == 'refs/heads/master' && github.repository == 'tiendao22289/WebBanHang'
+    runs-on: [self-hosted, Windows, X64, webbanhang-production]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Audit Sổ tay
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+        env:
+          AUDIT_MONTHS: ${{ inputs.months }}
+        run: |
+          & node scripts/notes-audit.cjs 'C:\Tool\SupabaseLocal\production.env' "$env:AUDIT_MONTHS"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

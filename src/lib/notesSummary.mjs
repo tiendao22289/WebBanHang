@@ -3,20 +3,28 @@
  */
 import { parsePrice, parseQty } from './notesMath.mjs';
 
-/** Khoảng thời gian của bộ lọc Ngày / Tháng / Năm theo giờ trên máy (null = tất cả). */
-export function filterRange(day, month, year) {
-  const now = new Date();
-  const y = parseInt(year) || (day || month ? now.getFullYear() : null);
+const VN_OFFSET = 7 * 3600000;
+const vnDate = (y, m, d) => new Date(Date.UTC(y, m, d) - VN_OFFSET);
+
+/**
+ * Khoảng thời gian của bộ lọc Ngày / Tháng / Năm theo giờ Việt Nam (không theo giờ trên máy —
+ * điện thoại để sai múi giờ vẫn ra đúng ngày). Thiếu tháng/năm = tháng/năm hiện tại (giờ VN).
+ * null = tất cả. `now` chỉ để test.
+ */
+export function filterRange(day, month, year, now = Date.now()) {
+  const vnNow = new Date(Number(now) + VN_OFFSET);
+  const y = parseInt(year) || (day || month ? vnNow.getUTCFullYear() : null);
   if (!y) return null;
   if (day) {
-    const m = (parseInt(month) || now.getMonth() + 1) - 1;
-    return { start: new Date(y, m, parseInt(day)), end: new Date(y, m, parseInt(day) + 1) };
+    const m = (parseInt(month) || vnNow.getUTCMonth() + 1) - 1;
+    return { start: vnDate(y, m, parseInt(day)), end: vnDate(y, m, parseInt(day) + 1) };
   }
-  if (month) return { start: new Date(y, parseInt(month) - 1, 1), end: new Date(y, parseInt(month), 1) };
-  return { start: new Date(y, 0, 1), end: new Date(y + 1, 0, 1) };
+  if (month) return { start: vnDate(y, parseInt(month) - 1, 1), end: vnDate(y, parseInt(month), 1) };
+  return { start: vnDate(y, 0, 1), end: vnDate(y + 1, 0, 1) };
 }
 
-const inRange = (iso, range) => {
+/** Phiếu có nằm trong khoảng lọc không (range null = mọi ngày) — danh sách phiếu và các ô dùng chung. */
+export const inRange = (iso, range) => {
   if (!range) return true;
   const t = new Date(iso).getTime();
   return t >= range.start.getTime() && t < range.end.getTime();

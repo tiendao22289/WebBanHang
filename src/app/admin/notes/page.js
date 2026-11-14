@@ -10,12 +10,12 @@ import { notesApi, notesApiWithPhotos, workforce } from '@/lib/staffApi';
 import { missingBills, needsBill, noBillReason, notePriceAlert, priceAlert, priceAlertText, purchasePrices } from '@/lib/notesChecks.mjs';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
 import { compressImage } from '@/lib/compressImage';
-import { filterRange, notesSummary } from './notesStats';
+import { filterRange, inRange, notesSummary } from './notesStats';
 import DebtPicker from './DebtPicker';
 import { KindTag, isOtherLine, newOtherLine } from './NoteKinds';
 import OtherCosts from './OtherCosts';
 import { BillPicker, MoneyInput, NoteItemsList, Section, TripPhotos, TripSummary, vnd } from './NewNoteParts';
-import { allOpenDebts, debtKey, fundDebtPayments, openLeftovers, openShortages, planOffsets } from '@/lib/notesDebts.mjs';
+import { allOpenDebts, debtKey, fundDebtPayments, handoverTotals, lineDebtBase, noteMoney, openLeftovers, openShortages, planOffsets } from '@/lib/notesDebts.mjs';
 import { seesAllNotes } from '@/lib/staffRoles.mjs';
 
 // Chỉ tính tiền thừa của phiếu từ tháng 10/2026 (khớp ô "Trả lại chủ" của tháng; phiếu cũ hơn đã trả chủ).
@@ -204,24 +204,10 @@ export default function StaffNotesPage() {
     alert('Đã gửi báo nghỉ!');
   };
 
-  // Filter notes by date
+  // Lọc phiếu theo Ngày / Tháng / Năm (giờ VN) — cùng khoảng với các ô thống kê, nên danh sách và ô luôn khớp.
   const filterNotesByDate = (notesList) => {
-    return notesList.filter(note => {
-      const d = new Date(note.created_at);
-      if (filterDay) {
-        return d.getDate() === parseInt(filterDay)
-          && d.getMonth() + 1 === parseInt(filterMonth || d.getMonth() + 1)
-          && d.getFullYear() === parseInt(filterYear || d.getFullYear());
-      }
-      if (filterMonth) {
-        return d.getMonth() + 1 === parseInt(filterMonth)
-          && d.getFullYear() === parseInt(filterYear || d.getFullYear());
-      }
-      if (filterYear) {
-        return d.getFullYear() === parseInt(filterYear);
-      }
-      return true;
-    });
+    const range = filterRange(filterDay, filterMonth, filterYear);
+    return notesList.filter(note => inRange(note.created_at, range));
   };
 
   // ── Authentication Logic ──
@@ -346,36 +332,12 @@ export default function StaffNotesPage() {
   // Cách đọc giá / số lượng dùng chung với máy chủ (notesMath): "2,5kg" = 2,5 · "250000" = 250.000đ.
   const parseVal = (str, isQty = false) => (isQty ? parseQty(str) : parsePrice(str));
 
+  // Tiền phiếu tính đúng như máy chủ lưu (noteTotals): làm tròn từng dòng, dòng tên trống và dòng rau / gia vị
+  // trống giá không tính; dòng đã trả nợ về sau vẫn là nợ lúc mua.
+  const rowsToSave = rows => rows.filter(i => String(i.name || '').trim() && !(i.preset && !String(i.price || '').trim()));
   const calculateTotals = () => {
-    let totalPaid = 0;
-    let totalDebt = 0;
-    let creditors = [];
-    
-    expenseItems.forEach(item => {
-      const price = parseVal(item.price);
-      const qty = parseVal(item.qty, true) || 1; // Default to 1 if no qty specified
-      const totalItemPrice = price * qty;
-      
-      if (item.name && totalItemPrice > 0) {
-        if (item.paymentStatus === 'full') {
-          totalPaid += totalItemPrice;
-        } else if (item.paymentStatus === 'debt') {
-          const debtAmt = item.debtAmount ? parseVal(item.debtAmount.replace(/\./g, '')) : totalItemPrice;
-          const cappedDebt = Math.min(debtAmt, totalItemPrice);
-          totalDebt += cappedDebt;
-          totalPaid += totalItemPrice - cappedDebt;
-          if (item.creditor && item.creditor.trim() !== '') {
-            creditors.push(item.creditor.trim());
-          }
-        }
-      }
-    });
-    
-    return { 
-      paid: totalPaid, 
-      debt: totalDebt,
-      creditors: [...new Set(creditors)].join(', ')
-    };
+    const t = noteTotals(rowsToSave(expenseItems));
+    return { paid: t.paid, debt: t.debt };
   };
 
   // Tiền của phiếu đi chợ đang ghi (cùng số cho các mục trong form và lúc lưu).
@@ -443,7 +405,7 @@ export default function StaffNotesPage() {
         note_type: newNoteType,
         items: newNoteType === 'expense' ? filled : [],
         note: newNoteContent,
-        input_amount: newNoteInputAmount,
+        input_amount: typedMoney(newNoteInputAmount),
         pay_debts: payDebts,
         carry_leftovers: carryLeftover && newNoteType === 'expense' ? keptLeftovers.map(l => ({ note_id: l.note_id, amount: l.left })) : [],
         // Tiền thật đưa chủ (đã trừ phần giữ lại bù tiền bỏ thêm) và các khoản bù.
@@ -585,23 +547,8 @@ export default function StaffNotesPage() {
   };
 
   const calculateEditTotals = () => {
-    let totalPaid = 0, totalDebt = 0;
-    editExpenseItems.forEach(item => {
-      const price = parseVal(item.price);
-      const qty = parseVal(item.qty, true) || 1;
-      const totalItemPrice = price * qty;
-      if (item.name && totalItemPrice > 0) {
-        if (item.paymentStatus === 'full') {
-          totalPaid += totalItemPrice;
-        } else if (item.paymentStatus === 'debt') {
-          const debtAmt = item.debtAmount ? parseVal(item.debtAmount.replace(/\./g, '')) : totalItemPrice;
-          const cappedDebt = Math.min(debtAmt, totalItemPrice);
-          totalDebt += cappedDebt;
-          totalPaid += totalItemPrice - cappedDebt;
-        }
-      }
-    });
-    return { paid: totalPaid, debt: totalDebt };
+    const t = noteTotals(rowsToSave(editExpenseItems));
+    return { paid: t.paid, debt: t.debt };
   };
 
   const submitEditNote = async note => {
@@ -709,7 +656,7 @@ export default function StaffNotesPage() {
     try {
       const body = {
         id: note.id, note_type: editNoteType, items: validItems, note: editNoteContent,
-        input_amount: editInputAmount, debt: editNoteType !== 'expense' ? finalDebtToSave : undefined,
+        input_amount: typedMoney(editInputAmount), debt: editNoteType !== 'expense' ? finalDebtToSave : undefined,
         updated_at: editUpdatedAt,
       };
       saved = (sendBills.length ? await notesApiWithPhotos('edit', body, [], sendBills) : await notesApi('edit', body)).note;
@@ -907,7 +854,8 @@ export default function StaffNotesPage() {
 
         // compute totals
         let grandTotal = 0, paidTotal = 0, debtTotal = 0;
-        const rows = data.items.filter(i => i.name?.trim());
+        // __at: vị trí thật trong phiếu (phiếu cũ có dòng tên trống) — trả nợ theo đúng dòng.
+        const rows = data.items.map((it, at) => ({ ...it, __at: at })).filter(i => i.name?.trim());
         // Dòng ghi giá cao bất thường so với các lần mua trước phiếu này.
         const viewed = notes.find(n => n.id === noteId);
         const alertOf = viewed ? notePriceAlert(viewed, prices) : () => null;
@@ -1008,7 +956,8 @@ export default function StaffNotesPage() {
                 const total = p * q;
                 const isDebt = item.paymentStatus === 'debt';
                 const paidAmt = item.paid_amount || 0;
-                const debtBase = item.debtAmount ? Math.min(parseVal(item.debtAmount.replace(/\./g, '')), total) : (isDebt ? total : 0);
+                // Như máy chủ (lineDebtBase): dòng "Đủ" chưa trả nợ lần nào thì không có nợ, dù còn sót số nợ cũ.
+                const debtBase = lineDebtBase(item);
                 const remaining = debtBase > 0 ? Math.max(0, debtBase - paidAmt) : 0;
                 const isThisPaying = payingItem?.noteId === noteId && payingItem?.idx === idx;
                 const hasPayHistory = item.payment_logs?.length > 0;
@@ -1112,7 +1061,7 @@ export default function StaffNotesPage() {
                               onClick={() => {
                                 const num = Number(payItemInput.replace(/\./g, ''));
                                 // Thẻ ở danh sách cũng có nút trả nợ: lấy đúng phiếu theo mã, không theo phiếu đang mở.
-                                handleItemPayment(notes.find(n => n.id === noteId) || viewingNote, idx, num);
+                                handleItemPayment(notes.find(n => n.id === noteId) || viewingNote, item.__at ?? idx, num);
                               }}
                               style={{ padding: '6px 14px', background: '#16a34a', color: 'white', border: 'none', borderRadius: 7, fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer' }}
                             >
@@ -1394,10 +1343,10 @@ export default function StaffNotesPage() {
   const staffNotes = notes.filter(n => !seesAllNotes(currentUser.role) || selectedStaff === 'ALL' || n.staff?.full_name === selectedStaff);
   const summary = notesSummary(staffNotes, payments, filterRange(filterDay, filterMonth, filterYear));
   // Ô "Còn phải đưa chủ": tiền thừa người đi chợ đang cầm − tiền họ đã bỏ thêm chưa bù, tính tới giờ.
+  // Tính theo từng người (tiền thừa của A không bù tiền bỏ thêm của B): còn phải đưa chủ và chủ còn nợ có thể cùng có.
   const handNow = (() => {
-    const held = openLeftovers(staffNotes, payments, LEFTOVER_SINCE).reduce((a, l) => a + l.left, 0);
-    const short = openShortages(staffNotes, payments, SHORTAGE_SINCE).reduce((a, l) => a + l.short, 0);
-    return { held, short, net: held - short };
+    const h = handoverTotals(openLeftovers(staffNotes, payments, LEFTOVER_SINCE), openShortages(staffNotes, payments, SHORTAGE_SINCE));
+    return { ...h, net: h.toOwner > 0 ? h.toOwner : -h.owes };
   })();
   const totalInputAmount = summary.given;
   const totalSpent = summary.cash;
@@ -1628,7 +1577,9 @@ export default function StaffNotesPage() {
           <div style={{ background: handNow.net >= 0 ? '#f0fdf4' : '#fff7ed', borderRadius: 9, padding: '8px 10px', border: `1px solid ${handNow.net >= 0 ? '#86efac' : '#fdba74'}`, textAlign: 'center', minWidth: 0 }}>
             <div style={{ fontSize: 10, color: handNow.net >= 0 ? '#15803d' : '#c2410c', fontWeight: 500, marginBottom: 2 }}>{handNow.net > 0 ? '↩ Còn phải đưa chủ' : handNow.net < 0 ? '⚠️ Chủ còn nợ NV' : '✅ Đã đưa chủ hết'}</div>
             <div style={{ fontWeight: 800, color: handNow.net >= 0 ? '#15803d' : '#c2410c', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatMoney(Math.abs(handNow.net))}</div>
-            <div style={{ fontSize: 9, color: '#6b7280', marginTop: 1 }}>{handNow.short > 0 ? `thừa ${formatMoney(handNow.held).replace('₫', 'đ')} − bỏ thêm ${formatMoney(handNow.short).replace('₫', 'đ')}` : 'tới giờ'}</div>
+            <div style={{ fontSize: 9, color: '#6b7280', marginTop: 1 }}>{handNow.toOwner > 0 && handNow.owes > 0
+              ? `chủ còn nợ NV ${formatMoney(handNow.owes).replace('₫', 'đ')}`
+              : handNow.short > 0 ? 'đã trừ tiền bỏ thêm của từng người' : 'tới giờ'}</div>
           </div>
           )}
           <div style={{ background: totalDebt > 0 ? '#fff1f2' : '#f0fdf4', borderRadius: 9, padding: '8px 10px', border: `1px solid ${totalDebt > 0 ? '#fca5a5' : '#86efac'}`, textAlign: 'center', minWidth: 0 }}>
@@ -1832,8 +1783,8 @@ export default function StaffNotesPage() {
               {editingNoteId === viewingNote.id && (
                 <div ref={editFormRef} style={{ marginBottom: 16, padding: 16, background: '#f0f9ff', borderRadius: 12, border: '1.5px solid #bae6fd' }}>
                   <div style={{ fontWeight: 700, color: '#0369a1', marginBottom: 12, fontSize: 14 }}>✏️ Chỉnh sửa ghi chú</div>
-                  {/* Note type selector */}
-                  <div style={{ marginBottom: 10 }}>
+                  {/* Note type selector — phiếu đi chợ không đổi sang loại khác (máy chủ cũng chặn khi phiếu có tiền) */}
+                  {viewingNote.note_type !== 'expense' && <div style={{ marginBottom: 10 }}>
                     <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Loại báo cáo</label>
                     <select value={editNoteType} onChange={e => setEditNoteType(e.target.value)} style={{ width: '100%', padding: '8px 10px', border: '1.5px solid #d1d5db', borderRadius: 8, fontSize: 13, outline: 'none' }}>
                       <option value="expense">Đi chợ / Chi tiền</option>
@@ -1841,7 +1792,7 @@ export default function StaffNotesPage() {
                       <option value="repair">Yêu cầu sửa chữa</option>
                       <option value="other">Ghi chú khác</option>
                     </select>
-                  </div>
+                  </div>}
                   {/* Content fields */}
                   {editNoteType === 'expense' ? (
                     <div>
@@ -1872,19 +1823,39 @@ export default function StaffNotesPage() {
                       </div>
                       {/* Tổng kết chi tiêu khi edit */}
                       {(() => {
+                        // Tính như máy chủ sẽ lưu: tiền hàng theo dòng (noteTotals) + sổ tiền của phiếu (dư cũ cộng vào,
+                        // trả nợ cũ bằng tiền phiếu này, đã trả chủ / chuyển đi / giữ lại bù) — noteMoney.
                         const { paid: ePaid, debt: eDebt } = calculateEditTotals();
                         const eInputAmt = typedMoney(editInputAmount);
-                        const eBalance = eInputAmt > 0 ? eInputAmt - ePaid : null;
-                        if (ePaid === 0 && eDebt === 0 && eInputAmt === 0) return null;
+                        let storedDoc = {};
+                        try { storedDoc = JSON.parse(viewingNote.content) || {}; } catch { storedDoc = {}; }
+                        const m = noteMoney({ ...viewingNote, note_type: 'expense', amount: ePaid,
+                          content: JSON.stringify({ ...storedDoc, input_amount: eInputAmt }) }, payments);
+                        const eBalance = m.given + m.carriedIn > 0 ? m.balance : null;
+                        const usedUp = m.returned + m.carriedOut + m.offsetOut;
+                        if (ePaid === 0 && eDebt === 0 && eInputAmt === 0 && m.carriedIn === 0) return null;
                         return (
                           <div style={{ padding: '8px 12px', background: '#fff7ed', borderRadius: 8, border: '1px solid #fed7aa', fontSize: 12, marginBottom: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            {ePaid > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>💸 Thực chi:</span><strong style={{ color: '#16a34a' }}>{formatMoney(ePaid)}</strong></div>}
-                            {eDebt > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>📋 Nợ:</span><strong style={{ color: '#dc2626' }}>{formatMoney(eDebt)}</strong></div>}
+                            {ePaid > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>💸 Trả ngay lúc mua:</span><strong style={{ color: '#16a34a' }}>{formatMoney(ePaid)}</strong></div>}
+                            {eDebt > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>📋 Mua nợ:</span><strong style={{ color: '#dc2626' }}>{formatMoney(eDebt)}</strong></div>}
                             {eInputAmt > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>💵 Tiền được giao:</span><strong style={{ color: '#1d4ed8' }}>{formatMoney(eInputAmt)}</strong></div>}
+                            {m.carriedIn > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>➕ Dư cũ cộng vào:</span><strong style={{ color: '#15803d' }}>{formatMoney(m.carriedIn)}</strong></div>}
+                            {m.funded > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>💳 Trả nợ cũ bằng tiền phiếu này:</span><strong style={{ color: '#7c3aed' }}>{formatMoney(m.funded)}</strong></div>}
+                            {eBalance !== null && usedUp > 0 && m.balance > 0 && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#6b7280' }}>
+                                <span>{[m.returned > 0 && `đã trả chủ ${formatMoney(m.returned)}`, m.carriedOut > 0 && `đã chuyển phiếu sau ${formatMoney(m.carriedOut)}`, m.offsetOut > 0 && `giữ lại bù ${formatMoney(m.offsetOut)}`].filter(Boolean).join(' · ')}</span>
+                                <strong>còn cầm {formatMoney(m.left)}</strong>
+                              </div>
+                            )}
                             {eBalance !== null && (
                               <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, padding: '5px 8px', borderRadius: 6, marginTop: 2, background: eBalance >= 0 ? '#f0fdf4' : '#fef2f2', border: `1px solid ${eBalance >= 0 ? '#86efac' : '#fca5a5'}` }}>
-                                <span style={{ color: eBalance >= 0 ? '#15803d' : '#dc2626' }}>{eBalance >= 0 ? '✅ Còn thừa — trả lại chủ:' : '⚠️ Còn thiếu:'}</span>
+                                <span style={{ color: eBalance >= 0 ? '#15803d' : '#dc2626' }}>{eBalance >= 0 ? (usedUp > 0 ? '✅ Còn thừa:' : '✅ Còn thừa — trả lại chủ:') : '⚠️ Còn thiếu (bỏ thêm):'}</span>
                                 <span style={{ color: eBalance >= 0 ? '#15803d' : '#dc2626' }}>{formatMoney(Math.abs(eBalance))}</span>
+                              </div>
+                            )}
+                            {eBalance !== null && eBalance < 0 && m.settled > 0 && (
+                              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#6b7280' }}>
+                                <span>đã bù {formatMoney(m.settled)}</span><strong>chủ còn nợ {formatMoney(m.short)}</strong>
                               </div>
                             )}
                           </div>
