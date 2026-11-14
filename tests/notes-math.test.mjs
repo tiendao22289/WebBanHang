@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lineWarnings, noteTotals, normalizePriceInput, parsePrice, parseQty } from '../src/lib/notesMath.mjs';
+import { lineWarnings, noteTotals, normalizePriceInput, parsePrice, parseQty, typedMoney } from '../src/lib/notesMath.mjs';
+
+test('money typed in a money box is read back right ("Tiền chủ giao 10.000.000" was 0đ in the summary)', () => {
+  assert.equal(typedMoney('10.000.000'), 10000000);
+  assert.equal(typedMoney('10 000 000'), 10000000, 'a phone may group with spaces');
+  assert.equal(typedMoney('640.000đ'), 640000);
+  assert.equal(typedMoney(''), 0);
+  assert.equal(typedMoney(null), 0);
+  assert.equal(typedMoney('abc'), 0);
+});
 
 test('prices are read the way the shop writes them', () => {
   for (const [text, value] of [
