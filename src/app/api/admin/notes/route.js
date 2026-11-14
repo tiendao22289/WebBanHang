@@ -49,7 +49,14 @@ const vnDay = iso => new Date(new Date(iso).getTime() + 7 * 3600000).toISOString
 const stamp = () => new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' });
 const vnd = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')} đ`;
 const str = (v, max) => String(v ?? '').slice(0, max);
-const money = v => { const n = Math.round(Number(String(v ?? '').replace(/\./g, ''))); return Number.isFinite(n) && n >= 0 && n <= MAX_MONEY ? n : 0; };
+// Số tiền trình duyệt gửi: số, hoặc chữ đã chấm / cách hàng nghìn ("10.000.000", "10 000 000") → chỉ giữ chữ số.
+// Số âm → 0. (Trước đây chỉ bỏ dấu chấm: máy nhóm số bằng dấu cách / dấu phẩy thì tiền chủ giao lưu thành 0.)
+const money = v => {
+  const s = String(v ?? '').trim();
+  if (s.startsWith('-')) return 0;
+  const n = Number(s.replace(/\D/g, ''));
+  return Number.isFinite(n) && n <= MAX_MONEY ? n : 0;
+};
 
 /** Dòng hàng từ trình duyệt → chỉ giữ các ô nhập; tiền đã trả nợ lấy từ dòng đang lưu. */
 function cleanItems(items, stored = []) {
@@ -83,6 +90,8 @@ function cleanItems(items, stored = []) {
       // Dòng đã trả nợ xong thì giữ là "đủ"; nợ lúc mua vẫn tính theo debtAmount / tổng dòng.
       if (old.paymentStatus === 'full' && row.paymentStatus === 'debt' && row.paid_amount >= debtBase(row)) row.paymentStatus = 'full';
     }
+    // Dòng trả đủ, chưa từng trả nợ: bỏ "số nợ / nợ của ai" còn sót khi đổi Nợ → Đủ (thẻ phiếu khỏi báo nợ ảo).
+    if (row.paymentStatus === 'full' && !row.paid_amount) { row.debtAmount = ''; row.creditor = ''; }
     return row;
   });
 }
@@ -360,7 +369,7 @@ export async function POST(request) {
       if (noBill.length) return fail(missingText(noBill));
       // Các khoản nợ cũ người ghi chọn trả bằng tiền của phiếu này — kiểm tra hết trước khi lưu.
       const requested = Array.isArray(body.pay_debts) ? body.pay_debts.slice(0, 60) : [];
-      const carryReq = type === 'expense' && items.length && Array.isArray(body.carry_leftovers) ? body.carry_leftovers.slice(0, 30) : [];
+      const carryReq = type === 'expense' && Array.isArray(body.carry_leftovers) ? body.carry_leftovers.slice(0, 30) : [];
       // Tiền thừa phiếu trước người đi chợ đã đưa lại chủ (tích "Đã trả chủ" lúc ghi phiếu mới).
       const returnReq = Array.isArray(body.return_leftovers) ? body.return_leftovers.slice(0, 30) : [];
       // Tiền thừa giữ lại bù tiền người đi chợ đã bỏ thêm ở phiếu trước (from_note_id null = tiền thừa phiếu này).
@@ -448,7 +457,9 @@ export async function POST(request) {
       let content, amount = 0, debt = 0;
       const storage = statusDatabase();
       const photoPaths = [], uploaded = [];
-      if (items.length) {
+      // Phiếu đi chợ có tiền chủ giao / tiền dư cộng vào mà không có dòng hàng (vd. chỉ đi trả nợ cũ): vẫn lưu
+      // dạng phiếu tiền để giữ tiền giao, tiền dư, "đã trả chủ" (trước đây lưu thành chữ, mất hết các số này).
+      if (items.length || (type === 'expense' && (money(body.input_amount) > 0 || carry.length > 0))) {
         const t = noteTotals(items);
         amount = t.paid; debt = t.debt;
         // Ảnh lưu trước, phiếu sau: ghi phiếu lỗi thì xoá ảnh vừa lưu (bên dưới).
@@ -608,7 +619,27 @@ export async function POST(request) {
       const type = TYPES.includes(body.note_type) ? body.note_type : note.note_type;
       const stored = parseContent(note.content);
       const storedItems = stored?.type === 'structured_expense' && Array.isArray(stored.items) ? stored.items : [];
+      // Phiếu đi chợ có tiền không đổi sang loại khác: Sổ thu chi chỉ tính phiếu đi chợ, Sổ tay / Thống kê tính
+      // mọi phiếu → đổi loại làm các trang lệch nhau (tiền phiếu vẫn còn).
+      const hasMoney = (Number(note.amount) || 0) + (Number(note.debt) || 0) > 0 || storedItems.length > 0 || Number(stored?.input_amount) > 0;
+      if (note.note_type === 'expense' && type !== 'expense' && hasMoney) return fail('Phiếu đi chợ có tiền không đổi sang loại khác được.');
       const items = type === 'expense' ? cleanItems(body.items, storedItems) : [];
+      // Dòng đã trả nợ (một phần / hết): không xoá, không hạ số nợ dưới số đã trả, không đổi thành "Đủ" khi
+      // còn nợ — tiền đã trả nợ (và phiếu đã bỏ tiền trả) phải còn khớp với dòng.
+      if (type === 'expense') {
+        const newById = new Map(items.map(i => [i._id, i]));
+        for (const [idx, o] of storedItems.entries()) {
+          const paid = Number(o?.paid_amount) || 0;
+          if (paid <= 0) continue;
+          const n = newById.get(o._id || `#${idx}`);
+          if (!n) return fail(`Dòng "${o.name}" đã trả nợ ${vnd(paid)} — không xoá được.`);
+          const owed = debtBase(n);
+          if (owed + 1 < paid) return fail(`Dòng "${n.name}" đã trả nợ ${vnd(paid)} — số nợ sau khi sửa (${vnd(owed)}) không được nhỏ hơn số đã trả.`);
+          if (n.paymentStatus === 'full' && paid + 1 < owed) {
+            return fail(`Dòng "${n.name}" mới trả nợ ${vnd(paid)} / ${vnd(owed)} — muốn trả nốt thì bấm "Trả nợ" ở dòng đó, không đổi sang "Đủ".`);
+          }
+        }
+      }
       const noteText = str(body.note, 4000);
       const ts = stamp(), by = user.full_name || 'Không rõ';
       // Ảnh hàng trên cân thêm lúc sửa (không bắt buộc; cả phiếu tối đa MAX_NOTE_PHOTOS).

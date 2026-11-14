@@ -7,7 +7,7 @@
  */
 import { lineWarnings, noteTotals, parsePrice, parseQty } from './notesMath.mjs';
 import { notesSummary } from './notesSummary.mjs';
-import { paymentItemIndex } from './notesDebts.mjs';
+import { noteMoney, paymentItemIndex } from './notesDebts.mjs';
 import { noBillReason, noBillText, notePriceAlert, priceAlertText, purchasePrices } from './notesChecks.mjs';
 
 export const ZALO_TEXT_LIMIT = 1900;
@@ -18,6 +18,20 @@ const dayMonth = iso => { const d = vnIso(iso); return `${d.slice(8, 10)}/${d.sl
 const readContent = content => { try { const d = JSON.parse(content); return d && typeof d === 'object' ? d : null; } catch { return null; } };
 const TYPE_LABEL = { stock: '📦 Báo thiếu', repair: '🔧 Sửa chữa', other: '📝 Ghi chú' };
 const named = items => (items || []).filter(i => String(i?.name || '').trim());
+
+/**
+ * Tiền của một phiếu đi chợ so với tiền chủ đưa (như trang Sổ tay — noteMoney): dư = chủ đưa + dư cũ
+ * − trả ngay − trả nợ cũ bằng tiền phiếu này; phần dư đã trả chủ / chuyển phiếu sau / giữ lại bù tiền
+ * bỏ thêm không còn "phải trả lại chủ". left ≥ 0: dư còn phải trả chủ; < 0: tiền bỏ thêm chưa được bù;
+ * null: phiếu không có tiền chủ đưa.
+ */
+export function noteCash(note, payments = []) {
+  const m = noteMoney(note, payments);
+  const hasMoney = m.given + m.carriedIn > 0;
+  return { ...m, hasMoney, left: hasMoney ? (m.balance >= 0 ? m.left : -m.short) : null };
+}
+const cashParts = m => [m.returned > 0 && `đã trả chủ ${vnd(m.returned)}`, m.carriedOut > 0 && `chuyển phiếu sau ${vnd(m.carriedOut)}`,
+  m.offsetOut > 0 && `giữ lại bù tiền bỏ thêm ${vnd(m.offsetOut)}`].filter(Boolean);
 // Dòng hàng đã nhận một lần trả nợ: tìm theo lịch sử trả của dòng, không theo vị trí (phiếu có thể đã bị sửa).
 const paidItem = (note, p) => { const items = readContent(note?.content)?.items; return Array.isArray(items) ? items[paymentItemIndex(items, p)] || null : null; };
 const lineTotal = item => Math.round(parsePrice(item.price) * parseQty(item.qty));
@@ -73,13 +87,13 @@ function noteBlock(note, index, ctx) {
   const paidNow = Number(note.amount) || 0;
   const funded = ctx.fundedBy.get(note.id) || 0;
   lines.push(`→ Tiền hàng ${vnd(saved)} · trả ngay ${vnd(paidNow)}${note.debt ? ` · nợ ${vnd(note.debt)}` : ''}${funded ? ` · trả nợ cũ ${vnd(funded)}` : ''}`);
-  const sumOf = list => (Array.isArray(list) ? list : []).reduce((a, r) => a + (Number(r?.amount) || 0), 0);
-  const carriedIn = sumOf(data.carried_in), carriedOut = sumOf(data.carried_out);
-  if (given || carriedIn) {
-    const left = given + carriedIn - paidNow - funded;
-    lines.push(`→ Chủ đưa ${vnd(given)}${carriedIn ? ` + dư cũ ${vnd(carriedIn)}` : ''} − đã chi ${vnd(paidNow + funded)} = ${left >= 0 ? `dư ${vnd(left)} (trả lại chủ)` : `thiếu ${vnd(-left)} (người đi chợ bỏ thêm)`}`);
+  const m = noteCash(note, ctx.payments);
+  if (m.hasMoney) {
+    const head = `→ Chủ đưa ${vnd(m.given)}${m.carriedIn ? ` + dư cũ ${vnd(m.carriedIn)}` : ''} − đã chi ${vnd(m.spent + m.funded)} = `;
+    const parts = cashParts(m);
+    if (m.balance >= 0) lines.push(`${head}dư ${vnd(m.balance)}${parts.length ? ` · ${parts.join(' · ')} · ${m.left ? `còn ${vnd(m.left)} chưa trả chủ` : 'hết dư'}` : ' (trả lại chủ)'}`);
+    else lines.push(`${head}thiếu ${vnd(-m.balance)} (người đi chợ bỏ thêm)${m.settled ? ` · đã bù ${vnd(m.settled)}${m.short ? ` · còn ${vnd(m.short)} chưa bù` : ''}` : ''}`);
   }
-  if (carriedOut) lines.push(`→ Đã chuyển ${vnd(carriedOut)} tiền dư sang phiếu sau`);
   const t = noteTotals(named(data.items));
   if (Math.abs(saved - t.total) >= 1000) lines.push(`⚠ Phiếu lệch tiền: tổng ghi ${vnd(saved)} nhưng các món cộng lại ${vnd(t.total)}`);
   const text = String(data.note || '').replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
@@ -101,7 +115,7 @@ export function notesReportMessages({ date, dayNotes = [], allNotes = [], paymen
   const inDay = iso => { const t = new Date(iso).getTime(); return t >= range.start.getTime() && t < range.end.getTime(); };
   const fundedBy = new Map();
   for (const p of payments) if (p.paid_from_note_id) fundedBy.set(p.paid_from_note_id, (fundedBy.get(p.paid_from_note_id) || 0) + Number(p.amount || 0));
-  const ctx = { date, fundedBy, staffName: id => staffNames[id], prices: purchasePrices(allNotes) };
+  const ctx = { date, fundedBy, payments, staffName: id => staffNames[id], prices: purchasePrices(allNotes) };
   const byId = new Map(allNotes.map(n => [n.id, n]));
   const sorted = [...dayNotes].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   const s = notesSummary(allNotes, payments, range);
@@ -232,6 +246,7 @@ export function notesDayData({ date, dayNotes = [], allNotes = [], payments = []
     const paidNow = Number(n.amount) || 0;
     const funded = fundedBy.get(n.id) || 0;
     const carriedIn = sumOf(data.carried_in), carriedOut = sumOf(data.carried_out);
+    const cash = noteCash(n, payments);
     const itemsTotal = noteTotals(named(data.items)).total;
     const alertOf = notePriceAlert(n, prices);
     // Ảnh bill của mối từng dòng (bill = đường dẫn ảnh; billFrom 'gallery' = ảnh chọn từ máy) và ảnh hàng
@@ -240,8 +255,10 @@ export function notesDayData({ date, dayNotes = [], allNotes = [], payments = []
     const photos = (Array.isArray(data.photos) ? data.photos : []).filter(p => typeof p === 'string');
     return {
       id: n.id, at: n.created_at, who: nameOf(n), kind: '🛒 Đi chợ', given, carriedIn, carriedOut, saved, paidNow, debt: Number(n.debt) || 0, funded,
-      // Dư (≥ 0, trả lại chủ) hoặc thiếu (< 0, người đi chợ bỏ thêm); null = không có tiền chủ đưa.
-      left: given || carriedIn ? given + carriedIn - paidNow - funded : null,
+      // balance: dư (≥ 0) / thiếu (< 0) so với tiền chủ đưa. left: dư CÒN phải trả chủ (đã trừ phần đã trả chủ,
+      // chuyển phiếu sau, giữ lại bù) hoặc −tiền bỏ thêm chưa bù; null = không có tiền chủ đưa.
+      balance: cash.hasMoney ? cash.balance : null, left: cash.left,
+      returned: cash.returned, offsetOut: cash.offsetOut, settled: cash.settled,
       mismatch: Math.abs(saved - itemsTotal) >= 1000 ? { saved, items: itemsTotal } : null,
       items: named(data.items).filter(i => lineTotal(i) || String(i.price || '').trim()).map(i => ({ ...itemMoney(i, alertOf(i)), ...billOf(i) })),
       ...(photos.length ? { photos } : {}),

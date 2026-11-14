@@ -643,3 +643,49 @@ test('"Đã trả chủ" on this trip keeps back the buyer\'s earlier top-up and
   assert.match((await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '10k' }], input_amount: '20.000',
     offsets: [{ from_note_id: null, to_note_id: short.id, amount: 5000 }] })).body.error, /chỉ còn 0 đ tiền bỏ thêm chưa bù/);
 });
+
+test('money typed with spaces reads the same as with dots, and a note with only the owner\'s money keeps it', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state, STAFF);
+  assert.equal((await post(api, { action: 'create', note_type: 'expense', items: [{ name: 'Rau', qty: '1', price: '50k' }], input_amount: '1 000 000' })).status, 200);
+  assert.equal(JSON.parse(state.staff_notes[0].content).input_amount, 1000000);
+  // Phiếu chưa ghi món nào, chỉ có tiền chủ giao: vẫn lưu tiền giao (không mất như trước).
+  const r = await post(api, { action: 'create', note_type: 'expense', items: [], input_amount: '500.000' });
+  assert.equal(r.status, 200);
+  const only = state.staff_notes.find(n => n.id === r.body.note.id);
+  assert.deepEqual([JSON.parse(only.content).type, JSON.parse(only.content).input_amount], ['structured_expense', 500000]);
+  assert.equal(noteMoney(only, []).left, 500000);
+});
+
+test('an edit cannot delete a paid debt line, set it below what was paid, or mark a part-paid line as paid in full', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  await post(api, { action: 'create', note_type: 'expense', items: items() });
+  const note = state.staff_notes[0];
+  assert.equal((await post(api, { action: 'pay_item', id: note.id, item_index: 1, amount: 100000 })).status, 200);
+  const rows = () => math.editRows(JSON.parse(state.staff_notes[0].content).items);
+  const edit = list => post(api, { action: 'edit', id: note.id, note_type: 'expense', items: list, note: '' });
+
+  assert.match((await edit(rows().filter((_, i) => i !== 1))).body.error, /đã trả nợ 100\.000/, 'deleting the paid line is refused');
+  assert.match((await edit(rows().map((it, i) => (i === 1 ? { ...it, qty: '1', price: '50k' } : it)))).body.error, /không được nhỏ hơn số đã trả/);
+  assert.match((await edit(rows().map((it, i) => (i === 1 ? { ...it, paymentStatus: 'full' } : it)))).body.error, /Trả nợ/);
+  assert.equal(state.staff_notes[0].paid_debt, 100000, 'nothing changed');
+  assert.equal(state.staff_notes[0].debt, 270000);
+
+  // Trả hết rồi thì đổi sang "Đủ" được; số đã trả vẫn giữ.
+  assert.equal((await post(api, { action: 'pay_item', id: note.id, item_index: 1, amount: 170000 })).status, 200);
+  assert.equal((await edit(rows().map((it, i) => (i === 1 ? { ...it, paymentStatus: 'full' } : it)))).status, 200);
+  assert.equal(JSON.parse(state.staff_notes[0].content).items[1].paid_amount, 270000);
+});
+
+test('a market note with money cannot be turned into another kind of note', async () => {
+  const state = { staff_notes: [], staff_note_payments: [] };
+  const api = load(state);
+  await post(api, { action: 'create', note_type: 'expense', items: items(), input_amount: '1.000.000' });
+  const note = state.staff_notes[0];
+  const r = await post(api, { action: 'edit', id: note.id, note_type: 'other', note: 'đổi loại' });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /không đổi sang loại khác/);
+  assert.equal(state.staff_notes[0].note_type, 'expense');
+  assert.equal(state.staff_notes[0].amount, 800000);
+});
