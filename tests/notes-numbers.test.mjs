@@ -48,3 +48,23 @@ test('a note\'s leftover in the report counts what was already handed back or mo
   assert.match(text, /dư 200\.000đ · đã trả chủ 150\.000đ · chuyển phiếu sau 50\.000đ · hết dư/);
   assert.match(text, /thiếu 100\.000đ \(người đi chợ bỏ thêm\) · đã bù 30\.000đ · còn 70\.000đ chưa bù/);
 });
+
+test('looking at an old day shows the leftover and the debts as they were at the end of that day', () => {
+  const n1 = { id: 'n1', staff_id: 's1', note_type: 'expense', created_at: '2026-11-02T02:00:00Z', staff: { full_name: 'Thy' }, amount: 300000, debt: 200000, paid_debt: 200000,
+    content: JSON.stringify({ type: 'structured_expense', input_amount: 500000, returned_logs: [{ amount: 200000, ts: '09:00 03/11/2026' }], items: [
+      { name: 'Ốc hương', qty: '1', price: '300k', paymentStatus: 'full' },
+      { name: 'Mực', qty: '1', price: '200k', paymentStatus: 'debt', creditor: 'Chị Lan', paid_amount: 200000, payment_logs: [{ amount: 200000 }] }] }) };
+  const payments = [{ note_id: 'n1', item_index: 1, amount: 200000, paid_at: '2026-11-03T02:00:00Z', paid_from_note_id: null }];
+  const day2 = { start: new Date('2026-11-01T17:00:00Z'), end: new Date('2026-11-02T17:00:00Z') };
+  const day3 = { start: new Date('2026-11-02T17:00:00Z'), end: new Date('2026-11-03T17:00:00Z') };
+
+  const old = notesDayData({ date: '2026-11-02', dayNotes: [n1], allNotes: [n1], payments, range: day2 });
+  assert.equal(old.notes[0].left, 200000, 'handed back on the 3rd → still held at the end of the 2nd');
+  assert.deepEqual(old.owed.map(o => [o.who, o.total]), [['Chị Lan', 200000]], 'paid on the 3rd → still owed at the end of the 2nd');
+  assert.match(notesReportMessages({ date: '2026-11-02', dayNotes: [n1], allNotes: [n1], payments, range: day2 }).join('\n'), /Chị Lan: 200\.000đ/);
+
+  const next = notesDayData({ date: '2026-11-03', dayNotes: [], allNotes: [n1], payments, range: day3 });
+  assert.deepEqual(next.owed, []);
+  assert.equal(noteCash(n1, payments, day3.end.getTime()).left, 0);
+  assert.equal(noteCash(n1, payments).left, 0, 'today: everything counted');
+});

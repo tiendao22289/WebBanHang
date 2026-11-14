@@ -25,10 +25,56 @@ const named = items => (items || []).filter(i => String(i?.name || '').trim());
  * bỏ thêm không còn "phải trả lại chủ". left ≥ 0: dư còn phải trả chủ; < 0: tiền bỏ thêm chưa được bù;
  * null: phiếu không có tiền chủ đưa.
  */
-export function noteCash(note, payments = []) {
-  const m = noteMoney(note, payments);
+export function noteCash(note, payments = [], end = Infinity) {
+  let n = note, pays = payments;
+  // Xem ngày cũ: chỉ tính các lần trả chủ / chuyển phiếu / bù / trả nợ trước cuối ngày đó (số không đổi về sau).
+  if (Number.isFinite(end)) {
+    const data = readContent(note?.content);
+    if (data) {
+      const cut = k => (Array.isArray(data[k]) ? { [k]: data[k].filter(r => !(stampMs(r?.ts) >= end)) } : {});
+      n = { ...note, content: JSON.stringify({ ...data, ...cut('returned_logs'), ...cut('carried_out'), ...cut('offset_out'), ...cut('short_settled') }) };
+    }
+    pays = payments.filter(p => !(Date.parse(p.paid_at) >= end));
+  }
+  const m = noteMoney(n, pays);
   const hasMoney = m.given + m.carriedIn > 0;
   return { ...m, hasMoney, left: hasMoney ? (m.balance >= 0 ? m.left : -m.short) : null };
+}
+
+// Giờ ghi trong sổ tiền / lịch sử phiếu ("HH:mm dd/mm/yyyy", giờ VN) → mốc thời gian; không đọc được → NaN (tính là trước).
+function stampMs(ts) {
+  const t = /(\d{1,2}):(\d{2})/.exec(String(ts || '')), d = /(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(String(ts || ''));
+  return t && d ? Date.UTC(+d[3], +d[2] - 1, +d[1], +t[1], +t[2]) - 7 * 3600000 : NaN;
+}
+
+/**
+ * Các dòng còn nợ tính tới mốc `end` (ms; Infinity = bây giờ): bỏ các lần trả nợ sau mốc (sổ trả nợ có ngày trả),
+ * nên xem ngày / tháng cũ vẫn thấy đúng nợ lúc đó. allNotes: phiếu ghi trước mốc.
+ */
+function owedLines(allNotes, payments = [], end = Infinity) {
+  const later = new Map();
+  if (Number.isFinite(end)) {
+    const byId = new Map(allNotes.map(n => [n.id, n]));
+    for (const p of payments) {
+      const n = byId.get(p.note_id);
+      if (!n || !(Date.parse(p.paid_at) >= end)) continue;
+      const at = paymentItemIndex(readContent(n.content)?.items, p);
+      if (at >= 0) later.set(`${n.id}:${at}`, (later.get(`${n.id}:${at}`) || 0) + (Number(p.amount) || 0));
+    }
+  }
+  const out = [];
+  for (const n of allNotes) {
+    const items = readContent(n.content)?.items;
+    if (!Array.isArray(items)) continue;
+    items.forEach((item, at) => {
+      if (!String(item?.name || '').trim()) return;
+      const base = debtBase(item);
+      const paid = Math.max(0, (Number(item.paid_amount) || 0) - (later.get(`${n.id}:${at}`) || 0));
+      const left = base - Math.min(base, paid);
+      if (left > 0) out.push({ n, item, left, who: String(item.creditor || '').trim() || 'Không ghi tên' });
+    });
+  }
+  return out;
 }
 const cashParts = m => [m.returned > 0 && `đã trả chủ ${vnd(m.returned)}`, m.carriedOut > 0 && `chuyển phiếu sau ${vnd(m.carriedOut)}`,
   m.offsetOut > 0 && `giữ lại bù tiền bỏ thêm ${vnd(m.offsetOut)}`].filter(Boolean);
@@ -87,7 +133,7 @@ function noteBlock(note, index, ctx) {
   const paidNow = Number(note.amount) || 0;
   const funded = ctx.fundedBy.get(note.id) || 0;
   lines.push(`→ Tiền hàng ${vnd(saved)} · trả ngay ${vnd(paidNow)}${note.debt ? ` · nợ ${vnd(note.debt)}` : ''}${funded ? ` · trả nợ cũ ${vnd(funded)}` : ''}`);
-  const m = noteCash(note, ctx.payments);
+  const m = noteCash(note, ctx.payments, ctx.end);
   if (m.hasMoney) {
     const head = `→ Chủ đưa ${vnd(m.given)}${m.carriedIn ? ` + dư cũ ${vnd(m.carriedIn)}` : ''} − đã chi ${vnd(m.spent + m.funded)} = `;
     const parts = cashParts(m);
@@ -115,7 +161,7 @@ export function notesReportMessages({ date, dayNotes = [], allNotes = [], paymen
   const inDay = iso => { const t = new Date(iso).getTime(); return t >= range.start.getTime() && t < range.end.getTime(); };
   const fundedBy = new Map();
   for (const p of payments) if (p.paid_from_note_id) fundedBy.set(p.paid_from_note_id, (fundedBy.get(p.paid_from_note_id) || 0) + Number(p.amount || 0));
-  const ctx = { date, fundedBy, payments, staffName: id => staffNames[id], prices: purchasePrices(allNotes) };
+  const ctx = { date, fundedBy, payments, end: range.end.getTime(), staffName: id => staffNames[id], prices: purchasePrices(allNotes) };
   const byId = new Map(allNotes.map(n => [n.id, n]));
   const sorted = [...dayNotes].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
   const s = notesSummary(allNotes, payments, range);
@@ -163,14 +209,8 @@ export function notesReportMessages({ date, dayNotes = [], allNotes = [], paymen
     blocks.push(lines.join('\n'));
   }
 
-  // 6. Còn nợ theo chủ nợ (từng món, từ ngày nào).
-  const owed = [];
-  for (const n of allNotes) {
-    for (const item of named(readContent(n.content)?.items)) {
-      const left = debtBase(item) - Math.min(debtBase(item), Number(item.paid_amount) || 0);
-      if (left > 0) owed.push({ who: String(item.creditor || '').trim() || 'Không ghi tên', what: item.name, left, at: n.created_at });
-    }
-  }
+  // 6. Còn nợ theo chủ nợ tới cuối ngày (từng món, từ ngày nào).
+  const owed = owedLines(allNotes, payments, range.end.getTime()).map(o => ({ who: o.who, what: o.item.name, left: o.left, at: o.n.created_at }));
   if (owed.length) {
     const byWho = new Map();
     for (const o of owed) byWho.set(o.who, [...(byWho.get(o.who) || []), o]);
@@ -208,16 +248,11 @@ function itemMoney(item, alert = null) {
 
 // Còn nợ theo chủ nợ (từng món, từ ngày nào), nợ nhiều nhất trước — chủ nợ lẫn từng món của chủ nợ đó.
 // date: ngày ghi phiếu (giờ VN) để trang tính đã nợ bao lâu.
-function owedByCreditor(allNotes) {
+// Tính tới cuối khoảng đang xem (end, ms): lần trả nợ sau đó chưa tính.
+function owedByCreditor(allNotes, payments = [], end = Infinity) {
   const byWho = new Map();
-  for (const n of allNotes) {
-    for (const item of named(readContent(n.content)?.items)) {
-      const m = itemMoney(item);
-      if (m.left > 0) {
-        const who = m.creditor || 'Không ghi tên';
-        byWho.set(who, [...(byWho.get(who) || []), { what: m.name, left: m.left, day: dayMonth(n.created_at), date: vnIso(n.created_at).slice(0, 10) }]);
-      }
-    }
+  for (const { n, item, left, who } of owedLines(allNotes, payments, end)) {
+    byWho.set(who, [...(byWho.get(who) || []), { what: String(item.name).trim(), left, day: dayMonth(n.created_at), date: vnIso(n.created_at).slice(0, 10) }]);
   }
   return [...byWho.entries()].map(([who, items]) => ({ who, total: items.reduce((a, o) => a + o.left, 0), items: [...items].sort((a, b) => b.left - a.left) }))
     .sort((a, b) => b.total - a.total);
@@ -246,7 +281,7 @@ export function notesDayData({ date, dayNotes = [], allNotes = [], payments = []
     const paidNow = Number(n.amount) || 0;
     const funded = fundedBy.get(n.id) || 0;
     const carriedIn = sumOf(data.carried_in), carriedOut = sumOf(data.carried_out);
-    const cash = noteCash(n, payments);
+    const cash = noteCash(n, payments, range.end.getTime());
     const itemsTotal = noteTotals(named(data.items)).total;
     const alertOf = notePriceAlert(n, prices);
     // Ảnh bill của mối từng dòng (bill = đường dẫn ảnh; billFrom 'gallery' = ảnh chọn từ máy) và ảnh hàng
@@ -287,7 +322,7 @@ export function notesDayData({ date, dayNotes = [], allNotes = [], payments = []
   return {
     summary: { count: sorted.length, given: s.given, hasGiven: s.hasGiven, goods: s.goods, cashNow: s.cashNow, newDebt, debtPaid: s.debtPaid, cash: s.cash,
       giveBack: s.giveBack, debtLeft: s.debtLeft, warnings: notes.filter(n => n.mismatch || n.items.some(i => i.warnings.length)).length },
-    notes, payments: paid, edited, deleted: removedNotes, owed: owedByCreditor(allNotes),
+    notes, payments: paid, edited, deleted: removedNotes, owed: owedByCreditor(allNotes, payments, range.end.getTime()),
   };
 }
 
@@ -326,6 +361,6 @@ export function notesRangeData({ allNotes = [], payments = [], staffNames = {}, 
       debtPaid: s.debtPaid, cash: s.cash, giveBack: s.giveBack, debtLeft: s.debtLeft, warnings },
     byStaff: [...byStaff.values()].sort((a, b) => b.goods - a.goods),
     top: [...bought.values()].sort((a, b) => b.total - a.total).slice(0, 10),
-    owed: owedByCreditor(allNotes),
+    owed: owedByCreditor(allNotes, payments, range.end.getTime()),
   };
 }
