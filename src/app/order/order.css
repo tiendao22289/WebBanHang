@@ -331,7 +331,53 @@ html, body { background: #ffffff !important; }
    CONTENT AREA
    ═══════════════════════════════ */
 .co-content {
-  padding: 0 0 110px;
+  /* Chừa chỗ cho đáy trang: thanh "8 tặng 1" + nút Gửi món (món cuối không bị che). */
+  padding: 0 0 calc(170px + env(safe-area-inset-bottom, 0px));
+}
+
+/* ── Thanh "8 tặng 1" ở đáy trang, ngay trên nút Gửi món (lib/promoStrip.mjs) ── */
+.co-promo-strip {
+  pointer-events: auto; width: 100%; display: flex; align-items: center; gap: 10px;
+  padding: 8px 8px 8px 12px; border: 2px solid #f59e0b; border-radius: 14px;
+  background: #fffbeb; color: #78350f; text-align: left; cursor: pointer; font-family: inherit;
+  box-shadow: 0 6px 18px rgba(217, 119, 6, 0.25);
+}
+.co-promo-strip-icon { font-size: 1.5rem; line-height: 1; flex-shrink: 0; }
+.co-promo-strip-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.co-promo-strip-text { font-size: 0.86rem; font-weight: 700; line-height: 1.3; }
+.co-promo-strip-text b { font-weight: 900; color: #dc2626; }
+.co-promo-strip-text.callout { animation: co-promo-strip-pop 0.35s ease-out; }
+.co-promo-strip-bar { display: block; height: 6px; border-radius: 4px; background: #fde68a; overflow: hidden; }
+.co-promo-strip-bar > span {
+  display: block; height: 100%; border-radius: 4px;
+  background: linear-gradient(90deg, #f59e0b, #ef4444); transition: width 0.5s ease;
+}
+.co-promo-strip-go {
+  flex-shrink: 0; padding: 8px 12px; border-radius: 10px;
+  background: #f59e0b; color: white; font-size: 0.82rem; font-weight: 900; white-space: nowrap;
+}
+.co-promo-strip.ready {
+  border-color: #16a34a; background: #f0fdf4; color: #14532d;
+  animation: co-promo-strip-glow 1.6s ease-in-out infinite;
+}
+.co-promo-strip.ready .co-promo-strip-text { font-size: 0.95rem; }
+.co-promo-strip.ready .co-promo-strip-text b { color: #15803d; }
+.co-promo-strip.ready .co-promo-strip-go { background: #16a34a; font-size: 0.92rem; padding: 10px 16px; }
+.co-promo-strip.chosen { border-color: #86efac; background: #ffffff; color: #166534; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); }
+.co-promo-strip.chosen .co-promo-strip-text b { color: #15803d; }
+.co-promo-strip.chosen .co-promo-strip-bar { background: #dcfce7; }
+.co-promo-strip.chosen .co-promo-strip-bar > span { background: #22c55e; }
+.co-promo-strip.chosen .co-promo-strip-go { background: #ffffff; color: #15803d; border: 1.5px solid #86efac; }
+@keyframes co-promo-strip-glow {
+  0%, 100% { box-shadow: 0 6px 18px rgba(22, 163, 74, 0.25); transform: translateY(0); }
+  50% { box-shadow: 0 6px 26px rgba(22, 163, 74, 0.55); transform: translateY(-2px); }
+}
+@keyframes co-promo-strip-pop {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .co-promo-strip.ready, .co-promo-strip-text.callout { animation: none; }
 }
 
 .co-content-header {
@@ -950,7 +996,7 @@ html, body { background: #ffffff !important; }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Overlay thể lệ thử thách — đè lên tất cả (bubble KM z-index 100/200) ── */
+/* ── Overlay thể lệ thử thách — đè lên tất cả (đáy trang 90/101, xem trước quà 200) ── */
 .co-chal-overlay {
   position: fixed;
   inset: 0;
@@ -1751,49 +1797,6 @@ body.modal-open { overflow: hidden; padding-right: var(--scrollbar-width, 0); }
 @keyframes coSlideDown {
   from { transform: translate(-50%, -20px); opacity: 0; }
   to   { transform: translate(-50%, 0);     opacity: 1; }
-}
-
-/* Trophy Animations (logo khuyến mãi) */
-.trophy-bounce {
-  font-size: 32px;
-  animation: trophyBounce 1.1s infinite ease-in-out;
-  display: inline-block;
-  line-height: 1;
-  filter: drop-shadow(0 2px 3px rgba(120,53,15,0.45));
-}
-.trophy-shake {
-  font-size: 32px;
-  animation: trophyShake 2.4s infinite ease-in-out;
-  display: inline-block;
-  line-height: 1;
-  filter: drop-shadow(0 2px 2px rgba(120,53,15,0.3));
-}
-@keyframes trophyBounce {
-  0%, 100% { transform: translateY(0) scale(1); }
-  50% { transform: translateY(-6px) scale(1.06); }
-}
-@keyframes trophyShake {
-  0%, 88%, 100% { transform: rotate(0deg); }
-  90% { transform: rotate(-5deg); }
-  92% { transform: rotate(5deg); }
-  94% { transform: rotate(-3deg); }
-  96% { transform: rotate(2deg); }
-  98% { transform: rotate(0deg); }
-}
-/* Halo glow: vòng vàng lan toả ra khi đủ điểm khuyến mãi */
-@keyframes trophy-halo-pulse {
-  0% {
-    box-shadow:
-      0 0 0 0 rgba(251,191,36,0.75),
-      0 0 0 0 rgba(251,191,36,0.5),
-      0 8px 24px rgba(245,158,11,0.55);
-  }
-  100% {
-    box-shadow:
-      0 0 0 26px rgba(251,191,36,0),
-      0 0 0 14px rgba(251,191,36,0),
-      0 8px 24px rgba(245,158,11,0.55);
-  }
 }
 
 /* ═══════════════════════════════════

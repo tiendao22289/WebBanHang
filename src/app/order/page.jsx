@@ -6,6 +6,7 @@ import {
   applyOrderRefusal, cartAfterSentOrder, customerOrderLines, initialOptionSelection, isMultiOption, multiChoices,
   openChoices, refreshSavedCart, selectionToItemOptions, toggleMultiChoice,
 } from '@/lib/draftCart.mjs';
+import { dishesDone, dishesLeft, promoHintText, promoStripState, promoStripText } from '@/lib/promoStrip.mjs';
 import { cartAlertDeviceKey, cartAlertItems, createCartReminder, createCartReporter } from '@/lib/customerCartAlert.mjs';
 import { removeVietnameseTones } from '@/lib/utils';
 import { createOrderRefresh } from '@/lib/orderRefresh.mjs';
@@ -13,6 +14,7 @@ import { COOKING_WORDS, LOAI_SYNONYMS, KEYWORD_ALIASES } from '@/lib/quickMatch'
 
 
 import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
@@ -44,258 +46,38 @@ import PaidNextVoucher, {
 // import ChatOrderButton from '@/components/ChatOrderButton'; // TẮT TÍNH NĂNG CHAT AI
 import './order.css';
 
-const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGiftSlots, onOpenGift, giftItems = [], promoEnabled, callout = null }) => {
+// Thanh "8 tặng 1" ở đáy trang, ngay trên nút Gửi món (lib/promoStrip.mjs). Thay nút tròn nổi cũ:
+// nút đó đè lên dấu "+" của món và trông như hình trang trí nên nhiều khách không thấy / không bấm.
+const PromoStrip = ({ qualifyingQty, threshold, giftCount, availableGiftSlots, onOpenGift, giftItems = [], callout = null }) => {
   const [showPreview, setShowPreview] = useState(false);
-  const [pos, setPos] = useState({ x: -100, y: -100 });
-  const posRef = useRef({ x: -100, y: -100 });
-  const dragRef = useRef({ isDragging: false, startX: 0, startY: 0, initialX: 0, initialY: 0, hasMoved: false });
-  const bubbleRef = useRef(null);
-  const [initialized, setInitialized] = useState(false);
-
-  // B\u01b0\u1edbc 1: kh\u1edfi t\u1ea1o v\u1ecb tr\u00ed
-  useEffect(() => {
-    const initPos = { x: window.innerWidth - 80, y: window.innerHeight - 240 };
-    posRef.current = initPos;
-    setPos(initPos);
-    setInitialized(true);
-  }, []);
-
-  // B\u01b0\u1edbc 2: g\u1eafn touch listener tr\u1ef1c ti\u1ebfp tr\u00ean element (passive:false \u0111\u1ec3 c\u00f3 th\u1ec3 preventDefault)
-  // Element lu\u00f4n mount (dng visibility) n\u00ean bubbleRef lu\u00f4n h\u1ee3p l\u1ec7
-  useEffect(() => {
-    const el = bubbleRef.current;
-    if (!el) return;
-
-    const onTouchStart = (e) => {
-      if (e.touches.length !== 1) return;
-      dragRef.current.isDragging = true;
-      dragRef.current.hasMoved = false;
-      dragRef.current.startX = e.touches[0].clientX;
-      dragRef.current.startY = e.touches[0].clientY;
-      dragRef.current.initialX = posRef.current.x;
-      dragRef.current.initialY = posRef.current.y;
-    };
-
-    const onTouchMove = (e) => {
-      if (!dragRef.current.isDragging || e.touches.length !== 1) return;
-      const dx = e.touches[0].clientX - dragRef.current.startX;
-      const dy = e.touches[0].clientY - dragRef.current.startY;
-      // Ch\u1ec9 preventDefault KHI \u0111\u00e3 x\u00e1c nh\u1eadn l\u00e0 drag (> 8px)
-      // \u2192 N\u1ebfu kh\u00f4ng v\u01b0\u1ee3t ng\u01b0\u1ee1ng, kh\u00f4ng g\u1ecdi preventDefault \u2192 browser v\u1eabn fire synthetic click sau touchend
-      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
-        dragRef.current.hasMoved = true;
-        e.preventDefault();
-        const newPos = {
-          x: Math.min(Math.max(0, dragRef.current.initialX + dx), window.innerWidth - 75),
-          y: Math.min(Math.max(0, dragRef.current.initialY + dy), window.innerHeight - 75),
-        };
-        posRef.current = newPos;
-        setPos(newPos);
-      }
-    };
-
-    const onTouchEnd = () => {
-      if (!dragRef.current.isDragging) return;
-      dragRef.current.isDragging = false;
-      if (dragRef.current.hasMoved) {
-        // Drag k\u1ebft th\u00fac \u2192 snap sang c\u1ea1nh g\u1ea7n nh\u1ea5t
-        setPos(p => {
-          const newPos = { ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 80 : 15 };
-          posRef.current = newPos;
-          return newPos;
-        });
-      }
-      // N\u1ebfu kh\u00f4ng di chuy\u1ec3n (tap): \u0111\u1ec3 browser t\u1ef1 fire synthetic click \u2192 onClick x\u1eed l\u00fd
-    };
-
-    el.addEventListener('touchstart', onTouchStart, { passive: true });
-    el.addEventListener('touchmove', onTouchMove, { passive: false });
-    el.addEventListener('touchend', onTouchEnd, { passive: true });
-    return () => {
-      el.removeEventListener('touchstart', onTouchStart);
-      el.removeEventListener('touchmove', onTouchMove);
-      el.removeEventListener('touchend', onTouchEnd);
-    };
-  }, []); // empty deps \u2014 element lu\u00f4n mount n\u00ean ch\u1ec9 c\u1ea7n g\u1eafn 1 l\u1ea7n
-
-  // TAP handler: d\u00f9ng onClick \u2014 ho\u1ea1t \u0111\u1ed9ng tr\u00ean c\u1ea3 PC l\u1eabn Android 1 ng\u00f3n
-  // Browser t\u1ef1 fire synthetic click sau touchend khi kh\u00f4ng c\u00f3 preventDefault
-  const handleTap = () => {
-    if (dragRef.current.hasMoved) {
-      dragRef.current.hasMoved = false; // reset sau drag-end click
-      return;
-    }
-    if (availableGiftSlots > 0 && onOpenGift) {
-      onOpenGift();
-    } else {
-      setShowPreview(true);
-    }
-  };
-
-  // Mouse drag handlers (PC)
-  const handleMouseDown = (e) => {
-    if (e.button !== 0) return;
-    dragRef.current.isDragging = true;
-    dragRef.current.hasMoved = false;
-    dragRef.current.startX = e.clientX;
-    dragRef.current.startY = e.clientY;
-    dragRef.current.initialX = posRef.current.x;
-    dragRef.current.initialY = posRef.current.y;
-  };
-  const handleMouseMove = (e) => {
-    if (!dragRef.current.isDragging) return;
-    const dx = e.clientX - dragRef.current.startX;
-    const dy = e.clientY - dragRef.current.startY;
-    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) dragRef.current.hasMoved = true;
-    if (!dragRef.current.hasMoved) return;
-    const newPos = {
-      x: Math.min(Math.max(0, dragRef.current.initialX + dx), window.innerWidth - 75),
-      y: Math.min(Math.max(0, dragRef.current.initialY + dy), window.innerHeight - 75),
-    };
-    posRef.current = newPos;
-    setPos(newPos);
-  };
-  const handleMouseUp = () => {
-    if (!dragRef.current.isDragging) return;
-    dragRef.current.isDragging = false;
-    if (dragRef.current.hasMoved) {
-      setPos(p => {
-        const newPos = { ...p, x: p.x > window.innerWidth / 2 ? window.innerWidth - 80 : 15 };
-        posRef.current = newPos;
-        return newPos;
-      });
-    }
-  };
-
-  const hasGift = giftCount > 0;
+  const state = promoStripState({ qualifyingQty, threshold, giftCount, availableGiftSlots });
+  const text = promoStripText(state, threshold);
   const progress = Math.min((qualifyingQty / threshold) * 100, 100);
-
-  // Icon con ốc (thay cho chiếc cúp) — trắng, hợp chủ đề quán ốc
-  const shellIcon = (
-    <svg width="42" height="42" viewBox="0 0 100 100" style={{ display: 'block' }} aria-hidden="true">
-      <g transform="translate(-2,-2)">
-        <path d="M18 74 C18 66 26 62 40 62 L70 62 C80 62 86 68 86 74 C86 78 82 80 78 80 L24 80 C20 80 18 78 18 74 Z" fill="#ffffff" />
-        <circle cx="82" cy="58" r="9" fill="#ffffff" />
-        <path d="M84 50 L88 40 M78 51 L74 42" stroke="#ffffff" strokeWidth="3" strokeLinecap="round" fill="none" />
-        <circle cx="88" cy="39" r="2.5" fill="#ffffff" />
-        <circle cx="73" cy="41" r="2.5" fill="#ffffff" />
-        <g transform="translate(45,45)">
-          <circle cx="0" cy="0" r="22" fill="#ffffff" />
-          <path d="M16 0 A16 16 0 1 1 -8 -13 A11 11 0 1 1 6 6 A6 6 0 1 1 -3 -3" fill="none" stroke="#dc2626" strokeWidth="4" strokeLinecap="round" />
-        </g>
-      </g>
-    </svg>
-  );
+  const open = () => {
+    if (text.open === 'gift' && onOpenGift) onOpenGift();
+    else setShowPreview(true);
+  };
 
   return (
     <>
-      {/* Bubble n\u1ed5i \u2014 lu\u00f4n mount (visibility:hidden) \u0111\u1ec3 bubbleRef/addEventListener lu\u00f4n h\u1ee3p l\u1ec7 */}
-      <div
-        ref={bubbleRef}
-        style={{
-          position: 'fixed', left: pos.x, top: pos.y, zIndex: 100,
-          touchAction: 'none',
-          transition: dragRef.current.isDragging ? 'none' : 'left 0.3s ease-out',
-          cursor: 'grab',
-          userSelect: 'none',
-          WebkitUserSelect: 'none',
-          visibility: initialized ? 'visible' : 'hidden',
-        }}
-        onClick={handleTap}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={() => { if (dragRef.current.isDragging) handleMouseUp(); }}
-      >
-        {/* Vòng tiến trình */}
-        <svg width="70" height="70" style={{ position: 'absolute', top: -5, left: -5, transform: 'rotate(-90deg)', pointerEvents: 'none' }}>
-          <circle cx="35" cy="35" r="30" fill="none" stroke="#fecaca" strokeWidth="4" />
-          <circle cx="35" cy="35" r="30" fill="none" stroke={hasGift ? '#f59e0b' : '#ef4444'} strokeWidth="4"
-            strokeDasharray={`${2 * Math.PI * 30}`}
-            strokeDashoffset={`${2 * Math.PI * 30 * (1 - progress / 100)}`}
-            strokeLinecap="round"
-            style={{ transition: 'stroke-dashoffset 0.5s ease' }}
-          />
-        </svg>
+      <button type="button" className={`co-promo-strip ${state.kind}`} onClick={open}>
+        <span className="co-promo-strip-icon" aria-hidden="true">{state.kind === 'ready' ? '🎉' : '🎁'}</span>
+        <span className="co-promo-strip-body">
+          {callout ? (
+            <span key={callout.text} className="co-promo-strip-text callout">{callout.text}</span>
+          ) : (
+            <span className="co-promo-strip-text">{text.lead}<b>{text.strong}</b>{text.tail}</span>
+          )}
+          {state.kind !== 'ready' && (
+            <span className="co-promo-strip-bar"><span style={{ width: `${Math.round(state.progress * 100)}%` }} /></span>
+          )}
+        </span>
+        <span className="co-promo-strip-go">{text.action}</span>
+      </button>
 
-        <div style={{
-          width: 60, height: 60, borderRadius: '50%',
-          background: hasGift
-            ? 'linear-gradient(135deg, #fbbf24 0%, #f59e0b 45%, #d97706 100%)'
-            : 'linear-gradient(135deg, #ef4444, #dc2626)',
-          boxShadow: hasGift ? '0 8px 24px rgba(245,158,11,0.55)' : '0 8px 24px rgba(239,68,68,0.55)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '1.75rem', border: '3px solid white',
-          animation: hasGift ? 'trophy-halo-pulse 1.6s infinite ease-out' : 'co-gift-pulse 2.5s infinite'
-        }}>
-          {hasGift ? <div className="trophy-bounce">{shellIcon}</div> : <div className="trophy-shake">{shellIcon}</div>}
-        </div>
-
-        {/* Badge số */}
-        <div style={{
-          position: 'absolute', top: -6, right: -12,
-          background: hasGift ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'linear-gradient(135deg, #dc2626, #b91c1c)',
-          color: 'white',
-          borderRadius: 20, padding: '3px 7px',
-          fontSize: '0.72rem', fontWeight: 900,
-          boxShadow: '0 3px 8px rgba(0,0,0,0.25)',
-          pointerEvents: 'none', whiteSpace: 'nowrap',
-          border: '2px solid white'
-        }}>
-          {hasGift ? (availableGiftSlots > 0 ? `🎉 ${availableGiftSlots} Quà!` : '✅ Đã nhận') : `${qualifyingQty % 1 === 0 ? qualifyingQty : qualifyingQty.toFixed(1)}/${threshold}`}
-        </div>
-
-        {/* Chữ Khuyến Mãi phía dưới */}
-        <div style={{
-          position: 'absolute', bottom: -20, left: '50%', transform: 'translateX(-50%)',
-          background: hasGift ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #ef4444, #dc2626)',
-          color: 'white', borderRadius: 8, padding: '2px 8px',
-          fontSize: '0.65rem', fontWeight: 900, whiteSpace: 'nowrap',
-          boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
-          border: '1.5px solid white',
-          pointerEvents: 'none',
-          letterSpacing: '0.03em'
-        }}>
-          {threshold} TẶNG 1
-        </div>
-
-        {/* Speech bubble callout */}
-        {callout && (
-          <div style={{
-            position: 'absolute',
-            right: 72,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            background: callout.isGift
-              ? 'linear-gradient(135deg, #15803d, #16a34a)'
-              : 'linear-gradient(135deg, #7c3aed, #a855f7)',
-            color: 'white',
-            borderRadius: 14,
-            padding: '10px 16px',
-            fontSize: '0.88rem',
-            fontWeight: 700,
-            width: 240,
-            lineHeight: 1.5,
-            boxShadow: '0 4px 20px rgba(0,0,0,0.25)',
-            pointerEvents: 'none',
-            whiteSpace: 'normal',
-            animation: 'calloutPop 0.35s cubic-bezier(0.175,0.885,0.32,1.275)',
-            zIndex: 110,
-          }}>
-            {callout.text}
-            <div style={{
-              position: 'absolute', right: -8, top: '50%', transform: 'translateY(-50%)',
-              width: 0, height: 0,
-              borderTop: '7px solid transparent',
-              borderBottom: '7px solid transparent',
-              borderLeft: callout.isGift ? '8px solid #16a34a' : '8px solid #7c3aed',
-            }} />
-          </div>
-        )}
-      </div>
-
-      {/* Modal xem trước món tặng */}
-      {showPreview && (
+      {/* Modal xem trước món tặng — gắn thẳng vào body: thanh nằm trong đáy trang (pointer-events: none,
+          z-index 90), để trong đó thì bấm xuyên qua bảng và thanh trên cùng đè lên. */}
+      {showPreview && createPortal(
         <div
           style={{
             position: 'fixed', inset: 0, zIndex: 200,
@@ -329,13 +111,13 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
             <div style={{ background: '#f0fdf4', borderRadius: 12, padding: '12px 14px', marginBottom: 20 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', fontWeight: 700, color: '#15803d', marginBottom: 8 }}>
                 <span>Tiến trình của bạn</span>
-                <span>{Number.isInteger(qualifyingQty) ? qualifyingQty : qualifyingQty.toFixed(1)}/{threshold} điểm</span>
+                <span>{dishesDone(qualifyingQty)}/{threshold} món</span>
               </div>
               <div style={{ height: 8, background: '#dcfce7', borderRadius: 6, overflow: 'hidden' }}>
                 <div style={{ width: `${progress}%`, height: '100%', background: 'linear-gradient(90deg, #22c55e, #16a34a)', borderRadius: 6, transition: 'width 0.5s ease' }} />
               </div>
               {qualifyingQty < threshold && (
-                <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 6 }}>Thêm <b style={{ color: '#dc2626' }}>{threshold - qualifyingQty} món</b> nữa để nhận quà!</div>
+                <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 6 }}>Thêm <b style={{ color: '#dc2626' }}>{dishesLeft(threshold - qualifyingQty)} món</b> nữa để nhận quà!</div>
               )}
             </div>
 
@@ -369,17 +151,14 @@ const DraggablePromoBubble = ({ qualifyingQty, threshold, giftCount, availableGi
               Đặt món ngay!
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       <style>{`
         @keyframes slideUpSheet {
           from { transform: translateY(100%); }
           to { transform: translateY(0); }
-        }
-        @keyframes calloutPop {
-          from { opacity: 0; transform: translateY(-50%) scale(0.85); }
-          to   { opacity: 1; transform: translateY(-50%) scale(1); }
         }
       `}</style>
     </>
@@ -741,7 +520,7 @@ function OrderContent() {
   const [giftCart, setGiftCart] = useState([]); // { id, name, price:0, is_gift:true }
   const [showGiftModal, setShowGiftModal] = useState(false);
   // Chế độ CHÚC MỪNG: bản chọn quà tự bật khi khách vừa đủ điểm, có hero vàng +
-  // pháo giấy. Tắt (mở từ bong bóng / lúc gửi đơn) thì hiện tiêu đề bình thường.
+  // pháo giấy. Tắt (mở từ thanh "8 tặng 1" / lúc gửi đơn) thì hiện tiêu đề bình thường.
   const [giftCelebrate, setGiftCelebrate] = useState(false);
   // Mỗi suất quà (giftCount) chỉ tự bật bản chúc mừng ĐÚNG MỘT LẦN — tránh
   // popup chen ngang lặp lại ở các lần gọi món sau (từng gây lỗi không in bill).
@@ -3656,8 +3435,8 @@ function OrderContent() {
     const remaining = nextThreshold - qualifyingQty;
     const nextGiftNum = currentGifts + 1;
 
-    // Tìm món trong giỏ có số lượng lẻ (chưa đủ 1 điểm vì divisor > 1)
-    let partialItemMsg = null;
+    // Tìm món trong giỏ có số lượng lẻ (chưa đủ 1 món vì divisor > 1)
+    let partial = null;
     for (const cartItem of cart) {
       const menuItem = menuItems.find(m => m.id === cartItem.id);
       if (!menuItem?.counts_for_promotion) continue;
@@ -3666,19 +3445,13 @@ function OrderContent() {
       if (divisor <= 1) continue;
       const remainder = cartItem.quantity % divisor;
       if (remainder > 0) {
-        const needed = divisor - remainder;
-        partialItemMsg = `Thêm ${needed} ${menuItem.name} để tròn điểm, hoặc món khác tuỳ ý nhé! 🔥`;
+        partial = { name: menuItem.name, needed: divisor - remainder };
         break;
       }
     }
 
-    // Hiện thị thông báo: nếu remaining < 1 và có món lẻ → gợi ý thêm món đó
-    const remPoints = Math.ceil(remaining);
-    const text = (remaining < 1 && partialItemMsg)
-      ? partialItemMsg
-      : nextGiftNum === 1
-        ? `Bạn còn thiếu ${remPoints} điểm nữa là được khuyến mãi! 🔥`
-        : `Còn thiếu ${remPoints} điểm nữa là được tặng lần ${nextGiftNum}! 🔥`;
+    // Khách chỉ thấy số món, không thấy "điểm" (promoHintText, lib/promoStrip.mjs).
+    const text = promoHintText({ left: remaining, nextGift: nextGiftNum, partial });
 
     setPromoCallout({ text, isGift: false });
     if (promoCalloutTimerRef.current) clearTimeout(promoCalloutTimerRef.current);
@@ -5015,20 +4788,6 @@ function OrderContent() {
           ))}
         </div>
 
-        {/* ─── Draggable Promotion Bubble (luôn hiện khi promo bật) ─── */}
-        {promoConfig.enabled && (
-          <DraggablePromoBubble
-            qualifyingQty={qualifyingQty}
-            threshold={promoConfig.threshold}
-            giftCount={giftCount}
-            availableGiftSlots={availableGiftSlots}
-            giftItems={giftItems}
-            promoEnabled={promoConfig.enabled}
-            onOpenGift={() => setShowGiftModal(true)}
-            callout={promoCallout}
-          />
-        )}
-
         {/* ─── Cart FAB ─── */}
         <style>{`
         @keyframes co-cart-shimmer {
@@ -5083,17 +4842,29 @@ function OrderContent() {
         }
       `}</style>
 
-        {/* ─── Cart FAB (Split Design) ─── */}
-        {totalItems > 0 && (
+        {/* ─── Đáy trang: thanh "8 tặng 1" + nút Chọn lại / Gửi món ─── */}
+        {(totalItems > 0 || promoConfig.enabled) && (
           <div style={{
-            // Đang nhắc "chưa gửi món" thì nổi trên bong bóng 8 tặng 1 (100), vẫn dưới các bảng popup (500).
+            // Đang nhắc "chưa gửi món" thì nổi trên mọi thứ khác ở trang (101), vẫn dưới các bảng popup (500).
             position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: cartReminder && !showCart ? 101 : 90,
             maxWidth: 500, margin: '0 auto',
-            padding: '12px 16px', paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))',
-            display: 'flex', gap: 12, pointerEvents: 'none', alignItems: 'stretch'
+            padding: '8px 16px', paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))',
+            display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: 'none'
           }}>
+            {/* Thanh "8 tặng 1": luôn hiện khi khuyến mãi bật, kể cả giỏ trống (khách mới vào thấy ngay). */}
+            {promoConfig.enabled && (
+              <PromoStrip
+                qualifyingQty={qualifyingQty}
+                threshold={promoConfig.threshold}
+                giftCount={giftCount}
+                availableGiftSlots={availableGiftSlots}
+                giftItems={giftItems}
+                onOpenGift={() => setShowGiftModal(true)}
+                callout={cartReminder && !showCart ? null : promoCallout}
+              />
+            )}
             {/* Nhắc khách quên gửi món (giỏ để yên 3 phút) — bấm mở giỏ để gửi, × thì thôi tới khi giỏ đổi */}
-            {cartReminder && !showCart && (
+            {totalItems > 0 && cartReminder && !showCart && (
               <div className="co-cart-reminder" role="status">
                 <button type="button" className="co-cart-reminder-main" onClick={() => setShowCart(true)}>
                   <span className="co-cart-reminder-icon" aria-hidden="true">⏰</span>
@@ -5106,60 +4877,64 @@ function OrderContent() {
                 <button type="button" className="co-cart-reminder-close" aria-label="Để sau" onClick={() => cartReminderRef.current?.mute()}>×</button>
               </div>
             )}
-            {/* Nút Chọn Lại */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowResetConfirm(true);
-              }}
-              style={{
-                pointerEvents: 'auto', flexShrink: 0,
-                background: 'white', color: '#ef4444',
-                border: '2px solid #ef4444', borderRadius: '16px',
-                padding: '0 8px',
-                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4,
-                cursor: 'pointer', boxShadow: '0 4px 14px rgba(239, 68, 68, 0.15)', transition: 'transform 0.1s'
-              }}
-            >
-              <RotateCcw size={18} strokeWidth={2.5} />
-              <span style={{ fontSize: '0.65rem', fontWeight: 900 }}>CHỌN LẠI</span>
-            </button>
+            {totalItems > 0 && (
+              <div style={{ display: 'flex', gap: 12, alignItems: 'stretch' }}>
+                {/* Nút Chọn Lại */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowResetConfirm(true);
+                  }}
+                  style={{
+                    pointerEvents: 'auto', flexShrink: 0,
+                    background: 'white', color: '#ef4444',
+                    border: '2px solid #ef4444', borderRadius: '16px',
+                    padding: '0 8px',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4,
+                    cursor: 'pointer', boxShadow: '0 4px 14px rgba(239, 68, 68, 0.15)', transition: 'transform 0.1s'
+                  }}
+                >
+                  <RotateCcw size={18} strokeWidth={2.5} />
+                  <span style={{ fontSize: '0.65rem', fontWeight: 900 }}>CHỌN LẠI</span>
+                </button>
 
-            {/* Nút Giỏ Hàng */}
-            <button
-              onClick={() => setShowCart(true)}
-              style={{
-                pointerEvents: 'auto', flex: 1, minWidth: 0,
-                background: !showCart ? 'linear-gradient(135deg, #3b82f6, #2563eb)' : '#2563eb',
-                boxShadow: !showCart ? '0 6px 20px rgba(37, 99, 235, 0.45)' : '0 4px 14px rgba(37, 99, 235, 0.3)',
-                overflow: 'hidden', position: 'relative',
-                borderRadius: '16px', border: 'none', color: 'white', padding: '12px 16px',
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, cursor: 'pointer'
-              }}
-            >
-              {!showCart && (
-                <div style={{
-                  position: 'absolute', top: 0, left: 0, width: '60%', height: '100%',
-                  background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent)',
-                  transform: 'skewX(-20deg)', animation: 'co-cart-shimmer 3s infinite', pointerEvents: 'none'
-                }} />
-              )}
+                {/* Nút Giỏ Hàng */}
+                <button
+                  onClick={() => setShowCart(true)}
+                  style={{
+                    pointerEvents: 'auto', flex: 1, minWidth: 0,
+                    background: !showCart ? 'linear-gradient(135deg, #3b82f6, #2563eb)' : '#2563eb',
+                    boxShadow: !showCart ? '0 6px 20px rgba(37, 99, 235, 0.45)' : '0 4px 14px rgba(37, 99, 235, 0.3)',
+                    overflow: 'hidden', position: 'relative',
+                    borderRadius: '16px', border: 'none', color: 'white', padding: '12px 16px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, cursor: 'pointer'
+                  }}
+                >
+                  {!showCart && (
+                    <div style={{
+                      position: 'absolute', top: 0, left: 0, width: '60%', height: '100%',
+                      background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent)',
+                      transform: 'skewX(-20deg)', animation: 'co-cart-shimmer 3s infinite', pointerEvents: 'none'
+                    }} />
+                  )}
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, position: 'relative', zIndex: 2, minWidth: 0 }}>
-                <div style={{ position: 'relative', animation: !showCart ? 'co-cart-attention 3s infinite 0.2s' : 'none' }}>
-                  <ShoppingBag size={24} style={{ flexShrink: 0 }} />
-                  {!showCart && <span style={{ position: 'absolute', top: -4, right: -4, width: 10, height: 10, background: '#fef3c7', borderRadius: '50%', boxShadow: '0 0 0 2px #2563eb' }} />}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
-                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '0.95rem', fontWeight: 800 }}>
-                    {(!showCart && (totalItems + giftCart.length) > 0) ? 'BẤM ĐỂ GỬI MÓN!' : 'Giỏ hàng'}
-                  </span>
-                  {!showCart && <span style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.9 }}>{totalItems + giftCart.length} món • Gửi ngay</span>}
-                </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, position: 'relative', zIndex: 2, minWidth: 0 }}>
+                    <div style={{ position: 'relative', animation: !showCart ? 'co-cart-attention 3s infinite 0.2s' : 'none' }}>
+                      <ShoppingBag size={24} style={{ flexShrink: 0 }} />
+                      {!showCart && <span style={{ position: 'absolute', top: -4, right: -4, width: 10, height: 10, background: '#fef3c7', borderRadius: '50%', boxShadow: '0 0 0 2px #2563eb' }} />}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 0 }}>
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '0.95rem', fontWeight: 800 }}>
+                        {(!showCart && (totalItems + giftCart.length) > 0) ? 'BẤM ĐỂ GỬI MÓN!' : 'Giỏ hàng'}
+                      </span>
+                      {!showCart && <span style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.9 }}>{totalItems + giftCart.length} món • Gửi ngay</span>}
+                    </div>
+                  </div>
+
+                  <strong style={{ position: 'relative', zIndex: 2, fontSize: '1.05rem', fontWeight: 900, flexShrink: 0 }}>{formatPrice(totalAmount)}</strong>
+                </button>
               </div>
-
-              <strong style={{ position: 'relative', zIndex: 2, fontSize: '1.05rem', fontWeight: 900, flexShrink: 0 }}>{formatPrice(totalAmount)}</strong>
-            </button>
+            )}
           </div>
         )}
 
@@ -5241,7 +5016,7 @@ function OrderContent() {
                   <b style={{ color: '#dc2626', fontSize: '1.1rem' }}>
                     {promoNudge.type === 'named' ? `${promoNudge.unitsNeeded} ${promoNudge.name}` : `${promoNudge.unitsNeeded} món`}
                   </b>{' '}
-                  nữa là đủ điểm nhận thêm <b style={{ color: '#16a34a' }}>1 món tặng miễn phí</b>! 🎉
+                  nữa là được tặng <b style={{ color: '#16a34a' }}>1 món miễn phí</b>! 🎉
                 </p>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '18px 20px 22px' }}>
