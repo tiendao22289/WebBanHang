@@ -888,7 +888,9 @@ function ApprovePanel({ inbox, failed, onReload, onChanged }) {
 }
 
 
-export default function ThongKePage() {
+// embedded: mở từ nút "Xem đơn" ở trang Bàn (khung phủ, đã qua mã PIN chủ quán) — không đổi URL,
+// nút X đóng thay cho Đăng xuất.
+export default function ThongKePage({ embedded = false, onClose } = {}) {
   const [user, setUser] = useState(undefined); // undefined = đang kiểm tra
   const [sessionError, setSessionError] = useState('');
   const [date, setDate] = useState(null);
@@ -943,10 +945,11 @@ export default function ThongKePage() {
   }, [user, date, period, load]);
   useEffect(() => { if (user?.role === 'admin') loadInbox(); }, [user, loadInbox]);
   useEffect(() => {
-    if (!user || user.role !== 'admin' || !date) return;
+    if (embedded || !user || user.role !== 'admin' || !date) return;
     window.history.replaceState(null, '', `/thongke?date=${date}${period === 'day' ? '' : `&p=${period}`}${tab === 'overview' ? '' : `&t=${tab}`}`);
-  }, [user, date, period, tab]);
-  const pickTab = key => { setTab(key); window.scrollTo({ top: 0 }); if (key === 'approve') loadInbox(); };
+  }, [embedded, user, date, period, tab]);
+  const toTop = () => (embedded ? document.querySelector('.tk-embed-scroll') : window)?.scrollTo({ top: 0 });
+  const pickTab = key => { setTab(key); toTop(); if (key === 'approve') loadInbox(); };
 
   async function logout() {
     await fetch('/api/admin/session', { method: 'DELETE' }).catch(() => {});
@@ -973,7 +976,7 @@ export default function ThongKePage() {
   const label = period === 'day' ? <><b>{dayTitle(date)}</b> · {ddmm(date)}/{date.slice(0, 4)}</>
     : period === 'week' ? <><b>Tuần</b> {ddmm(weekStart(date))} – {ddmm(addDays(weekStart(date), 6))}</>
     : <><b>Tháng {Number(date.slice(5, 7))}</b>/{date.slice(0, 4)}</>;
-  const openDay = d => { setPeriod('day'); setDate(d); window.scrollTo({ top: 0 }); };
+  const openDay = d => { setPeriod('day'); setDate(d); toTop(); };
   const rangeLabel = report && period !== 'day' && report.from ? periodLabel(report) : '';
 
   return <main className="tk-page">
@@ -982,7 +985,9 @@ export default function ThongKePage() {
         <div className="tk-brand"><span className="tk-brand-logo"><BarChart3 size={18} /></span><div><b>Thống kê nhanh</b><small>{user.full_name || 'Admin'}</small></div></div>
         <div className="tk-bar-actions">
           <button className="tk-icon" onClick={() => load(date, period)} disabled={loading} aria-label="Tải lại"><RefreshCw size={19} className={loading ? 'spin' : ''} /></button>
-          <button className="tk-icon" onClick={logout} aria-label="Đăng xuất"><LogOut size={19} /></button>
+          {embedded
+            ? <button className="tk-icon" onClick={onClose} aria-label="Đóng"><X size={21} /></button>
+            : <button className="tk-icon" onClick={logout} aria-label="Đăng xuất"><LogOut size={19} /></button>}
         </div>
       </div>
       <div className="tk-periods" role="tablist" aria-label="Xem theo">

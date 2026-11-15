@@ -36,6 +36,7 @@ import Swal from 'sweetalert2';
 import {
   Bell,
   ChevronRight,
+  ChevronLeft,
   Plus,
   Minus,
   QrCode,
@@ -53,6 +54,9 @@ import {
   ChefHat,
 } from 'lucide-react';
 import './tables.css';
+import '../../thongke/thongke.css';
+import ThongKePage from '../../thongke/page';
+import AdminPinGate from '../AdminPinGate';
 import LongOpenTables from './LongOpenTables';
 import DishQuickToggle from './DishQuickToggle';
 import { canSeeReviews } from '@/lib/staffRoles.mjs';
@@ -378,6 +382,11 @@ export default function TablesPage() {
   const [priceFixSaving, setPriceFixSaving] = useState(false);
   // Takeaway
   const [showTakeawayOrders, setShowTakeawayOrders] = useState(false);
+  // Nút "Xem đơn" (thẻ Mang về): chủ quán bấm → nhập mã PIN → Thống kê nhanh (/thongke) ngay trong trang.
+  // Nhân viên khác bấm vẫn xem đơn mang về như cũ; chủ quán xem đơn mang về bằng nút trong khung.
+  const [showStats, setShowStats] = useState(false);
+  const openTakeawayList = () => { fetchTakeawayOrders(); setShowTakeawayOrders(true); };
+  const onViewOrders = () => (currentStaff?.role === 'admin' ? setShowStats(true) : openTakeawayList());
   const [takeawayOrders, setTakeawayOrders] = useState([]);
   const [showShareSheet, setShowShareSheet] = useState(false);
   const [discountMode, setDiscountMode] = useState('VND'); // 'VND' | 'PCT'
@@ -3697,7 +3706,7 @@ export default function TablesPage() {
                     </>)}
                     <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
                       <button
-                        onClick={() => { fetchTakeawayOrders(); setShowTakeawayOrders(true); }}
+                        onClick={onViewOrders}
                         style={{ padding: '8px 14px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}
                       >
                         <ShoppingBag size={14} /> Xem đơn
@@ -4323,7 +4332,7 @@ export default function TablesPage() {
                           </div>
                           </>, { flex: 1 })}
                           <button
-                            onClick={() => { fetchTakeawayOrders(); setShowTakeawayOrders(true); }}
+                            onClick={onViewOrders}
                             style={{ padding: '6px 12px', background: '#2563eb', color: 'white', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
                           >
                             <ShoppingBag size={13} /> Xem đơn
@@ -6699,6 +6708,26 @@ export default function TablesPage() {
         )
       }
 
+      {/* ── Thống kê nhanh (nút Xem đơn của chủ quán, qua mã PIN) ── */}
+      {
+        showStats && (
+          <div className="tk-embed" style={{ position: 'fixed', inset: 0, zIndex: 3000, display: 'flex', flexDirection: 'column', background: '#f8fafc' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 'calc(8px + env(safe-area-inset-top)) 12px 8px', background: '#fff', borderBottom: '1px solid #e5e7eb', flexShrink: 0 }}>
+              <button onClick={() => setShowStats(false)} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '7px 12px', border: '1.5px solid #e5e7eb', borderRadius: 10, background: '#fff', fontWeight: 700, fontSize: '0.85rem', color: '#111827', cursor: 'pointer' }}>
+                <ChevronLeft size={16} /> Bàn
+              </button>
+              <button onClick={() => { setShowStats(false); openTakeawayList(); }} style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, padding: '7px 12px', border: '1.5px solid #bfdbfe', borderRadius: 10, background: '#eff6ff', color: '#1d4ed8', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer' }}>
+                🛵 Đơn mang về{takeawayOrders.length ? ` (${takeawayOrders.length})` : ''}
+              </button>
+            </div>
+            <div className="tk-embed-scroll" style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', position: 'relative' }}>
+              <AdminPinGate section="stats">
+                <ThongKePage embedded onClose={() => setShowStats(false)} />
+              </AdminPinGate>
+            </div>
+          </div>
+        )
+      }
       {/* ── Takeaway Orders Modal ── */}
       {
         showTakeawayOrders && (
