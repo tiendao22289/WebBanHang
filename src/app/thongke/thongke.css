@@ -360,3 +360,5 @@ button.tk-tile { cursor: pointer; }
 .tk-photo-img p { color: #fecaca; text-align: center; padding: 0 16px; }
 .tk-photo-foot { padding: 8px 14px calc(12px + env(safe-area-inset-bottom)); text-align: center; }
 .tk-photo-foot a { color: #93c5fd; font-size: 13px; }
+.tk-embed .tk-page { min-height: 100%; }
+.tk-embed .tk-bar { padding-top: 0; }
