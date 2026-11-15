@@ -1247,7 +1247,9 @@ export default function TablesPage() {
     fetchReviewRequests();
     fetchPromoAndGifts();
 
-    const recovery = createTableOrderRecovery(() => fetchTablesRef.current?.(), {
+    // Điện thoại khoá màn hình / chuyển app thì mất kết nối realtime → lỡ sự kiện khách xin ưu đãi
+    // đánh giá (⭐ trên thẻ bàn). Mỗi lần nối lại / mở lại màn hình / định kỳ: đọc lại cả yêu cầu đánh giá.
+    const recovery = createTableOrderRecovery(() => Promise.all([fetchTablesRef.current?.(), fetchReviewRequests()]), {
       isVisible: () => document.visibilityState === 'visible',
       intervalMs: process.env.NEXT_PUBLIC_APP_ENV === 'dev' ? 10000 : 90000,
       disconnectedIntervalMs: 10000,
