@@ -998,9 +998,24 @@ export default function TablesPage() {
     const { value: ids, isConfirmed } = await Swal.fire({
       title: '🖨 In món',
       html: `<div style="font-size:0.85rem;color:#6b7280;margin-bottom:6px">Chọn món cần in. Món bếp ra máy bếp, nước / bia / khăn ra máy quầy.</div>
+        <label style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:2px solid #e2e8f0;text-align:left;cursor:pointer;font-weight:700;color:#16a34a">
+          <input type="checkbox" id="mp-all" style="width:20px;height:20px;flex-shrink:0"> Chọn tất cả
+        </label>
         <div style="max-height:50vh;overflow-y:auto;font-size:0.95rem">${rows}</div>`,
       showCancelButton: true, confirmButtonText: '🖨 In', cancelButtonText: 'Huỷ',
       confirmButtonColor: '#16a34a', reverseButtons: true,
+      didOpen: (popup) => {
+        const all = popup.querySelector('#mp-all');
+        const boxes = [...popup.querySelectorAll('.mp-item')];
+        const sync = () => {
+          const n = boxes.filter(b => b.checked).length;
+          all.checked = n === boxes.length;
+          all.indeterminate = n > 0 && n < boxes.length;
+        };
+        all.addEventListener('change', () => { boxes.forEach(b => { b.checked = all.checked; }); sync(); });
+        boxes.forEach(b => b.addEventListener('change', sync));
+        sync();
+      },
       preConfirm: () => {
         const picked = [...document.querySelectorAll('.mp-item:checked')].map(el => el.value);
         if (!picked.length) Swal.showValidationMessage('Chưa chọn món nào');
