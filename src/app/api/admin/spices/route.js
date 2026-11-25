@@ -9,7 +9,9 @@
  * POST {action}:
  *   create { supplier_id, lines: [{ name, unit, qty }], note } — ai cũng được; giá lấy giá lần trước của chủ gia vị đó
  *   add_lines { id, lines, note } — thêm món vào đơn chưa nhận (ai cũng được)
- *   receive { id, updated_at, received: [số nhận từng dòng | null = đủ] } — ai cũng được, chỉ một lần
+ *   receive { id, updated_at, received: [null = đủ | { check: ok|short|over|wrong, qty, note }], note } — ai cũng được, một lần
+ *   recheck { id, updated_at, received, note } — quản lý / chủ quán kiểm lại đơn đã nhận (đối soát)
+ * GET ?days=<supplier_id> → { days: supplierDays(...) } 60 ngày (nhân viên / quản lý không thấy tiền đã trả, nợ cuối ngày)
  *   cancel { id, reason } — người gọi (đơn chưa nhận) hoặc quản lý / admin
  *   set_prices { id, updated_at, prices: [{ index, price }] } — admin, sửa mọi lúc
  *   save_supplier { id?, name, phone, active } · new_link { id } · save_item { id?, name, unit, default_qty, active } — admin
@@ -21,7 +23,7 @@ import { randomBytes } from 'node:crypto';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { nowMs } from '@/lib/trueTime.mjs';
 import {
-  addLines, applyPrices, buildLines, parseItemLines, parseQty, cancelOrder, cleanName, createOrderRow, itemKey, lastPrices, receiveOrder,
+  addLines, applyPrices, buildLines, recheckOrder, supplierDays, parseItemLines, parseQty, cancelOrder, cleanName, createOrderRow, itemKey, lastPrices, receiveOrder,
   spiceStats, statsFrom, supplierBalances, vnDateOf,
 } from '@/lib/spiceOrders.mjs';
 
@@ -73,6 +75,20 @@ export async function GET(request) {
     const db = staffDatabase(user.id);
     const params = new URL(request.url).searchParams;
     const today = vnDateOf(nowIso());
+
+    const daysOf = params.get('days');
+    if (daysOf) {
+      if (!UUID.test(daysOf)) return fail('Không thấy chủ gia vị.');
+      const [orders, payments] = await Promise.all([
+        readAll(() => db.from('spice_orders').select('id, supplier_id, items, note, supplier_note, log, created_at, created_by_name, received_at, received_date, received_by_name, cancelled_at')
+          .eq('supplier_id', daysOf).not('received_at', 'is', null).order('id')),
+        isAdmin ? readAll(() => db.from('spice_payments').select('supplier_id, amount, method, note, paid_date').eq('supplier_id', daysOf).order('id')) : Promise.resolve([]),
+      ]);
+      const from = vnDateOf(new Date(nowMs() - 60 * 86400000).toISOString());
+      let days = supplierDays(orders, payments, { from });
+      if (!isAdmin) days = days.filter(d => d.orders.length).map(d => ({ ...d, paid: 0, payments: [], balance: null }));
+      return NextResponse.json({ days, today }, { headers });
+    }
 
     const period = params.get('stats');
     if (period) {
@@ -155,7 +171,7 @@ export async function POST(request) {
       return ok({ order: data?.[0] || null, supplier: { id: supplier.id, name: supplier.name, phone: supplier.phone || '', token: supplier.token } });
     }
 
-    if (['add_lines', 'receive', 'cancel', 'set_prices'].includes(body.action)) {
+    if (['add_lines', 'receive', 'recheck', 'cancel', 'set_prices'].includes(body.action)) {
       if (!UUID.test(String(body.id || ''))) return fail('Không thấy đơn.');
       const order = await readOrder(db, body.id);
       if (!order) return fail('Không thấy đơn.', 404);
@@ -164,7 +180,10 @@ export async function POST(request) {
       if (body.action === 'add_lines') {
         result = addLines(order, body.lines, { last: lastPrices(await supplierHistory(db, order.supplier_id), order.supplier_id), by, at, note: str(body.note, 300) });
       } else if (body.action === 'receive') {
-        result = receiveOrder(order, body.received, { by, at });
+        result = receiveOrder(order, body.received, { by, at, note: str(body.note, 300) });
+      } else if (body.action === 'recheck') {
+        if (!canManage) return fail('Chỉ quản lý hoặc chủ quán kiểm lại được.', 403);
+        result = recheckOrder(order, body.received, { by, at, note: str(body.note, 300) });
       } else if (body.action === 'cancel') {
         if (!canManage && order.created_by !== user.id) return fail('Chỉ người gọi đơn hoặc quản lý huỷ được.', 403);
         result = cancelOrder(order, { by, at, reason: str(body.reason, 200) });

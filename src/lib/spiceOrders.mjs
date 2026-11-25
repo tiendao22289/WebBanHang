@@ -314,25 +314,102 @@ export function applyPrices(order, prices, { by, at, who = 'supplier', done = fa
   return { patch };
 }
 
-/** Nhân viên bấm Đã nhận: received[i] = số nhận (trống = nhận đủ). → { patch } hoặc { error }. */
-export function receiveOrder(order, received, { by, at }) {
+/** Kết quả kiểm hàng từng dòng: đủ / thiếu / dư / sai hàng (sai loại, hư, không đúng yêu cầu). */
+export const CHECKS = ['ok', 'short', 'over', 'wrong'];
+export const CHECK_LABELS = { ok: 'Đủ', short: 'Thiếu', over: 'Dư', wrong: 'Sai hàng' };
+
+/**
+ * Kiểm một dòng đã nhận: { check, got (số nhận), diff (nhận − gọi), note }. Dòng cũ chưa có check thì suy ra từ số nhận.
+ */
+export function lineCheck(line) {
+  const qty = Number(line?.qty) || 0, got = lineQty(line);
+  const diff = Math.round((got - qty) * 1000) / 1000;
+  const check = CHECKS.includes(line?.check) ? line.check : diff < 0 ? 'short' : diff > 0 ? 'over' : 'ok';
+  return { check, got, diff, note: line?.check_note || '' };
+}
+
+/**
+ * Đọc kết quả kiểm hàng người nhận gửi lên. Mỗi dòng: null (đủ) · số (số nhận, kiểu cũ) · { check, qty, note }.
+ * Thiếu: số nhận < số gọi · Dư: số nhận > số gọi · Sai hàng: phải ghi rõ sai thế nào, số nhận (mặc định 0 = không lấy).
+ * → { items, checks (các dòng không đủ, để ghi lịch sử) } hoặc { error }.
+ */
+function readChecks(order, received) {
+  const list = Array.isArray(received) ? received : [];
+  const checks = [];
+  const items = [];
+  for (let i = 0; i < order.items.length; i += 1) {
+    const l = order.items[i], r = list[i], ordered = Number(l.qty) || 0;
+    const { check_note: _n, check: _c, ...base } = l;
+    let check = 'ok', got = ordered, note = '';
+    if (r && typeof r === 'object') {
+      check = CHECKS.includes(r.check) ? r.check : 'ok';
+      note = String(r.note ?? '').trim().replace(/\s+/g, ' ').slice(0, 200);
+      const raw = String(r.qty ?? '').trim().replace(',', '.');
+      const q = raw === '' ? null : Number(raw) === 0 ? 0 : parseQty(raw);
+      if (check !== 'ok' && raw !== '' && q === null) return { error: `"${l.name}": số nhận không hợp lệ.` };
+      if (check === 'short') {
+        if (q === null || q >= ordered) return { error: `"${l.name}": thiếu thì số nhận phải ít hơn ${qtyText(ordered)}.` };
+        got = q;
+      } else if (check === 'over') {
+        if (q === null || q <= ordered) return { error: `"${l.name}": dư thì số nhận phải nhiều hơn ${qtyText(ordered)}.` };
+        got = q;
+      } else if (check === 'wrong') {
+        if (!note) return { error: `"${l.name}": ghi rõ sai thế nào (vd: ớt xanh thay ớt đỏ, hàng hư).` };
+        got = q === null ? 0 : q;
+      }
+    } else if (r !== null && r !== undefined && String(r).trim() !== '') {
+      // Kiểu cũ: chỉ có số nhận.
+      const q = Number(String(r).replace(',', '.')) === 0 ? 0 : parseQty(r);
+      if (q !== null) { got = q; check = q < ordered ? 'short' : q > ordered ? 'over' : 'ok'; }
+    }
+    const row = { ...base, received_qty: got === ordered ? null : got, check };
+    if (note) row.check_note = note;
+    if (check !== 'ok') checks.push({ name: l.name, unit: l.unit, qty: ordered, got, check, ...(note ? { note } : {}) });
+    items.push(row);
+  }
+  if (orderTotal(items) > MAX_SPICE_TOTAL) return { error: TOO_BIG };
+  return { items, checks };
+}
+
+/**
+ * Nhân viên nhận hàng, kiểm từng món (đủ / thiếu / dư / sai hàng). received xem readChecks; note = ghi chú khi nhận.
+ * → { patch } hoặc { error }.
+ */
+export function receiveOrder(order, received, { by, at, note = '' }) {
   if (order.cancelled_at) return { error: 'Đơn đã huỷ.' };
   if (order.received_at) return { error: `Đơn đã được ${order.received_by_name || 'người khác'} bấm nhận rồi.` };
-  const list = Array.isArray(received) ? received : [];
-  const short = [];
-  const items = order.items.map((l, i) => {
-    const r = list[i];
-    if (r === null || r === undefined || String(r).trim() === '') return { ...l, received_qty: null };
-    const q = Number(String(r).replace(',', '.')) === 0 ? 0 : parseQty(r);
-    if (q === null) return { ...l, received_qty: null };
-    if (q !== Number(l.qty)) short.push({ name: l.name, qty: l.qty, got: q, unit: l.unit });
-    return { ...l, received_qty: q === Number(l.qty) ? null : q };
-  });
-  if (orderTotal(items) > MAX_SPICE_TOTAL) return { error: TOO_BIG };
+  const r = readChecks(order, received);
+  if (r.error) return r;
+  const clean = String(note ?? '').trim().slice(0, 300);
   return { patch: {
-    items, total: orderTotal(items), received_at: at, received_date: vnDateOf(at), received_by_name: by,
-    log: pushLog(order, [{ at, by, who: 'staff', type: 'receive', ...(short.length ? { short } : {}) }]),
+    items: r.items, total: orderTotal(r.items), received_at: at, received_date: vnDateOf(at), received_by_name: by,
+    log: pushLog(order, [{ at, by, who: 'staff', type: 'receive', ...(r.checks.length ? { checks: r.checks } : {}), ...(clean ? { note: clean } : {}) }]),
   } };
+}
+
+/**
+ * Quản lý / chủ quán kiểm lại đơn đã nhận (đối soát với chủ gia vị): sửa đủ / thiếu / dư / sai, ngày nhận giữ nguyên.
+ */
+export function recheckOrder(order, received, { by, at, note = '' }) {
+  if (order.cancelled_at) return { error: 'Đơn đã huỷ.' };
+  if (!order.received_at) return { error: 'Đơn chưa nhận, bấm Nhận hàng.' };
+  const r = readChecks(order, received);
+  if (r.error) return r;
+  const clean = String(note ?? '').trim().slice(0, 300);
+  return { patch: {
+    items: r.items, total: orderTotal(r.items),
+    log: pushLog(order, [{ at, by, who: 'staff', type: 'recheck', checks: r.checks, ...(clean ? { note: clean } : {}) }]),
+  } };
+}
+
+/** Một dòng kiểm hàng dễ đọc: "Muối thiếu 0,5 kg (gọi 2, nhận 1,5)". */
+export function checkText(c) {
+  const u = c.unit ? ` ${c.unit}` : '';
+  const d = Math.round((Number(c.got) - Number(c.qty)) * 1000) / 1000;
+  const check = c.check || (d < 0 ? 'short' : d > 0 ? 'over' : 'ok');
+  if (check === 'wrong') return `${c.name} sai hàng${c.note ? `: ${c.note}` : ''} (gọi ${qtyText(c.qty)}, lấy ${qtyText(c.got)}${u})`;
+  if (check === 'ok') return `${c.name} đủ`;
+  return `${c.name} ${check === 'short' ? 'thiếu' : 'dư'} ${qtyText(Math.abs(d))}${u} (gọi ${qtyText(c.qty)}, nhận ${qtyText(c.got)})${c.note ? ` · ${c.note}` : ''}`;
 }
 
 export function cancelOrder(order, { by, at, reason = '' }) {
@@ -358,10 +435,8 @@ export function logLine(e) {
     : e.type === 'price' ? `đổi giá: ${(e.changes || []).map(c => `${c.name} ${priceOf(c.from)} → ${priceOf(c.to)}`).join(', ')}`
     : e.type === 'done' ? 'báo đã soạn xong hàng'
     : e.type === 'note' ? `ghi chú: ${e.note || '(xoá ghi chú)'}`
-    : e.type === 'receive' ? (e.short?.length ? `nhận hàng khác số gọi: ${e.short.map(s => {
-      const d = Math.round((Number(s.got) - Number(s.qty)) * 1000) / 1000, u = s.unit ? ` ${s.unit}` : '';
-      return `${s.name} gọi ${qtyText(s.qty)} nhận ${qtyText(s.got)}${u} (${d < 0 ? 'thiếu' : 'dư'} ${qtyText(Math.abs(d))})`;
-    }).join(', ')}` : 'nhận đủ hàng')
+    : e.type === 'receive' ? withNote((e.checks || e.short)?.length ? `nhận hàng: ${(e.checks || e.short).map(checkText).join('; ')}` : 'nhận đủ hàng')
+    : e.type === 'recheck' ? withNote(e.checks?.length ? `kiểm lại: ${e.checks.map(checkText).join('; ')}` : 'kiểm lại: tất cả đủ')
     : e.type === 'cancel' ? withNote('huỷ đơn')
     : String(e.type || '');
   return { time: e.at ? shortTime(e.at) : '', who, role: e.who || 'staff', text };
@@ -425,4 +500,74 @@ export function parseItemLines(text) {
     out.push({ name, qty, unit });
   }
   return out.slice(0, 100);
+}
+
+/* ---------- Đối soát từng ngày với chủ gia vị ---------- */
+
+/**
+ * Đối soát từng ngày của MỘT chủ gia vị (orders, payments chỉ của người đó, đủ từ trước tới nay để tính nợ cuối ngày):
+ * [{ date, orders: [{ id, created_at, created_by_name, received_at, received_by_name, note, receive_note, supplier_note, total,
+ *    lines: [{ name, unit, qty, got, check, diff, note, price, amount }] }], total, counts: { short, over, wrong }, waiting,
+ *    paid, payments: [{ amount, method, note }], balance (quán còn nợ tới hết ngày) }], ngày mới nhất trước, chỉ ngày ≥ from
+ * có nhận hàng hoặc có trả tiền. Đơn tính theo ngày nhận (giống Sổ thu chi).
+ */
+export function supplierDays(orders, payments, { from = '' } = {}) {
+  const byDate = new Map();
+  const day = date => {
+    if (!byDate.has(date)) byDate.set(date, { date, orders: [], total: 0, counts: { short: 0, over: 0, wrong: 0 }, waiting: 0, paid: 0, payments: [], balance: 0 });
+    return byDate.get(date);
+  };
+  for (const o of orders || []) {
+    if (o.cancelled_at || !o.received_at) continue;
+    const d = day(o.received_date || vnDateOf(o.received_at));
+    const receiveNote = [...(o.log || [])].reverse().find(e => e.type === 'receive' || e.type === 'recheck')?.note || '';
+    const lines = (o.items || []).map(l => {
+      const c = lineCheck(l);
+      if (c.check !== 'ok') d.counts[c.check] += 1;
+      return { name: l.name, unit: l.unit || '', qty: Number(l.qty) || 0, got: c.got, check: c.check, diff: c.diff, note: c.note,
+        price: l.price ?? null, amount: lineAmount(l) };
+    });
+    const total = orderTotal(o.items);
+    d.total += total;
+    if (missingPrices(o.items)) d.waiting += 1;
+    d.orders.push({ id: o.id, created_at: o.created_at, created_by_name: o.created_by_name || '', received_at: o.received_at,
+      received_by_name: o.received_by_name || '', note: o.note || '', receive_note: receiveNote, supplier_note: o.supplier_note || '', total, lines });
+  }
+  for (const p of payments || []) {
+    const d = day(p.paid_date);
+    d.paid += Number(p.amount) || 0;
+    d.payments.push({ amount: Number(p.amount) || 0, method: p.method, note: p.note || '' });
+  }
+  let balance = 0;
+  const all = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+  for (const d of all) {
+    balance += d.total - d.paid;
+    d.balance = balance;
+    d.orders.sort((a, b) => String(a.received_at).localeCompare(String(b.received_at)));
+  }
+  return all.filter(d => d.date >= from).reverse();
+}
+
+/** Tin đối soát một ngày để gửi Zalo cho chủ gia vị (hoặc chủ gia vị gửi lại quán). */
+export function dayReportText({ supplierName = '', day, withMoney = true }) {
+  const [y, m, dd] = day.date.split('-');
+  const out = [`🧂 Đối soát gia vị ngày ${dd}/${m}/${y}${supplierName ? ` – ${supplierName}` : ''}`];
+  day.orders.forEach((o, k) => {
+    out.push('', `Đơn ${k + 1} (gọi ${shortTime(o.created_at)}${o.created_by_name ? ` – ${o.created_by_name}` : ''}; nhận ${shortTime(o.received_at)}${o.received_by_name ? ` – ${o.received_by_name}` : ''}):`);
+    for (const l of o.lines) {
+      const mark = l.check === 'ok' ? '✅' : l.check === 'wrong' ? '⚠️' : l.check === 'short' ? '➖' : '➕';
+      const what = l.check === 'ok' ? `${qtyText(l.got)}${l.unit ? ` ${l.unit}` : ''} đủ` : checkText(l).replace(`${l.name} `, '');
+      out.push(`${mark} ${l.name}: ${what}${withMoney ? ` = ${l.price === null ? 'chưa giá' : vnd(l.amount)}` : ''}`);
+    }
+    if (o.receive_note) out.push(`Ghi chú nhận: ${o.receive_note}`);
+    if (withMoney) out.push(`Tiền đơn: ${vnd(o.total)}`);
+  });
+  const { short, over, wrong } = day.counts;
+  if (short || over || wrong) out.push('', `Cần đối lại: ${[short && `${short} món thiếu`, over && `${over} món dư`, wrong && `${wrong} món sai`].filter(Boolean).join(', ')}`);
+  if (withMoney) {
+    out.push('', `Tổng nhận ngày này: ${vnd(day.total)}`);
+    if (day.paid) out.push(`Quán trả trong ngày: ${vnd(day.paid)}`);
+    out.push(`Quán còn nợ tới hết ngày: ${vnd(day.balance)}`);
+  }
+  return out.join('\n');
 }

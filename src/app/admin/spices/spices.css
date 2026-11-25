@@ -185,3 +185,23 @@ textarea.sp-field { min-height: 64px; resize: vertical; }
 .sp-cell.on .add { border: 2px solid var(--sp-main); background: var(--sp-main-soft); }
 .sp-cell .badge { position: absolute; top: -9px; right: -4px; background: var(--sp-main); color: #fff; border-radius: 999px; font-size: 12px; font-weight: 800; padding: 2px 8px; pointer-events: none; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-cell .minus { position: absolute; top: -10px; left: -6px; width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--sp-line); background: #fff; font-size: 20px; font-weight: 800; line-height: 1; color: var(--sp-text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+
+/* Kiểm hàng: nhãn từng món */
+.sp-check { display: inline-block; margin-top: 4px; border-radius: 6px; padding: 1px 7px; font-size: 13px; font-weight: 700; }
+.sp-check.ok { background: var(--sp-ok-soft); color: var(--sp-ok); }
+.sp-check.short, .sp-check.wrong { background: var(--sp-bad-soft); color: var(--sp-bad); }
+.sp-check.over { background: var(--sp-blue-soft); color: var(--sp-blue); }
+.sp-recv { padding: 10px 0; border-bottom: 1px dashed var(--sp-line); }
+.sp-recv-checks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 6px; }
+.sp-recv-checks .sp-pick { padding: 8px 2px; min-height: 42px; font-size: 14px; text-align: center; }
+.sp-recv-checks .sp-pick.on.ok { background: var(--sp-ok-soft); border-color: var(--sp-ok); color: var(--sp-ok); }
+.sp-recv-checks .sp-pick.on.short, .sp-recv-checks .sp-pick.on.wrong { background: var(--sp-bad-soft); border-color: var(--sp-bad); color: var(--sp-bad); }
+.sp-recv-checks .sp-pick.on.over { background: var(--sp-blue-soft); border-color: var(--sp-blue); color: var(--sp-blue); }
+/* Đối soát từng ngày */
+.sp-day-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; width: 100%; }
+.sp-day-total { margin-left: auto; padding-left: 8px; }
+.sp-day-order { padding: 10px 0; border-bottom: 1px dashed var(--sp-line); }
+.sp-day-pay { padding: 8px 0; color: var(--sp-ok); font-weight: 600; }
+.sp-stat tr.warn td { background: #fff7f7; }
+.sp-stat .nop { color: var(--sp-bad); font-weight: 700; }
+.sp-stat td:nth-child(2), .sp-stat td:nth-child(3) { white-space: nowrap; }

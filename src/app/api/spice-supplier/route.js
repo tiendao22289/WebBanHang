@@ -3,14 +3,14 @@
  * (spice_suppliers.token, chủ quán bấm "Đổi link" là link cũ hết dùng). Chủ gia vị chỉ thấy đơn của chính mình.
  *
  * GET ?t=<mã> → { supplier: { name }, summary (đã giao / quán đã trả / quán còn thiếu), orders (mọi đơn chưa nhận + 60 ngày),
- *               payments (các lần quán trả) }
+ *               payments (các lần quán trả), days (đối soát từng ngày 60 ngày: đủ / thiếu / dư / sai, nợ cuối ngày) }
  * POST { t, id, updated_at, prices: [{ index, price }], done, note } → điền / sửa giá, báo "Đã soạn xong", ghi chú.
  *   Đơn chưa nhận: sửa giá mọi dòng; đơn đã nhận: chỉ điền được dòng còn trống giá (sửa giá thì báo chủ quán).
  */
 import { NextResponse } from 'next/server';
 import { statusDatabase } from '@/lib/statusAuth';
 import { nowMs } from '@/lib/trueTime.mjs';
-import { applyPrices, supplierSummary } from '@/lib/spiceOrders.mjs';
+import { applyPrices, supplierDays, supplierSummary, vnDateOf } from '@/lib/spiceOrders.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,12 +54,13 @@ export async function GET(request) {
     const since = new Date(nowMs() - 60 * 86400000).toISOString();
     const [all, payments] = await Promise.all([
       readAll(() => db.from('spice_orders').select('*').eq('supplier_id', supplier.id).order('created_at', { ascending: false })),
-      readAll(() => db.from('spice_payments').select('amount, method, paid_date, note, created_at').eq('supplier_id', supplier.id).order('paid_date', { ascending: false })),
+      readAll(() => db.from('spice_payments').select('supplier_id, amount, method, paid_date, note, created_at').eq('supplier_id', supplier.id).order('paid_date', { ascending: false })),
     ]);
     const orders = all.filter(o => o.created_at >= since || (!o.received_at && !o.cancelled_at));
     return NextResponse.json({
       supplier: { name: supplier.name }, summary: supplierSummary(all, payments),
-      orders: orders.map(view), payments: payments.slice(0, 60),
+      orders: orders.map(view), payments: payments.slice(0, 60).map(({ supplier_id: _s, ...p }) => p),
+      days: supplierDays(all, payments, { from: vnDateOf(since) }),
     }, { headers });
   } catch (error) {
     console.error('[spice-supplier] GET', error);
