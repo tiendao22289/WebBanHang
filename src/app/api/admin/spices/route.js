@@ -16,6 +16,9 @@
  *   set_prices { id, updated_at, prices: [{ index, price }] } — admin, sửa mọi lúc
  *   save_supplier { id?, name, phone, active } · new_link { id } · save_item { id?, name, unit, default_qty, active } — admin
  *   save_items { text } — admin dán nhiều món một lần ("Muối 2 kg" mỗi dòng), món đã có thì cập nhật số / đơn vị
+ *   replace_items { text } — admin sửa CẢ danh sách bằng chữ: đúng thứ tự dòng, món không còn trong chữ bị xoá
+ *   move_item { id, dir: -1 | 1 } · delete_item { id } — admin xếp / xoá món (đơn cũ giữ tên món, không ảnh hưởng)
+ *   Món nhân viên gõ thêm khi gọi chỉ nằm trong đơn đó, không tự vào danh sách (danh sách do chủ quán quyết).
  *   pay { supplier_id, amount, method, paid_date, note } · delete_payment { id } — admin
  */
 import { NextResponse } from 'next/server';
@@ -23,7 +26,7 @@ import { randomBytes } from 'node:crypto';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { nowMs } from '@/lib/trueTime.mjs';
 import {
-  addLines, applyPrices, buildLines, recheckOrder, supplierDays, parseItemLines, parseQty, cancelOrder, cleanName, createOrderRow, itemKey, lastPrices, receiveOrder,
+  addLines, applyPrices, buildLines, recheckOrder, supplierDays, parseItemLines, parseQty, moveItem, planItemList, cancelOrder, cleanName, createOrderRow, itemKey, lastPrices, receiveOrder,
   spiceStats, statsFrom, supplierBalances, vnDateOf,
 } from '@/lib/spiceOrders.mjs';
 
@@ -136,16 +139,6 @@ export async function GET(request) {
   }
 }
 
-async function rememberItems(db, lines) {
-  const { data: known } = await db.from('spice_items').select('name');
-  const knownKeys = new Set((known || []).map(i => itemKey(i.name)));
-  const fresh = lines.filter(l => !knownKeys.has(itemKey(l.name))).map(l => ({ name: l.name, unit: l.unit || null }));
-  if (fresh.length) {
-    const { error } = await db.from('spice_items').insert(fresh);
-    if (error) console.error('[admin/spices] items', error);
-  }
-}
-
 export async function POST(request) {
   try {
     const s = await getStaffSession(request);
@@ -167,7 +160,6 @@ export async function POST(request) {
       const row = createOrderRow({ lines: built.lines, note: str(body.note, 300), by, byId: user.id, at, supplierId: supplier.id });
       const { data, error: insertError } = await db.from('spice_orders').insert(row).select('*');
       if (insertError) throw insertError;
-      await rememberItems(db, built.lines);
       return ok({ order: data?.[0] || null, supplier: { id: supplier.id, name: supplier.name, phone: supplier.phone || '', token: supplier.token } });
     }
 
@@ -195,7 +187,6 @@ export async function POST(request) {
       if (!result.patch) return ok({ order });
       const saved = await updateOrder(db, order, result.patch, at);
       if (!saved) return fail(CHANGED, 409);
-      if (body.action === 'add_lines') await rememberItems(db, result.lines);
       const supplier = body.action === 'add_lines'
         ? (await db.from('spice_suppliers').select('id, name, phone, token').eq('id', order.supplier_id).maybeSingle()).data : null;
       return ok({ order: saved, ...(supplier ? { supplier } : {}) });
@@ -234,10 +225,12 @@ export async function POST(request) {
       const qty = body.default_qty === '' || body.default_qty === null || body.default_qty === undefined ? null : parseQty(String(body.default_qty));
       if (qty === null && body.default_qty !== '' && body.default_qty !== null && body.default_qty !== undefined) return fail('Số lượng mặc định không hợp lệ.');
       const row = { name, unit: cleanName(body.unit, 20) || null, default_qty: qty, active: body.active !== false };
-      const { data: all, error: readError } = await db.from('spice_items').select('id, name');
+      const { data: all, error: readError } = await db.from('spice_items').select('id, name, sort');
       if (readError) throw readError;
       if ((all || []).some(i => itemKey(i.name) === itemKey(name) && i.id !== body.id)) return fail('Đã có món này.');
-      const q = body.id ? db.from('spice_items').update(row).eq('id', body.id) : db.from('spice_items').insert(row);
+      // Món mới vào cuối danh sách.
+      const q = body.id ? db.from('spice_items').update(row).eq('id', body.id)
+        : db.from('spice_items').insert({ ...row, sort: Math.max(0, ...(all || []).map(i => Number(i.sort) || 0)) + 1 });
       const { data, error } = await q.select('*');
       if (error) throw error;
       return ok({ item: data?.[0] || null });
@@ -266,6 +259,44 @@ export async function POST(request) {
         }
       }
       return ok({ added, updated });
+    }
+
+    if (body.action === 'replace_items') {
+      const { data: all, error: readError } = await db.from('spice_items').select('*');
+      if (readError) throw readError;
+      const plan = planItemList(all || [], body.text);
+      if (plan.error) return fail(plan.error);
+      // Xoá trước (để đổi tên "Ớt" → "ớt" không vướng trùng tên), rồi sửa, rồi thêm.
+      if (plan.deletes.length) {
+        const { error } = await db.from('spice_items').delete().in('id', plan.deletes);
+        if (error) throw error;
+      }
+      for (const u of plan.updates) {
+        const { error } = await db.from('spice_items').update(u.patch).eq('id', u.id);
+        if (error) throw error;
+      }
+      if (plan.inserts.length) {
+        const { error } = await db.from('spice_items').insert(plan.inserts);
+        if (error) throw error;
+      }
+      return ok({ total: (all || []).length - plan.deletes.length + plan.inserts.length, added: plan.inserts.length, removed: plan.deletes.length });
+    }
+
+    if (body.action === 'move_item' || body.action === 'delete_item') {
+      if (!UUID.test(String(body.id || ''))) return fail('Không thấy món.');
+      if (body.action === 'delete_item') {
+        const { data, error } = await db.from('spice_items').delete().eq('id', body.id).select('id');
+        if (error) throw error;
+        if (!data?.length) return fail('Không thấy món.', 404);
+        return ok({});
+      }
+      const { data: all, error: readError } = await db.from('spice_items').select('id, name, sort');
+      if (readError) throw readError;
+      for (const c of moveItem(all || [], body.id, Number(body.dir))) {
+        const { error } = await db.from('spice_items').update({ sort: c.sort }).eq('id', c.id);
+        if (error) throw error;
+      }
+      return ok({});
     }
 
     if (body.action === 'pay') {

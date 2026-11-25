@@ -205,3 +205,10 @@ textarea.sp-field { min-height: 64px; resize: vertical; }
 .sp-stat tr.warn td { background: #fff7f7; }
 .sp-stat .nop { color: var(--sp-bad); font-weight: 700; }
 .sp-stat td:nth-child(2), .sp-stat td:nth-child(3) { white-space: nowrap; }
+
+/* Cài đặt: danh sách món theo thứ tự, đổi chỗ ▲▼ */
+.sp-item-row { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--sp-line, #eee); }
+.sp-item-row:last-of-type { border-bottom: 0; }
+.sp-item-name { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 8px 2px; font: inherit; color: inherit; cursor: pointer; }
+.sp-move { width: 40px; height: 40px; flex: none; border-radius: 10px; border: 1px solid var(--sp-line, #ddd); background: #fff; font-size: 14px; color: inherit; }
+.sp-move:disabled { opacity: 0.3; }

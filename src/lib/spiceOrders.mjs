@@ -466,8 +466,8 @@ export const itemStep = item => {
 };
 
 /**
- * Xếp món: món hay gọi (đếm trong các đơn gần đây, ưu tiên của chủ gia vị đang chọn) lên trước, rồi theo thứ tự chủ quán
- * xếp (sort), rồi tên. Món ẩn (active = false) bỏ ra.
+ * Xếp món đúng thứ tự chủ quán xếp trong Cài đặt (sort, rồi tên); uses = số lần gọi gần đây (ưu tiên chủ gia vị đang chọn).
+ * Món ẩn (active = false) bỏ ra.
  */
 export function rankItems(items, orders = [], supplierId = null) {
   const count = new Map();
@@ -476,9 +476,9 @@ export function rankItems(items, orders = [], supplierId = null) {
     const w = supplierId && o.supplier_id === supplierId ? 3 : 1;
     for (const l of o.items || []) count.set(itemKey(l.name), (count.get(itemKey(l.name)) || 0) + w);
   }
-  return (items || []).filter(i => i.active !== false)
-    .map(i => ({ ...i, uses: count.get(itemKey(i.name)) || 0 }))
-    .sort((a, b) => b.uses - a.uses || (Number(a.sort) || 0) - (Number(b.sort) || 0) || a.name.localeCompare(b.name, 'vi'));
+  // Thứ tự do chủ quán xếp trong Cài đặt; số lần gọi chỉ để biết món hay gọi.
+  return orderedItems((items || []).filter(i => i.active !== false))
+    .map(i => ({ ...i, uses: count.get(itemKey(i.name)) || 0 }));
 }
 
 /**
@@ -500,6 +500,52 @@ export function parseItemLines(text) {
     out.push({ name, qty, unit });
   }
   return out.slice(0, 100);
+}
+
+/** Danh sách món theo thứ tự chủ quán xếp (sort, rồi tên). */
+export function orderedItems(items) {
+  return [...(items || [])].sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0) || String(a.name).localeCompare(String(b.name), 'vi'));
+}
+
+/** Một dòng của danh sách để sửa bằng chữ: "Tiêu xay 0,5 kg". */
+export function itemLineText(i) {
+  const q = Number(i.default_qty) > 0 ? ` ${String(Math.round(Number(i.default_qty) * 1000) / 1000).replace('.', ',')}` : '';
+  return `${i.name}${q}${i.unit ? `${q ? ' ' : ' 1 '}${i.unit}` : ''}`;
+}
+
+/**
+ * Đưa món lên (dir -1) / xuống (dir 1) một bậc: đánh số lại 1..n theo thứ tự đang thấy rồi đổi chỗ.
+ * → [{ id, sort }] chỉ các món đổi số (rỗng nếu đã ở đầu / cuối hoặc không thấy món).
+ */
+export function moveItem(items, id, dir) {
+  const list = orderedItems(items);
+  const i = list.findIndex(x => x.id === id), j = i + (dir < 0 ? -1 : 1);
+  if (i < 0 || j < 0 || j >= list.length) return [];
+  [list[i], list[j]] = [list[j], list[i]];
+  return list.map((x, k) => ({ id: x.id, sort: k + 1 })).filter((x, k) => Number(list[k].sort) !== x.sort);
+}
+
+/**
+ * Chủ quán sửa CẢ danh sách bằng chữ (mỗi dòng "Tên số đơn-vị"): danh sách sau khi lưu đúng y như chữ —
+ * thứ tự theo dòng, số / đơn vị theo dòng (không ghi = bỏ), món không còn trong chữ thì xoá.
+ * → { error } | { updates: [{ id, patch }], inserts: [row], deletes: [id] }
+ */
+export function planItemList(existing, text) {
+  const list = parseItemLines(text);
+  if (!list.length) return { error: 'Danh sách trống. Mỗi dòng một món, vd: Muối 1 kg' };
+  const byKey = new Map((existing || []).map(i => [itemKey(i.name), i]));
+  const keep = new Set();
+  const updates = [], inserts = [];
+  list.forEach((it, k) => {
+    const row = { name: it.name, unit: it.unit || null, default_qty: it.qty, sort: k + 1, active: true };
+    const old = byKey.get(itemKey(it.name));
+    if (!old) { inserts.push(row); return; }
+    keep.add(old.id);
+    const changed = ['name', 'unit', 'default_qty', 'sort', 'active'].some(f => (old[f] ?? null) !== row[f] && !(f === 'default_qty' && Number(old[f]) === row[f]));
+    if (changed) updates.push({ id: old.id, patch: row });
+  });
+  const deletes = (existing || []).filter(i => !keep.has(i.id)).map(i => i.id);
+  return { updates, inserts, deletes };
 }
 
 /* ---------- Đối soát từng ngày với chủ gia vị ---------- */

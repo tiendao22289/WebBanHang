@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useBackClose } from '@/lib/useBackClose';
 import { useReloadHold } from '@/lib/useBuildRefresh';
 import {
-  CHECK_LABELS, STATE_LABELS, addedLater, changeText, cleanName, dayReportText, lineCheck, itemKey, itemStep, plainText, rankItems, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shareText, shortTime,
+  CHECK_LABELS, STATE_LABELS, addedLater, changeText, cleanName, dayReportText, lineCheck, itemKey, itemLineText, itemStep, orderedItems, plainText, rankItems, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shareText, shortTime,
 } from '@/lib/spiceOrders.mjs';
 import { CheckBadge, DayCard } from './SpiceShared';
 import './spices.css';
@@ -124,7 +124,7 @@ function readCart() {
 }
 function saveCart(v) { try { localStorage.setItem(CART_KEY, JSON.stringify(v)); } catch { /* máy chặn lưu: bỏ qua */ } }
 
-// Chọn món nhanh: ô to theo danh sách (món hay gọi lên đầu), bấm ô = thêm số mặc định (vd Tiêu 0,5 kg), bấm tiếp = thêm nữa,
+// Chọn món nhanh: ô to theo danh sách đúng thứ tự chủ quán xếp, bấm ô = thêm số mặc định (vd Tiêu 0,5 kg), bấm tiếp = thêm nữa,
 // nút − trên ô để bớt. Danh sách dài thì có ô tìm (gõ không dấu cũng được). Món không có trong danh sách: "＋ Món khác".
 const num = v => Number(String(v ?? '').replace(',', '.')) || 0;
 const fmtQty = n => String(Math.round(n * 1000) / 1000).replace('.', ',');
@@ -568,6 +568,15 @@ function SetupTab({ data, reload }) {
   const [edit, setEdit] = useState(null); // { id?, name, phone, active }
   const [itemEdit, setItemEdit] = useState(null);
   const [bulk, setBulk] = useState(null); // chữ đang dán: nhiều món một lần
+  const [listText, setListText] = useState(null); // sửa cả danh sách bằng chữ
+  const [busy, setBusy] = useState(false);
+  const items = orderedItems(data.items);
+  const move = async (id, dir) => {
+    if (busy) return;
+    setBusy(true);
+    try { await api({ action: 'move_item', id, dir }); await reload(); } catch (e) { setMsg({ key: 'item', err: true, text: e.message }); }
+    setBusy(false);
+  };
   const [msg, setMsg] = useState(null);
   const run = async (body, text, key) => {
     try { await api(body); setMsg({ key, text }); await reload(); return true; } catch (e) { setMsg({ key, err: true, text: e.message }); return false; }
@@ -591,17 +600,35 @@ function SetupTab({ data, reload }) {
 
     <h2>Món gia vị</h2>
     {msg?.key === 'item' && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
-    <div className="sp-card"><div className="sp-picks">
-      {[...data.items].sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0) || a.name.localeCompare(b.name, 'vi')).map(i => <button key={i.id} type="button" className="sp-pick" style={i.active ? undefined : { opacity: 0.5, textDecoration: 'line-through' }}
-        onClick={() => setItemEdit({ ...i, unit: i.unit || '', default_qty: i.default_qty ? fmtQty(Number(i.default_qty)) : '' })}>
-        {i.name}<small>{i.default_qty ? `${fmtQty(Number(i.default_qty))} ` : ''}{i.unit || ''}</small>
-      </button>)}
+    <div className="sp-card">
+      <p className="sp-mute sp-small" style={{ marginTop: 0 }}>Nhân viên thấy đúng các món này, đúng thứ tự này. Bấm tên món để sửa tên / đơn vị / số mỗi lần bấm, ẩn hoặc xoá. ▲▼ để đổi chỗ.</p>
+      {items.length === 0 && <p className="sp-empty">Chưa có món nào.</p>}
+      {items.map((i, k) => <div key={i.id} className="sp-item-row" style={i.active ? undefined : { opacity: 0.55 }}>
+        <button type="button" className="sp-item-name" onClick={() => setItemEdit({ ...i, unit: i.unit || '', default_qty: i.default_qty ? fmtQty(Number(i.default_qty)) : '' })}>
+          <span className="sp-b">{k + 1}. {i.name}</span>
+          <span className="sp-mute"> · {i.default_qty ? fmtQty(Number(i.default_qty)) : 1} {i.unit || ''}{!i.active ? ' · đang ẩn' : ''}</span>
+        </button>
+        <button type="button" className="sp-move" aria-label="Lên" disabled={busy || k === 0} onClick={() => move(i.id, -1)}>▲</button>
+        <button type="button" className="sp-move" aria-label="Xuống" disabled={busy || k === items.length - 1} onClick={() => move(i.id, 1)}>▼</button>
+      </div>)}
+      <div className="sp-btns">
+        <button type="button" className="sp-btn" onClick={() => setItemEdit({ name: '', unit: '', default_qty: '', active: true })}>➕ Một món</button>
+        <button type="button" className="sp-btn" onClick={() => setBulk('')}>📋 Thêm nhiều món</button>
+        <button type="button" className="sp-btn main" onClick={() => setListText(items.filter(i => i.active).map(itemLineText).join('\n'))}>✏️ Sửa cả danh sách</button>
+      </div>
+      <p className="sp-mute sp-small" style={{ marginTop: 8 }}>Món nhân viên gõ thêm lúc gọi (＋ Món khác) chỉ nằm trong đơn đó, không tự vào danh sách.</p>
     </div>
-    <div className="sp-btns">
-      <button type="button" className="sp-btn" onClick={() => setItemEdit({ name: '', unit: '', default_qty: '', active: true })}>➕ Một món</button>
-      <button type="button" className="sp-btn main" onClick={() => setBulk('')}>📋 Thêm nhiều món</button>
-    </div>
-    <p className="sp-mute sp-small" style={{ marginTop: 8 }}>Số nhỏ dưới tên = số lượng mỗi lần nhân viên bấm món. Bấm món để sửa / ẩn. Nhân viên gõ món mới khi gọi thì món đó tự vào danh sách.</p></div>
+    {listText !== null && <Sheet title="Sửa cả danh sách" onClose={() => setListText(null)}>
+      <p className="sp-mute">Mỗi dòng một món: <b>tên, số mỗi lần bấm, đơn vị</b> (vd: <i>Tiêu xay 0,5 kg</i>). Sửa tên, đổi thứ tự dòng, thêm dòng mới tuỳ ý. <b>Dòng nào xoá đi thì món đó bị xoá khỏi danh sách</b> (đơn cũ vẫn giữ nguyên).</p>
+      <textarea className="sp-field" rows={14} value={listText} onChange={e => setListText(e.target.value)} />
+      {msg?.key === 'list' && msg.err && <div className="sp-msg err">{msg.text}</div>}
+      <div className="sp-btns"><button type="button" className="sp-btn main block" disabled={!listText.trim()} onClick={async () => {
+        try {
+          const j = await api({ action: 'replace_items', text: listText });
+          setMsg({ key: 'item', text: `Đã lưu danh sách: ${j.total} món${j.added ? `, thêm ${j.added}` : ''}${j.removed ? `, xoá ${j.removed}` : ''} ✓` }); setListText(null); await reload();
+        } catch (e) { setMsg({ key: 'list', err: true, text: e.message }); }
+      }}>Lưu danh sách</button></div>
+    </Sheet>}
     {bulk !== null && <Sheet title="Thêm nhiều món" onClose={() => setBulk(null)}>
       <p className="sp-mute">Mỗi dòng một món: tên, số lượng mặc định, đơn vị. Món đã có thì cập nhật số và đơn vị.</p>
       <textarea className="sp-field" rows={8} placeholder={'Muối 1 kg\nTiêu xay 0,5 kg\nRau răm 2 bó\nNước mắm 2 chai'} value={bulk} onChange={e => setBulk(e.target.value)} />
@@ -634,6 +661,10 @@ function SetupTab({ data, reload }) {
       <div className="sp-btns"><button type="button" className="sp-btn main block" onClick={async () => {
         if (await run({ action: 'save_item', id: itemEdit.id, name: itemEdit.name, unit: itemEdit.unit, active: itemEdit.active, default_qty: String(itemEdit.default_qty || '').replace(',', '.') }, 'Đã lưu món ✓', 'item')) setItemEdit(null);
       }}>Lưu</button></div>
+      {itemEdit.id && <div className="sp-btns"><button type="button" className="sp-btn bad block" onClick={async () => {
+        if (!window.confirm(`Xoá "${itemEdit.name}" khỏi danh sách? Đơn cũ vẫn giữ nguyên.`)) return;
+        if (await run({ action: 'delete_item', id: itemEdit.id }, `Đã xoá ${itemEdit.name}`, 'item')) setItemEdit(null);
+      }}>🗑 Xoá món này</button></div>}
     </Sheet>}
   </>;
 }

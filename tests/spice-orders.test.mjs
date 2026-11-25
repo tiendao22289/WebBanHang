@@ -260,7 +260,7 @@ test('máy chủ: trọn quy trình gọi → thêm món → chủ gia vị đi�
   assert.equal(first.status, 200);
   assert.deepEqual(first.body.order.items.map(l => l.price), [null, null]);
   assert.equal(first.body.supplier.token, sup.token);
-  assert.deepEqual(state.spice_items.map(i => i.name).sort(), ['Muối', 'Sả']);
+  assert.deepEqual(state.spice_items, [], 'món nhân viên gõ không tự vào danh sách (danh sách do chủ quán quyết)');
 
   // Tài thêm món lúc 9h.
   state.now = Date.parse(T(9));
@@ -362,6 +362,7 @@ test('máy chủ: huỷ đơn — người gọi hoặc quản lý; nhân viên 
   const fixed = await post(owner, { action: 'set_prices', id: o3.id, prices: [{ index: 0, price: 1000 }] });
   assert.equal(fixed.body.order.log.at(-1).who, 'admin');
   // Trùng tên món khi tạo món trong Cài đặt.
+  assert.equal((await post(owner, { action: 'save_item', name: 'Ớt' })).status, 200);
   assert.match((await post(owner, { action: 'save_item', name: ' ớt ' })).body.error, /Đã có/);
   // Dữ liệu lạ.
   assert.equal((await post(thy, { action: 'create', supplier_id: 'abc', lines: [] })).status, 400);
@@ -413,7 +414,7 @@ test('spice_orders.sql cài trên Postgres thật, chạy lại được, web c�
 
 /* ---------------- Danh sách món chọn nhanh ---------------- */
 
-test('tìm món không dấu, số mặc định mỗi lần bấm, món hay gọi lên đầu', () => {
+test('tìm món không dấu, số mặc định mỗi lần bấm, đúng thứ tự chủ quán xếp', () => {
   assert.equal(spice.plainText('Hành Tím'), 'hanh tim');
   assert.equal(spice.plainText('Đường'), 'duong');
   assert.equal(spice.itemStep({ default_qty: 0.5 }), 0.5);
@@ -425,7 +426,9 @@ test('tìm món không dấu, số mặc định mỗi lần bấm, món hay g�
     { supplier_id: SUP2, items: [{ name: 'Đường' }, { name: 'Đường ' }] },
     { supplier_id: SUP, cancelled_at: 'x', items: [{ name: 'Muối' }, { name: 'Muối' }, { name: 'Muối' }, { name: 'Muối' }] },
   ];
-  assert.deepEqual(spice.rankItems(items, orders, SUP).map(i => i.name), ['Sả', 'Đường', 'Muối']);
+  const ranked = spice.rankItems(items, orders, SUP);
+  assert.deepEqual(ranked.map(i => i.name), ['Muối', 'Đường', 'Sả'], 'thứ tự chủ quán, không theo số lần gọi');
+  assert.deepEqual(ranked.map(i => i.uses), [0, 2, 3]);
   assert.deepEqual(spice.rankItems(items, [], null).map(i => i.name), ['Muối', 'Đường', 'Sả']);
 });
 
@@ -458,6 +461,75 @@ test('máy chủ: thêm nhiều món, sửa số mặc định; nhân viên khô
   const seen = (await get(thy)).body.items;
   assert.ok(seen.every(i => i.active !== false));
   assert.equal(seen.find(i => i.name === 'Rau răm').default_qty, 2);
+});
+
+test('chủ quán xếp món: lên / xuống, đánh số lại khi sort trùng', () => {
+  const items = [{ id: 'a', name: 'Muối', sort: 1 }, { id: 'b', name: 'Đường', sort: 2 }, { id: 'c', name: 'Sả', sort: 3 }];
+  assert.deepEqual(spice.moveItem(items, 'c', -1), [{ id: 'c', sort: 2 }, { id: 'b', sort: 3 }]);
+  assert.deepEqual(spice.moveItem(items, 'a', -1), [], 'đầu danh sách thì không lên được');
+  assert.deepEqual(spice.moveItem(items, 'c', 1), []);
+  assert.deepEqual(spice.moveItem(items, 'x', 1), []);
+  // Món cũ sort = 0 cả: đánh số lại theo tên rồi đổi chỗ.
+  const flat = [{ id: 'a', name: 'Muối', sort: 0 }, { id: 'b', name: 'Bơ', sort: 0 }, { id: 'c', name: 'Ớt', sort: 0 }];
+  const ch = spice.moveItem(flat, 'c', -1);
+  const after = spice.orderedItems(flat.map(i => ({ ...i, sort: ch.find(c => c.id === i.id)?.sort ?? i.sort })));
+  assert.deepEqual(after.map(i => i.name), ['Bơ', 'Ớt', 'Muối']);
+  assert.equal(spice.itemLineText({ name: 'Tiêu xay', default_qty: 0.5, unit: 'kg' }), 'Tiêu xay 0,5 kg');
+  assert.equal(spice.itemLineText({ name: 'Muối', default_qty: null, unit: 'kg' }), 'Muối 1 kg');
+  assert.equal(spice.itemLineText({ name: 'Rau răm', default_qty: null, unit: null }), 'Rau răm');
+  // Chữ của danh sách đọc lại ra đúng món.
+  for (const it of [{ name: 'Tiêu xay', default_qty: 0.5, unit: 'kg' }, { name: 'Nước mắm Phú Quốc', default_qty: 2, unit: 'chai' }, { name: 'Sả', default_qty: null, unit: null }]) {
+    const [back] = spice.parseItemLines(spice.itemLineText(it));
+    assert.equal(back.name, it.name);
+    assert.equal(back.unit || null, it.unit);
+  }
+});
+
+test('sửa cả danh sách bằng chữ: đúng thứ tự dòng, sửa số / đơn vị, xoá món không còn, thêm món mới', () => {
+  const old = [
+    { id: 'a', name: 'Muối', unit: 'kg', default_qty: 1, sort: 1, active: true },
+    { id: 'b', name: 'Đường', unit: 'kg', default_qty: 2, sort: 2, active: true },
+    { id: 'c', name: 'Bơ', unit: 'hộp', default_qty: null, sort: 3, active: false },
+  ];
+  const plan = spice.planItemList(old, 'đường 2 kg\nMuối 1 kg\nỚt hiểm 0,5 kg');
+  assert.deepEqual(plan.deletes, ['c']);
+  assert.deepEqual(plan.inserts, [{ name: 'Ớt hiểm', unit: 'kg', default_qty: 0.5, sort: 3, active: true }]);
+  assert.deepEqual(plan.updates, [
+    { id: 'b', patch: { name: 'đường', unit: 'kg', default_qty: 2, sort: 1, active: true } },
+    { id: 'a', patch: { name: 'Muối', unit: 'kg', default_qty: 1, sort: 2, active: true } },
+  ]);
+  // Không đổi gì thì không ghi gì.
+  assert.deepEqual(spice.planItemList(old.slice(0, 2), 'Muối 1 kg\nĐường 2 kg'), { updates: [], inserts: [], deletes: [] });
+  assert.match(spice.planItemList(old, '  \n').error, /trống/);
+});
+
+test('máy chủ: chủ quán sửa cả danh sách, xếp, xoá món; nhân viên không làm được; nhân viên thấy đúng thứ tự', async () => {
+  const state = newState();
+  const owner = adminApi(state, 'admin'), thy = adminApi(state, 'staff');
+  state.spice_items.push(
+    { id: '00000000-0000-4000-8000-0000000000a1', name: 'Muối', unit: 'kg', default_qty: 1, sort: 1, active: true },
+    { id: '00000000-0000-4000-8000-0000000000a2', name: 'Bột ngọt', unit: 'kg', default_qty: 1, sort: 2, active: true },
+    { id: '00000000-0000-4000-8000-0000000000a3', name: 'Đường', unit: 'kg', default_qty: 2, sort: 3, active: true },
+  );
+  for (const body of [{ action: 'replace_items', text: 'Ớt 1 kg' }, { action: 'move_item', id: state.spice_items[0].id, dir: 1 }, { action: 'delete_item', id: state.spice_items[0].id }]) {
+    assert.equal((await post(thy, body)).status, 403);
+  }
+  const r = await post(owner, { action: 'replace_items', text: 'Đường 3 kg\nMuối 1 kg\nSa tế 2 hũ' });
+  assert.equal(r.status, 200);
+  assert.deepEqual([r.body.total, r.body.added, r.body.removed], [3, 1, 1]);
+  const names = async api => (await get(api)).body.items.sort((a, b) => a.sort - b.sort).map(i => `${i.name} ${i.default_qty} ${i.unit}`);
+  assert.deepEqual(await names(thy), ['Đường 3 kg', 'Muối 1 kg', 'Sa tế 2 hũ']);
+  const sate = state.spice_items.find(i => i.name === 'Sa tế');
+  assert.equal((await post(owner, { action: 'move_item', id: sate.id, dir: -1 })).status, 200);
+  assert.deepEqual((await names(thy)).map(n => n.split(' ')[0]), ['Đường', 'Sa', 'Muối']);
+  // Món mới thêm từng món vào cuối danh sách.
+  await post(owner, { action: 'save_item', name: 'Gừng', unit: 'kg', default_qty: '0,5'.replace(',', '.') });
+  assert.equal((await names(thy)).at(-1), 'Gừng 0.5 kg');
+  assert.equal((await post(owner, { action: 'delete_item', id: sate.id })).status, 200);
+  assert.equal((await post(owner, { action: 'delete_item', id: sate.id })).status, 404);
+  assert.equal((await post(owner, { action: 'delete_item', id: 'abc' })).status, 400);
+  assert.ok(!state.spice_items.some(i => i.name === 'Sa tế'));
+  assert.match((await post(owner, { action: 'replace_items', text: '' })).body.error, /trống/);
 });
 
 test('tin gửi Zalo là link của riêng đơn đó', () => {
