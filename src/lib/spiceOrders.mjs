@@ -217,7 +217,7 @@ export function shareText({ supplierName = '', items = [], note = '', link = '',
   for (const l of items) lines.push(`• ${cleanName(l.name)}: ${qtyText(l.qty)}${l.unit ? ` ${l.unit}` : ''}`);
   if (note) lines.push(`Ghi chú: ${note}`);
   if (by) lines.push(`Người gọi: ${by}`);
-  if (link) lines.push('', `Mở link để soạn hàng và điền giá: ${link}`);
+  if (link) lines.push('', `Mở link đơn này để soạn hàng và điền giá: ${link}`);
   return lines.join('\n');
 }
 
@@ -377,4 +377,52 @@ export function supplierSummary(orders, payments) {
     open: (orders || []).filter(o => !o.cancelled_at && !o.received_at).length,
     waitingPrice: received.filter(o => missingPrices(o.items)).length,
   };
+}
+
+/* ---------- Danh sách món để chọn nhanh ---------- */
+
+/** Chữ để tìm: bỏ dấu, chữ thường ("Hành tím" → "hanh tim"). */
+export const plainText = s => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'd').toLowerCase().trim();
+
+/** Số lượng mỗi lần bấm món: số mặc định chủ quán đặt, không có thì 1. */
+export const itemStep = item => {
+  const q = Number(item?.default_qty);
+  return Number.isFinite(q) && q > 0 ? q : 1;
+};
+
+/**
+ * Xếp món: món hay gọi (đếm trong các đơn gần đây, ưu tiên của chủ gia vị đang chọn) lên trước, rồi theo thứ tự chủ quán
+ * xếp (sort), rồi tên. Món ẩn (active = false) bỏ ra.
+ */
+export function rankItems(items, orders = [], supplierId = null) {
+  const count = new Map();
+  for (const o of orders || []) {
+    if (o.cancelled_at) continue;
+    const w = supplierId && o.supplier_id === supplierId ? 3 : 1;
+    for (const l of o.items || []) count.set(itemKey(l.name), (count.get(itemKey(l.name)) || 0) + w);
+  }
+  return (items || []).filter(i => i.active !== false)
+    .map(i => ({ ...i, uses: count.get(itemKey(i.name)) || 0 }))
+    .sort((a, b) => b.uses - a.uses || (Number(a.sort) || 0) - (Number(b.sort) || 0) || a.name.localeCompare(b.name, 'vi'));
+}
+
+/**
+ * Chủ quán dán nhiều món một lần, mỗi dòng (hoặc cách nhau dấu phẩy / chấm phẩy) một món:
+ * "Muối 2 kg", "Tiêu 0,5kg", "Rau răm" (dấu phẩy phải có dấu cách sau, để "0,5" không bị tách) → [{ name, qty (null = không ghi), unit }]. Bỏ dòng trống, gộp tên trùng.
+ */
+export function parseItemLines(text) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of String(text ?? '').split(/\n|;|,\s+/)) {
+    const line = raw.trim().replace(/\s+/g, ' ');
+    if (!line) continue;
+    const m = /^(.*?\S)\s+(\d+(?:[.,]\d+)?)\s*([^\d\s].*)?$/.exec(line);
+    const name = cleanName(m ? m[1] : line);
+    const qty = m ? parseQty(m[2]) : null;
+    const unit = cleanName(m?.[3] || '', 20);
+    if (!name || seen.has(itemKey(name))) continue;
+    seen.add(itemKey(name));
+    out.push({ name, qty, unit });
+  }
+  return out.slice(0, 100);
 }

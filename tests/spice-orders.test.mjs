@@ -399,6 +399,68 @@ test('spice_orders.sql cài trên Postgres thật, chạy lại được, web c�
   await assert.rejects(db.query(`INSERT INTO spice_orders (supplier_id, items, received_at) VALUES ($1, '[]', now())`, [s.id]));
   await assert.rejects(db.query(`INSERT INTO spice_payments (supplier_id, amount, method, paid_date) VALUES ($1, 500, 'cash', '2026-11-25')`, [s.id]));
   await assert.rejects(db.query(`INSERT INTO spice_payments (supplier_id, amount, method, paid_date) VALUES ($1, 5000, 'card', '2026-11-25')`, [s.id]));
-  await assert.rejects(db.query(`INSERT INTO spice_items (name) VALUES ('Muối'), ('muối')`));
+  await assert.rejects(db.query(`INSERT INTO spice_items (name) VALUES ('Muối Tây'), ('muối tây')`));
+  // Danh sách gia vị mặc định: thêm khi bảng trống, chạy lại không thêm trùng; chủ quán xoá hết thì không tự thêm lại? — chỉ khi trống.
+  const { rows: seeded } = await db.query('SELECT name, unit, default_qty FROM spice_items ORDER BY sort');
+  assert.equal(seeded.length, 20);
+  assert.deepEqual([seeded[0].name, seeded[0].unit, Number(seeded[0].default_qty)], ['Muối', 'kg', 1]);
+  assert.equal(Number(seeded.find(r => r.name === 'Tiêu xay').default_qty), 0.5);
+  await db.exec(sql);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM spice_items')).rows[0].n, 20);
+  await assert.rejects(db.query(`UPDATE spice_items SET default_qty = 0 WHERE name = 'Muối'`));
   await db.close();
+});
+
+/* ---------------- Danh sách món chọn nhanh ---------------- */
+
+test('tìm món không dấu, số mặc định mỗi lần bấm, món hay gọi lên đầu', () => {
+  assert.equal(spice.plainText('Hành Tím'), 'hanh tim');
+  assert.equal(spice.plainText('Đường'), 'duong');
+  assert.equal(spice.itemStep({ default_qty: 0.5 }), 0.5);
+  assert.equal(spice.itemStep({ default_qty: null }), 1);
+  assert.equal(spice.itemStep(undefined), 1);
+  const items = [{ name: 'Muối', sort: 1 }, { name: 'Đường', sort: 2 }, { name: 'Sả', sort: 3 }, { name: 'Ẩn', sort: 0, active: false }];
+  const orders = [
+    { supplier_id: SUP, items: [{ name: 'Sả' }] },
+    { supplier_id: SUP2, items: [{ name: 'Đường' }, { name: 'Đường ' }] },
+    { supplier_id: SUP, cancelled_at: 'x', items: [{ name: 'Muối' }, { name: 'Muối' }, { name: 'Muối' }, { name: 'Muối' }] },
+  ];
+  assert.deepEqual(spice.rankItems(items, orders, SUP).map(i => i.name), ['Sả', 'Đường', 'Muối']);
+  assert.deepEqual(spice.rankItems(items, [], null).map(i => i.name), ['Muối', 'Đường', 'Sả']);
+});
+
+test('chủ quán dán nhiều món một lần: "Muối 2 kg", "Tiêu 0,5kg", phẩy có cách, chấm phẩy, trùng tên', () => {
+  assert.deepEqual(spice.parseItemLines('Muối 2 kg\nTiêu 0,5kg, Rau răm;  hạt nêm 3 gói\nmuối 5\n\n7 Up 2 lon'), [
+    { name: 'Muối', qty: 2, unit: 'kg' }, { name: 'Tiêu', qty: 0.5, unit: 'kg' }, { name: 'Rau răm', qty: null, unit: '' },
+    { name: 'hạt nêm', qty: 3, unit: 'gói' }, { name: '7 Up', qty: 2, unit: 'lon' },
+  ]);
+  assert.deepEqual(spice.parseItemLines(''), []);
+  assert.deepEqual(spice.parseItemLines('Nước mắm Phú Quốc 2 chai'), [{ name: 'Nước mắm Phú Quốc', qty: 2, unit: 'chai' }]);
+  assert.equal(spice.parseItemLines(Array.from({ length: 150 }, (_, i) => `M${i}`).join('\n')).length, 100);
+});
+
+test('máy chủ: thêm nhiều món, sửa số mặc định; nhân viên không sửa danh sách được', async () => {
+  const state = newState();
+  const owner = adminApi(state, 'admin'), thy = adminApi(state, 'staff');
+  state.spice_items.push({ id: 'i1', name: 'Muối', unit: 'kg', default_qty: 1, sort: 1, active: false });
+  assert.equal((await post(thy, { action: 'save_items', text: 'Ớt 1 kg' })).status, 403);
+  const r = await post(owner, { action: 'save_items', text: 'muối 2 kg\nTiêu 0,5 kg\nRau răm 2 bó' });
+  assert.deepEqual([r.body.added, r.body.updated], [2, 1]);
+  const muoi = state.spice_items.find(i => i.id === 'i1');
+  assert.deepEqual([muoi.name, muoi.default_qty, muoi.active], ['Muối', 2, true], 'món đã có: cập nhật số, hiện lại');
+  assert.deepEqual(state.spice_items.filter(i => i.id !== 'i1').map(i => [i.name, i.default_qty, i.unit, i.sort]), [['Tiêu', 0.5, 'kg', 2], ['Rau răm', 2, 'bó', 3]]);
+  assert.match((await post(owner, { action: 'save_items', text: '  \n ' })).body.error, /Chưa có món/);
+  const tieu = state.spice_items.find(i => i.name === 'Tiêu');
+  assert.equal((await post(owner, { action: 'save_item', id: tieu.id, name: 'Tiêu', unit: 'kg', default_qty: '0.25' })).body.item.default_qty, 0.25);
+  assert.equal((await post(owner, { action: 'save_item', id: tieu.id, name: 'Tiêu', unit: 'kg', default_qty: '' })).body.item.default_qty, null);
+  assert.match((await post(owner, { action: 'save_item', id: tieu.id, name: 'Tiêu', default_qty: 'abc' })).body.error, /mặc định/);
+  // Nhân viên thấy món đang hiện, có số mặc định để bấm nhanh.
+  const seen = (await get(thy)).body.items;
+  assert.ok(seen.every(i => i.active !== false));
+  assert.equal(seen.find(i => i.name === 'Rau răm').default_qty, 2);
+});
+
+test('tin gửi Zalo là link của riêng đơn đó', () => {
+  const text = spice.shareText({ items: [{ name: 'Muối', qty: 1 }], link: 'https://x/giavi/abc?don=o1' });
+  assert.match(text, /Mở link đơn này để soạn hàng và điền giá: https:\/\/x\/giavi\/abc\?don=o1/);
 });

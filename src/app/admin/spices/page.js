@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useBackClose } from '@/lib/useBackClose';
 import { useReloadHold } from '@/lib/useBuildRefresh';
 import {
-  STATE_LABELS, addedLater, changeText, itemKey, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shareText, shortTime,
+  STATE_LABELS, addedLater, changeText, cleanName, itemKey, itemStep, plainText, rankItems, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shareText, shortTime,
 } from '@/lib/spiceOrders.mjs';
 import './spices.css';
 
@@ -122,49 +122,72 @@ function readCart() {
 }
 function saveCart(v) { try { localStorage.setItem(CART_KEY, JSON.stringify(v)); } catch { /* máy chặn lưu: bỏ qua */ } }
 
-function ItemPicker({ items, lines, setLines, prices = {}, exclude = [] }) {
+// Chọn món nhanh: ô to theo danh sách (món hay gọi lên đầu), bấm ô = thêm số mặc định (vd Tiêu 0,5 kg), bấm tiếp = thêm nữa,
+// nút − trên ô để bớt. Danh sách dài thì có ô tìm (gõ không dấu cũng được). Món không có trong danh sách: "＋ Món khác".
+const num = v => Number(String(v ?? '').replace(',', '.')) || 0;
+const fmtQty = n => String(Math.round(n * 1000) / 1000).replace('.', ',');
+function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders = [], supplierId = null }) {
+  const [q, setQ] = useState('');
+  const [other, setOther] = useState(false);
   const [name, setName] = useState('');
   const [unit, setUnit] = useState('');
-  const chosen = new Map(lines.map((l, i) => [itemKey(l.name), i]));
-  const blocked = new Set(exclude.map(itemKey));
-  const add = (n, u) => {
-    const k = itemKey(n);
-    if (!k || blocked.has(k)) return;
-    if (chosen.has(k)) setLines(lines.map((l, i) => (i === chosen.get(k) ? { ...l, qty: String((Number(String(l.qty).replace(',', '.')) || 0) + 1) } : l)));
-    else setLines([...lines, { name: n.trim(), unit: u || '', qty: '1' }]);
+  const idx = new Map(lines.map((l, i) => [itemKey(l.name), i]));
+  const blockedKey = exclude.map(itemKey).join('|');
+  const ranked = useMemo(() => {
+    const blocked = new Set(blockedKey.split('|'));
+    return rankItems(items, orders, supplierId).filter(i => !blocked.has(itemKey(i.name)));
+  }, [items, orders, supplierId, blockedKey]);
+  // Tìm: món có chữ bắt đầu bằng chữ đang gõ lên trước ("hanh" → Hành tím, Hành lá rồi mới tới Chanh).
+  const qq = plainText(q);
+  const hit = i => { const t = plainText(i.name); return t.startsWith(qq) ? 0 : t.split(' ').some(w => w.startsWith(qq)) ? 1 : t.includes(qq) ? 2 : 3; };
+  const shown = qq ? ranked.filter(i => hit(i) < 3).sort((a, b) => hit(a) - hit(b)) : ranked;
+  const bump = (item, dir = 1) => {
+    const k = itemKey(item.name), step = item.step || itemStep(item);
+    if (!k || exclude.some(n => itemKey(n) === k)) return;
+    if (!idx.has(k)) {
+      if (dir > 0) setLines([...lines, { name: cleanName(item.name), unit: item.unit || '', qty: fmtQty(step), step }]);
+      return;
+    }
+    const i = idx.get(k), next = num(lines[i].qty) + dir * (lines[i].step || step);
+    setLines(next <= 0 ? lines.filter((_, j) => j !== i) : lines.map((l, j) => (j === i ? { ...l, qty: fmtQty(next) } : l)));
   };
+  const addOther = () => { if (!name.trim()) return; bump({ name, unit }); setName(''); setUnit(''); setOther(false); };
   const setLine = (i, patch) => setLines(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
-  const step = (i, d) => {
-    const q = Math.max(0, (Number(String(lines[i].qty).replace(',', '.')) || 0) + d);
-    if (q <= 0) setLines(lines.filter((_, j) => j !== i)); else setLine(i, { qty: String(q) });
-  };
-  const shown = items.filter(i => !blocked.has(itemKey(i.name)));
   return <>
-    {shown.length > 0 && <>
-      <p className="sp-mute">Bấm món để thêm (bấm lại để tăng số lượng):</p>
-      <div className="sp-picks">{shown.map(i => {
-        const p = prices[itemKey(i.name)];
-        return <button key={i.id} type="button" className={`sp-pick ${chosen.has(itemKey(i.name)) ? 'on' : ''}`} onClick={() => add(i.name, i.unit)}>
-          {i.name}{p !== undefined && <small>{money(p)}{i.unit ? `/${i.unit}` : ''}</small>}
-        </button>;
-      })}</div>
+    {ranked.length > 8 && <input className="sp-field" type="search" placeholder="🔍 Tìm món (gõ không dấu cũng được)" value={q} onChange={e => setQ(e.target.value)} style={{ marginBottom: 10 }} />}
+    {shown.length > 0 && <div className="sp-grid">{shown.map(i => {
+      const at = idx.get(itemKey(i.name)), on = at !== undefined, p = prices[itemKey(i.name)];
+      return <div key={i.id || i.name} className={`sp-cell ${on ? 'on' : ''}`}>
+        <button type="button" className="add" onClick={() => bump(i, 1)} aria-label={`Thêm ${i.name}`}>
+          <span className="nm">{i.name}</span>
+          <small>+{fmtQty(itemStep(i))} {i.unit || ''}</small>
+          {p !== undefined && <small className="pr">{money(p)}</small>}
+        </button>
+        {on && <span className="badge">{lines[at].qty}{lines[at].unit ? ` ${lines[at].unit}` : ''}</span>}
+        {on && <button type="button" className="minus" aria-label={`Bớt ${i.name}`} onClick={() => bump(i, -1)}>−</button>}
+      </div>;
+    })}</div>}
+    {q.trim() && !shown.length && <button type="button" className="sp-btn block" onClick={() => { bump({ name: q }); setQ(''); }}>＋ Thêm món mới "{q.trim()}"</button>}
+    {!other
+      ? <button type="button" className="sp-btn ghost" style={{ marginTop: 6 }} onClick={() => setOther(true)}>＋ Món khác (không có trong danh sách)</button>
+      : <div className="sp-row" style={{ marginTop: 10 }}>
+        <input className="sp-field sp-grow" autoFocus placeholder="Tên món" value={name} maxLength={60} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addOther(); }} />
+        <input className="sp-unit" placeholder="kg, bịch" value={unit} maxLength={20} onChange={e => setUnit(e.target.value)} />
+        <button type="button" className="sp-btn main" disabled={!name.trim()} onClick={addOther}>Thêm</button>
+      </div>}
+    {lines.length > 0 && <>
+      <div className="sp-b" style={{ marginTop: 12 }}>Đã chọn {lines.length} món <span className="sp-mute">(sửa số / đơn vị nếu cần)</span></div>
+      <ul className="sp-cart">{lines.map((l, i) => <li key={`${l.name}-${i}`}>
+        <span className="nm">{l.name}</span>
+        <div className="sp-qty">
+          <button type="button" aria-label={`Bớt ${l.name}`} onClick={() => bump(l, -1)}>−</button>
+          <input inputMode="decimal" aria-label={`Số lượng ${l.name}`} value={l.qty} onChange={e => setLine(i, { qty: e.target.value.replace(/[^\d.,]/g, '').slice(0, 7) })} />
+          <button type="button" aria-label={`Thêm ${l.name}`} onClick={() => bump(l, 1)}>+</button>
+        </div>
+        <input className="sp-unit" placeholder="đơn vị" aria-label={`Đơn vị ${l.name}`} value={l.unit} maxLength={20} onChange={e => setLine(i, { unit: e.target.value })} />
+        <button type="button" className="sp-x" aria-label={`Bỏ ${l.name}`} onClick={() => setLines(lines.filter((_, j) => j !== i))}>✕</button>
+      </li>)}</ul>
     </>}
-    <div className="sp-row" style={{ marginTop: 10 }}>
-      <input className="sp-field sp-grow" placeholder="Món khác (vd: Sả)" value={name} maxLength={60} onChange={e => setName(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter') { add(name, unit); setName(''); setUnit(''); } }} />
-      <input className="sp-unit" placeholder="kg, bịch" value={unit} maxLength={20} onChange={e => setUnit(e.target.value)} />
-      <button type="button" className="sp-btn main" disabled={!name.trim()} onClick={() => { add(name, unit); setName(''); setUnit(''); }}>Thêm</button>
-    </div>
-    {lines.length > 0 && <ul className="sp-cart">{lines.map((l, i) => <li key={`${l.name}-${i}`}>
-      <span className="nm">{l.name}</span>
-      <div className="sp-qty">
-        <button type="button" aria-label={`Bớt ${l.name}`} onClick={() => step(i, -1)}>−</button>
-        <input inputMode="decimal" aria-label={`Số lượng ${l.name}`} value={l.qty} onChange={e => setLine(i, { qty: e.target.value.replace(/[^\d.,]/g, '').slice(0, 7) })} />
-        <button type="button" aria-label={`Thêm ${l.name}`} onClick={() => step(i, 1)}>+</button>
-      </div>
-      <input className="sp-unit" placeholder="đơn vị" aria-label={`Đơn vị ${l.name}`} value={l.unit} maxLength={20} onChange={e => setLine(i, { unit: e.target.value })} />
-      <button type="button" className="sp-x" aria-label={`Bỏ ${l.name}`} onClick={() => setLines(lines.filter((_, j) => j !== i))}>✕</button>
-    </li>)}</ul>}
   </>;
 }
 
@@ -184,6 +207,8 @@ function CallTab({ data, onSent, goSetup }) {
     Chưa có chủ gia vị.{goSetup ? <><br /><button type="button" className="sp-btn main" style={{ marginTop: 12 }} onClick={goSetup}>Thêm chủ gia vị</button></> : ' Nhờ chủ quán thêm ở trang Gia vị → Cài đặt.'}
   </div>;
   const supplier = active.find(s => s.id === supplierId);
+  // Đơn gần nhất (chưa huỷ) gửi cho chủ gia vị này: bấm một lần là có lại đủ món, sửa số rồi gửi.
+  const lastOrder = supplier ? data.orders.find(o => o.supplier_id === supplier.id && !o.cancelled_at) : null;
   const send = async () => {
     if (!supplier) { setError('Chọn chủ gia vị trước.'); return; }
     if (!lines.length) { setError('Chưa chọn món nào.'); return; }
@@ -204,7 +229,10 @@ function CallTab({ data, onSent, goSetup }) {
     </div>
     <div className="sp-card">
       <div className="sp-b" style={{ marginBottom: 8 }}>2. Gọi món gì?</div>
-      <ItemPicker items={data.items} lines={lines} setLines={setLines} prices={data.lastPrices?.[supplierId] || {}} />
+      {!lines.length && lastOrder && <button type="button" className="sp-btn block" style={{ marginBottom: 10 }} onClick={() => setLines(lastOrder.items.map(l => ({ name: l.name, unit: l.unit || '', qty: fmtQty(Number(l.qty)), step: itemStep(data.items.find(i => itemKey(i.name) === itemKey(l.name))) })))}>
+        🔁 Gọi giống lần trước ({lastOrder.items.length} món, {shortTime(lastOrder.created_at)})
+      </button>}
+      <ItemPicker items={data.items} lines={lines} setLines={setLines} prices={data.lastPrices?.[supplierId] || {}} orders={data.orders} supplierId={supplierId} />
       <textarea className="sp-field" style={{ marginTop: 12 }} placeholder="Ghi chú cho chủ gia vị (không bắt buộc)" value={note} maxLength={300} onChange={e => setNote(e.target.value)} />
     </div>
     {error && <div className="sp-msg err">{error}</div>}
@@ -336,7 +364,7 @@ function AddSheet({ order, data, onClose, onAdded }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   return <Sheet title="Thêm món vào đơn" onClose={onClose}>
-    <ItemPicker items={data.items} lines={lines} setLines={setLines} prices={data.lastPrices?.[order.supplier_id] || {}} exclude={order.items.map(l => l.name)} />
+    <ItemPicker items={data.items} lines={lines} setLines={setLines} prices={data.lastPrices?.[order.supplier_id] || {}} exclude={order.items.map(l => l.name)} orders={data.orders} supplierId={order.supplier_id} />
     <textarea className="sp-field" style={{ marginTop: 12 }} placeholder="Ghi chú (vd: thêm vì hết giữa ca)" value={note} maxLength={300} onChange={e => setNote(e.target.value)} />
     {error && <div className="sp-msg err">{error}</div>}
     <div className="sp-btns"><button type="button" className="sp-btn main block" disabled={busy || !lines.length} onClick={async () => {
@@ -471,6 +499,7 @@ function StatsTab() {
 function SetupTab({ data, reload }) {
   const [edit, setEdit] = useState(null); // { id?, name, phone, active }
   const [itemEdit, setItemEdit] = useState(null);
+  const [bulk, setBulk] = useState(null); // chữ đang dán: nhiều món một lần
   const [msg, setMsg] = useState(null);
   const run = async (body, text, key) => {
     try { await api(body); setMsg({ key, text }); await reload(); return true; } catch (e) { setMsg({ key, err: true, text: e.message }); return false; }
@@ -495,11 +524,27 @@ function SetupTab({ data, reload }) {
     <h2>Món gia vị</h2>
     {msg?.key === 'item' && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
     <div className="sp-card"><div className="sp-picks">
-      {data.items.map(i => <button key={i.id} type="button" className="sp-pick" style={i.active ? undefined : { opacity: 0.5, textDecoration: 'line-through' }} onClick={() => setItemEdit({ ...i, unit: i.unit || '' })}>
-        {i.name}{i.unit && <small>{i.unit}</small>}
+      {[...data.items].sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0) || a.name.localeCompare(b.name, 'vi')).map(i => <button key={i.id} type="button" className="sp-pick" style={i.active ? undefined : { opacity: 0.5, textDecoration: 'line-through' }}
+        onClick={() => setItemEdit({ ...i, unit: i.unit || '', default_qty: i.default_qty ? fmtQty(Number(i.default_qty)) : '' })}>
+        {i.name}<small>{i.default_qty ? `${fmtQty(Number(i.default_qty))} ` : ''}{i.unit || ''}</small>
       </button>)}
-      <button type="button" className="sp-pick on" onClick={() => setItemEdit({ name: '', unit: '', active: true })}>➕ Món mới</button>
-    </div><p className="sp-mute sp-small" style={{ marginTop: 8 }}>Nhân viên gõ món mới khi gọi thì món đó tự vào danh sách. Bấm món để sửa / ẩn.</p></div>
+    </div>
+    <div className="sp-btns">
+      <button type="button" className="sp-btn" onClick={() => setItemEdit({ name: '', unit: '', default_qty: '', active: true })}>➕ Một món</button>
+      <button type="button" className="sp-btn main" onClick={() => setBulk('')}>📋 Thêm nhiều món</button>
+    </div>
+    <p className="sp-mute sp-small" style={{ marginTop: 8 }}>Số nhỏ dưới tên = số lượng mỗi lần nhân viên bấm món. Bấm món để sửa / ẩn. Nhân viên gõ món mới khi gọi thì món đó tự vào danh sách.</p></div>
+    {bulk !== null && <Sheet title="Thêm nhiều món" onClose={() => setBulk(null)}>
+      <p className="sp-mute">Mỗi dòng một món: tên, số lượng mặc định, đơn vị. Món đã có thì cập nhật số và đơn vị.</p>
+      <textarea className="sp-field" rows={8} placeholder={'Muối 1 kg\nTiêu xay 0,5 kg\nRau răm 2 bó\nNước mắm 2 chai'} value={bulk} onChange={e => setBulk(e.target.value)} />
+      {msg?.key === 'bulk' && msg.err && <div className="sp-msg err">{msg.text}</div>}
+      <div className="sp-btns"><button type="button" className="sp-btn main block" disabled={!bulk.trim()} onClick={async () => {
+        try {
+          const j = await api({ action: 'save_items', text: bulk });
+          setMsg({ key: 'item', text: `Đã thêm ${j.added} món${j.updated ? `, cập nhật ${j.updated} món` : ''} ✓` }); setBulk(null); await reload();
+        } catch (e) { setMsg({ key: 'bulk', err: true, text: e.message }); }
+      }}>Lưu danh sách</button></div>
+    </Sheet>}
 
     {edit && <Sheet title={edit.id ? 'Sửa chủ gia vị' : 'Thêm chủ gia vị'} onClose={() => setEdit(null)}>
       <input className="sp-field" placeholder="Tên (vd: Cô Hai gia vị)" value={edit.name} maxLength={60} onChange={e => setEdit({ ...edit, name: e.target.value })} />
@@ -513,9 +558,13 @@ function SetupTab({ data, reload }) {
     {itemEdit && <Sheet title={itemEdit.id ? 'Sửa món' : 'Món mới'} onClose={() => setItemEdit(null)}>
       <div className="sp-row"><input className="sp-field sp-grow" placeholder="Tên món" value={itemEdit.name} maxLength={60} onChange={e => setItemEdit({ ...itemEdit, name: e.target.value })} />
         <input className="sp-unit" placeholder="kg, bịch" value={itemEdit.unit} maxLength={20} onChange={e => setItemEdit({ ...itemEdit, unit: e.target.value })} /></div>
+      <label className="sp-mute" style={{ display: 'block', marginTop: 10 }}>Mỗi lần bấm món thêm bao nhiêu (để trống = 1)</label>
+      <input className="sp-field" inputMode="decimal" placeholder="vd: 0,5" value={itemEdit.default_qty} maxLength={7}
+        onChange={e => setItemEdit({ ...itemEdit, default_qty: e.target.value.replace(/[^\d.,]/g, '') })} />
+      {msg?.key === 'item' && msg.err && <div className="sp-msg err">{msg.text}</div>}
       {itemEdit.id && <label className="sp-row" style={{ marginTop: 10 }}><input type="checkbox" checked={itemEdit.active} onChange={e => setItemEdit({ ...itemEdit, active: e.target.checked })} style={{ width: 22, height: 22 }} /> Hiện khi gọi hàng</label>}
       <div className="sp-btns"><button type="button" className="sp-btn main block" onClick={async () => {
-        if (await run({ action: 'save_item', ...itemEdit }, 'Đã lưu món ✓', 'item')) setItemEdit(null);
+        if (await run({ action: 'save_item', id: itemEdit.id, name: itemEdit.name, unit: itemEdit.unit, active: itemEdit.active, default_qty: String(itemEdit.default_qty || '').replace(',', '.') }, 'Đã lưu món ✓', 'item')) setItemEdit(null);
       }}>Lưu</button></div>
     </Sheet>}
   </>;
