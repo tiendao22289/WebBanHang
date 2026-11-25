@@ -113,7 +113,7 @@ test('nhận hàng: nhận đủ hoặc nhận thiếu (ghi rõ thiếu món nà
   assert.equal(spice.logLine(full.patch.log.at(-1)).text, 'nhận đủ hàng');
   const short = spice.receiveOrder(o, ['1,5', '0'], { by: 'Thy', at: T(10) });
   assert.equal(short.patch.total, 1.5 * 12000);
-  assert.equal(spice.logLine(short.patch.log.at(-1)).text, 'nhận hàng, thiếu: Muối gọi 2 nhận 1,5 kg, Sả gọi 1 nhận 0 kg');
+  assert.equal(spice.logLine(short.patch.log.at(-1)).text, 'nhận hàng khác số gọi: Muối gọi 2 nhận 1,5 kg (thiếu 0,5), Sả gọi 1 nhận 0 kg (thiếu 1)');
   // Gõ đúng số đã gọi = nhận đủ.
   assert.equal(spice.receiveOrder(o, ['2', '1'], { by: 'Thy', at: T(10) }).patch.items[0].received_qty, null);
   assert.match(spice.receiveOrder({ ...o, ...full.patch }, [], { by: 'Tài', at: T(11) }).error, /Thy/);

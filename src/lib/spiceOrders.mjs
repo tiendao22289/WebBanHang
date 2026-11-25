@@ -10,6 +10,9 @@
 export const MAX_SPICE_LINES = 60;
 export const MAX_SPICE_PRICE = 50_000_000;
 export const MAX_SPICE_QTY = 10_000;
+/** Tổng một đơn tối đa (cột total trong DB). */
+export const MAX_SPICE_TOTAL = 1_000_000_000;
+const TOO_BIG = 'Tổng đơn quá lớn, kiểm tra lại giá và số lượng.';
 
 const DAY_MS = 86400000;
 const ms = iso => Date.parse(iso) || 0;
@@ -270,7 +273,10 @@ export function addLines(order, raw, { last, by, at, note = '' }) {
   const built = buildLines(raw, { last, existing: order.items, by, at });
   if (built.error) return built;
   const items = [...order.items, ...built.lines];
-  return { patch: { items, total: orderTotal(items), log: pushLog(order, [{ at, by, who: 'staff', type: 'add', items: logItems(built.lines), ...(note ? { note } : {}) }]) }, lines: built.lines };
+  if (orderTotal(items) > MAX_SPICE_TOTAL) return { error: TOO_BIG };
+  // Chủ gia vị đã báo soạn xong mà quán gọi thêm: đơn về lại "Mới gửi" để chủ gia vị soạn và điền giá món thêm.
+  return { patch: { items, total: orderTotal(items), ...(order.priced_at ? { priced_at: null } : {}),
+    log: pushLog(order, [{ at, by, who: 'staff', type: 'add', items: logItems(built.lines), ...(note ? { note } : {}) }]) }, lines: built.lines };
 }
 
 /**
@@ -303,6 +309,7 @@ export function applyPrices(order, prices, { by, at, who = 'supplier', done = fa
     if (clean !== (order.supplier_note ?? null)) { patch.supplier_note = clean; events.push({ at, by, who, type: 'note', note: clean || '' }); }
   }
   if (!events.length) return { patch: null };
+  if (patch.total > MAX_SPICE_TOTAL) return { error: TOO_BIG };
   patch.log = pushLog(order, events);
   return { patch };
 }
@@ -321,6 +328,7 @@ export function receiveOrder(order, received, { by, at }) {
     if (q !== Number(l.qty)) short.push({ name: l.name, qty: l.qty, got: q, unit: l.unit });
     return { ...l, received_qty: q === Number(l.qty) ? null : q };
   });
+  if (orderTotal(items) > MAX_SPICE_TOTAL) return { error: TOO_BIG };
   return { patch: {
     items, total: orderTotal(items), received_at: at, received_date: vnDateOf(at), received_by_name: by,
     log: pushLog(order, [{ at, by, who: 'staff', type: 'receive', ...(short.length ? { short } : {}) }]),
@@ -350,7 +358,10 @@ export function logLine(e) {
     : e.type === 'price' ? `đổi giá: ${(e.changes || []).map(c => `${c.name} ${priceOf(c.from)} → ${priceOf(c.to)}`).join(', ')}`
     : e.type === 'done' ? 'báo đã soạn xong hàng'
     : e.type === 'note' ? `ghi chú: ${e.note || '(xoá ghi chú)'}`
-    : e.type === 'receive' ? (e.short?.length ? `nhận hàng, thiếu: ${e.short.map(s => `${s.name} gọi ${qtyText(s.qty)} nhận ${qtyText(s.got)}${s.unit ? ` ${s.unit}` : ''}`).join(', ')}` : 'nhận đủ hàng')
+    : e.type === 'receive' ? (e.short?.length ? `nhận hàng khác số gọi: ${e.short.map(s => {
+      const d = Math.round((Number(s.got) - Number(s.qty)) * 1000) / 1000, u = s.unit ? ` ${s.unit}` : '';
+      return `${s.name} gọi ${qtyText(s.qty)} nhận ${qtyText(s.got)}${u} (${d < 0 ? 'thiếu' : 'dư'} ${qtyText(Math.abs(d))})`;
+    }).join(', ')}` : 'nhận đủ hàng')
     : e.type === 'cancel' ? withNote('huỷ đơn')
     : String(e.type || '');
   return { time: e.at ? shortTime(e.at) : '', who, role: e.who || 'staff', text };
