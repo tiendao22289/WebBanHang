@@ -38,7 +38,8 @@ import { loadPayrollMonth, readClosedDays, readLateRules } from '@/lib/payrollMo
 import { claimText, payrollCost } from '@/lib/payroll.mjs';
 import { addCosts, addItemCosts, namedCostList } from '@/lib/noteCategories.mjs';
 import { allOpenDebts } from '@/lib/notesDebts.mjs';
-import { FINANCE_START_DATE, FIXED_CATEGORIES, billHasStaff, billStaff, checkoutKey, closeDifferences, dailyReportText, dailyWarnings, groupPaidBills, isMonthKey, itemKey, shoppingParts, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, plainName, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
+import { spiceCostByDay, spiceDayData } from '@/lib/spiceOrders.mjs';
+import { FINANCE_START_DATE, FIXED_CATEGORIES, dayCostTotal, billHasStaff, billStaff, checkoutKey, closeDifferences, dailyReportText, dailyWarnings, groupPaidBills, isMonthKey, itemKey, shoppingParts, summarizeItems, monthBounds, noteCost, noteLineWarnings, noteMismatch, plainName, suspiciousNoteItems, summarizeMonth, vnDate, vnDayStartIso } from '@/lib/ownerFinance.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -254,7 +255,7 @@ async function loadMonth(db, month, today) {
   const revenue = await readAll(() => db.from('finance_revenue_ledger')
     .select('order_id, business_date, amount, payment_method, account_id')
     .gte('business_date', start).lt('business_date', next).order('order_id'));
-  const [notes, entriesResult, accountsResult, staffResult, closesResult, categories, paperBills, noteCategories] = await Promise.all([
+  const [notes, entriesResult, accountsResult, staffResult, closesResult, categories, paperBills, noteCategories, spiceOrders] = await Promise.all([
     notesBetween(db, vnDayStartIso(start), vnDayStartIso(next)),
     db.from('finance_entries').select('*').gte('entry_date', start).lt('entry_date', next).order('entry_date').order('created_at'),
     db.from('bank_accounts').select('id, account_name, bank_name, account_number').order('sort_order'),
@@ -263,6 +264,7 @@ async function loadMonth(db, month, today) {
     readCategories(db),
     readPaper(db, start, next),
     readNoteCategories(db),
+    readSpiceOrders(db, start, next),
   ]);
   for (const result of [entriesResult, accountsResult, staffResult]) if (result.error) throw result.error;
   if (closesResult.error && !missingTable(closesResult.error)) throw closesResult.error;
@@ -275,7 +277,7 @@ async function loadMonth(db, month, today) {
   } catch (error) { console.error('[admin/finance] wages', error); }
   return {
     entries, categories, noteCategories,
-    summary: summarizeMonth({ month, revenue, paperBills, notes, entries, closes: closesResult.data || [], checks: await readChecks(db, start, next), categories, wages, today }),
+    summary: summarizeMonth({ month, revenue, paperBills, notes, entries, closes: closesResult.data || [], checks: await readChecks(db, start, next), categories, wages, today, spices: spiceCostByDay(spiceOrders) }),
     accounts: (accountsResult.data || []).map(a => ({ id: a.id, name: [a.bank_name, a.account_name].filter(Boolean).join(' · ') || 'Tài khoản', last4: String(a.account_number || '').slice(-4) })),
     staff: (staffResult.data || []).map(s => s.full_name).filter(Boolean),
   };
@@ -643,6 +645,26 @@ async function sendDailyReport(db, { date, today, scheduled }) {
 }
 
 // Loại "Khác" của dòng hàng Sổ tay (xăng xe, sửa chữa…): finance_settings['note_categories'].
+// Đơn gia vị đã nhận trong [from, to) (theo ngày nhận) — chi phí gia vị của ngày nhận. Chưa cài bảng → [].
+async function readSpiceOrders(db, from, to) {
+  try {
+    return await readAll(() => db.from('spice_orders').select('id, supplier_id, items, received_at, received_date, cancelled_at')
+      .gte('received_date', from).lt('received_date', to).order('id'));
+  } catch (error) { if (missingTable(error)) return []; throw error; }
+}
+// Mục Gia vị của một ngày cho /thongke: từng món (giá tăng / giảm), đã trả trong ngày, nợ còn lại tới hết ngày đó.
+async function spiceDay(db, date) {
+  try {
+    const [orders, payments, suppliers] = await Promise.all([
+      readAll(() => db.from('spice_orders').select('id, supplier_id, items, received_at, received_date, cancelled_at').lte('received_date', date).order('id')),
+      readAll(() => db.from('spice_payments').select('id, supplier_id, amount, method, paid_date').lte('paid_date', date).order('id')),
+      db.from('spice_suppliers').select('id, name'),
+    ]);
+    if (suppliers.error) throw suppliers.error;
+    const data = spiceDayData({ orders, payments, date, supplierNames: Object.fromEntries((suppliers.data || []).map(x => [x.id, x.name])) });
+    return data.orders || data.paid || data.debt ? data : null;
+  } catch (error) { if (missingTable(error)) return null; throw error; }
+}
 async function readNoteCategories(db) {
   const { data, error } = await db.from('finance_settings').select('value').eq('key', 'note_categories').maybeSingle();
   if (error) { if (missingTable(error)) return []; throw error; }
@@ -652,6 +674,7 @@ async function readNoteCategories(db) {
 // rồi các khoản còn lại.
 const costList = (d, noteCategories) => [
   ...shoppingParts(d, noteCategories).map(p => [p.id ? `${p.name} (Sổ tay)` : 'Đi chợ', p.amount, p.items || null]),
+  ['Gia vị', d.spices, namedCostList(d.costItems?.spices)],
   ['Chi trong ngày', d.drinks, namedCostList(d.costItems?.drinks)], ['Lương', d.salary], ['Chi cố định', d.fixedShare, namedCostList(d.costItems?.fixed)],
   ['Khác', d.customTotal, namedCostList(d.costItems?.custom)],
 ].filter(([, amount]) => amount > 0).map(([label, amount, items]) => ({ label, amount, ...(items?.length ? { items } : {}) }));
@@ -832,9 +855,9 @@ export async function GET(request) {
       const monthExtra = (a, b) => (period !== 'month' ? 0 : loaded.map(l => l.summary)
         .filter(s => s.days.length && a <= s.from && b >= s.to).reduce((total, s) => total + (Number(s.totals.salaryExtra) || 0), 0));
       const sum = (list, extra = 0) => {
-        const t = { revenue: 0, bills: 0, paperBills: 0, cash: 0, byAccount: {}, purchases: 0, notesOther: {}, notesOtherItems: {}, costItems: { drinks: {}, fixed: {}, custom: {}, shop: {} }, drinks: 0, salary: 0, fixedShare: 0, customTotal: 0, profit: 0, closedDays: 0 };
+        const t = { revenue: 0, bills: 0, paperBills: 0, cash: 0, byAccount: {}, purchases: 0, notesOther: {}, notesOtherItems: {}, costItems: { drinks: {}, fixed: {}, custom: {}, shop: {}, spices: {} }, drinks: 0, salary: 0, fixedShare: 0, customTotal: 0, spices: 0, profit: 0, closedDays: 0 };
         for (const d of list) {
-          for (const k of ['revenue', 'bills', 'paperBills', 'cash', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit']) t[k] += Number(d[k]) || 0;
+          for (const k of ['revenue', 'bills', 'paperBills', 'cash', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'spices', 'profit']) t[k] += Number(d[k]) || 0;
           for (const [id, v] of Object.entries(d.byAccount || {})) t.byAccount[id] = (t.byAccount[id] || 0) + v;
           addCosts(t.notesOther, d.notesOther);
           addItemCosts(t.notesOtherItems, d.notesOtherItems);
@@ -843,7 +866,7 @@ export async function GET(request) {
         }
         t.salary += extra;
         t.profit -= extra;
-        t.cost = t.purchases + t.drinks + t.salary + t.fixedShare + t.customTotal;
+        t.cost = dayCostTotal(t);
         return t;
       };
       const current = within(p.start, p.end);
@@ -869,7 +892,7 @@ export async function GET(request) {
         period, date, today, startDate: FINANCE_START_DATE, ...p,
         days: datesFrom(p.from, p.to).map(d => {
           const x = allDays.get(d);
-          return x ? { date: d, revenue: x.revenue, cost: x.purchases + x.drinks + x.salary + x.fixedShare + x.customTotal, profit: x.profit, bills: x.bills + x.paperBills, closed: !!(x.close || x.check) } : { date: d, revenue: null };
+          return x ? { date: d, revenue: x.revenue, cost: dayCostTotal(x), profit: x.profit, bills: x.bills + x.paperBills, closed: !!(x.close || x.check) } : { date: d, revenue: null };
         }),
         totals: { revenue: t.revenue, bills: t.bills, paperBills: t.paperBills, cash: t.cash, cost: t.cost, profit: t.profit, days: current.length, closedDays: t.closedDays,
           transfers: Object.entries(t.byAccount).map(([id, amount]) => ({ name: accountName(id), amount })),
@@ -909,13 +932,14 @@ export async function GET(request) {
       // Ảnh bill từng dòng / ảnh hàng của phiếu Sổ tay trong ngày: link xem 1 giờ để chủ đối chiếu trên /thongke.
       const notePhotoPaths = (notesData?.notes || []).flatMap(n => [...(n.photos || []), ...n.items.map(i => i.bill)]).filter(Boolean);
       const notePhotoLinks = notePhotoPaths.length ? await signReceiptImages(db, notePhotoPaths) : {};
+      const spices = await spiceDay(db, reportDate).catch(error => { console.error('[admin/finance] spices', error); return null; });
       return NextResponse.json({
         date: reportDate, today, startDate: FINANCE_START_DATE,
         summary: {
           revenue: day.revenue, bills: day.bills, paperBills: day.paperBills, cash: day.cash,
           transfers: Object.entries(day.byAccount || {}).map(([id, amount]) => ({ name: accountName(id), amount })),
           costs: costList(day, report.view.noteCategories || []),
-          cost: day.purchases + day.drinks + day.salary + day.fixedShare + day.customTotal,
+          cost: dayCostTotal(day),
           profit: day.profit, month: monthTotals, closed: !!day.close, warnings, check,
         },
         compare: insights.find(b => b.key === 'compare')?.data || null,
@@ -925,6 +949,7 @@ export async function GET(request) {
         // Cùng số liệu dạng dữ liệu (trang /thongke vẽ thẻ số, bảng).
         loss: insights.find(b => b.key === 'loss')?.data || null, staff: insights.find(b => b.key === 'staff')?.data || null,
         notes: notesData && { ...notesData, photo_links: notePhotoLinks },
+        spices,
       }, { headers });
     }
 

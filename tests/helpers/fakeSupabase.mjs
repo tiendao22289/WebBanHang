@@ -49,6 +49,7 @@ export function fakeDb(state) {
       lt(k, v) { conditions.push(r => r[k] < v); return q; },
       lte(k, v) { conditions.push(r => r[k] <= v); return q; },
       is(k, v) { conditions.push(r => (r[k] ?? null) === v); return q; },
+      not(k, op, v) { if (op === 'is') conditions.push(r => (r[k] ?? null) !== v); return q; },
       // SQL LIKE: % = chuỗi bất kỳ, _ = một ký tự.
       like(k, pattern) {
         const re = new RegExp(`^${String(pattern).split('').map(c => (c === '%' ? '.*' : c === '_' ? '.' : c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('')}$`, 's');

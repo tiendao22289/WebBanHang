@@ -58,6 +58,10 @@ export function noteItems(note) {
 }
 
 /** Tiền hàng của 1 phiếu Sổ tay "Đi chợ / Chi tiêu": đã trả + còn nợ. */
+/** Tổng chi của một ngày / kỳ: Sổ tay + gia vị + chi trong ngày + lương + cố định + tab tự tạo. */
+export const dayCostTotal = d => (Number(d?.purchases) || 0) + (Number(d?.spices) || 0) + (Number(d?.drinks) || 0) + (Number(d?.salary) || 0)
+  + (Number(d?.fixedShare) || 0) + (Number(d?.customTotal) || 0);
+
 export function noteCost(note) {
   if (note?.note_type !== 'expense') return 0;
   return Math.max(0, Number(note.amount) || 0) + Math.max(0, Number(note.debt) || 0);
@@ -189,7 +193,7 @@ function datesBetween(from, toInclusive) {
  *   Khoản lương nhập tay cũ (finance_entries kind 'salary') không tính nữa.
  * Chỉ tính các ngày từ FINANCE_START_DATE đến hết hôm nay (giờ VN).
  */
-export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [], entries = [], closes = [], checks = [], categories = [], wages = null, today, startDate = FINANCE_START_DATE }) {
+export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [], entries = [], closes = [], checks = [], categories = [], wages = null, today, startDate = FINANCE_START_DATE, spices = {} }) {
   const { start, next, daysInMonth } = monthBounds(month);
   const lastOfMonth = new Date(Date.parse(`${next}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
   const from = start > startDate ? start : startDate;
@@ -218,8 +222,10 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
     date, revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {},
     purchases: 0, purchaseNotes: 0, notesOther: {}, notesOtherItems: {}, suspiciousNotes: 0, mismatchNotes: 0, drinks: 0, salary: Number(wages?.byDay?.[date]) || 0, fixedShare: fixedPerDay,
     custom: { ...customDailyShare }, customWho: structuredClone(customMonthWho), customTotal: 0, profit: 0, close: null, check: null,
+    // Gia vị: đơn gọi gia vị đã nhận trong ngày (ghi nợ chủ gia vị, trả gom) — spices = spiceCostByDay() của src/lib/spiceOrders.mjs.
+    spices: Number(spices[date]?.amount) || 0, spiceWaiting: Number(spices[date]?.waiting) || 0,
     // shop: tiền đi chợ (hàng ốc, không gồm loại "Khác") theo người viết phiếu Sổ tay.
-    costItems: { drinks: {}, fixed: structuredClone(fixedItemsPerDay), custom: {}, shop: {}, salary: structuredClone(wages?.byDayStaff?.[date] || {}) },
+    costItems: { drinks: {}, fixed: structuredClone(fixedItemsPerDay), custom: {}, shop: {}, salary: structuredClone(wages?.byDayStaff?.[date] || {}), spices: structuredClone(spices[date]?.items || {}) },
   }));
   const byDate = new Map(days.map(d => [d.date, d]));
 
@@ -274,13 +280,13 @@ export function summarizeMonth({ month, revenue = [], paperBills = [], notes = [
   }
 
   const totals = { revenue: 0, bills: 0, paperBills: 0, paperRevenue: 0, cash: 0, transfer: 0, byAccount: {}, purchases: 0, notesOther: {}, notesOtherItems: {}, drinks: 0, salary: 0, fixedShare: 0,
-    custom: {}, customTotal: 0, profit: 0, costItems: { drinks: {}, fixed: {}, custom: {}, shop: {} } };
+    custom: {}, customTotal: 0, spices: 0, profit: 0, costItems: { drinks: {}, fixed: {}, custom: {}, shop: {}, spices: {} } };
   for (const day of days) {
     day.customTotal = Object.values(day.custom).reduce((sum, v) => sum + v, 0);
     for (const [id, v] of Object.entries(day.custom)) addNamedCost(day.costItems.custom, tabName(id) || 'Khác', v, day.customWho?.[id]);
     delete day.customWho;
-    day.profit = day.revenue - day.purchases - day.drinks - day.salary - day.fixedShare - day.customTotal;
-    for (const key of ['revenue', 'bills', 'paperBills', 'paperRevenue', 'cash', 'transfer', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'profit', 'suspiciousNotes', 'mismatchNotes']) totals[key] = (totals[key] || 0) + day[key];
+    day.profit = day.revenue - dayCostTotal(day);
+    for (const key of ['revenue', 'bills', 'paperBills', 'paperRevenue', 'cash', 'transfer', 'purchases', 'drinks', 'salary', 'fixedShare', 'customTotal', 'spices', 'profit', 'suspiciousNotes', 'mismatchNotes']) totals[key] = (totals[key] || 0) + day[key];
     for (const [acc, amount] of Object.entries(day.byAccount)) totals.byAccount[acc] = (totals.byAccount[acc] || 0) + amount;
     for (const [id, amount] of Object.entries(day.custom)) totals.custom[id] = (totals.custom[id] || 0) + amount;
     addCosts(totals.notesOther, day.notesOther);
@@ -304,7 +310,7 @@ export function costParts(day, categories = []) {
   for (const [id, v] of Object.entries(day.custom || {})) {
     if (monthly.has(id)) monthlyTabs += Number(v) || 0; else dailyTabs += Number(v) || 0;
   }
-  return { daily: (Number(day.drinks) || 0) + dailyTabs, purchases: Number(day.purchases) || 0, salary: Number(day.salary) || 0, fixed: (Number(day.fixedShare) || 0) + monthlyTabs };
+  return { daily: (Number(day.drinks) || 0) + dailyTabs, purchases: Number(day.purchases) || 0, spices: Number(day.spices) || 0, salary: Number(day.salary) || 0, fixed: (Number(day.fixedShare) || 0) + monthlyTabs };
 }
 
 /**
@@ -332,12 +338,12 @@ export function dailyReportText({ day, monthTotals, accounts = [], alerts = {}, 
   const [y, m, d] = day.date.split('-');
   const weekday = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][new Date(`${day.date}T00:00:00Z`).getUTCDay()];
   const accountName = id => accounts.find(a => a.id === id)?.name || 'Không rõ thẻ';
-  const cost = day.purchases + day.drinks + day.salary + day.fixedShare + day.customTotal;
+  const cost = dayCostTotal(day);
   const lines = [`📒 ${title} Sổ thu chi · ${weekday} ${d}/${m}/${y}`, ''];
   lines.push(`Doanh thu: ${vnd(day.revenue)} (${day.bills} bill${day.paperBills ? ` + ${day.paperBills} bill giấy` : ''})`);
   lines.push(`• Tiền mặt: ${vnd(day.cash)}`);
   for (const [id, amount] of Object.entries(day.byAccount || {})) lines.push(`• CK ${accountName(id)}: ${vnd(amount)}`);
-  const parts = [...shoppingParts(day, noteCategories).map(p => [p.id ? p.name.toLowerCase() : 'đi chợ', p.amount]), ['trong ngày', day.drinks], ['lương', day.salary], ['cố định', day.fixedShare], ['khác', day.customTotal]]
+  const parts = [...shoppingParts(day, noteCategories).map(p => [p.id ? p.name.toLowerCase() : 'đi chợ', p.amount]), ['gia vị', day.spices || 0], ['trong ngày', day.drinks], ['lương', day.salary], ['cố định', day.fixedShare], ['khác', day.customTotal]]
     .filter(([, v]) => v > 0).map(([k, v]) => `${k} ${vnd(v)}`);
   lines.push(`Chi: ${vnd(cost)}${parts.length ? ` (${parts.join(', ')})` : ''}`);
   lines.push(`${day.profit < 0 ? 'Lỗ' : 'Lãi'} ngày: ${signed(day.profit)}`);
@@ -369,6 +375,7 @@ export function dailyWarnings({ day, accounts = [], alerts = {}, today = null, w
   }
   if (alerts.missingPhoto) warnings.push(`${alerts.missingPhoto} bill CK chưa có ảnh (tháng này)`);
   if (alerts.unchecked) warnings.push(`${alerts.unchecked} bill CK chưa đối chiếu (tháng này)`);
+  if (day.spiceWaiting) warnings.push(`${day.spiceWaiting} đơn gia vị đã nhận còn món chưa có giá`);
   // Phiếu Sổ tay lệch: máy tự kiểm tra đã liệt kê (dayCheckLines) thì không nhắc lại lần nữa.
   if (day.check) return warnings;
   if (day.mismatchNotes) warnings.push(`${day.mismatchNotes} phiếu Sổ tay lệch tiền (tổng phiếu khác các dòng hàng)`);
