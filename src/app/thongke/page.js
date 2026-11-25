@@ -8,8 +8,9 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle, Banknote, BarChart3, CalendarDays, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight,
-  Clock, CreditCard, Gift, ListChecks, LogOut, NotebookPen, RefreshCw, ShieldAlert, Users, UtensilsCrossed, Wallet, X,
+  Clock, CreditCard, Gift, ListChecks, LogOut, NotebookPen, RefreshCw, ShieldAlert, Soup, Users, UtensilsCrossed, Wallet, X,
 } from 'lucide-react';
+import { changeText } from '@/lib/spiceOrders.mjs';
 import { workforce } from '@/lib/staffApi';
 import { useBackClose } from '@/lib/useBackClose';
 
@@ -161,6 +162,27 @@ function Costs({ summary }) {
       Chưa có tiền nhà, điện, nước… của tháng này. Nhập 1 lần cho cả tháng ở <a href={FIXED_COSTS_LINK}>Sổ thu chi → Chi phí</a>,
       máy tự chia đều vào từng ngày.
     </p>}
+  </Card>;
+}
+
+// Gia vị trong ngày (đơn gọi gia vị đã nhận): từng món, giá tăng ▲ / giảm ▼ so với lần trước, đã trả trong ngày, còn nợ.
+const qtyOf = q => String(Math.round((Number(q) || 0) * 1000) / 1000).replace('.', ',');
+function SpicesDay({ spices }) {
+  if (!spices) return null;
+  return <Card icon={Soup} title="Gia vị" aside={money(spices.total)}>
+    {spices.lines.length ? <ul className="tk-cost-items">{spices.lines.map((l, i) => <li key={`${l.name}-${i}`}>
+      <span>{l.name} · {qtyOf(l.qty)} {l.unit}{l.price !== null ? ` × ${money(l.price)}` : ' · chưa giá'}
+        {l.change ? <small className="tk-cost-by" style={{ color: l.change > 0 ? '#b91c1c' : '#15803d', fontWeight: 700 }}>{changeText(l.change)} so với lần trước</small> : null}
+        {l.supplier && <small className="tk-cost-by">{l.supplier}</small>}</span>
+      <b>{money(l.amount)}</b>
+    </li>)}</ul> : <p className="tk-empty">Không nhận gia vị ngày này.</p>}
+    {(spices.up > 0 || spices.down > 0) && <p className="tk-cost-hint">{spices.up > 0 ? `${spices.up} món tăng giá` : ''}{spices.up > 0 && spices.down > 0 ? ' · ' : ''}{spices.down > 0 ? `${spices.down} món giảm giá` : ''}</p>}
+    {spices.waiting > 0 && <p className="tk-cost-hint">⚠️ {spices.waiting} đơn còn món chưa có giá.</p>}
+    <ul className="tk-cost-items">
+      {spices.paid > 0 && <li><span>Đã trả chủ gia vị hôm nay</span><b>{money(spices.paid)}</b></li>}
+      <li><span>Còn nợ chủ gia vị (tới hết ngày)</span><b>{money(spices.debt)}</b></li>
+    </ul>
+    <p className="tk-cost-hint"><a href="/admin/spices">Mở trang Gia vị</a></p>
   </Card>;
 }
 
@@ -1020,6 +1042,7 @@ export default function ThongKePage({ embedded = false, onClose } = {}) {
           <Warnings summary={report.summary} />
           <Payments summary={report.summary} />
           <Costs summary={report.summary} />
+          <SpicesDay spices={report.spices} />
         </>}
         {tab === 'items' && (report.compare ? <>
           <TopItems compare={report.compare} />

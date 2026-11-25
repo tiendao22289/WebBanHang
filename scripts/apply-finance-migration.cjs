@@ -256,6 +256,15 @@ async function main() {
   if (!claims.table_ok || !claims.anon_blocked) throw new Error('Chưa cài được bảng khoản chi hộ.');
   if (!claims.given_ok) throw new Error('Chưa cài được cột "chủ đưa trước" của khoản chi hộ.');
 
+  // Gọi gia vị: chủ gia vị điền giá qua link riêng, đơn đã nhận ghi nợ + vào Sổ thu chi (spice_orders.sql).
+  await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'spice_orders.sql'), 'utf8'));
+  const [spices] = await query(`SELECT
+    (SELECT count(*)::int FROM unnest(ARRAY['spice_suppliers', 'spice_items', 'spice_orders', 'spice_payments']) t WHERE to_regclass('public.' || t) IS NOT NULL) AS tables,
+    (SELECT count(*)::int FROM unnest(ARRAY['spice_suppliers', 'spice_items', 'spice_orders', 'spice_payments']) t
+      WHERE to_regclass('public.' || t) IS NOT NULL AND (has_table_privilege('anon', 'public.' || t, 'SELECT') OR has_table_privilege('authenticated', 'public.' || t, 'SELECT'))) AS open_tables`);
+  console.log(JSON.stringify(spices));
+  if (spices.tables !== 4 || spices.open_tables !== 0) throw new Error('Chưa cài được phần Gọi gia vị.');
+
   // Báo lỗi chéo giữa nhân viên, chủ duyệt mới thành phạt (payroll_peer_reports.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_peer_reports.sql'), 'utf8'));
   const [peer] = await query(`SELECT to_regclass('public.payroll_peer_reports') IS NOT NULL AS table_ok,

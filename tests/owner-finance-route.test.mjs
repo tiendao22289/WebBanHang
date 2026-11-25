@@ -13,6 +13,7 @@ import { dayAudit } from '../src/lib/dayAudit.mjs';
 import { createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { payrollCost } from '../src/lib/payroll.mjs';
 import { normalizeRules } from '../src/lib/attendanceRules.mjs';
+import { spiceCostByDay, spiceDayData } from '../src/lib/spiceOrders.mjs';
 
 const source = readFileSync(new URL('../src/app/api/admin/finance/route.js', import.meta.url), 'utf8')
   .replace(/^import [\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
@@ -79,7 +80,7 @@ function fakeDb(state, { failTable } = {}) {
 function load({ role = 'admin', code = 200, state, failTable, sent = [], zaloFails = false, env = {} }) {
   const NextResponse = { json: (body, init = {}) => ({ status: init.status || 200, body }) };
   return vm.runInNewContext(`${source}\n({ GET, POST })`, {
-    NextResponse, ...finance, ...zaloLink, ...dayCheckLib, ...noteCategoriesLib, allOpenDebts, dayAudit, notesReportMessages, notesDayData, notesRangeData, packMessages, compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData, AUTO_CLOSE_BY: 'Máy tự đóng (quên ra ca)', createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
+    NextResponse, ...finance, ...zaloLink, ...dayCheckLib, ...noteCategoriesLib, allOpenDebts, dayAudit, spiceCostByDay, spiceDayData, notesReportMessages, notesDayData, notesRangeData, packMessages, compareBlock, compareData, lossBlock, lossData, staffBlock, staffData, staffRangeData, AUTO_CLOSE_BY: 'Máy tự đóng (quên ra ca)', createHmac, randomInt, randomUUID, timingSafeEqual, Buffer, process: { env },
     sendOaText: async (_db, id, text) => { sent.push({ id, text }); return zaloFails ? { ok: false, detail: { error: -230 } } : { ok: true }; },
     URL, Number, Math, String, Promise, console: { error() {} }, Date, JSON,
     getStaffSession: async () => code === 200 ? { code, user: { id: 's1', full_name: 'Chủ quán', role } } : { code },
@@ -785,6 +786,34 @@ test('Sổ tay "Khác" kinds (petrol, repairs) show as their own costs on /thong
   const month = (await get(api, 'month=2026-10')).body;
   assert.deepEqual(plain(month.noteCategories), [{ id: 'xang', name: 'Xăng xe' }]);
   assert.deepEqual(plain(month.totals.notesOther), { xang: 50000 });
+});
+
+test('Gia vị: received spice orders are a cost on the day they arrived (/thongke, week, month), with price changes, paid and still owed', async () => {
+  const state = empty();
+  state.spice_suppliers = [{ id: 'sup1', name: 'Cô Hai' }];
+  state.spice_orders = [
+    { id: 'g1', supplier_id: 'sup1', received_at: '2026-10-24T03:00:00.000Z', received_date: '2026-10-24', items: [{ name: 'Muối', unit: 'kg', qty: 2, price: 12000, old_price: null }] },
+    { id: 'g2', supplier_id: 'sup1', received_at: '2026-10-23T03:00:00.000Z', received_date: '2026-10-23', items: [{ name: 'Muối', unit: 'kg', qty: 1, price: 13000, old_price: 12000 }, { name: 'Sả', unit: 'kg', qty: 1, price: 30000, old_price: 35000 }] },
+    { id: 'g3', supplier_id: 'sup1', received_at: '2026-10-23T04:00:00.000Z', received_date: '2026-10-23', cancelled_at: '2026-10-23T05:00:00.000Z', items: [{ name: 'Muối', qty: 9, price: 13000 }] },
+    { id: 'g4', supplier_id: 'sup1', received_at: null, received_date: null, items: [{ name: 'Tiêu', qty: 1, price: 90000 }] },
+  ];
+  state.spice_payments = [{ id: 'p1', supplier_id: 'sup1', amount: 20000, method: 'cash', paid_date: '2026-10-23' }];
+  const api = load({ state });
+  const report = (await get(api, 'report=2026-10-23')).body;
+  const spiceCost = report.summary.costs.find(c => c.label === 'Gia vị');
+  assert.deepEqual(plain(spiceCost), { label: 'Gia vị', amount: 43000, items: [{ name: 'Sả', amount: 30000 }, { name: 'Muối', amount: 13000 }] });
+  assert.equal(report.summary.cost, 43000);
+  assert.equal(report.summary.profit, -43000);
+  assert.deepEqual(plain([report.spices.total, report.spices.up, report.spices.down, report.spices.paid, report.spices.debt]), [43000, 1, 1, 20000, 43000 - 20000], 'the 24th is not owed yet on the 23rd');
+  assert.equal(report.spices.lines[0].supplier, 'Cô Hai');
+  const week = (await get(api, 'period=week&date=2026-10-23')).body;
+  assert.equal(week.totals.costs.find(c => c.label === 'Gia vị').amount, 67000);
+  const month = (await get(api, 'month=2026-10')).body;
+  assert.equal(month.totals.spices, 67000);
+  // Chưa cài bảng gia vị: sổ vẫn mở như cũ.
+  const old = empty();
+  const plainDay = (await get(load({ state: old }), 'report=2026-10-23')).body;
+  assert.equal(plainDay.spices, null);
 });
 
 test('/thongke Sổ tay: each line with a seller bill comes with a link to open the photo', async () => {

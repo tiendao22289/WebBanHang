@@ -280,8 +280,8 @@ test('the daily Zalo report lists money per card, costs, profit and anything tha
 test('a day of spending splits into: during the day, shopping, wages, fixed (shared out per day)', () => {
   const categories = [{ id: 'gas', scope: 'tab', schedule: 'daily' }, { id: 'loan', scope: 'tab', schedule: 'monthly' }];
   const day = { drinks: 350000, purchases: 1200000, salary: 900000, fixedShare: 300000, custom: { gas: 120000, loan: 50000 } };
-  assert.deepEqual(costParts(day, categories), { daily: 470000, purchases: 1200000, salary: 900000, fixed: 350000 });
-  assert.deepEqual(costParts({ drinks: 0, purchases: 0, salary: 0, fixedShare: 0 }), { daily: 0, purchases: 0, salary: 0, fixed: 0 });
+  assert.deepEqual(costParts(day, categories), { daily: 470000, purchases: 1200000, spices: 0, salary: 900000, fixed: 350000 });
+  assert.deepEqual(costParts({ drinks: 0, purchases: 0, salary: 0, fixedShare: 0 }), { daily: 0, purchases: 0, spices: 0, salary: 0, fixed: 0 });
 });
 // Số liệu thật ngày 27/10 (Sổ thu chi, "Bill đã thu"): đóng bàn ghi cùng một paid_at cho mọi bill của bàn.
 const ledgerBill = (id, paidAt, table, amount, more = {}) => ({ order_id: `o-${id}`, paid_at: paidAt, table_number: table, amount: String(amount),

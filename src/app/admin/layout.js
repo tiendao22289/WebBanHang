@@ -20,6 +20,7 @@ import {
   Ticket,
   ClipboardList,
   Bell,
+  Soup,
 } from 'lucide-react';
 import PrintErrorAlert from '@/components/PrintErrorAlert';
 import QrClockScanner from '@/components/QrClockScanner';
@@ -42,6 +43,8 @@ const ALL_NAV = [
   { href: '/admin/customers', label: 'Khách hàng', icon: UsersRound },
   { href: '/admin/vouchers', label: 'Voucher', icon: Ticket, adminOnly: true },
   { href: '/admin/notes', label: 'Sổ tay', icon: ChefHat },
+  // Gọi gia vị: nhân viên gửi đơn cho chủ gia vị qua Zalo, chủ gia vị điền giá bằng link riêng (src/app/admin/spices).
+  { href: '/admin/spices', label: 'Gia vị', icon: Soup },
   { href: '/admin/payroll', label: 'Tính Lương', icon: Wallet },
   // Đơn từ của nhân viên / quản lý: tự ghi lỗi, chi hộ quán, ứng lương, báo nghỉ (chủ quán duyệt ở Lương → Yêu cầu).
   { href: '/admin/payroll/don', label: 'Đơn từ', icon: ClipboardList, staffOnly: true },

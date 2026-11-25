@@ -7,7 +7,8 @@ export const normalizeRole = role => (ROLES.includes(role) ? role : 'staff');
 export const ROLE_LABELS = { admin: '👑 Admin', manager: '🧑‍💼 Quản lý', staff: '👤 Nhân viên' };
 export const roleLabel = role => ROLE_LABELS[normalizeRole(role)];
 
-const STAFF_PATHS = ['/admin/tables', '/admin/payroll', '/admin/qr', '/admin/receipts'];
+// /admin/spices: Gọi gia vị — nhân viên, quản lý, admin đều gọi được.
+const STAFF_PATHS = ['/admin/tables', '/admin/payroll', '/admin/qr', '/admin/receipts', '/admin/spices'];
 const MANAGER_PATHS = [...STAFF_PATHS, '/admin/menu', '/admin/notes'];
 
 /** Các trang /admin/* tài khoản này được mở; null = admin, mở hết. */

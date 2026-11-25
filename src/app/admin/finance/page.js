@@ -5,7 +5,7 @@ import { Banknote, Camera, ChevronDown, ChevronLeft, ChevronRight, CreditCard, P
 import { compressImage, fetchWithTimeout } from '@/lib/compressImage';
 import { useBackClose } from '@/lib/useBackClose';
 import CameraCapture, { cameraSupported } from '@/lib/CameraCapture';
-import { billStaff, costParts, groupPaidBills, shoppingParts, staffText } from '@/lib/ownerFinance.mjs';
+import { billStaff, costParts, dayCostTotal, groupPaidBills, shoppingParts, staffText } from '@/lib/ownerFinance.mjs';
 import { addNamedCost, namedCostList } from '@/lib/noteCategories.mjs';
 import { parsePrice, parseQty } from '@/lib/notesMath.mjs';
 import { lineDebtBase } from '@/lib/notesDebts.mjs';
@@ -293,7 +293,7 @@ function MonthlyCosts({ data, month, onSaved }) {
 // Chênh lệch chốt sổ: dương = thừa, âm = thiếu so với sổ.
 const diffText = diff => diff === 0 ? 'Khớp ✓' : diff > 0 ? `Thừa ${money(diff)}` : `Thiếu ${money(-diff)}`;
 const diffClass = diff => diff === 0 ? 'ok' : 'bad';
-const dayCost = d => d.purchases + d.drinks + d.salary + d.fixedShare + d.customTotal;
+const dayCost = dayCostTotal;
 
 // Chi tiết Nhập hàng của một ngày: từng phiếu Sổ tay — từng món (số lượng × giá = thành tiền, món nào nợ ai), đã trả / nợ của
 // phiếu; cuối là nợ trong ngày và tổng nợ Sổ tay tới giờ (theo người bán). Cảnh báo phiếu lệch tiền / giá đáng ngờ như cũ.
@@ -366,6 +366,7 @@ function DayCosts({ day, month, spend = null, notes = null, debts = null, openTi
   const groups = [
     { key: 'daily', label: 'Chi trong ngày', amount: p.daily, hint: 'Nước ngọt, đá, gas… ghi trong ngày (và tab nhập theo ngày).' },
     { key: 'purchases', label: 'Nhập hàng', amount: p.purchases, hint: `Tiền phiếu Sổ tay${day.purchaseNotes ? ` (${day.purchaseNotes} phiếu)` : ''}: đi chợ hàng ốc và các loại Khác.` },
+    { key: 'spices', label: '🧂 Gia vị', amount: p.spices, hint: `Đơn gọi gia vị đã nhận trong ngày (ghi nợ chủ gia vị, trả gom ở trang Gia vị → Công nợ).${day.spiceWaiting ? ` Còn ${day.spiceWaiting} đơn chưa đủ giá.` : ''}` },
     { key: 'salary', label: 'Lương', amount: p.salary, hint: 'Lương ngày này theo chấm công (cùng cách tính trang Lương). Thưởng / phạt tính theo tháng, không chia vào ngày.' },
     { key: 'fixed', label: 'Cố định', amount: p.fixed, hint: `Chi cả tháng chia đều mỗi ngày: cả tháng ÷ ${dim} ngày (tháng này).` },
   ].filter(g => g.amount > 0 || g.key === 'daily' || g.key === 'purchases');
@@ -382,6 +383,7 @@ function DayCosts({ day, month, spend = null, notes = null, debts = null, openTi
           {g.key !== 'daily' && g.key !== 'purchases' && <p className="fin-costs-hint">{g.hint}</p>}
           {g.key === 'daily' && (spend || (dailyItems.length ? list(dailyItems) : <p className="fin-empty">Đang tải…</p>))}
           {g.key === 'purchases' && <NotesDetail notes={notes} debts={debts} parts={shop} onView={onView} />}
+          {g.key === 'spices' && (namedCostList(day.costItems?.spices).length ? list(namedCostList(day.costItems?.spices)) : null)}
           {g.key === 'salary' && (staff.length ? list(staff) : <p className="fin-empty">Chưa tách được theo người.</p>)}
           {g.key === 'fixed' && <table className="fin-costs-table">
             <thead><tr><th>Khoản</th><th>Cả tháng</th><th>Mỗi ngày</th></tr></thead>
