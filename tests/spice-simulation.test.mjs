@@ -225,7 +225,7 @@ test('nhận dư hàng: lịch sử ghi "dư", tiền tính theo số nhận', a
   await w.post('owner', { action: 'set_prices', id: o.id, prices: [{ index: 0, price: 10000 }] });
   await w.post('thy', { action: 'receive', id: o.id, received: ['3'] });
   assert.equal(order(w, o.id).total, 30000);
-  assert.equal(spice.logLine(order(w, o.id).log.at(-1)).text, 'nhận hàng khác số gọi: Muối gọi 2 nhận 3 kg (dư 1)');
+  assert.equal(spice.logLine(order(w, o.id).log.at(-1)).text, 'nhận hàng: Muối dư 1 kg (gọi 2, nhận 3)');
 });
 
 test('chủ gia vị chỉ thấy đơn của mình, không thấy mã nhân viên, không sửa được đơn người khác hay đơn đã huỷ', async () => {
@@ -290,6 +290,14 @@ async function checkWorld(w, step) {
     // Sau khi nhận, chủ gia vị chỉ được điền giá dòng đang trống.
     const receivedAt = o.received_at;
     if (receivedAt) {
+      for (const l of o.items) {
+        const c = spice.lineCheck(l);
+        assert.ok(spice.CHECKS.includes(c.check), `${where}: nhãn kiểm hàng hợp lệ`);
+        if (c.check === 'short') assert.ok(c.got < Number(l.qty), `${where}: thiếu thì nhận ít hơn`);
+        if (c.check === 'over') assert.ok(c.got > Number(l.qty), `${where}: dư thì nhận nhiều hơn`);
+        if (c.check === 'wrong') assert.ok(c.note, `${where}: sai hàng có ghi chú`);
+        if (c.check === 'ok') assert.equal(c.got, Number(l.qty), `${where}: đủ thì đúng số gọi`);
+      }
       const filled = new Set();
       for (const e of o.log.filter(e => e.type === 'price' && e.who === 'supplier' && e.at > receivedAt)) {
         for (const c of e.changes) {
@@ -307,9 +315,14 @@ async function checkWorld(w, step) {
     const delivered = mine.reduce((a, o) => a + o.total, 0);
     const paid = payments.filter(p => p.supplier_id === s.id).reduce((a, p) => a + p.amount, 0);
     assert.equal(owner.balances?.[s.id]?.debt ?? 0, delivered - paid, `${where}: nợ ${s.name}`);
+    // Đối soát từng ngày: nợ cuối ngày gần nhất = công nợ; tổng các ngày = tổng đã giao.
+    const days = spice.supplierDays(orders.filter(o => o.supplier_id === s.id), payments.filter(p => p.supplier_id === s.id));
+    assert.equal(days[0]?.balance ?? 0, delivered - paid, `${where}: đối soát nợ cuối ${s.name}`);
+    assert.equal(days.reduce((a, d) => a + d.total, 0), delivered, `${where}: đối soát tổng ${s.name}`);
     if (s.active) {
-      const page = (await w.sup.get(s.token)).body.summary;
+      const pageAll = (await w.sup.get(s.token)).body, page = pageAll.summary;
       assert.deepEqual([page.delivered, page.paid, page.owed], [delivered, paid, delivered - paid], `${where}: trang chủ gia vị ${s.name}`);
+      if (pageAll.days.length) assert.equal(pageAll.days[0].balance, delivered - paid, `${where}: đối soát trên trang chủ gia vị ${s.name}`);
     }
   }
   // Sổ thu chi tháng = thống kê = cộng tay các đơn đã nhận.
@@ -342,7 +355,7 @@ for (const seed of SEEDS) {
       const any = orders.length ? pick(orders) : null;
       const who = pick(STAFF);
       const lines = () => Array.from({ length: 1 + Math.floor(r() * 3) }, () => ({ name: pick(NAMES), qty: String(Math.round((0.5 + r() * 4) * 2) / 2).replace('.', ','), unit: pick(['kg', 'bịch', '']) }));
-      const kind = pick(['create', 'create', 'add', 'supplier', 'supplier', 'supplier', 'receive', 'receive', 'cancel', 'admin_price', 'pay', 'unpay', 'stale', 'link']);
+      const kind = pick(['create', 'create', 'add', 'supplier', 'supplier', 'supplier', 'receive', 'receive', 'recheck', 'cancel', 'admin_price', 'pay', 'unpay', 'stale', 'link']);
       let res = null;
       const live = s => w.state.spice_suppliers.find(x => x.id === s.id);
       if (kind === 'create') res = await w.post(who, { action: 'create', supplier_id: pick(suppliers).id, lines: lines(), note: r() < 0.3 ? 'gấp' : '' });
@@ -356,7 +369,19 @@ for (const seed of SEEDS) {
         }
       } else if (kind === 'receive' && open.length) {
         const o = pick(open);
-        res = await w.post(who, { action: 'receive', id: o.id, updated_at: o.updated_at, received: o.items.map(l => (r() < 0.7 ? null : String(Math.round(r() * Number(l.qty) * 2) / 2))) });
+        // Kiểm từng món: đủ / thiếu / dư / sai (có khi nhập sai để chắc máy chủ chặn đúng).
+        const recv = o.items.map(l => {
+          const x = r(), q = Number(l.qty);
+          if (x < 0.55) return null;
+          if (x < 0.7) return { check: 'short', qty: String(Math.floor(r() * q * 2) / 2) };
+          if (x < 0.8) return { check: 'over', qty: String(q + 0.5 + Math.floor(r() * 4) / 2) };
+          if (x < 0.9) return { check: 'wrong', qty: r() < 0.5 ? '0' : String(q), note: r() < 0.9 ? 'hàng hư' : '' };
+          return String(Math.round(r() * q * 2) / 2);
+        });
+        res = await w.post(who, { action: 'receive', id: o.id, updated_at: o.updated_at, received: recv, note: r() < 0.3 ? 'giao trễ' : '' });
+      } else if (kind === 'recheck' && any?.received_at) {
+        res = await w.post(who, { action: 'recheck', id: any.id, updated_at: any.updated_at, received: any.items.map(l => (r() < 0.6 ? null : { check: 'short', qty: String(Math.floor(r() * Number(l.qty) * 2) / 2) })) });
+        if (!['owner', 'lan'].includes(who)) assert.equal(res.status, 403, `bước ${step}: ${who} không được kiểm lại`);
       } else if (kind === 'cancel' && any) res = await w.post(who, { action: 'cancel', id: any.id });
       else if (kind === 'admin_price' && any) res = await w.post(who, { action: 'set_prices', id: any.id, prices: [{ index: 0, price: Math.round(r() * 100) * 1000 }] });
       else if (kind === 'pay') res = await w.post(who, { action: 'pay', supplier_id: pick(suppliers).id, amount: String(Math.round(r() * 300) * 1000), method: pick(['cash', 'transfer']) });
@@ -382,6 +407,7 @@ for (const seed of SEEDS) {
     }
     // Mô phỏng phải thật sự chạm đủ các nhánh, không chỉ toàn lỗi.
     const okCount = k => stats[`${k}:200`] || 0;
+    assert.ok(w.state.spice_orders.some(o => o.items.some(l => l.check && l.check !== 'ok')), 'có món thiếu / dư / sai');
     for (const k of ['create', 'supplier', 'receive']) assert.ok(okCount(k) > 3, `${k} thành công đủ nhiều: ${JSON.stringify(stats)}`);
     assert.ok(w.state.spice_orders.some(o => o.received_at), 'có đơn đã nhận');
     assert.ok(w.state.spice_orders.some(o => o.received_date?.startsWith('2026-12')) || day < Date.parse('2026-12-01T00:00:00Z'), 'nếu sang tháng 12 thì có đơn tháng 12');

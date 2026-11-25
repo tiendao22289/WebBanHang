@@ -8,8 +8,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useBackClose } from '@/lib/useBackClose';
 import { useReloadHold } from '@/lib/useBuildRefresh';
 import {
-  STATE_LABELS, addedLater, changeText, cleanName, itemKey, itemStep, plainText, rankItems, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shareText, shortTime,
+  CHECK_LABELS, STATE_LABELS, addedLater, changeText, cleanName, dayReportText, lineCheck, itemKey, itemLineText, itemStep, orderedItems, plainText, rankItems, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shareText, shortTime,
 } from '@/lib/spiceOrders.mjs';
+import { CheckBadge, DayCard } from './SpiceShared';
 import './spices.css';
 
 const money = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
@@ -64,7 +65,7 @@ export default function SpicesPage() {
   });
 
   if (!data) return <div className="sp">{error ? <div className="sp-msg err">{error}</div> : <p className="sp-empty">Đang tải…</p>}</div>;
-  const tabs = [['call', '🧂 Gọi hàng'], ['orders', 'Đơn'], ...(isAdmin ? [['debt', 'Công nợ'], ['stats', 'Thống kê'], ['setup', 'Cài đặt']] : [])];
+  const tabs = [['call', '🧂 Gọi hàng'], ['orders', 'Đơn'], ['days', '📅 Đối soát'], ...(isAdmin ? [['debt', 'Công nợ'], ['stats', 'Thống kê'], ['setup', 'Cài đặt']] : [])];
   return <div className="sp">
     <h1>🧂 Gia vị</h1>
     {error && <div className="sp-msg err">{error}</div>}
@@ -75,6 +76,7 @@ export default function SpicesPage() {
     </div>
     {tab === 'call' && <CallTab data={data} onSent={(supplier, order, items, note) => { askShare(supplier, order, items, { note }); load(); setTab('orders'); }} goSetup={isAdmin ? () => setTab('setup') : null} />}
     {tab === 'orders' && <OrdersTab data={data} supplierById={supplierById} reload={load} onShare={askShare} />}
+    {tab === 'days' && <DaysTab data={data} reload={load} onShareText={(title, text, phone) => setShare({ title, text, phone, hint: 'Gửi bảng đối soát ngày này qua Zalo cho chủ gia vị để hai bên cân đối.' })} />}
     {tab === 'debt' && isAdmin && <DebtTab data={data} reload={load} />}
     {tab === 'stats' && isAdmin && <StatsTab />}
     {tab === 'setup' && isAdmin && <SetupTab data={data} reload={load} />}
@@ -105,7 +107,7 @@ function ShareSheet({ share, onClose }) {
     catch (e) { if (e?.name !== 'AbortError') copy(); }
   };
   return <Sheet title={share.title} onClose={onClose}>
-    <p className="sp-mute">Gửi tin này qua Zalo cho chủ gia vị (hoặc nhóm). Trong tin có link để họ soạn hàng và điền giá.</p>
+    <p className="sp-mute">{share.hint || 'Gửi tin này qua Zalo cho chủ gia vị (hoặc nhóm). Trong tin có link để họ soạn hàng và điền giá.'}</p>
     <textarea className="sp-field" readOnly rows={7} value={share.text} onFocus={e => e.target.select()} />
     {msg && <div className="sp-msg ok">{msg}</div>}
     <div className="sp-btns">
@@ -122,7 +124,7 @@ function readCart() {
 }
 function saveCart(v) { try { localStorage.setItem(CART_KEY, JSON.stringify(v)); } catch { /* máy chặn lưu: bỏ qua */ } }
 
-// Chọn món nhanh: ô to theo danh sách (món hay gọi lên đầu), bấm ô = thêm số mặc định (vd Tiêu 0,5 kg), bấm tiếp = thêm nữa,
+// Chọn món nhanh: ô to theo danh sách đúng thứ tự chủ quán xếp, bấm ô = thêm số mặc định (vd Tiêu 0,5 kg), bấm tiếp = thêm nữa,
 // nút − trên ô để bớt. Danh sách dài thì có ô tìm (gõ không dấu cũng được). Món không có trong danh sách: "＋ Món khác".
 const num = v => Number(String(v ?? '').replace(',', '.')) || 0;
 const fmtQty = n => String(Math.round(n * 1000) / 1000).replace('.', ',');
@@ -280,7 +282,8 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
         {msg?.id === o.id && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
         <div className="sp-btns">
           {open && <button type="button" className="sp-btn ok" disabled={busy === o.id} onClick={() => run(o, { action: 'receive', received: [] }, 'Đã nhận đủ ✓')}>✅ Nhận đủ</button>}
-          {open && <button type="button" className="sp-btn" disabled={busy === o.id} onClick={() => setSheet({ kind: 'receive', order: o })}>Nhận thiếu…</button>}
+          {open && <button type="button" className="sp-btn" disabled={busy === o.id} onClick={() => setSheet({ kind: 'receive', order: o })}>🔍 Kiểm từng món…</button>}
+          {!open && !o.cancelled_at && canManage && <button type="button" className="sp-btn" onClick={() => setSheet({ kind: 'recheck', order: o })}>🔍 Kiểm lại</button>}
           {open && <button type="button" className="sp-btn" onClick={() => setSheet({ kind: 'add', order: o })}>➕ Thêm món</button>}
           {open && sup && <button type="button" className="sp-btn zalo" onClick={() => onShare(sup, o, o.items, { note: o.note || '' })}>📤 Gửi lại Zalo</button>}
           {isAdmin && !o.cancelled_at && <button type="button" className="sp-btn" onClick={() => setSheet({ kind: 'price', order: o })}>Sửa giá</button>}
@@ -291,8 +294,8 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
         <History log={o.log} />
       </div>;
     })}
-    {sheet?.kind === 'receive' && <ReceiveSheet order={sheet.order} onClose={() => setSheet(null)}
-      onSave={received => run(sheet.order, { action: 'receive', received }, 'Đã nhận ✓').then(ok => ok && setSheet(null))} />}
+    {(sheet?.kind === 'receive' || sheet?.kind === 'recheck') && <ReceiveSheet order={sheet.order} recheck={sheet.kind === 'recheck'} onClose={() => setSheet(null)}
+      onSave={(received, note) => run(sheet.order, { action: sheet.kind, received, note }, sheet.kind === 'recheck' ? 'Đã kiểm lại ✓' : 'Đã nhận ✓').then(ok => { if (ok) setSheet(null); return ok; })} />}
     {sheet?.kind === 'add' && <AddSheet order={sheet.order} data={data} onClose={() => setSheet(null)} onAdded={(j, items, note) => {
       setSheet(null); reload();
       const sup = j.supplier || supplierById[sheet.order.supplier_id];
@@ -314,8 +317,8 @@ function OrderLines({ order }) {
         <div className="meta">
           {qtyText(l.qty)} {l.unit}{hasPrice(l) ? ` × ${money(l.price)}` : ''}
           {ch !== 0 && <span className={ch > 0 ? 'sp-up' : 'sp-down'}> {changeText(ch)}</span>}
-          {l.received_qty !== null && l.received_qty !== undefined && <span className="short"> · nhận {qtyText(lineQty(l))}</span>}
         </div>
+        {order.received_at && !order.cancelled_at && (() => { const c = lineCheck(l); return <div><CheckBadge check={c.check} diff={c.diff} unit={l.unit} note={c.note} /></div>; })()}
         {later && <span className="added">➕ {l.added_by} thêm {shortTime(l.added_at)}</span>}
       </li>;
     })}</ul>
@@ -343,18 +346,44 @@ function Fold({ head, initial = false, className = 'sp-fold', plain = false, chi
 }
 
 
-function ReceiveSheet({ order, onClose, onSave }) {
-  const [got, setGot] = useState(() => order.items.map(l => qtyText(l.qty)));
+// Kiểm hàng khi nhận: mỗi món bấm Đủ / Thiếu / Dư / Sai hàng; thiếu / dư ghi số thật nhận; sai hàng ghi rõ sai gì (lấy bao
+// nhiêu, mặc định 0). recheck = quản lý / chủ quán kiểm lại đơn đã nhận (đối soát).
+function ReceiveSheet({ order, recheck = false, onClose, onSave }) {
+  const [rows, setRows] = useState(() => order.items.map(l => {
+    const c = recheck ? lineCheck(l) : { check: 'ok', got: Number(l.qty), note: '' };
+    return { check: c.check, qty: c.check === 'ok' ? '' : qtyText(c.got), note: c.note };
+  }));
+  const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
-  return <Sheet title="Nhận hàng" onClose={onClose}>
-    <p className="sp-mute">Sửa số đã nhận ở món bị thiếu (0 = không giao). Món nào đủ thì để nguyên.</p>
-    <ul className="sp-cart">{order.items.map((l, i) => <li key={i}>
-      <span className="nm">{l.name}<br /><span className="sp-mute sp-small">gọi {qtyText(l.qty)} {l.unit}</span></span>
-      <div className="sp-qty"><input inputMode="decimal" aria-label={`Đã nhận ${l.name}`} value={got[i]} onChange={e => setGot(got.map((g, j) => (j === i ? e.target.value.replace(/[^\d.,]/g, '').slice(0, 7) : g)))} /></div>
-      <span className="sp-mute">{l.unit}</span>
-    </li>)}</ul>
-    <div className="sp-btns"><button type="button" className="sp-btn ok block" disabled={busy}
-      onClick={async () => { setBusy(true); await onSave(got.map(g => g.replace(',', '.'))); setBusy(false); }}>Lưu đã nhận</button></div>
+  const [error, setError] = useState('');
+  const set = (i, patch) => setRows(rs => rs.map((r, j) => (j === i ? { ...r, ...(typeof patch === 'function' ? patch(r) : patch) } : r)));
+  const issues = rows.filter(r => r.check !== 'ok').length;
+  return <Sheet title={recheck ? 'Kiểm lại đơn đã nhận' : 'Kiểm hàng khi nhận'} onClose={onClose}>
+    <p className="sp-mute">Kiểm từng món rồi bấm: <b>Đủ</b> · <b>Thiếu</b> / <b>Dư</b> (ghi số thật nhận) · <b>Sai hàng</b> (ghi sai gì). Chủ gia vị sẽ thấy.</p>
+    {order.items.map((l, i) => {
+      const r = rows[i];
+      return <div key={i} className={`sp-recv ${r.check}`}>
+        <div className="sp-row between"><span className="sp-b">{l.name}</span><span className="sp-mute">gọi {qtyText(l.qty)} {l.unit}</span></div>
+        <div className="sp-recv-checks">{['ok', 'short', 'over', 'wrong'].map(k => <button key={k} type="button" className={`sp-pick ${r.check === k ? 'on' : ''} ${k}`}
+          onClick={() => set(i, cur => ({ check: k, qty: k === 'ok' ? '' : k === 'wrong' ? (cur.qty || '0') : (cur.check === k ? cur.qty : '') }))}>{CHECK_LABELS[k]}</button>)}</div>
+        {r.check !== 'ok' && <div className="sp-row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+          <span className="sp-mute">{r.check === 'wrong' ? 'Lấy' : 'Nhận thật'}</span>
+          <div className="sp-qty"><input inputMode="decimal" aria-label={`Số nhận ${l.name}`} placeholder={r.check === 'short' ? `< ${qtyText(l.qty)}` : r.check === 'over' ? `> ${qtyText(l.qty)}` : '0'}
+            value={r.qty} onChange={e => set(i, { qty: e.target.value.replace(/[^\d.,]/g, '').slice(0, 7) })} /></div>
+          <span className="sp-mute">{l.unit}</span>
+          <input className="sp-field" style={{ flex: '1 1 100%' }} placeholder={r.check === 'wrong' ? 'Sai gì? (bắt buộc, vd: ớt xanh thay ớt đỏ, hàng hư)' : 'Ghi chú (không bắt buộc)'}
+            value={r.note} maxLength={200} onChange={e => set(i, { note: e.target.value })} />
+        </div>}
+      </div>;
+    })}
+    <textarea className="sp-field" style={{ marginTop: 10 }} placeholder="Ghi chú chung (vd: giao trễ 30 phút)" value={note} maxLength={300} onChange={e => setNote(e.target.value)} />
+    {error && <div className="sp-msg err">{error}</div>}
+    <div className="sp-btns"><button type="button" className="sp-btn ok block" disabled={busy} onClick={async () => {
+      setBusy(true); setError('');
+      const ok = await onSave(rows.map(r => (r.check === 'ok' ? null : { check: r.check, qty: r.qty.replace(',', '.'), note: r.note })), note);
+      if (!ok) setError('Chưa lưu được, xem thông báo trên thẻ đơn.');
+      setBusy(false);
+    }}>{recheck ? 'Lưu kiểm lại' : issues ? `Xác nhận nhận (${issues} món không đủ)` : 'Xác nhận nhận đủ'}</button></div>
   </Sheet>;
 }
 
@@ -395,6 +424,45 @@ function PriceSheet({ order, onClose, onSave }) {
       setBusy(false);
     }}>Lưu giá</button></div>
   </Sheet>;
+}
+
+
+/* ---------------- Tab Đối soát ---------------- */
+// Xem lại từng ngày với một chủ gia vị: món gọi / nhận / đủ-thiếu-dư-sai, tiền; chủ quán thấy thêm tiền trả và nợ cuối ngày.
+// Nút gửi đối soát ngày qua Zalo để báo lại và cân đối với chủ gia vị.
+function DaysTab({ data, reload, onShareText }) {
+  const isAdmin = data.me.role === 'admin', canManage = isAdmin || data.me.role === 'manager';
+  const [supplierId, setSupplierId] = useState(data.suppliers.find(s => s.active)?.id || data.suppliers[0]?.id || '');
+  const [days, setDays] = useState(null);
+  const [error, setError] = useState('');
+  const [recheck, setRecheck] = useState(null);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!supplierId) return undefined;
+    let live = true;
+    setDays(null); setError('');
+    fetch(`/api/admin/spices?days=${supplierId}`, { cache: 'no-store' }).then(r => r.json().then(j => ({ ok: r.ok, j })))
+      .then(({ ok, j }) => { if (!live) return; if (ok) setDays(j.days); else setError(j.error || 'Không tải được.'); })
+      .catch(() => live && setError('Mạng yếu, thử lại.'));
+    return () => { live = false; };
+  }, [supplierId, tick]);
+  const sup = data.suppliers.find(s => s.id === supplierId);
+  if (!data.suppliers.length) return <p className="sp-empty">Chưa có chủ gia vị.</p>;
+  return <>
+    <div className="sp-picks" style={{ marginBottom: 10 }}>{data.suppliers.map(s => <button key={s.id} type="button" className={`sp-pick ${s.id === supplierId ? 'on' : ''}`} onClick={() => setSupplierId(s.id)}>{s.name}</button>)}</div>
+    <p className="sp-mute">Từng ngày nhận hàng (60 ngày gần đây). Bấm ngày để xem món đủ / thiếu / dư / sai{isAdmin ? ', tiền đã trả và nợ cuối ngày' : ''}.</p>
+    {error && <div className="sp-msg err">{error}</div>}
+    {!days && !error && <p className="sp-empty">Đang tải…</p>}
+    {days && !days.length && <p className="sp-empty">Chưa nhận đơn nào.</p>}
+    {days?.map((d, i) => <DayCard key={d.date} day={d} initial={i === 0}
+      onShare={sup ? day => onShareText(`Đối soát ${day.date.split('-').reverse().slice(0, 2).join('/')}`, dayReportText({ supplierName: sup.name, day, withMoney: true }), sup.phone) : null}
+      onRecheck={canManage ? id => setRecheck(data.orders.find(o => o.id === id) || { id, missing: true }) : null} />)}
+    {recheck?.missing && <Sheet title="Kiểm lại" onClose={() => setRecheck(null)}><p className="sp-mute">Đơn này cũ hơn 60 ngày, mở ở tab Đơn → Tất cả.</p></Sheet>}
+    {recheck && !recheck.missing && <ReceiveSheet order={recheck} recheck onClose={() => setRecheck(null)} onSave={async (received, note) => {
+      try { await api({ action: 'recheck', id: recheck.id, updated_at: recheck.updated_at, received, note }); setRecheck(null); await reload(); setTick(t => t + 1); return true; }
+      catch (e) { setError(e.message); return false; }
+    }} />}
+  </>;
 }
 
 /* ---------------- Tab Công nợ (chủ quán) ---------------- */
@@ -500,6 +568,15 @@ function SetupTab({ data, reload }) {
   const [edit, setEdit] = useState(null); // { id?, name, phone, active }
   const [itemEdit, setItemEdit] = useState(null);
   const [bulk, setBulk] = useState(null); // chữ đang dán: nhiều món một lần
+  const [listText, setListText] = useState(null); // sửa cả danh sách bằng chữ
+  const [busy, setBusy] = useState(false);
+  const items = orderedItems(data.items);
+  const move = async (id, dir) => {
+    if (busy) return;
+    setBusy(true);
+    try { await api({ action: 'move_item', id, dir }); await reload(); } catch (e) { setMsg({ key: 'item', err: true, text: e.message }); }
+    setBusy(false);
+  };
   const [msg, setMsg] = useState(null);
   const run = async (body, text, key) => {
     try { await api(body); setMsg({ key, text }); await reload(); return true; } catch (e) { setMsg({ key, err: true, text: e.message }); return false; }
@@ -523,17 +600,35 @@ function SetupTab({ data, reload }) {
 
     <h2>Món gia vị</h2>
     {msg?.key === 'item' && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
-    <div className="sp-card"><div className="sp-picks">
-      {[...data.items].sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0) || a.name.localeCompare(b.name, 'vi')).map(i => <button key={i.id} type="button" className="sp-pick" style={i.active ? undefined : { opacity: 0.5, textDecoration: 'line-through' }}
-        onClick={() => setItemEdit({ ...i, unit: i.unit || '', default_qty: i.default_qty ? fmtQty(Number(i.default_qty)) : '' })}>
-        {i.name}<small>{i.default_qty ? `${fmtQty(Number(i.default_qty))} ` : ''}{i.unit || ''}</small>
-      </button>)}
+    <div className="sp-card">
+      <p className="sp-mute sp-small" style={{ marginTop: 0 }}>Nhân viên thấy đúng các món này, đúng thứ tự này. Bấm tên món để sửa tên / đơn vị / số mỗi lần bấm, ẩn hoặc xoá. ▲▼ để đổi chỗ.</p>
+      {items.length === 0 && <p className="sp-empty">Chưa có món nào.</p>}
+      {items.map((i, k) => <div key={i.id} className="sp-item-row" style={i.active ? undefined : { opacity: 0.55 }}>
+        <button type="button" className="sp-item-name" onClick={() => setItemEdit({ ...i, unit: i.unit || '', default_qty: i.default_qty ? fmtQty(Number(i.default_qty)) : '' })}>
+          <span className="sp-b">{k + 1}. {i.name}</span>
+          <span className="sp-mute"> · {i.default_qty ? fmtQty(Number(i.default_qty)) : 1} {i.unit || ''}{!i.active ? ' · đang ẩn' : ''}</span>
+        </button>
+        <button type="button" className="sp-move" aria-label="Lên" disabled={busy || k === 0} onClick={() => move(i.id, -1)}>▲</button>
+        <button type="button" className="sp-move" aria-label="Xuống" disabled={busy || k === items.length - 1} onClick={() => move(i.id, 1)}>▼</button>
+      </div>)}
+      <div className="sp-btns">
+        <button type="button" className="sp-btn" onClick={() => setItemEdit({ name: '', unit: '', default_qty: '', active: true })}>➕ Một món</button>
+        <button type="button" className="sp-btn" onClick={() => setBulk('')}>📋 Thêm nhiều món</button>
+        <button type="button" className="sp-btn main" onClick={() => setListText(items.filter(i => i.active).map(itemLineText).join('\n'))}>✏️ Sửa cả danh sách</button>
+      </div>
+      <p className="sp-mute sp-small" style={{ marginTop: 8 }}>Món nhân viên gõ thêm lúc gọi (＋ Món khác) chỉ nằm trong đơn đó, không tự vào danh sách.</p>
     </div>
-    <div className="sp-btns">
-      <button type="button" className="sp-btn" onClick={() => setItemEdit({ name: '', unit: '', default_qty: '', active: true })}>➕ Một món</button>
-      <button type="button" className="sp-btn main" onClick={() => setBulk('')}>📋 Thêm nhiều món</button>
-    </div>
-    <p className="sp-mute sp-small" style={{ marginTop: 8 }}>Số nhỏ dưới tên = số lượng mỗi lần nhân viên bấm món. Bấm món để sửa / ẩn. Nhân viên gõ món mới khi gọi thì món đó tự vào danh sách.</p></div>
+    {listText !== null && <Sheet title="Sửa cả danh sách" onClose={() => setListText(null)}>
+      <p className="sp-mute">Mỗi dòng một món: <b>tên, số mỗi lần bấm, đơn vị</b> (vd: <i>Tiêu xay 0,5 kg</i>). Sửa tên, đổi thứ tự dòng, thêm dòng mới tuỳ ý. <b>Dòng nào xoá đi thì món đó bị xoá khỏi danh sách</b> (đơn cũ vẫn giữ nguyên).</p>
+      <textarea className="sp-field" rows={14} value={listText} onChange={e => setListText(e.target.value)} />
+      {msg?.key === 'list' && msg.err && <div className="sp-msg err">{msg.text}</div>}
+      <div className="sp-btns"><button type="button" className="sp-btn main block" disabled={!listText.trim()} onClick={async () => {
+        try {
+          const j = await api({ action: 'replace_items', text: listText });
+          setMsg({ key: 'item', text: `Đã lưu danh sách: ${j.total} món${j.added ? `, thêm ${j.added}` : ''}${j.removed ? `, xoá ${j.removed}` : ''} ✓` }); setListText(null); await reload();
+        } catch (e) { setMsg({ key: 'list', err: true, text: e.message }); }
+      }}>Lưu danh sách</button></div>
+    </Sheet>}
     {bulk !== null && <Sheet title="Thêm nhiều món" onClose={() => setBulk(null)}>
       <p className="sp-mute">Mỗi dòng một món: tên, số lượng mặc định, đơn vị. Món đã có thì cập nhật số và đơn vị.</p>
       <textarea className="sp-field" rows={8} placeholder={'Muối 1 kg\nTiêu xay 0,5 kg\nRau răm 2 bó\nNước mắm 2 chai'} value={bulk} onChange={e => setBulk(e.target.value)} />
@@ -566,6 +661,10 @@ function SetupTab({ data, reload }) {
       <div className="sp-btns"><button type="button" className="sp-btn main block" onClick={async () => {
         if (await run({ action: 'save_item', id: itemEdit.id, name: itemEdit.name, unit: itemEdit.unit, active: itemEdit.active, default_qty: String(itemEdit.default_qty || '').replace(',', '.') }, 'Đã lưu món ✓', 'item')) setItemEdit(null);
       }}>Lưu</button></div>
+      {itemEdit.id && <div className="sp-btns"><button type="button" className="sp-btn bad block" onClick={async () => {
+        if (!window.confirm(`Xoá "${itemEdit.name}" khỏi danh sách? Đơn cũ vẫn giữ nguyên.`)) return;
+        if (await run({ action: 'delete_item', id: itemEdit.id }, `Đã xoá ${itemEdit.name}`, 'item')) setItemEdit(null);
+      }}>🗑 Xoá món này</button></div>}
     </Sheet>}
   </>;
 }

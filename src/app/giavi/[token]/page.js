@@ -6,7 +6,8 @@
  */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { STATE_LABELS, addedLater, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shortTime, supplierCanPrice } from '@/lib/spiceOrders.mjs';
+import { STATE_LABELS, addedLater, lineAmount, lineCheck, lineQty, logLine, missingPrices, orderState, orderTotal, shortTime, supplierCanPrice } from '@/lib/spiceOrders.mjs';
+import { CheckBadge, DayCard } from '../../admin/spices/SpiceShared';
 import '../../admin/spices/spices.css';
 
 const money = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
@@ -132,6 +133,7 @@ function SupplierView() {
     {card(single)}
     <h2>Tổng với quán</h2>
     {tiles}
+    {data.days?.[0] && <><h2>📅 Đối soát ngày gần nhất</h2><DayCard day={data.days[0]} /></>}
     {(groups.open.length > 1 || groups.done.length > 0) && <button type="button" className="sp-btn block" onClick={() => setShowAll(true)}>
       Xem tất cả đơn của bạn{groups.open.length > 1 ? ` (${groups.open.length - (single.received_at || single.cancelled_at ? 0 : 1)} đơn khác đang chờ)` : ''}
     </button>}
@@ -149,6 +151,10 @@ function SupplierView() {
     {groups.done.length ? groups.done.map(card) : <p className="sp-empty">Chưa có.</p>}
 
     {groups.cancelled.length > 0 && <Fold head={`Đơn quán đã huỷ (${groups.cancelled.length})`}>{groups.cancelled.map(card)}</Fold>}
+
+    <h2>📅 Đối soát từng ngày</h2>
+    <p className="sp-mute">Bấm từng ngày để xem quán nhận đủ / thiếu / dư / sai món nào, tiền ngày đó và quán còn nợ tới hết ngày.</p>
+    {data.days?.length ? data.days.map((d, i) => <DayCard key={d.date} day={d} initial={i === 0} />) : <p className="sp-empty">Chưa có ngày nào.</p>}
 
     <h2>Các lần quán trả tiền</h2>
     {data.payments.length ? <div className="sp-card"><ul className="sp-log">{data.payments.map((p, i) => <li key={i}>
@@ -192,7 +198,10 @@ function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave,
             <span className="sp-b">{qtyText(l.qty)} {l.unit}</span>
           </div>
           {later && <span className="added">➕ {l.added_by || 'Nhân viên'} thêm lúc {shortTime(l.added_at)}</span>}
-          {l.received_qty !== null && l.received_qty !== undefined && <div className="meta short">Quán nhận {qtyText(got)} {l.unit} (gọi {qtyText(l.qty)})</div>}
+          {order.received_at && !order.cancelled_at && (() => { const c = lineCheck(order.items[i]); return <div>
+            <CheckBadge check={c.check} diff={c.diff} unit={l.unit} note={c.note} />
+            {c.check !== 'ok' && <span className="sp-mute sp-small"> quán nhận {qtyText(got)} {l.unit}</span>}
+          </div>; })()}
           {editable
             ? <div className="sp-price">
                 <span className="unit">Giá 1 {l.unit || 'phần'}</span>
