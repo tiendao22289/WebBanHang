@@ -22,6 +22,18 @@ CREATE TABLE IF NOT EXISTS public.spice_items (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS spice_items_name ON public.spice_items (lower(name));
+-- Số lượng mặc định khi bấm món (vd Tiêu 0,5 kg) và thứ tự chủ quán xếp (2026-11-25).
+ALTER TABLE public.spice_items ADD COLUMN IF NOT EXISTS default_qty numeric CHECK (default_qty IS NULL OR (default_qty > 0 AND default_qty <= 10000));
+ALTER TABLE public.spice_items ADD COLUMN IF NOT EXISTS sort integer NOT NULL DEFAULT 0;
+-- Danh sách gia vị hay gọi, chỉ thêm khi danh sách đang trống (chủ quán xoá / ẩn món thì chạy lại không thêm lại).
+INSERT INTO public.spice_items (name, unit, default_qty, sort)
+SELECT v.name, v.unit, v.qty, v.sort FROM (VALUES
+  ('Muối', 'kg', 1, 1), ('Đường', 'kg', 2, 2), ('Bột ngọt', 'kg', 1, 3), ('Hạt nêm', 'gói', 1, 4), ('Tiêu xay', 'kg', 0.5, 5),
+  ('Ớt', 'kg', 1, 6), ('Tỏi', 'kg', 1, 7), ('Hành tím', 'kg', 1, 8), ('Sả', 'kg', 1, 9), ('Gừng', 'kg', 0.5, 10),
+  ('Chanh', 'kg', 2, 11), ('Hành lá', 'kg', 0.5, 12), ('Rau răm', 'bó', 2, 13), ('Ngò gai', 'bó', 2, 14), ('Nước mắm', 'chai', 2, 15),
+  ('Dầu ăn', 'can', 1, 16), ('Bơ', 'hộp', 1, 17), ('Sa tế', 'hũ', 2, 18), ('Tương ớt', 'chai', 2, 19), ('Me', 'kg', 0.5, 20)
+) AS v(name, unit, qty, sort)
+WHERE NOT EXISTS (SELECT 1 FROM public.spice_items);
 
 -- items: [{ name, unit, qty, received_qty, price, old_price, added_by, added_at }] (src/lib/spiceOrders.mjs). total = tiền theo giá đang có.
 -- log: lịch sử để sau không tranh cãi [{ at, by, who ('staff'|'supplier'), type, ... }] — ai gọi, thêm món, đổi giá, nhận, huỷ, lúc nào.

@@ -170,3 +170,18 @@ textarea.sp-field { min-height: 64px; resize: vertical; }
 }
 @media (prefers-reduced-motion: reduce) { .sp-sheet, .sp-sheet-bg { animation: none; } }
 .sp-fold-tag { flex: 0 0 auto; font-size: 13px; font-weight: 700; color: var(--sp-blue); background: var(--sp-blue-soft); border-radius: 999px; padding: 2px 10px; }
+
+/* Ô chọn món nhanh */
+.sp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 8px; padding-top: 8px; }
+@media (max-width: 340px) { .sp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 560px) { .sp-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.sp-cell { position: relative; }
+.sp-cell .add { width: 100%; min-height: 70px; border: 1px solid var(--sp-line); border-radius: 12px; background: #fff; padding: 8px 4px; text-align: center; color: var(--sp-text);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
+.sp-cell .add:active { transform: scale(.97); }
+.sp-cell .add .nm { font-weight: 700; font-size: 15px; line-height: 1.2; word-break: break-word; }
+.sp-cell .add small { font-size: 12px; color: var(--sp-mute); }
+.sp-cell .add small.pr { color: var(--sp-main-dark); font-weight: 600; }
+.sp-cell.on .add { border: 2px solid var(--sp-main); background: var(--sp-main-soft); }
+.sp-cell .badge { position: absolute; top: -9px; right: -4px; background: var(--sp-main); color: #fff; border-radius: 999px; font-size: 12px; font-weight: 800; padding: 2px 8px; pointer-events: none; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-cell .minus { position: absolute; top: -10px; left: -6px; width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--sp-line); background: #fff; font-size: 20px; font-weight: 800; line-height: 1; color: var(--sp-text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }

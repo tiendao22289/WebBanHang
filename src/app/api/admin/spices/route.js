@@ -12,7 +12,8 @@
  *   receive { id, updated_at, received: [số nhận từng dòng | null = đủ] } — ai cũng được, chỉ một lần
  *   cancel { id, reason } — người gọi (đơn chưa nhận) hoặc quản lý / admin
  *   set_prices { id, updated_at, prices: [{ index, price }] } — admin, sửa mọi lúc
- *   save_supplier { id?, name, phone, active } · new_link { id } · save_item { id?, name, unit, active } — admin
+ *   save_supplier { id?, name, phone, active } · new_link { id } · save_item { id?, name, unit, default_qty, active } — admin
+ *   save_items { text } — admin dán nhiều món một lần ("Muối 2 kg" mỗi dòng), món đã có thì cập nhật số / đơn vị
  *   pay { supplier_id, amount, method, paid_date, note } · delete_payment { id } — admin
  */
 import { NextResponse } from 'next/server';
@@ -20,7 +21,7 @@ import { randomBytes } from 'node:crypto';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { nowMs } from '@/lib/trueTime.mjs';
 import {
-  addLines, applyPrices, buildLines, cancelOrder, cleanName, createOrderRow, itemKey, lastPrices, receiveOrder,
+  addLines, applyPrices, buildLines, parseItemLines, parseQty, cancelOrder, cleanName, createOrderRow, itemKey, lastPrices, receiveOrder,
   spiceStats, statsFrom, supplierBalances, vnDateOf,
 } from '@/lib/spiceOrders.mjs';
 
@@ -211,7 +212,9 @@ export async function POST(request) {
       const name = cleanName(body.name);
       if (!name) return fail('Nhập tên món.');
       if (body.id && !UUID.test(String(body.id))) return fail('Không thấy món.');
-      const row = { name, unit: cleanName(body.unit, 20) || null, active: body.active !== false };
+      const qty = body.default_qty === '' || body.default_qty === null || body.default_qty === undefined ? null : parseQty(String(body.default_qty));
+      if (qty === null && body.default_qty !== '' && body.default_qty !== null && body.default_qty !== undefined) return fail('Số lượng mặc định không hợp lệ.');
+      const row = { name, unit: cleanName(body.unit, 20) || null, default_qty: qty, active: body.active !== false };
       const { data: all, error: readError } = await db.from('spice_items').select('id, name');
       if (readError) throw readError;
       if ((all || []).some(i => itemKey(i.name) === itemKey(name) && i.id !== body.id)) return fail('Đã có món này.');
@@ -219,6 +222,31 @@ export async function POST(request) {
       const { data, error } = await q.select('*');
       if (error) throw error;
       return ok({ item: data?.[0] || null });
+    }
+
+    if (body.action === 'save_items') {
+      const list = parseItemLines(body.text);
+      if (!list.length) return fail('Chưa có món nào. Mỗi dòng một món, vd: Muối 2 kg');
+      const { data: all, error: readError } = await db.from('spice_items').select('id, name, sort');
+      if (readError) throw readError;
+      const byKey = new Map((all || []).map(i => [itemKey(i.name), i]));
+      let sort = Math.max(0, ...(all || []).map(i => Number(i.sort) || 0));
+      let added = 0, updated = 0;
+      for (const it of list) {
+        const old = byKey.get(itemKey(it.name));
+        const patch = { ...(it.unit ? { unit: it.unit } : {}), ...(it.qty !== null ? { default_qty: it.qty } : {}), active: true };
+        if (old) {
+          const { error } = await db.from('spice_items').update(patch).eq('id', old.id);
+          if (error) throw error;
+          updated += 1;
+        } else {
+          sort += 1;
+          const { error } = await db.from('spice_items').insert({ name: it.name, unit: it.unit || null, default_qty: it.qty, sort, active: true });
+          if (error) throw error;
+          added += 1;
+        }
+      }
+      return ok({ added, updated });
     }
 
     if (body.action === 'pay') {
