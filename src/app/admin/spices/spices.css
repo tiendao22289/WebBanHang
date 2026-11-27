@@ -470,3 +470,16 @@ textarea.sp-field.sp-note-in:focus { min-height: 72px; }
   .sp-drawer-list .sp-qty .q { min-width: 34px; font-size: 14px; }
   .sp-drawer .sp-btn.main { min-height: 42px; font-size: 14px; padding: 6px 8px; }
 }
+/* Thanh món nửa màn hình: mỗi món MỘT hàng gọn (tên trái, − số + phải), bỏ dòng "+1 kg" */
+@media (max-width: 640px) {
+  .sp-drawer-list li { flex-wrap: nowrap; gap: 4px; padding: 3px 0 3px 4px; min-height: 40px; }
+  .sp-drawer-list .nm { flex: 1 1 auto; padding: 4px 0; }
+  .sp-drawer-list .nm b { font-size: 13px; line-height: 1.2; }
+  .sp-drawer-list .nm small { display: none; }
+  .sp-drawer-list .add, .sp-drawer-list .sp-qty { margin: 0; }
+  .sp-drawer-list .add { width: 28px; height: 28px; font-size: 18px; }
+  .sp-drawer-list .sp-qty { gap: 2px; }
+  .sp-drawer-list .sp-qty button { width: 26px; height: 26px; font-size: 15px; border-radius: 7px; }
+  .sp-drawer-list .sp-qty .q { min-width: 26px; font-size: 13px; }
+  .sp-drawer-list .sp-qty .q small { font-size: 9px; }
+}
