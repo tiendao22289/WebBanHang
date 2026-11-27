@@ -12,6 +12,7 @@
  * POST { t, id, deliver_to: <mã nhân viên> } → báo đã giao hàng cho nhân viên đó (đổi được đến khi quán nhận); GET trả staff [{ id, name }].
  * GET còn trả history: mọi đơn quán đã nhận (gọn) để chủ gia vị thống kê đã / chưa thanh toán, số lượng từng món.
  */
+import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { statusDatabase } from '@/lib/statusAuth';
 import { nowMs } from '@/lib/trueTime.mjs';
@@ -38,19 +39,21 @@ async function readAll(build) {
   }
 }
 
-// Nhân viên đang làm trong quán (chủ gia vị chọn người nhận hàng): chỉ tên, bỏ người đã nghỉ.
-async function shopStaff(db) {
+// Nhân viên đang làm trong quán (chủ gia vị chọn người nhận hàng): chỉ tên + mã riêng theo link (không lộ mã nhân viên thật),
+// bỏ người đã nghỉ. Mã đổi khi quán đổi link.
+const staffKey = (id, token) => createHash('sha256').update(`${token}:${id}`).digest('hex').slice(0, 16);
+async function shopStaff(db, token) {
   const { data, error } = await db.from('staff').select('id, full_name').order('full_name');
   if (error) throw error;
   const today = vnDay();
   const { data: gone } = await db.from('staff_departures').select('staff_id, last_day');
   const left = new Set((gone || []).filter(g => g.last_day && String(g.last_day).slice(0, 10) < today).map(g => g.staff_id));
-  return (data || []).filter(s => s.full_name && !left.has(s.id)).map(s => ({ id: s.id, name: s.full_name }));
+  return (data || []).filter(s => s.full_name && !left.has(s.id)).map(s => ({ id: s.id, key: staffKey(s.id, token), name: s.full_name }));
 }
 
 async function supplierOf(db, token) {
   if (!TOKEN.test(String(token || ''))) return null;
-  const { data, error } = await db.from('spice_suppliers').select('id, name, active').eq('token', token).maybeSingle();
+  const { data, error } = await db.from('spice_suppliers').select('id, name, active, token').eq('token', token).maybeSingle();
   if (error) throw error;
   return data?.active ? data : null;
 }
@@ -79,14 +82,14 @@ export async function GET(request) {
     const [all, payments, staff] = await Promise.all([
       readAll(() => db.from('spice_orders').select('*').eq('supplier_id', supplier.id).order('created_at', { ascending: false })),
       readAll(() => db.from('spice_payments').select('supplier_id, amount, method, paid_date, note, created_at').eq('supplier_id', supplier.id).order('paid_date', { ascending: false })),
-      shopStaff(db),
+      shopStaff(db, supplier.token),
     ]);
     const orders = all.filter(o => o.created_at >= since || (!o.received_at && !o.cancelled_at));
     return NextResponse.json({
       supplier: { name: supplier.name }, summary: supplierSummary(all, payments),
       orders: orders.map(view), payments: payments.slice(0, 60).map(({ supplier_id: _s, ...p }) => p),
       days: supplierDays(all, payments, { from: vnDateOf(since) }),
-      staff,
+      staff: staff.map(({ key, name }) => ({ id: key, name })),
       history: all.filter(o => o.received_at || o.cancelled_at).map(slim),
     }, { headers });
   } catch (error) {
@@ -129,7 +132,8 @@ export async function POST(request) {
       const history = await readAll(() => db.from('spice_orders').select('id, supplier_id, items, created_at, cancelled_at').eq('supplier_id', supplier.id).order('created_at', { ascending: false }));
       result = supplierAddLines(order, body.add, { last: lastPrices(history, supplier.id), by: supplier.name, at });
     } else if (body.deliver_to !== undefined) {
-      const who = UUID.test(String(body.deliver_to || '')) ? (await shopStaff(db)).find(x => x.id === body.deliver_to) : null;
+      const key = String(body.deliver_to || '');
+      const who = /^[\da-f]{16}$/.test(key) ? (await shopStaff(db, body.t)).find(x => x.key === key) : null;
       if (!who) return fail('Chọn nhân viên nhận hàng.');
       result = deliverOrder(order, who, { by: supplier.name, at });
     } else if (typeof body.paid === 'boolean') {

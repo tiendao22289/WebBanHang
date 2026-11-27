@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import * as spice from '../src/lib/spiceOrders.mjs';
 import { dailyReportText, dayCostTotal, summarizeMonth, costParts } from '../src/lib/ownerFinance.mjs';
@@ -248,7 +248,7 @@ function adminApi(state, who) {
   });
 }
 function supplierApi(state) {
-  return vm.runInNewContext(`${SUPPLIER_SRC}\n({ GET, POST })`, { ...GLOBALS, ...spice, NextResponse, nowMs: () => state.now, vnDay: () => new Date(state.now + 7 * 3600000).toISOString().slice(0, 10), statusDatabase: () => fakeDb(state) });
+  return vm.runInNewContext(`${SUPPLIER_SRC}\n({ GET, POST })`, { ...GLOBALS, ...spice, NextResponse, createHash, nowMs: () => state.now, vnDay: () => new Date(state.now + 7 * 3600000).toISOString().slice(0, 10), statusDatabase: () => fakeDb(state) });
 }
 const post = (api, body) => api.POST({ url: 'http://x/api', json: async () => body });
 const get = (api, qs = '') => api.GET({ url: `http://x/api${qs}` });
@@ -922,9 +922,11 @@ test('máy chủ: chủ gia vị giao hàng cho một nhân viên — người �
   const page = (await get(supplier, `?t=${sup.token}`)).body;
   // Thấy tên nhân viên đang làm (người đã nghỉ thì không).
   assert.deepEqual(page.staff.map(x => x.name).sort(), ['Chủ quán', 'Quản lý', 'Thy']);
-  assert.match((await post(supplier, { t: sup.token, id: o.id, deliver_to: USERS.staff2.id })).body.error, /Chọn nhân viên/);
+  for (const u of Object.values(USERS)) assert.ok(!JSON.stringify(page).includes(u.id), 'không lộ mã nhân viên thật');
+  const keyOf = name => page.staff.find(x => x.name === name).id;
+  assert.match((await post(supplier, { t: sup.token, id: o.id, deliver_to: USERS.staff2.id })).body.error, /Chọn nhân viên/); // mã thật / người đã nghỉ: không nhận
   assert.match((await post(supplier, { t: sup.token, id: o.id, deliver_to: 'x' })).body.error, /Chọn nhân viên/);
-  const d = await post(supplier, { t: sup.token, id: o.id, deliver_to: USERS.staff.id });
+  const d = await post(supplier, { t: sup.token, id: o.id, deliver_to: keyOf('Thy') });
   assert.equal(d.status, 200);
   assert.equal(d.body.order.delivered_to_name, 'Thy');
   assert.equal('delivered_to' in d.body.order, false, 'không lộ mã nhân viên');
@@ -940,9 +942,16 @@ test('máy chủ: chủ gia vị giao hàng cho một nhân viên — người �
   assert.equal(r2.status, 200);
   assert.equal(r2.body.order.received_by_name, 'Thy');
   // Nhận rồi thì không đổi người giao được.
-  assert.match((await post(supplier, { t: sup.token, id: o.id, deliver_to: USERS.manager.id })).body.error, /đã nhận/);
+  assert.match((await post(supplier, { t: sup.token, id: o.id, deliver_to: keyOf('Quản lý') })).body.error, /đã nhận/);
   // Quản lý luôn nhận được đơn giao cho người khác.
   const o2 = (await post(thy, { action: 'create', supplier_id: sup.id, lines: [{ name: 'Sả', qty: 1 }] })).body.order;
-  await post(supplier, { t: sup.token, id: o2.id, deliver_to: USERS.staff.id });
+  await post(supplier, { t: sup.token, id: o2.id, deliver_to: keyOf('Thy') });
+  assert.equal(state.spice_orders.find(x => x.id === o2.id).delivered_to, USERS.staff.id);
+  // Đổi link: mã cũ hết dùng.
+  const fresh = (await post(owner, { action: 'new_link', id: sup.id })).body.supplier;
+  const o3 = (await post(thy, { action: 'create', supplier_id: sup.id, lines: [{ name: 'Ớt', qty: 1 }] })).body.order;
+  assert.match((await post(supplier, { t: fresh.token, id: o3.id, deliver_to: keyOf('Thy') })).body.error, /Chọn nhân viên/);
+  // Hàng đã giao: người gọi (nhân viên) không tự huỷ được nữa, quản lý được.
+  assert.match((await post(thy, { action: 'cancel', id: o2.id })).body.error, /đã giao hàng/);
   assert.equal((await post(mgr, { action: 'receive', id: o2.id, received: [{ index: 0, qty: 1 }] })).status, 200);
 });

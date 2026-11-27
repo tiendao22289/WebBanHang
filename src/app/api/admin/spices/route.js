@@ -183,6 +183,7 @@ export async function POST(request) {
       } else if (body.action === 'cancel') {
         if (order.received_at && !isAdmin) return fail('Đơn đã nhận hàng, chỉ chủ quán huỷ được.', 403);
         if (!canManage && order.created_by !== user.id) return fail('Chỉ người gọi đơn hoặc quản lý huỷ được.', 403);
+        if (!canManage && order.delivered_to) return fail('Chủ gia vị đã giao hàng — chỉ quản lý hoặc chủ quán huỷ được.', 403);
         result = cancelOrder(order, { by, at, reason: str(body.reason, 200), owner: isAdmin && !!order.received_at });
       } else {
         if (!isAdmin) return fail('Chỉ chủ quán sửa giá ở đây.', 403);

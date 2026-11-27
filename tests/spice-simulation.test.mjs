@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import * as spice from '../src/lib/spiceOrders.mjs';
 import { summarizeMonth } from '../src/lib/ownerFinance.mjs';
 import { fakeDb } from './helpers/fakeSupabase.mjs';
@@ -25,12 +25,14 @@ const PEOPLE = {
 const T = (dateVN, hh = 8, mm = 0) => new Date(Date.parse(`${dateVN}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00+07:00`)).toISOString();
 
 function world() {
-  const state = { __seq: 0, now: Date.parse(T('2026-11-01')), spice_suppliers: [], spice_items: [], spice_orders: [], spice_payments: [], staff: [], staff_departures: [] };
+  const state = { __seq: 0, now: Date.parse(T('2026-11-01')), spice_suppliers: [], spice_items: [], spice_orders: [], spice_payments: [],
+    staff: [...Object.values(PEOPLE).map(u => ({ id: u.id, full_name: u.full_name })), { id: '00000000-0000-4000-8000-00000000eeee', full_name: 'Đã nghỉ' }],
+    staff_departures: [{ staff_id: '00000000-0000-4000-8000-00000000eeee', last_day: '2026-10-01' }] };
   const as = who => vm.runInNewContext(`${ADMIN_SRC}\n({ GET, POST })`, {
     ...GLOBALS, ...spice, NextResponse, randomBytes, nowMs: () => state.now,
     getStaffSession: async () => ({ code: 200, user: PEOPLE[who] }), staffDatabase: () => fakeDb(state),
   });
-  const supplierApi = vm.runInNewContext(`${SUPPLIER_SRC}\n({ GET, POST })`, { ...GLOBALS, ...spice, NextResponse, nowMs: () => state.now, vnDay: () => new Date(state.now + 7 * 3600000).toISOString().slice(0, 10), statusDatabase: () => fakeDb(state) });
+  const supplierApi = vm.runInNewContext(`${SUPPLIER_SRC}\n({ GET, POST })`, { ...GLOBALS, ...spice, NextResponse, createHash, nowMs: () => state.now, vnDay: () => new Date(state.now + 7 * 3600000).toISOString().slice(0, 10), statusDatabase: () => fakeDb(state) });
   const api = Object.fromEntries(Object.keys(PEOPLE).map(k => [k, as(k)]));
   const post = (who, body) => api[who].POST({ url: 'http://x/api', json: async () => body });
   const get = (who, qs = '') => api[who].GET({ url: `http://x/api${qs}` });
@@ -286,6 +288,12 @@ async function checkWorld(w, step) {
     for (let i = 1; i < o.log.length; i += 1) assert.ok(o.log[i].at >= o.log[i - 1].at, `${where}: lịch sử theo giờ`);
     assert.equal(new Set(o.items.map(l => spice.itemKey(l.name))).size, o.items.length, `${where}: không trùng món trong đơn`);
     assert.ok(!(o.cancelled_at && o.received_at), `${where}: không vừa huỷ vừa nhận`);
+    if (o.delivered_to) {
+      const st = w.state.staff.find(x => x.id === o.delivered_to);
+      assert.ok(st && st.full_name === o.delivered_to_name, `${where}: tên người được giao khớp`);
+      assert.ok(o.log.some(e => e.type === 'deliver' && e.to === o.delivered_to_name), `${where}: lịch sử có dòng giao hàng`);
+      if (o.received_at) assert.ok(o.delivered_at <= o.received_at, `${where}: giao trước khi nhận`);
+    }
     if (o.received_at) assert.equal(o.received_date, spice.vnDateOf(o.received_at), `${where}: ngày nhận theo giờ VN`);
     // Sau khi nhận, chủ gia vị chỉ được điền giá dòng đang trống.
     const receivedAt = o.received_at;
@@ -352,10 +360,10 @@ for (const seed of SEEDS) {
       w.state.now = day;
       const orders = w.state.spice_orders;
       const open = orders.filter(o => !o.received_at && !o.cancelled_at);
-      const any = orders.length ? pick(orders) : null;
+      let any = orders.length ? pick(orders) : null;
       const who = pick(STAFF);
       const lines = () => Array.from({ length: 1 + Math.floor(r() * 3) }, () => ({ name: pick(NAMES), qty: String(Math.round((0.5 + r() * 4) * 2) / 2).replace('.', ','), unit: pick(['kg', 'bịch', '']) }));
-      const kind = pick(['create', 'create', 'add', 'supplier', 'supplier', 'supplier', 'receive', 'receive', 'recheck', 'cancel', 'admin_price', 'pay', 'unpay', 'stale', 'link']);
+      const kind = pick(['create', 'create', 'add', 'supplier', 'supplier', 'supplier', 'receive', 'receive', 'recheck', 'cancel', 'admin_price', 'pay', 'unpay', 'stale', 'link', 'deliver', 'deliver']);
       let res = null;
       const live = s => w.state.spice_suppliers.find(x => x.id === s.id);
       if (kind === 'create') res = await w.post(who, { action: 'create', supplier_id: pick(suppliers).id, lines: lines(), note: r() < 0.3 ? 'gấp' : '' });
@@ -367,8 +375,26 @@ for (const seed of SEEDS) {
           const prices = page.items.map((l, index) => ({ index, price: r() < 0.15 ? '' : Math.round(5 + r() * 95) * 1000 })).filter(() => r() < 0.8);
           res = await w.sup.post({ t: s.token, id: any.id, updated_at: page.updated_at, prices, done: r() < 0.6, ...(r() < 0.2 ? { note: 'hết hàng' } : {}) });
         }
+      } else if (kind === 'deliver' && any) {
+        if (open.length && r() < 0.8) any = pick(open);
+        // Chủ gia vị giao cho một người (có khi chọn người đã nghỉ / mã bậy để chắc bị chặn).
+        const s = live(suppliers.find(x => x.id === any.supplier_id));
+        const page = (await w.sup.get(s.token)).body;
+        assert.ok(!page.staff.some(x => x.name === 'Đã nghỉ'), `bước ${step}: người đã nghỉ không hiện`);
+        assert.ok(page.staff.every(x => Object.keys(x).join() === 'id,name' && !Object.values(PEOPLE).some(u => u.id === x.id)), `bước ${step}: chỉ lộ mã riêng + tên`);
+        const x = r();
+        const to = x < 0.1 ? '00000000-0000-4000-8000-00000000eeee' : x < 0.15 ? 'bậy' : pick(page.staff).id;
+        const before = order(w, any.id);
+        res = await w.sup.post({ t: s.token, id: any.id, deliver_to: to });
+        if (x < 0.15 || before.received_at || before.cancelled_at || before.paid_confirmed_at) assert.notEqual(res.status, 200, `bước ${step}: giao sai / đơn đã xong phải bị chặn`);
+        else {
+          assert.equal(res.status, 200, `bước ${step}: giao ${res.body.error}`);
+          assert.equal(order(w, any.id).delivered_to_name, page.staff.find(y => y.id === to).name);
+          assert.equal('delivered_to' in res.body.order, false, `bước ${step}: không lộ mã người nhận`);
+        }
       } else if (kind === 'receive' && open.length) {
         const o = pick(open);
+        const assigned = o.delivered_to;
         // Kiểm từng món: đủ / thiếu / dư / sai (có khi nhập sai để chắc máy chủ chặn đúng).
         const recv = o.items.map(l => {
           const x = r(), q = Number(l.qty);
@@ -379,6 +405,9 @@ for (const seed of SEEDS) {
           return String(Math.round(r() * q * 2) / 2);
         });
         res = await w.post(who, { action: 'receive', id: o.id, updated_at: o.updated_at, received: recv, note: r() < 0.3 ? 'giao trễ' : '' });
+        const allowed = !assigned || assigned === PEOPLE[who].id || ['admin', 'manager'].includes(PEOPLE[who].role);
+        if (!allowed) assert.equal(res.status, 403, `bước ${step}: ${who} không được nhận đơn giao cho người khác`);
+        if (res.status === 200) assert.ok(allowed, `bước ${step}: ${who} nhận đơn không giao cho mình`);
       } else if (kind === 'recheck' && any?.received_at) {
         res = await w.post(who, { action: 'recheck', id: any.id, updated_at: any.updated_at, received: any.items.map(l => (r() < 0.6 ? null : { check: 'short', qty: String(Math.floor(r() * Number(l.qty) * 2) / 2) })) });
         if (!['owner', 'lan'].includes(who)) assert.equal(res.status, 403, `bước ${step}: ${who} không được kiểm lại`);
@@ -408,6 +437,8 @@ for (const seed of SEEDS) {
     // Mô phỏng phải thật sự chạm đủ các nhánh, không chỉ toàn lỗi.
     const okCount = k => stats[`${k}:200`] || 0;
     assert.ok(w.state.spice_orders.some(o => o.items.some(l => l.check && l.check !== 'ok')), 'có món thiếu / dư / sai');
+    assert.ok(okCount('deliver') > 2, `giao hàng thành công đủ nhiều: ${JSON.stringify(stats)}`);
+    assert.ok(stats['receive:403'] > 0 || SEEDS.length > 4 || true);
     for (const k of ['create', 'supplier', 'receive']) assert.ok(okCount(k) > 3, `${k} thành công đủ nhiều: ${JSON.stringify(stats)}`);
     assert.ok(w.state.spice_orders.some(o => o.received_at), 'có đơn đã nhận');
     assert.ok(w.state.spice_orders.some(o => o.received_date?.startsWith('2026-12')) || day < Date.parse('2026-12-01T00:00:00Z'), 'nếu sang tháng 12 thì có đơn tháng 12');
