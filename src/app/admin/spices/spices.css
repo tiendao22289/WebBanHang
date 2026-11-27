@@ -399,3 +399,34 @@ textarea.sp-field.sp-note-in:focus { min-height: 72px; }
 .sp-hist.cx { opacity: .7; }
 .sp-paidrow { margin-top: 8px; padding: 6px 10px; border-radius: 10px; background: #f8fafc; }
 .sp-ok-t { color: var(--sp-ok); font-weight: 700; }
+
+/* Trang quán: tab dạng nút gạt nhỏ (6 tab = 2 hàng × 3, 3 tab = 1 hàng) */
+.sp-seg.six, .sp-seg.three { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 10px; }
+.sp-seg.six button, .sp-seg.three button { position: relative; min-height: 36px; font-size: 14px; gap: 4px; padding: 0 2px; white-space: nowrap; }
+.sp-seg.six button span, .sp-seg.three button span { font-size: 13px; }
+@media (max-width: 420px) { .sp-seg.six button span, .sp-seg.three button span { display: none; } }
+@media (min-width: 560px) { .sp-seg.six { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+
+/* Ô chọn món thấp, gọn hơn để thấy được danh sách đã chọn */
+.sp-grid { gap: 10px 6px; }
+.sp-cell .add { min-height: 50px; padding: 5px 3px; border-radius: 10px; }
+.sp-cell .add .nm { font-size: 14px; }
+.sp-cell .add small { font-size: 11px; }
+.sp-cell .badge { top: -8px; font-size: 11px; padding: 1px 6px; }
+.sp-cell .minus { width: 26px; height: 26px; top: -9px; left: -5px; font-size: 17px; }
+
+/* Danh sách đã chọn: mỗi món một hàng (tên · − số + · đơn vị · ✕) */
+.sp-cart-h { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--sp-line); }
+.sp-cart-h .sp-btn.ghost { min-height: 32px; font-size: 13px; }
+.sp-cart.compact { margin-top: 2px; }
+.sp-cart.compact li { flex-wrap: nowrap; gap: 6px; padding: 5px 0; }
+.sp-cart.compact .nm { flex: 1 1 auto; min-width: 0; font-size: 15px; line-height: 1.2; word-break: break-word; }
+.sp-cart.compact .sp-qty { gap: 3px; flex: none; }
+.sp-cart.compact .sp-qty button { width: 34px; height: 34px; font-size: 19px; border-radius: 9px; }
+.sp-cart.compact .sp-qty input { width: 46px; height: 34px; font-size: 15px; border-radius: 9px; }
+.sp-cart.compact .sp-unit { flex: 0 0 50px; width: 50px; height: 34px; font-size: 14px; padding: 0 4px; border-radius: 9px; }
+.sp-cart.compact .sp-x { width: 30px; height: 30px; flex: none; font-size: 15px; border-radius: 8px; }
+.sp-cart-h.top { margin-top: 0; padding-top: 0; border-top: 0; }
+.sp-cart.compact { background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 2px 8px; }
+.sp-cart.compact li:last-child { border-bottom: 0; }
+.sp-pick-h { margin: 12px 0 4px; font-size: 13px; font-weight: 700; color: var(--sp-mute); }
