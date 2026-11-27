@@ -886,3 +886,27 @@ test('chủ gia vị báo Đã TT → chủ quán xác nhận mới trừ nợ; 
   assert.match((await post(supplier, { t: sup.token, id: ord.id, note: 'sửa' })).body.error, /khoá/);
   assert.equal((await post(supplier, { t: sup.token, ids: [ord.id], paid: false })).body.changed, 0);
 });
+
+test('máy chủ: quản lý thêm / sửa / xếp / xoá món được, nhưng không đụng chủ gia vị và tiền', async () => {
+  const state = newState();
+  const mgr = adminApi(state, 'manager'), thy = adminApi(state, 'staff');
+  state.spice_items.push({ id: 'i1', name: 'Muối', unit: 'kg', default_qty: 1, sort: 1, active: false });
+  assert.equal((await post(mgr, { action: 'save_item', name: 'Ớt', unit: 'kg' })).status, 200);
+  assert.equal((await post(mgr, { action: 'save_items', text: 'Tiêu 0,5 kg' })).status, 200);
+  const ot = state.spice_items.find(i => i.name === 'Ớt');
+  assert.equal((await post(mgr, { action: 'save_item', id: ot.id, name: 'Ớt hiểm', unit: 'kg' })).status, 200);
+  assert.equal((await post(mgr, { action: 'move_item', id: ot.id, dir: -1 })).status, 200);
+  assert.equal((await post(mgr, { action: 'delete_item', id: ot.id })).status, 200);
+  assert.ok(!state.spice_items.some(i => i.id === ot.id));
+  assert.equal((await post(mgr, { action: 'replace_items', text: 'Muối 1 kg\nTiêu 0,5 kg' })).status, 200);
+  // Quản lý thấy cả món đang ẩn (để sửa); nhân viên thì không.
+  state.spice_items.find(i => i.name === 'Tiêu').active = false;
+  assert.ok((await get(mgr)).body.items.some(i => i.active === false));
+  assert.ok((await get(thy)).body.items.every(i => i.active !== false));
+  // Không được: chủ gia vị, link, trả tiền.
+  for (const body of [{ action: 'save_supplier', name: 'X' }, { action: 'new_link', id: '00000000-0000-4000-8000-000000000001' },
+    { action: 'pay', supplier_id: '00000000-0000-4000-8000-000000000001', amount: 1000 }]) {
+    assert.equal((await post(mgr, body)).status, 403, body.action);
+  }
+  assert.equal((await post(thy, { action: 'save_item', name: 'Gừng' })).status, 403);
+});

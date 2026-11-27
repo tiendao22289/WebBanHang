@@ -17,7 +17,7 @@
  *   save_supplier { id?, name, phone, active } · new_link { id } · save_item { id?, name, unit, default_qty, active } — admin
  *   save_items { text } — admin dán nhiều món một lần ("Muối 2 kg" mỗi dòng), món đã có thì cập nhật số / đơn vị
  *   replace_items { text } — admin sửa CẢ danh sách bằng chữ: đúng thứ tự dòng, món không còn trong chữ bị xoá
- *   move_item { id, dir: -1 | 1 } · delete_item { id } — admin xếp / xoá món (đơn cũ giữ tên món, không ảnh hưởng)
+ *   move_item { id, dir: -1 | 1 } · delete_item { id } — quản lý / admin xếp / xoá món (đơn cũ giữ tên món, không ảnh hưởng)
  *   Món nhân viên gõ thêm khi gọi chỉ nằm trong đơn đó, không tự vào danh sách (danh sách do chủ quán quyết).
  *   pay { supplier_id, amount, method, paid_date, note } · delete_payment { id } — admin
  *   confirm_paid { ids, ok, method: cash|transfer (bắt buộc khi ok), note } — admin xác nhận (ok) / báo không đúng (ok=false) lời báo "đã nhận tiền" của chủ gia vị
@@ -71,11 +71,13 @@ async function updateOrder(db, order, patch, at) {
 const supplierHistory = (db, supplierId) => readAll(() => db.from('spice_orders').select('supplier_id, items, created_at, cancelled_at')
   .eq('supplier_id', supplierId).order('created_at', { ascending: false }));
 
+const ITEM_ACTIONS = new Set(['save_item', 'save_items', 'replace_items', 'move_item', 'delete_item']);
+
 export async function GET(request) {
   try {
     const s = await getStaffSession(request);
     if (s.code !== 200) return fail(s.code === 503 ? 'Không kiểm tra được đăng nhập.' : 'Cần đăng nhập.', s.code);
-    const user = s.user, isAdmin = user.role === 'admin';
+    const user = s.user, isAdmin = user.role === 'admin', canManage = isAdmin || user.role === 'manager';
     const db = staffDatabase(user.id);
     const params = new URL(request.url).searchParams;
     const today = vnDateOf(nowIso());
@@ -130,7 +132,7 @@ export async function GET(request) {
       me: { id: user.id, name: user.full_name, role: user.role }, today,
       // Mã link để nhân viên gửi cho chủ gia vị qua Zalo; ai đăng nhập cũng thấy.
       suppliers: list.filter(x => isAdmin || x.active).map(x => ({ id: x.id, name: x.name, phone: x.phone || '', token: x.token, active: x.active })),
-      items: (items.data || []).filter(i => isAdmin || i.active),
+      items: (items.data || []).filter(i => canManage || i.active), // quản lý cần thấy cả món đang ẩn để sửa
       orders, lastPrices: lastPricesOut, balances, payments: isAdmin ? payments : [],
     }, { headers });
   } catch (error) {
@@ -194,7 +196,8 @@ export async function POST(request) {
       return ok({ order: saved, ...(supplier ? { supplier } : {}) });
     }
 
-    if (!isAdmin) return fail('Chỉ chủ quán làm được việc này.', 403);
+    // Danh sách món: quản lý cũng thêm / sửa / xoá / xếp được. Chủ gia vị, tiền: chỉ chủ quán.
+    if (!isAdmin && !(canManage && ITEM_ACTIONS.has(body.action))) return fail('Chỉ chủ quán làm được việc này.', 403);
 
     if (body.action === 'save_supplier') {
       const name = cleanName(body.name);
