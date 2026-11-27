@@ -455,3 +455,18 @@ textarea.sp-field.sp-note-in:focus { min-height: 72px; }
 @media (prefers-reduced-motion: reduce) { .sp-drawer, .sp-drawer-bg { animation: none; } }
 .sp-fab.sp-fab-admin { background: #b45309; color: #fff; font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
 .sp-fab.sp-fab-admin span { font-size: 34px; font-weight: 300; margin-top: -3px; }
+/* Thanh món chỉ chiếm nửa màn hình; điện thoại: tên món một hàng, nút +/− hàng dưới cho vừa */
+.sp-drawer { width: max(50vw, 184px); max-width: 380px; padding-left: 10px; padding-right: 10px; gap: 6px; }
+.sp-drawer-h { font-size: 16px; }
+.sp-drawer .sp-field { min-height: 38px; padding: 6px 10px; font-size: 16px; }
+@media (max-width: 640px) {
+  .sp-drawer-list li { flex-wrap: wrap; gap: 0 4px; padding: 4px 2px; }
+  .sp-drawer-list .nm { flex: 1 1 100%; padding: 4px 2px 2px; }
+  .sp-drawer-list .nm b { font-size: 14px; }
+  .sp-drawer-list .nm small { font-size: 11px; }
+  .sp-drawer-list .add, .sp-drawer-list .sp-qty { margin-left: auto; margin-bottom: 4px; }
+  .sp-drawer-list .add { width: 32px; height: 32px; font-size: 20px; }
+  .sp-drawer-list .sp-qty button { width: 30px; height: 30px; font-size: 17px; }
+  .sp-drawer-list .sp-qty .q { min-width: 34px; font-size: 14px; }
+  .sp-drawer .sp-btn.main { min-height: 42px; font-size: 14px; padding: 6px 8px; }
+}
