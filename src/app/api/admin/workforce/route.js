@@ -575,6 +575,19 @@ async function readCycles(db, staffId = null) {
  * (hoặc từ đầu kỳ nếu kỳ bắt đầu sớm hơn), cùng công thức bảng lương; tháng đã chốt thì theo tiền từng ngày đã chốt.
  */
 /**
+ * Khoản phạt `id` có thuộc tháng lương đã chốt của người bị phạt không. Đã chốt thì không sửa / xoá: bảng lương tháng đó theo số chốt,
+ * sửa ở đây sẽ không khớp. → { missing } | { closed: khoản phạt } | {}.
+ */
+async function fineLock(db, id) {
+  const { data: v, error } = await db.from('payroll_violations').select('id, staff_id, month, year').eq('id', id).maybeSingle();
+  if (error) throw error;
+  if (!v) return { missing: true };
+  const { data: closed, error: ce } = await db.from('payroll_closes').select('staff_id').eq('year', v.year).eq('month', v.month).eq('staff_id', v.staff_id).maybeSingle();
+  if (ce) throw ce;
+  return closed ? { closed: v } : {};
+}
+
+/**
  * Tiền từng ngày (byDay) và các khoản (ứng, phạt, thưởng, chi hộ cộng lương) của một người trong tháng `k` đã nạp (loadPayrollMonth).
  * Tháng đã chốt: ngày có trong số chốt theo số chốt; ngày sau lúc chốt (số chốt chưa có) theo chấm công hiện tại — chốt giữa tháng
  * không làm mất các ngày sau đó khi trả lương theo kỳ / theo ngày chọn.
@@ -1342,6 +1355,9 @@ export async function POST(request) {
     // Sửa số tiền / lý do một khoản phạt đã ghi.
     if (body.action === 'edit_violation') {
       if (!UUID.test(body.id || '')) return fail('Thiếu khoản phạt.');
+      const lock = await fineLock(db, body.id);
+      if (lock.missing) return fail('Không tìm thấy khoản phạt.', 404);
+      if (lock.closed) return fail(`Lương tháng ${lock.closed.month}/${lock.closed.year} của người này đã chốt. Mở chốt người đó trước rồi mới sửa.`, 409);
       const patch = {};
       if ('amount' in body) {
         const amount = money(body.amount);
@@ -1849,6 +1865,8 @@ export async function POST(request) {
 
     if (body.action === 'delete_violation') {
       if (!UUID.test(body.id || '')) return fail('Thiếu khoản phạt.');
+      const lock = await fineLock(db, body.id);
+      if (lock.closed) return fail(`Lương tháng ${lock.closed.month}/${lock.closed.year} của người này đã chốt. Mở chốt người đó trước rồi mới xoá.`, 409);
       const r = await db.from('payroll_violations').delete().eq('id', body.id);
       if (r.error) throw r.error;
       // Xoá cả ngày / người ghi; khoản từ gợi ý chấm công thì gợi ý hiện lại để chủ xử lý lại.

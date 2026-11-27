@@ -1535,16 +1535,48 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
       {p.photo && <> · <a href={p.photo} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontWeight: 700 }}>📷 Xem ảnh</a></>}
       {seenText(p.seen_at)}</div>;
   };
+  // Sửa tiền / xoá từng khoản phạt ngay trong danh sách: lưu xong bảng lương tính lại. Lương tháng của người đó đã chốt thì chỉ xem
+  // (máy chủ cũng chặn) — mở chốt trước rồi sửa.
+  const fineMoneyCell = (v, m, locked) => {
+    const key = `fine:${v.id}`, priced = Number(v.amount) > 0, editing = drafts[key] !== undefined;
+    const save = () => {
+      const raw = String(draftOf(key, '')).replace(/\D/g, '');
+      if (!(Number(raw) > 0)) { alert('Nhập số tiền phạt. Muốn bỏ khoản này thì bấm 🗑.'); return; }
+      if (priced && Number(raw) === Number(v.amount)) { dropDrafts(key); return; }
+      editAction('edit_violation', { id: v.id, amount: raw }, null, key);
+    };
+    const iconBtn = { border: 'none', background: 'none', cursor: 'pointer', padding: '2px 4px', fontSize: '0.85rem', lineHeight: 1 };
+    if (locked) return <span style={{ color: priced ? '#dc2626' : '#b45309' }}>{priced ? `-${formatMoney(v.amount)}` : 'chưa định tiền'}</span>;
+    return (
+      <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+        {editing || !priced ? <>
+          <input style={{ ...moneyBox, width: 88, textAlign: 'right' }} inputMode="numeric" placeholder={priced ? '' : 'Định tiền'} aria-label="Tiền phạt"
+            autoFocus={editing} value={typedMoney(draftOf(key, ''))} onChange={e => setDraft(key, e.target.value.replace(/\D/g, ''))}
+            onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') dropDrafts(key); }} />
+          <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }} onClick={save}>Lưu</button>
+          {editing && priced && <button style={smallBtn} onClick={() => dropDrafts(key)}>Huỷ</button>}
+        </> : (
+          <button onClick={() => setDraft(key, String(Math.round(Number(v.amount))))} title="Bấm để sửa số tiền"
+            style={{ ...iconBtn, color: '#dc2626', fontWeight: 700, fontSize: 'inherit', borderBottom: '1px dashed #fca5a5', borderRadius: 0 }}>-{formatMoney(v.amount)} ✏️</button>
+        )}
+        <button style={iconBtn} title="Xoá khoản phạt" aria-label="Xoá khoản phạt" onClick={() => handleDeleteViolation(v.id, !!m?.kind)}>🗑</button>
+      </span>
+    );
+  };
   const finesPanel = s => {
     const list = finesOf(s.id), total = list.reduce((a, x) => a + Number(x.v.amount || 0), 0), warned = dismissedOf(s.id);
     const dayOf = iso => ddmm(new Date(Date.parse(iso) + 7 * 3600000).toISOString().slice(0, 10));
+    const locked = !!calcSalary(s.id).locked;
     return (
       <div style={{ background: '#fffafa', borderTop: '1px solid #fee2e2', padding: '10px 12px' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
           <strong style={{ fontSize: '0.85rem' }}>⚠️ Vi phạm tháng {selMonth}/{selYear} — {s.full_name}: {list.length} lỗi, trừ <span style={{ color: '#dc2626' }}>{formatMoney(total)}</span>
             {warned.length > 0 && <span style={{ color: '#1d4ed8' }}> · {warned.length} nhắc nhở</span>}</strong>
-          <button style={smallBtn} onClick={() => { setDetail(null); setActiveTab('violations'); }}>Sửa / xoá ở tab Vi phạm</button>
+          <button style={smallBtn} onClick={() => { setDetail(null); setVForm(p => ({ ...p, staff_id: s.id })); setActiveTab('violations'); }}>＋ Ghi lỗi mới</button>
           <button style={smallBtn} onClick={() => setDetail(null)}>Đóng</button>
+        </div>
+        <div style={{ fontSize: '0.74rem', color: locked ? '#b45309' : '#64748b', marginBottom: 6 }}>
+          {locked ? '🔒 Lương tháng này của người này đã chốt: mở chốt rồi mới sửa / xoá được.' : 'Bấm vào số tiền để sửa, 🗑 để xoá. Lưu xong bảng lương tự tính lại.'}
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table className="payroll-table detail-list" style={{ width: '100%', maxWidth: 640, fontSize: '0.8rem' }}>
@@ -1562,8 +1594,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                       {v.created_at ? ` lúc ${hhmm(v.created_at)} ${dayOf(v.created_at)}` : ''}
                     </div>
                   </td>
-                  <td className="detail-money" style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', verticalAlign: 'top', color: Number(v.amount) > 0 ? '#dc2626' : '#b45309', fontWeight: 700 }}>
-                    {Number(v.amount) > 0 ? `-${formatMoney(v.amount)}` : 'chưa định tiền'}
+                  <td className="detail-money" style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', verticalAlign: 'top', fontWeight: 700 }}>
+                    {fineMoneyCell(v, m, locked)}
                   </td>
                 </tr>
               ))}
@@ -2829,7 +2861,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
 
   // ── ADMIN VIEW ───────────────────────────────────────────────────────────────
   return (
-    <div className="payroll-page">
+    <div className="payroll-page wide">
       {rangeFor && <RangeSheet staff={rangeFor} defaultFrom={rangeDefaults(rangeFor.id).from} defaultTo={rangeDefaults(rangeFor.id).to} today={vnToday()}
         onClose={() => setRangeFor(null)} onDone={() => { fetchPayrollMonth(); fetchCycles(); }} />}
       {/* Gọn cho điện thoại: tên trang; người dùng + lúc cập nhật một dòng nhỏ. Dữ liệu tự tải. */}
