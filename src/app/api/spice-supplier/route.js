@@ -8,12 +8,13 @@
  *   Đơn chưa nhận: sửa giá mọi dòng; đơn đã nhận: chỉ điền được dòng còn trống giá (sửa giá thì báo chủ quán).
  * POST { t, id, updated_at, add: [{ name, unit, qty, price }] } → chủ gia vị tự thêm món (quán gọi thiếu), đơn chưa nhận.
  * POST { t, id, updated_at, paid: true | false } → chủ gia vị đánh dấu đơn đã nhận tiền / chưa (sổ riêng, mục Thống kê).
+ * POST { t, ids: [id…], paid: true | false } → đánh dấu nhiều đơn đã tích chọn một lần (đơn không hợp lệ thì bỏ qua, báo số đơn đã đổi).
  * GET còn trả history: mọi đơn quán đã nhận (gọn) để chủ gia vị thống kê đã / chưa thanh toán, số lượng từng món.
  */
 import { NextResponse } from 'next/server';
 import { statusDatabase } from '@/lib/statusAuth';
 import { nowMs } from '@/lib/trueTime.mjs';
-import { applyPrices, lastPrices, setSupplierPaid, supplierAddLines, supplierDays, supplierSummary, vnDateOf } from '@/lib/spiceOrders.mjs';
+import { applyPrices, lastPrices, orderTotal, setSupplierPaid, supplierAddLines, supplierDays, supplierSummary, vnDateOf } from '@/lib/spiceOrders.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,7 +52,7 @@ const view = o => ({
 });
 // Đơn đã nhận, gọn, cho mục Thống kê của chủ gia vị.
 const slim = o => ({
-  id: o.id, created_at: o.created_at, received_at: o.received_at, received_date: o.received_date, total: o.total,
+  id: o.id, created_at: o.created_at, received_at: o.received_at, received_date: o.received_date, total: o.total, cancelled_at: o.cancelled_at || null,
   supplier_paid_at: o.supplier_paid_at || null, updated_at: o.updated_at,
   items: (o.items || []).map(l => ({ name: l.name, unit: l.unit, qty: l.qty, received_qty: l.received_qty ?? null, price: l.price ?? null, check: l.check, by_supplier: !!l.by_supplier })),
 });
@@ -71,7 +72,7 @@ export async function GET(request) {
       supplier: { name: supplier.name }, summary: supplierSummary(all, payments),
       orders: orders.map(view), payments: payments.slice(0, 60).map(({ supplier_id: _s, ...p }) => p),
       days: supplierDays(all, payments, { from: vnDateOf(since) }),
-      history: all.filter(o => o.received_at && !o.cancelled_at).map(slim),
+      history: all.filter(o => o.received_at || o.cancelled_at).map(slim),
     }, { headers });
   } catch (error) {
     console.error('[spice-supplier] GET', error);
@@ -85,6 +86,22 @@ export async function POST(request) {
     const body = await request.json().catch(() => ({}));
     const supplier = await supplierOf(db, body.t);
     if (!supplier) return fail(BAD_LINK, 404);
+    if (Array.isArray(body.ids) && typeof body.paid === 'boolean') {
+      const ids = [...new Set(body.ids.map(String))].filter(id => UUID.test(id)).slice(0, 200);
+      if (!ids.length) return fail('Chưa chọn đơn nào.');
+      const { data: list, error: readError } = await db.from('spice_orders').select('*').eq('supplier_id', supplier.id).in('id', ids);
+      if (readError) throw readError;
+      const at = nowIso();
+      let changed = 0, total = 0;
+      for (const order of list || []) {
+        const r = setSupplierPaid(order, body.paid, { by: supplier.name, at });
+        if (r.error || !r.patch) continue;
+        const { data, error: saveError } = await db.from('spice_orders').update({ ...r.patch, updated_at: at }).eq('id', order.id).eq('updated_at', order.updated_at).select('id');
+        if (saveError) throw saveError;
+        if (data?.length) { changed += 1; total += orderTotal(order.items); }
+      }
+      return NextResponse.json({ ok: true, changed, total }, { headers });
+    }
     if (!UUID.test(String(body.id || ''))) return fail('Không thấy đơn.');
     const { data: order, error } = await db.from('spice_orders').select('*').eq('id', body.id).eq('supplier_id', supplier.id).maybeSingle();
     if (error) throw error;

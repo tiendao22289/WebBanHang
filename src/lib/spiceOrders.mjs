@@ -358,12 +358,15 @@ export function setSupplierPaid(order, paid, { by, at }) {
  * → { count, total, paid: { count, total }, unpaid: { count, total }, orders (mới trước), items: [{ name, unit, qty, amount, orders }] }
  */
 export function supplierOrderStats(orders, { paid = 'all', from = '', to = '9999' } = {}) {
-  const received = (orders || []).filter(o => !o.cancelled_at && o.received_at)
-    .map(o => ({ ...o, date: o.received_date || vnDateOf(o.received_at) }))
+  const dated = (orders || []).filter(o => o.received_at || o.cancelled_at)
+    .map(o => ({ ...o, date: o.received_at ? (o.received_date || vnDateOf(o.received_at)) : vnDateOf(o.cancelled_at) }))
     .filter(o => o.date >= from && o.date <= to);
+  const received = dated.filter(o => !o.cancelled_at && o.received_at);
+  // Đơn quán đã huỷ (để xem lại, không tính tiền).
+  const cancelledList = dated.filter(o => o.cancelled_at);
   const part = list => ({ count: list.length, total: list.reduce((s, o) => s + orderTotal(o.items), 0) });
   const paidList = received.filter(o => o.supplier_paid_at), unpaidList = received.filter(o => !o.supplier_paid_at);
-  const shown = paid === 'paid' ? paidList : paid === 'unpaid' ? unpaidList : received;
+  const shown = paid === 'paid' ? paidList : paid === 'unpaid' ? unpaidList : paid === 'cancelled' ? cancelledList : received;
   const items = new Map();
   for (const o of shown) for (const l of o.items || []) {
     const k = itemKey(l.name);
@@ -376,8 +379,8 @@ export function supplierOrderStats(orders, { paid = 'all', from = '', to = '9999
     items.set(k, it);
   }
   return {
-    ...part(shown), paid: part(paidList), unpaid: part(unpaidList),
-    orders: [...shown].sort((a, b) => String(b.received_at).localeCompare(String(a.received_at))),
+    ...part(shown), paid: part(paidList), unpaid: part(unpaidList), cancelled: part(cancelledList),
+    orders: [...shown].sort((a, b) => String(b.received_at || b.cancelled_at || b.created_at).localeCompare(String(a.received_at || a.cancelled_at || a.created_at))),
     items: [...items.values()].sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name, 'vi')),
   };
 }
