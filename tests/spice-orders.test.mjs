@@ -776,3 +776,38 @@ test('chủ quán huỷ đơn đã nhận (đơn thử / nhận nhầm): bắt b
   assert.ok(state.spice_orders[0].cancelled_at);
   assert.equal((await get(owner)).body.balances?.[sup.id]?.debt ?? 0, 0);
 });
+
+test('thống kê chủ gia vị: mục Đã huỷ riêng, không tính vào đã / chưa thanh toán', () => {
+  const list = [
+    { id: 'a', received_at: T(10), received_date: '2026-11-25', items: [{ name: 'Muối', qty: 1, price: 10000 }] },
+    { id: 'b', received_at: T(10), received_date: '2026-11-25', cancelled_at: T(12), items: [{ name: 'Ớt', qty: 1, price: 50000 }] },
+    { id: 'c', created_at: T(9), cancelled_at: T(9, 30), items: [{ name: 'Sả', qty: 2, price: null }] },
+  ];
+  const all = spice.supplierOrderStats(list);
+  assert.deepEqual([all.count, all.unpaid.count, all.cancelled.count, all.cancelled.total], [1, 1, 2, 50000]);
+  const cx = spice.supplierOrderStats(list, { paid: 'cancelled' });
+  assert.deepEqual(cx.orders.map(o => o.id), ['b', 'c']);
+});
+
+test('máy chủ: chủ gia vị tích nhiều đơn rồi đánh dấu đã thanh toán một lần', async () => {
+  const state = newState();
+  const owner = adminApi(state, 'admin'), thy = adminApi(state, 'staff'), supplier = supplierApi(state);
+  const sup = (await post(owner, { action: 'save_supplier', name: 'Cô Hai' })).body.supplier;
+  const other = (await post(owner, { action: 'save_supplier', name: 'Chú Ba' })).body.supplier;
+  const make = async s => {
+    const o = (await post(thy, { action: 'create', supplier_id: s.id, lines: [{ name: 'Muối', qty: 1 }] })).body.order;
+    await post(thy, { action: 'receive', id: o.id, updated_at: o.updated_at, received: [] });
+    return o.id;
+  };
+  const a = await make(sup), b = await make(sup), mine = await make(other);
+  const open = (await post(thy, { action: 'create', supplier_id: sup.id, lines: [{ name: 'Ớt', qty: 1 }] })).body.order.id;
+  const r = await post(supplier, { t: sup.token, ids: [a, b, mine, open, 'xx'], paid: true });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.changed, 2, 'chỉ đơn đã nhận của chính chủ gia vị này');
+  const byId = id => state.spice_orders.find(o => o.id === id);
+  assert.ok(byId(a).supplier_paid_at && byId(b).supplier_paid_at);
+  assert.equal(byId(mine).supplier_paid_at ?? null, null);
+  assert.equal(byId(open).supplier_paid_at ?? null, null);
+  assert.equal((await post(supplier, { t: sup.token, ids: [a], paid: false })).body.changed, 1);
+  assert.match((await post(supplier, { t: sup.token, ids: [], paid: true })).body.error, /Chưa chọn/);
+});

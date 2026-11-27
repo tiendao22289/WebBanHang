@@ -96,6 +96,19 @@ function SupplierView() {
     finally { setBusy(''); }
   }
 
+  // Tích nhiều đơn → đánh dấu đã / chưa thanh toán một lần.
+  async function bulkPaid(ids, paid) {
+    setNotice(null);
+    try {
+      const r = await fetch('/api/spice-supplier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t: token, ids, paid }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setNotice({ id: 'bulk', err: true, text: j.error || 'Không lưu được.' }); return false; }
+      setNotice({ id: 'bulk', text: `Đã đánh dấu ${j.changed} đơn ${paid ? 'đã thanh toán' : 'chưa thanh toán'} (${money(j.total)}) ✓` });
+      await load();
+      return true;
+    } catch { setNotice({ id: 'bulk', err: true, text: 'Mạng yếu, bấm lại.' }); return false; }
+  }
+
   async function save(order, done) {
     const draft = drafts[order.id] || { prices: {} };
     const prices = Object.entries(draft.prices).map(([index, v]) => ({ index: Number(index), price: v === '' ? null : Number(v) }));
@@ -139,7 +152,8 @@ function SupplierView() {
     || (!single && view === 'open' && groups.open.length === 1 ? groups.open[0] : null);
   const card = order => <OrderCard key={order.id} order={order} draft={drafts[order.id]} focus={order.id === focusId} busy={busy === order.id} inBar={active?.id === order.id} addReq={addReq?.id === order.id ? addReq.n : 0}
     notice={notice?.id === order.id ? notice : null} onPrice={setPrice} onNote={setNote} onSave={save} onUndo={() => drop(order.id)}
-    onAdd={(o, add) => post(o, { add }, `Đã thêm ${add.length} món ✓ Quán sẽ thấy khi nhận hàng.`)} />;
+    onAdd={(o, add) => post(o, { add }, `Đã thêm ${add.length} món ✓ Quán sẽ thấy khi nhận hàng.`)}
+    onPaid={(o, paid) => post(o, { paid }, paid ? 'Đã đánh dấu: đã thanh toán ✓' : 'Đã đánh dấu: chưa thanh toán')} />;
   // Tổng với quán: một thẻ gọn — số quán còn thiếu to bên trái, đã giao / đã trả nhỏ bên phải.
   const tiles = <div className="sp-sumbar">
     <div className="main">
@@ -152,7 +166,7 @@ function SupplierView() {
     </div>
   </div>;
   let bar = null;
-  if (active) {
+  if (active && view !== 'stats' && view !== 'days') {
     const d = drafts[active.id];
     const items = active.items.map((l, i) => (d && i in d.prices ? { ...l, price: d.prices[i] === '' ? null : Number(d.prices[i]) } : l));
     const miss = missingPrices(items);
@@ -215,14 +229,14 @@ function SupplierView() {
     </>}
 
     {view === 'stats' && <SupplierStats history={data.history || []} payments={data.payments} busyId={busy} notice={notice}
-      onPaid={(o, paid) => post(o, { paid }, paid ? 'Đã đánh dấu: đã thanh toán ✓' : 'Đã đánh dấu: chưa thanh toán')} />}
+      onPaid={(o, paid) => post(o, { paid }, paid ? 'Đã đánh dấu: đã thanh toán ✓' : 'Đã đánh dấu: chưa thanh toán')} onBulk={bulkPaid} />}
     <p className="sp-mute sp-small" style={{ textAlign: 'center', marginTop: 20 }}>Trang tự cập nhật. Lưu link này để mở lại lần sau.</p>
   </div>
   {bar}
   </div>;
 }
 
-function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notice, onPrice, onNote, onSave, onUndo, onAdd }) {
+function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notice, onPrice, onNote, onSave, onUndo, onAdd, onPaid }) {
   const [adding, setAdding] = useState(null); // [{ name, qty, unit, price }] đang thêm
   const addRef = useRef(null);
   // Bấm nút + nổi: mở ô thêm món của đơn này và cuộn tới, con trỏ vào ô tên món.
@@ -254,6 +268,11 @@ function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notic
       {order.cancelled_at && <span>✖ Huỷ {shortTime(order.cancelled_at)} · <b>{order.cancelled_by_name}</b></span>}
     </div>
     {order.note && <div className="sp-note staff">📝 Quán ghi: {order.note}</div>}
+    {received && onPaid && <div className="sp-row between sp-paidrow">
+      <span className="sp-small">{order.supplier_paid_at ? <span className="sp-ok-t">💵 Đã thanh toán · {shortTime(order.supplier_paid_at)}</span> : <span className="sp-mute">Chưa thanh toán</span>}</span>
+      <button type="button" className={`sp-paybtn ${order.supplier_paid_at ? 'paid' : ''}`} disabled={busy} onClick={() => onPaid(order, !order.supplier_paid_at)}>
+        {order.supplier_paid_at ? '✓ Đã TT' : 'Đánh dấu đã TT'}</button>
+    </div>}
     {received && <div className="sp-sum">
       {[['ok', '✅', 'đủ'], ['short', '➖', 'thiếu'], ['over', '➕', 'dư'], ['wrong', '⚠️', 'sai'], ['skip', '🚫', 'không lấy']].filter(([k]) => counts[k])
         .map(([k, ic, label]) => <span key={k} className={`sp-check ${k}`}>{ic} {counts[k]} {label}</span>)}
@@ -345,50 +364,81 @@ function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notic
 
 const monthLabel = m => `Tháng ${m.slice(5)}/${m.slice(0, 4)}`;
 const dayShort = d => d.split('-').reverse().slice(0, 2).join('/');
+const vnDateOfIso = iso => new Date(new Date(iso).getTime() + 7 * 3600000).toISOString().slice(0, 10);
 
 /**
  * Thống kê của chủ gia vị: đơn quán đã nhận, tự đánh dấu đã thanh toán / chưa (bấm trên từng đơn), lọc theo đã / chưa và theo
  * tháng, số lượng + tiền từng món; cuối trang là các lần quán ghi đã trả tiền.
  */
-function SupplierStats({ history, payments, busyId, notice, onPaid }) {
+function SupplierStats({ history, payments, busyId, notice, onPaid, onBulk }) {
   const [paid, setPaid] = useState('unpaid');
   const [month, setMonth] = useState('');
-  const months = [...new Set(history.map(o => (o.received_date || '').slice(0, 7)).filter(Boolean))].sort().reverse();
+  const [picked, setPicked] = useState(() => new Set()); // đơn đang tích chọn
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const months = [...new Set(history.map(o => (o.received_date || (o.cancelled_at ? vnDateOfIso(o.cancelled_at) : '')).slice(0, 7)).filter(Boolean))].sort().reverse();
   const range = month ? { from: `${month}-01`, to: `${month}-31` } : {};
   const st = supplierOrderStats(history, { paid, ...range });
+  const canPick = paid === 'unpaid' || paid === 'paid' || paid === 'all';
+  const pickable = st.orders.filter(o => !o.cancelled_at);
+  const chosen = pickable.filter(o => picked.has(o.id));
+  const chosenTotal = chosen.reduce((t, o) => t + orderTotal(o.items), 0);
+  const toggle = id => setPicked(p => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const allOn = pickable.length > 0 && chosen.length === pickable.length;
+  const switchTo = k => { setPaid(k); setPicked(new Set()); };
+  // Tích nhiều đơn → đánh dấu một lần. Đơn đang chọn đều chưa TT thì nút là "Đã thanh toán"; đều đã TT thì "Chưa thanh toán".
+  const markPaid = !chosen.every(o => o.supplier_paid_at);
+  const bulk = async () => {
+    setBulkBusy(true);
+    if (await onBulk(chosen.map(o => o.id), markPaid)) setPicked(new Set());
+    setBulkBusy(false);
+  };
   return <>
     <div className="sp-tiles two">
-      <button type="button" className={`sp-tile owe ${paid === 'unpaid' ? 'sel' : ''}`} onClick={() => setPaid('unpaid')}>
+      <button type="button" className={`sp-tile owe ${paid === 'unpaid' ? 'sel' : ''}`} onClick={() => switchTo('unpaid')}>
         <div className="k">Chưa thanh toán · {st.unpaid.count} đơn</div><div className="v">{money(st.unpaid.total)}</div></button>
-      <button type="button" className={`sp-tile paid ${paid === 'paid' ? 'sel' : ''}`} onClick={() => setPaid('paid')}>
+      <button type="button" className={`sp-tile paid ${paid === 'paid' ? 'sel' : ''}`} onClick={() => switchTo('paid')}>
         <div className="k">Đã thanh toán · {st.paid.count} đơn</div><div className="v">{money(st.paid.total)}</div></button>
     </div>
-    <div className="sp-seg" role="tablist">
-      {[['unpaid', 'Chưa TT'], ['paid', 'Đã TT'], ['all', 'Tất cả']].map(([k, l]) => <button key={k} type="button" role="tab" aria-selected={paid === k} className={paid === k ? 'on' : ''} onClick={() => setPaid(k)}>{l}</button>)}
+    <div className="sp-seg four" role="tablist">
+      {[['unpaid', 'Chưa TT', st.unpaid.count], ['paid', 'Đã TT', st.paid.count], ['cancelled', 'Đã huỷ', st.cancelled.count], ['all', 'Tất cả', st.unpaid.count + st.paid.count]].map(([k, l, n]) =>
+        <button key={k} type="button" role="tab" aria-selected={paid === k} className={paid === k ? 'on' : ''} onClick={() => switchTo(k)}>{l}<small>{n}</small></button>)}
     </div>
     {months.length > 0 && <div className="sp-picks" style={{ marginBottom: 10 }}>
-      <button type="button" className={`sp-pick ${month === '' ? 'on' : ''}`} onClick={() => setMonth('')}>Tất cả tháng</button>
-      {months.map(m => <button key={m} type="button" className={`sp-pick ${month === m ? 'on' : ''}`} onClick={() => setMonth(m)}>{monthLabel(m)}</button>)}
+      <button type="button" className={`sp-pick ${month === '' ? 'on' : ''}`} onClick={() => { setMonth(''); setPicked(new Set()); }}>Tất cả tháng</button>
+      {months.map(m => <button key={m} type="button" className={`sp-pick ${month === m ? 'on' : ''}`} onClick={() => { setMonth(m); setPicked(new Set()); }}>{monthLabel(m)}</button>)}
     </div>}
-    <p className="sp-mute sp-small" style={{ margin: '0 0 8px' }}>Bấm nút trên từng đơn để đánh dấu <b>Đã thanh toán</b> hoặc <b>Chưa</b>. Đây là sổ riêng của bạn, quán cũng thấy dấu này.</p>
+    {paid === 'cancelled'
+      ? <p className="sp-tip">Đơn quán đã huỷ — không giao, không tính tiền. Chỉ để xem lại.</p>
+      : <p className="sp-tip">Tích chọn các đơn rồi bấm <b>Đã thanh toán</b> một lần, hoặc bấm nút trên từng đơn. Đây là sổ riêng của bạn, quán cũng thấy dấu này.</p>}
 
     <div className="sp-card">
-      <div className="sp-row between"><span className="sp-b">Đơn ({st.count})</span><span className="sp-money">{money(st.total)}</span></div>
-      {notice?.err && st.orders.some(o => o.id === notice.id) && <div className="sp-msg err">{notice.text}</div>}
+      <div className="sp-row between">
+        {canPick && pickable.length > 0
+          ? <label className="sp-pickall"><input type="checkbox" checked={allOn} onChange={() => setPicked(allOn ? new Set() : new Set(pickable.map(o => o.id)))} /> Chọn tất cả ({pickable.length})</label>
+          : <span className="sp-b">Đơn ({st.count})</span>}
+        <span className="sp-money">{money(st.total)}</span>
+      </div>
+      {notice?.err && (notice.id === 'bulk' || st.orders.some(o => o.id === notice.id)) && <div className="sp-msg err">{notice.text}</div>}
+      {notice && !notice.err && notice.id === 'bulk' && <div className="sp-msg ok">{notice.text}</div>}
       {!st.orders.length && <p className="sp-empty" style={{ padding: 16 }}>Không có đơn.</p>}
-      {st.orders.map(o => <div key={o.id} className="sp-hist">
-        <div className="sp-row between">
-          <div className="sp-grow"><div className="sp-b">{dayShort(o.received_date || '')} · {money(orderTotal(o.items))}</div>
-            <div className="sp-mute sp-small">{o.items.filter(l => lineQty(l) > 0).map(l => `${l.name} ${qtyText(lineQty(l))}${l.unit ? ` ${l.unit}` : ''}`).join(', ')}</div></div>
-          <button type="button" className={`sp-paybtn ${o.supplier_paid_at ? 'paid' : ''}`} disabled={busyId === o.id}
-            onClick={() => onPaid(o, !o.supplier_paid_at)}>{o.supplier_paid_at ? '✓ Đã TT' : 'Chưa TT'}</button>
+      {st.orders.map(o => <div key={o.id} className={`sp-hist${picked.has(o.id) ? ' on' : ''}${o.cancelled_at ? ' cx' : ''}`}>
+        <div className="sp-row">
+          {canPick && !o.cancelled_at && <input type="checkbox" className="sp-check-in" aria-label={`Chọn đơn ${dayShort(o.received_date || '')}`} checked={picked.has(o.id)} onChange={() => toggle(o.id)} />}
+          <div className="sp-grow" onClick={() => canPick && !o.cancelled_at && toggle(o.id)}>
+            <div className="sp-b">{o.cancelled_at ? `Huỷ ${shortTime(o.cancelled_at)}` : dayShort(o.received_date || '')} · {money(orderTotal(o.items))}</div>
+            <div className="sp-mute sp-small">{o.items.filter(l => o.cancelled_at || lineQty(l) > 0).map(l => `${l.name} ${qtyText(o.cancelled_at ? l.qty : lineQty(l))}${l.unit ? ` ${l.unit}` : ''}`).join(', ')}</div>
+          </div>
+          {o.cancelled_at
+            ? <span className="sp-chip cancelled">Đã huỷ</span>
+            : <button type="button" className={`sp-paybtn ${o.supplier_paid_at ? 'paid' : ''}`} disabled={busyId === o.id}
+                onClick={() => onPaid(o, !o.supplier_paid_at)}>{o.supplier_paid_at ? '✓ Đã TT' : 'Chưa TT'}</button>}
         </div>
-        {o.supplier_paid_at && <div className="sp-mute sp-small">Đánh dấu đã thanh toán {shortTime(o.supplier_paid_at)} · bấm lại nếu nhầm</div>}
+        {o.supplier_paid_at && !o.cancelled_at && <div className="sp-mute sp-small">Đánh dấu đã thanh toán {shortTime(o.supplier_paid_at)} · bấm lại nếu nhầm</div>}
       </div>)}
     </div>
 
     <div className="sp-card">
-      <div className="sp-b" style={{ marginBottom: 6 }}>Số lượng từng món {paid === 'paid' ? '(đã TT)' : paid === 'unpaid' ? '(chưa TT)' : ''}{month ? ` · ${monthLabel(month)}` : ''}</div>
+      <div className="sp-b" style={{ marginBottom: 6 }}>Số lượng từng món {paid === 'paid' ? '(đã TT)' : paid === 'unpaid' ? '(chưa TT)' : paid === 'cancelled' ? '(đơn đã huỷ)' : ''}{month ? ` · ${monthLabel(month)}` : ''}</div>
       {st.items.length ? <table className="sp-stat">
         <thead><tr><th>Món</th><th>SL</th><th>Lần</th><th>Tiền</th></tr></thead>
         <tbody>{st.items.map(it => <tr key={it.name}><td>{it.name}</td><td>{qtyText(it.qty)} {it.unit}</td><td>{it.orders}</td><td className="sp-money">{money(it.amount)}</td></tr>)}</tbody>
@@ -402,6 +452,15 @@ function SupplierStats({ history, payments, busyId, notice, onPaid }) {
         <span><span className="sp-money">{money(p.amount)}</span> · {p.method === 'transfer' ? 'chuyển khoản' : 'tiền mặt'}{p.note ? ` · ${p.note}` : ''}</span>
       </li>)}</ul> : <p className="sp-mute">Quán chưa ghi lần trả nào.</p>}
     </div>
+
+    {chosen.length > 0 && <div className="sp-bar sp-actbar"><div className="sp-bar-in col">
+      <div className="sp-row between sp-small"><span className="sp-mute">Đã chọn <b>{chosen.length}</b> đơn</span><span className="sp-money">{money(chosenTotal)}</span></div>
+      <div className="sp-row sp-actbtns">
+        <button type="button" className="sp-btn" disabled={bulkBusy} onClick={() => setPicked(new Set())}>Bỏ chọn</button>
+        <button type="button" className={`sp-btn ${markPaid ? 'ok' : 'main'}`} disabled={bulkBusy} onClick={bulk}>
+          {bulkBusy ? 'Đang lưu…' : markPaid ? `✓ Đã thanh toán ${chosen.length} đơn` : `Chưa thanh toán ${chosen.length} đơn`}</button>
+      </div>
+    </div></div>}
   </>;
 }
 

@@ -389,3 +389,13 @@ textarea.sp-field.sp-note-in:focus { min-height: 72px; }
 /* Đơn đã huỷ: mờ, gọn */
 .sp-order.cancelled { opacity: .75; border-left-color: #cbd5e1; }
 .sp-cx { padding: 10px 12px; }
+
+/* Thống kê chủ gia vị: tích chọn nhiều đơn */
+.sp-seg small { margin-left: 2px; }
+.sp-pickall { display: flex; align-items: center; gap: 8px; font-weight: 700; min-height: 40px; cursor: pointer; }
+.sp-pickall input, .sp-check-in { width: 22px; height: 22px; flex: none; accent-color: var(--sp-ok); margin: 0; }
+.sp-hist .sp-row { align-items: center; gap: 10px; }
+.sp-hist.on { background: var(--sp-ok-soft); margin: 0 -14px; padding: 10px 14px; }
+.sp-hist.cx { opacity: .7; }
+.sp-paidrow { margin-top: 8px; padding: 6px 10px; border-radius: 10px; background: #f8fafc; }
+.sp-ok-t { color: var(--sp-ok); font-weight: 700; }
