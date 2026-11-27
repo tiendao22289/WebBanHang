@@ -485,10 +485,19 @@ export function checkText(c) {
   return `${c.name} ${check === 'short' ? 'thiếu' : 'dư'} ${qtyText(Math.abs(d))}${u} (gọi ${qtyText(c.qty)}, nhận ${qtyText(c.got)})${c.note ? ` · ${c.note}` : ''}`;
 }
 
-export function cancelOrder(order, { by, at, reason = '' }) {
+/**
+ * Huỷ đơn. Đơn chưa nhận: người gọi / quản lý. Đơn ĐÃ nhận (đơn thử, bấm nhận nhầm): chỉ chủ quán (owner = true) và phải ghi lý do;
+ * đơn huỷ ra khỏi Sổ thu chi, công nợ, thống kê, đối soát; ngày giờ nhận vẫn giữ để xem lại, lịch sử ghi ai huỷ, lý do.
+ */
+export function cancelOrder(order, { by, at, reason = '', owner = false }) {
   if (order.cancelled_at) return { error: 'Đơn đã huỷ.' };
-  if (order.received_at) return { error: 'Đơn đã nhận hàng, không huỷ được.' };
-  return { patch: { cancelled_at: at, cancelled_by_name: by, log: pushLog(order, [{ at, by, who: 'staff', type: 'cancel', ...(reason ? { note: reason } : {}) }]) } };
+  const clean = String(reason ?? '').trim().slice(0, 200);
+  if (order.received_at) {
+    if (!owner) return { error: 'Đơn đã nhận hàng, chỉ chủ quán huỷ được.' };
+    if (!clean) return { error: 'Ghi lý do huỷ đơn đã nhận (vd: đơn thử, bấm nhận nhầm).' };
+  }
+  return { patch: { cancelled_at: at, cancelled_by_name: by, log: pushLog(order, [{ at, by, who: owner ? 'admin' : 'staff', type: 'cancel',
+    ...(order.received_at ? { was_received: true, total: orderTotal(order.items) } : {}), ...(clean ? { note: clean } : {}) }]) } };
 }
 
 /** Giờ ngắn "08:15 25/11" theo giờ Việt Nam. */
@@ -510,7 +519,7 @@ export function logLine(e) {
     : e.type === 'note' ? `ghi chú: ${e.note || '(xoá ghi chú)'}`
     : e.type === 'receive' ? withNote((e.checks || e.short)?.length ? `nhận hàng: ${(e.checks || e.short).map(checkText).join('; ')}` : 'nhận đủ hàng')
     : e.type === 'recheck' ? withNote(e.checks?.length ? `kiểm lại: ${e.checks.map(checkText).join('; ')}` : 'kiểm lại: tất cả đủ')
-    : e.type === 'cancel' ? withNote('huỷ đơn')
+    : e.type === 'cancel' ? withNote(e.was_received ? `huỷ đơn đã nhận (${vnd(e.total)} ra khỏi sổ và công nợ)` : 'huỷ đơn')
     : e.type === 'paid' ? 'đánh dấu đã nhận tiền đơn này'
     : e.type === 'unpaid' ? 'đánh dấu chưa nhận tiền đơn này'
     : String(e.type || '');

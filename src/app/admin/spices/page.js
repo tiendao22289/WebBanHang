@@ -307,6 +307,13 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
           {!open && !o.cancelled_at && canManage && <button type="button" onClick={() => setSheet({ kind: 'recheck', order: o })}>🔍 Kiểm lại</button>}
           {isAdmin && !o.cancelled_at && <button type="button" onClick={() => setSheet({ kind: 'price', order: o })}>✏️ Sửa giá</button>}
           {canCancel && <button type="button" className="bad" disabled={busy === o.id} onClick={() => { if (window.confirm('Huỷ đơn này?')) run(o, { action: 'cancel' }, 'Đã huỷ đơn'); }}>Huỷ đơn</button>}
+          {isAdmin && o.received_at && !o.cancelled_at && <button type="button" className="bad" disabled={busy === o.id} onClick={() => {
+            const reason = window.prompt(`Huỷ đơn đã nhận ${money(orderTotal(o.items))}?
+Đơn sẽ ra khỏi Sổ thu chi, công nợ và thống kê; lịch sử vẫn giữ.
+
+Ghi lý do (vd: đơn thử, bấm nhận nhầm):`);
+            if (reason && reason.trim()) run(o, { action: 'cancel', reason: reason.trim() }, 'Đã huỷ đơn đã nhận');
+          }}>🗑 Huỷ đơn đã nhận</button>}
         </div>
         <History log={o.log} />
       </div>;
