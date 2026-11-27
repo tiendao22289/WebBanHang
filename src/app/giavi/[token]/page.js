@@ -161,19 +161,20 @@ function SupplierView() {
     };
     const canAdd = !active.received_at && !active.cancelled_at;
     bar = <div className="sp-bar sp-actbar">
-      {canAdd && <button type="button" className="sp-fab" aria-label="Thêm món quán gọi thiếu"
-        onClick={() => { if (!shown) setTab('open'); setAddReq(r => ({ id: active.id, n: (r?.n || 0) + 1 })); }}>
-        <span aria-hidden="true">+</span></button>}
+
       <div className="sp-bar-in col">
       <div className="sp-row between sp-small">
         <span className="sp-mute">Đơn {shortTime(active.created_at)}{d ? <b className="sp-dirty"> · chưa lưu</b> : ''}{miss ? <span className="nop"> · {miss} món chưa giá</span> : ''}</span>
         <span className="sp-money">{money(orderTotal(items))}</span>
       </div>
       <div className="sp-row sp-actbtns">
+        {canAdd && <button type="button" className="sp-fab" aria-label="Thêm món quán gọi thiếu"
+        onClick={() => { if (!shown) setTab('open'); setAddReq(r => ({ id: active.id, n: (r?.n || 0) + 1 })); }}>
+        <span aria-hidden="true">+</span></button>}
         {!shown && <button type="button" className="sp-btn" onClick={goTo}>Tới đơn</button>}
-        {d && <button type="button" className="sp-btn" disabled={isBusy} onClick={() => drop(active.id)}>Bỏ sửa</button>}
+        {d && <button type="button" className="sp-btn" disabled={isBusy} onClick={() => drop(active.id)}>Bỏ</button>}
         {d && <button type="button" className="sp-btn main" disabled={isBusy} onClick={() => save(active, false)}>{isBusy ? 'Đang lưu…' : 'Lưu giá'}</button>}
-        {!active.received_at && !active.priced_at && <button type="button" className="sp-btn ok" disabled={isBusy} onClick={() => save(active, true)}>✅ Soạn xong</button>}
+        {!active.received_at && !active.priced_at && <button type="button" className="sp-btn ok" disabled={isBusy} onClick={() => save(active, true)}>{d ? '✅ Xong' : '✅ Soạn xong'}</button>}
         {!d && (active.received_at || active.priced_at) && <span className="sp-mute sp-small sp-grow" style={{ textAlign: 'right' }}>{active.priced_at && !active.received_at ? '✅ Đã báo soạn xong, chờ quán nhận' : 'Sửa giá ô nào thì bấm Lưu giá'}</span>}
       </div>
     </div></div>;
@@ -277,39 +278,32 @@ function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notic
             {c && c.check !== 'ok' && <CheckBadge check={c.check} diff={c.diff} unit={l.unit} note={c.note} />}
           </li>;
         }
-        return <li key={i} className="sp-line compact">
-          <div className="sp-row between">
-            <span className="name">{l.name}</span>
-            <span className="sp-qtyb">{qtyText(l.qty)} {l.unit}</span>
+        // Món cần điền giá: một hàng — bên trái tên + số lượng (+ tiền khi có giá), bên phải ô giá.
+        const up = hasPrice(l) && old !== null && l.price !== old;
+        return <li key={i} className="sp-pline">
+          <div className="info">
+            <div className="name">{l.name}</div>
+            <div className="sub">
+              <b>{order.received_at ? `quán nhận ${qtyText(got)}` : qtyText(l.qty)} {l.unit}</b>
+              {hasPrice(l) && <span className="amt"> = {money(lineAmount(l))}</span>}
+              {up && <span className={l.price > old ? 'sp-up' : 'sp-down'}> {l.price > old ? '▲' : '▼'}{money(Math.abs(l.price - old))}</span>}
+            </div>
+            {old !== null && !up && <div className="hint">lần trước {money(old)}</div>}
+            {l.by_supplier ? <span className="added sup">🧺 Bạn thêm {shortTime(l.added_at)}</span>
+              : later && <span className="added">➕ {l.added_by || 'NV'} thêm {shortTime(l.added_at)}</span>}
           </div>
-          {l.by_supplier ? <span className="added sup">🧺 Bạn tự thêm lúc {shortTime(l.added_at)}</span>
-            : later && <span className="added">➕ {l.added_by || 'Nhân viên'} thêm lúc {shortTime(l.added_at)}</span>}
-          {order.received_at && !order.cancelled_at && (() => { const c = lineCheck(order.items[i]); return <div>
-            <CheckBadge check={c.check} diff={c.diff} unit={l.unit} note={c.note} />
-            {c.check !== 'ok' && <span className="sp-mute sp-small"> quán nhận {qtyText(got)} {l.unit}</span>}
-          </div>; })()}
-          {editable
-            ? <div className="sp-price">
-                <span className="unit">Giá / {l.unit || 'phần'}</span>
-                <input inputMode="numeric" enterKeyHint="next" placeholder="Nhập giá" aria-label={`Giá ${l.name}`} className={value === '' ? 'empty' : ''}
-                  value={withDots(value)} onChange={e => onPrice(order, i, e.target.value)} />
-                <span className="sp-money amt">{hasPrice(l) ? money(lineAmount(l)) : ''}</span>
-              </div>
-            : <div className="sp-row between meta">
-                <span>{hasPrice(l) ? `${money(l.price)} / ${l.unit || 'phần'}` : <span className="nop">Chưa có giá</span>}</span>
-                <span className="sp-money">{hasPrice(l) ? money(lineAmount(l)) : ''}</span>
-              </div>}
-          {old !== null && (editable || (hasPrice(l) && l.price !== old)) && <div className="meta">
-            Lần trước {money(old)}
-            {hasPrice(l) && l.price !== old && <span className={l.price > old ? 'sp-up' : 'sp-down'}> {l.price > old ? '▲' : '▼'} {money(Math.abs(l.price - old))}</span>}
-          </div>}
+          <label className={`pin ${value === '' ? 'empty' : ''}`}>
+            <input inputMode="numeric" enterKeyHint="next" placeholder="Giá" aria-label={`Giá 1 ${l.unit || 'phần'} ${l.name}`}
+              value={withDots(value)} onChange={e => onPrice(order, i, e.target.value)} />
+            <small>đ/{l.unit || 'phần'}</small>
+          </label>
         </li>;
       })}
     </ul>}
     {showLines && <div className="sp-total"><span>Tổng{missing ? ` (còn ${missing} món chưa giá)` : ''}</span><span className="sp-money">{money(total)}</span></div>}
     {showLines && !open && !focus && <button type="button" className="sp-btn ghost" onClick={() => setShowLines(false)}>Thu gọn</button>}
     {canEditAny
-      ? <textarea className="sp-field" style={{ marginTop: 10 }} placeholder="Ghi chú cho quán (vd: hết sả, giao mai)" value={noteValue} onChange={e => onNote(order, e.target.value)} />
+      ? <textarea className="sp-field sp-note-in" rows={1} placeholder="💬 Ghi chú cho quán" value={noteValue} onChange={e => onNote(order, e.target.value)} />
       : order.supplier_note && <div className="sp-note supplier">💬 Bạn ghi: {order.supplier_note}</div>}
     {open && !adding && !inBar && <button type="button" className="sp-addmini" aria-label="Thêm món quán gọi thiếu" onClick={() => setAdding([{ name: '', qty: '1', unit: '', price: '' }])}>
       <span aria-hidden="true">+</span> Thêm món</button>}
