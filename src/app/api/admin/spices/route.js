@@ -83,7 +83,7 @@ export async function GET(request) {
     if (daysOf) {
       if (!UUID.test(daysOf)) return fail('Không thấy chủ gia vị.');
       const [orders, payments] = await Promise.all([
-        readAll(() => db.from('spice_orders').select('id, supplier_id, items, note, supplier_note, log, created_at, created_by_name, received_at, received_date, received_by_name, cancelled_at')
+        readAll(() => db.from('spice_orders').select('id, supplier_id, items, note, supplier_note, log, created_at, created_by_name, received_at, received_date, received_by_name, cancelled_at, supplier_paid_at')
           .eq('supplier_id', daysOf).not('received_at', 'is', null).order('id')),
         isAdmin ? readAll(() => db.from('spice_payments').select('supplier_id, amount, method, note, paid_date').eq('supplier_id', daysOf).order('id')) : Promise.resolve([]),
       ]);
@@ -122,7 +122,7 @@ export async function GET(request) {
     const lastPricesOut = Object.fromEntries(list.map(x => [x.id, Object.fromEntries([...lastPrices(orders, x.id)].map(([k, v]) => [k, v.price]))]));
     let balances = null;
     if (isAdmin) {
-      const all = await readAll(() => db.from('spice_orders').select('id, supplier_id, items, received_at, cancelled_at').not('received_at', 'is', null).order('id'));
+      const all = await readAll(() => db.from('spice_orders').select('id, supplier_id, items, received_at, received_date, cancelled_at, supplier_paid_at').not('received_at', 'is', null).order('id'));
       balances = supplierBalances(all, payments);
     }
     return NextResponse.json({

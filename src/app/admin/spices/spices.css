@@ -503,3 +503,7 @@ textarea.sp-field.sp-note-in:focus { min-height: 72px; }
 .sp-empty-call { text-align: center; color: var(--sp-mute); background: #fff; border: 2px dashed var(--sp-line); border-radius: 14px; padding: 28px 16px; }
 .sp-empty-call .ic { font-size: 34px; margin-bottom: 6px; }
 .sp-empty-call .plus { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--sp-main); color: #fff; font-size: 18px; line-height: 1; vertical-align: middle; }
+/* Giá cũ của chủ gia vị dưới tên món đã chọn */
+.sp-cart.compact .nm small { display: block; font-size: 11px; font-weight: 600; margin-top: 1px; }
+.sp-cart.compact .nm small.old { color: var(--sp-main-dark); }
+.sp-cart.compact .nm small.new { color: var(--sp-mute); font-weight: 500; }

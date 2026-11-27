@@ -100,18 +100,49 @@ export function lastPrices(orders, supplierId) {
   return out;
 }
 
-/** Nợ từng chủ gia vị: tiền các đơn đã nhận − đã trả. { [supplier_id]: { owed, paid, debt, waiting } } */
+/**
+ * Đối chiếu tiền của MỘT chủ gia vị (hai bên cùng một con số):
+ * - Tiền quán ghi trả (spice_payments) trừ dần vào đơn đã nhận CŨ NHẤT trước (kể cả đơn chủ gia vị đã bấm Đã TT,
+ *   để quán ghi trả và chủ gia vị bấm Đã TT cho cùng đơn thì không bị trừ hai lần).
+ * - Đơn chủ gia vị bấm Đã TT coi như đã trả đủ (tiền đưa tay, chuyển khoản quán chưa ghi…).
+ * - Còn nợ = phần chưa trả của các đơn chưa bấm Đã TT − tiền quán trả dư (nếu có).
+ * asOf ("YYYY-MM-DD"): chỉ tính đơn nhận, tiền trả, dấu Đã TT tới hết ngày đó (nợ cuối ngày).
+ * → { delivered, cash (tiền quán ghi trả), owed, byOrder: Map(id → { total, covered, marked, paid, left }) }
+ */
+export function settleOrders(orders, payments, { asOf = null } = {}) {
+  const upTo = d => !asOf || (d && d <= asOf);
+  const list = (orders || []).filter(o => !o.cancelled_at && o.received_at && upTo(o.received_date || vnDateOf(o.received_at)))
+    .sort((a, b) => ms(a.received_at) - ms(b.received_at) || String(a.id).localeCompare(String(b.id)));
+  const cash = (payments || []).filter(p => upTo(p.paid_date)).reduce((t, p) => t + (Number(p.amount) || 0), 0);
+  let pool = cash, delivered = 0, unpaid = 0;
+  const byOrder = new Map();
+  for (const o of list) {
+    const total = orderTotal(o.items);
+    delivered += total;
+    const covered = Math.min(pool, Math.max(0, total));
+    pool -= covered;
+    const marked = !!o.supplier_paid_at && upTo(vnDateOf(o.supplier_paid_at));
+    const left = marked ? 0 : total - covered;
+    unpaid += left;
+    byOrder.set(o.id, { total, covered, marked, paid: marked || (total > 0 && left <= 0), left });
+  }
+  return { delivered, cash, owed: unpaid - pool, byOrder };
+}
+
+const bySupplier = rows => {
+  const m = new Map();
+  for (const r of rows || []) { if (!m.has(r.supplier_id)) m.set(r.supplier_id, []); m.get(r.supplier_id).push(r); }
+  return m;
+};
+
+/** Nợ từng chủ gia vị (theo settleOrders). { [supplier_id]: { owed (tiền đã giao), paid (quán ghi trả), debt (còn nợ), waiting } } */
 export function supplierBalances(orders, payments) {
   const out = {};
-  const row = id => (out[id] ||= { owed: 0, paid: 0, debt: 0, waiting: 0 });
-  for (const o of orders || []) {
-    if (o.cancelled_at || !o.received_at) continue;
-    const r = row(o.supplier_id);
-    r.owed += orderTotal(o.items);
-    if (missingPrices(o.items)) r.waiting += 1;
+  const os = bySupplier(orders), ps = bySupplier(payments);
+  for (const id of new Set([...os.keys(), ...ps.keys()])) {
+    const st = settleOrders(os.get(id) || [], ps.get(id) || []);
+    out[id] = { owed: st.delivered, paid: st.cash, debt: st.owed, waiting: (os.get(id) || []).filter(o => !o.cancelled_at && o.received_at && missingPrices(o.items)).length };
   }
-  for (const p of payments || []) row(p.supplier_id).paid += Number(p.amount) || 0;
-  for (const r of Object.values(out)) r.debt = r.owed - r.paid;
   return out;
 }
 
@@ -197,9 +228,9 @@ export function spiceDayData({ orders = [], payments = [], date, supplierNames =
     lines.push({ name: cleanName(l.name), unit: l.unit || '', qty: lineQty(l), price: hasPrice(l) ? Number(l.price) : null,
       old_price: l.old_price ?? null, change: priceChange(l), amount: lineAmount(l), supplier: supplierNames[o.supplier_id] || '' });
   }
-  const until = (orders || []).filter(o => !o.cancelled_at && o.received_at && (o.received_date || vnDateOf(o.received_at)) <= date);
-  const paidUntil = (payments || []).filter(p => p.paid_date <= date);
-  const owed = until.reduce((s, o) => s + orderTotal(o.items), 0) - paidUntil.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const os = bySupplier(orders), ps = bySupplier(payments);
+  let owed = 0;
+  for (const id of new Set([...os.keys(), ...ps.keys()])) owed += settleOrders(os.get(id) || [], ps.get(id) || [], { asOf: date }).owed;
   const paidToday = (payments || []).filter(p => p.paid_date === date);
   return {
     total: lines.reduce((s, l) => s + l.amount, 0), orders: day.length, waiting: day.filter(o => missingPrices(o.items)).length,
@@ -357,15 +388,17 @@ export function setSupplierPaid(order, paid, { by, at }) {
  * Thống kê cho chủ gia vị: đơn quán đã nhận, lọc paid ('all' | 'paid' | 'unpaid' theo dấu chủ gia vị bấm) và ngày nhận [from, to].
  * → { count, total, paid: { count, total }, unpaid: { count, total }, orders (mới trước), items: [{ name, unit, qty, amount, orders }] }
  */
-export function supplierOrderStats(orders, { paid = 'all', from = '', to = '9999' } = {}) {
+export function supplierOrderStats(orders, { paid = 'all', from = '', to = '9999', payments = [] } = {}) {
+  // Đã thanh toán = chủ gia vị bấm Đã TT hoặc tiền quán ghi trả đã phủ đủ đơn (trừ đơn cũ trước).
+  const settle = settleOrders(orders, payments).byOrder;
   const dated = (orders || []).filter(o => o.received_at || o.cancelled_at)
-    .map(o => ({ ...o, date: o.received_at ? (o.received_date || vnDateOf(o.received_at)) : vnDateOf(o.cancelled_at) }))
+    .map(o => ({ ...o, pay: settle.get(o.id) || null, date: o.received_at ? (o.received_date || vnDateOf(o.received_at)) : vnDateOf(o.cancelled_at) }))
     .filter(o => o.date >= from && o.date <= to);
   const received = dated.filter(o => !o.cancelled_at && o.received_at);
   // Đơn quán đã huỷ (để xem lại, không tính tiền).
   const cancelledList = dated.filter(o => o.cancelled_at);
   const part = list => ({ count: list.length, total: list.reduce((s, o) => s + orderTotal(o.items), 0) });
-  const paidList = received.filter(o => o.supplier_paid_at), unpaidList = received.filter(o => !o.supplier_paid_at);
+  const paidList = received.filter(o => o.pay?.paid), unpaidList = received.filter(o => !o.pay?.paid);
   const shown = paid === 'paid' ? paidList : paid === 'unpaid' ? unpaidList : paid === 'cancelled' ? cancelledList : received;
   const items = new Map();
   for (const o of shown) for (const l of o.items || []) {
@@ -532,10 +565,10 @@ export function logLine(e) {
 /** Tổng cho chủ gia vị xem: đã giao (đơn quán đã nhận), quán đã trả, quán còn thiếu, đơn đang chờ. */
 export function supplierSummary(orders, payments) {
   const received = (orders || []).filter(o => !o.cancelled_at && o.received_at);
-  const delivered = received.reduce((s, o) => s + orderTotal(o.items), 0);
-  const paid = (payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const st = settleOrders(orders, payments);
+  // paid = đã thanh toán (quán ghi trả + đơn chủ gia vị bấm Đã TT); cash = riêng tiền quán ghi trả.
   return {
-    delivered, paid, owed: delivered - paid,
+    delivered: st.delivered, paid: st.delivered - st.owed, cash: st.cash, owed: st.owed,
     open: (orders || []).filter(o => !o.cancelled_at && !o.received_at).length,
     waitingPrice: received.filter(o => missingPrices(o.items)).length,
   };
@@ -671,11 +704,9 @@ export function supplierDays(orders, payments, { from = '' } = {}) {
     d.paid += Number(p.amount) || 0;
     d.payments.push({ amount: Number(p.amount) || 0, method: p.method, note: p.note || '' });
   }
-  let balance = 0;
   const all = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
   for (const d of all) {
-    balance += d.total - d.paid;
-    d.balance = balance;
+    d.balance = settleOrders(orders, payments, { asOf: d.date }).owed;
     d.orders.sort((a, b) => String(a.received_at).localeCompare(String(b.received_at)));
   }
   return all.filter(d => d.date >= from).reverse();

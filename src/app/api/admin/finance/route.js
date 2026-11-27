@@ -656,7 +656,7 @@ async function readSpiceOrders(db, from, to) {
 async function spiceDay(db, date) {
   try {
     const [orders, payments, suppliers] = await Promise.all([
-      readAll(() => db.from('spice_orders').select('id, supplier_id, items, received_at, received_date, cancelled_at').lte('received_date', date).order('id')),
+      readAll(() => db.from('spice_orders').select('id, supplier_id, items, received_at, received_date, cancelled_at, supplier_paid_at').lte('received_date', date).order('id')),
       readAll(() => db.from('spice_payments').select('id, supplier_id, amount, method, paid_date').lte('paid_date', date).order('id')),
       db.from('spice_suppliers').select('id, name'),
     ]);

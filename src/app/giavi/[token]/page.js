@@ -162,7 +162,7 @@ function SupplierView() {
     </div>
     <div className="side">
       <div><span>Đã giao</span><b>{money(s.delivered)}</b></div>
-      <div><span>Quán đã trả</span><b className="paid">{money(s.paid)}</b></div>
+      <div><span>Đã thanh toán</span><b className="paid">{money(s.paid)}</b></div>
     </div>
   </div>;
   let bar = null;
@@ -377,7 +377,7 @@ function SupplierStats({ history, payments, busyId, notice, onPaid, onBulk }) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const months = [...new Set(history.map(o => (o.received_date || (o.cancelled_at ? vnDateOfIso(o.cancelled_at) : '')).slice(0, 7)).filter(Boolean))].sort().reverse();
   const range = month ? { from: `${month}-01`, to: `${month}-31` } : {};
-  const st = supplierOrderStats(history, { paid, ...range });
+  const st = supplierOrderStats(history, { paid, ...range, payments });
   const canPick = paid === 'unpaid' || paid === 'paid' || paid === 'all';
   const pickable = st.orders.filter(o => !o.cancelled_at);
   const chosen = pickable.filter(o => picked.has(o.id));
@@ -431,7 +431,7 @@ function SupplierStats({ history, payments, busyId, notice, onPaid, onBulk }) {
           {o.cancelled_at
             ? <span className="sp-chip cancelled">Đã huỷ</span>
             : <button type="button" className={`sp-paybtn ${o.supplier_paid_at ? 'paid' : ''}`} disabled={busyId === o.id}
-                onClick={() => onPaid(o, !o.supplier_paid_at)}>{o.supplier_paid_at ? '✓ Đã TT' : 'Chưa TT'}</button>}
+                onClick={() => onPaid(o, !o.supplier_paid_at)}>{o.supplier_paid_at ? '✓ Đã TT' : o.pay?.paid ? '✓ Quán đã trả' : o.pay?.covered > 0 ? `Còn ${money(o.pay.left)}` : 'Chưa TT'}</button>}
         </div>
         {o.supplier_paid_at && !o.cancelled_at && <div className="sp-mute sp-small">Đánh dấu đã thanh toán {shortTime(o.supplier_paid_at)} · bấm lại nếu nhầm</div>}
       </div>)}

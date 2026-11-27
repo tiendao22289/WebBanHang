@@ -161,8 +161,8 @@ function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders 
   return <>
     {lines.length > 0 && <>
       <div className="sp-cart-h top"><span className="sp-b">🧾 Đã chọn {lines.length} món</span><button type="button" className="sp-btn ghost bad" onClick={() => setLines([])}>Xoá hết</button></div>
-      <ul className="sp-cart compact">{lines.map((l, i) => <li key={`${l.name}-${i}`}>
-        <span className="nm">{l.name}</span>
+      <ul className="sp-cart compact">{lines.map((l, i) => { const p = prices[itemKey(l.name)]; return <li key={`${l.name}-${i}`}>
+        <span className="nm">{l.name}<small className={p !== undefined ? 'old' : 'new'}>{p !== undefined ? `giá cũ ${money(p)}/${l.unit || 'phần'}` : 'chưa có giá cũ'}</small></span>
         <div className="sp-qty">
           <button type="button" aria-label={`Bớt ${l.name}`} onClick={() => bump(l, -1)}>−</button>
           <input inputMode="decimal" aria-label={`Số lượng ${l.name}`} value={l.qty} onChange={e => setLine(i, { qty: e.target.value.replace(/[^\d.,]/g, '').slice(0, 7) })} />
@@ -170,7 +170,7 @@ function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders 
         </div>
         <input className="sp-unit" placeholder="đơn vị" aria-label={`Đơn vị ${l.name}`} value={l.unit} maxLength={20} onChange={e => setLine(i, { unit: e.target.value })} />
         <button type="button" className="sp-x" aria-label={`Bỏ ${l.name}`} onClick={() => setLines(lines.filter((_, j) => j !== i))}>✕</button>
-      </li>)}</ul>
+      </li>; })}</ul>
       {!drawer && <div className="sp-pick-h">Bấm thêm món:</div>}
     </>}
     {drawer && <DrawerFab onOpen={() => setPanel(true)} hidden={panel} />}
@@ -578,6 +578,7 @@ function DebtTab({ data, reload }) {
           <div className="sp-tile paid"><div className="k">Đã trả</div><div className="v">{money(b.paid)}</div></div>
           <div className="sp-tile owe"><div className="k">Còn nợ</div><div className="v">{money(b.debt)}</div></div>
         </div>
+        {b.owed - b.paid - b.debt > 0 && <p className="sp-mute sp-small">💵 Chủ gia vị đã bấm <b>Đã TT</b> thêm {money(b.owed - b.paid - b.debt)} (tiền đưa ngoài sổ). Nếu quán chưa trả số này thì báo lại chủ gia vị.</p>}
         {b.waiting > 0 && <p className="sp-mute">⚠️ {b.waiting} đơn đã nhận còn món chưa có giá.</p>}
         {msg?.id === s.id && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
         <button type="button" className="sp-btn main block" onClick={() => setPay({ supplier: s, amount: String(Math.max(0, b.debt)) })}>💵 Trả tiền</button>
