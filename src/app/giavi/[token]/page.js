@@ -6,7 +6,7 @@
  */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { STATE_LABELS, addedLater, lineAmount, lineCheck, lineQty, logLine, missingPrices, orderState, orderTotal, shortTime, supplierCanPrice } from '@/lib/spiceOrders.mjs';
+import { STATE_LABELS, addedLater, lineAmount, lineCheck, lineQty, logLine, missingPrices, orderState, orderTotal, shortTime, supplierCanPrice, supplierOrderStats } from '@/lib/spiceOrders.mjs';
 import { CheckBadge, DayCard } from '../../admin/spices/SpiceShared';
 import '../../admin/spices/spices.css';
 
@@ -80,6 +80,21 @@ function SupplierView() {
   const setNote = (order, value) => setDrafts(d => ({ ...d, [order.id]: { prices: {}, ...d[order.id], note: value.slice(0, 300) } }));
   const drop = id => setDrafts(d => { const n = { ...d }; delete n[id]; return n; });
 
+  // Gửi một việc khác (thêm món / đánh dấu đã nhận tiền) cho đơn. → true nếu lưu được.
+  async function post(order, extra, okText) {
+    setBusy(order.id); setNotice(null);
+    try {
+      const r = await fetch('/api/spice-supplier', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ t: token, id: order.id, updated_at: order.updated_at, ...extra }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setNotice({ id: order.id, err: true, text: j.error || 'Không lưu được.' }); if (r.status === 409) load(); return false; }
+      setNotice({ id: order.id, text: okText });
+      await load();
+      return true;
+    } catch { setNotice({ id: order.id, err: true, text: 'Mạng yếu, bấm lại.' }); return false; }
+    finally { setBusy(''); }
+  }
+
   async function save(order, done) {
     const draft = drafts[order.id] || { prices: {} };
     const prices = Object.entries(draft.prices).map(([index, v]) => ({ index: Number(index), price: v === '' ? null : Number(v) }));
@@ -113,7 +128,8 @@ function SupplierView() {
   const s = data.summary;
   const single = !showAll && focusId ? data.orders.find(o => o.id === focusId) : null;
   const card = order => <OrderCard key={order.id} order={order} draft={drafts[order.id]} focus={order.id === focusId} busy={busy === order.id}
-    notice={notice?.id === order.id ? notice : null} onPrice={setPrice} onNote={setNote} onSave={save} onUndo={() => drop(order.id)} />;
+    notice={notice?.id === order.id ? notice : null} onPrice={setPrice} onNote={setNote} onSave={save} onUndo={() => drop(order.id)}
+    onAdd={(o, add) => post(o, { add }, `Đã thêm ${add.length} món ✓ Quán sẽ thấy khi nhận hàng.`)} />;
   const tiles = <>
     <div className="sp-tiles sup">
       <div className="sp-tile"><div className="k">Đã giao</div><div className="v">{money(s.delivered)}</div></div>
@@ -142,7 +158,7 @@ function SupplierView() {
     </button>}
   </div>{bar}</div>;
   const view = tab || (groups.open.length ? 'open' : 'done');
-  const tabs = [['open', '📦', 'Cần soạn', groups.open.length], ['done', '✅', 'Đã giao', null], ['days', '📅', 'Đối soát', null], ['pay', '💵', 'Tiền', null]];
+  const tabs = [['open', '📦', 'Cần soạn', groups.open.length], ['done', '✅', 'Đã giao', null], ['days', '📅', 'Đối soát', null], ['stats', '📊', 'Thống kê', null]];
   return <div className="sp-page"><div className="sp">
     <div className="sp-head"><h1>🧂 Đơn gia vị</h1><span className="sp-mute sp-small">{data.supplier.name}</span></div>
     {error && <div className="sp-msg err">{error}</div>}
@@ -168,19 +184,16 @@ function SupplierView() {
       {data.days?.length ? data.days.map((d, i) => <DayCard key={d.date} day={d} initial={i === 0} />) : <p className="sp-empty">Chưa có ngày nào.</p>}
     </>}
 
-    {view === 'pay' && <>
-      {data.payments.length ? <div className="sp-card"><ul className="sp-log">{data.payments.map((p, i) => <li key={i}>
-        <span className="t">{p.paid_date.split('-').reverse().slice(0, 2).join('/')}</span>
-        <span><span className="sp-money">{money(p.amount)}</span> · {p.method === 'transfer' ? 'chuyển khoản' : 'tiền mặt'}{p.note ? ` · ${p.note}` : ''}</span>
-      </li>)}</ul></div> : <p className="sp-empty">Quán chưa trả lần nào.</p>}
-    </>}
+    {view === 'stats' && <SupplierStats history={data.history || []} payments={data.payments} busyId={busy} notice={notice}
+      onPaid={(o, paid) => post(o, { paid }, paid ? 'Đã đánh dấu: đã thanh toán ✓' : 'Đã đánh dấu: chưa thanh toán')} />}
     <p className="sp-mute sp-small" style={{ textAlign: 'center', marginTop: 20 }}>Trang tự cập nhật. Lưu link này để mở lại lần sau.</p>
   </div>
   {bar}
   </div>;
 }
 
-function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave, onUndo }) {
+function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave, onUndo, onAdd }) {
+  const [adding, setAdding] = useState(null); // [{ name, qty, unit, price }] đang thêm
   const state = orderState(order);
   const open = !order.cancelled_at && !order.received_at;
   // Đơn đang gõ: tính lại tiền theo giá đang gõ.
@@ -212,7 +225,8 @@ function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave,
             <span className="name">{l.name}</span>
             <span className="sp-qtyb">{qtyText(l.qty)} {l.unit}</span>
           </div>
-          {later && <span className="added">➕ {l.added_by || 'Nhân viên'} thêm lúc {shortTime(l.added_at)}</span>}
+          {l.by_supplier ? <span className="added sup">🧺 Bạn tự thêm lúc {shortTime(l.added_at)}</span>
+            : later && <span className="added">➕ {l.added_by || 'Nhân viên'} thêm lúc {shortTime(l.added_at)}</span>}
           {order.received_at && !order.cancelled_at && (() => { const c = lineCheck(order.items[i]); return <div>
             <CheckBadge check={c.check} diff={c.diff} unit={l.unit} note={c.note} />
             {c.check !== 'ok' && <span className="sp-mute sp-small"> quán nhận {qtyText(got)} {l.unit}</span>}
@@ -239,6 +253,29 @@ function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave,
     {canEditAny
       ? <textarea className="sp-field" style={{ marginTop: 10 }} placeholder="Ghi chú cho quán (vd: hết sả, giao mai)" value={noteValue} onChange={e => onNote(order, e.target.value)} />
       : order.supplier_note && <div className="sp-note supplier">💬 Bạn ghi: {order.supplier_note}</div>}
+    {open && !adding && <button type="button" className="sp-btn ghost" style={{ marginTop: 6 }} onClick={() => setAdding([{ name: '', qty: '1', unit: '', price: '' }])}>
+      ➕ Thêm món quán gọi thiếu</button>}
+    {open && adding && <div className="sp-addbox">
+      <div className="sp-b">Thêm món (quán gọi thiếu)</div>
+      <p className="sp-mute sp-small" style={{ margin: '2px 0 8px' }}>Quán sẽ thấy nhãn 🧺 "chủ gia vị tự thêm"; khi nhận, quán không cần thì bấm Không lấy và không tính tiền món đó.</p>
+      {adding.map((a, k) => <div key={k} className="sp-addrow">
+        <input className="sp-field" placeholder="Tên món" value={a.name} maxLength={60} onChange={e => setAdding(adding.map((x, j) => (j === k ? { ...x, name: e.target.value } : x)))} />
+        <div className="sp-row" style={{ marginTop: 6 }}>
+          <input className="sp-unit" inputMode="decimal" aria-label="Số lượng" placeholder="SL" value={a.qty} onChange={e => setAdding(adding.map((x, j) => (j === k ? { ...x, qty: e.target.value.replace(/[^\d.,]/g, '').slice(0, 7) } : x)))} />
+          <input className="sp-unit" placeholder="kg, bó" value={a.unit} maxLength={20} onChange={e => setAdding(adding.map((x, j) => (j === k ? { ...x, unit: e.target.value } : x)))} />
+          <input className="sp-field sp-grow" inputMode="numeric" placeholder="Giá / 1" value={withDots(a.price)} onChange={e => setAdding(adding.map((x, j) => (j === k ? { ...x, price: digits(e.target.value) } : x)))} />
+          {adding.length > 1 && <button type="button" className="sp-x" aria-label="Bỏ dòng" onClick={() => setAdding(adding.filter((_, j) => j !== k))}>✕</button>}
+        </div>
+      </div>)}
+      <button type="button" className="sp-btn ghost" onClick={() => setAdding([...adding, { name: '', qty: '1', unit: '', price: '' }])}>＋ Thêm dòng</button>
+      <div className="sp-btns">
+        <button type="button" className="sp-btn" onClick={() => setAdding(null)}>Thôi</button>
+        <button type="button" className="sp-btn main" disabled={busy || !adding.some(a => a.name.trim())} onClick={async () => {
+          const add = adding.filter(a => a.name.trim()).map(a => ({ name: a.name, unit: a.unit, qty: String(a.qty).replace(',', '.'), price: a.price }));
+          if (await onAdd(order, add)) setAdding(null);
+        }}>{busy ? 'Đang lưu…' : 'Lưu món thêm'}</button>
+      </div>
+    </div>}
     {notice && <div className={`sp-msg ${notice.err ? 'err' : 'ok'}`}>{notice.text}</div>}
     {canEditAny && <div className="sp-btns">
       {draft && <button type="button" className="sp-btn" disabled={busy} onClick={onUndo}>Bỏ sửa</button>}
@@ -247,6 +284,68 @@ function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave,
     </div>}
     <History log={order.log} />
   </div>;
+}
+
+const monthLabel = m => `Tháng ${m.slice(5)}/${m.slice(0, 4)}`;
+const dayShort = d => d.split('-').reverse().slice(0, 2).join('/');
+
+/**
+ * Thống kê của chủ gia vị: đơn quán đã nhận, tự đánh dấu đã thanh toán / chưa (bấm trên từng đơn), lọc theo đã / chưa và theo
+ * tháng, số lượng + tiền từng món; cuối trang là các lần quán ghi đã trả tiền.
+ */
+function SupplierStats({ history, payments, busyId, notice, onPaid }) {
+  const [paid, setPaid] = useState('unpaid');
+  const [month, setMonth] = useState('');
+  const months = [...new Set(history.map(o => (o.received_date || '').slice(0, 7)).filter(Boolean))].sort().reverse();
+  const range = month ? { from: `${month}-01`, to: `${month}-31` } : {};
+  const st = supplierOrderStats(history, { paid, ...range });
+  return <>
+    <div className="sp-tiles two">
+      <button type="button" className={`sp-tile owe ${paid === 'unpaid' ? 'sel' : ''}`} onClick={() => setPaid('unpaid')}>
+        <div className="k">Chưa thanh toán · {st.unpaid.count} đơn</div><div className="v">{money(st.unpaid.total)}</div></button>
+      <button type="button" className={`sp-tile paid ${paid === 'paid' ? 'sel' : ''}`} onClick={() => setPaid('paid')}>
+        <div className="k">Đã thanh toán · {st.paid.count} đơn</div><div className="v">{money(st.paid.total)}</div></button>
+    </div>
+    <div className="sp-seg" role="tablist">
+      {[['unpaid', 'Chưa TT'], ['paid', 'Đã TT'], ['all', 'Tất cả']].map(([k, l]) => <button key={k} type="button" role="tab" aria-selected={paid === k} className={paid === k ? 'on' : ''} onClick={() => setPaid(k)}>{l}</button>)}
+    </div>
+    {months.length > 0 && <div className="sp-picks" style={{ marginBottom: 10 }}>
+      <button type="button" className={`sp-pick ${month === '' ? 'on' : ''}`} onClick={() => setMonth('')}>Tất cả tháng</button>
+      {months.map(m => <button key={m} type="button" className={`sp-pick ${month === m ? 'on' : ''}`} onClick={() => setMonth(m)}>{monthLabel(m)}</button>)}
+    </div>}
+    <p className="sp-mute sp-small" style={{ margin: '0 0 8px' }}>Bấm nút trên từng đơn để đánh dấu <b>Đã thanh toán</b> hoặc <b>Chưa</b>. Đây là sổ riêng của bạn, quán cũng thấy dấu này.</p>
+
+    <div className="sp-card">
+      <div className="sp-row between"><span className="sp-b">Đơn ({st.count})</span><span className="sp-money">{money(st.total)}</span></div>
+      {notice?.err && st.orders.some(o => o.id === notice.id) && <div className="sp-msg err">{notice.text}</div>}
+      {!st.orders.length && <p className="sp-empty" style={{ padding: 16 }}>Không có đơn.</p>}
+      {st.orders.map(o => <div key={o.id} className="sp-hist">
+        <div className="sp-row between">
+          <div className="sp-grow"><div className="sp-b">{dayShort(o.received_date || '')} · {money(orderTotal(o.items))}</div>
+            <div className="sp-mute sp-small">{o.items.filter(l => lineQty(l) > 0).map(l => `${l.name} ${qtyText(lineQty(l))}${l.unit ? ` ${l.unit}` : ''}`).join(', ')}</div></div>
+          <button type="button" className={`sp-paybtn ${o.supplier_paid_at ? 'paid' : ''}`} disabled={busyId === o.id}
+            onClick={() => onPaid(o, !o.supplier_paid_at)}>{o.supplier_paid_at ? '✓ Đã TT' : 'Chưa TT'}</button>
+        </div>
+        {o.supplier_paid_at && <div className="sp-mute sp-small">Đánh dấu đã thanh toán {shortTime(o.supplier_paid_at)} · bấm lại nếu nhầm</div>}
+      </div>)}
+    </div>
+
+    <div className="sp-card">
+      <div className="sp-b" style={{ marginBottom: 6 }}>Số lượng từng món {paid === 'paid' ? '(đã TT)' : paid === 'unpaid' ? '(chưa TT)' : ''}{month ? ` · ${monthLabel(month)}` : ''}</div>
+      {st.items.length ? <table className="sp-stat">
+        <thead><tr><th>Món</th><th>SL</th><th>Lần</th><th>Tiền</th></tr></thead>
+        <tbody>{st.items.map(it => <tr key={it.name}><td>{it.name}</td><td>{qtyText(it.qty)} {it.unit}</td><td>{it.orders}</td><td className="sp-money">{money(it.amount)}</td></tr>)}</tbody>
+      </table> : <p className="sp-empty" style={{ padding: 16 }}>Chưa có.</p>}
+    </div>
+
+    <div className="sp-card">
+      <div className="sp-b" style={{ marginBottom: 6 }}>Các lần quán ghi đã trả tiền</div>
+      {payments.length ? <ul className="sp-log">{payments.map((p, i) => <li key={i}>
+        <span className="t">{dayShort(p.paid_date)}</span>
+        <span><span className="sp-money">{money(p.amount)}</span> · {p.method === 'transfer' ? 'chuyển khoản' : 'tiền mặt'}{p.note ? ` · ${p.note}` : ''}</span>
+      </li>)}</ul> : <p className="sp-mute">Quán chưa ghi lần trả nào.</p>}
+    </div>
+  </>;
 }
 
 function History({ log }) {

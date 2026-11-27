@@ -292,6 +292,8 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
         </div>
         {o.note && <div className="sp-note staff">📝 {o.note}</div>}
         {o.supplier_note && <div className="sp-note supplier">💬 Chủ gia vị: {o.supplier_note}</div>}
+        {open && o.items.some(l => l.by_supplier) && <div className="sp-note supplier">🧺 Chủ gia vị tự thêm {o.items.filter(l => l.by_supplier).length} món. Bấm <b>Kiểm hàng</b> để chọn lấy hay <b>Không lấy</b>.</div>}
+        {o.supplier_paid_at && <div className="sp-paidmark">💵 Chủ gia vị đã đánh dấu nhận tiền đơn này · {shortTime(o.supplier_paid_at)}</div>}
         <OrderLines order={o} />
         {msg?.id === o.id && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
         {open && <div className="sp-btns two">
@@ -334,7 +336,8 @@ function OrderLines({ order }) {
           {ch !== 0 && <span className={ch > 0 ? 'sp-up' : 'sp-down'}> {changeText(ch)}</span>}
         </div>}
         {order.received_at && !order.cancelled_at && (() => { const c = lineCheck(l); return <div><CheckBadge check={c.check} diff={c.diff} unit={l.unit} note={c.note} /></div>; })()}
-        {later && <span className="added">➕ {l.added_by} thêm {shortTime(l.added_at)}</span>}
+        {l.by_supplier ? <span className="added sup">🧺 Chủ gia vị tự thêm {shortTime(l.added_at)}</span>
+          : later && <span className="added">➕ {l.added_by} thêm {shortTime(l.added_at)}</span>}
       </li>;
     })}</ul>
     <div className="sp-total"><span>Tổng{missing ? ` (${missing} món chưa giá)` : ''}</span><span className="sp-money">{money(orderTotal(order.items))}</span></div>
@@ -378,10 +381,11 @@ function ReceiveSheet({ order, recheck = false, onClose, onSave }) {
     {order.items.map((l, i) => {
       const r = rows[i];
       return <div key={i} className={`sp-recv ${r.check}`}>
-        <div className="sp-row between"><span className="sp-b">{l.name}</span><span className="sp-mute">gọi {qtyText(l.qty)} {l.unit}</span></div>
-        <div className="sp-recv-checks">{['ok', 'short', 'over', 'wrong'].map(k => <button key={k} type="button" className={`sp-pick ${r.check === k ? 'on' : ''} ${k}`}
+        <div className="sp-row between"><span className="sp-b">{l.name}</span><span className="sp-mute">{l.by_supplier ? 'chủ gia vị thêm' : 'gọi'} {qtyText(l.qty)} {l.unit}</span></div>
+        {l.by_supplier && <span className="added sup">🧺 Chủ gia vị tự thêm — quán không cần thì bấm Không lấy</span>}
+        <div className={`sp-recv-checks${l.by_supplier ? ' five' : ''}`}>{['ok', 'short', 'over', 'wrong', ...(l.by_supplier ? ['skip'] : [])].map(k => <button key={k} type="button" className={`sp-pick ${r.check === k ? 'on' : ''} ${k}`}
           onClick={() => set(i, cur => ({ check: k, qty: k === 'ok' ? '' : k === 'wrong' ? (cur.qty || '0') : (cur.check === k ? cur.qty : '') }))}>{CHECK_LABELS[k]}</button>)}</div>
-        {r.check !== 'ok' && <div className="sp-row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+        {r.check !== 'ok' && r.check !== 'skip' && <div className="sp-row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
           <span className="sp-mute">{r.check === 'wrong' ? 'Lấy' : 'Nhận thật'}</span>
           <div className="sp-qty"><input inputMode="decimal" aria-label={`Số nhận ${l.name}`} placeholder={r.check === 'short' ? `< ${qtyText(l.qty)}` : r.check === 'over' ? `> ${qtyText(l.qty)}` : '0'}
             value={r.qty} onChange={e => set(i, { qty: e.target.value.replace(/[^\d.,]/g, '').slice(0, 7) })} /></div>
@@ -559,7 +563,7 @@ function StatsTab() {
     <div className="sp-picks" style={{ marginBottom: 10 }}>
       {[['day', 'Theo ngày'], ['month', 'Theo tháng'], ['year', 'Theo năm']].map(([k, l]) => <button key={k} type="button" className={`sp-pick ${period === k ? 'on' : ''}`} onClick={() => setPeriod(k)}>{l}</button>)}
     </div>
-    <p className="sp-mute">Tính theo ngày quán nhận hàng. ▲ giá tăng / ▼ giá giảm so với lần trước.</p>
+    <p className="sp-mute">Tính theo ngày quán nhận hàng. ▲ giá tăng / ▼ giá giảm so với lần trước. 🧺 = chủ gia vị tự thêm món, ✏️ = chủ gia vị sửa giá.</p>
     {error && <div className="sp-msg err">{error}</div>}
     {!data && !error && <p className="sp-empty">Đang tải…</p>}
     {data && !data.stats.length && <p className="sp-empty">Chưa có đơn đã nhận.</p>}
@@ -568,7 +572,9 @@ function StatsTab() {
       <table className="sp-stat" style={{ marginTop: 8 }}>
         <thead><tr><th>Món</th><th>SL</th><th>Giá</th><th>Tiền</th></tr></thead>
         <tbody>{g.items.map(it => <tr key={it.name}>
-          <td>{it.name}{it.suppliers.length > 0 && <div className="sp-mute sp-small">{it.suppliers.join(', ')}</div>}</td>
+          <td>{it.name}{it.suppliers.length > 0 && <div className="sp-mute sp-small">{it.suppliers.join(', ')}</div>}
+            {it.supplierOffered > 0 && <div className="sp-tag sup">🧺 CGV tự thêm {qtyText(it.supplierOffered)} {it.unit}{it.supplierAdded < it.supplierOffered ? ` · quán lấy ${qtyText(it.supplierAdded)}` : ''}</div>}
+            {it.supplierEdits > 0 && <div className="sp-tag edit">✏️ CGV sửa giá {it.supplierEdits} lần</div>}</td>
           <td>{qtyText(it.qty)} {it.unit}</td>
           <td>{it.price !== null ? money(it.price) : '—'}{it.change ? <div className={it.change > 0 ? 'sp-up' : 'sp-down'}>{changeText(it.change)}</div> : null}</td>
           <td className="sp-money">{money(it.amount)}</td>

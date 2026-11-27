@@ -263,9 +263,10 @@ async function main() {
     (SELECT count(*)::int FROM unnest(ARRAY['spice_suppliers', 'spice_items', 'spice_orders', 'spice_payments']) t
       WHERE to_regclass('public.' || t) IS NOT NULL AND (has_table_privilege('anon', 'public.' || t, 'SELECT') OR has_table_privilege('authenticated', 'public.' || t, 'SELECT'))) AS open_tables,
     (SELECT count(*)::int FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'spice_items' AND column_name IN ('default_qty', 'sort')) AS item_cols,
+    (SELECT count(*)::int FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'spice_orders' AND column_name = 'supplier_paid_at') AS paid_col,
     (SELECT count(*)::int FROM public.spice_items) AS items`);
   console.log(JSON.stringify(spices));
-  if (spices.tables !== 4 || spices.open_tables !== 0 || spices.item_cols !== 2) throw new Error('Chưa cài được phần Gọi gia vị.');
+  if (spices.tables !== 4 || spices.open_tables !== 0 || spices.item_cols !== 2 || spices.paid_col !== 1) throw new Error('Chưa cài được phần Gọi gia vị.');
 
   // Báo lỗi chéo giữa nhân viên, chủ duyệt mới thành phạt (payroll_peer_reports.sql).
   await query(fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', 'payroll_peer_reports.sql'), 'utf8'));

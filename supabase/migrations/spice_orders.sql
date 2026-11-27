@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS public.spice_orders (
 );
 CREATE INDEX IF NOT EXISTS spice_orders_created ON public.spice_orders (created_at DESC);
 CREATE INDEX IF NOT EXISTS spice_orders_received ON public.spice_orders (received_date) WHERE received_date IS NOT NULL;
+-- Chủ gia vị tự đánh dấu đơn đã nhận tiền (sổ riêng của chủ gia vị, 2026-11-27). Nợ của quán vẫn tính theo spice_payments.
+ALTER TABLE public.spice_orders ADD COLUMN IF NOT EXISTS supplier_paid_at timestamptz;
 CREATE INDEX IF NOT EXISTS spice_orders_supplier ON public.spice_orders (supplier_id, created_at DESC);
 
 -- Chủ quán trả nợ chủ gia vị (gom nhiều đơn): tiền mặt hay chuyển khoản.

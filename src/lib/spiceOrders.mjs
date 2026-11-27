@@ -159,10 +159,14 @@ export function spiceStats(orders, { period = 'day', supplierNames = {} } = {}) 
       if (!k) continue;
       const amount = lineAmount(l);
       g.total += amount;
-      const it = g.items.get(k) || { name: cleanName(l.name), unit: l.unit || '', qty: 0, amount: 0, price: null, first: null, before: null, suppliers: new Set() };
+      const it = g.items.get(k) || { name: cleanName(l.name), unit: l.unit || '', qty: 0, amount: 0, price: null, first: null, before: null, suppliers: new Set(),
+        supplierAdded: 0, supplierOffered: 0, supplierEdits: 0 };
       g.items.set(k, it);
       it.qty += lineQty(l);
       it.amount += amount;
+      // Lưu lại: chủ gia vị tự thêm món (số đã lấy) / chủ gia vị sửa giá khác giá lần trước.
+      if (l.by_supplier) { it.supplierAdded += lineQty(l); it.supplierOffered += Number(l.qty) || 0; }
+      if (l.price_by === 'supplier' && l.old_price !== null && l.old_price !== undefined && hasPrice(l) && Number(l.price) !== Number(l.old_price)) it.supplierEdits += 1;
       if (hasPrice(l)) {
         // Mốc so: giá lần trước của đơn đầu kỳ; món lần đầu mới có giá thì lấy giá đầu kỳ (trong kỳ đổi giá vẫn thấy ▲▼).
         if (it.first === null) { it.first = Number(l.price); it.before = l.old_price ?? Number(l.price); }
@@ -176,7 +180,7 @@ export function spiceStats(orders, { period = 'day', supplierNames = {} } = {}) 
     items: [...g.items.values()].map(it => ({
       name: it.name, unit: it.unit, qty: Math.round(it.qty * 1000) / 1000, amount: it.amount, price: it.price, first: it.first,
       change: it.price !== null && it.before !== null && it.before !== undefined ? it.price - Number(it.before) : null,
-      suppliers: [...it.suppliers],
+      suppliers: [...it.suppliers], supplierAdded: Math.round(it.supplierAdded * 1000) / 1000, supplierOffered: Math.round(it.supplierOffered * 1000) / 1000, supplierEdits: it.supplierEdits,
     })).sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name, 'vi')),
   }));
 }
@@ -299,6 +303,7 @@ export function applyPrices(order, prices, { by, at, who = 'supplier', done = fa
     if (before === price) continue;
     if (who !== 'admin' && !supplierCanPrice(order, i)) return { error: `"${items[i].name}": quán đã nhận hàng, muốn sửa giá thì báo chủ quán.` };
     items[i].price = price;
+    items[i].price_by = who;
     changes.push({ name: items[i].name, from: before, to: price });
   }
   const events = [];
@@ -315,9 +320,72 @@ export function applyPrices(order, prices, { by, at, who = 'supplier', done = fa
   return { patch };
 }
 
+/**
+ * Chủ gia vị tự thêm món vào đơn chưa nhận (quán gọi thiếu): raw [{ name, unit, qty, price }]. Dòng mới đánh dấu by_supplier,
+ * giá chủ gia vị ghi (trống thì lấy giá lần trước). Khi nhận, quán chọn Không lấy được. → { patch, lines } hoặc { error }.
+ */
+export function supplierAddLines(order, raw, { last = new Map(), by, at }) {
+  if (order.cancelled_at) return { error: 'Đơn đã huỷ.' };
+  if (order.received_at) return { error: 'Quán đã nhận đơn này rồi, không thêm được.' };
+  const list = Array.isArray(raw) ? raw : [];
+  const built = buildLines(list, { last, existing: order.items, by, at });
+  if (built.error) return built;
+  const priceOfRaw = new Map(list.map(r => [itemKey(cleanName(r?.name)), r?.price]));
+  const lines = [];
+  for (const l of built.lines) {
+    const rawPrice = priceOfRaw.get(itemKey(l.name));
+    const typed = rawPrice === undefined || rawPrice === null || String(rawPrice).trim() === '' ? null : parsePrice(rawPrice);
+    if (typed === undefined) return { error: `Giá "${l.name}" không hợp lệ.` };
+    lines.push({ ...l, price: typed ?? l.price, ...(typed !== null ? { price_by: 'supplier' } : {}), by_supplier: true });
+  }
+  const items = [...order.items, ...lines];
+  if (orderTotal(items) > MAX_SPICE_TOTAL) return { error: TOO_BIG };
+  return { patch: { items, total: orderTotal(items),
+    log: pushLog(order, [{ at, by, who: 'supplier', type: 'add', items: logItems(lines) }]) }, lines };
+}
+
+/** Chủ gia vị đánh dấu đơn đã nhận tiền / chưa (sổ riêng của chủ gia vị; nợ của quán vẫn theo các lần quán trả). */
+export function setSupplierPaid(order, paid, { by, at }) {
+  if (order.cancelled_at) return { error: 'Đơn đã huỷ.' };
+  if (!order.received_at) return { error: 'Quán chưa nhận đơn này.' };
+  if (!!order.supplier_paid_at === !!paid) return { patch: null };
+  return { patch: { supplier_paid_at: paid ? at : null,
+    log: pushLog(order, [{ at, by, who: 'supplier', type: paid ? 'paid' : 'unpaid' }]) } };
+}
+
+/**
+ * Thống kê cho chủ gia vị: đơn quán đã nhận, lọc paid ('all' | 'paid' | 'unpaid' theo dấu chủ gia vị bấm) và ngày nhận [from, to].
+ * → { count, total, paid: { count, total }, unpaid: { count, total }, orders (mới trước), items: [{ name, unit, qty, amount, orders }] }
+ */
+export function supplierOrderStats(orders, { paid = 'all', from = '', to = '9999' } = {}) {
+  const received = (orders || []).filter(o => !o.cancelled_at && o.received_at)
+    .map(o => ({ ...o, date: o.received_date || vnDateOf(o.received_at) }))
+    .filter(o => o.date >= from && o.date <= to);
+  const part = list => ({ count: list.length, total: list.reduce((s, o) => s + orderTotal(o.items), 0) });
+  const paidList = received.filter(o => o.supplier_paid_at), unpaidList = received.filter(o => !o.supplier_paid_at);
+  const shown = paid === 'paid' ? paidList : paid === 'unpaid' ? unpaidList : received;
+  const items = new Map();
+  for (const o of shown) for (const l of o.items || []) {
+    const k = itemKey(l.name);
+    const qty = lineQty(l);
+    if (!k || qty <= 0) continue;
+    const it = items.get(k) || { name: cleanName(l.name), unit: l.unit || '', qty: 0, amount: 0, orders: 0 };
+    it.qty = Math.round((it.qty + qty) * 1000) / 1000;
+    it.amount += lineAmount(l);
+    it.orders += 1;
+    items.set(k, it);
+  }
+  return {
+    ...part(shown), paid: part(paidList), unpaid: part(unpaidList),
+    orders: [...shown].sort((a, b) => String(b.received_at).localeCompare(String(a.received_at))),
+    items: [...items.values()].sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name, 'vi')),
+  };
+}
+
 /** Kết quả kiểm hàng từng dòng: đủ / thiếu / dư / sai hàng (sai loại, hư, không đúng yêu cầu). */
-export const CHECKS = ['ok', 'short', 'over', 'wrong'];
-export const CHECK_LABELS = { ok: 'Đủ', short: 'Thiếu', over: 'Dư', wrong: 'Sai hàng' };
+export const CHECKS = ['ok', 'short', 'over', 'wrong', 'skip'];
+// skip = Không lấy: món chủ gia vị tự thêm mà quán không cần (không tính tiền).
+export const CHECK_LABELS = { ok: 'Đủ', short: 'Thiếu', over: 'Dư', wrong: 'Sai hàng', skip: 'Không lấy' };
 
 /**
  * Kiểm một dòng đã nhận: { check, got (số nhận), diff (nhận − gọi), note }. Dòng cũ chưa có check thì suy ra từ số nhận.
@@ -357,6 +425,9 @@ function readChecks(order, received) {
       } else if (check === 'wrong') {
         if (!note) return { error: `"${l.name}": ghi rõ sai thế nào (vd: ớt xanh thay ớt đỏ, hàng hư).` };
         got = q === null ? 0 : q;
+      } else if (check === 'skip') {
+        if (!l.by_supplier) return { error: `"${l.name}": quán gọi món này, không lấy thì chọn Thiếu (nhận 0).` };
+        got = 0;
       }
     } else if (r !== null && r !== undefined && String(r).trim() !== '') {
       // Kiểu cũ: chỉ có số nhận.
@@ -409,6 +480,7 @@ export function checkText(c) {
   const d = Math.round((Number(c.got) - Number(c.qty)) * 1000) / 1000;
   const check = c.check || (d < 0 ? 'short' : d > 0 ? 'over' : 'ok');
   if (check === 'wrong') return `${c.name} sai hàng${c.note ? `: ${c.note}` : ''} (gọi ${qtyText(c.qty)}, lấy ${qtyText(c.got)}${u})`;
+  if (check === 'skip') return `${c.name} không lấy (chủ gia vị tự thêm ${qtyText(c.qty)}${u})${c.note ? ` · ${c.note}` : ''}`;
   if (check === 'ok') return `${c.name} đủ`;
   return `${c.name} ${check === 'short' ? 'thiếu' : 'dư'} ${qtyText(Math.abs(d))}${u} (gọi ${qtyText(c.qty)}, nhận ${qtyText(c.got)})${c.note ? ` · ${c.note}` : ''}`;
 }
@@ -439,6 +511,8 @@ export function logLine(e) {
     : e.type === 'receive' ? withNote((e.checks || e.short)?.length ? `nhận hàng: ${(e.checks || e.short).map(checkText).join('; ')}` : 'nhận đủ hàng')
     : e.type === 'recheck' ? withNote(e.checks?.length ? `kiểm lại: ${e.checks.map(checkText).join('; ')}` : 'kiểm lại: tất cả đủ')
     : e.type === 'cancel' ? withNote('huỷ đơn')
+    : e.type === 'paid' ? 'đánh dấu đã nhận tiền đơn này'
+    : e.type === 'unpaid' ? 'đánh dấu chưa nhận tiền đơn này'
     : String(e.type || '');
   return { time: e.at ? shortTime(e.at) : '', who, role: e.who || 'staff', text };
 }
@@ -561,7 +635,7 @@ export function planItemList(existing, text) {
 export function supplierDays(orders, payments, { from = '' } = {}) {
   const byDate = new Map();
   const day = date => {
-    if (!byDate.has(date)) byDate.set(date, { date, orders: [], total: 0, counts: { short: 0, over: 0, wrong: 0 }, waiting: 0, paid: 0, payments: [], balance: 0 });
+    if (!byDate.has(date)) byDate.set(date, { date, orders: [], total: 0, counts: { short: 0, over: 0, wrong: 0, skip: 0 }, waiting: 0, paid: 0, payments: [], balance: 0 });
     return byDate.get(date);
   };
   for (const o of orders || []) {
@@ -572,7 +646,7 @@ export function supplierDays(orders, payments, { from = '' } = {}) {
       const c = lineCheck(l);
       if (c.check !== 'ok') d.counts[c.check] += 1;
       return { name: l.name, unit: l.unit || '', qty: Number(l.qty) || 0, got: c.got, check: c.check, diff: c.diff, note: c.note,
-        price: l.price ?? null, amount: lineAmount(l) };
+        price: l.price ?? null, amount: lineAmount(l), by_supplier: !!l.by_supplier };
     });
     const total = orderTotal(o.items);
     d.total += total;
@@ -602,15 +676,16 @@ export function dayReportText({ supplierName = '', day, withMoney = true }) {
   day.orders.forEach((o, k) => {
     out.push('', `Đơn ${k + 1} (gọi ${shortTime(o.created_at)}${o.created_by_name ? ` – ${o.created_by_name}` : ''}; nhận ${shortTime(o.received_at)}${o.received_by_name ? ` – ${o.received_by_name}` : ''}):`);
     for (const l of o.lines) {
-      const mark = l.check === 'ok' ? '✅' : l.check === 'wrong' ? '⚠️' : l.check === 'short' ? '➖' : '➕';
+      const mark = l.check === 'ok' ? '✅' : l.check === 'wrong' ? '⚠️' : l.check === 'short' ? '➖' : l.check === 'skip' ? '🚫' : '➕';
       const what = l.check === 'ok' ? `${qtyText(l.got)}${l.unit ? ` ${l.unit}` : ''} đủ` : checkText(l).replace(`${l.name} `, '');
       out.push(`${mark} ${l.name}: ${what}${withMoney ? ` = ${l.price === null ? 'chưa giá' : vnd(l.amount)}` : ''}`);
     }
     if (o.receive_note) out.push(`Ghi chú nhận: ${o.receive_note}`);
     if (withMoney) out.push(`Tiền đơn: ${vnd(o.total)}`);
   });
-  const { short, over, wrong } = day.counts;
+  const { short, over, wrong, skip = 0 } = day.counts;
   if (short || over || wrong) out.push('', `Cần đối lại: ${[short && `${short} món thiếu`, over && `${over} món dư`, wrong && `${wrong} món sai`].filter(Boolean).join(', ')}`);
+  if (skip) out.push(`Quán không lấy ${skip} món chủ gia vị tự thêm (không tính tiền).`);
   if (withMoney) {
     out.push('', `Tổng nhận ngày này: ${vnd(day.total)}`);
     if (day.paid) out.push(`Quán trả trong ngày: ${vnd(day.paid)}`);

@@ -260,3 +260,26 @@ textarea.sp-field { min-height: 64px; resize: vertical; }
 .sp-price input { min-height: 46px; }
 /* Số tiền trong ô tổng không xuống dòng ("200.000" / "đ") */
 .sp-tile .v { white-space: nowrap; word-break: normal; font-size: clamp(14px, 4.3vw, 17px); }
+
+/* Chủ gia vị tự thêm món, Không lấy, đã nhận tiền, thống kê của chủ gia vị */
+.sp-line .added.sup, .sp-recv .added.sup { color: var(--sp-main-dark); background: var(--sp-main-soft); }
+.sp-recv .added { display: inline-block; margin-top: 4px; font-size: 12px; font-weight: 700; border-radius: 6px; padding: 1px 6px; }
+.sp-recv-checks.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.sp-recv-checks.five .sp-pick { font-size: 13px; padding: 8px 1px; }
+.sp-recv-checks .sp-pick.on.skip { background: #f3f4f6; border-color: var(--sp-mute); color: var(--sp-text); }
+.sp-check.skip { background: #f3f4f6; color: var(--sp-mute); }
+.sp-paidmark { margin-top: 8px; padding: 6px 10px; border-radius: 10px; background: var(--sp-ok-soft); color: var(--sp-ok); font-weight: 700; font-size: 14px; }
+.sp-tag { display: inline-block; margin-top: 3px; font-size: 12px; font-weight: 700; border-radius: 6px; padding: 1px 6px; }
+.sp-tag.sup { background: var(--sp-main-soft); color: var(--sp-main-dark); }
+.sp-tag.edit { background: var(--sp-blue-soft); color: var(--sp-blue); }
+.sp-paybtn { min-height: 40px; border-radius: 999px; padding: 6px 12px; font-weight: 700; font-size: 14px; border: 1px solid var(--sp-line); background: #fff; color: var(--sp-text); white-space: nowrap; }
+.sp-paybtn.paid { background: var(--sp-ok); border-color: var(--sp-ok); color: #fff; }
+.sp-hist { padding: 10px 0; border-bottom: 1px dashed var(--sp-line); }
+.sp-hist:last-child { border-bottom: 0; }
+.sp-addbox { margin-top: 10px; padding: 12px; border: 2px dashed var(--sp-main); border-radius: 12px; background: #fffbeb; }
+.sp-addrow { padding: 8px 0; border-bottom: 1px dashed var(--sp-line); }
+.sp-addrow .sp-unit { width: 64px; flex: none; }
+.sp-tiles.two { grid-template-columns: repeat(2, 1fr); }
+button.sp-tile { font: inherit; color: inherit; cursor: pointer; }
+.sp-tile.sel { outline: 3px solid var(--sp-main-soft); border-color: var(--sp-main); }
+.sp-tile.paid { background: var(--sp-ok-soft); border-color: #bbf7d0; }
