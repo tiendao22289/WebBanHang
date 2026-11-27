@@ -493,3 +493,6 @@ textarea.sp-field.sp-note-in:focus { min-height: 72px; }
   .sp-drawer-list .sp-qty button { width: 30px; height: 30px; font-size: 17px; }
   .sp-drawer-list .sp-qty .q { min-width: 32px; font-size: 14px; }
 }
+.sp-addrow-btn.big { min-height: 64px; font-size: 18px; margin-top: 4px; }
+.sp-addrow-btn.big span { width: 34px; height: 34px; font-size: 26px; }
+.sp-fab.sp-fab-admin { bottom: calc(var(--admin-bottom-nav-height, 0px) + 140px); }

@@ -173,10 +173,11 @@ function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders 
       </li>)}</ul>
       {!drawer && <div className="sp-pick-h">Bấm thêm món:</div>}
     </>}
-    {drawer && lines.length > 0 && <button type="button" className="sp-addrow-btn" onClick={() => setPanel(true)}><span aria-hidden="true">+</span> Thêm món khác</button>}
+    {drawer && <button type="button" className={`sp-addrow-btn${lines.length ? '' : ' big'}`} onClick={() => setPanel(true)}>
+      <span aria-hidden="true">+</span> {lines.length ? 'Thêm món khác' : 'Chọn món'}</button>}
     {drawer && <DrawerFab onOpen={() => setPanel(true)} hidden={panel} />}
     {drawer && panel && <ItemDrawer items={ranked} lines={lines} idx={idx} prices={prices} bump={bump} onClose={() => setPanel(false)} />}
-    {(!drawer || !lines.length) && <>
+    {!drawer && <>
     {ranked.length > 8 && <input className="sp-field" type="search" placeholder="🔍 Tìm món (gõ không dấu cũng được)" value={q} onChange={e => setQ(e.target.value)} style={{ marginBottom: 10 }} />}
     {shown.length > 0 && <div className="sp-grid">{shown.map(i => {
       const at = idx.get(itemKey(i.name)), on = at !== undefined, p = prices[itemKey(i.name)];
@@ -293,7 +294,7 @@ function CallTab({ data, onSent, goSetup }) {
         </button>)}</div>
       </div>}
     <div className="sp-card">
-      <div className="sp-step-h"><span className="sp-step">2</span>Chọn món <span className="sp-mute sp-small" style={{ fontWeight: 500 }}>· bấm ô để thêm, bấm − để bớt</span></div>
+      <div className="sp-step-h"><span className="sp-step">2</span>Chọn món <span className="sp-mute sp-small" style={{ fontWeight: 500 }}>· bấm + để thêm món</span></div>
       {!lines.length && lastOrder && <button type="button" className="sp-btn block" style={{ marginBottom: 10 }} onClick={() => setLines(lastOrder.items.map(l => ({ name: l.name, unit: l.unit || '', qty: fmtQty(Number(l.qty)), step: itemStep(data.items.find(i => itemKey(i.name) === itemKey(l.name))) })))}>
         🔁 Gọi giống lần trước · {lastOrder.items.length} món
       </button>}
