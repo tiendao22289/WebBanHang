@@ -164,7 +164,8 @@ export function spiceStats(orders, { period = 'day', supplierNames = {} } = {}) 
       it.qty += lineQty(l);
       it.amount += amount;
       if (hasPrice(l)) {
-        if (it.first === null) { it.first = Number(l.price); it.before = l.old_price ?? null; }
+        // Mốc so: giá lần trước của đơn đầu kỳ; món lần đầu mới có giá thì lấy giá đầu kỳ (trong kỳ đổi giá vẫn thấy ▲▼).
+        if (it.first === null) { it.first = Number(l.price); it.before = l.old_price ?? Number(l.price); }
         it.price = Number(l.price);
       }
       if (supplierNames[o.supplier_id]) it.suppliers.add(supplierNames[o.supplier_id]);

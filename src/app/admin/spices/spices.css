@@ -258,3 +258,5 @@ textarea.sp-field { min-height: 64px; resize: vertical; }
 .sp-qtyb { font-weight: 800; font-size: 16px; white-space: nowrap; background: #f3f4f6; border-radius: 8px; padding: 1px 8px; }
 .sp-price .amt { flex: 0 0 auto; min-width: 76px; text-align: right; color: var(--sp-main-dark); }
 .sp-price input { min-height: 46px; }
+/* Số tiền trong ô tổng không xuống dòng ("200.000" / "đ") */
+.sp-tile .v { white-space: nowrap; word-break: normal; font-size: clamp(14px, 4.3vw, 17px); }

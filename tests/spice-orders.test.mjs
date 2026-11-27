@@ -191,6 +191,14 @@ test('thống kê từng món theo ngày / tháng / năm, có giá tăng giảm 
   assert.equal(month[0].items.find(i => i.name === 'Muối').qty, 5);
   assert.equal(month[0].items.find(i => i.name === 'Muối').first, 12000);
   assert.equal(spice.spiceStats(ORDERS, { period: 'year' })[0].key, '2026');
+  // Món lần đầu có giá rồi trong cùng ngày đổi giá: vẫn thấy ▲ so với giá đầu ngày; một lần duy nhất thì không có ▲▼.
+  const fresh = [
+    { supplier_id: SUP, received_at: '2026-11-27T03:00:00Z', items: [{ name: 'Ớt', qty: 1, price: 60000, old_price: null }] },
+    { supplier_id: SUP, received_at: '2026-11-27T05:00:00Z', items: [{ name: 'Ớt', qty: 1, price: 70000, old_price: 60000 }, { name: 'Sả', qty: 1, price: 25000, old_price: null }] },
+  ];
+  const day = spice.spiceStats(fresh, { period: 'day' })[0];
+  assert.equal(day.items.find(i => i.name === 'Ớt').change, 10000);
+  assert.equal(day.items.find(i => i.name === 'Sả').change, 0);
 });
 
 test('mục Gia vị của một ngày (/thongke): từng món, tăng / giảm, đã trả, còn nợ tới hết ngày', () => {
