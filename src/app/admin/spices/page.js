@@ -263,8 +263,11 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
     open: data.orders.filter(o => ['new', 'priced', 'waiting_price'].includes(orderState(o))).length,
     done: data.orders.filter(o => orderState(o) === 'done').length,
   };
+  // Đơn đã huỷ không nằm chung: gom vào mục "Đơn đã huỷ" gập lại ở cuối tab Tất cả (không tính tiền, chỉ để xem lại).
+  const cancelled = data.orders.filter(o => o.cancelled_at);
   const list = data.orders.filter(o => {
     const st = orderState(o);
+    if (st === 'cancelled') return false;
     return filter === 'all' || (filter === 'open' ? ['new', 'priced', 'waiting_price'].includes(st) : st === 'done');
   });
   const run = async (order, body, okText) => {
@@ -275,7 +278,7 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
   };
   return <>
     <div className="sp-seg" role="tablist">
-      {[['open', 'Đang chờ', counts.open], ['done', 'Đã nhận', counts.done], ['all', 'Tất cả', data.orders.length]].map(([k, l, n]) => <button key={k} type="button" role="tab" aria-selected={filter === k}
+      {[['open', 'Đang chờ', counts.open], ['done', 'Đã nhận', counts.done], ['all', 'Tất cả', data.orders.length - cancelled.length]].map(([k, l, n]) => <button key={k} type="button" role="tab" aria-selected={filter === k}
         className={filter === k ? 'on' : ''} onClick={() => setFilter(k)}>{l}<small>{n}</small></button>)}
     </div>
     {!list.length && <p className="sp-empty">Không có đơn.</p>}
@@ -318,6 +321,18 @@ Ghi lý do (vd: đơn thử, bấm nhận nhầm):`);
         <History log={o.log} />
       </div>;
     }} />
+    {filter === 'all' && cancelled.length > 0 && <Fold className="sp-dayfold" plain head={<span className="sp-day-head">
+      <span className="sp-b">🗑 Đơn đã huỷ</span><span className="sp-mute"> · {cancelled.length} đơn · không tính tiền</span></span>}>
+      <div className="sp-dayfold-in">{cancelled.map(o => {
+        const why = [...(o.log || [])].reverse().find(e => e.type === 'cancel');
+        return <div key={o.id} className="sp-card sp-order cancelled sp-cx">
+          <div className="sp-row between"><span className="sp-b">{supplierById[o.supplier_id]?.name || 'Chủ gia vị'}</span><span className="sp-mute sp-small">{o.items.length} món · {money(orderTotal(o.items))}</span></div>
+          <div className="sp-who"><span>🕘 Gọi {shortTime(o.created_at)} · <b>{o.created_by_name}</b></span><span>✖ Huỷ {shortTime(o.cancelled_at)} · <b>{o.cancelled_by_name}</b></span></div>
+          {why?.note && <div className="sp-mute sp-small">Lý do: {why.note}</div>}
+          <History log={o.log} />
+        </div>;
+      })}</div>
+    </Fold>}
     {(sheet?.kind === 'receive' || sheet?.kind === 'recheck') && <ReceiveSheet order={sheet.order} recheck={sheet.kind === 'recheck'} onClose={() => setSheet(null)}
       onSave={(received, note) => run(sheet.order, { action: sheet.kind, received, note }, sheet.kind === 'recheck' ? 'Đã kiểm lại ✓' : 'Đã nhận ✓').then(ok => { if (ok) setSheet(null); return ok; })} />}
     {sheet?.kind === 'add' && <AddSheet order={sheet.order} data={data} onClose={() => setSheet(null)} onAdded={(j, items, note) => {

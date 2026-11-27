@@ -202,9 +202,11 @@ function SupplierView() {
 
     {view === 'done' && <>
       {single && singleDone
-        ? <>{card(single)}<button type="button" className="sp-btn block" onClick={() => setShowAll(true)}>Xem tất cả đơn đã giao</button></>
+        ? <>{single.cancelled_at && <div className="sp-msg err">Đơn này quán đã huỷ lúc {shortTime(single.cancelled_at)} — không giao, không tính tiền.</div>}
+          {card(single)}<button type="button" className="sp-btn block" onClick={() => setShowAll(true)}>Xem tất cả đơn đã giao</button></>
         : groups.done.length ? <DayGroups orders={groups.done} today={vnToday()} render={card} /> : <p className="sp-empty">Chưa có đơn quán đã nhận.</p>}
-      {groups.cancelled.length > 0 && <Fold head={`Đơn quán đã huỷ (${groups.cancelled.length})`}>{groups.cancelled.map(card)}</Fold>}
+      {groups.cancelled.length > 0 && !(single && singleDone) && <Fold className="sp-dayfold" plain head={<span className="sp-day-head"><span className="sp-b">🗑 Đơn quán đã huỷ</span><span className="sp-mute"> · {groups.cancelled.length} đơn · không tính tiền</span></span>}>
+        <div className="sp-dayfold-in">{groups.cancelled.map(card)}</div></Fold>}
     </>}
 
     {view === 'days' && <>
@@ -232,7 +234,7 @@ function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notic
   const state = orderState(order);
   const open = !order.cancelled_at && !order.received_at;
   // Đơn đã nhận / đã huỷ: gọn — đầu thẻ có tóm tắt đủ / thiếu / dư / sai, bấm mới hiện từng món (đơn mở từ link thì hiện sẵn).
-  const [showLines, setShowLines] = useState(() => open || focus || order.items.some((_, i) => supplierCanPrice(order, i)));
+  const [showLines, setShowLines] = useState(() => !order.cancelled_at && (open || focus || order.items.some((_, i) => supplierCanPrice(order, i))));
   const received = !!order.received_at && !order.cancelled_at;
   const counts = received ? order.items.reduce((m, l) => { const c = lineCheck(l).check; m[c] = (m[c] || 0) + 1; return m; }, {}) : {};
   // Đơn đang gõ: tính lại tiền theo giá đang gõ.
@@ -304,7 +306,7 @@ function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notic
       })}
     </ul>}
     {showLines && <div className="sp-total"><span>Tổng{missing ? ` (còn ${missing} món chưa giá)` : ''}</span><span className="sp-money">{money(total)}</span></div>}
-    {showLines && !open && !focus && <button type="button" className="sp-btn ghost" onClick={() => setShowLines(false)}>Thu gọn</button>}
+    {showLines && !open && (!focus || order.cancelled_at) && <button type="button" className="sp-btn ghost" onClick={() => setShowLines(false)}>Thu gọn</button>}
     {canEditAny
       ? <textarea className="sp-field sp-note-in" rows={1} placeholder="💬 Ghi chú cho quán" value={noteValue} onChange={e => onNote(order, e.target.value)} />
       : order.supplier_note && <div className="sp-note supplier">💬 Bạn ghi: {order.supplier_note}</div>}
