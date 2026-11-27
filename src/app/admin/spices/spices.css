@@ -365,3 +365,23 @@ textarea.sp-field.sp-note-in:focus { min-height: 72px; }
 .sp-actbtns .sp-fab span { font-size: 28px; }
 .sp-page .sp { padding-bottom: calc(130px + env(safe-area-inset-bottom)); }
 .sp-actbtns .sp-btn { white-space: nowrap; padding: 6px 8px; }
+
+/* Đầu trang chủ gia vị: thẻ tổng gọn + tab dạng nút gạt */
+.sp-sumbar { display: flex; align-items: center; gap: 12px; background: #fff; border: 1px solid var(--sp-line); border-radius: 14px; padding: 10px 14px; margin: 8px 0 10px; }
+.sp-sumbar .main { flex: 1; min-width: 0; }
+.sp-sumbar .main .k { font-size: 12px; color: var(--sp-mute); font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
+.sp-sumbar .main .v { font-size: 24px; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sp-sumbar .main .v.owe { color: var(--sp-bad); }
+.sp-sumbar .main .v.ok { color: var(--sp-ok); }
+.sp-sumbar .side { flex: 0 0 auto; display: grid; gap: 2px; padding-left: 12px; border-left: 1px solid var(--sp-line); font-size: 13px; }
+.sp-sumbar .side div { display: flex; justify-content: space-between; gap: 10px; }
+.sp-sumbar .side span { color: var(--sp-mute); }
+.sp-sumbar .side b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sp-sumbar .side b.paid { color: var(--sp-ok); }
+.sp-seg.four { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 10px; }
+.sp-seg.four button { position: relative; min-height: 40px; font-size: 13px; gap: 3px; padding: 0 2px; white-space: nowrap; }
+.sp-seg.four button span { font-size: 14px; }
+.sp-seg .dot { position: absolute; top: -5px; right: -2px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--sp-bad); color: #fff;
+  font-size: 11px; font-weight: 800; font-style: normal; line-height: 18px; text-align: center; }
+@media (max-width: 420px) { .sp-seg.four button span { display: none; } .sp-seg.four button { font-size: 14px; } }
+.sp-tip { margin: 0 0 8px; font-size: 13px; color: var(--sp-mute); }

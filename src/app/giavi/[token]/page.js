@@ -140,14 +140,17 @@ function SupplierView() {
   const card = order => <OrderCard key={order.id} order={order} draft={drafts[order.id]} focus={order.id === focusId} busy={busy === order.id} inBar={active?.id === order.id} addReq={addReq?.id === order.id ? addReq.n : 0}
     notice={notice?.id === order.id ? notice : null} onPrice={setPrice} onNote={setNote} onSave={save} onUndo={() => drop(order.id)}
     onAdd={(o, add) => post(o, { add }, `Đã thêm ${add.length} món ✓ Quán sẽ thấy khi nhận hàng.`)} />;
-  const tiles = <>
-    <div className="sp-tiles sup">
-      <div className="sp-tile"><div className="k">Đã giao</div><div className="v">{money(s.delivered)}</div></div>
-      <div className="sp-tile paid"><div className="k">Quán đã trả</div><div className="v">{money(s.paid)}</div></div>
-      <div className="sp-tile owe"><div className="k">Quán còn thiếu</div><div className="v">{money(Math.max(0, s.owed))}</div></div>
+  // Tổng với quán: một thẻ gọn — số quán còn thiếu to bên trái, đã giao / đã trả nhỏ bên phải.
+  const tiles = <div className="sp-sumbar">
+    <div className="main">
+      <div className="k">{s.owed < 0 ? 'Quán trả dư' : 'Quán còn thiếu'}</div>
+      <div className={`v ${s.owed > 0 ? 'owe' : 'ok'}`}>{money(Math.abs(s.owed))}</div>
     </div>
-    {s.owed < 0 && <p className="sp-mute">Quán đã trả dư {money(-s.owed)}.</p>}
-  </>;
+    <div className="side">
+      <div><span>Đã giao</span><b>{money(s.delivered)}</b></div>
+      <div><span>Quán đã trả</span><b className="paid">{money(s.paid)}</b></div>
+    </div>
+  </div>;
   let bar = null;
   if (active) {
     const d = drafts[active.id];
@@ -184,14 +187,14 @@ function SupplierView() {
     <div className="sp-head"><h1>🧂 Đơn gia vị</h1><span className="sp-mute sp-small">{data.supplier.name}</span></div>
     {error && <div className="sp-msg err">{error}</div>}
     {tiles}
-    <div className="sp-tabs grid four" role="tablist">
-      {tabs.map(([k, icon, label, n]) => <button key={k} type="button" role="tab" aria-selected={view === k} className={`sp-tab ${view === k ? 'on' : ''}`} onClick={() => setTab(k)}>
-        <span className="ic" aria-hidden="true">{icon}</span>{label}{n > 0 && <span className="sp-count">{n}</span>}
+    <div className="sp-seg four" role="tablist">
+      {tabs.map(([k, icon, label, n]) => <button key={k} type="button" role="tab" aria-selected={view === k} className={view === k ? 'on' : ''} onClick={() => setTab(k)}>
+        <span aria-hidden="true">{icon}</span>{label}{n > 0 && <i className="dot">{n}</i>}
       </button>)}
     </div>
 
     {view === 'open' && <>
-      {groups.open.length > 0 && <p className="sp-mute sp-small" style={{ margin: '0 0 8px' }}>Điền giá từng món (giá lần trước đã điền sẵn, sửa được) rồi bấm <b>✅ Đã soạn xong</b>.</p>}
+      {groups.open.length > 0 && <p className="sp-tip">Điền giá từng món → bấm <b>✅ Soạn xong</b>. Giá cũ đã điền sẵn, sửa được.</p>}
       {single && !singleDone
         ? <>{card(single)}{groups.open.length > 1 && <button type="button" className="sp-btn block" onClick={() => setShowAll(true)}>Xem {groups.open.length - 1} đơn khác đang chờ soạn</button>}</>
         : groups.open.length ? groups.open.map(card) : <p className="sp-empty">Chưa có đơn mới. Quán gọi là đơn hiện ở đây.</p>}
