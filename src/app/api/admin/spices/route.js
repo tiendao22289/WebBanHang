@@ -20,7 +20,7 @@
  *   move_item { id, dir: -1 | 1 } · delete_item { id } — admin xếp / xoá món (đơn cũ giữ tên món, không ảnh hưởng)
  *   Món nhân viên gõ thêm khi gọi chỉ nằm trong đơn đó, không tự vào danh sách (danh sách do chủ quán quyết).
  *   pay { supplier_id, amount, method, paid_date, note } · delete_payment { id } — admin
- *   confirm_paid { ids, ok, note } — admin xác nhận (ok) / báo không đúng (ok=false) lời báo "đã nhận tiền" của chủ gia vị
+ *   confirm_paid { ids, ok, method: cash|transfer (bắt buộc khi ok), note } — admin xác nhận (ok) / báo không đúng (ok=false) lời báo "đã nhận tiền" của chủ gia vị
  */
 import { NextResponse } from 'next/server';
 import { randomBytes } from 'node:crypto';
@@ -310,7 +310,7 @@ export async function POST(request) {
       let changed = 0, total = 0;
       const errors = [];
       for (const order of list || []) {
-        const r = confirmSupplierPaid(order, body.ok !== false, { by, at, note: str(body.note, 200) });
+        const r = confirmSupplierPaid(order, body.ok !== false, { by, at, note: str(body.note, 200), method: String(body.method || '') });
         if (r.error) { errors.push(r.error); continue; }
         const saved = await updateOrder(db, order, r.patch, at);
         if (saved) { changed += 1; total += orderTotal(order.items); }

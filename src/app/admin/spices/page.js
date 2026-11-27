@@ -9,7 +9,7 @@ import { createPortal } from 'react-dom';
 import { useBackClose } from '@/lib/useBackClose';
 import { useReloadHold } from '@/lib/useBuildRefresh';
 import {
-  CHECK_LABELS, STATE_LABELS, addedLater, paidState, changeText, cleanName, dayReportText, lineCheck, itemKey, itemLineText, itemStep, orderedItems, plainText, rankItems, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shareText, shortTime,
+  CHECK_LABELS, PAY_METHODS, STATE_LABELS, addedLater, paidState, changeText, cleanName, dayReportText, lineCheck, itemKey, itemLineText, itemStep, orderedItems, plainText, rankItems, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shareText, shortTime,
 } from '@/lib/spiceOrders.mjs';
 import { CheckBadge, DayCard, DayGroups } from './SpiceShared';
 import './spices.css';
@@ -351,10 +351,10 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
         {o.note && <div className="sp-note staff">📝 {o.note}</div>}
         {o.supplier_note && <div className="sp-note supplier">💬 Chủ gia vị: {o.supplier_note}</div>}
         {open && o.items.some(l => l.by_supplier) && <div className="sp-note supplier">🧺 Chủ gia vị tự thêm {o.items.filter(l => l.by_supplier).length} món. Bấm <b>Kiểm hàng</b> để chọn lấy hay <b>Không lấy</b>.</div>}
-        {paidState(o) === 'confirmed' && <div className="sp-paidmark">🔒 Đã xác nhận thanh toán · {shortTime(o.paid_confirmed_at)}</div>}
+        {paidState(o) === 'confirmed' && <div className="sp-paidmark">🔒 Đã xác nhận thanh toán{PAY_METHODS[o.paid_method] ? ` · ${PAY_METHODS[o.paid_method]}` : ''} · {shortTime(o.paid_confirmed_at)}</div>}
         {paidState(o) === 'pending' && <div className="sp-paidmark ask">⏳ Chủ gia vị báo đã nhận tiền · {shortTime(o.supplier_paid_at)}
           {isAdmin && <span className="sp-ask-btns">
-            <button type="button" className="sp-btn ok" disabled={busy === o.id} onClick={() => run(o, { action: 'confirm_paid', ids: [o.id], ok: true }, 'Đã xác nhận thanh toán ✓')}>✓ Xác nhận</button>
+            <button type="button" className="sp-btn ok" disabled={busy === o.id} onClick={() => setSheet({ kind: 'confirm', order: o })}>✓ Xác nhận</button>
             <button type="button" className="sp-btn bad" disabled={busy === o.id} onClick={() => { const note = window.prompt('Chưa thanh toán đơn này? Ghi lý do cho chủ gia vị (không bắt buộc):', ''); if (note !== null) run(o, { action: 'confirm_paid', ids: [o.id], ok: false, note }, 'Đã báo lại: chưa thanh toán'); }}>Không đúng</button>
           </span>}
         </div>}
@@ -400,6 +400,8 @@ Ghi lý do (vd: đơn thử, bấm nhận nhầm):`);
       const sup = j.supplier || supplierById[sheet.order.supplier_id];
       if (sup) onShare(sup, j.order, items, { added: true, note });
     }} />}
+    {sheet?.kind === 'confirm' && <ConfirmPaySheet orders={[sheet.order]} onClose={() => setSheet(null)}
+      onConfirm={(method, note) => run(sheet.order, { action: 'confirm_paid', ids: [sheet.order.id], ok: true, method, note }, `Đã xác nhận thanh toán · ${PAY_METHODS[method]} ✓`).then(ok => { if (ok) setSheet(null); return ok; })} />}
     {sheet?.kind === 'price' && <PriceSheet order={sheet.order} onClose={() => setSheet(null)}
       onSave={prices => run(sheet.order, { action: 'set_prices', prices }, 'Đã sửa giá ✓').then(ok => ok && setSheet(null))} />}
   </>;
@@ -572,18 +574,19 @@ function DaysTab({ data, reload, onShareText }) {
 function PayAsks({ orders, reload }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [ask, setAsk] = useState(null); // đơn đang xác nhận (hộp chọn tiền mặt / CK)
   if (!orders.length && !msg) return null;
   const total = orders.reduce((t, o) => t + orderTotal(o.items), 0);
-  const act = async (ids, ok) => {
-    let note = '';
-    if (!ok) { note = window.prompt('Ghi lý do cho chủ gia vị (không bắt buộc):', ''); if (note === null) return; }
+  const act = async (ids, ok, method = '', note = '') => {
+    if (!ok) { note = window.prompt('Ghi lý do cho chủ gia vị (không bắt buộc):', ''); if (note === null) return false; }
     setBusy(true); setMsg(null);
     try {
-      const j = await api({ action: 'confirm_paid', ids, ok, note });
-      setMsg({ text: ok ? `Đã xác nhận ${j.changed} đơn · ${money(j.total)} ✓` : 'Đã báo lại chủ gia vị: chưa thanh toán' });
+      const j = await api({ action: 'confirm_paid', ids, ok, method, note });
+      setMsg({ text: ok ? `Đã xác nhận ${j.changed} đơn · ${money(j.total)} · ${PAY_METHODS[method]} ✓` : 'Đã báo lại chủ gia vị: chưa thanh toán' });
       await reload();
-    } catch (e) { setMsg({ err: true, text: e.message }); }
-    setBusy(false);
+      return true;
+    } catch (e) { setMsg({ err: true, text: e.message }); return false; }
+    finally { setBusy(false); }
   };
   return <div className="sp-asks">
     {orders.length > 0 && <>
@@ -592,14 +595,37 @@ function PayAsks({ orders, reload }) {
       {orders.map(o => <div key={o.id} className="sp-row between sp-ask-row">
         <span><b>{shortTime(o.received_at)}</b> · {money(orderTotal(o.items))}<span className="sp-mute sp-small"> · báo {shortTime(o.supplier_paid_at)}</span></span>
         <span className="sp-ask-btns">
-          <button type="button" className="sp-btn ok" disabled={busy} onClick={() => act([o.id], true)}>✓</button>
+          <button type="button" className="sp-btn ok" disabled={busy} onClick={() => setAsk([o])}>✓</button>
           <button type="button" className="sp-btn bad" disabled={busy} onClick={() => act([o.id], false)}>✗</button>
         </span>
       </div>)}
-      {orders.length > 1 && <button type="button" className="sp-btn ok block" style={{ marginTop: 8 }} disabled={busy} onClick={() => act(orders.map(o => o.id), true)}>✓ Xác nhận tất cả {orders.length} đơn · {money(total)}</button>}
+      {orders.length > 1 && <button type="button" className="sp-btn ok block" style={{ marginTop: 8 }} disabled={busy} onClick={() => setAsk(orders)}>✓ Xác nhận tất cả {orders.length} đơn · {money(total)}</button>}
     </>}
+    {ask && <ConfirmPaySheet orders={ask} onClose={() => setAsk(null)} onConfirm={async (method, note) => { if (await act(ask.map(o => o.id), true, method, note)) setAsk(null); }} />}
     {msg && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
   </div>;
+}
+
+/** Hộp xác nhận thanh toán: bắt buộc chọn quán trả bằng tiền mặt hay chuyển khoản. */
+function ConfirmPaySheet({ orders, onClose, onConfirm }) {
+  const [method, setMethod] = useState('');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const total = orders.reduce((t, o) => t + orderTotal(o.items), 0);
+  return <Sheet title="Xác nhận đã thanh toán" onClose={onClose}>
+    <div className="sp-row between" style={{ marginBottom: 6 }}><span>{orders.length} đơn</span><span className="sp-money" style={{ fontSize: 20 }}>{money(total)}</span></div>
+    <div className="sp-mute sp-small" style={{ marginBottom: 10 }}>{orders.map(o => `${shortTime(o.received_at)} · ${money(orderTotal(o.items))}`).join(' — ')}</div>
+    <div className="sp-b" style={{ marginBottom: 6 }}>Quán đã trả bằng <span style={{ color: 'var(--sp-bad)' }}>*</span></div>
+    <div className="sp-btns two" style={{ marginTop: 0 }}>
+      <button type="button" className={`sp-btn ${method === 'cash' ? 'main' : ''}`} onClick={() => setMethod('cash')}>💵 Tiền mặt</button>
+      <button type="button" className={`sp-btn ${method === 'transfer' ? 'main' : ''}`} onClick={() => setMethod('transfer')}>🏦 Chuyển khoản</button>
+    </div>
+    <input className="sp-field" style={{ marginTop: 10 }} placeholder="Ghi chú (không bắt buộc), vd: CK lúc 10h" value={note} maxLength={200} onChange={e => setNote(e.target.value)} />
+    {!method && <p className="sp-mute sp-small" style={{ margin: '8px 0 0' }}>Chọn tiền mặt hoặc chuyển khoản mới xác nhận được.</p>}
+    <div className="sp-btns"><button type="button" className="sp-btn ok block" disabled={!method || busy} onClick={async () => { setBusy(true); await onConfirm(method, note); setBusy(false); }}>
+      {busy ? 'Đang lưu…' : `✓ Xác nhận${method ? ` · ${PAY_METHODS[method]}` : ''}`}</button></div>
+    <p className="sp-mute sp-small" style={{ margin: '8px 0 0' }}>Xác nhận rồi thì trừ nợ và khoá đơn, chủ gia vị không sửa được nữa.</p>
+  </Sheet>;
 }
 
 function DebtTab({ data, reload }) {

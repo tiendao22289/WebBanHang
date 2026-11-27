@@ -270,7 +270,7 @@ function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notic
     {order.note && <div className="sp-note staff">📝 Quán ghi: {order.note}</div>}
     {received && onPaid && <div className="sp-row between sp-paidrow">
       {paidState(order) === 'confirmed'
-        ? <span className="sp-small sp-ok-t">🔒 Quán đã xác nhận thanh toán · {shortTime(order.paid_confirmed_at)}</span>
+        ? <span className="sp-small sp-ok-t">🔒 Quán đã xác nhận thanh toán{order.paid_method ? ` · ${order.paid_method === 'transfer' ? 'chuyển khoản' : 'tiền mặt'}` : ''} · {shortTime(order.paid_confirmed_at)}</span>
         : <>
           <span className="sp-small">{paidState(order) === 'pending' ? <span className="sp-wait-t">⏳ Đã báo, chờ quán xác nhận</span> : <span className="sp-mute">Chưa thanh toán</span>}</span>
           <button type="button" className={`sp-paybtn ${paidState(order) === 'pending' ? 'wait' : ''}`} disabled={busy} onClick={() => onPaid(order, !order.supplier_paid_at)}>
@@ -439,7 +439,7 @@ function SupplierStats({ history, payments, busyId, notice, onPaid, onBulk }) {
                 onClick={() => onPaid(o, !o.supplier_paid_at)}>{o.supplier_paid_at ? '⏳ Chờ xác nhận' : o.pay?.paid ? '✓ Quán đã trả' : o.pay?.covered > 0 ? `Còn ${money(o.pay.left)}` : 'Báo đã TT'}</button>}
         </div>
         {o.supplier_paid_at && !o.paid_confirmed_at && !o.cancelled_at && <div className="sp-mute sp-small">Đã báo lúc {shortTime(o.supplier_paid_at)} · chờ quán xác nhận · bấm lại để bỏ báo nếu nhầm</div>}
-        {o.paid_confirmed_at && <div className="sp-mute sp-small">Quán xác nhận {shortTime(o.paid_confirmed_at)} · đơn đã khoá</div>}
+        {o.paid_confirmed_at && <div className="sp-mute sp-small">Quán xác nhận {shortTime(o.paid_confirmed_at)}{o.paid_method ? ` · ${o.paid_method === 'transfer' ? '🏦 chuyển khoản' : '💵 tiền mặt'}` : ''} · đơn đã khoá</div>}
       </div>)}
     </div>
 

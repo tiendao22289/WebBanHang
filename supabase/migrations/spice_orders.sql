@@ -66,6 +66,8 @@ ALTER TABLE public.spice_orders ADD COLUMN IF NOT EXISTS supplier_paid_at timest
 -- chủ gia vị không sửa / bỏ được gì trên đơn đó nữa.
 ALTER TABLE public.spice_orders ADD COLUMN IF NOT EXISTS paid_confirmed_at timestamptz;
 ALTER TABLE public.spice_orders ADD COLUMN IF NOT EXISTS paid_confirmed_by text;
+-- Chủ quán xác nhận thì bắt buộc ghi trả bằng tiền mặt hay chuyển khoản (2026-11-27).
+ALTER TABLE public.spice_orders ADD COLUMN IF NOT EXISTS paid_method text CHECK (paid_method IS NULL OR paid_method IN ('cash', 'transfer'));
 CREATE INDEX IF NOT EXISTS spice_orders_supplier ON public.spice_orders (supplier_id, created_at DESC);
 
 -- Chủ quán trả nợ chủ gia vị (gom nhiều đơn): tiền mặt hay chuyển khoản.

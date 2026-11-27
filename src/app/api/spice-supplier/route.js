@@ -48,12 +48,12 @@ const view = o => ({
   id: o.id, items: o.items, total: o.total, note: o.note, supplier_note: o.supplier_note, created_at: o.created_at,
   created_by_name: o.created_by_name, priced_at: o.priced_at, received_at: o.received_at, received_by_name: o.received_by_name,
   cancelled_at: o.cancelled_at, cancelled_by_name: o.cancelled_by_name, log: o.log || [], updated_at: o.updated_at,
-  supplier_paid_at: o.supplier_paid_at || null, paid_confirmed_at: o.paid_confirmed_at || null,
+  supplier_paid_at: o.supplier_paid_at || null, paid_confirmed_at: o.paid_confirmed_at || null, paid_method: o.paid_method || null,
 });
 // Đơn đã nhận, gọn, cho mục Thống kê của chủ gia vị.
 const slim = o => ({
   id: o.id, created_at: o.created_at, received_at: o.received_at, received_date: o.received_date, total: o.total, cancelled_at: o.cancelled_at || null,
-  supplier_paid_at: o.supplier_paid_at || null, paid_confirmed_at: o.paid_confirmed_at || null, updated_at: o.updated_at,
+  supplier_paid_at: o.supplier_paid_at || null, paid_confirmed_at: o.paid_confirmed_at || null, paid_method: o.paid_method || null, updated_at: o.updated_at,
   items: (o.items || []).map(l => ({ name: l.name, unit: l.unit, qty: l.qty, received_qty: l.received_qty ?? null, price: l.price ?? null, check: l.check, by_supplier: !!l.by_supplier })),
 });
 

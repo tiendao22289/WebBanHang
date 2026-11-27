@@ -389,13 +389,15 @@ export function setSupplierPaid(order, paid, { by, at }) {
  * Chủ quán xử lý lời báo "đã nhận tiền" của chủ gia vị: ok = true → xác nhận (trừ nợ, khoá đơn với chủ gia vị);
  * ok = false → không đúng (bỏ dấu báo, chủ gia vị báo lại được). → { patch } | { error }.
  */
-export function confirmSupplierPaid(order, ok, { by, at, note = '' }) {
+export const PAY_METHODS = { cash: 'tiền mặt', transfer: 'chuyển khoản' };
+export function confirmSupplierPaid(order, ok, { by, at, note = '', method = '' }) {
   if (order.cancelled_at) return { error: 'Đơn đã huỷ.' };
   if (order.paid_confirmed_at) return { error: 'Đơn này đã xác nhận thanh toán rồi.' };
   if (!order.supplier_paid_at) return { error: 'Chủ gia vị chưa báo đã nhận tiền đơn này.' };
+  if (ok && !PAY_METHODS[method]) return { error: 'Chọn quán đã trả bằng tiền mặt hay chuyển khoản.' };
   const clean = String(note ?? '').trim().slice(0, 200);
   return { patch: ok
-    ? { paid_confirmed_at: at, paid_confirmed_by: by, log: pushLog(order, [{ at, by, who: 'admin', type: 'paid_confirm', ...(clean ? { note: clean } : {}) }]) }
+    ? { paid_confirmed_at: at, paid_confirmed_by: by, paid_method: method, log: pushLog(order, [{ at, by, who: 'admin', type: 'paid_confirm', method, ...(clean ? { note: clean } : {}) }]) }
     : { supplier_paid_at: null, log: pushLog(order, [{ at, by, who: 'admin', type: 'paid_reject', ...(clean ? { note: clean } : {}) }]) } };
 }
 
@@ -576,7 +578,7 @@ export function logLine(e) {
     : e.type === 'cancel' ? withNote(e.was_received ? `huỷ đơn đã nhận (${vnd(e.total)} ra khỏi sổ và công nợ)` : 'huỷ đơn')
     : e.type === 'paid' ? 'báo đã nhận tiền đơn này (chờ quán xác nhận)'
     : e.type === 'unpaid' ? 'bỏ báo đã nhận tiền'
-    : e.type === 'paid_confirm' ? withNote('xác nhận đã thanh toán đơn này — khoá đơn')
+    : e.type === 'paid_confirm' ? withNote(`xác nhận đã thanh toán đơn này${PAY_METHODS[e.method] ? ` (${PAY_METHODS[e.method]})` : ''} — khoá đơn`)
     : e.type === 'paid_reject' ? withNote('báo lại: chưa thanh toán (bỏ dấu của chủ gia vị)')
     : String(e.type || '');
   return { time: e.at ? shortTime(e.at) : '', who, role: e.who || 'staff', text };
