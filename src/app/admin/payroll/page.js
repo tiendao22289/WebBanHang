@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { workforce, workforceWithPhoto } from '@/lib/staffApi';
 import CameraCapture from '@/lib/CameraCapture';
 import { currentWorkDay, dayFlags, dayInShiftMs, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { DEFAULT_OT_RATE, LATE_FINE_MINUTES, MAX_CYCLE_DAYS, STANDARD_DAYS, activeFineKinds, addDays, bonusCheck, computeSalary, cycleDueTo, cyclePayday, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthDays, monthTallies, nothingDue, paydayWeekday,
+import { DEFAULT_OT_RATE, LATE_FINE_MINUTES, MAX_CYCLE_DAYS, STANDARD_DAYS, activeFineKinds, addDays, bonusCheck, computeSalary, cycleDueTo, cyclePayday, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthDays, monthTallies, nothingDue, offDays, paydayWeekday,
   payoutPartOfMonth, shopClosedDays, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
@@ -1085,6 +1085,23 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   const monthLastDay = `${selYear}-${fmt(selMonth)}-${fmt(new Date(Date.UTC(selYear, selMonth, 0)).getUTCDate())}`;
   const monthClosedDays = shopClosedDays({ rules: payrollMonth.closedRules, rows: payrollMonth.closedRows, from: `${selYear}-${fmt(selMonth)}-01`,
     to: monthLastDay < vnToday() ? monthLastDay : vnToday() });
+  // Ngày nghỉ của một người trong tháng đang xem: quán mở mà không có lượt chấm công nào (tới hết ngày làm trước hôm nay), mỗi ngày kèm
+  // đơn báo nghỉ phủ ngày đó (đã duyệt = nghỉ có phép; chờ duyệt / bị từ chối / không có đơn = ghi rõ). Ngày nghỉ không có công, không lương.
+  const offInfo = staffId => {
+    const person = staffList.find(x => x.id === staffId) || { id: staffId };
+    const { employed } = holidayArgs(person, { departures: checkin?.departures || [], returns: payrollMonth.returns || [] });
+    const worked = attendance.filter(a => a.staff_id === staffId).map(a => workDayOf(a, rules));
+    const days = offDays({ key: `${selYear}-${fmt(selMonth)}`, worked, closedDays: monthClosedDays, employed, until: rules ? currentWorkDay(rules, null, Date.now()) : vnToday() });
+    const leaveOf = day => {
+      const reqs = (payrollMonth.leaveDays || []).filter(l => l.staff_id === staffId && day >= String(l.from_date).slice(0, 10) && day <= String(l.to_date).slice(0, 10))
+        .map(l => requests.find(r => r.id === l.request_id)).filter(Boolean);
+      return reqs.find(r => r.status === 'approved') || reqs.find(r => r.status === 'pending') || reqs.find(r => r.status === 'rejected') || null;
+    };
+    const list = days.map(day => ({ day, req: leaveOf(day) }));
+    return { list, approved: list.filter(x => x.req?.status === 'approved').length, unexcused: list.filter(x => x.req?.status !== 'approved').length };
+  };
+  const offKind = req => (!req ? 'Nghỉ không phép · không quét mã' : req.status === 'approved' ? 'Nghỉ có phép · đơn đã duyệt'
+    : req.status === 'pending' ? 'Nghỉ · đơn chờ duyệt' : 'Nghỉ · đơn bị từ chối');
   // Lương tháng đang xem (cùng công thức với nút "Chốt lương" trên máy chủ).
   const calcSalary = (staffId) => computeSalary({
     year: selYear, month: selMonth, staffId,
@@ -1723,21 +1740,34 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
       ));
       editHint = 'Sửa số tiền, duyệt hoặc xoá ở ✏️ Sửa → Ứng lương.';
     } else if (kind === 'absent') {
-      const list = monthRequests(s.id, 'absent');
+      // Từng ngày nghỉ (quán mở, không quét mã): có phép / không phép, lý do, 0đ. Sau đó các đơn báo nghỉ chưa thành ngày nghỉ ở trên
+      // (chưa tới ngày, hoặc ngày đó vẫn đi làm).
+      const list = monthRequests(s.id, 'absent'), off = offInfo(s.id);
       const leaveOf = id => (payrollMonth.leaveDays || []).find(l => l.request_id === id);
-      summary = `${list.length} đơn, ${fmtNum(c.absDays || 0)} ngày đã duyệt`;
-      head = ['Ngày nghỉ', 'Số ngày', 'Lý do', 'Trạng thái'];
-      rows = list.map(r => {
-        const l = leaveOf(r.id);
-        return (
-          <tr key={r.id}>
-            <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 700 }}>{l ? `${ddmm(l.from_date)}${l.to_date !== l.from_date ? ` – ${ddmm(l.to_date)}` : ''}` : `gửi ${ddmm(vnDay(r.created_at))}`}</td>
-            <td data-label="Số ngày" style={{ ...td, whiteSpace: 'nowrap' }}>{fmtNum(r.days)} ngày</td>
-            <td data-label="Lý do" style={td}>{r.reason || '—'}</td>
-            <td data-label="Trạng thái" style={{ ...td, whiteSpace: 'nowrap', color: r.status === 'pending' ? '#b45309' : '#16a34a' }}>{r.status === 'pending' ? 'chờ duyệt' : 'đã duyệt'}</td>
+      const covered = new Set(off.list.map(x => x.req?.id).filter(Boolean));
+      summary = `${off.list.length} ngày nghỉ${off.list.length ? ` (${off.approved} có phép, ${off.unexcused} không phép)` : ''} · không lương`;
+      head = ['Ngày nghỉ', 'Loại', 'Lý do', 'Tiền ngày'];
+      rows = [
+        ...[...off.list].reverse().map(({ day, req }) => (
+          <tr key={day}>
+            {dayCell(day)}
+            <td data-label="Loại" style={{ ...td, fontWeight: 600, color: req?.status === 'approved' ? '#1d4ed8' : '#b91c1c' }}>{offKind(req)}</td>
+            <td data-label="Lý do" style={td}>{req?.reason || '—'}</td>
+            <td data-label="Tiền ngày" className="detail-money" style={{ ...td, whiteSpace: 'nowrap', color: '#94a3b8', fontWeight: 700 }}>0đ · không lương</td>
           </tr>
-        );
-      });
+        )),
+        ...list.filter(r => !covered.has(r.id)).map(r => {
+          const l = leaveOf(r.id), ahead = l && String(l.from_date).slice(0, 10) > vnToday();
+          return (
+            <tr key={r.id}>
+              <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 700 }}>{l ? `${ddmm(l.from_date)}${l.to_date !== l.from_date ? ` – ${ddmm(l.to_date)}` : ''}` : `gửi ${ddmm(vnDay(r.created_at))}`}</td>
+              <td data-label="Loại" style={{ ...td, color: r.status === 'pending' ? '#b45309' : '#16a34a' }}>Đơn báo nghỉ {fmtNum(r.days)} ngày · {r.status === 'pending' ? 'chờ duyệt' : 'đã duyệt'}{ahead ? ' · chưa tới ngày' : ' · ngày đó vẫn đi làm'}</td>
+              <td data-label="Lý do" style={td}>{r.reason || '—'}</td>
+              <td data-label="Tiền ngày" className="detail-money" style={{ ...td, color: '#94a3b8' }}>—</td>
+            </tr>
+          );
+        }),
+      ];
       editHint = c.rule === 'days' ? 'Ngày nghỉ không có ngày công nên không có lương ngày đó (đã trừ sẵn trong cột Ngày công, không trừ thêm khoản nào khác). Ngày quán nghỉ vẫn có lương. Xoá đơn ở ✏️ Sửa → Đơn báo nghỉ.' : 'Xoá đơn ở ✏️ Sửa → Đơn báo nghỉ.';
     } else if (kind === 'drinks') {
       // Nước / bia nhân viên tự ghi: ngày uống, lúc ghi, uống gì, mấy chai × giá; chủ xoá lần ghi sai.
@@ -1851,14 +1881,40 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     const dailyOf = new Map((live.daily || []).map(d => [d.day, d]));
     const byWorkDay = new Map();
     for (const a of atts) { const wd = workDayOf(a, rules); byWorkDay.set(wd, [...(byWorkDay.get(wd) || []), a]); }
-    const dayKeys = [...new Set([...dailyOf.keys(), ...byWorkDay.keys()])].sort().reverse();
+    // Ngày nghỉ (quán mở, không quét mã) cũng có dòng: có phép (đơn đã duyệt) / không phép, 0đ — để thấy ngày nào không có lương.
+    const off = offInfo(s.id), offOf = new Map(off.list.map(x => [x.day, x.req]));
+    const dayKeys = [...new Set([...dailyOf.keys(), ...byWorkDay.keys(), ...offOf.keys()])].sort().reverse();
     const workedDays = [...byWorkDay.keys()].length;
     const mini = (text, onClick, kind) => (
       <button onClick={onClick} style={{ ...smallBtn, padding: '2px 8px', fontSize: '0.72rem', ...(kind === 'red' ? { color: '#dc2626', borderColor: '#fecaca', background: '#fff5f5' } : kind === 'green' ? { color: '#15803d', borderColor: '#bbf7d0', background: '#f0fdf4' } : {}) }}>{text}</button>
     );
     const small = (text, color = '#64748b') => <div style={{ fontSize: '0.72rem', color, marginTop: 2, lineHeight: 1.35 }}>{text}</div>;
     const none = <span style={{ color: '#cbd5e1' }}>—</span>;
+    const offRow = wd => {
+      const req = offOf.get(wd), ok = req?.status === 'approved', bg = ok ? '#f8fafc' : '#fef2f2';
+      const cell = { verticalAlign: 'top', padding: '8px 10px', background: bg };
+      const dayShift = rules ? shiftOf(rules, s.id, wd) : null;
+      return (
+        <tr key={wd}>
+          <td style={{ ...cell, whiteSpace: 'nowrap' }}><strong>{weekday(wd)} {ddmm(wd)}</strong>{dayShift && small(`ca ${dayShift.start}–${dayShift.end}${dayShift.own ? ' riêng' : ''}`)}</td>
+          <td style={cell}><strong style={{ fontSize: '0.9rem', color: '#94a3b8' }}>0đ</strong>{small('không lương', '#b91c1c')}</td>
+          <td style={cell}>
+            <span style={{ fontWeight: 700, color: ok ? '#1d4ed8' : '#b91c1c' }}>🛌 {offKind(req)}</span>
+            {req?.reason && small(`Lý do: ${req.reason}`)}
+          </td>
+          <td style={cell}>
+            <div style={{ color: '#64748b' }}>Không có lượt chấm công</div>
+            {/* Nhân viên có đi làm mà quên quét: điền sẵn giờ ca ngày này vào ô "Thêm lượt" bên dưới, chủ xem lại rồi bấm Thêm lượt. */}
+            {dayShift && <div style={{ marginTop: 3 }}>{mini('+ Đi làm, quên quét: thêm lượt', () => {
+              setDraft(`att:${s.id}:in`, `${wd}T${dayShift.start}`);
+              setDraft(`att:${s.id}:out`, `${dayShift.end <= dayShift.start ? nextDay(wd) : wd}T${dayShift.end}`);
+            }, 'green')}</div>}
+          </td>
+        </tr>
+      );
+    };
     const dayRow = wd => {
+      if (offOf.has(wd) && !byWorkDay.has(wd) && !dailyOf.has(wd)) return offRow(wd);
       const d = dailyOf.get(wd), list = [...(byWorkDay.get(wd) || [])].sort((x, y) => String(x.clock_in).localeCompare(String(y.clock_in)));
       // Ngày đã tính lương: số trễ / sớm theo bảng lương; ngày chưa tính (tháng cũ, ca sai mặt chờ duyệt): theo giờ quét.
       const f = d ? { late: d.late, leftEarly: d.leftEarly, early: d.early, stay: d.stay } : (x => ({ late: x.late, leftEarly: x.leftEarly, early: x.early, stay: x.stayed }))(dayFlags(list, rules));
@@ -1966,7 +2022,9 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         </div>
 
         <div style={section}>
-          {head(`📅 Từng ngày trong tháng (${workedDays} ngày đi làm, ${atts.length} lượt chấm công)`)}
+          {head(`📅 Từng ngày trong tháng (${workedDays} ngày đi làm, ${off.list.length} ngày nghỉ, ${atts.length} lượt chấm công)`)}
+          {off.list.length > 0 && <div style={{ fontSize: '0.78rem', color: '#b91c1c', marginBottom: 4 }}>
+            🛌 Nghỉ {off.list.length} ngày quán mở{off.approved ? ` · ${off.approved} có phép` : ''}{off.unexcused ? ` · ${off.unexcused} không phép (không quét mã)` : ''}: không có ngày công nên không có lương những ngày này.</div>}
           <div style={{ fontSize: '0.74rem', color: '#64748b', marginBottom: 6, lineHeight: 1.5 }}>
             Mỗi ngày một dòng, ngày mới nhất ở trên. Lượt dọn quán sau nửa đêm nằm ở ngày của ca. Dòng nền vàng: ngày cần xem
             (giờ ngoài ca chờ duyệt, quên ra ca, sai mặt).
@@ -3098,9 +3156,15 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                               {c.claimCut > 0 && slipRow(s, { label: 'Tiền thừa chi hộ', sub: 'chưa trả chủ, trừ lương', value: `−${formatMoney(c.claimCut)}`, tone: 'red', kind: 'claimcut', has: !!c.claimList?.length })}
                               {slipRow(s, { label: 'Ứng lương', sub: adv.length ? `${adv.length} lần${advPending ? ` · ${advPending} chờ duyệt` : ''}` : null,
                                 value: adv.length ? `−${formatMoney(c.advAmt)}` : '—', tone: adv.length ? 'red' : 'muted', kind: 'advance', has: adv.length > 0 })}
-                              {slipRow(s, { label: 'Nghỉ', sub: abs.length ? `${abs.length} đơn${c.rule === 'days' ? ' · không tính công' : ''}` : null,
-                                value: c.rule === 'days' ? (c.absDays ? `${fmtNum(c.absDays)} ngày` : abs.length ? 'chờ duyệt' : '—') : `−${formatMoney(c.absAmt)}`,
-                                tone: c.rule === 'days' || !c.absAmt ? 'muted' : 'red', kind: 'absent', has: abs.length > 0 })}
+                              {(() => {
+                                // Ngày nghỉ (quán mở, không quét mã): có phép / không phép, không lương.
+                                const off = c.rule === 'days' ? offInfo(s.id) : null;
+                                return slipRow(s, { label: 'Nghỉ',
+                                  sub: off ? (off.list.length ? [off.approved && `${off.approved} có phép`, off.unexcused && `${off.unexcused} không phép`, 'không lương'].filter(Boolean).join(' · ') : abs.length ? `${abs.length} đơn` : null)
+                                    : abs.length ? `${abs.length} đơn` : null,
+                                  value: off ? (off.list.length ? `${off.list.length} ngày` : abs.length ? 'có đơn' : '—') : `−${formatMoney(c.absAmt)}`,
+                                  tone: off ? (off.list.length ? 'red' : 'muted') : !c.absAmt ? 'muted' : 'red', kind: 'absent', has: abs.length > 0 || !!off?.list.length });
+                              })()}
                               {(() => {
                                 // Lần bị báo mà chủ bỏ qua (nhắc nhở) cũng mở được danh sách, để đối chiếu.
                                 const warned = dismissedOf(s.id).length;
@@ -3164,9 +3228,15 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                                 {c.claimAmt > 0 && <div style={{ color: '#16a34a' }}>+{formatMoney(c.claimAmt)} chi hộ</div>}
                                 {c.claimCut > 0 && <div style={{ color: '#dc2626' }}>−{formatMoney(c.claimCut)} tiền thừa chi hộ</div>}</>)}</div>}</td>
                             <td>{cellBtn(s.id, 'advance', monthRequests(s.id, 'advance').length > 0, <span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span>)}</td>
-                            <td>{cellBtn(s.id, 'absent', monthRequests(s.id, 'absent').length > 0, c.rule === 'days'
-                              ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không tính công)` : monthRequests(s.id, 'absent').length ? 'chờ duyệt' : '—'}</span>
-                              : <><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.absDays)} ngày</div></>)}</td>
+                            <td>{(() => {
+                              const off = c.rule === 'days' ? offInfo(s.id) : null, reqs = monthRequests(s.id, 'absent').length;
+                              return cellBtn(s.id, 'absent', reqs > 0 || !!off?.list.length, c.rule === 'days'
+                              ? (off.list.length ? <span><span style={{ color: '#b91c1c', fontWeight: 700, whiteSpace: 'nowrap' }}>{off.list.length} ngày nghỉ</span>
+                                  <div style={{ fontSize: '0.72rem', color: '#64748b', whiteSpace: 'nowrap' }}>{[off.approved && `${off.approved} có phép`, off.unexcused && `${off.unexcused} không phép`].filter(Boolean).join(' · ')}</div>
+                                  <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>không lương</div></span>
+                                : <span style={{color:'#94a3b8'}}>{reqs ? 'có đơn sắp tới' : '—'}</span>)
+                              : <><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.absDays)} ngày</div></>);
+                            })()}</td>
                             <td>{vioCell(s.id, c)}</td>
                             {/* Nước ngọt / bia nhân viên tự ghi: tổng tiền trừ + số lần, bấm để xem từng lần (chủ xoá lần ghi sai ở đó). */}
                             <td>{c.drinkAmt > 0
