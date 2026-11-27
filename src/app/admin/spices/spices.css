@@ -305,3 +305,14 @@ button.sp-tile { font: inherit; color: inherit; cursor: pointer; }
 .sp-dayfold > .sp-fold-btn { min-height: 46px; }
 .sp-dayfold-in { padding-bottom: 6px; }
 .sp-dayfold-in .sp-card { margin-bottom: 8px; }
+
+/* Thanh nút cố định dưới đáy trang chủ gia vị: nhỏ, gọn */
+.sp-actbar { padding-top: 8px; padding-bottom: calc(8px + env(safe-area-inset-bottom)); box-shadow: 0 -4px 14px rgba(0,0,0,.06); }
+.sp-bar-in.col { flex-direction: column; align-items: stretch; gap: 6px; }
+.sp-actbar .sp-money { font-size: 17px; color: var(--sp-main-dark); }
+.sp-actbar .nop { color: var(--sp-bad); font-weight: 700; }
+.sp-actbar .sp-dirty { color: var(--sp-main-dark); }
+.sp-actbtns { gap: 6px; }
+.sp-actbtns .sp-btn, .sp-btns.small .sp-btn { min-height: 40px; padding: 6px 10px; font-size: 14px; border-radius: 10px; }
+.sp-actbtns .sp-btn { flex: 1 1 0; }
+.sp-btns.small > .sp-btn { flex: 1 1 100px; }
