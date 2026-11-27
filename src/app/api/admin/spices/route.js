@@ -27,7 +27,7 @@ import { randomBytes } from 'node:crypto';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { nowMs } from '@/lib/trueTime.mjs';
 import {
-  addLines, applyPrices, buildLines, confirmSupplierPaid, orderTotal, recheckOrder, supplierDays, parseItemLines, parseQty, moveItem, planItemList, cancelOrder, cleanName, createOrderRow, itemKey, lastPrices, receiveOrder,
+  addLines, applyPrices, buildLines, canReceive, confirmSupplierPaid, orderTotal, recheckOrder, supplierDays, parseItemLines, parseQty, moveItem, planItemList, cancelOrder, cleanName, createOrderRow, itemKey, lastPrices, receiveOrder,
   spiceStats, statsFrom, supplierBalances, vnDateOf,
 } from '@/lib/spiceOrders.mjs';
 
@@ -175,6 +175,7 @@ export async function POST(request) {
       if (body.action === 'add_lines') {
         result = addLines(order, body.lines, { last: lastPrices(await supplierHistory(db, order.supplier_id), order.supplier_id), by, at, note: str(body.note, 300) });
       } else if (body.action === 'receive') {
+        if (!canReceive(order, user)) return fail(`Đơn này chủ gia vị giao cho ${order.delivered_to_name} — ${order.delivered_to_name} kiểm và bấm nhận (hoặc quản lý).`, 403);
         result = receiveOrder(order, body.received, { by, at, note: str(body.note, 300) });
       } else if (body.action === 'recheck') {
         if (!canManage) return fail('Chỉ quản lý hoặc chủ quán kiểm lại được.', 403);

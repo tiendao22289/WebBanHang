@@ -25,12 +25,12 @@ const PEOPLE = {
 const T = (dateVN, hh = 8, mm = 0) => new Date(Date.parse(`${dateVN}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00+07:00`)).toISOString();
 
 function world() {
-  const state = { __seq: 0, now: Date.parse(T('2026-11-01')), spice_suppliers: [], spice_items: [], spice_orders: [], spice_payments: [] };
+  const state = { __seq: 0, now: Date.parse(T('2026-11-01')), spice_suppliers: [], spice_items: [], spice_orders: [], spice_payments: [], staff: [], staff_departures: [] };
   const as = who => vm.runInNewContext(`${ADMIN_SRC}\n({ GET, POST })`, {
     ...GLOBALS, ...spice, NextResponse, randomBytes, nowMs: () => state.now,
     getStaffSession: async () => ({ code: 200, user: PEOPLE[who] }), staffDatabase: () => fakeDb(state),
   });
-  const supplierApi = vm.runInNewContext(`${SUPPLIER_SRC}\n({ GET, POST })`, { ...GLOBALS, ...spice, NextResponse, nowMs: () => state.now, statusDatabase: () => fakeDb(state) });
+  const supplierApi = vm.runInNewContext(`${SUPPLIER_SRC}\n({ GET, POST })`, { ...GLOBALS, ...spice, NextResponse, nowMs: () => state.now, vnDay: () => new Date(state.now + 7 * 3600000).toISOString().slice(0, 10), statusDatabase: () => fakeDb(state) });
   const api = Object.fromEntries(Object.keys(PEOPLE).map(k => [k, as(k)]));
   const post = (who, body) => api[who].POST({ url: 'http://x/api', json: async () => body });
   const get = (who, qs = '') => api[who].GET({ url: `http://x/api${qs}` });

@@ -503,6 +503,22 @@ function readChecks(order, received) {
  * Nhân viên nhận hàng, kiểm từng món (đủ / thiếu / dư / sai hàng). received xem readChecks; note = ghi chú khi nhận.
  * → { patch } hoặc { error }.
  */
+/**
+ * Chủ gia vị báo đã giao hàng cho một nhân viên trong quán (staff = { id, name }); người đó kiểm đủ / thiếu rồi bấm nhận.
+ * Đổi người được đến khi quán bấm nhận. → { patch } | { error }.
+ */
+export function deliverOrder(order, staff, { by, at }) {
+  if (order.cancelled_at) return { error: 'Đơn đã huỷ.' };
+  if (order.received_at) return { error: `Quán đã nhận đơn này rồi (${order.received_by_name || 'nhân viên'} kiểm).` };
+  if (!staff?.id || !staff?.name) return { error: 'Chọn nhân viên nhận hàng.' };
+  if (order.delivered_to === staff.id) return { patch: null };
+  return { patch: { delivered_to: staff.id, delivered_to_name: staff.name, delivered_at: at,
+    log: pushLog(order, [{ at, by, who: 'supplier', type: 'deliver', to: staff.name }]) } };
+}
+
+/** Ai được bấm nhận / kiểm đơn: đơn đã giao cho ai thì người đó; quản lý, chủ quán luôn được. Chưa giao cho ai: ai cũng được. */
+export const canReceive = (order, user) => !order?.delivered_to || order.delivered_to === user?.id || ['admin', 'manager'].includes(user?.role);
+
 export function receiveOrder(order, received, { by, at, note = '' }) {
   if (order.cancelled_at) return { error: 'Đơn đã huỷ.' };
   if (order.received_at) return { error: `Đơn đã được ${order.received_by_name || 'người khác'} bấm nhận rồi.` };
@@ -572,6 +588,7 @@ export function logLine(e) {
     : e.type === 'add' ? withNote(`thêm: ${itemList(e.items)}`)
     : e.type === 'price' ? `đổi giá: ${(e.changes || []).map(c => `${c.name} ${priceOf(c.from)} → ${priceOf(c.to)}`).join(', ')}`
     : e.type === 'done' ? 'báo đã soạn xong hàng'
+    : e.type === 'deliver' ? `giao hàng cho ${e.to} (người này kiểm và bấm nhận)`
     : e.type === 'note' ? `ghi chú: ${e.note || '(xoá ghi chú)'}`
     : e.type === 'receive' ? withNote((e.checks || e.short)?.length ? `nhận hàng: ${(e.checks || e.short).map(checkText).join('; ')}` : 'nhận đủ hàng')
     : e.type === 'recheck' ? withNote(e.checks?.length ? `kiểm lại: ${e.checks.map(checkText).join('; ')}` : 'kiểm lại: tất cả đủ')
