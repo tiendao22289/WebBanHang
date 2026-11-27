@@ -483,3 +483,13 @@ textarea.sp-field.sp-note-in:focus { min-height: 72px; }
   .sp-drawer-list .sp-qty .q { min-width: 26px; font-size: 13px; }
   .sp-drawer-list .sp-qty .q small { font-size: 9px; }
 }
+/* Rộng hơn một chút (khoảng 60% màn hình) cho dễ nhìn, chữ và nút to hơn chút */
+.sp-drawer { width: max(60vw, 220px); }
+@media (max-width: 640px) {
+  .sp-drawer-list li { min-height: 44px; padding-left: 6px; }
+  .sp-drawer-list .nm b { font-size: 15px; }
+  .sp-drawer-list .add { width: 32px; height: 32px; font-size: 20px; }
+  .sp-drawer-list .sp-qty { gap: 3px; }
+  .sp-drawer-list .sp-qty button { width: 30px; height: 30px; font-size: 17px; }
+  .sp-drawer-list .sp-qty .q { min-width: 32px; font-size: 14px; }
+}
