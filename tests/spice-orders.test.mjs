@@ -598,7 +598,7 @@ test('đối soát từng ngày: món đủ / thiếu / dư / sai, tiền ngày,
   const days = spice.supplierDays([a, b, cancelled], pays);
   assert.deepEqual(days.map(d => [d.date, d.orders.length, d.total, d.paid, d.balance]), [
     ['2026-11-26', 0, 0, 10000, 60000 + 120000 - 50000 - 10000], ['2026-11-25', 1, 120000, 50000, 60000 + 120000 - 50000], ['2026-11-24', 1, 60000, 0, 60000]]);
-  assert.deepEqual(days[2].counts, { short: 1, over: 0, wrong: 1 });
+  assert.deepEqual(days[2].counts, { short: 1, over: 0, wrong: 1, skip: 0 });
   assert.equal(days[2].orders[0].receive_note, 'trễ');
   assert.deepEqual(days[2].orders[0].lines.map(l => [l.name, l.check, l.got, l.amount]), [['Muối', 'short', 1, 10000], ['Ớt', 'wrong', 0, 0], ['Sả', 'ok', 1, 30000], ['Tỏi', 'ok', 1, 20000]]);
   assert.equal(spice.supplierDays([a, b], pays, { from: '2026-11-25' }).length, 2, 'lọc từ ngày, nợ vẫn tính từ đầu');
@@ -647,4 +647,101 @@ test('máy chủ: kiểm hàng khi nhận, kiểm lại chỉ quản lý / chủ
   assert.equal(page.days[0].orders[0].lines[1].note, 'ớt xanh, quán lấy dùng');
   assert.deepEqual(page.orders[0].items.map(l => l.check), ['short', 'wrong']);
   assert.ok(!JSON.stringify(page.payments).includes(sup.id), 'không lộ mã');
+});
+
+/* ---------------- Chủ gia vị tự thêm món, quán Không lấy, chủ gia vị đánh dấu đã / chưa thanh toán ---------------- */
+
+test('chủ gia vị tự thêm món: đánh dấu by_supplier, giá chủ gia vị ghi, đơn đã nhận thì khoá; quán Không lấy được', () => {
+  const order = { id: 'o1', created_at: T(8), items: [{ name: 'Muối', unit: 'kg', qty: 1, price: 12000, old_price: 12000 }], log: [] };
+  const last = new Map([['sả', { price: 25000 }]]);
+  const r = spice.supplierAddLines(order, [{ name: 'Sả', qty: '2', unit: 'kg' }, { name: 'Gừng', qty: '0.5', unit: 'kg', price: '40.000' }], { last, by: 'Cô Hai', at: T(9) });
+  assert.deepEqual(r.lines.map(l => [l.name, l.price, l.by_supplier, l.price_by ?? null]), [['Sả', 25000, true, null], ['Gừng', 40000, true, 'supplier']]);
+  assert.equal(r.patch.total, 12000 + 50000 + 20000);
+  assert.deepEqual(r.patch.log.at(-1), { at: T(9), by: 'Cô Hai', who: 'supplier', type: 'add', items: [{ name: 'Sả', qty: 2, unit: 'kg' }, { name: 'Gừng', qty: 0.5, unit: 'kg' }] });
+  assert.match(spice.supplierAddLines(order, [{ name: 'muối', qty: 1 }], { by: 'x', at: T(9) }).error, /đã có/);
+  assert.match(spice.supplierAddLines({ ...order, received_at: T(10) }, [{ name: 'Ớt', qty: 1 }], { by: 'x', at: T(9) }).error, /đã nhận/);
+  assert.match(spice.supplierAddLines(order, [{ name: 'Ớt', qty: 1, price: 'abc' }], { by: 'x', at: T(9) }).error, /Giá/);
+  // Quán nhận: Không lấy Sả (chủ gia vị thêm) → 0đ; món quán gọi thì không chọn Không lấy được.
+  const withAdd = { ...order, ...r.patch };
+  const got = spice.receiveOrder(withAdd, [null, { check: 'skip' }, null], { by: 'Thy', at: T(11) });
+  assert.equal(got.patch.total, 12000 + 20000);
+  assert.equal(spice.lineCheck(got.patch.items[1]).check, 'skip');
+  assert.match(spice.logLine(got.patch.log.at(-1)).text, /Sả không lấy/);
+  assert.match(spice.receiveOrder(withAdd, [{ check: 'skip' }], { by: 'Thy', at: T(11) }).error, /Thiếu/);
+  const days = spice.supplierDays([{ ...withAdd, ...got.patch }], [], {});
+  assert.equal(days[0].counts.skip, 1);
+  assert.equal(days[0].orders[0].lines[1].by_supplier, true);
+  assert.match(spice.dayReportText({ day: days[0] }), /không lấy 1 món/);
+});
+
+test('thống kê quán ghi món chủ gia vị tự thêm và chủ gia vị sửa giá', () => {
+  const orders = [{ supplier_id: SUP, received_at: T(9), items: [
+    { name: 'Ớt', qty: 1, price: 70000, old_price: 60000, price_by: 'supplier' },
+    { name: 'Sả', qty: 2, price: 25000, old_price: null, by_supplier: true },
+    { name: 'Muối', qty: 1, price: 12000, old_price: 12000, price_by: 'supplier' },
+  ] }];
+  const items = spice.spiceStats(orders, { period: 'day' })[0].items;
+  const by = n => items.find(i => i.name === n);
+  assert.deepEqual([by('Ớt').supplierEdits, by('Ớt').supplierAdded], [1, 0]);
+  assert.deepEqual([by('Sả').supplierEdits, by('Sả').supplierAdded], [0, 2]);
+  assert.equal(by('Sả').supplierOffered, 2);
+  const skipped = spice.spiceStats([{ received_at: T(9), items: [{ name: 'Chanh', qty: 1, received_qty: 0, check: 'skip', price: 30000, by_supplier: true }] }])[0].items[0];
+  assert.deepEqual([skipped.supplierOffered, skipped.supplierAdded], [1, 0]);
+  assert.equal(by('Muối').supplierEdits, 0, 'giá giữ nguyên thì không tính là sửa');
+  const priced = spice.applyPrices({ items: [{ name: 'Ớt', qty: 1, price: 60000 }], log: [] }, [{ index: 0, price: 65000 }], { by: 'Chủ quán', at: T(9), who: 'admin' });
+  assert.equal(priced.patch.items[0].price_by, 'admin');
+});
+
+test('chủ gia vị đánh dấu đã / chưa thanh toán, lọc theo đó và theo tháng, số lượng từng món', () => {
+  const o = { id: 'o1', received_at: T(10), items: [], log: [] };
+  const paid = spice.setSupplierPaid(o, true, { by: 'Cô Hai', at: T(12) });
+  assert.equal(paid.patch.supplier_paid_at, T(12));
+  assert.equal(spice.logLine(paid.patch.log[0]).text, 'đánh dấu đã nhận tiền đơn này');
+  assert.equal(spice.setSupplierPaid({ ...o, supplier_paid_at: T(12) }, true, { by: 'x', at: T(13) }).patch, null);
+  assert.equal(spice.setSupplierPaid({ ...o, supplier_paid_at: T(12) }, false, { by: 'x', at: T(13) }).patch.supplier_paid_at, null);
+  assert.match(spice.setSupplierPaid({ id: 'o2', items: [] }, true, { by: 'x', at: T(13) }).error, /chưa nhận/);
+  const list = [
+    { id: 'a', received_at: T(10, 0, 3), received_date: '2026-11-03', supplier_paid_at: T(12), items: [{ name: 'Muối', unit: 'kg', qty: 2, price: 10000 }] },
+    { id: 'b', received_at: T(10, 0, 20), received_date: '2026-11-20', items: [{ name: 'Muối', unit: 'kg', qty: 1, price: 10000 }, { name: 'Sả', unit: 'kg', qty: 2, received_qty: 0, check: 'skip', price: 25000 }] },
+    { id: 'c', received_at: '2026-10-30T03:00:00Z', received_date: '2026-10-30', items: [{ name: 'Ớt', unit: 'kg', qty: 1, price: 60000 }] },
+    { id: 'd', items: [{ name: 'Ớt', qty: 1, price: 1 }] },
+    { id: 'e', received_at: T(10), cancelled_at: T(11), items: [{ name: 'Ớt', qty: 1, price: 1 }] },
+  ];
+  const all = spice.supplierOrderStats(list);
+  assert.deepEqual([all.count, all.total, all.paid.total, all.unpaid.total], [3, 90000, 20000, 70000]);
+  assert.deepEqual(all.orders.map(x => x.id), ['b', 'a', 'c']);
+  const unpaidNov = spice.supplierOrderStats(list, { paid: 'unpaid', from: '2026-11-01', to: '2026-11-31' });
+  assert.deepEqual([unpaidNov.count, unpaidNov.total], [1, 10000]);
+  assert.deepEqual(unpaidNov.items, [{ name: 'Muối', unit: 'kg', qty: 1, amount: 10000, orders: 1 }], 'món Không lấy không tính số lượng');
+  const novAll = spice.supplierOrderStats(list, { from: '2026-11-01', to: '2026-11-31' });
+  assert.deepEqual(novAll.items.map(i => [i.name, i.qty, i.orders]), [['Muối', 3, 2]]);
+});
+
+test('máy chủ: chủ gia vị thêm món qua link, quán Không lấy, chủ gia vị đánh dấu đã thanh toán', async () => {
+  const state = newState();
+  const owner = adminApi(state, 'admin'), thy = adminApi(state, 'staff'), supplier = supplierApi(state);
+  const sup = (await post(owner, { action: 'save_supplier', name: 'Cô Hai' })).body.supplier;
+  const order = (await post(thy, { action: 'create', supplier_id: sup.id, lines: [{ name: 'Muối', qty: 1, unit: 'kg' }] })).body.order;
+  const added = await post(supplier, { t: sup.token, id: order.id, updated_at: order.updated_at, add: [{ name: 'Sả', qty: '1', unit: 'kg', price: '25000' }] });
+  assert.equal(added.status, 200);
+  assert.deepEqual(added.body.order.items.map(l => [l.name, !!l.by_supplier]), [['Muối', false], ['Sả', true]]);
+  // Đơn chưa nhận thì chưa đánh dấu tiền được.
+  assert.match((await post(supplier, { t: sup.token, id: order.id, paid: true })).body.error, /chưa nhận/);
+  const cur = state.spice_orders[0];
+  assert.equal((await post(thy, { action: 'receive', id: cur.id, updated_at: cur.updated_at, received: [null, { check: 'skip' }] })).status, 200);
+  assert.equal(state.spice_orders[0].total, 0, 'Muối chưa có giá, Sả không lấy');
+  // Thêm món sau khi nhận: khoá.
+  assert.match((await post(supplier, { t: sup.token, id: order.id, add: [{ name: 'Ớt', qty: 1 }] })).body.error, /đã nhận/);
+  assert.equal((await post(supplier, { t: sup.token, id: order.id, paid: true })).status, 200);
+  const page = (await get(supplier, `?t=${sup.token}`)).body;
+  assert.equal(page.history.length, 1);
+  assert.ok(page.history[0].supplier_paid_at);
+  assert.equal(page.orders[0].supplier_paid_at, page.history[0].supplier_paid_at);
+  assert.ok(!('created_by' in page.history[0]));
+  // Quán thấy dấu đã thanh toán và lịch sử.
+  const seen = (await get(owner)).body.orders[0];
+  assert.ok(seen.supplier_paid_at);
+  assert.deepEqual(seen.log.filter(e => e.who === 'supplier').map(e => e.type), ['add', 'paid']);
+  assert.equal((await post(supplier, { t: sup.token, id: order.id, paid: false })).status, 200);
+  assert.equal(state.spice_orders[0].supplier_paid_at, null);
 });

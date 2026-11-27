@@ -8,7 +8,7 @@ import { CHECK_LABELS, shortTime } from '@/lib/spiceOrders.mjs';
 
 export const money = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
 export const qtyText = q => String(Math.round((Number(q) || 0) * 1000) / 1000).replace('.', ',');
-const ICON = { ok: '✅', short: '➖', over: '➕', wrong: '⚠️' };
+const ICON = { ok: '✅', short: '➖', over: '➕', wrong: '⚠️', skip: '🚫' };
 const WEEKDAY = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
 export const dayLabel = date => {
   const [y, m, d] = date.split('-');
@@ -38,13 +38,14 @@ export function Fold({ head, initial = false, className = 'sp-fold', plain = fal
  * nợ tới hết ngày (balance null = người xem không được thấy). onShare: nút gửi Zalo.
  */
 export function DayCard({ day, initial = false, onShare = null, onRecheck = null }) {
-  const { short, over, wrong } = day.counts;
+  const { short, over, wrong, skip = 0 } = day.counts;
   const issues = short + over + wrong;
   const head = <span className="sp-day-head">
     <span className="sp-b">{dayLabel(day.date)}</span>
     <span className="sp-mute"> · {day.orders.length} đơn</span>
     {issues > 0 ? <span className="sp-check wrong" style={{ marginLeft: 6 }}>{[short && `${short} thiếu`, over && `${over} dư`, wrong && `${wrong} sai`].filter(Boolean).join(' · ')}</span>
       : day.orders.length > 0 && <span className="sp-check ok" style={{ marginLeft: 6 }}>Đủ hết</span>}
+    {skip > 0 && <span className="sp-check skip" style={{ marginLeft: 6 }}>{skip} không lấy</span>}
     <span className="sp-money sp-day-total">{money(day.total)}</span>
   </span>;
   return <Fold className="sp-card" plain initial={initial} head={head}>
@@ -53,7 +54,7 @@ export function DayCard({ day, initial = false, onShare = null, onRecheck = null
       <table className="sp-stat">
         <thead><tr><th>Món</th><th>Gọi</th><th>Nhận</th><th>Tiền</th></tr></thead>
         <tbody>{o.lines.map((l, i) => <tr key={i} className={l.check !== 'ok' ? 'warn' : ''}>
-          <td>{l.name}<div><CheckBadge check={l.check} diff={l.diff} unit={l.unit} note={l.note} /></div></td>
+          <td>{l.name}{l.by_supplier && <span className="sp-mute sp-small"> 🧺 CGV thêm</span>}<div><CheckBadge check={l.check} diff={l.diff} unit={l.unit} note={l.note} /></div></td>
           <td>{qtyText(l.qty)} {l.unit}</td>
           <td>{qtyText(l.got)} {l.unit}</td>
           <td className="sp-money">{l.price === null ? <span className="nop">chưa giá</span> : money(l.amount)}</td>
