@@ -9,12 +9,14 @@
  * POST { t, id, updated_at, add: [{ name, unit, qty, price }] } → chủ gia vị tự thêm món (quán gọi thiếu), đơn chưa nhận.
  * POST { t, id, updated_at, paid: true | false } → chủ gia vị đánh dấu đơn đã nhận tiền / chưa (sổ riêng, mục Thống kê).
  * POST { t, ids: [id…], paid: true | false } → đánh dấu nhiều đơn đã tích chọn một lần (đơn không hợp lệ thì bỏ qua, báo số đơn đã đổi).
+ * POST { t, id, deliver_to: <mã nhân viên> } → báo đã giao hàng cho nhân viên đó (đổi được đến khi quán nhận); GET trả staff [{ id, name }].
  * GET còn trả history: mọi đơn quán đã nhận (gọn) để chủ gia vị thống kê đã / chưa thanh toán, số lượng từng món.
  */
 import { NextResponse } from 'next/server';
 import { statusDatabase } from '@/lib/statusAuth';
 import { nowMs } from '@/lib/trueTime.mjs';
-import { applyPrices, lastPrices, orderTotal, setSupplierPaid, supplierAddLines, supplierDays, supplierSummary, vnDateOf } from '@/lib/spiceOrders.mjs';
+import { vnDay } from '@/lib/staffDeparture.mjs';
+import { applyPrices, deliverOrder, lastPrices, orderTotal, setSupplierPaid, supplierAddLines, supplierDays, supplierSummary, vnDateOf } from '@/lib/spiceOrders.mjs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,6 +38,16 @@ async function readAll(build) {
   }
 }
 
+// Nhân viên đang làm trong quán (chủ gia vị chọn người nhận hàng): chỉ tên, bỏ người đã nghỉ.
+async function shopStaff(db) {
+  const { data, error } = await db.from('staff').select('id, full_name').order('full_name');
+  if (error) throw error;
+  const today = vnDay();
+  const { data: gone } = await db.from('staff_departures').select('staff_id, last_day');
+  const left = new Set((gone || []).filter(g => g.last_day && String(g.last_day).slice(0, 10) < today).map(g => g.staff_id));
+  return (data || []).filter(s => s.full_name && !left.has(s.id)).map(s => ({ id: s.id, name: s.full_name }));
+}
+
 async function supplierOf(db, token) {
   if (!TOKEN.test(String(token || ''))) return null;
   const { data, error } = await db.from('spice_suppliers').select('id, name, active').eq('token', token).maybeSingle();
@@ -48,6 +60,7 @@ const view = o => ({
   id: o.id, items: o.items, total: o.total, note: o.note, supplier_note: o.supplier_note, created_at: o.created_at,
   created_by_name: o.created_by_name, priced_at: o.priced_at, received_at: o.received_at, received_by_name: o.received_by_name,
   cancelled_at: o.cancelled_at, cancelled_by_name: o.cancelled_by_name, log: o.log || [], updated_at: o.updated_at,
+  delivered_to_name: o.delivered_to_name || null, delivered_at: o.delivered_at || null,
   supplier_paid_at: o.supplier_paid_at || null, paid_confirmed_at: o.paid_confirmed_at || null, paid_method: o.paid_method || null,
 });
 // Đơn đã nhận, gọn, cho mục Thống kê của chủ gia vị.
@@ -63,15 +76,17 @@ export async function GET(request) {
     const supplier = await supplierOf(db, new URL(request.url).searchParams.get('t'));
     if (!supplier) return fail(BAD_LINK, 404);
     const since = new Date(nowMs() - 60 * 86400000).toISOString();
-    const [all, payments] = await Promise.all([
+    const [all, payments, staff] = await Promise.all([
       readAll(() => db.from('spice_orders').select('*').eq('supplier_id', supplier.id).order('created_at', { ascending: false })),
       readAll(() => db.from('spice_payments').select('supplier_id, amount, method, paid_date, note, created_at').eq('supplier_id', supplier.id).order('paid_date', { ascending: false })),
+      shopStaff(db),
     ]);
     const orders = all.filter(o => o.created_at >= since || (!o.received_at && !o.cancelled_at));
     return NextResponse.json({
       supplier: { name: supplier.name }, summary: supplierSummary(all, payments),
       orders: orders.map(view), payments: payments.slice(0, 60).map(({ supplier_id: _s, ...p }) => p),
       days: supplierDays(all, payments, { from: vnDateOf(since) }),
+      staff,
       history: all.filter(o => o.received_at || o.cancelled_at).map(slim),
     }, { headers });
   } catch (error) {
@@ -113,6 +128,10 @@ export async function POST(request) {
     if (Array.isArray(body.add)) {
       const history = await readAll(() => db.from('spice_orders').select('id, supplier_id, items, created_at, cancelled_at').eq('supplier_id', supplier.id).order('created_at', { ascending: false }));
       result = supplierAddLines(order, body.add, { last: lastPrices(history, supplier.id), by: supplier.name, at });
+    } else if (body.deliver_to !== undefined) {
+      const who = UUID.test(String(body.deliver_to || '')) ? (await shopStaff(db)).find(x => x.id === body.deliver_to) : null;
+      if (!who) return fail('Chọn nhân viên nhận hàng.');
+      result = deliverOrder(order, who, { by: supplier.name, at });
     } else if (typeof body.paid === 'boolean') {
       result = setSupplierPaid(order, body.paid, { by: supplier.name, at });
     } else {

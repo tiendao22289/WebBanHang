@@ -10,6 +10,7 @@ import { useBackClose } from '@/lib/useBackClose';
 import { useReloadHold } from '@/lib/useBuildRefresh';
 import {
   CHECK_LABELS, PAY_METHODS, STATE_LABELS, addedLater, paidState, changeText, cleanName, dayReportText, lineCheck, itemKey, itemLineText, itemStep, orderedItems, plainText, rankItems, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shareText, shortTime,
+  canReceive,
 } from '@/lib/spiceOrders.mjs';
 import { CheckBadge, DayCard, DayGroups } from './SpiceShared';
 import './spices.css';
@@ -56,6 +57,7 @@ export default function SpicesPage() {
   const suppliers = data?.suppliers || [];
   const supplierById = useMemo(() => Object.fromEntries(suppliers.map(s => [s.id, s])), [suppliers]);
   const openCount = (data?.orders || []).filter(o => ['new', 'priced', 'waiting_price'].includes(orderState(o))).length;
+  const mineCount = (data?.orders || []).filter(o => o.delivered_to && o.delivered_to === data?.me?.id && !o.received_at && !o.cancelled_at).length;
   const payAsks = (data?.orders || []).filter(o => !o.cancelled_at && paidState(o) === 'pending').length;
 
   // Sau khi gửi / thêm món: hộp "Gửi qua Zalo" (chia sẻ cần một lần bấm của người dùng, nên không mở tự động).
@@ -72,6 +74,8 @@ export default function SpicesPage() {
   return <div className="sp">
     <div className="sp-head"><h1>🧂 Gia vị</h1><span className="sp-mute sp-small">{data.me?.name}</span></div>
     {error && <div className="sp-msg err">{error}</div>}
+    {mineCount > 0 && tab !== 'orders' && <button type="button" className="sp-minebar" onClick={() => { setTab('orders'); window.scrollTo(0, 0); }}>
+      🚚 Chủ gia vị giao hàng cho bạn ({mineCount} đơn) — bấm để kiểm và nhận</button>}
     <div className={`sp-seg ${tabs.length === 4 ? 'four' : tabs.length > 3 ? 'six' : 'three'}`} role="tablist">
       {tabs.map(([k, icon, label]) => <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => { setTab(k); window.scrollTo(0, 0); }}>
         <span aria-hidden="true">{icon}</span>{label}{k === 'orders' && openCount > 0 && <i className="dot">{openCount}</i>}{k === 'debt' && payAsks > 0 && <i className="dot">{payAsks}</i>}
@@ -324,6 +328,8 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
     if (st === 'cancelled') return false;
     return filter === 'all' || (filter === 'open' ? ['new', 'priced', 'waiting_price'].includes(st) : st === 'done');
   });
+  // Đơn chủ gia vị giao cho chính mình: lên đầu, kiểm và bấm nhận.
+  const mine = data.orders.filter(o => o.delivered_to === me.id && !o.received_at && !o.cancelled_at);
   const run = async (order, body, okText) => {
     setBusy(order.id); setMsg(null);
     try { await api({ id: order.id, updated_at: order.updated_at, ...body }); setMsg({ id: order.id, text: okText }); await reload(); return true; }
@@ -331,6 +337,15 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
     finally { setBusy(''); }
   };
   return <>
+    {mine.length > 0 && <div className="sp-mine">
+      <h3>🚚 Hàng giao cho bạn</h3>
+      <p className="sp-mute sp-small" style={{ margin: '0 0 6px' }}>Chủ gia vị đã giao cho bạn. Kiểm đủ / thiếu / dư / sai rồi bấm nhận.</p>
+      {mine.map(o => <div key={o.id} className="sp-mine-row">
+        <span className="sp-grow"><b>{supplierById[o.supplier_id]?.name || 'Chủ gia vị'}</b><span className="sp-mute sp-small"> · {o.items.length} món · {shortTime(o.delivered_at)}</span></span>
+        <button type="button" className="sp-btn ok" disabled={busy === o.id} onClick={() => setSheet({ kind: 'receive', order: o })}>🔍 Kiểm & nhận</button>
+      </div>)}
+      {mine.some(o => msg?.id === o.id) && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
+    </div>}
     <div className="sp-seg" role="tablist">
       {[['open', 'Đang chờ', counts.open], ['done', 'Đã nhận', counts.done], ['all', 'Tất cả', data.orders.length - cancelled.length]].map(([k, l, n]) => <button key={k} type="button" role="tab" aria-selected={filter === k}
         className={filter === k ? 'on' : ''} onClick={() => setFilter(k)}>{l}<small>{n}</small></button>)}
@@ -341,11 +356,13 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
       const st = orderState(o), sup = supplierById[o.supplier_id];
       const open = !o.received_at && !o.cancelled_at;
       const canCancel = open && (canManage || o.created_by === me.id);
-      return <div key={o.id} className={`sp-card sp-order ${st}`}>
+      const mayReceive = canReceive(o, me);
+      return <div key={o.id} className={`sp-card sp-order ${st}${open && o.delivered_to === me.id ? ' hl' : ''}`}>
         <div className="sp-row between"><div className="sp-b sp-grow">{sup?.name || 'Chủ gia vị'}</div><span className={`sp-chip ${st}`}>{STATE_LABELS[st]}</span></div>
         <div className="sp-who">
           <span>🕘 Gọi {shortTime(o.created_at)} · <b>{o.created_by_name}</b></span>
-          {o.received_at && <span>📥 Nhận {shortTime(o.received_at)} · <b>{o.received_by_name}</b></span>}
+          {o.delivered_to_name && <span>🚚 Giao {shortTime(o.delivered_at)} cho <b>{o.delivered_to_name}</b></span>}
+          {o.received_at && <span>📥 Nhận & kiểm {shortTime(o.received_at)} · <b>{o.received_by_name}</b></span>}
           {o.cancelled_at && <span>✖ Huỷ · <b>{o.cancelled_by_name}</b></span>}
         </div>
         {o.note && <div className="sp-note staff">📝 {o.note}</div>}
@@ -360,7 +377,8 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
         </div>}
         <OrderLines order={o} />
         {msg?.id === o.id && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
-        {open && <div className="sp-btns two">
+        {open && o.delivered_to && <div className="sp-note deliver">🚚 Chủ gia vị giao cho <b>{o.delivered_to === me.id ? 'bạn' : o.delivered_to_name}</b>{o.delivered_to === me.id ? ' — kiểm hàng rồi bấm nhận' : ` — ${o.delivered_to_name} kiểm và bấm nhận`}</div>}
+        {open && mayReceive && <div className="sp-btns two">
           <button type="button" className="sp-btn ok" disabled={busy === o.id} onClick={() => run(o, { action: 'receive', received: [] }, 'Đã nhận đủ ✓')}>✅ Nhận đủ</button>
           <button type="button" className="sp-btn" disabled={busy === o.id} onClick={() => setSheet({ kind: 'receive', order: o })}>🔍 Kiểm hàng</button>
         </div>}

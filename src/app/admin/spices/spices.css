@@ -517,3 +517,15 @@ textarea.sp-field.sp-note-in:focus { min-height: 72px; }
 .sp-paybtn.wait { background: #fef3c7; border-color: #fcd34d; color: var(--sp-main-dark); }
 .sp-paybtn.lock { display: inline-flex; align-items: center; cursor: default; }
 .sp-wait-t { color: var(--sp-main-dark); font-weight: 700; }
+
+/* Giao hàng cho một nhân viên (2026-11-27) */
+.sp-deliver { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: #eef6ff; border: 1px solid #cfe3fb; }
+.sp-staffpick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
+.sp-staffpick button { min-height: 44px; border-radius: 10px; border: 1px solid var(--sp-line); background: #fff; color: var(--sp-text); font-weight: 700; font-size: 15px; padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-staffpick button.on { background: var(--sp-main); border-color: var(--sp-main); color: #fff; }
+.sp-mine { border: 2px solid var(--sp-main); background: #f2f8ff; border-radius: 14px; padding: 10px 12px; margin-bottom: 10px; }
+.sp-mine h3 { margin: 0 0 6px; font-size: 16px; }
+.sp-mine-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-top: 1px solid #dbe7f5; }
+.sp-mine-row:first-of-type { border-top: 0; }
+.sp-minebar { display: block; width: 100%; text-align: left; border: 0; border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; background: var(--sp-main, #2563eb); color: #fff; font-weight: 700; font-size: 15px; }
+.sp-note.deliver { background: #eef6ff; border-left-color: var(--sp-blue); color: #1e3a5f; }

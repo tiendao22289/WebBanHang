@@ -153,7 +153,8 @@ function SupplierView() {
   const card = order => <OrderCard key={order.id} order={order} draft={drafts[order.id]} focus={order.id === focusId} busy={busy === order.id} inBar={active?.id === order.id} addReq={addReq?.id === order.id ? addReq.n : 0}
     notice={notice?.id === order.id ? notice : null} onPrice={setPrice} onNote={setNote} onSave={save} onUndo={() => drop(order.id)}
     onAdd={(o, add) => post(o, { add }, `Đã thêm ${add.length} món ✓ Quán sẽ thấy khi nhận hàng.`)}
-    onPaid={(o, paid) => post(o, { paid }, paid ? 'Đã báo quán — chờ quán xác nhận ⏳' : 'Đã bỏ báo')} />;
+    onPaid={(o, paid) => post(o, { paid }, paid ? 'Đã báo quán — chờ quán xác nhận ⏳' : 'Đã bỏ báo')}
+    staff={data.staff || []} onDeliver={(o, id) => post(o, { deliver_to: id }, `Đã báo giao cho ${(data.staff || []).find(x => x.id === id)?.name || 'nhân viên'} ✓`)} />;
   // Tổng với quán: một thẻ gọn — số quán còn thiếu to bên trái, đã giao / đã trả nhỏ bên phải.
   const tiles = <div className="sp-sumbar">
     <div className="main">
@@ -208,7 +209,7 @@ function SupplierView() {
     </div>
 
     {view === 'open' && <>
-      {groups.open.length > 0 && <p className="sp-tip">Điền giá từng món → bấm <b>✅ Soạn xong</b>. Giá cũ đã điền sẵn, sửa được.</p>}
+      {groups.open.length > 0 && <p className="sp-tip">Điền giá → bấm <b>✅ Soạn xong</b> → khi giao bấm <b>🚚 Giao hàng</b> chọn người nhận. Giá cũ đã điền sẵn.</p>}
       {single && !singleDone
         ? <>{card(single)}{groups.open.length > 1 && <button type="button" className="sp-btn block" onClick={() => setShowAll(true)}>Xem {groups.open.length - 1} đơn khác đang chờ soạn</button>}</>
         : groups.open.length ? groups.open.map(card) : <p className="sp-empty">Chưa có đơn mới. Quán gọi là đơn hiện ở đây.</p>}
@@ -236,7 +237,7 @@ function SupplierView() {
   </div>;
 }
 
-function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notice, onPrice, onNote, onSave, onUndo, onAdd, onPaid }) {
+function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notice, staff = [], onPrice, onNote, onSave, onUndo, onAdd, onPaid, onDeliver }) {
   const [adding, setAdding] = useState(null); // [{ name, qty, unit, price }] đang thêm
   const addRef = useRef(null);
   // Bấm nút + nổi: mở ô thêm món của đơn này và cuộn tới, con trỏ vào ô tên món.
@@ -264,10 +265,12 @@ function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notic
     </div>
     <div className="sp-who">
       <span>🕘 Gọi · <b>{order.created_by_name || 'Nhân viên'}</b></span>
-      {order.received_at && <span>📥 Nhận {shortTime(order.received_at)} · <b>{order.received_by_name}</b></span>}
+      {order.delivered_to_name && <span>🚚 Giao {shortTime(order.delivered_at)} · <b>{order.delivered_to_name}</b></span>}
+      {order.received_at && <span>📥 Nhận & kiểm {shortTime(order.received_at)} · <b>{order.received_by_name}</b></span>}
       {order.cancelled_at && <span>✖ Huỷ {shortTime(order.cancelled_at)} · <b>{order.cancelled_by_name}</b></span>}
     </div>
     {order.note && <div className="sp-note staff">📝 Quán ghi: {order.note}</div>}
+    {open && onDeliver && <DeliverRow order={order} staff={staff} busy={busy} onDeliver={onDeliver} />}
     {received && onPaid && <div className="sp-row between sp-paidrow">
       {paidState(order) === 'confirmed'
         ? <span className="sp-small sp-ok-t">🔒 Quán đã xác nhận thanh toán{order.paid_method ? ` · ${order.paid_method === 'transfer' ? 'chuyển khoản' : 'tiền mặt'}` : ''} · {shortTime(order.paid_confirmed_at)}</span>
@@ -374,6 +377,27 @@ const vnDateOfIso = iso => new Date(new Date(iso).getTime() + 7 * 3600000).toISO
  * Thống kê của chủ gia vị: đơn quán đã nhận, tự đánh dấu đã thanh toán / chưa (bấm trên từng đơn), lọc theo đã / chưa và theo
  * tháng, số lượng + tiền từng món; cuối trang là các lần quán ghi đã trả tiền.
  */
+/** Giao hàng: chủ gia vị chọn nhân viên trong quán nhận hàng; người đó kiểm đủ / thiếu và bấm nhận. Đổi được đến khi quán nhận. */
+function DeliverRow({ order, staff, busy, onDeliver }) {
+  const [picking, setPicking] = useState(false);
+  const pick = async id => { if (await onDeliver(order, id)) setPicking(false); };
+  return <div className="sp-deliver">
+    {order.delivered_to_name && !picking
+      ? <div className="sp-row between"><span className="sp-small">🚚 Đã giao cho <b>{order.delivered_to_name}</b> · chờ kiểm hàng</span>
+        <button type="button" className="sp-paybtn" disabled={busy} onClick={() => setPicking(true)}>Đổi</button></div>
+      : !picking
+        ? <button type="button" className="sp-btn main block" disabled={busy} onClick={() => setPicking(true)}>🚚 Giao hàng — chọn người nhận</button>
+        : <>
+          <div className="sp-row between"><span className="sp-small sp-b">Giao cho ai trong quán?</span>
+            <button type="button" className="sp-paybtn" onClick={() => setPicking(false)}>Đóng</button></div>
+          {staff.length ? <div className="sp-staffpick">{staff.map(x => <button key={x.id} type="button" disabled={busy}
+            className={x.name === order.delivered_to_name ? 'on' : ''} onClick={() => pick(x.id)}>{x.name}</button>)}</div>
+            : <p className="sp-mute sp-small">Chưa có danh sách nhân viên.</p>}
+          <p className="sp-mute sp-small" style={{ margin: '6px 0 0' }}>Người được chọn sẽ kiểm đủ / thiếu và bấm nhận hàng.</p>
+        </>}
+  </div>;
+}
+
 function SupplierStats({ history, payments, busyId, notice, onPaid, onBulk }) {
   const [paid, setPaid] = useState('unpaid');
   const [month, setMonth] = useState('');

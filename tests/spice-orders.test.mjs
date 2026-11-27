@@ -248,11 +248,12 @@ function adminApi(state, who) {
   });
 }
 function supplierApi(state) {
-  return vm.runInNewContext(`${SUPPLIER_SRC}\n({ GET, POST })`, { ...GLOBALS, ...spice, NextResponse, nowMs: () => state.now, statusDatabase: () => fakeDb(state) });
+  return vm.runInNewContext(`${SUPPLIER_SRC}\n({ GET, POST })`, { ...GLOBALS, ...spice, NextResponse, nowMs: () => state.now, vnDay: () => new Date(state.now + 7 * 3600000).toISOString().slice(0, 10), statusDatabase: () => fakeDb(state) });
 }
 const post = (api, body) => api.POST({ url: 'http://x/api', json: async () => body });
 const get = (api, qs = '') => api.GET({ url: `http://x/api${qs}` });
-const newState = () => ({ __seq: 0, now: Date.parse(T(8)), spice_suppliers: [], spice_items: [], spice_orders: [], spice_payments: [] });
+const newState = () => ({ __seq: 0, now: Date.parse(T(8)), spice_suppliers: [], spice_items: [], spice_orders: [], spice_payments: [],
+  staff: Object.values(USERS).map(u => ({ id: u.id, full_name: u.full_name, role: u.role })), staff_departures: [] });
 
 test('máy chủ: trọn quy trình gọi → thêm món → chủ gia vị điền giá → nhận → trả nợ', async () => {
   const state = newState();
@@ -909,4 +910,39 @@ test('máy chủ: quản lý thêm / sửa / xếp / xoá món được, nhưng 
     assert.equal((await post(mgr, body)).status, 403, body.action);
   }
   assert.equal((await post(thy, { action: 'save_item', name: 'Gừng' })).status, 403);
+});
+
+test('máy chủ: chủ gia vị giao hàng cho một nhân viên — người đó kiểm và bấm nhận, nhân viên khác không nhận được', async () => {
+  const state = newState();
+  const owner = adminApi(state, 'admin'), thy = adminApi(state, 'staff'), tai = adminApi(state, 'staff2'), mgr = adminApi(state, 'manager');
+  state.staff_departures.push({ staff_id: USERS.staff2.id, last_day: '2020-01-01' });
+  const sup = (await post(owner, { action: 'save_supplier', name: 'Cô Hai' })).body.supplier;
+  const o = (await post(thy, { action: 'create', supplier_id: sup.id, lines: [{ name: 'Muối', qty: 2, unit: 'kg' }] })).body.order;
+  const supplier = supplierApi(state);
+  const page = (await get(supplier, `?t=${sup.token}`)).body;
+  // Thấy tên nhân viên đang làm (người đã nghỉ thì không).
+  assert.deepEqual(page.staff.map(x => x.name).sort(), ['Chủ quán', 'Quản lý', 'Thy']);
+  assert.match((await post(supplier, { t: sup.token, id: o.id, deliver_to: USERS.staff2.id })).body.error, /Chọn nhân viên/);
+  assert.match((await post(supplier, { t: sup.token, id: o.id, deliver_to: 'x' })).body.error, /Chọn nhân viên/);
+  const d = await post(supplier, { t: sup.token, id: o.id, deliver_to: USERS.staff.id });
+  assert.equal(d.status, 200);
+  assert.equal(d.body.order.delivered_to_name, 'Thy');
+  assert.equal('delivered_to' in d.body.order, false, 'không lộ mã nhân viên');
+  const saved = state.spice_orders[0];
+  assert.equal(saved.delivered_to, USERS.staff.id);
+  assert.equal(spice.logLine(saved.log.at(-1)).text, 'giao hàng cho Thy (người này kiểm và bấm nhận)');
+  // Tài (nhân viên khác) không bấm nhận được; Thy được.
+  state.staff_departures.length = 0;
+  const r1 = await post(tai, { action: 'receive', id: o.id, received: [{ index: 0, qty: 2 }] });
+  assert.equal(r1.status, 403);
+  assert.match(r1.body.error, /giao cho Thy/);
+  const r2 = await post(thy, { action: 'receive', id: o.id, received: [{ index: 0, qty: 1.5, check: 'short' }] });
+  assert.equal(r2.status, 200);
+  assert.equal(r2.body.order.received_by_name, 'Thy');
+  // Nhận rồi thì không đổi người giao được.
+  assert.match((await post(supplier, { t: sup.token, id: o.id, deliver_to: USERS.manager.id })).body.error, /đã nhận/);
+  // Quản lý luôn nhận được đơn giao cho người khác.
+  const o2 = (await post(thy, { action: 'create', supplier_id: sup.id, lines: [{ name: 'Sả', qty: 1 }] })).body.order;
+  await post(supplier, { t: sup.token, id: o2.id, deliver_to: USERS.staff.id });
+  assert.equal((await post(mgr, { action: 'receive', id: o2.id, received: [{ index: 0, qty: 1 }] })).status, 200);
 });
