@@ -117,6 +117,16 @@ test('a colleague reports a mistake; nothing is cut until the owner fines or dis
   const other = await post(AN, { action: 'report_peer', staff_id: BINH.id, reason: 'Quên lau bàn 3' });
   assert.equal((await post(OWNER, { action: 'decide_peer', id: other.body.id, status: 'approved' })).status, 200);
   assert.deepEqual(plain(state.payroll_violations.map(v => v.amount)), [30000, 0]);
+
+  // Chủ sửa tiền khoản phạt sau đó (Bảng lương / tab Vi phạm): tab Yêu cầu hiện số mới; xoá khoản phạt thì báo "đã bỏ phạt".
+  const reportOf = async id => (await get(OWNER, 'peer=1')).body.reports.find(r => r.id === id);
+  assert.equal((await post(OWNER, { action: 'edit_violation', id: fined.body.violation_id, amount: '45.000' })).status, 200);
+  assert.deepEqual(plain(await reportOf(glass.body.id)).amount, 45000);
+  assert.equal((await reportOf(glass.body.id)).dropped, false);
+  assert.equal((await post(OWNER, { action: 'delete_violation', id: fined.body.violation_id })).status, 200);
+  const gone = await reportOf(glass.body.id);
+  assert.deepEqual([gone.status, gone.amount, gone.dropped], ['approved', 0, true]);
+  assert.equal((await reportOf(phone.body.id)).dropped, false, 'a dismissed report is not a dropped fine');
 });
 
 test('before the table exists the report part hides itself and says the web is updating', async () => {
