@@ -299,3 +299,9 @@ button.sp-tile { font: inherit; color: inherit; cursor: pointer; }
 .sp-line.tight.bad.over { background: #f5f8ff; }
 .sp-line.tight.bad.skip { background: #f8fafc; }
 .sp-tag:not(.sup):not(.edit) { background: var(--sp-blue-soft); color: var(--sp-blue); }
+
+/* Đơn các ngày trước gom lại theo ngày */
+.sp-dayfold { background: #eef1f4; border-radius: 12px; padding: 4px 12px; margin-bottom: 10px; }
+.sp-dayfold > .sp-fold-btn { min-height: 46px; }
+.sp-dayfold-in { padding-bottom: 6px; }
+.sp-dayfold-in .sp-card { margin-bottom: 8px; }

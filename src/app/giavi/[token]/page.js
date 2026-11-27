@@ -7,7 +7,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { STATE_LABELS, addedLater, lineAmount, lineCheck, lineQty, logLine, missingPrices, orderState, orderTotal, shortTime, supplierCanPrice, supplierOrderStats } from '@/lib/spiceOrders.mjs';
-import { CheckBadge, DayCard } from '../../admin/spices/SpiceShared';
+import { CheckBadge, DayCard, DayGroups, vnToday } from '../../admin/spices/SpiceShared';
 import '../../admin/spices/spices.css';
 
 const money = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
@@ -175,7 +175,7 @@ function SupplierView() {
     </>}
 
     {view === 'done' && <>
-      {groups.done.length ? groups.done.map(card) : <p className="sp-empty">Chưa có đơn quán đã nhận.</p>}
+      {groups.done.length ? <DayGroups orders={groups.done} today={vnToday()} render={card} /> : <p className="sp-empty">Chưa có đơn quán đã nhận.</p>}
       {groups.cancelled.length > 0 && <Fold head={`Đơn quán đã huỷ (${groups.cancelled.length})`}>{groups.cancelled.map(card)}</Fold>}
     </>}
 
