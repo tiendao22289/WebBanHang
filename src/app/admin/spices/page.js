@@ -34,7 +34,7 @@ export default function SpicesPage() {
   const [error, setError] = useState('');
   const [tab, setTab] = useState('call');
   const [share, setShare] = useState(null); // { title, text, phone }
-  const isAdmin = data?.me?.role === 'admin';
+  const isAdmin = data?.me?.role === 'admin', isManager = data?.me?.role === 'manager';
 
   const load = useCallback(async () => {
     try {
@@ -68,11 +68,11 @@ export default function SpicesPage() {
 
   if (!data) return <div className="sp">{error ? <div className="sp-msg err">{error}</div> : <p className="sp-empty">Đang tải…</p>}</div>;
   const tabs = [['call', '🧂', 'Gọi hàng'], ['orders', '📦', 'Đơn'], ['days', '📅', 'Đối soát'],
-    ...(isAdmin ? [['debt', '💰', 'Công nợ'], ['stats', '📊', 'Thống kê'], ['setup', '⚙️', 'Cài đặt']] : [])];
+    ...(isAdmin ? [['debt', '💰', 'Công nợ'], ['stats', '📊', 'Thống kê'], ['setup', '⚙️', 'Cài đặt']] : isManager ? [['setup', '⚙️', 'Cài đặt']] : [])];
   return <div className="sp">
     <div className="sp-head"><h1>🧂 Gia vị</h1><span className="sp-mute sp-small">{data.me?.name}</span></div>
     {error && <div className="sp-msg err">{error}</div>}
-    <div className={`sp-seg ${tabs.length > 3 ? 'six' : 'three'}`} role="tablist">
+    <div className={`sp-seg ${tabs.length === 4 ? 'four' : tabs.length > 3 ? 'six' : 'three'}`} role="tablist">
       {tabs.map(([k, icon, label]) => <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => { setTab(k); window.scrollTo(0, 0); }}>
         <span aria-hidden="true">{icon}</span>{label}{k === 'orders' && openCount > 0 && <i className="dot">{openCount}</i>}{k === 'debt' && payAsks > 0 && <i className="dot">{payAsks}</i>}
       </button>)}
@@ -82,7 +82,7 @@ export default function SpicesPage() {
     {tab === 'days' && <DaysTab data={data} reload={load} onShareText={(title, text, phone) => setShare({ title, text, phone, hint: 'Gửi bảng đối soát ngày này qua Zalo cho chủ gia vị để hai bên cân đối.' })} />}
     {tab === 'debt' && isAdmin && <DebtTab data={data} reload={load} />}
     {tab === 'stats' && isAdmin && <StatsTab />}
-    {tab === 'setup' && isAdmin && <SetupTab data={data} reload={load} />}
+    {tab === 'setup' && (isAdmin || isManager) && <SetupTab data={data} reload={load} isAdmin={isAdmin} />}
     {share && <ShareSheet share={share} onClose={() => setShare(null)} />}
   </div>;
 }
@@ -730,7 +730,7 @@ function StatsTab() {
 }
 
 /* ---------------- Tab Cài đặt (chủ quán) ---------------- */
-function SetupTab({ data, reload }) {
+function SetupTab({ data, reload, isAdmin }) {
   const [edit, setEdit] = useState(null); // { id?, name, phone, active }
   const [itemEdit, setItemEdit] = useState(null);
   const [bulk, setBulk] = useState(null); // chữ đang dán: nhiều món một lần
@@ -752,6 +752,7 @@ function SetupTab({ data, reload }) {
     catch { setMsg({ key: s.id, text: linkOf(s.token) }); }
   };
   return <>
+    {isAdmin && <>
     <h2>Chủ gia vị</h2>
     {data.suppliers.map(s => <div key={s.id} className="sp-card">
       <div className="sp-row between"><div><div className="sp-b">{s.name}{!s.active && <span className="sp-mute"> (ngưng)</span>}</div>{s.phone && <div className="sp-mute">{s.phone}</div>}</div>
@@ -763,6 +764,7 @@ function SetupTab({ data, reload }) {
       </div>
     </div>)}
     <button type="button" className="sp-btn main block" onClick={() => setEdit({ name: '', phone: '', active: true })}>➕ Thêm chủ gia vị</button>
+    </>}
 
     <h2>Món gia vị</h2>
     {msg?.key === 'item' && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
