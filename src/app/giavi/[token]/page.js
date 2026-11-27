@@ -261,7 +261,7 @@ function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notic
   return <div id={`don-${order.id}`} className={`sp-card sp-order ${state} ${focus ? 'hl' : ''}`}>
     <div className="sp-row between">
       <div className="sp-b">Đơn {shortTime(order.created_at)}</div>
-      <span className={`sp-chip ${state}`}>{STATE_LABELS[state]}</span>
+      <span className={`sp-chip ${state}`}>{open && order.delivered_to_name ? '🚚 Đã giao, chờ kiểm' : STATE_LABELS[state]}</span>
     </div>
     <div className="sp-who">
       <span>🕘 Gọi · <b>{order.created_by_name || 'Nhân viên'}</b></span>

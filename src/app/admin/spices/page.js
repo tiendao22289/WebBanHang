@@ -355,10 +355,10 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
     <DayGroups orders={list} today={data.today} render={o => {
       const st = orderState(o), sup = supplierById[o.supplier_id];
       const open = !o.received_at && !o.cancelled_at;
-      const canCancel = open && (canManage || o.created_by === me.id);
+      const canCancel = open && (canManage || (o.created_by === me.id && !o.delivered_to)); // hàng đã giao: chỉ quản lý huỷ
       const mayReceive = canReceive(o, me);
       return <div key={o.id} className={`sp-card sp-order ${st}${open && o.delivered_to === me.id ? ' hl' : ''}`}>
-        <div className="sp-row between"><div className="sp-b sp-grow">{sup?.name || 'Chủ gia vị'}</div><span className={`sp-chip ${st}`}>{STATE_LABELS[st]}</span></div>
+        <div className="sp-row between"><div className="sp-b sp-grow">{sup?.name || 'Chủ gia vị'}</div><span className={`sp-chip ${st}`}>{open && o.delivered_to ? '🚚 Đã giao, chờ kiểm' : STATE_LABELS[st]}</span></div>
         <div className="sp-who">
           <span>🕘 Gọi {shortTime(o.created_at)} · <b>{o.created_by_name}</b></span>
           {o.delivered_to_name && <span>🚚 Giao {shortTime(o.delivered_at)} cho <b>{o.delivered_to_name}</b></span>}
