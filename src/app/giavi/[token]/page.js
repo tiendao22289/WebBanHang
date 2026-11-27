@@ -6,7 +6,7 @@
  */
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { STATE_LABELS, addedLater, lineAmount, lineCheck, lineQty, logLine, missingPrices, orderState, orderTotal, shortTime, supplierCanPrice, supplierOrderStats } from '@/lib/spiceOrders.mjs';
+import { STATE_LABELS, addedLater, lineAmount, lineCheck, lineQty, logLine, missingPrices, orderState, orderTotal, shortTime, paidState, supplierCanPrice, supplierOrderStats } from '@/lib/spiceOrders.mjs';
 import { CheckBadge, DayCard, DayGroups, vnToday } from '../../admin/spices/SpiceShared';
 import '../../admin/spices/spices.css';
 
@@ -103,7 +103,7 @@ function SupplierView() {
       const r = await fetch('/api/spice-supplier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t: token, ids, paid }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { setNotice({ id: 'bulk', err: true, text: j.error || 'Không lưu được.' }); return false; }
-      setNotice({ id: 'bulk', text: `Đã đánh dấu ${j.changed} đơn ${paid ? 'đã thanh toán' : 'chưa thanh toán'} (${money(j.total)}) ✓` });
+      setNotice({ id: 'bulk', text: paid ? `Đã báo ${j.changed} đơn (${money(j.total)}) — chờ quán xác nhận ⏳` : `Đã bỏ báo ${j.changed} đơn` });
       await load();
       return true;
     } catch { setNotice({ id: 'bulk', err: true, text: 'Mạng yếu, bấm lại.' }); return false; }
@@ -153,7 +153,7 @@ function SupplierView() {
   const card = order => <OrderCard key={order.id} order={order} draft={drafts[order.id]} focus={order.id === focusId} busy={busy === order.id} inBar={active?.id === order.id} addReq={addReq?.id === order.id ? addReq.n : 0}
     notice={notice?.id === order.id ? notice : null} onPrice={setPrice} onNote={setNote} onSave={save} onUndo={() => drop(order.id)}
     onAdd={(o, add) => post(o, { add }, `Đã thêm ${add.length} món ✓ Quán sẽ thấy khi nhận hàng.`)}
-    onPaid={(o, paid) => post(o, { paid }, paid ? 'Đã đánh dấu: đã thanh toán ✓' : 'Đã đánh dấu: chưa thanh toán')} />;
+    onPaid={(o, paid) => post(o, { paid }, paid ? 'Đã báo quán — chờ quán xác nhận ⏳' : 'Đã bỏ báo')} />;
   // Tổng với quán: một thẻ gọn — số quán còn thiếu to bên trái, đã giao / đã trả nhỏ bên phải.
   const tiles = <div className="sp-sumbar">
     <div className="main">
@@ -229,7 +229,7 @@ function SupplierView() {
     </>}
 
     {view === 'stats' && <SupplierStats history={data.history || []} payments={data.payments} busyId={busy} notice={notice}
-      onPaid={(o, paid) => post(o, { paid }, paid ? 'Đã đánh dấu: đã thanh toán ✓' : 'Đã đánh dấu: chưa thanh toán')} onBulk={bulkPaid} />}
+      onPaid={(o, paid) => post(o, { paid }, paid ? 'Đã báo quán — chờ quán xác nhận ⏳' : 'Đã bỏ báo')} onBulk={bulkPaid} />}
     <p className="sp-mute sp-small" style={{ textAlign: 'center', marginTop: 20 }}>Trang tự cập nhật. Lưu link này để mở lại lần sau.</p>
   </div>
   {bar}
@@ -269,9 +269,13 @@ function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notic
     </div>
     {order.note && <div className="sp-note staff">📝 Quán ghi: {order.note}</div>}
     {received && onPaid && <div className="sp-row between sp-paidrow">
-      <span className="sp-small">{order.supplier_paid_at ? <span className="sp-ok-t">💵 Đã thanh toán · {shortTime(order.supplier_paid_at)}</span> : <span className="sp-mute">Chưa thanh toán</span>}</span>
-      <button type="button" className={`sp-paybtn ${order.supplier_paid_at ? 'paid' : ''}`} disabled={busy} onClick={() => onPaid(order, !order.supplier_paid_at)}>
-        {order.supplier_paid_at ? '✓ Đã TT' : 'Đánh dấu đã TT'}</button>
+      {paidState(order) === 'confirmed'
+        ? <span className="sp-small sp-ok-t">🔒 Quán đã xác nhận thanh toán · {shortTime(order.paid_confirmed_at)}</span>
+        : <>
+          <span className="sp-small">{paidState(order) === 'pending' ? <span className="sp-wait-t">⏳ Đã báo, chờ quán xác nhận</span> : <span className="sp-mute">Chưa thanh toán</span>}</span>
+          <button type="button" className={`sp-paybtn ${paidState(order) === 'pending' ? 'wait' : ''}`} disabled={busy} onClick={() => onPaid(order, !order.supplier_paid_at)}>
+            {paidState(order) === 'pending' ? 'Bỏ báo' : 'Báo đã TT'}</button>
+        </>}
     </div>}
     {received && <div className="sp-sum">
       {[['ok', '✅', 'đủ'], ['short', '➖', 'thiếu'], ['over', '➕', 'dư'], ['wrong', '⚠️', 'sai'], ['skip', '🚫', 'không lấy']].filter(([k]) => counts[k])
@@ -379,7 +383,7 @@ function SupplierStats({ history, payments, busyId, notice, onPaid, onBulk }) {
   const range = month ? { from: `${month}-01`, to: `${month}-31` } : {};
   const st = supplierOrderStats(history, { paid, ...range, payments });
   const canPick = paid === 'unpaid' || paid === 'paid' || paid === 'all';
-  const pickable = st.orders.filter(o => !o.cancelled_at);
+  const pickable = st.orders.filter(o => !o.cancelled_at && !o.paid_confirmed_at);
   const chosen = pickable.filter(o => picked.has(o.id));
   const chosenTotal = chosen.reduce((t, o) => t + orderTotal(o.items), 0);
   const toggle = id => setPicked(p => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -409,7 +413,7 @@ function SupplierStats({ history, payments, busyId, notice, onPaid, onBulk }) {
     </div>}
     {paid === 'cancelled'
       ? <p className="sp-tip">Đơn quán đã huỷ — không giao, không tính tiền. Chỉ để xem lại.</p>
-      : <p className="sp-tip">Tích chọn các đơn rồi bấm <b>Đã thanh toán</b> một lần, hoặc bấm nút trên từng đơn. Đây là sổ riêng của bạn, quán cũng thấy dấu này.</p>}
+      : <p className="sp-tip">Tích các đơn đã nhận tiền rồi bấm <b>Báo đã thanh toán</b>. Quán xác nhận thì trừ nợ và đơn được khoá 🔒 (không sửa được nữa).</p>}
 
     <div className="sp-card">
       <div className="sp-row between">
@@ -423,17 +427,19 @@ function SupplierStats({ history, payments, busyId, notice, onPaid, onBulk }) {
       {!st.orders.length && <p className="sp-empty" style={{ padding: 16 }}>Không có đơn.</p>}
       {st.orders.map(o => <div key={o.id} className={`sp-hist${picked.has(o.id) ? ' on' : ''}${o.cancelled_at ? ' cx' : ''}`}>
         <div className="sp-row">
-          {canPick && !o.cancelled_at && <input type="checkbox" className="sp-check-in" aria-label={`Chọn đơn ${dayShort(o.received_date || '')}`} checked={picked.has(o.id)} onChange={() => toggle(o.id)} />}
+          {canPick && !o.cancelled_at && !o.paid_confirmed_at && <input type="checkbox" className="sp-check-in" aria-label={`Chọn đơn ${dayShort(o.received_date || '')}`} checked={picked.has(o.id)} onChange={() => toggle(o.id)} />}
           <div className="sp-grow" onClick={() => canPick && !o.cancelled_at && toggle(o.id)}>
             <div className="sp-b">{o.cancelled_at ? `Huỷ ${shortTime(o.cancelled_at)}` : dayShort(o.received_date || '')} · {money(orderTotal(o.items))}</div>
             <div className="sp-mute sp-small">{o.items.filter(l => o.cancelled_at || lineQty(l) > 0).map(l => `${l.name} ${qtyText(o.cancelled_at ? l.qty : lineQty(l))}${l.unit ? ` ${l.unit}` : ''}`).join(', ')}</div>
           </div>
           {o.cancelled_at
             ? <span className="sp-chip cancelled">Đã huỷ</span>
-            : <button type="button" className={`sp-paybtn ${o.supplier_paid_at ? 'paid' : ''}`} disabled={busyId === o.id}
-                onClick={() => onPaid(o, !o.supplier_paid_at)}>{o.supplier_paid_at ? '✓ Đã TT' : o.pay?.paid ? '✓ Quán đã trả' : o.pay?.covered > 0 ? `Còn ${money(o.pay.left)}` : 'Chưa TT'}</button>}
+            : o.paid_confirmed_at ? <span className="sp-paybtn paid lock">🔒 Đã xác nhận</span>
+            : <button type="button" className={`sp-paybtn ${o.supplier_paid_at ? 'wait' : o.pay?.paid ? 'paid' : ''}`} disabled={busyId === o.id}
+                onClick={() => onPaid(o, !o.supplier_paid_at)}>{o.supplier_paid_at ? '⏳ Chờ xác nhận' : o.pay?.paid ? '✓ Quán đã trả' : o.pay?.covered > 0 ? `Còn ${money(o.pay.left)}` : 'Báo đã TT'}</button>}
         </div>
-        {o.supplier_paid_at && !o.cancelled_at && <div className="sp-mute sp-small">Đánh dấu đã thanh toán {shortTime(o.supplier_paid_at)} · bấm lại nếu nhầm</div>}
+        {o.supplier_paid_at && !o.paid_confirmed_at && !o.cancelled_at && <div className="sp-mute sp-small">Đã báo lúc {shortTime(o.supplier_paid_at)} · chờ quán xác nhận · bấm lại để bỏ báo nếu nhầm</div>}
+        {o.paid_confirmed_at && <div className="sp-mute sp-small">Quán xác nhận {shortTime(o.paid_confirmed_at)} · đơn đã khoá</div>}
       </div>)}
     </div>
 
@@ -458,7 +464,7 @@ function SupplierStats({ history, payments, busyId, notice, onPaid, onBulk }) {
       <div className="sp-row sp-actbtns">
         <button type="button" className="sp-btn" disabled={bulkBusy} onClick={() => setPicked(new Set())}>Bỏ chọn</button>
         <button type="button" className={`sp-btn ${markPaid ? 'ok' : 'main'}`} disabled={bulkBusy} onClick={bulk}>
-          {bulkBusy ? 'Đang lưu…' : markPaid ? `✓ Đã thanh toán ${chosen.length} đơn` : `Chưa thanh toán ${chosen.length} đơn`}</button>
+          {bulkBusy ? 'Đang gửi…' : markPaid ? `Báo đã thanh toán ${chosen.length} đơn` : `Bỏ báo ${chosen.length} đơn`}</button>
       </div>
     </div></div>}
   </>;

@@ -696,12 +696,12 @@ test('chủ gia vị đánh dấu đã / chưa thanh toán, lọc theo đó và 
   const o = { id: 'o1', received_at: T(10), items: [], log: [] };
   const paid = spice.setSupplierPaid(o, true, { by: 'Cô Hai', at: T(12) });
   assert.equal(paid.patch.supplier_paid_at, T(12));
-  assert.equal(spice.logLine(paid.patch.log[0]).text, 'đánh dấu đã nhận tiền đơn này');
+  assert.equal(spice.logLine(paid.patch.log[0]).text, 'báo đã nhận tiền đơn này (chờ quán xác nhận)');
   assert.equal(spice.setSupplierPaid({ ...o, supplier_paid_at: T(12) }, true, { by: 'x', at: T(13) }).patch, null);
   assert.equal(spice.setSupplierPaid({ ...o, supplier_paid_at: T(12) }, false, { by: 'x', at: T(13) }).patch.supplier_paid_at, null);
   assert.match(spice.setSupplierPaid({ id: 'o2', items: [] }, true, { by: 'x', at: T(13) }).error, /chưa nhận/);
   const list = [
-    { id: 'a', received_at: T(10, 0, 3), received_date: '2026-11-03', supplier_paid_at: T(12), items: [{ name: 'Muối', unit: 'kg', qty: 2, price: 10000 }] },
+    { id: 'a', received_at: T(10, 0, 3), received_date: '2026-11-03', supplier_paid_at: T(12), paid_confirmed_at: T(13), items: [{ name: 'Muối', unit: 'kg', qty: 2, price: 10000 }] },
     { id: 'b', received_at: T(10, 0, 20), received_date: '2026-11-20', items: [{ name: 'Muối', unit: 'kg', qty: 1, price: 10000 }, { name: 'Sả', unit: 'kg', qty: 2, received_qty: 0, check: 'skip', price: 25000 }] },
     { id: 'c', received_at: '2026-10-30T03:00:00Z', received_date: '2026-10-30', items: [{ name: 'Ớt', unit: 'kg', qty: 1, price: 60000 }] },
     { id: 'd', items: [{ name: 'Ớt', qty: 1, price: 1 }] },
@@ -813,17 +813,19 @@ test('máy chủ: chủ gia vị tích nhiều đơn rồi đánh dấu đã tha
 });
 
 test('đối chiếu tiền: chủ gia vị bấm Đã TT là hết nợ đơn đó; quán ghi trả trừ đơn cũ trước, không trừ hai lần', () => {
-  const o = (id, h, total, paidAt = null) => ({ id, supplier_id: SUP, received_at: T(h), received_date: '2026-11-25', supplier_paid_at: paidAt, items: [{ name: 'Muối', qty: 1, price: total }] });
+  const o = (id, h, total, paidAt = null) => ({ id, supplier_id: SUP, received_at: T(h), received_date: '2026-11-25', supplier_paid_at: paidAt, paid_confirmed_at: paidAt, items: [{ name: 'Muối', qty: 1, price: total }] });
   const A = o('a', 8, 100000), B = o('b', 9, 100000), C = o('c', 10, 100000);
   // 1. Chỉ chủ gia vị bấm Đã TT (quán chưa ghi trả): nợ giảm đúng đơn đó.
-  assert.equal(spice.settleOrders([A, { ...B, supplier_paid_at: T(12) }, C], []).owed, 200000);
+  assert.equal(spice.settleOrders([A, { ...B, supplier_paid_at: T(12), paid_confirmed_at: T(12) }, C], []).owed, 200000);
+  // Chủ gia vị mới báo, quán chưa xác nhận → chưa trừ nợ.
+  assert.equal(spice.settleOrders([A, { ...B, supplier_paid_at: T(12) }, C], []).owed, 300000);
   // 2. Bấm Đã TT hết → về 0 (đúng như trên ảnh của chủ quán).
-  const allMarked = [A, B, C].map(x => ({ ...x, supplier_paid_at: T(12) }));
+  const allMarked = [A, B, C].map(x => ({ ...x, supplier_paid_at: T(12), paid_confirmed_at: T(12) }));
   assert.equal(spice.supplierSummary(allMarked, []).owed, 0);
   assert.equal(spice.supplierSummary(allMarked, []).paid, 300000);
   // 3. Quán ghi trả 200k (phủ A, B) và chủ gia vị cũng bấm Đã TT A, B → còn đúng C, không trừ hai lần.
   const pay200 = [{ supplier_id: SUP, amount: 200000, paid_date: '2026-11-25' }];
-  assert.equal(spice.settleOrders([{ ...A, supplier_paid_at: T(12) }, { ...B, supplier_paid_at: T(12) }, C], pay200).owed, 100000);
+  assert.equal(spice.settleOrders([{ ...A, supplier_paid_at: T(12), paid_confirmed_at: T(12) }, { ...B, supplier_paid_at: T(12), paid_confirmed_at: T(12) }, C], pay200).owed, 100000);
   // 4. Quán ghi trả 200k, chủ gia vị chưa bấm gì → A, B tự thành đã thanh toán.
   const st = spice.settleOrders([A, B, C], pay200);
   assert.deepEqual([...st.byOrder.values()].map(x => x.paid), [true, true, false]);
@@ -834,16 +836,50 @@ test('đối chiếu tiền: chủ gia vị bấm Đã TT là hết nợ đơn �
   // 6. Trả dư → nợ âm (quán trả dư).
   assert.equal(spice.settleOrders([A], [{ supplier_id: SUP, amount: 120000, paid_date: '2026-11-25' }]).owed, -20000);
   // 7. Công nợ của chủ quán, thống kê chủ gia vị, đối soát cuối ngày, sổ đều cùng số.
-  const list = [A, { ...B, supplier_paid_at: T(12) }, C];
+  const list = [A, { ...B, supplier_paid_at: T(12), paid_confirmed_at: T(12) }, C];
   assert.equal(spice.supplierBalances(list, [])[SUP].debt, 200000);
   const stats = spice.supplierOrderStats(list, { payments: [] });
   assert.deepEqual([stats.paid.total, stats.unpaid.total], [100000, 200000]);
   assert.equal(spice.supplierDays(list, [], {})[0].balance, 200000);
   assert.equal(spice.spiceDayData({ orders: list, payments: [], date: '2026-11-25' }).debt, 200000);
   // Đơn bấm Đã TT sau ngày đó thì nợ cuối ngày hôm trước chưa trừ.
-  const later = [{ ...A, supplier_paid_at: '2026-11-26T03:00:00Z' }];
+  const later = [{ ...A, supplier_paid_at: '2026-11-26T03:00:00Z', paid_confirmed_at: '2026-11-26T03:00:00Z' }];
   assert.equal(spice.spiceDayData({ orders: later, payments: [], date: '2026-11-25' }).debt, 100000);
   assert.equal(spice.spiceDayData({ orders: later, payments: [], date: '2026-11-26' }).debt, 0);
   // Đơn chưa có giá (0đ) không tính là đã thanh toán.
   assert.equal(spice.settleOrders([o('z', 8, null)], []).byOrder.get('z').paid, false);
+});
+
+test('chủ gia vị báo Đã TT → chủ quán xác nhận mới trừ nợ; xác nhận rồi thì đơn khoá với chủ gia vị', async () => {
+  const o = { id: 'o1', received_at: T(10), items: [{ name: 'Muối', qty: 1, price: 10000 }], log: [] };
+  assert.match(spice.confirmSupplierPaid(o, true, { by: 'Chủ quán', at: T(12) }).error, /chưa báo/);
+  const asked = { ...o, supplier_paid_at: T(11) };
+  assert.equal(spice.paidState(asked), 'pending');
+  const ok = { ...asked, ...spice.confirmSupplierPaid(asked, true, { by: 'Chủ quán', at: T(12) }).patch };
+  assert.equal(spice.paidState(ok), 'confirmed');
+  assert.match(spice.logLine(ok.log.at(-1)).text, /xác nhận đã thanh toán/);
+  assert.match(spice.setSupplierPaid(ok, false, { by: 'Cô Hai', at: T(13) }).error, /không sửa được/);
+  assert.equal(spice.supplierCanPrice({ ...ok, items: [{ name: 'Muối', qty: 1, price: null }] }, 0), false);
+  assert.match(spice.confirmSupplierPaid(ok, true, { by: 'x', at: T(13) }).error, /rồi/);
+  const no = { ...asked, ...spice.confirmSupplierPaid(asked, false, { by: 'Chủ quán', at: T(12), note: 'chưa chuyển' }).patch };
+  assert.equal(no.supplier_paid_at, null);
+  assert.match(spice.logLine(no.log.at(-1)).text, /chưa thanh toán/);
+
+  // Máy chủ: chủ gia vị báo → quán thấy chờ, xác nhận (chỉ admin) → nợ về 0, chủ gia vị không bỏ / sửa được nữa.
+  const state = newState();
+  const owner = adminApi(state, 'admin'), thy = adminApi(state, 'staff'), supplier = supplierApi(state);
+  const sup = (await post(owner, { action: 'save_supplier', name: 'Cô Hai' })).body.supplier;
+  const ord = (await post(thy, { action: 'create', supplier_id: sup.id, lines: [{ name: 'Muối', qty: 1 }] })).body.order;
+  const priced = await post(supplier, { t: sup.token, id: ord.id, updated_at: ord.updated_at, prices: [{ index: 0, price: 20000 }], done: true });
+  await post(thy, { action: 'receive', id: ord.id, updated_at: priced.body.order.updated_at, received: [] });
+  await post(supplier, { t: sup.token, ids: [ord.id], paid: true });
+  assert.equal((await get(supplier, `?t=${sup.token}`)).body.summary.owed, 20000, 'mới báo, chưa trừ');
+  assert.equal((await post(thy, { action: 'confirm_paid', ids: [ord.id] })).status, 403);
+  const c = await post(owner, { action: 'confirm_paid', ids: [ord.id] });
+  assert.deepEqual([c.status, c.body.changed, c.body.total], [200, 1, 20000]);
+  assert.equal((await get(supplier, `?t=${sup.token}`)).body.summary.owed, 0);
+  assert.equal((await get(owner)).body.balances[sup.id].debt, 0);
+  assert.match((await post(supplier, { t: sup.token, id: ord.id, paid: false })).body.error, /khoá/);
+  assert.match((await post(supplier, { t: sup.token, id: ord.id, note: 'sửa' })).body.error, /khoá/);
+  assert.equal((await post(supplier, { t: sup.token, ids: [ord.id], paid: false })).body.changed, 0);
 });

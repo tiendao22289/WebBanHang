@@ -20,13 +20,14 @@
  *   move_item { id, dir: -1 | 1 } · delete_item { id } — admin xếp / xoá món (đơn cũ giữ tên món, không ảnh hưởng)
  *   Món nhân viên gõ thêm khi gọi chỉ nằm trong đơn đó, không tự vào danh sách (danh sách do chủ quán quyết).
  *   pay { supplier_id, amount, method, paid_date, note } · delete_payment { id } — admin
+ *   confirm_paid { ids, ok, note } — admin xác nhận (ok) / báo không đúng (ok=false) lời báo "đã nhận tiền" của chủ gia vị
  */
 import { NextResponse } from 'next/server';
 import { randomBytes } from 'node:crypto';
 import { getStaffSession, staffDatabase } from '@/lib/statusAuth';
 import { nowMs } from '@/lib/trueTime.mjs';
 import {
-  addLines, applyPrices, buildLines, recheckOrder, supplierDays, parseItemLines, parseQty, moveItem, planItemList, cancelOrder, cleanName, createOrderRow, itemKey, lastPrices, receiveOrder,
+  addLines, applyPrices, buildLines, confirmSupplierPaid, orderTotal, recheckOrder, supplierDays, parseItemLines, parseQty, moveItem, planItemList, cancelOrder, cleanName, createOrderRow, itemKey, lastPrices, receiveOrder,
   spiceStats, statsFrom, supplierBalances, vnDateOf,
 } from '@/lib/spiceOrders.mjs';
 
@@ -83,7 +84,7 @@ export async function GET(request) {
     if (daysOf) {
       if (!UUID.test(daysOf)) return fail('Không thấy chủ gia vị.');
       const [orders, payments] = await Promise.all([
-        readAll(() => db.from('spice_orders').select('id, supplier_id, items, note, supplier_note, log, created_at, created_by_name, received_at, received_date, received_by_name, cancelled_at, supplier_paid_at')
+        readAll(() => db.from('spice_orders').select('id, supplier_id, items, note, supplier_note, log, created_at, created_by_name, received_at, received_date, received_by_name, cancelled_at, supplier_paid_at, paid_confirmed_at')
           .eq('supplier_id', daysOf).not('received_at', 'is', null).order('id')),
         isAdmin ? readAll(() => db.from('spice_payments').select('supplier_id, amount, method, note, paid_date').eq('supplier_id', daysOf).order('id')) : Promise.resolve([]),
       ]);
@@ -122,7 +123,7 @@ export async function GET(request) {
     const lastPricesOut = Object.fromEntries(list.map(x => [x.id, Object.fromEntries([...lastPrices(orders, x.id)].map(([k, v]) => [k, v.price]))]));
     let balances = null;
     if (isAdmin) {
-      const all = await readAll(() => db.from('spice_orders').select('id, supplier_id, items, received_at, received_date, cancelled_at, supplier_paid_at').not('received_at', 'is', null).order('id'));
+      const all = await readAll(() => db.from('spice_orders').select('id, supplier_id, items, received_at, received_date, cancelled_at, supplier_paid_at, paid_confirmed_at').not('received_at', 'is', null).order('id'));
       balances = supplierBalances(all, payments);
     }
     return NextResponse.json({
@@ -298,6 +299,24 @@ export async function POST(request) {
         if (error) throw error;
       }
       return ok({});
+    }
+
+    if (body.action === 'confirm_paid') {
+      // { ids: [...], ok: true | false, note } — chủ quán xác nhận / báo không đúng lời báo đã nhận tiền của chủ gia vị.
+      const ids = [...new Set((Array.isArray(body.ids) ? body.ids : [body.id]).map(String))].filter(id => UUID.test(id)).slice(0, 200);
+      if (!ids.length) return fail('Chưa chọn đơn nào.');
+      const { data: list, error: readError } = await db.from('spice_orders').select('*').in('id', ids);
+      if (readError) throw readError;
+      let changed = 0, total = 0;
+      const errors = [];
+      for (const order of list || []) {
+        const r = confirmSupplierPaid(order, body.ok !== false, { by, at, note: str(body.note, 200) });
+        if (r.error) { errors.push(r.error); continue; }
+        const saved = await updateOrder(db, order, r.patch, at);
+        if (saved) { changed += 1; total += orderTotal(order.items); }
+      }
+      if (!changed && errors.length) return fail(errors[0]);
+      return ok({ changed, total });
     }
 
     if (body.action === 'pay') {

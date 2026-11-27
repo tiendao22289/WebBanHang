@@ -80,7 +80,7 @@ export const STATE_LABELS = {
  * (chủ quán sửa được mọi lúc qua trang Gia vị).
  */
 export const supplierCanPrice = (order, index) => {
-  if (!order || order.cancelled_at) return false;
+  if (!order || order.cancelled_at || order.paid_confirmed_at) return false; // quán đã xác nhận thanh toán: khoá
   if (!order.received_at) return true;
   return !hasPrice(order.items?.[index]);
 };
@@ -104,7 +104,7 @@ export function lastPrices(orders, supplierId) {
  * Đối chiếu tiền của MỘT chủ gia vị (hai bên cùng một con số):
  * - Tiền quán ghi trả (spice_payments) trừ dần vào đơn đã nhận CŨ NHẤT trước (kể cả đơn chủ gia vị đã bấm Đã TT,
  *   để quán ghi trả và chủ gia vị bấm Đã TT cho cùng đơn thì không bị trừ hai lần).
- * - Đơn chủ gia vị bấm Đã TT coi như đã trả đủ (tiền đưa tay, chuyển khoản quán chưa ghi…).
+ * - Đơn chủ gia vị báo Đã TT VÀ chủ quán đã xác nhận → coi như đã trả đủ (báo mà chưa xác nhận thì chưa trừ).
  * - Còn nợ = phần chưa trả của các đơn chưa bấm Đã TT − tiền quán trả dư (nếu có).
  * asOf ("YYYY-MM-DD"): chỉ tính đơn nhận, tiền trả, dấu Đã TT tới hết ngày đó (nợ cuối ngày).
  * → { delivered, cash (tiền quán ghi trả), owed, byOrder: Map(id → { total, covered, marked, paid, left }) }
@@ -121,7 +121,7 @@ export function settleOrders(orders, payments, { asOf = null } = {}) {
     delivered += total;
     const covered = Math.min(pool, Math.max(0, total));
     pool -= covered;
-    const marked = !!o.supplier_paid_at && upTo(vnDateOf(o.supplier_paid_at));
+    const marked = !!o.paid_confirmed_at && upTo(vnDateOf(o.paid_confirmed_at)); // chỉ khi quán xác nhận
     const left = marked ? 0 : total - covered;
     unpaid += left;
     byOrder.set(o.id, { total, covered, marked, paid: marked || (total > 0 && left <= 0), left });
@@ -379,10 +379,28 @@ export function supplierAddLines(order, raw, { last = new Map(), by, at }) {
 export function setSupplierPaid(order, paid, { by, at }) {
   if (order.cancelled_at) return { error: 'Đơn đã huỷ.' };
   if (!order.received_at) return { error: 'Quán chưa nhận đơn này.' };
+  if (order.paid_confirmed_at) return { error: 'Quán đã xác nhận thanh toán đơn này, không sửa được nữa.' };
   if (!!order.supplier_paid_at === !!paid) return { patch: null };
   return { patch: { supplier_paid_at: paid ? at : null,
     log: pushLog(order, [{ at, by, who: 'supplier', type: paid ? 'paid' : 'unpaid' }]) } };
 }
+
+/**
+ * Chủ quán xử lý lời báo "đã nhận tiền" của chủ gia vị: ok = true → xác nhận (trừ nợ, khoá đơn với chủ gia vị);
+ * ok = false → không đúng (bỏ dấu báo, chủ gia vị báo lại được). → { patch } | { error }.
+ */
+export function confirmSupplierPaid(order, ok, { by, at, note = '' }) {
+  if (order.cancelled_at) return { error: 'Đơn đã huỷ.' };
+  if (order.paid_confirmed_at) return { error: 'Đơn này đã xác nhận thanh toán rồi.' };
+  if (!order.supplier_paid_at) return { error: 'Chủ gia vị chưa báo đã nhận tiền đơn này.' };
+  const clean = String(note ?? '').trim().slice(0, 200);
+  return { patch: ok
+    ? { paid_confirmed_at: at, paid_confirmed_by: by, log: pushLog(order, [{ at, by, who: 'admin', type: 'paid_confirm', ...(clean ? { note: clean } : {}) }]) }
+    : { supplier_paid_at: null, log: pushLog(order, [{ at, by, who: 'admin', type: 'paid_reject', ...(clean ? { note: clean } : {}) }]) } };
+}
+
+/** Trạng thái thanh toán của chủ gia vị trên một đơn: 'none' | 'pending' (đã báo, chờ quán) | 'confirmed' (quán xác nhận, khoá). */
+export const paidState = o => (o?.paid_confirmed_at ? 'confirmed' : o?.supplier_paid_at ? 'pending' : 'none');
 
 /**
  * Thống kê cho chủ gia vị: đơn quán đã nhận, lọc paid ('all' | 'paid' | 'unpaid' theo dấu chủ gia vị bấm) và ngày nhận [from, to].
@@ -556,8 +574,10 @@ export function logLine(e) {
     : e.type === 'receive' ? withNote((e.checks || e.short)?.length ? `nhận hàng: ${(e.checks || e.short).map(checkText).join('; ')}` : 'nhận đủ hàng')
     : e.type === 'recheck' ? withNote(e.checks?.length ? `kiểm lại: ${e.checks.map(checkText).join('; ')}` : 'kiểm lại: tất cả đủ')
     : e.type === 'cancel' ? withNote(e.was_received ? `huỷ đơn đã nhận (${vnd(e.total)} ra khỏi sổ và công nợ)` : 'huỷ đơn')
-    : e.type === 'paid' ? 'đánh dấu đã nhận tiền đơn này'
-    : e.type === 'unpaid' ? 'đánh dấu chưa nhận tiền đơn này'
+    : e.type === 'paid' ? 'báo đã nhận tiền đơn này (chờ quán xác nhận)'
+    : e.type === 'unpaid' ? 'bỏ báo đã nhận tiền'
+    : e.type === 'paid_confirm' ? withNote('xác nhận đã thanh toán đơn này — khoá đơn')
+    : e.type === 'paid_reject' ? withNote('báo lại: chưa thanh toán (bỏ dấu của chủ gia vị)')
     : String(e.type || '');
   return { time: e.at ? shortTime(e.at) : '', who, role: e.who || 'staff', text };
 }

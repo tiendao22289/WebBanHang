@@ -507,3 +507,13 @@ textarea.sp-field.sp-note-in:focus { min-height: 72px; }
 .sp-cart.compact .nm small { display: block; font-size: 11px; font-weight: 600; margin-top: 1px; }
 .sp-cart.compact .nm small.old { color: var(--sp-main-dark); }
 .sp-cart.compact .nm small.new { color: var(--sp-mute); font-weight: 500; }
+
+/* Báo đã thanh toán → chờ quán xác nhận → khoá */
+.sp-paidmark.ask { background: #fef3c7; color: var(--sp-main-dark); display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sp-ask-btns { display: inline-flex; gap: 6px; margin-left: auto; }
+.sp-ask-btns .sp-btn { min-height: 36px; padding: 4px 12px; font-size: 14px; }
+.sp-asks { margin: 8px 0; padding: 10px; border-radius: 12px; background: #fffbeb; border: 1px solid #fde68a; }
+.sp-ask-row { padding: 6px 0; border-top: 1px dashed #fde68a; }
+.sp-paybtn.wait { background: #fef3c7; border-color: #fcd34d; color: var(--sp-main-dark); }
+.sp-paybtn.lock { display: inline-flex; align-items: center; cursor: default; }
+.sp-wait-t { color: var(--sp-main-dark); font-weight: 700; }
