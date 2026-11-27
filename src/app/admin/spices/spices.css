@@ -283,3 +283,19 @@ textarea.sp-field { min-height: 64px; resize: vertical; }
 button.sp-tile { font: inherit; color: inherit; cursor: pointer; }
 .sp-tile.sel { outline: 3px solid var(--sp-main-soft); border-color: var(--sp-main); }
 .sp-tile.paid { background: var(--sp-ok-soft); border-color: #bbf7d0; }
+
+/* Trang chủ gia vị: đơn đã nhận gọn */
+.sp-sum { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.sp-sum .sp-check { margin-top: 0; }
+.sp-more { display: flex; justify-content: space-between; align-items: center; width: 100%; margin-top: 10px; min-height: 44px; padding: 8px 12px;
+  border: 1px solid var(--sp-line); border-radius: 10px; background: #f8fafc; font: inherit; font-weight: 700; color: var(--sp-blue); cursor: pointer; }
+.sp-more .sp-money { color: var(--sp-main-dark); font-size: 17px; }
+.sp-line.tight { padding: 7px 0; }
+.sp-line.tight .name { font-size: 15px; }
+.sp-line.tight .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin-top: 1px; }
+.sp-line.tight .meta .sp-tag { margin-top: 0; }
+.sp-line.tight .sp-check { margin-top: 3px; font-size: 12px; }
+.sp-line.tight.bad { background: #fff7f7; margin: 0 -8px; padding: 7px 8px; border-radius: 8px; }
+.sp-line.tight.bad.over { background: #f5f8ff; }
+.sp-line.tight.bad.skip { background: #f8fafc; }
+.sp-tag:not(.sup):not(.edit) { background: var(--sp-blue-soft); color: var(--sp-blue); }

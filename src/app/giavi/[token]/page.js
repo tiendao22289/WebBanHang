@@ -196,6 +196,10 @@ function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave,
   const [adding, setAdding] = useState(null); // [{ name, qty, unit, price }] đang thêm
   const state = orderState(order);
   const open = !order.cancelled_at && !order.received_at;
+  // Đơn đã nhận / đã huỷ: gọn — đầu thẻ có tóm tắt đủ / thiếu / dư / sai, bấm mới hiện từng món (đơn mở từ link thì hiện sẵn).
+  const [showLines, setShowLines] = useState(() => open || focus || order.items.some((_, i) => supplierCanPrice(order, i)));
+  const received = !!order.received_at && !order.cancelled_at;
+  const counts = received ? order.items.reduce((m, l) => { const c = lineCheck(l).check; m[c] = (m[c] || 0) + 1; return m; }, {}) : {};
   // Đơn đang gõ: tính lại tiền theo giá đang gõ.
   const items = order.items.map((l, i) => (draft && i in draft.prices ? { ...l, price: draft.prices[i] === '' ? null : Number(draft.prices[i]) } : l));
   const total = orderTotal(items);
@@ -213,13 +217,35 @@ function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave,
       {order.cancelled_at && <span>✖ Huỷ {shortTime(order.cancelled_at)} · <b>{order.cancelled_by_name}</b></span>}
     </div>
     {order.note && <div className="sp-note staff">📝 Quán ghi: {order.note}</div>}
-    <ul className="sp-lines">
+    {received && <div className="sp-sum">
+      {[['ok', '✅', 'đủ'], ['short', '➖', 'thiếu'], ['over', '➕', 'dư'], ['wrong', '⚠️', 'sai'], ['skip', '🚫', 'không lấy']].filter(([k]) => counts[k])
+        .map(([k, ic, label]) => <span key={k} className={`sp-check ${k}`}>{ic} {counts[k]} {label}</span>)}
+    </div>}
+    {!showLines && <button type="button" className="sp-more" onClick={() => setShowLines(true)}>
+      <span>Xem {order.items.length} món</span><span className="sp-money">{money(total)}</span></button>}
+    {showLines && <ul className="sp-lines">
       {items.map((l, i) => {
         const editable = supplierCanPrice(order, i);
         const later = addedLater(order, l);
         const value = draft && i in draft.prices ? draft.prices[i] : (hasPrice(order.items[i]) ? String(order.items[i].price) : '');
         const got = lineQty(l);
         const old = l.old_price !== null && l.old_price !== undefined ? l.old_price : null;
+        if (!editable) {
+          // Món đã chốt: một hàng tên · số — tiền; hàng nhỏ giá / đơn vị, nhãn thiếu / dư / sai (đủ thì không ghi cho gọn).
+          const c = received ? lineCheck(order.items[i]) : null;
+          const qty = c && c.check !== 'ok' ? `gọi ${qtyText(l.qty)} · nhận ${qtyText(got)} ${l.unit || ''}` : `${qtyText(l.qty)} ${l.unit || ''}`;
+          return <li key={i} className={`sp-line tight${c && c.check !== 'ok' ? ` bad ${c.check}` : ''}`}>
+            <div className="sp-row between"><span className="name">{l.name} <span className="q">{qty}</span></span>
+              <span className="sp-money">{hasPrice(l) ? money(lineAmount(l)) : <span className="nop">chưa giá</span>}</span></div>
+            <div className="meta">
+              {hasPrice(l) && <span>{money(l.price)}/{l.unit || 'phần'}</span>}
+              {hasPrice(l) && old !== null && l.price !== old && <span className={l.price > old ? 'sp-up' : 'sp-down'}> {l.price > old ? '▲' : '▼'}{money(Math.abs(l.price - old))}</span>}
+              {l.by_supplier && <span className="sp-tag sup">🧺 bạn thêm</span>}
+              {!l.by_supplier && later && <span className="sp-tag">➕ {l.added_by || 'NV'} thêm</span>}
+            </div>
+            {c && c.check !== 'ok' && <CheckBadge check={c.check} diff={c.diff} unit={l.unit} note={c.note} />}
+          </li>;
+        }
         return <li key={i} className="sp-line compact">
           <div className="sp-row between">
             <span className="name">{l.name}</span>
@@ -248,8 +274,9 @@ function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave,
           </div>}
         </li>;
       })}
-    </ul>
-    <div className="sp-total"><span>Tổng{missing ? ` (còn ${missing} món chưa giá)` : ''}</span><span className="sp-money">{money(total)}</span></div>
+    </ul>}
+    {showLines && <div className="sp-total"><span>Tổng{missing ? ` (còn ${missing} món chưa giá)` : ''}</span><span className="sp-money">{money(total)}</span></div>}
+    {showLines && !open && !focus && <button type="button" className="sp-btn ghost" onClick={() => setShowLines(false)}>Thu gọn</button>}
     {canEditAny
       ? <textarea className="sp-field" style={{ marginTop: 10 }} placeholder="Ghi chú cho quán (vd: hết sả, giao mai)" value={noteValue} onChange={e => onNote(order, e.target.value)} />
       : order.supplier_note && <div className="sp-note supplier">💬 Bạn ghi: {order.supplier_note}</div>}
