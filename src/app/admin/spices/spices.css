@@ -316,3 +316,26 @@ button.sp-tile { font: inherit; color: inherit; cursor: pointer; }
 .sp-actbtns .sp-btn, .sp-btns.small .sp-btn { min-height: 40px; padding: 6px 10px; font-size: 14px; border-radius: 10px; }
 .sp-actbtns .sp-btn { flex: 1 1 0; }
 .sp-btns.small > .sp-btn { flex: 1 1 100px; }
+
+/* Nút + nổi (thêm món): tròn, nằm trên thanh nút dưới đáy, góc phải. iPhone: chừa vùng vuốt (safe-area) vì nằm theo thanh;
+   Android: bóng đổ + vùng bấm ≥ 56px. Không phóng to khi chạm đúp, không loé xanh khi chạm. */
+.sp-fab { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: calc(100% + 12px); z-index: 31;
+  width: 60px; height: 60px; border-radius: 50%; border: 0; padding: 0; background: var(--sp-main); color: #fff;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1;
+  box-shadow: 0 6px 16px rgba(180, 83, 9, .35), 0 2px 4px rgba(0,0,0,.18); cursor: pointer;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation; -webkit-user-select: none; user-select: none;
+  transition: transform .12s ease, box-shadow .12s ease; font-family: inherit; }
+.sp-fab span { font-size: 34px; font-weight: 300; margin-top: -3px; }
+.sp-fab small { font-size: 9px; font-weight: 700; margin-top: 1px; letter-spacing: .2px; }
+.sp-fab:active { transform: scale(.93); box-shadow: 0 3px 8px rgba(180, 83, 9, .3); }
+.sp-fab:focus-visible { outline: 3px solid var(--sp-main-soft); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .sp-fab { transition: none; } }
+/* Đơn khác (không phải đơn đang làm): nút + nhỏ gọn trong thẻ */
+.sp-addmini { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; min-height: 40px; padding: 4px 14px 4px 6px; border-radius: 999px;
+  border: 1px solid #fcd34d; background: var(--sp-main-soft); color: var(--sp-main-dark); font: inherit; font-size: 14px; font-weight: 700;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation; cursor: pointer; }
+.sp-addmini span { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--sp-main); color: #fff; font-size: 20px; line-height: 1; }
+/* Trang chủ gia vị: chừa chỗ cho thanh nút + nút nổi để không che nội dung cuối trang */
+.sp-page .sp { padding-bottom: calc(190px + env(safe-area-inset-bottom)); }
+/* Đang mở ô thêm món thì ẩn nút + để không che nút Lưu (máy cũ không hỗ trợ :has thì vẫn hiện, không sao). */
+.sp-page:has(.sp-addbox) .sp-fab { display: none; }

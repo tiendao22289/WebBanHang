@@ -32,7 +32,8 @@ function SupplierView() {
   const scrolled = useRef(false);
   // Link quán gửi (?don=…) chỉ mở đúng đơn đó; bấm "Xem tất cả đơn" mới hiện các đơn khác.
   const [showAll, setShowAll] = useState(false);
-  const [tab, setTab] = useState(null); // null = tự chọn: có đơn cần soạn thì 'open', không thì 'done'
+  const [tab, setTab] = useState(null);
+  const [addReq, setAddReq] = useState(null); // { id, n } — nút + nổi bấm: mở ô thêm món của đơn id // null = tự chọn: có đơn cần soạn thì 'open', không thì 'done'
   const dirty = Object.keys(drafts).length > 0;
 
   const load = useCallback(async () => {
@@ -136,7 +137,7 @@ function SupplierView() {
   const active = (draftId && data.orders.find(o => o.id === draftId))
     || (single && editable(single) ? single : null)
     || (!single && view === 'open' && groups.open.length === 1 ? groups.open[0] : null);
-  const card = order => <OrderCard key={order.id} order={order} draft={drafts[order.id]} focus={order.id === focusId} busy={busy === order.id} inBar={active?.id === order.id}
+  const card = order => <OrderCard key={order.id} order={order} draft={drafts[order.id]} focus={order.id === focusId} busy={busy === order.id} inBar={active?.id === order.id} addReq={addReq?.id === order.id ? addReq.n : 0}
     notice={notice?.id === order.id ? notice : null} onPrice={setPrice} onNote={setNote} onSave={save} onUndo={() => drop(order.id)}
     onAdd={(o, add) => post(o, { add }, `Đã thêm ${add.length} món ✓ Quán sẽ thấy khi nhận hàng.`)} />;
   const tiles = <>
@@ -158,7 +159,12 @@ function SupplierView() {
       setTab(active.received_at ? 'done' : 'open');
       setTimeout(() => document.getElementById(`don-${active.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
     };
-    bar = <div className="sp-bar sp-actbar"><div className="sp-bar-in col">
+    const canAdd = !active.received_at && !active.cancelled_at;
+    bar = <div className="sp-bar sp-actbar">
+      {canAdd && <button type="button" className="sp-fab" aria-label="Thêm món quán gọi thiếu"
+        onClick={() => { if (!shown) setTab('open'); setAddReq(r => ({ id: active.id, n: (r?.n || 0) + 1 })); }}>
+        <span aria-hidden="true">+</span></button>}
+      <div className="sp-bar-in col">
       <div className="sp-row between sp-small">
         <span className="sp-mute">Đơn {shortTime(active.created_at)}{d ? <b className="sp-dirty"> · chưa lưu</b> : ''}{miss ? <span className="nop"> · {miss} món chưa giá</span> : ''}</span>
         <span className="sp-money">{money(orderTotal(items))}</span>
@@ -210,8 +216,15 @@ function SupplierView() {
   </div>;
 }
 
-function OrderCard({ order, draft, focus, busy, inBar = false, notice, onPrice, onNote, onSave, onUndo, onAdd }) {
+function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notice, onPrice, onNote, onSave, onUndo, onAdd }) {
   const [adding, setAdding] = useState(null); // [{ name, qty, unit, price }] đang thêm
+  const addRef = useRef(null);
+  // Bấm nút + nổi: mở ô thêm món của đơn này và cuộn tới, con trỏ vào ô tên món.
+  useEffect(() => {
+    if (!addReq) return;
+    setAdding(a => a || [{ name: '', qty: '1', unit: '', price: '' }]);
+    setTimeout(() => { addRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); addRef.current?.querySelector('input')?.focus({ preventScroll: true }); }, 60);
+  }, [addReq]);
   const state = orderState(order);
   const open = !order.cancelled_at && !order.received_at;
   // Đơn đã nhận / đã huỷ: gọn — đầu thẻ có tóm tắt đủ / thiếu / dư / sai, bấm mới hiện từng món (đơn mở từ link thì hiện sẵn).
@@ -298,9 +311,9 @@ function OrderCard({ order, draft, focus, busy, inBar = false, notice, onPrice, 
     {canEditAny
       ? <textarea className="sp-field" style={{ marginTop: 10 }} placeholder="Ghi chú cho quán (vd: hết sả, giao mai)" value={noteValue} onChange={e => onNote(order, e.target.value)} />
       : order.supplier_note && <div className="sp-note supplier">💬 Bạn ghi: {order.supplier_note}</div>}
-    {open && !adding && <button type="button" className="sp-btn ghost" style={{ marginTop: 6 }} onClick={() => setAdding([{ name: '', qty: '1', unit: '', price: '' }])}>
-      ➕ Thêm món quán gọi thiếu</button>}
-    {open && adding && <div className="sp-addbox">
+    {open && !adding && !inBar && <button type="button" className="sp-addmini" aria-label="Thêm món quán gọi thiếu" onClick={() => setAdding([{ name: '', qty: '1', unit: '', price: '' }])}>
+      <span aria-hidden="true">+</span> Thêm món</button>}
+    {open && adding && <div className="sp-addbox" ref={addRef}>
       <div className="sp-b">Thêm món (quán gọi thiếu)</div>
       <p className="sp-mute sp-small" style={{ margin: '2px 0 8px' }}>Quán sẽ thấy nhãn 🧺 "chủ gia vị tự thêm"; khi nhận, quán không cần thì bấm Không lấy và không tính tiền món đó.</p>
       {adding.map((a, k) => <div key={k} className="sp-addrow">
