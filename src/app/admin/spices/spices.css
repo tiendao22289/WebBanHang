@@ -496,3 +496,10 @@ textarea.sp-field.sp-note-in:focus { min-height: 72px; }
 .sp-addrow-btn.big { min-height: 64px; font-size: 18px; margin-top: 4px; }
 .sp-addrow-btn.big span { width: 34px; height: 34px; font-size: 26px; }
 .sp-fab.sp-fab-admin { bottom: calc(var(--admin-bottom-nav-height, 0px) + 140px); }
+
+/* Gọi hàng không còn bước 1-2-3: chỉ danh sách món + nút + */
+.sp-to-picks { align-items: center; margin-bottom: 10px; }
+.sp-to-picks .sp-pick { min-height: 38px; padding: 6px 12px; }
+.sp-empty-call { text-align: center; color: var(--sp-mute); background: #fff; border: 2px dashed var(--sp-line); border-radius: 14px; padding: 28px 16px; }
+.sp-empty-call .ic { font-size: 34px; margin-bottom: 6px; }
+.sp-empty-call .plus { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--sp-main); color: #fff; font-size: 18px; line-height: 1; vertical-align: middle; }

@@ -173,8 +173,6 @@ function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders 
       </li>)}</ul>
       {!drawer && <div className="sp-pick-h">Bấm thêm món:</div>}
     </>}
-    {drawer && <button type="button" className={`sp-addrow-btn${lines.length ? '' : ' big'}`} onClick={() => setPanel(true)}>
-      <span aria-hidden="true">+</span> {lines.length ? 'Thêm món khác' : 'Chọn món'}</button>}
     {drawer && <DrawerFab onOpen={() => setPanel(true)} hidden={panel} />}
     {drawer && panel && <ItemDrawer items={ranked} lines={lines} idx={idx} prices={prices} bump={bump} onClose={() => setPanel(false)} />}
     {!drawer && <>
@@ -285,25 +283,19 @@ function CallTab({ data, onSent, goSetup }) {
     finally { setBusy(false); }
   };
   return <>
-    {active.length === 1
-      ? <div className="sp-card sp-to"><span className="sp-step">1</span><span className="sp-mute">Gửi cho</span> <b>{active[0].name}</b></div>
-      : <div className="sp-card">
-        <div className="sp-step-h"><span className="sp-step">1</span>Gửi cho ai?</div>
-        <div className="sp-picks">{active.map(s => <button key={s.id} type="button" className={`sp-pick ${s.id === supplierId ? 'on' : ''}`} onClick={() => setSupplierId(s.id)}>
-          {s.name}{s.phone && <small>{s.phone}</small>}
-        </button>)}</div>
-      </div>}
-    <div className="sp-card">
-      <div className="sp-step-h"><span className="sp-step">2</span>Chọn món <span className="sp-mute sp-small" style={{ fontWeight: 500 }}>· bấm + để thêm món</span></div>
-      {!lines.length && lastOrder && <button type="button" className="sp-btn block" style={{ marginBottom: 10 }} onClick={() => setLines(lastOrder.items.map(l => ({ name: l.name, unit: l.unit || '', qty: fmtQty(Number(l.qty)), step: itemStep(data.items.find(i => itemKey(i.name) === itemKey(l.name))) })))}>
+    {active.length > 1 && <div className="sp-picks sp-to-picks">
+      <span className="sp-mute sp-small">Gửi cho:</span>
+      {active.map(s => <button key={s.id} type="button" className={`sp-pick ${s.id === supplierId ? 'on' : ''}`} onClick={() => setSupplierId(s.id)}>{s.name}</button>)}
+    </div>}
+    {!lines.length && <div className="sp-empty-call">
+      <div className="ic" aria-hidden="true">🧂</div>
+      <div>Chưa có món nào. Bấm nút <b className="plus">+</b> để chọn món.</div>
+      {lastOrder && <button type="button" className="sp-btn block" style={{ marginTop: 10 }} onClick={() => setLines(lastOrder.items.map(l => ({ name: l.name, unit: l.unit || '', qty: fmtQty(Number(l.qty)), step: itemStep(data.items.find(i => itemKey(i.name) === itemKey(l.name))) })))}>
         🔁 Gọi giống lần trước · {lastOrder.items.length} món
       </button>}
-      <ItemPicker drawer items={data.items} lines={lines} setLines={setLines} prices={data.lastPrices?.[supplierId] || {}} orders={data.orders} supplierId={supplierId} />
-    </div>
-    <div className="sp-card">
-      <div className="sp-step-h"><span className="sp-step">3</span>Ghi chú <span className="sp-mute sp-small" style={{ fontWeight: 500 }}>· không bắt buộc</span></div>
-      <textarea className="sp-field" placeholder="vd: giao trước 10h, lấy ớt hiểm" value={note} maxLength={300} onChange={e => setNote(e.target.value)} />
-    </div>
+    </div>}
+    <ItemPicker drawer items={data.items} lines={lines} setLines={setLines} prices={data.lastPrices?.[supplierId] || {}} orders={data.orders} supplierId={supplierId} />
+    {lines.length > 0 && <textarea className="sp-field sp-note-in" rows={1} placeholder="💬 Ghi chú cho chủ gia vị (không bắt buộc)" value={note} maxLength={300} onChange={e => setNote(e.target.value)} />}
     {error && <div className="sp-msg err">{error}</div>}
     <div className="sp-bar in-admin"><div className="sp-bar-in">
       <button type="button" className="sp-btn main" disabled={busy || !lines.length || !supplier} onClick={send}>
