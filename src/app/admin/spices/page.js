@@ -9,7 +9,7 @@ import { createPortal } from 'react-dom';
 import { useBackClose } from '@/lib/useBackClose';
 import { useReloadHold } from '@/lib/useBuildRefresh';
 import {
-  CHECK_LABELS, STATE_LABELS, addedLater, changeText, cleanName, dayReportText, lineCheck, itemKey, itemLineText, itemStep, orderedItems, plainText, rankItems, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shareText, shortTime,
+  CHECK_LABELS, STATE_LABELS, addedLater, paidState, changeText, cleanName, dayReportText, lineCheck, itemKey, itemLineText, itemStep, orderedItems, plainText, rankItems, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shareText, shortTime,
 } from '@/lib/spiceOrders.mjs';
 import { CheckBadge, DayCard, DayGroups } from './SpiceShared';
 import './spices.css';
@@ -56,6 +56,7 @@ export default function SpicesPage() {
   const suppliers = data?.suppliers || [];
   const supplierById = useMemo(() => Object.fromEntries(suppliers.map(s => [s.id, s])), [suppliers]);
   const openCount = (data?.orders || []).filter(o => ['new', 'priced', 'waiting_price'].includes(orderState(o))).length;
+  const payAsks = (data?.orders || []).filter(o => !o.cancelled_at && paidState(o) === 'pending').length;
 
   // Sau khi gửi / thêm món: hộp "Gửi qua Zalo" (chia sẻ cần một lần bấm của người dùng, nên không mở tự động).
   const askShare = (supplier, order, items, { added = false, note = '' } = {}) => setShare({
@@ -73,7 +74,7 @@ export default function SpicesPage() {
     {error && <div className="sp-msg err">{error}</div>}
     <div className={`sp-seg ${tabs.length > 3 ? 'six' : 'three'}`} role="tablist">
       {tabs.map(([k, icon, label]) => <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => { setTab(k); window.scrollTo(0, 0); }}>
-        <span aria-hidden="true">{icon}</span>{label}{k === 'orders' && openCount > 0 && <i className="dot">{openCount}</i>}
+        <span aria-hidden="true">{icon}</span>{label}{k === 'orders' && openCount > 0 && <i className="dot">{openCount}</i>}{k === 'debt' && payAsks > 0 && <i className="dot">{payAsks}</i>}
       </button>)}
     </div>
     {tab === 'call' && <CallTab data={data} onSent={(supplier, order, items, note) => { askShare(supplier, order, items, { note }); load(); setTab('orders'); }} goSetup={isAdmin ? () => setTab('setup') : null} />}
@@ -161,8 +162,8 @@ function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders 
   return <>
     {lines.length > 0 && <>
       <div className="sp-cart-h top"><span className="sp-b">🧾 Đã chọn {lines.length} món</span><button type="button" className="sp-btn ghost bad" onClick={() => setLines([])}>Xoá hết</button></div>
-      <ul className="sp-cart compact">{lines.map((l, i) => <li key={`${l.name}-${i}`}>
-        <span className="nm">{l.name}</span>
+      <ul className="sp-cart compact">{lines.map((l, i) => { const p = prices[itemKey(l.name)]; return <li key={`${l.name}-${i}`}>
+        <span className="nm">{l.name}<small className={p !== undefined ? 'old' : 'new'}>{p !== undefined ? `giá cũ ${money(p)}/${l.unit || 'phần'}` : 'chưa có giá cũ'}</small></span>
         <div className="sp-qty">
           <button type="button" aria-label={`Bớt ${l.name}`} onClick={() => bump(l, -1)}>−</button>
           <input inputMode="decimal" aria-label={`Số lượng ${l.name}`} value={l.qty} onChange={e => setLine(i, { qty: e.target.value.replace(/[^\d.,]/g, '').slice(0, 7) })} />
@@ -170,7 +171,7 @@ function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders 
         </div>
         <input className="sp-unit" placeholder="đơn vị" aria-label={`Đơn vị ${l.name}`} value={l.unit} maxLength={20} onChange={e => setLine(i, { unit: e.target.value })} />
         <button type="button" className="sp-x" aria-label={`Bỏ ${l.name}`} onClick={() => setLines(lines.filter((_, j) => j !== i))}>✕</button>
-      </li>)}</ul>
+      </li>; })}</ul>
       {!drawer && <div className="sp-pick-h">Bấm thêm món:</div>}
     </>}
     {drawer && <DrawerFab onOpen={() => setPanel(true)} hidden={panel} />}
@@ -350,7 +351,13 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
         {o.note && <div className="sp-note staff">📝 {o.note}</div>}
         {o.supplier_note && <div className="sp-note supplier">💬 Chủ gia vị: {o.supplier_note}</div>}
         {open && o.items.some(l => l.by_supplier) && <div className="sp-note supplier">🧺 Chủ gia vị tự thêm {o.items.filter(l => l.by_supplier).length} món. Bấm <b>Kiểm hàng</b> để chọn lấy hay <b>Không lấy</b>.</div>}
-        {o.supplier_paid_at && <div className="sp-paidmark">💵 Chủ gia vị đã đánh dấu nhận tiền đơn này · {shortTime(o.supplier_paid_at)}</div>}
+        {paidState(o) === 'confirmed' && <div className="sp-paidmark">🔒 Đã xác nhận thanh toán · {shortTime(o.paid_confirmed_at)}</div>}
+        {paidState(o) === 'pending' && <div className="sp-paidmark ask">⏳ Chủ gia vị báo đã nhận tiền · {shortTime(o.supplier_paid_at)}
+          {isAdmin && <span className="sp-ask-btns">
+            <button type="button" className="sp-btn ok" disabled={busy === o.id} onClick={() => run(o, { action: 'confirm_paid', ids: [o.id], ok: true }, 'Đã xác nhận thanh toán ✓')}>✓ Xác nhận</button>
+            <button type="button" className="sp-btn bad" disabled={busy === o.id} onClick={() => { const note = window.prompt('Chưa thanh toán đơn này? Ghi lý do cho chủ gia vị (không bắt buộc):', ''); if (note !== null) run(o, { action: 'confirm_paid', ids: [o.id], ok: false, note }, 'Đã báo lại: chưa thanh toán'); }}>Không đúng</button>
+          </span>}
+        </div>}
         <OrderLines order={o} />
         {msg?.id === o.id && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
         {open && <div className="sp-btns two">
@@ -561,6 +568,40 @@ function DaysTab({ data, reload, onShareText }) {
 }
 
 /* ---------------- Tab Công nợ (chủ quán) ---------------- */
+/** Chủ gia vị bấm "Đã TT" → chủ quán xác nhận (trừ nợ, khoá đơn) hoặc báo Không đúng. Xác nhận từng đơn hoặc tất cả. */
+function PayAsks({ orders, reload }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  if (!orders.length && !msg) return null;
+  const total = orders.reduce((t, o) => t + orderTotal(o.items), 0);
+  const act = async (ids, ok) => {
+    let note = '';
+    if (!ok) { note = window.prompt('Ghi lý do cho chủ gia vị (không bắt buộc):', ''); if (note === null) return; }
+    setBusy(true); setMsg(null);
+    try {
+      const j = await api({ action: 'confirm_paid', ids, ok, note });
+      setMsg({ text: ok ? `Đã xác nhận ${j.changed} đơn · ${money(j.total)} ✓` : 'Đã báo lại chủ gia vị: chưa thanh toán' });
+      await reload();
+    } catch (e) { setMsg({ err: true, text: e.message }); }
+    setBusy(false);
+  };
+  return <div className="sp-asks">
+    {orders.length > 0 && <>
+      <div className="sp-row between"><span className="sp-b">⏳ Chờ xác nhận thanh toán · {orders.length} đơn</span><span className="sp-money">{money(total)}</span></div>
+      <p className="sp-mute sp-small" style={{ margin: '2px 0 6px' }}>Chủ gia vị báo đã nhận tiền. Xác nhận thì trừ nợ và khoá đơn (chủ gia vị không sửa được nữa).</p>
+      {orders.map(o => <div key={o.id} className="sp-row between sp-ask-row">
+        <span><b>{shortTime(o.received_at)}</b> · {money(orderTotal(o.items))}<span className="sp-mute sp-small"> · báo {shortTime(o.supplier_paid_at)}</span></span>
+        <span className="sp-ask-btns">
+          <button type="button" className="sp-btn ok" disabled={busy} onClick={() => act([o.id], true)}>✓</button>
+          <button type="button" className="sp-btn bad" disabled={busy} onClick={() => act([o.id], false)}>✗</button>
+        </span>
+      </div>)}
+      {orders.length > 1 && <button type="button" className="sp-btn ok block" style={{ marginTop: 8 }} disabled={busy} onClick={() => act(orders.map(o => o.id), true)}>✓ Xác nhận tất cả {orders.length} đơn · {money(total)}</button>}
+    </>}
+    {msg && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
+  </div>;
+}
+
 function DebtTab({ data, reload }) {
   const [pay, setPay] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -578,6 +619,8 @@ function DebtTab({ data, reload }) {
           <div className="sp-tile paid"><div className="k">Đã trả</div><div className="v">{money(b.paid)}</div></div>
           <div className="sp-tile owe"><div className="k">Còn nợ</div><div className="v">{money(b.debt)}</div></div>
         </div>
+        {b.owed - b.paid - b.debt > 0 && <p className="sp-mute sp-small">🔒 Trong đó {money(b.owed - b.paid - b.debt)} là các đơn chủ gia vị báo đã nhận tiền và quán đã xác nhận.</p>}
+        <PayAsks orders={data.orders.filter(o => o.supplier_id === s.id && !o.cancelled_at && paidState(o) === 'pending')} reload={reload} />
         {b.waiting > 0 && <p className="sp-mute">⚠️ {b.waiting} đơn đã nhận còn món chưa có giá.</p>}
         {msg?.id === s.id && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
         <button type="button" className="sp-btn main block" onClick={() => setPay({ supplier: s, amount: String(Math.max(0, b.debt)) })}>💵 Trả tiền</button>
