@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { workforce, workforceWithPhoto } from '@/lib/staffApi';
 import CameraCapture from '@/lib/CameraCapture';
 import { currentWorkDay, dayFlags, dayInShiftMs, durationText, flagTexts, groupByWorkDay, hhmm, hoursOn, sessionHours, shiftOf, validTime, workDayOf } from '@/lib/attendanceRules.mjs';
-import { DEFAULT_OT_RATE, LATE_FINE_MINUTES, MAX_CYCLE_DAYS, STANDARD_DAYS, activeFineKinds, addDays, bonusCheck, computeSalary, cycleDueTo, cyclePayday, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthDays, monthTallies, nothingDue, offDays, paydayWeekday,
+import { DEFAULT_OT_RATE, LATE_FINE_MINUTES, MAX_CYCLE_DAYS, STANDARD_DAYS, activeFineKinds, addDays, bonusCheck, computeSalary, fineSuggestions, holidayArgs, lateRuleOn, lateRulesOf, monthDays, monthTallies, offDays, paydayWeekday,
   payoutPartOfMonth, shopClosedDays, usesDayPay } from '@/lib/payroll.mjs';
 import { activeInMonth } from '@/lib/staffDeparture.mjs';
 import QrClockScanner from '@/components/QrClockScanner';
@@ -449,80 +449,8 @@ function RangeSheet({ staff, defaultFrom, defaultTo, today, onClose, onDone }) {
   );
 }
 
-// Trả lương theo kỳ (5, 7, 10 ngày…): từng người đang trả theo kỳ — kỳ đang chạy, ngày phát, số phải trả tới ngày chọn (máy chủ
-// tính, cùng công thức bảng lương), nút "Đã thanh toán lương" (kỳ mới tính từ hôm sau ngày đã trả tới) và bỏ lần trả bấm nhầm.
+// Số ngày của kỳ trả lương có sẵn để chọn ở tab Mức lương (trả lương: nút "💵 Trả lương theo ngày" ở từng người).
 const CYCLE_PRESETS = [5, 7, 10, 15];
-const paydayText = n => (n === 0 ? 'hôm nay' : n > 0 ? `còn ${n} ngày` : `quá ${-n} ngày`);
-function CycleBox({ people, today, nameOf, onPay, onUndo }) {
-  const [toDays, setToDays] = useState({});
-  if (!people.length) return null;
-  const line = { display: 'flex', justifyContent: 'space-between', gap: 8, padding: '2px 0' };
-  const list = [...people].sort((a, b) => a.period.daysLeft - b.period.daysLeft);
-  return (
-    <div style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 12, padding: '12px 14px', margin: '0 0 12px', fontSize: '0.84rem', color: '#334155' }}>
-      <div style={{ fontWeight: 800, fontSize: '0.95rem', marginBottom: 2 }}>💵 Trả lương theo kỳ</div>
-      <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 8 }}>Trả xong bấm &quot;Đã thanh toán lương&quot;: kỳ mới tự tính từ hôm sau. Cài kỳ ở tab Mức lương.</div>
-      {list.map(p => {
-        const { start, payday, daysLeft } = p.period;
-        const name = nameOf(p.staff_id), started = start <= today, due = daysLeft <= 0 && started;
-        const defaultTo = payday < today ? payday : today;
-        const picked = toDays[p.staff_id], to = picked && picked >= start && picked <= today ? picked : defaultTo;
-        const d = started ? cycleDueTo(p, to, start) : null;
-        const workDays = d ? d.days.filter(x => x.day >= start && x.due > 0) : [];
-        const sum = xs => xs.reduce((a, x) => a + x.amount, 0);
-        const last = p.payouts[0];
-        return (
-          <div key={p.staff_id} style={{ border: `1.5px solid ${due ? '#fdba74' : '#e2e8f0'}`, background: due ? '#fff7ed' : '#f8fafc', borderRadius: 10, padding: '10px 12px', marginTop: 8 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
-              <span><strong style={{ fontSize: '0.95rem' }}>{name}</strong> <span style={{ color: '#64748b' }}>· mỗi {p.every_days} ngày</span></span>
-              <span style={{ fontWeight: 700, color: due ? '#c2410c' : '#475569' }}>{due ? '🔔 ' : ''}Ngày phát {ddmm(payday)} ({paydayText(daysLeft)})</span>
-            </div>
-            <div style={{ color: '#475569', marginTop: 2 }}>Kỳ này: {ddmm(start)} → {ddmm(payday)}</div>
-            {!started && <div style={{ color: '#64748b', marginTop: 4 }}>Kỳ mới bắt đầu ngày {ddmm(start)}, chưa có gì phải trả.</div>}
-            {d && (
-              <>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '6px 0 4px', fontWeight: 600 }}>
-                  Tính tới hết ngày
-                  <input type="date" value={to} min={start} max={today} onChange={e => setToDays(x => ({ ...x, [p.staff_id]: e.target.value }))}
-                    style={{ padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', background: 'white' }} />
-                </label>
-                <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 10px' }}>
-                  <div style={line}><span>{workDays.length ? `${workDays.length} ngày có công (${workDays.map(x => x.day.slice(8, 10)).join(', ')}/${to.slice(5, 7)})` : 'Chưa có ngày công nào'}</span><b>{formatMoney(d.work)}</b></div>
-                  {d.adjust !== 0 && <div style={line}><span>Phần chênh của ngày đã trả trước ({d.days.filter(x => x.day < start).map(x => ddmm(x.day)).join(', ')})</span><b>{d.adjust > 0 ? '+' : '−'}{formatMoney(Math.abs(d.adjust))}</b></div>}
-                  {d.advances.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ ứng lương</span><b>−{formatMoney(sum(d.advances))}</b></div>}
-                  {d.fines.length > 0 && <div style={{ ...line, color: '#dc2626' }}><span>Trừ phạt</span><b>−{formatMoney(sum(d.fines))}</b></div>}
-                  {d.bonuses.length > 0 && <div style={{ ...line, color: '#16a34a' }}><span>Thưởng chuyên cần</span><b>+{formatMoney(sum(d.bonuses))}</b></div>}
-                  {(d.claims || []).length > 0 && <div style={{ ...line, color: sum(d.claims) < 0 ? '#dc2626' : '#16a34a' }}><span>Chi hộ ({d.claims.length} khoản)</span><b>{sum(d.claims) < 0 ? '−' : '+'}{formatMoney(Math.abs(sum(d.claims)))}</b></div>}
-                  {(d.drinks || []).length > 0 && <div style={{ ...line, color: sum(d.drinks) < 0 ? '#16a34a' : '#dc2626' }}><span>{sum(d.drinks) < 0 ? 'Trả lại nước uống đã xoá' : `Trừ nước uống (${d.drinks.length} lần)`}</span><b>{sum(d.drinks) < 0 ? '+' : '−'}{formatMoney(Math.abs(sum(d.drinks)))}</b></div>}
-                  <div style={{ ...line, borderTop: '1px dashed #cbd5e1', marginTop: 4, paddingTop: 4, fontSize: '0.95rem' }}>
-                    <strong>Cần trả</strong><strong style={{ color: d.amount < 0 ? '#dc2626' : '#15803d' }}>{formatMoney(d.amount)}</strong>
-                  </div>
-                </div>
-                {p.openDay && p.openDay <= to && <div style={{ color: '#b45309', fontSize: '0.78rem', marginTop: 4 }}>⏳ Ngày {ddmm(p.openDay)} {name} chưa ra ca nên chưa tính tiền ngày đó; trả xong thì phần đó tự cộng vào lần trả sau.</div>}
-                {nothingDue(d)
-                  ? <div style={{ color: '#64748b', fontSize: '0.8rem', marginTop: 6 }}>Chưa có ngày công hay khoản nào để trả tới hết {ddmm(to)} — chưa cần bấm đã thanh toán.</div>
-                  : d.amount < 0
-                  ? <div style={{ color: '#dc2626', fontSize: '0.8rem', marginTop: 6 }}>Tiền ứng / phạt nhiều hơn tiền công nên chưa phải trả; lần trả sau sẽ trừ tiếp.</div>
-                  : <button className="btn-primary" style={{ marginTop: 8, width: '100%' }} onClick={() => onPay(p, to, d.amount, name)}>✅ Đã thanh toán lương {formatMoney(d.amount)}</button>}
-              </>
-            )}
-            {last && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.76rem', color: '#64748b', marginTop: 6 }}>
-                <span>Lần trả gần nhất: {ddmm(String(last.from_day))} – {ddmm(String(last.to_day))} · {formatMoney(last.amount)} · {new Date(last.paid_at).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}{last.paid_by ? ` (${last.paid_by})` : ''}</span>
-                {last.received_at
-                  ? <span style={{ color: '#15803d', fontWeight: 700 }}>🤝 {name} đã xác nhận nhận {whenText(last.received_at)}</span>
-                  : <>
-                      <span style={{ color: '#b45309' }}>⏳ chờ {name} bấm &quot;Tôi đã nhận&quot;</span>
-                      <button style={{ ...smallBtn, fontSize: '0.72rem', padding: '2px 8px', color: '#dc2626', borderColor: '#fecaca', background: '#fff5f5' }} onClick={() => onUndo(last, name)}>Bỏ lần trả này</button>
-                    </>}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 // Mục Đơn từ của nhân viên: mỗi loại một ô, bấm để mở đúng phần điền.
 const FORM_TILES = [
@@ -1152,20 +1080,6 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   };
   const markPaid = async (staffId, paid) => {
     try { await workforce('mark_paid', { year: selYear, month: selMonth, staff_id: staffId, paid }); } catch (err) { return alert(err.message); }
-    fetchPayrollMonth();
-  };
-  // Trả lương theo kỳ: "Đã thanh toán lương" tới hết ngày đã chọn. Máy chủ tính lại; khác số đang hiện thì báo và tải lại.
-  const payCycle = async (p, to, amount, name) => {
-    const next = addDays(to, 1);
-    if (!confirm(`Đã trả lương cho ${name} ${formatMoney(amount)} (từ ${ddmm(p.period.start)} tới hết ${ddmm(to)})?\n\nKỳ mới tính từ ${ddmm(next)}, ngày phát ${ddmm(cyclePayday(p, next))}.`)) return;
-    try { await workforce('pay_cycle', { staff_id: p.staff_id, to_day: to, amount }); } catch (err) { alert(err.message); fetchCycles(); return; }
-    fetchCycles();
-    fetchPayrollMonth();
-  };
-  const undoPayout = async (payout, name) => {
-    if (!confirm(`Bỏ lần trả lương ${formatMoney(payout.amount)} của ${name} (${ddmm(String(payout.from_day))} – ${ddmm(String(payout.to_day))})? Kỳ sẽ quay lại như trước khi bấm.`)) return;
-    try { await workforce('undo_payout', { id: payout.id }); } catch (err) { return alert(err.message); }
-    fetchCycles();
     fetchPayrollMonth();
   };
   // Phần lương tháng đang xem của một người đã trả theo kỳ (tiền các ngày của tháng + thưởng − ứng − phạt đã tính vào các lần trả).
@@ -3052,11 +2966,6 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                     <div style={{ fontWeight: 800, margin: '2px 0 6px' }}>📅 Chấm công ngày {ddmm(shownDay)}</div>
                     <DayTable first="Nhân viên" rows={filtered.map(s => ({ key: s.id, label: s.full_name, d: (calcSalary(s.id).daily || []).find(x => x.day === shownDay) })).filter(r => r.d)} />
                   </div>
-                )}
-
-                {/* Người trả lương theo kỳ (5, 7, 10 ngày…): ngày phát, số phải trả, nút "Đã thanh toán lương" */}
-                {isAdmin && (
-                  <CycleBox people={cycles.people} today={cycles.today || today} nameOf={id => staffList.find(x => x.id === id)?.full_name || 'Nhân viên'} onPay={payCycle} onUndo={undoPayout} />
                 )}
 
                 {/* Cách tính + chốt lương tháng */}
