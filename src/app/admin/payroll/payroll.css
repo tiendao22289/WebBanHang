@@ -7,6 +7,9 @@
   background: #f8fafc;
   min-height: 100vh;
 }
+/* Trang chủ quán (bảng lương nhiều cột): trên PC dùng hết bề ngang màn hình. Trang của nhân viên giữ 960px cho dễ đọc. */
+.payroll-page.wide { max-width: none; }
+@media (min-width: 1024px) { .payroll-page.wide { padding: 14px 20px; } }
 
 /* Header */
 .payroll-header {

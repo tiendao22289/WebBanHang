@@ -87,6 +87,15 @@ test('staff log their own mistakes at the listed price, cannot change them, and 
   assert.equal(month.violationMeta.filter(m => m.self_reported).length, 2);
   assert.equal((await post(OWNER, { action: 'edit_violation', id: other.body.id, amount: '100.000' })).status, 200);
   assert.equal((await get(AN, 'me=1')).body.salary.vioAmt, 120000);
+  // Lương tháng của người đó đã chốt: không sửa / xoá khoản phạt (bảng lương theo số chốt, sửa sẽ không khớp) — mở chốt trước.
+  state.payroll_closes = [{ staff_id: AN.id, year: 2026, month: 11, snapshot: {} }];
+  const lockedEdit = await post(OWNER, { action: 'edit_violation', id, amount: '50.000' });
+  assert.equal(lockedEdit.status, 409);
+  assert.match(lockedEdit.body.error, /đã chốt/);
+  assert.equal((await post(OWNER, { action: 'delete_violation', id })).status, 409);
+  assert.equal(state.payroll_violations.find(v => v.id === id).amount, 20000, 'nothing changed while the month is closed');
+  state.payroll_closes = [];
+  assert.equal((await post(OWNER, { action: 'edit_violation', id: '00000000-0000-4000-9000-0000000000f9', amount: 1000 })).status, 404, 'a missing fine says so');
   assert.equal((await post(OWNER, { action: 'delete_violation', id })).status, 200, 'the owner can still remove a mistaken one');
 
   // Bấm liên tục: tối đa 20 khoản tự ghi một ngày.
