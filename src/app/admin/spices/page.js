@@ -70,9 +70,9 @@ export default function SpicesPage() {
   return <div className="sp">
     <div className="sp-head"><h1>🧂 Gia vị</h1><span className="sp-mute sp-small">{data.me?.name}</span></div>
     {error && <div className="sp-msg err">{error}</div>}
-    <div className="sp-tabs grid" role="tablist">
-      {tabs.map(([k, icon, label]) => <button key={k} type="button" role="tab" aria-selected={tab === k} className={`sp-tab ${tab === k ? 'on' : ''}`} onClick={() => { setTab(k); window.scrollTo(0, 0); }}>
-        <span className="ic" aria-hidden="true">{icon}</span>{label}{k === 'orders' && openCount > 0 && <span className="sp-count">{openCount}</span>}
+    <div className={`sp-seg ${tabs.length > 3 ? 'six' : 'three'}`} role="tablist">
+      {tabs.map(([k, icon, label]) => <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => { setTab(k); window.scrollTo(0, 0); }}>
+        <span aria-hidden="true">{icon}</span>{label}{k === 'orders' && openCount > 0 && <i className="dot">{openCount}</i>}
       </button>)}
     </div>
     {tab === 'call' && <CallTab data={data} onSent={(supplier, order, items, note) => { askShare(supplier, order, items, { note }); load(); setTab('orders'); }} goSetup={isAdmin ? () => setTab('setup') : null} />}
@@ -157,6 +157,20 @@ function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders 
   const addOther = () => { if (!name.trim()) return; bump({ name, unit }); setName(''); setUnit(''); setOther(false); };
   const setLine = (i, patch) => setLines(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   return <>
+    {lines.length > 0 && <>
+      <div className="sp-cart-h top"><span className="sp-b">🧾 Đã chọn {lines.length} món</span><button type="button" className="sp-btn ghost bad" onClick={() => setLines([])}>Xoá hết</button></div>
+      <ul className="sp-cart compact">{lines.map((l, i) => <li key={`${l.name}-${i}`}>
+        <span className="nm">{l.name}</span>
+        <div className="sp-qty">
+          <button type="button" aria-label={`Bớt ${l.name}`} onClick={() => bump(l, -1)}>−</button>
+          <input inputMode="decimal" aria-label={`Số lượng ${l.name}`} value={l.qty} onChange={e => setLine(i, { qty: e.target.value.replace(/[^\d.,]/g, '').slice(0, 7) })} />
+          <button type="button" aria-label={`Thêm ${l.name}`} onClick={() => bump(l, 1)}>+</button>
+        </div>
+        <input className="sp-unit" placeholder="đơn vị" aria-label={`Đơn vị ${l.name}`} value={l.unit} maxLength={20} onChange={e => setLine(i, { unit: e.target.value })} />
+        <button type="button" className="sp-x" aria-label={`Bỏ ${l.name}`} onClick={() => setLines(lines.filter((_, j) => j !== i))}>✕</button>
+      </li>)}</ul>
+      <div className="sp-pick-h">Bấm thêm món:</div>
+    </>}
     {ranked.length > 8 && <input className="sp-field" type="search" placeholder="🔍 Tìm món (gõ không dấu cũng được)" value={q} onChange={e => setQ(e.target.value)} style={{ marginBottom: 10 }} />}
     {shown.length > 0 && <div className="sp-grid">{shown.map(i => {
       const at = idx.get(itemKey(i.name)), on = at !== undefined, p = prices[itemKey(i.name)];
@@ -178,19 +192,6 @@ function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders 
         <input className="sp-unit" placeholder="kg, bịch" value={unit} maxLength={20} onChange={e => setUnit(e.target.value)} />
         <button type="button" className="sp-btn main" disabled={!name.trim()} onClick={addOther}>Thêm</button>
       </div>}
-    {lines.length > 0 && <>
-      <div className="sp-b" style={{ marginTop: 12 }}>Đã chọn {lines.length} món <span className="sp-mute">(sửa số / đơn vị nếu cần)</span></div>
-      <ul className="sp-cart">{lines.map((l, i) => <li key={`${l.name}-${i}`}>
-        <span className="nm">{l.name}</span>
-        <div className="sp-qty">
-          <button type="button" aria-label={`Bớt ${l.name}`} onClick={() => bump(l, -1)}>−</button>
-          <input inputMode="decimal" aria-label={`Số lượng ${l.name}`} value={l.qty} onChange={e => setLine(i, { qty: e.target.value.replace(/[^\d.,]/g, '').slice(0, 7) })} />
-          <button type="button" aria-label={`Thêm ${l.name}`} onClick={() => bump(l, 1)}>+</button>
-        </div>
-        <input className="sp-unit" placeholder="đơn vị" aria-label={`Đơn vị ${l.name}`} value={l.unit} maxLength={20} onChange={e => setLine(i, { unit: e.target.value })} />
-        <button type="button" className="sp-x" aria-label={`Bỏ ${l.name}`} onClick={() => setLines(lines.filter((_, j) => j !== i))}>✕</button>
-      </li>)}</ul>
-    </>}
   </>;
 }
 
