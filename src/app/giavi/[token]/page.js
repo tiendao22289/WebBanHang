@@ -7,7 +7,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { STATE_LABELS, addedLater, lineAmount, lineCheck, lineQty, logLine, missingPrices, orderState, orderTotal, shortTime, supplierCanPrice, supplierOrderStats } from '@/lib/spiceOrders.mjs';
-import { CheckBadge, DayCard } from '../../admin/spices/SpiceShared';
+import { CheckBadge, DayCard, DayGroups, vnToday } from '../../admin/spices/SpiceShared';
 import '../../admin/spices/spices.css';
 
 const money = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
@@ -32,7 +32,8 @@ function SupplierView() {
   const scrolled = useRef(false);
   // Link quán gửi (?don=…) chỉ mở đúng đơn đó; bấm "Xem tất cả đơn" mới hiện các đơn khác.
   const [showAll, setShowAll] = useState(false);
-  const [tab, setTab] = useState(null); // null = tự chọn: có đơn cần soạn thì 'open', không thì 'done'
+  const [tab, setTab] = useState(null);
+  const [addReq, setAddReq] = useState(null); // { id, n } — nút + nổi bấm: mở ô thêm món của đơn id // null = tự chọn: có đơn cần soạn thì 'open', không thì 'done'
   const dirty = Object.keys(drafts).length > 0;
 
   const load = useCallback(async () => {
@@ -127,7 +128,16 @@ function SupplierView() {
 
   const s = data.summary;
   const single = !showAll && focusId ? data.orders.find(o => o.id === focusId) : null;
-  const card = order => <OrderCard key={order.id} order={order} draft={drafts[order.id]} focus={order.id === focusId} busy={busy === order.id}
+  const singleDone = !!(single && (single.received_at || single.cancelled_at));
+  const view = tab || (single ? (singleDone ? 'done' : 'open') : groups.open.length ? 'open' : 'done');
+  // Đơn đang làm: nút Lưu giá / Đã soạn xong nằm cố định dưới đáy màn hình (không phải kéo tìm). Ưu tiên đơn đang gõ giá,
+  // rồi đơn mở từ link, rồi đơn duy nhất đang chờ soạn.
+  const editable = o => !o.cancelled_at && o.items.some((_, i) => supplierCanPrice(o, i));
+  const draftId = Object.keys(drafts)[0];
+  const active = (draftId && data.orders.find(o => o.id === draftId))
+    || (single && editable(single) ? single : null)
+    || (!single && view === 'open' && groups.open.length === 1 ? groups.open[0] : null);
+  const card = order => <OrderCard key={order.id} order={order} draft={drafts[order.id]} focus={order.id === focusId} busy={busy === order.id} inBar={active?.id === order.id} addReq={addReq?.id === order.id ? addReq.n : 0}
     notice={notice?.id === order.id ? notice : null} onPrice={setPrice} onNote={setNote} onSave={save} onUndo={() => drop(order.id)}
     onAdd={(o, add) => post(o, { add }, `Đã thêm ${add.length} món ✓ Quán sẽ thấy khi nhận hàng.`)} />;
   const tiles = <>
@@ -138,26 +148,36 @@ function SupplierView() {
     </div>
     {s.owed < 0 && <p className="sp-mute">Quán đã trả dư {money(-s.owed)}.</p>}
   </>;
-  const bar = dirty && <div className="sp-bar"><div className="sp-bar-in"><span className="sp-grow sp-b">Có giá chưa lưu</span>
-    <button type="button" className="sp-btn main" onClick={() => {
-      const id = Object.keys(drafts)[0];
-      const order = data.orders.find(o => o.id === id);
-      setTab(order?.received_at ? 'done' : 'open');
-      setTimeout(() => document.getElementById(`don-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
-    }}>Tới đơn đang sửa</button></div></div>;
-  if (single) return <div className="sp-page"><div className="sp">
-    <h1>🧂 Đơn quán gọi</h1>
-    <p className="sp-sub">Chào {data.supplier.name}. Điền giá từng món rồi bấm <b>Đã soạn xong</b>.</p>
-    {error && <div className="sp-msg err">{error}</div>}
-    {card(single)}
-    <h2>Tổng với quán</h2>
-    {tiles}
-    {data.days?.[0] && <><h2>📅 Đối soát ngày gần nhất</h2><DayCard day={data.days[0]} /></>}
-    {(groups.open.length > 1 || groups.done.length > 0) && <button type="button" className="sp-btn block" onClick={() => { setShowAll(true); setTab(null); window.scrollTo(0, 0); }}>
-      Xem tất cả đơn của bạn{groups.open.length > 1 ? ` (${groups.open.length - (single.received_at || single.cancelled_at ? 0 : 1)} đơn khác đang chờ)` : ''}
-    </button>}
-  </div>{bar}</div>;
-  const view = tab || (groups.open.length ? 'open' : 'done');
+  let bar = null;
+  if (active) {
+    const d = drafts[active.id];
+    const items = active.items.map((l, i) => (d && i in d.prices ? { ...l, price: d.prices[i] === '' ? null : Number(d.prices[i]) } : l));
+    const miss = missingPrices(items);
+    const isBusy = busy === active.id;
+    const shown = single ? single.id === active.id : (active.received_at ? view === 'done' : view === 'open');
+    const goTo = () => {
+      setTab(active.received_at ? 'done' : 'open');
+      setTimeout(() => document.getElementById(`don-${active.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    };
+    const canAdd = !active.received_at && !active.cancelled_at;
+    bar = <div className="sp-bar sp-actbar">
+      {canAdd && <button type="button" className="sp-fab" aria-label="Thêm món quán gọi thiếu"
+        onClick={() => { if (!shown) setTab('open'); setAddReq(r => ({ id: active.id, n: (r?.n || 0) + 1 })); }}>
+        <span aria-hidden="true">+</span></button>}
+      <div className="sp-bar-in col">
+      <div className="sp-row between sp-small">
+        <span className="sp-mute">Đơn {shortTime(active.created_at)}{d ? <b className="sp-dirty"> · chưa lưu</b> : ''}{miss ? <span className="nop"> · {miss} món chưa giá</span> : ''}</span>
+        <span className="sp-money">{money(orderTotal(items))}</span>
+      </div>
+      <div className="sp-row sp-actbtns">
+        {!shown && <button type="button" className="sp-btn" onClick={goTo}>Tới đơn</button>}
+        {d && <button type="button" className="sp-btn" disabled={isBusy} onClick={() => drop(active.id)}>Bỏ sửa</button>}
+        {d && <button type="button" className="sp-btn main" disabled={isBusy} onClick={() => save(active, false)}>{isBusy ? 'Đang lưu…' : 'Lưu giá'}</button>}
+        {!active.received_at && !active.priced_at && <button type="button" className="sp-btn ok" disabled={isBusy} onClick={() => save(active, true)}>✅ Soạn xong</button>}
+        {!d && (active.received_at || active.priced_at) && <span className="sp-mute sp-small sp-grow" style={{ textAlign: 'right' }}>{active.priced_at && !active.received_at ? '✅ Đã báo soạn xong, chờ quán nhận' : 'Sửa giá ô nào thì bấm Lưu giá'}</span>}
+      </div>
+    </div></div>;
+  }
   const tabs = [['open', '📦', 'Cần soạn', groups.open.length], ['done', '✅', 'Đã giao', null], ['days', '📅', 'Đối soát', null], ['stats', '📊', 'Thống kê', null]];
   return <div className="sp-page"><div className="sp">
     <div className="sp-head"><h1>🧂 Đơn gia vị</h1><span className="sp-mute sp-small">{data.supplier.name}</span></div>
@@ -171,11 +191,15 @@ function SupplierView() {
 
     {view === 'open' && <>
       {groups.open.length > 0 && <p className="sp-mute sp-small" style={{ margin: '0 0 8px' }}>Điền giá từng món (giá lần trước đã điền sẵn, sửa được) rồi bấm <b>✅ Đã soạn xong</b>.</p>}
-      {groups.open.length ? groups.open.map(card) : <p className="sp-empty">Chưa có đơn mới. Quán gọi là đơn hiện ở đây.</p>}
+      {single && !singleDone
+        ? <>{card(single)}{groups.open.length > 1 && <button type="button" className="sp-btn block" onClick={() => setShowAll(true)}>Xem {groups.open.length - 1} đơn khác đang chờ soạn</button>}</>
+        : groups.open.length ? groups.open.map(card) : <p className="sp-empty">Chưa có đơn mới. Quán gọi là đơn hiện ở đây.</p>}
     </>}
 
     {view === 'done' && <>
-      {groups.done.length ? groups.done.map(card) : <p className="sp-empty">Chưa có đơn quán đã nhận.</p>}
+      {single && singleDone
+        ? <>{card(single)}<button type="button" className="sp-btn block" onClick={() => setShowAll(true)}>Xem tất cả đơn đã giao</button></>
+        : groups.done.length ? <DayGroups orders={groups.done} today={vnToday()} render={card} /> : <p className="sp-empty">Chưa có đơn quán đã nhận.</p>}
       {groups.cancelled.length > 0 && <Fold head={`Đơn quán đã huỷ (${groups.cancelled.length})`}>{groups.cancelled.map(card)}</Fold>}
     </>}
 
@@ -192,10 +216,21 @@ function SupplierView() {
   </div>;
 }
 
-function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave, onUndo, onAdd }) {
+function OrderCard({ order, draft, focus, busy, inBar = false, addReq = 0, notice, onPrice, onNote, onSave, onUndo, onAdd }) {
   const [adding, setAdding] = useState(null); // [{ name, qty, unit, price }] đang thêm
+  const addRef = useRef(null);
+  // Bấm nút + nổi: mở ô thêm món của đơn này và cuộn tới, con trỏ vào ô tên món.
+  useEffect(() => {
+    if (!addReq) return;
+    setAdding(a => a || [{ name: '', qty: '1', unit: '', price: '' }]);
+    setTimeout(() => { addRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); addRef.current?.querySelector('input')?.focus({ preventScroll: true }); }, 60);
+  }, [addReq]);
   const state = orderState(order);
   const open = !order.cancelled_at && !order.received_at;
+  // Đơn đã nhận / đã huỷ: gọn — đầu thẻ có tóm tắt đủ / thiếu / dư / sai, bấm mới hiện từng món (đơn mở từ link thì hiện sẵn).
+  const [showLines, setShowLines] = useState(() => open || focus || order.items.some((_, i) => supplierCanPrice(order, i)));
+  const received = !!order.received_at && !order.cancelled_at;
+  const counts = received ? order.items.reduce((m, l) => { const c = lineCheck(l).check; m[c] = (m[c] || 0) + 1; return m; }, {}) : {};
   // Đơn đang gõ: tính lại tiền theo giá đang gõ.
   const items = order.items.map((l, i) => (draft && i in draft.prices ? { ...l, price: draft.prices[i] === '' ? null : Number(draft.prices[i]) } : l));
   const total = orderTotal(items);
@@ -213,13 +248,35 @@ function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave,
       {order.cancelled_at && <span>✖ Huỷ {shortTime(order.cancelled_at)} · <b>{order.cancelled_by_name}</b></span>}
     </div>
     {order.note && <div className="sp-note staff">📝 Quán ghi: {order.note}</div>}
-    <ul className="sp-lines">
+    {received && <div className="sp-sum">
+      {[['ok', '✅', 'đủ'], ['short', '➖', 'thiếu'], ['over', '➕', 'dư'], ['wrong', '⚠️', 'sai'], ['skip', '🚫', 'không lấy']].filter(([k]) => counts[k])
+        .map(([k, ic, label]) => <span key={k} className={`sp-check ${k}`}>{ic} {counts[k]} {label}</span>)}
+    </div>}
+    {!showLines && <button type="button" className="sp-more" onClick={() => setShowLines(true)}>
+      <span>Xem {order.items.length} món</span><span className="sp-money">{money(total)}</span></button>}
+    {showLines && <ul className="sp-lines">
       {items.map((l, i) => {
         const editable = supplierCanPrice(order, i);
         const later = addedLater(order, l);
         const value = draft && i in draft.prices ? draft.prices[i] : (hasPrice(order.items[i]) ? String(order.items[i].price) : '');
         const got = lineQty(l);
         const old = l.old_price !== null && l.old_price !== undefined ? l.old_price : null;
+        if (!editable) {
+          // Món đã chốt: một hàng tên · số — tiền; hàng nhỏ giá / đơn vị, nhãn thiếu / dư / sai (đủ thì không ghi cho gọn).
+          const c = received ? lineCheck(order.items[i]) : null;
+          const qty = c && c.check !== 'ok' ? `gọi ${qtyText(l.qty)} · nhận ${qtyText(got)} ${l.unit || ''}` : `${qtyText(l.qty)} ${l.unit || ''}`;
+          return <li key={i} className={`sp-line tight${c && c.check !== 'ok' ? ` bad ${c.check}` : ''}`}>
+            <div className="sp-row between"><span className="name">{l.name} <span className="q">{qty}</span></span>
+              <span className="sp-money">{hasPrice(l) ? money(lineAmount(l)) : <span className="nop">chưa giá</span>}</span></div>
+            <div className="meta">
+              {hasPrice(l) && <span>{money(l.price)}/{l.unit || 'phần'}</span>}
+              {hasPrice(l) && old !== null && l.price !== old && <span className={l.price > old ? 'sp-up' : 'sp-down'}> {l.price > old ? '▲' : '▼'}{money(Math.abs(l.price - old))}</span>}
+              {l.by_supplier && <span className="sp-tag sup">🧺 bạn thêm</span>}
+              {!l.by_supplier && later && <span className="sp-tag">➕ {l.added_by || 'NV'} thêm</span>}
+            </div>
+            {c && c.check !== 'ok' && <CheckBadge check={c.check} diff={c.diff} unit={l.unit} note={c.note} />}
+          </li>;
+        }
         return <li key={i} className="sp-line compact">
           <div className="sp-row between">
             <span className="name">{l.name}</span>
@@ -248,14 +305,15 @@ function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave,
           </div>}
         </li>;
       })}
-    </ul>
-    <div className="sp-total"><span>Tổng{missing ? ` (còn ${missing} món chưa giá)` : ''}</span><span className="sp-money">{money(total)}</span></div>
+    </ul>}
+    {showLines && <div className="sp-total"><span>Tổng{missing ? ` (còn ${missing} món chưa giá)` : ''}</span><span className="sp-money">{money(total)}</span></div>}
+    {showLines && !open && !focus && <button type="button" className="sp-btn ghost" onClick={() => setShowLines(false)}>Thu gọn</button>}
     {canEditAny
       ? <textarea className="sp-field" style={{ marginTop: 10 }} placeholder="Ghi chú cho quán (vd: hết sả, giao mai)" value={noteValue} onChange={e => onNote(order, e.target.value)} />
       : order.supplier_note && <div className="sp-note supplier">💬 Bạn ghi: {order.supplier_note}</div>}
-    {open && !adding && <button type="button" className="sp-btn ghost" style={{ marginTop: 6 }} onClick={() => setAdding([{ name: '', qty: '1', unit: '', price: '' }])}>
-      ➕ Thêm món quán gọi thiếu</button>}
-    {open && adding && <div className="sp-addbox">
+    {open && !adding && !inBar && <button type="button" className="sp-addmini" aria-label="Thêm món quán gọi thiếu" onClick={() => setAdding([{ name: '', qty: '1', unit: '', price: '' }])}>
+      <span aria-hidden="true">+</span> Thêm món</button>}
+    {open && adding && <div className="sp-addbox" ref={addRef}>
       <div className="sp-b">Thêm món (quán gọi thiếu)</div>
       <p className="sp-mute sp-small" style={{ margin: '2px 0 8px' }}>Quán sẽ thấy nhãn 🧺 "chủ gia vị tự thêm"; khi nhận, quán không cần thì bấm Không lấy và không tính tiền món đó.</p>
       {adding.map((a, k) => <div key={k} className="sp-addrow">
@@ -277,7 +335,7 @@ function OrderCard({ order, draft, focus, busy, notice, onPrice, onNote, onSave,
       </div>
     </div>}
     {notice && <div className={`sp-msg ${notice.err ? 'err' : 'ok'}`}>{notice.text}</div>}
-    {canEditAny && <div className="sp-btns">
+    {canEditAny && !inBar && <div className="sp-btns small">
       {draft && <button type="button" className="sp-btn" disabled={busy} onClick={onUndo}>Bỏ sửa</button>}
       {draft && <button type="button" className="sp-btn main" disabled={busy} onClick={() => onSave(order, false)}>{busy ? 'Đang lưu…' : 'Lưu giá'}</button>}
       {open && !order.priced_at && <button type="button" className="sp-btn ok" disabled={busy} onClick={() => onSave(order, true)}>✅ Đã soạn xong</button>}

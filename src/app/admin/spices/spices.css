@@ -283,3 +283,59 @@ textarea.sp-field { min-height: 64px; resize: vertical; }
 button.sp-tile { font: inherit; color: inherit; cursor: pointer; }
 .sp-tile.sel { outline: 3px solid var(--sp-main-soft); border-color: var(--sp-main); }
 .sp-tile.paid { background: var(--sp-ok-soft); border-color: #bbf7d0; }
+
+/* Trang chủ gia vị: đơn đã nhận gọn */
+.sp-sum { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.sp-sum .sp-check { margin-top: 0; }
+.sp-more { display: flex; justify-content: space-between; align-items: center; width: 100%; margin-top: 10px; min-height: 44px; padding: 8px 12px;
+  border: 1px solid var(--sp-line); border-radius: 10px; background: #f8fafc; font: inherit; font-weight: 700; color: var(--sp-blue); cursor: pointer; }
+.sp-more .sp-money { color: var(--sp-main-dark); font-size: 17px; }
+.sp-line.tight { padding: 7px 0; }
+.sp-line.tight .name { font-size: 15px; }
+.sp-line.tight .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; margin-top: 1px; }
+.sp-line.tight .meta .sp-tag { margin-top: 0; }
+.sp-line.tight .sp-check { margin-top: 3px; font-size: 12px; }
+.sp-line.tight.bad { background: #fff7f7; margin: 0 -8px; padding: 7px 8px; border-radius: 8px; }
+.sp-line.tight.bad.over { background: #f5f8ff; }
+.sp-line.tight.bad.skip { background: #f8fafc; }
+.sp-tag:not(.sup):not(.edit) { background: var(--sp-blue-soft); color: var(--sp-blue); }
+
+/* Đơn các ngày trước gom lại theo ngày */
+.sp-dayfold { background: #eef1f4; border-radius: 12px; padding: 4px 12px; margin-bottom: 10px; }
+.sp-dayfold > .sp-fold-btn { min-height: 46px; }
+.sp-dayfold-in { padding-bottom: 6px; }
+.sp-dayfold-in .sp-card { margin-bottom: 8px; }
+
+/* Thanh nút cố định dưới đáy trang chủ gia vị: nhỏ, gọn */
+.sp-actbar { padding-top: 8px; padding-bottom: calc(8px + env(safe-area-inset-bottom)); box-shadow: 0 -4px 14px rgba(0,0,0,.06); }
+.sp-bar-in.col { flex-direction: column; align-items: stretch; gap: 6px; }
+.sp-actbar .sp-money { font-size: 17px; color: var(--sp-main-dark); }
+.sp-actbar .nop { color: var(--sp-bad); font-weight: 700; }
+.sp-actbar .sp-dirty { color: var(--sp-main-dark); }
+.sp-actbtns { gap: 6px; }
+.sp-actbtns .sp-btn, .sp-btns.small .sp-btn { min-height: 40px; padding: 6px 10px; font-size: 14px; border-radius: 10px; }
+.sp-actbtns .sp-btn { flex: 1 1 0; }
+.sp-btns.small > .sp-btn { flex: 1 1 100px; }
+
+/* Nút + nổi (thêm món): tròn, nằm trên thanh nút dưới đáy, góc phải. iPhone: chừa vùng vuốt (safe-area) vì nằm theo thanh;
+   Android: bóng đổ + vùng bấm ≥ 56px. Không phóng to khi chạm đúp, không loé xanh khi chạm. */
+.sp-fab { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: calc(100% + 12px); z-index: 31;
+  width: 60px; height: 60px; border-radius: 50%; border: 0; padding: 0; background: var(--sp-main); color: #fff;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1;
+  box-shadow: 0 6px 16px rgba(180, 83, 9, .35), 0 2px 4px rgba(0,0,0,.18); cursor: pointer;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation; -webkit-user-select: none; user-select: none;
+  transition: transform .12s ease, box-shadow .12s ease; font-family: inherit; }
+.sp-fab span { font-size: 34px; font-weight: 300; margin-top: -3px; }
+.sp-fab small { font-size: 9px; font-weight: 700; margin-top: 1px; letter-spacing: .2px; }
+.sp-fab:active { transform: scale(.93); box-shadow: 0 3px 8px rgba(180, 83, 9, .3); }
+.sp-fab:focus-visible { outline: 3px solid var(--sp-main-soft); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .sp-fab { transition: none; } }
+/* Đơn khác (không phải đơn đang làm): nút + nhỏ gọn trong thẻ */
+.sp-addmini { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; min-height: 40px; padding: 4px 14px 4px 6px; border-radius: 999px;
+  border: 1px solid #fcd34d; background: var(--sp-main-soft); color: var(--sp-main-dark); font: inherit; font-size: 14px; font-weight: 700;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation; cursor: pointer; }
+.sp-addmini span { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--sp-main); color: #fff; font-size: 20px; line-height: 1; }
+/* Trang chủ gia vị: chừa chỗ cho thanh nút + nút nổi để không che nội dung cuối trang */
+.sp-page .sp { padding-bottom: calc(190px + env(safe-area-inset-bottom)); }
+/* Đang mở ô thêm món thì ẩn nút + để không che nút Lưu (máy cũ không hỗ trợ :has thì vẫn hiện, không sao). */
+.sp-page:has(.sp-addbox) .sp-fab { display: none; }

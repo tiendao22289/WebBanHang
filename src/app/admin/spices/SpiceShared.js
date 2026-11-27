@@ -3,8 +3,8 @@
  * Phần dùng chung trang nhân viên (/admin/spices) và trang chủ gia vị (/giavi/<mã>):
  * nhãn kiểm hàng từng món (Đủ / Thiếu / Dư / Sai hàng) và thẻ đối soát một ngày.
  */
-import { useState } from 'react';
-import { CHECK_LABELS, shortTime } from '@/lib/spiceOrders.mjs';
+import { Fragment, useState } from 'react';
+import { CHECK_LABELS, orderTotal, shortTime, vnDateOf } from '@/lib/spiceOrders.mjs';
 
 export const money = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
 export const qtyText = q => String(Math.round((Number(q) || 0) * 1000) / 1000).replace('.', ',');
@@ -72,4 +72,33 @@ export function DayCard({ day, initial = false, onShare = null, onRecheck = null
       <span className="sp-b">Quán còn nợ tới hết ngày</span><span className="sp-money" style={{ color: 'var(--sp-bad)' }}>{money(day.balance)}</span></div>}
     {onShare && <div className="sp-btns"><button type="button" className="sp-btn zalo block" onClick={() => onShare(day)}>📤 Gửi đối soát ngày này qua Zalo</button></div>}
   </Fold>;
+}
+
+/** Hôm nay theo giờ Việt Nam ("2026-11-27"). */
+export const vnToday = () => vnDateOf(new Date().toISOString());
+
+/**
+ * Gom đơn theo ngày cho gọn: đơn chưa nhận luôn hiện trên cùng; đơn hôm nay hiện sẵn; đơn các ngày trước gập lại thành
+ * một dòng "📅 T5 26/11 · 3 đơn · 1.234.000đ", bấm mới mở. Ngày của đơn đã nhận = ngày nhận, còn lại = ngày gọi.
+ */
+export function DayGroups({ orders, today, render }) {
+  const pending = [], byDay = new Map();
+  for (const o of orders) {
+    if (!o.received_at && !o.cancelled_at) { pending.push(o); continue; }
+    const date = o.received_at ? (o.received_date || vnDateOf(o.received_at)) : vnDateOf(o.cancelled_at || o.created_at);
+    if (!byDay.has(date)) byDay.set(date, []);
+    byDay.get(date).push(o);
+  }
+  const days = [...byDay.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  return <>
+    {pending.map(render)}
+    {days.map(([date, list]) => date === today
+      ? <Fragment key={date}>{list.map(render)}</Fragment>
+      : <Fold key={date} className="sp-dayfold" plain head={<span className="sp-day-head">
+          <span className="sp-b">📅 {dayLabel(date)}</span><span className="sp-mute"> · {list.length} đơn</span>
+          <span className="sp-money sp-day-total">{money(list.filter(o => !o.cancelled_at).reduce((t, o) => t + orderTotal(o.items), 0))}</span>
+        </span>}>
+          <div className="sp-dayfold-in">{list.map(render)}</div>
+        </Fold>)}
+  </>;
 }

@@ -10,7 +10,7 @@ import { useReloadHold } from '@/lib/useBuildRefresh';
 import {
   CHECK_LABELS, STATE_LABELS, addedLater, changeText, cleanName, dayReportText, lineCheck, itemKey, itemLineText, itemStep, orderedItems, plainText, rankItems, lineAmount, lineQty, logLine, missingPrices, orderState, orderTotal, shareText, shortTime,
 } from '@/lib/spiceOrders.mjs';
-import { CheckBadge, DayCard } from './SpiceShared';
+import { CheckBadge, DayCard, DayGroups } from './SpiceShared';
 import './spices.css';
 
 const money = n => `${Math.round(Number(n) || 0).toLocaleString('vi-VN')}đ`;
@@ -279,7 +279,8 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
         className={filter === k ? 'on' : ''} onClick={() => setFilter(k)}>{l}<small>{n}</small></button>)}
     </div>
     {!list.length && <p className="sp-empty">Không có đơn.</p>}
-    {list.map(o => {
+    {filter !== 'open' && list.some(o => o.received_at || o.cancelled_at) && <p className="sp-mute sp-small" style={{ margin: '0 0 8px' }}>Đơn các ngày trước đã gom theo ngày, bấm ngày để xem.</p>}
+    <DayGroups orders={list} today={data.today} render={o => {
       const st = orderState(o), sup = supplierById[o.supplier_id];
       const open = !o.received_at && !o.cancelled_at;
       const canCancel = open && (canManage || o.created_by === me.id);
@@ -309,7 +310,7 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
         </div>
         <History log={o.log} />
       </div>;
-    })}
+    }} />
     {(sheet?.kind === 'receive' || sheet?.kind === 'recheck') && <ReceiveSheet order={sheet.order} recheck={sheet.kind === 'recheck'} onClose={() => setSheet(null)}
       onSave={(received, note) => run(sheet.order, { action: sheet.kind, received, note }, sheet.kind === 'recheck' ? 'Đã kiểm lại ✓' : 'Đã nhận ✓').then(ok => { if (ok) setSheet(null); return ok; })} />}
     {sheet?.kind === 'add' && <AddSheet order={sheet.order} data={data} onClose={() => setSheet(null)} onAdded={(j, items, note) => {
