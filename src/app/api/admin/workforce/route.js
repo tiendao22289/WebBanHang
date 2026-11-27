@@ -363,10 +363,18 @@ async function peerOverview(db) {
   if (missingTable(error)) return { ready: false, reports: [] };
   if (error) throw error;
   const photos = await signPeerPhotos(db, data || []);
-  return { ready: true, reports: (data || []).map(r => ({ id: r.id, reporter_id: r.reporter_id, reporter_name: r.reporter_name || null, staff_id: r.staff_id, photo: photos[r.photo_path] || null,
-    date: String(r.report_date).slice(0, 10), rule_id: r.rule_id || null, reason: r.reason, note: r.note || null, suggested_amount: Number(r.suggested_amount) || 0,
-    status: r.status, amount: r.amount ?? null, violation_id: r.violation_id || null, admin_note: r.admin_note || null, decided_by: r.decided_by || null,
-    decided_at: r.decided_at || null, seen_at: r.seen_at || null, created_at: r.created_at })) };
+  // Lần đã phạt: số tiền theo khoản phạt hiện tại (chủ sửa tiền / xoá ở Bảng lương hay tab Vi phạm sau đó) — dropped = khoản đã bị xoá.
+  const linked = (data || []).filter(r => r.status === 'approved' && r.violation_id).map(r => r.violation_id);
+  const cur = linked.length ? await db.from('payroll_violations').select('id, amount').in('id', linked) : { data: [] };
+  if (cur.error) throw cur.error;
+  const fineOf = new Map((cur.data || []).map(v => [v.id, Number(v.amount) || 0]));
+  return { ready: true, reports: (data || []).map(r => {
+    const linkedFine = r.status === 'approved' && r.violation_id, dropped = !!linkedFine && !fineOf.has(r.violation_id);
+    return { id: r.id, reporter_id: r.reporter_id, reporter_name: r.reporter_name || null, staff_id: r.staff_id, photo: photos[r.photo_path] || null,
+      date: String(r.report_date).slice(0, 10), rule_id: r.rule_id || null, reason: r.reason, note: r.note || null, suggested_amount: Number(r.suggested_amount) || 0,
+      status: r.status, amount: linkedFine ? (dropped ? 0 : fineOf.get(r.violation_id)) : r.amount ?? null, dropped, violation_id: r.violation_id || null,
+      admin_note: r.admin_note || null, decided_by: r.decided_by || null, decided_at: r.decided_at || null, seen_at: r.seen_at || null, created_at: r.created_at };
+  }) };
 }
 
 // Khoản chi hộ quán của chính người đó (60 ngày gần đây + mọi khoản còn chờ duyệt). Bảng chưa có: ready false (ẩn phần ghi).

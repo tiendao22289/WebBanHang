@@ -1738,7 +1738,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           </tr>
         );
       });
-      editHint = c.rule === 'days' ? 'Ngày nghỉ không trừ thêm tiền (ngày không đi làm thì không có ngày công). Xoá đơn ở ✏️ Sửa → Đơn báo nghỉ.' : 'Xoá đơn ở ✏️ Sửa → Đơn báo nghỉ.';
+      editHint = c.rule === 'days' ? 'Ngày nghỉ không có ngày công nên không có lương ngày đó (đã trừ sẵn trong cột Ngày công, không trừ thêm khoản nào khác). Ngày quán nghỉ vẫn có lương. Xoá đơn ở ✏️ Sửa → Đơn báo nghỉ.' : 'Xoá đơn ở ✏️ Sửa → Đơn báo nghỉ.';
     } else if (kind === 'drinks') {
       // Nước / bia nhân viên tự ghi: ngày uống, lúc ghi, uống gì, mấy chai × giá; chủ xoá lần ghi sai.
       const list = c.drinkList || [];
@@ -2500,7 +2500,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 {c.pendingH > 0 && row('Ngoài ca chờ chủ duyệt', `${fmtNum(c.pendingH)} giờ (chưa tính)`, '#b45309')}
                 {c.advAmt > 0 && row('Ứng lương', `−${formatMoney(c.advAmt)}`, '#dc2626')}
                 {c.absDays > 0 && (c.rule === 'days'
-                  ? row('Nghỉ có đơn', `${fmtNum(c.absDays)} ngày (không trừ thêm)`, '#64748b')
+                  ? row('Nghỉ có đơn', `${fmtNum(c.absDays)} ngày (không tính công)`, '#64748b')
                   : row('Nghỉ có đơn', `−${formatMoney(c.absAmt)} (${fmtNum(c.absDays)} ngày)`, '#dc2626'))}
                 {(c.vioAmt > 0 || myFines.length > 0) && row(`Phạt (${myFines.length} lỗi)`, `−${formatMoney(c.vioAmt)}`, '#dc2626')}
                 {myFines.length > 0 && (
@@ -3006,7 +3006,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   <details className="pay-rules">
                     <summary>📐 <strong>{dayPay ? 'Cách tính lương theo ngày công' : 'Cách tính lương tháng này'}</strong> <span>(bấm để xem)</span></summary>
                     {dayPay
-                      ? <><strong>Tính theo ngày công:</strong> 1 ngày công = lương cơ bản ÷ 30 (tháng nào cũng vậy) × số ngày công (ngày làm dưới nửa ca tính nửa ngày; ngày quán nghỉ cũng được 1 công). Tháng 31 ngày trừ bớt 1 ngày, tháng 2 cộng thêm 2 ngày (năm nhuận 1 ngày), nên đi làm đủ tháng = đúng lương cơ bản và mỗi ngày nghỉ tháng nào cũng trừ bằng nhau{monthDays(selYear, selMonth) !== 30 ? ` (tháng này ${monthDays(selYear, selMonth)} ngày)` : ''}. Đi trễ: trừ theo luật đi trễ (mặc định của quán hoặc riêng từng người — tiền cố định mỗi lần và / hoặc theo phút trễ); về sớm từ 30 phút: trừ số phút về sớm (lương ngày ÷ số phút của ca). Vào sớm / ra dư quá số phút cho lệch: tự tính tăng ca (bấm "Sửa" để bỏ một ca nếu không trả). Đơn báo nghỉ không trừ thêm. Người trả theo ngày: lương 1 ngày × số ngày đi làm (cách tính ngày, trễ / về sớm như trên; ngày không chấm công là nghỉ, không lương). Người trả theo giờ: số giờ trong ca × lương 1 giờ (trễ / về sớm mất đúng số phút đó), giờ ngoài ca trả theo giá tăng ca.</>
+                      ? <><strong>Tính theo ngày công:</strong> 1 ngày công = lương cơ bản ÷ 30 (tháng nào cũng vậy) × số ngày công (ngày làm dưới nửa ca tính nửa ngày; ngày quán nghỉ cũng được 1 công). Tháng 31 ngày trừ bớt 1 ngày, tháng 2 cộng thêm 2 ngày (năm nhuận 1 ngày), nên đi làm đủ tháng = đúng lương cơ bản và mỗi ngày nghỉ tháng nào cũng trừ bằng nhau{monthDays(selYear, selMonth) !== 30 ? ` (tháng này ${monthDays(selYear, selMonth)} ngày)` : ''}. Đi trễ: trừ theo luật đi trễ (mặc định của quán hoặc riêng từng người — tiền cố định mỗi lần và / hoặc theo phút trễ); về sớm từ 30 phút: trừ số phút về sớm (lương ngày ÷ số phút của ca). Vào sớm / ra dư quá số phút cho lệch: tự tính tăng ca (bấm "Sửa" để bỏ một ca nếu không trả). Ngày quán bán mà không chấm công (có đơn báo nghỉ hay không) không có ngày công nên không có lương ngày đó; đơn báo nghỉ chỉ ghi lý do, không trừ thêm. Người trả theo ngày: lương 1 ngày × số ngày đi làm (cách tính ngày, trễ / về sớm như trên; ngày không chấm công là nghỉ, không lương). Người trả theo giờ: số giờ trong ca × lương 1 giờ (trễ / về sớm mất đúng số phút đó), giờ ngoài ca trả theo giá tăng ca.</>
                       : <>Tháng này tính theo cách cũ: đủ lương cơ bản, tăng ca = giờ quá 8 tiếng/ngày, trừ ngày nghỉ có đơn.</>}
                   </details>
                   {isAdmin && (
@@ -3098,7 +3098,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                               {c.claimCut > 0 && slipRow(s, { label: 'Tiền thừa chi hộ', sub: 'chưa trả chủ, trừ lương', value: `−${formatMoney(c.claimCut)}`, tone: 'red', kind: 'claimcut', has: !!c.claimList?.length })}
                               {slipRow(s, { label: 'Ứng lương', sub: adv.length ? `${adv.length} lần${advPending ? ` · ${advPending} chờ duyệt` : ''}` : null,
                                 value: adv.length ? `−${formatMoney(c.advAmt)}` : '—', tone: adv.length ? 'red' : 'muted', kind: 'advance', has: adv.length > 0 })}
-                              {slipRow(s, { label: 'Nghỉ', sub: abs.length ? `${abs.length} đơn${c.rule === 'days' ? ' · không trừ thêm' : ''}` : null,
+                              {slipRow(s, { label: 'Nghỉ', sub: abs.length ? `${abs.length} đơn${c.rule === 'days' ? ' · không tính công' : ''}` : null,
                                 value: c.rule === 'days' ? (c.absDays ? `${fmtNum(c.absDays)} ngày` : abs.length ? 'chờ duyệt' : '—') : `−${formatMoney(c.absAmt)}`,
                                 tone: c.rule === 'days' || !c.absAmt ? 'muted' : 'red', kind: 'absent', has: abs.length > 0 })}
                               {(() => {
@@ -3165,7 +3165,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                                 {c.claimCut > 0 && <div style={{ color: '#dc2626' }}>−{formatMoney(c.claimCut)} tiền thừa chi hộ</div>}</>)}</div>}</td>
                             <td>{cellBtn(s.id, 'advance', monthRequests(s.id, 'advance').length > 0, <span style={{color:'#ef4444'}}>-{formatMoney(c.advAmt)}</span>)}</td>
                             <td>{cellBtn(s.id, 'absent', monthRequests(s.id, 'absent').length > 0, c.rule === 'days'
-                              ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không trừ)` : monthRequests(s.id, 'absent').length ? 'chờ duyệt' : '—'}</span>
+                              ? <span style={{color:'#94a3b8'}}>{c.absDays ? `${fmtNum(c.absDays)} ngày (không tính công)` : monthRequests(s.id, 'absent').length ? 'chờ duyệt' : '—'}</span>
                               : <><span style={{color:'#ef4444'}}>-{formatMoney(c.absAmt)}</span><div style={{fontSize:'0.72rem',color:'#94a3b8'}}>{fmtNum(c.absDays)} ngày</div></>)}</td>
                             <td>{vioCell(s.id, c)}</td>
                             {/* Nước ngọt / bia nhân viên tự ghi: tổng tiền trừ + số lần, bấm để xem từng lần (chủ xoá lần ghi sai ở đó). */}
@@ -3220,8 +3220,10 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
               const typed = peerAmounts[x.id] ?? (x.suggested_amount ? x.suggested_amount.toLocaleString('vi-VN') : '');
               const amount = Number(String(typed).replace(/\D/g, '')) || 0;
               items.push({ key: `peer-${x.id}`, kind: 'peer', pending, at: ms(x.created_at), who: nameOf(x.staff_id),
-                head: x.status === 'approved' && x.amount ? formatMoney(x.amount) : null,
-                status: pending ? null : x.status === 'approved' ? { text: x.amount ? 'Đã phạt' : 'Đã ghi lỗi', tone: 'bad' } : { text: 'Bỏ qua', tone: 'muted' },
+                // Số tiền theo khoản phạt hiện tại (máy chủ): sửa / xoá ở Bảng lương hay tab Vi phạm thì ở đây đổi theo.
+                head: x.status === 'approved' && !x.dropped && x.amount ? formatMoney(x.amount) : null,
+                status: pending ? null : x.status !== 'approved' ? { text: 'Bỏ qua', tone: 'muted' } : x.dropped ? { text: 'Đã bỏ phạt', tone: 'muted' }
+                  : { text: x.amount ? 'Đã phạt' : 'Chưa định tiền', tone: 'bad' },
                 rows: [
                   ['Lỗi', <><strong>{x.reason}</strong> · ngày {ddmm(x.date)}</>],
                   x.note && ['Ghi thêm', x.note],
