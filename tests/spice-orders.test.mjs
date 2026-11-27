@@ -745,3 +745,34 @@ test('máy chủ: chủ gia vị thêm món qua link, quán Không lấy, chủ 
   assert.equal((await post(supplier, { t: sup.token, id: order.id, paid: false })).status, 200);
   assert.equal(state.spice_orders[0].supplier_paid_at, null);
 });
+
+test('chủ quán huỷ đơn đã nhận (đơn thử / nhận nhầm): bắt buộc lý do, ra khỏi sổ, công nợ, thống kê, đối soát', async () => {
+  const o = { id: 'o1', supplier_id: SUP, received_at: T(10), received_date: '2026-11-25', items: [{ name: 'Muối', qty: 2, price: 10000 }], log: [] };
+  assert.match(spice.cancelOrder(o, { by: 'Chủ quán', at: T(11), owner: true }).error, /lý do/);
+  const r = spice.cancelOrder(o, { by: 'Chủ quán', at: T(11), owner: true, reason: 'đơn thử' });
+  const after = { ...o, ...r.patch };
+  assert.equal(after.cancelled_at, T(11));
+  assert.equal(after.received_at, T(10), 'giữ giờ nhận để xem lại');
+  assert.match(spice.logLine(after.log.at(-1)).text, /huỷ đơn đã nhận \(20\.000đ ra khỏi sổ và công nợ\) · ghi chú: đơn thử/);
+  assert.equal(after.log.at(-1).who, 'admin');
+  assert.equal(spice.orderState(after), 'cancelled');
+  assert.deepEqual(spice.spiceCostByDay([after]), {});
+  assert.equal(spice.supplierSummary([after], []).delivered, 0);
+  assert.deepEqual(spice.supplierDays([after], [], {}), []);
+  assert.equal(spice.spiceStats([after]).length, 0);
+  assert.equal(spice.supplierOrderStats([after]).count, 0);
+
+  // Máy chủ: nhân viên / quản lý không huỷ được đơn đã nhận; chủ quán được, phải có lý do.
+  const state = newState();
+  const owner = adminApi(state, 'admin'), thy = adminApi(state, 'staff'), mgr = adminApi(state, 'manager');
+  const sup = (await post(owner, { action: 'save_supplier', name: 'Đào' })).body.supplier;
+  const order = (await post(thy, { action: 'create', supplier_id: sup.id, lines: [{ name: 'Muối', qty: 1 }] })).body.order;
+  await post(thy, { action: 'receive', id: order.id, updated_at: order.updated_at, received: [] });
+  assert.equal((await post(thy, { action: 'cancel', id: order.id, reason: 'x' })).status, 403);
+  assert.equal((await post(mgr, { action: 'cancel', id: order.id, reason: 'x' })).status, 403);
+  assert.match((await post(owner, { action: 'cancel', id: order.id })).body.error, /lý do/);
+  const ok = await post(owner, { action: 'cancel', id: order.id, reason: 'đơn thử' });
+  assert.equal(ok.status, 200);
+  assert.ok(state.spice_orders[0].cancelled_at);
+  assert.equal((await get(owner)).body.balances?.[sup.id]?.debt ?? 0, 0);
+});

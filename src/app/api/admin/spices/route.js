@@ -12,7 +12,7 @@
  *   receive { id, updated_at, received: [null = đủ | { check: ok|short|over|wrong, qty, note }], note } — ai cũng được, một lần
  *   recheck { id, updated_at, received, note } — quản lý / chủ quán kiểm lại đơn đã nhận (đối soát)
  * GET ?days=<supplier_id> → { days: supplierDays(...) } 60 ngày (nhân viên / quản lý không thấy tiền đã trả, nợ cuối ngày)
- *   cancel { id, reason } — người gọi (đơn chưa nhận) hoặc quản lý / admin
+ *   cancel { id, reason } — người gọi (đơn chưa nhận) hoặc quản lý / admin; đơn ĐÃ nhận: chỉ admin, bắt buộc lý do
  *   set_prices { id, updated_at, prices: [{ index, price }] } — admin, sửa mọi lúc
  *   save_supplier { id?, name, phone, active } · new_link { id } · save_item { id?, name, unit, default_qty, active } — admin
  *   save_items { text } — admin dán nhiều món một lần ("Muối 2 kg" mỗi dòng), món đã có thì cập nhật số / đơn vị
@@ -177,8 +177,9 @@ export async function POST(request) {
         if (!canManage) return fail('Chỉ quản lý hoặc chủ quán kiểm lại được.', 403);
         result = recheckOrder(order, body.received, { by, at, note: str(body.note, 300) });
       } else if (body.action === 'cancel') {
+        if (order.received_at && !isAdmin) return fail('Đơn đã nhận hàng, chỉ chủ quán huỷ được.', 403);
         if (!canManage && order.created_by !== user.id) return fail('Chỉ người gọi đơn hoặc quản lý huỷ được.', 403);
-        result = cancelOrder(order, { by, at, reason: str(body.reason, 200) });
+        result = cancelOrder(order, { by, at, reason: str(body.reason, 200), owner: isAdmin && !!order.received_at });
       } else {
         if (!isAdmin) return fail('Chỉ chủ quán sửa giá ở đây.', 403);
         result = applyPrices(order, body.prices, { by, at, who: 'admin' });
