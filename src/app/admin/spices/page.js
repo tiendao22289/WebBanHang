@@ -65,13 +65,14 @@ export default function SpicesPage() {
   });
 
   if (!data) return <div className="sp">{error ? <div className="sp-msg err">{error}</div> : <p className="sp-empty">Đang tải…</p>}</div>;
-  const tabs = [['call', '🧂 Gọi hàng'], ['orders', 'Đơn'], ['days', '📅 Đối soát'], ...(isAdmin ? [['debt', 'Công nợ'], ['stats', 'Thống kê'], ['setup', 'Cài đặt']] : [])];
+  const tabs = [['call', '🧂', 'Gọi hàng'], ['orders', '📦', 'Đơn'], ['days', '📅', 'Đối soát'],
+    ...(isAdmin ? [['debt', '💰', 'Công nợ'], ['stats', '📊', 'Thống kê'], ['setup', '⚙️', 'Cài đặt']] : [])];
   return <div className="sp">
-    <h1>🧂 Gia vị</h1>
+    <div className="sp-head"><h1>🧂 Gia vị</h1><span className="sp-mute sp-small">{data.me?.name}</span></div>
     {error && <div className="sp-msg err">{error}</div>}
-    <div className="sp-tabs" role="tablist">
-      {tabs.map(([k, label]) => <button key={k} type="button" role="tab" aria-selected={tab === k} className={`sp-tab ${tab === k ? 'on' : ''}`} onClick={() => setTab(k)}>
-        {label}{k === 'orders' && openCount > 0 && <span className="sp-count">{openCount}</span>}
+    <div className="sp-tabs grid" role="tablist">
+      {tabs.map(([k, icon, label]) => <button key={k} type="button" role="tab" aria-selected={tab === k} className={`sp-tab ${tab === k ? 'on' : ''}`} onClick={() => { setTab(k); window.scrollTo(0, 0); }}>
+        <span className="ic" aria-hidden="true">{icon}</span>{label}{k === 'orders' && openCount > 0 && <span className="sp-count">{openCount}</span>}
       </button>)}
     </div>
     {tab === 'call' && <CallTab data={data} onSent={(supplier, order, items, note) => { askShare(supplier, order, items, { note }); load(); setTab('orders'); }} goSetup={isAdmin ? () => setTab('setup') : null} />}
@@ -223,19 +224,24 @@ function CallTab({ data, onSent, goSetup }) {
     finally { setBusy(false); }
   };
   return <>
+    {active.length === 1
+      ? <div className="sp-card sp-to"><span className="sp-step">1</span><span className="sp-mute">Gửi cho</span> <b>{active[0].name}</b></div>
+      : <div className="sp-card">
+        <div className="sp-step-h"><span className="sp-step">1</span>Gửi cho ai?</div>
+        <div className="sp-picks">{active.map(s => <button key={s.id} type="button" className={`sp-pick ${s.id === supplierId ? 'on' : ''}`} onClick={() => setSupplierId(s.id)}>
+          {s.name}{s.phone && <small>{s.phone}</small>}
+        </button>)}</div>
+      </div>}
     <div className="sp-card">
-      <div className="sp-b" style={{ marginBottom: 8 }}>1. Gửi cho ai?</div>
-      <div className="sp-picks">{active.map(s => <button key={s.id} type="button" className={`sp-pick ${s.id === supplierId ? 'on' : ''}`} onClick={() => setSupplierId(s.id)}>
-        {s.name}{s.phone && <small>{s.phone}</small>}
-      </button>)}</div>
-    </div>
-    <div className="sp-card">
-      <div className="sp-b" style={{ marginBottom: 8 }}>2. Gọi món gì?</div>
+      <div className="sp-step-h"><span className="sp-step">2</span>Chọn món <span className="sp-mute sp-small" style={{ fontWeight: 500 }}>· bấm ô để thêm, bấm − để bớt</span></div>
       {!lines.length && lastOrder && <button type="button" className="sp-btn block" style={{ marginBottom: 10 }} onClick={() => setLines(lastOrder.items.map(l => ({ name: l.name, unit: l.unit || '', qty: fmtQty(Number(l.qty)), step: itemStep(data.items.find(i => itemKey(i.name) === itemKey(l.name))) })))}>
-        🔁 Gọi giống lần trước ({lastOrder.items.length} món, {shortTime(lastOrder.created_at)})
+        🔁 Gọi giống lần trước · {lastOrder.items.length} món
       </button>}
       <ItemPicker items={data.items} lines={lines} setLines={setLines} prices={data.lastPrices?.[supplierId] || {}} orders={data.orders} supplierId={supplierId} />
-      <textarea className="sp-field" style={{ marginTop: 12 }} placeholder="Ghi chú cho chủ gia vị (không bắt buộc)" value={note} maxLength={300} onChange={e => setNote(e.target.value)} />
+    </div>
+    <div className="sp-card">
+      <div className="sp-step-h"><span className="sp-step">3</span>Ghi chú <span className="sp-mute sp-small" style={{ fontWeight: 500 }}>· không bắt buộc</span></div>
+      <textarea className="sp-field" placeholder="vd: giao trước 10h, lấy ớt hiểm" value={note} maxLength={300} onChange={e => setNote(e.target.value)} />
     </div>
     {error && <div className="sp-msg err">{error}</div>}
     <div className="sp-bar in-admin"><div className="sp-bar-in">
@@ -253,6 +259,10 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState('');
   const me = data.me, isAdmin = me.role === 'admin', canManage = isAdmin || me.role === 'manager';
+  const counts = {
+    open: data.orders.filter(o => ['new', 'priced', 'waiting_price'].includes(orderState(o))).length,
+    done: data.orders.filter(o => orderState(o) === 'done').length,
+  };
   const list = data.orders.filter(o => {
     const st = orderState(o);
     return filter === 'all' || (filter === 'open' ? ['new', 'priced', 'waiting_price'].includes(st) : st === 'done');
@@ -264,33 +274,37 @@ function OrdersTab({ data, supplierById, reload, onShare }) {
     finally { setBusy(''); }
   };
   return <>
-    <div className="sp-picks" style={{ marginBottom: 10 }}>
-      {[['open', 'Đang chờ'], ['done', 'Đã nhận'], ['all', 'Tất cả']].map(([k, l]) => <button key={k} type="button" className={`sp-pick ${filter === k ? 'on' : ''}`} onClick={() => setFilter(k)}>{l}</button>)}
+    <div className="sp-seg" role="tablist">
+      {[['open', 'Đang chờ', counts.open], ['done', 'Đã nhận', counts.done], ['all', 'Tất cả', data.orders.length]].map(([k, l, n]) => <button key={k} type="button" role="tab" aria-selected={filter === k}
+        className={filter === k ? 'on' : ''} onClick={() => setFilter(k)}>{l}<small>{n}</small></button>)}
     </div>
     {!list.length && <p className="sp-empty">Không có đơn.</p>}
     {list.map(o => {
       const st = orderState(o), sup = supplierById[o.supplier_id];
       const open = !o.received_at && !o.cancelled_at;
-      return <div key={o.id} className="sp-card">
-        <div className="sp-row between"><div className="sp-b">{sup?.name || 'Chủ gia vị'}</div><span className={`sp-chip ${st}`}>{STATE_LABELS[st]}</span></div>
-        <div className="sp-mute">Gọi: <b>{o.created_by_name}</b> {shortTime(o.created_at)}
-          {o.received_at && <> · Nhận: <b>{o.received_by_name}</b> {shortTime(o.received_at)}</>}
-          {o.cancelled_at && <> · Huỷ: <b>{o.cancelled_by_name}</b></>}</div>
+      const canCancel = open && (canManage || o.created_by === me.id);
+      return <div key={o.id} className={`sp-card sp-order ${st}`}>
+        <div className="sp-row between"><div className="sp-b sp-grow">{sup?.name || 'Chủ gia vị'}</div><span className={`sp-chip ${st}`}>{STATE_LABELS[st]}</span></div>
+        <div className="sp-who">
+          <span>🕘 Gọi {shortTime(o.created_at)} · <b>{o.created_by_name}</b></span>
+          {o.received_at && <span>📥 Nhận {shortTime(o.received_at)} · <b>{o.received_by_name}</b></span>}
+          {o.cancelled_at && <span>✖ Huỷ · <b>{o.cancelled_by_name}</b></span>}
+        </div>
         {o.note && <div className="sp-note staff">📝 {o.note}</div>}
         {o.supplier_note && <div className="sp-note supplier">💬 Chủ gia vị: {o.supplier_note}</div>}
         <OrderLines order={o} />
         {msg?.id === o.id && <div className={`sp-msg ${msg.err ? 'err' : 'ok'}`}>{msg.text}</div>}
-        <div className="sp-btns">
-          {open && <button type="button" className="sp-btn ok" disabled={busy === o.id} onClick={() => run(o, { action: 'receive', received: [] }, 'Đã nhận đủ ✓')}>✅ Nhận đủ</button>}
-          {open && <button type="button" className="sp-btn" disabled={busy === o.id} onClick={() => setSheet({ kind: 'receive', order: o })}>🔍 Kiểm từng món…</button>}
-          {!open && !o.cancelled_at && canManage && <button type="button" className="sp-btn" onClick={() => setSheet({ kind: 'recheck', order: o })}>🔍 Kiểm lại</button>}
-          {open && <button type="button" className="sp-btn" onClick={() => setSheet({ kind: 'add', order: o })}>➕ Thêm món</button>}
-          {open && sup && <button type="button" className="sp-btn zalo" onClick={() => onShare(sup, o, o.items, { note: o.note || '' })}>📤 Gửi lại Zalo</button>}
-          {isAdmin && !o.cancelled_at && <button type="button" className="sp-btn" onClick={() => setSheet({ kind: 'price', order: o })}>Sửa giá</button>}
-        </div>
-        {open && (canManage || o.created_by === me.id) && <div style={{ textAlign: 'right' }}>
-          <button type="button" className="sp-btn ghost bad" disabled={busy === o.id} onClick={() => run(o, { action: 'cancel' }, 'Đã huỷ đơn')}>Huỷ đơn</button>
+        {open && <div className="sp-btns two">
+          <button type="button" className="sp-btn ok" disabled={busy === o.id} onClick={() => run(o, { action: 'receive', received: [] }, 'Đã nhận đủ ✓')}>✅ Nhận đủ</button>
+          <button type="button" className="sp-btn" disabled={busy === o.id} onClick={() => setSheet({ kind: 'receive', order: o })}>🔍 Kiểm hàng</button>
         </div>}
+        <div className="sp-acts">
+          {open && <button type="button" onClick={() => setSheet({ kind: 'add', order: o })}>➕ Thêm món</button>}
+          {open && sup && <button type="button" className="zalo" onClick={() => onShare(sup, o, o.items, { note: o.note || '' })}>📤 Gửi lại Zalo</button>}
+          {!open && !o.cancelled_at && canManage && <button type="button" onClick={() => setSheet({ kind: 'recheck', order: o })}>🔍 Kiểm lại</button>}
+          {isAdmin && !o.cancelled_at && <button type="button" onClick={() => setSheet({ kind: 'price', order: o })}>✏️ Sửa giá</button>}
+          {canCancel && <button type="button" className="bad" disabled={busy === o.id} onClick={() => { if (window.confirm('Huỷ đơn này?')) run(o, { action: 'cancel' }, 'Đã huỷ đơn'); }}>Huỷ đơn</button>}
+        </div>
         <History log={o.log} />
       </div>;
     })}
@@ -312,12 +326,13 @@ function OrderLines({ order }) {
     <ul className="sp-lines">{order.items.map((l, i) => {
       const later = addedLater(order, l);
       const ch = hasPrice(l) && l.old_price !== null && l.old_price !== undefined ? l.price - l.old_price : 0;
-      return <li key={i} className="sp-line">
-        <div className="sp-row between"><span className="name">{l.name}</span><span className="sp-money">{hasPrice(l) ? money(lineAmount(l)) : <span className="nop">chưa giá</span>}</span></div>
-        <div className="meta">
-          {qtyText(l.qty)} {l.unit}{hasPrice(l) ? ` × ${money(l.price)}` : ''}
+      return <li key={i} className="sp-line compact">
+        <div className="sp-row between"><span className="name">{l.name} <span className="q">{qtyText(l.qty)} {l.unit}</span></span>
+          <span className="sp-money">{hasPrice(l) ? money(lineAmount(l)) : <span className="nop">chưa giá</span>}</span></div>
+        {hasPrice(l) && <div className="meta">
+          {money(l.price)} / {l.unit || 'phần'}
           {ch !== 0 && <span className={ch > 0 ? 'sp-up' : 'sp-down'}> {changeText(ch)}</span>}
-        </div>
+        </div>}
         {order.received_at && !order.cancelled_at && (() => { const c = lineCheck(l); return <div><CheckBadge check={c.check} diff={c.diff} unit={l.unit} note={c.note} /></div>; })()}
         {later && <span className="added">➕ {l.added_by} thêm {shortTime(l.added_at)}</span>}
       </li>;
