@@ -1,5 +1,5 @@
 /* Gọi gia vị — dùng chung cho trang nhân viên (/admin/spices) và trang chủ gia vị (/giavi/<mã>). Làm cho điện thoại trước. */
-.sp {
+.sp, .sp-page {
   --sp-bg: #f6f7f9;
   --sp-card: #fff;
   --sp-line: #e5e7eb;
@@ -14,6 +14,8 @@
   --sp-bad-soft: #fee2e2;
   --sp-blue: #1d4ed8;
   --sp-blue-soft: #dbeafe;
+}
+.sp {
   max-width: 640px;
   margin: 0 auto;
   padding: 12px 12px calc(96px + env(safe-area-inset-bottom));
@@ -23,12 +25,12 @@
   -webkit-text-size-adjust: 100%;
 }
 .sp-page { min-height: 100vh; background: var(--sp-bg); }
-.sp, .sp h1, .sp h2, .sp h3, .sp-sheet { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+.sp, .sp h1, .sp h2, .sp h3, .sp-sheet, .sp-bar { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
 .sp * { box-sizing: border-box; }
 .sp h1 { font-size: 22px; margin: 4px 0 2px; }
 .sp h2 { font-size: 18px; margin: 18px 0 8px; }
 .sp .sp-sub { color: var(--sp-mute); font-size: 14px; margin: 0 0 10px; }
-.sp button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.sp button, .sp-bar button { font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 .sp input, .sp textarea, .sp select { font: inherit; font-size: 16px; /* iPhone không tự phóng to khi gõ */ }
 
 /* Tab trên cùng: dính đầu trang, bấm to */
@@ -212,3 +214,47 @@ textarea.sp-field { min-height: 64px; resize: vertical; }
 .sp-item-name { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 8px 2px; font: inherit; color: inherit; cursor: pointer; }
 .sp-move { width: 40px; height: 40px; flex: none; border-radius: 10px; border: 1px solid var(--sp-line, #ddd); background: #fff; font-size: 14px; color: inherit; }
 .sp-move:disabled { opacity: 0.3; }
+
+/* ---- Sắp xếp lại 2026-11-27: tab lưới, bước gọi hàng, thẻ đơn gọn ---- */
+.sp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.sp-tabs.grid { position: static; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; overflow: visible; }
+.sp-tabs.grid .sp-tab { padding: 8px 4px; min-height: 44px; border-radius: 12px; font-size: 14px; display: flex; align-items: center; justify-content: center; gap: 4px; white-space: nowrap; }
+.sp-tabs.grid .sp-tab .ic { font-size: 16px; }
+.sp-tabs.grid .sp-tab .sp-count { margin-left: 2px; min-width: 20px; line-height: 20px; font-size: 12px; }
+@media (min-width: 560px) { .sp-tabs.grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+
+.sp-step { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--sp-main); color: #fff; font-size: 13px; font-weight: 800; flex: none; }
+.sp-step-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 700; margin-bottom: 10px; }
+.sp-to { display: flex; align-items: center; gap: 8px; padding: 12px 14px; }
+
+.sp-seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; background: #eceef1; border-radius: 12px; margin-bottom: 12px; }
+.sp-seg button { border: 0; background: transparent; border-radius: 9px; min-height: 40px; font-weight: 700; color: var(--sp-mute); display: flex; align-items: center; justify-content: center; gap: 6px; }
+.sp-seg button.on { background: #fff; color: var(--sp-text); box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+.sp-seg small { font-size: 12px; font-weight: 800; background: #dfe2e6; color: var(--sp-mute); border-radius: 999px; padding: 0 7px; line-height: 18px; }
+.sp-seg button.on small { background: var(--sp-main-soft); color: var(--sp-main-dark); }
+
+.sp-order { border-left: 4px solid var(--sp-line); }
+.sp-order.new { border-left-color: var(--sp-blue); }
+.sp-order.priced { border-left-color: var(--sp-main); }
+.sp-order.waiting_price { border-left-color: var(--sp-bad); }
+.sp-order.done { border-left-color: var(--sp-ok); }
+.sp-who { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 4px; font-size: 13px; color: var(--sp-mute); }
+.sp-who b { color: var(--sp-text); font-weight: 600; }
+.sp-line.compact { padding: 8px 0; }
+.sp-line.compact .name { font-size: 16px; }
+.sp-line .q { font-weight: 500; color: var(--sp-mute); font-size: 14px; white-space: nowrap; }
+.sp-btns.two > .sp-btn { flex: 1 1 0; }
+.sp-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.sp-acts:empty { display: none; }
+.sp-acts button { border: 1px solid var(--sp-line); background: #fff; border-radius: 999px; min-height: 38px; padding: 6px 12px; font-size: 14px; font-weight: 600; color: var(--sp-text); }
+.sp-acts button.zalo { color: #0068ff; border-color: #bfdbfe; background: #eff6ff; }
+.sp-acts button.bad { color: var(--sp-bad); border-color: #fecaca; margin-left: auto; }
+
+/* Trang chủ gia vị: 4 tab, ô giá cùng hàng với thành tiền */
+.sp-tabs.grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.sp-tabs.grid.four .sp-tab { flex-direction: column; gap: 0; min-height: 54px; font-size: 13px; position: relative; }
+.sp-tabs.grid.four .sp-tab .sp-count { position: absolute; top: 3px; right: 4px; }
+.sp-tiles.sup { margin: 6px 0 4px; }
+.sp-qtyb { font-weight: 800; font-size: 16px; white-space: nowrap; background: #f3f4f6; border-radius: 8px; padding: 1px 8px; }
+.sp-price .amt { flex: 0 0 auto; min-width: 76px; text-align: right; color: var(--sp-main-dark); }
+.sp-price input { min-height: 46px; }
