@@ -46,6 +46,25 @@ import { lunarDaysBetween } from './lunar.mjs';
 export const STANDARD_DAYS = 26;
 export const DAY_BASE = 30;
 export const monthDays = (year, month) => new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+/**
+ * Ngày nghỉ của một người trong tháng `key` ('YYYY-MM'): quán mở (không nằm trong closedDays), đang làm việc (employed như
+ * holidayArgs: từ ngày vào làm, tới ngày làm cuối, trừ khoảng đã nghỉ rồi đi làm lại), không có ngày làm nào trong `worked`, và trước
+ * `until` (ngày làm hiện tại: hôm nay chưa xong ca thì chưa tính là nghỉ). Ngày nghỉ không có công nên không có lương — trang Lương
+ * hiện để chủ thấy (có đơn báo nghỉ đã duyệt hay không). → ['YYYY-MM-DD', …] tăng dần.
+ */
+export function offDays({ key, worked = [], closedDays = [], employed = null, until = null }) {
+  const [y, m] = String(key).split('-').map(Number), seen = new Set(worked), closed = new Set((closedDays || []).map(d => String(d?.day ?? d).slice(0, 10)));
+  const on = day => !(employed?.from && day < employed.from) && !(employed?.to && day > employed.to)
+    && !(employed?.away || []).some(([left, back]) => day > left && day < back);
+  const out = [];
+  for (let i = 1; i <= monthDays(y, m); i += 1) {
+    const day = `${key}-${String(i).padStart(2, '0')}`;
+    if (until && day >= until) break;
+    if (!seen.has(day) && !closed.has(day) && on(day)) out.push(day);
+  }
+  return out;
+}
 export const DAY_PAY_FROM = '2026-11';
 export const DEFAULT_OT_RATE = 25000;
 // Thưởng chuyên cần: mặc định phải đủ 22 ngày công; gợi ý phạt khi trễ quá 30 phút.
