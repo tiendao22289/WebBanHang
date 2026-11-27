@@ -5,6 +5,7 @@
  * Chủ quán thêm: Công nợ (trả gom), Thống kê từng món theo ngày / tháng / năm, Cài đặt (chủ gia vị, link riêng, món).
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useBackClose } from '@/lib/useBackClose';
 import { useReloadHold } from '@/lib/useBuildRefresh';
 import {
@@ -129,7 +130,8 @@ function saveCart(v) { try { localStorage.setItem(CART_KEY, JSON.stringify(v)); 
 // nút − trên ô để bớt. Danh sách dài thì có ô tìm (gõ không dấu cũng được). Món không có trong danh sách: "＋ Món khác".
 const num = v => Number(String(v ?? '').replace(',', '.')) || 0;
 const fmtQty = n => String(Math.round(n * 1000) / 1000).replace('.', ',');
-function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders = [], supplierId = null }) {
+function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders = [], supplierId = null, drawer = false }) {
+  const [panel, setPanel] = useState(false); // thanh danh sách món bên phải (nút + cố định)
   const [q, setQ] = useState('');
   const [other, setOther] = useState(false);
   const [name, setName] = useState('');
@@ -169,8 +171,12 @@ function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders 
         <input className="sp-unit" placeholder="đơn vị" aria-label={`Đơn vị ${l.name}`} value={l.unit} maxLength={20} onChange={e => setLine(i, { unit: e.target.value })} />
         <button type="button" className="sp-x" aria-label={`Bỏ ${l.name}`} onClick={() => setLines(lines.filter((_, j) => j !== i))}>✕</button>
       </li>)}</ul>
-      <div className="sp-pick-h">Bấm thêm món:</div>
+      {!drawer && <div className="sp-pick-h">Bấm thêm món:</div>}
     </>}
+    {drawer && lines.length > 0 && <button type="button" className="sp-addrow-btn" onClick={() => setPanel(true)}><span aria-hidden="true">+</span> Thêm món khác</button>}
+    {drawer && <DrawerFab onOpen={() => setPanel(true)} hidden={panel} />}
+    {drawer && panel && <ItemDrawer items={ranked} lines={lines} idx={idx} prices={prices} bump={bump} onClose={() => setPanel(false)} />}
+    {(!drawer || !lines.length) && <>
     {ranked.length > 8 && <input className="sp-field" type="search" placeholder="🔍 Tìm món (gõ không dấu cũng được)" value={q} onChange={e => setQ(e.target.value)} style={{ marginBottom: 10 }} />}
     {shown.length > 0 && <div className="sp-grid">{shown.map(i => {
       const at = idx.get(itemKey(i.name)), on = at !== undefined, p = prices[itemKey(i.name)];
@@ -192,7 +198,60 @@ function ItemPicker({ items, lines, setLines, prices = {}, exclude = [], orders 
         <input className="sp-unit" placeholder="kg, bịch" value={unit} maxLength={20} onChange={e => setUnit(e.target.value)} />
         <button type="button" className="sp-btn main" disabled={!name.trim()} onClick={addOther}>Thêm</button>
       </div>}
+    </>}
   </>;
+}
+
+/** Nút + tròn cố định góc phải (trên nút Gửi đơn): mở thanh danh sách món. */
+function DrawerFab({ onOpen, hidden }) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => setReady(true), []);
+  if (!ready || hidden) return null;
+  return createPortal(<button type="button" className="sp-fab sp-fab-admin" aria-label="Thêm món" onClick={onOpen}><span aria-hidden="true">+</span></button>, document.body);
+}
+
+/**
+ * Thanh đứng bên phải: tìm món (không dấu), kéo lên xuống xem cả danh sách, bấm + / − ngay trên từng dòng.
+ * Món không có trong danh sách: gõ tên rồi bấm "Thêm món mới". Bấm nền tối, ✕ hoặc nút Back của điện thoại để đóng.
+ */
+function ItemDrawer({ items, lines, idx, prices, bump, onClose }) {
+  const [q, setQ] = useState('');
+  useBackClose(true, onClose);
+  useEffect(() => {
+    const old = document.body.style.overflow;
+    document.body.style.overflow = 'hidden'; // không cuộn trang phía sau
+    return () => { document.body.style.overflow = old; };
+  }, []);
+  const qq = plainText(q);
+  const hit = i => { const t = plainText(i.name); return t.startsWith(qq) ? 0 : t.split(' ').some(w => w.startsWith(qq)) ? 1 : t.includes(qq) ? 2 : 3; };
+  const shown = qq ? items.filter(i => hit(i) < 3).sort((a, b) => hit(a) - hit(b)) : items;
+  return createPortal(<div className="sp sp-drawer-bg" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <aside className="sp-drawer" role="dialog" aria-modal="true" aria-label="Thêm món">
+      <div className="sp-drawer-h">
+        <b>Thêm món</b>
+        <button type="button" className="sp-x" aria-label="Đóng" onClick={onClose}>✕</button>
+      </div>
+      <input className="sp-field" type="search" placeholder="🔍 Tìm món" value={q} onChange={e => setQ(e.target.value)} />
+      <ul className="sp-drawer-list">
+        {shown.map(i => {
+          const at = idx.get(itemKey(i.name)), l = at !== undefined ? lines[at] : null, p = prices[itemKey(i.name)];
+          return <li key={i.id || i.name} className={l ? 'on' : ''}>
+            <button type="button" className="nm" onClick={() => bump(i, 1)}>
+              <b>{i.name}</b>
+              <small>+{fmtQty(itemStep(i))} {i.unit || ''}{p !== undefined ? ` · ${money(p)}` : ''}</small>
+            </button>
+            {l
+              ? <div className="sp-qty"><button type="button" aria-label={`Bớt ${i.name}`} onClick={() => bump(i, -1)}>−</button>
+                  <span className="q">{l.qty}<small>{l.unit}</small></span>
+                  <button type="button" aria-label={`Thêm ${i.name}`} onClick={() => bump(i, 1)}>+</button></div>
+              : <button type="button" className="add" aria-label={`Thêm ${i.name}`} onClick={() => bump(i, 1)}>+</button>}
+          </li>;
+        })}
+        {q.trim() && !shown.length && <li><button type="button" className="sp-btn block" onClick={() => { bump({ name: q }); setQ(''); }}>＋ Thêm món mới "{q.trim()}"</button></li>}
+      </ul>
+      <button type="button" className="sp-btn main block" onClick={onClose}>Xong{lines.length ? ` · đã chọn ${lines.length} món` : ''}</button>
+    </aside>
+  </div>, document.body);
 }
 
 /* ---------------- Tab Gọi hàng ---------------- */
@@ -238,7 +297,7 @@ function CallTab({ data, onSent, goSetup }) {
       {!lines.length && lastOrder && <button type="button" className="sp-btn block" style={{ marginBottom: 10 }} onClick={() => setLines(lastOrder.items.map(l => ({ name: l.name, unit: l.unit || '', qty: fmtQty(Number(l.qty)), step: itemStep(data.items.find(i => itemKey(i.name) === itemKey(l.name))) })))}>
         🔁 Gọi giống lần trước · {lastOrder.items.length} món
       </button>}
-      <ItemPicker items={data.items} lines={lines} setLines={setLines} prices={data.lastPrices?.[supplierId] || {}} orders={data.orders} supplierId={supplierId} />
+      <ItemPicker drawer items={data.items} lines={lines} setLines={setLines} prices={data.lastPrices?.[supplierId] || {}} orders={data.orders} supplierId={supplierId} />
     </div>
     <div className="sp-card">
       <div className="sp-step-h"><span className="sp-step">3</span>Ghi chú <span className="sp-mute sp-small" style={{ fontWeight: 500 }}>· không bắt buộc</span></div>
