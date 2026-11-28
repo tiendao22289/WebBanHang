@@ -157,14 +157,18 @@ function shrinkPhoto(file) {
 }
 const typedMoney = v => { const raw = String(v ?? '').replace(/\./g, '').replace(/\D/g, ''); return raw ? Number(raw).toLocaleString('vi-VN') : ''; };
 const shownMoney = n => (Number(n) > 0 ? Number(n).toLocaleString('vi-VN') : '');
+// Cài đặt → chấm công: tên máy gọn từ user agent, giờ ngắn của lượt quét, chữ cảnh báo, màu nhãn vai trò.
+const shortUa = ua => /iPhone/.test(ua || '') ? 'iPhone' : /iPad/.test(ua || '') ? 'iPad' : /Android/.test(ua || '') ? (String(ua).match(/;\s*([^;)]+?)\s+Build/)?.[1] || 'Android') : 'Máy khác';
+const scanWhen = ts => ts ? new Date(ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '—';
+const SCAN_WARN = { other_network: 'không dùng wifi quán', unknown_device: 'máy lạ', shared_device: 'máy của người khác', admin_no_qr: 'admin chấm không quét mã', no_face: 'chưa có mặt mẫu' };
+const roleStyleOf = role => (role === 'admin' ? { background: '#fef9c3', color: '#92400e' } : role === 'manager' ? { background: '#f5f3ff', color: '#6d28d9' } : { background: '#e0f2fe', color: '#0369a1' });
 const smallBtn = { fontSize: '0.75rem', padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, whiteSpace: 'nowrap' };
 const moneyBox = { width: 110, padding: '4px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem' };
 
 // Thưởng chuyên cần (Bảng lương): điều kiện + mức gợi ý (sửa được); người đủ điều kiện — chủ tự điền tiền rồi
 // duyệt, chỉ khi đã hết tháng; người đã duyệt (bỏ được); người chưa đủ kèm lý do (vẫn thưởng được).
-function BonusBox({ year, month, people, settings, monthOver, onAction }) {
+function BonusBox({ year, month, people, settings, monthOver, onAction, onSettings }) {
   const [amounts, setAmounts] = useState({});
-  const [edit, setEdit] = useState(null);
   const [extra, setExtra] = useState({});
   const s = settings || { bonus_amount: 0, bonus_min_days: 22 };
   const suggested = shownMoney(s.bonus_amount);
@@ -190,20 +194,11 @@ function BonusBox({ year, month, people, settings, monthOver, onAction }) {
         <span style={{ color: '#b45309', fontSize: '0.8rem' }}>{open ? '▴' : '▾'}</span>
       </button>
       {open && <>
-      {edit ? (
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', margin: '4px 0' }}>
-          <label>Mức thưởng gợi ý <input style={moneyBox} inputMode="numeric" value={edit.bonus_amount} onChange={e => setEdit(x => ({ ...x, bonus_amount: typedMoney(e.target.value) }))} /></label>
-          <label>Ít nhất <input style={{ ...moneyBox, width: 56 }} inputMode="decimal" value={edit.bonus_min_days} onChange={e => setEdit(x => ({ ...x, bonus_min_days: e.target.value }))} /> ngày công</label>
-          <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }} onClick={async () => { if (await onAction('save_bonus_settings', { bonus_amount: edit.bonus_amount || '0', bonus_min_days: edit.bonus_min_days })) setEdit(null); }}>Lưu</button>
-          <button style={smallBtn} onClick={() => setEdit(null)}>Huỷ</button>
-        </div>
-      ) : (
-        <div>
-          Điều kiện: cả tháng <strong>không đi trễ</strong>, <strong>không quên ra ca</strong>, đủ <strong>{fmtNum(s.bonus_min_days)} ngày công</strong>.
-          {' '}{s.bonus_amount ? <>Mức gợi ý <strong>{formatMoney(s.bonus_amount)}</strong>, sửa được từng người.</> : 'Chưa đặt mức thưởng gợi ý.'}
-          {' '}<button style={smallBtn} onClick={() => setEdit({ bonus_amount: suggested, bonus_min_days: fmtNum(s.bonus_min_days) })}>{unused ? 'Đặt mức thưởng' : 'Sửa'}</button>
-        </div>
-      )}
+      <div>
+        Điều kiện: cả tháng <strong>không đi trễ</strong>, <strong>không quên ra ca</strong>, đủ <strong>{fmtNum(s.bonus_min_days)} ngày công</strong>.
+        {' '}{s.bonus_amount ? <>Mức gợi ý <strong>{formatMoney(s.bonus_amount)}</strong>, sửa được từng người.</> : 'Chưa đặt mức thưởng gợi ý.'}
+        {' '}<button style={smallBtn} onClick={onSettings}>{unused ? 'Đặt mức thưởng ở Cài đặt' : 'Sửa ở Cài đặt'}</button>
+      </div>
       {!unused && (
         <>
           {!monthOver && (eligible.length
@@ -285,7 +280,37 @@ function FineHints({ hints, nameOf, rules, reviews, onAction }) {
   );
 }
 
+// Cài đặt → Cài chung cả quán → Thưởng chuyên cần: mức thưởng gợi ý + số ngày công tối thiểu. Duyệt thưởng hằng tháng ở Bảng lương.
+function BonusSettings({ settings, onAction }) {
+  const s = settings || { bonus_amount: 0, bonus_min_days: 22 };
+  const saved = { bonus_amount: shownMoney(s.bonus_amount), bonus_min_days: fmtNum(s.bonus_min_days) };
+  const [edit, setEdit] = useState(null);
+  const v = edit || saved;
+  const changed = !!edit && (edit.bonus_amount !== saved.bonus_amount || String(edit.bonus_min_days) !== saved.bonus_min_days);
+  return <>
+    <div className="sp-note" style={{ marginTop: 0, marginBottom: 8, color: '#475569' }}>
+      Điều kiện: cả tháng <strong>không đi trễ</strong>, <strong>không quên ra ca</strong>, đủ số ngày công dưới đây. Hết tháng, người đủ điều kiện hiện ở
+      Bảng lương → ⭐ Thưởng chuyên cần để bạn duyệt (sửa được số tiền từng người). Mức thưởng để trống = chưa dùng thưởng.
+    </div>
+    <div className="sp-form">
+      <label>Mức thưởng gợi ý
+        <input inputMode="numeric" placeholder="Chưa đặt" value={v.bonus_amount} onChange={e => setEdit({ ...v, bonus_amount: typedMoney(e.target.value) })} />
+      </label>
+      <label>Ít nhất (ngày công)
+        <input inputMode="decimal" value={v.bonus_min_days} onChange={e => setEdit({ ...v, bonus_min_days: e.target.value })} />
+      </label>
+    </div>
+    {changed && (
+      <div className="sp-actions">
+        <button className="btn-primary" onClick={async () => { if (await onAction('save_bonus_settings', { bonus_amount: edit.bonus_amount || '0', bonus_min_days: edit.bonus_min_days })) setEdit(null); }}>Lưu</button>
+        <button style={smallBtn} onClick={() => setEdit(null)}>Huỷ</button>
+      </div>
+    )}
+  </>;
+}
+
 // Danh sách lỗi có sẵn: tên + tiền phạt gợi ý (trống = điền mỗi lần), ẩn / hiện. 🤖 = lỗi máy tự gợi ý từ chấm công.
+// Ở Cài đặt → Cài chung cả quán (tab Vi phạm chỉ còn nút mở tới đây).
 function FineRules({ rules, onAction }) {
   const [edits, setEdits] = useState({});
   const [draft, setDraft] = useState({ name: '', amount: '' });
@@ -296,9 +321,8 @@ function FineRules({ rules, onAction }) {
     if (await onAction('save_fine_rule', { id: r.id, name: v.name, amount: v.amount, active })) setEdits(e => { const next = { ...e }; delete next[r.id]; return next; });
   };
   return (
-    <details className="payroll-form">
-      <summary style={{ fontWeight: 800, cursor: 'pointer' }}>📋 Danh sách lỗi có sẵn ({rules.filter(r => r.active).length})</summary>
-      <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '6px 0' }}>Đặt sẵn tiền phạt cho từng lỗi để ghi phạt nhanh (để trống thì điền mỗi lần). 🤖 là lỗi máy tự gợi ý từ chấm công — ẩn đi thì máy thôi gợi ý lỗi đó.</p>
+    <>
+      <p style={{ fontSize: '0.8rem', color: '#64748b', margin: '0 0 6px' }}>Đặt sẵn tiền phạt cho từng lỗi để ghi phạt nhanh (để trống thì điền mỗi lần). 🤖 là lỗi máy tự gợi ý từ chấm công — ẩn đi thì máy thôi gợi ý lỗi đó.</p>
       {rules.map(r => {
         const v = valueOf(r);
         return (
@@ -316,7 +340,7 @@ function FineRules({ rules, onAction }) {
         <input value={draft.amount} placeholder="Tiền phạt" inputMode="numeric" onChange={e => setDraft(d => ({ ...d, amount: typedMoney(e.target.value) }))} style={moneyBox} />
         <button style={smallBtn} onClick={async () => { if (draft.name.trim() && await onAction('save_fine_rule', { name: draft.name, amount: draft.amount })) setDraft({ name: '', amount: '' }); }}>Thêm</button>
       </div>
-    </details>
+    </>
   );
 }
 
@@ -449,7 +473,7 @@ function RangeSheet({ staff, defaultFrom, defaultTo, today, onClose, onDone }) {
   );
 }
 
-// Số ngày của kỳ trả lương có sẵn để chọn ở tab Mức lương (trả lương: nút "💵 Trả lương theo ngày" ở từng người).
+// Số ngày của kỳ trả lương có sẵn để chọn ở Cài đặt → tên người → Lương (trả lương: nút "💵 Trả lương theo ngày" ở từng người).
 const CYCLE_PRESETS = [5, 7, 10, 15];
 
 // Mục Đơn từ của nhân viên: mỗi loại một ô, bấm để mở đúng phần điền.
@@ -477,10 +501,8 @@ const REQ_KINDS = {
 export default function PayrollPage({ staffSection = null } = {}) {
   const formsView = staffSection === 'forms';
   const [activeTab, setActiveTab] = useState('salary');
-  // Điện thoại: mục Cài đặt nhớ lần mở gần nhất (bấm "Cài đặt" mở lại đúng mục đó).
-  const [lastSettingTab, setLastSettingTab] = useState('accounts');
-  const [configFocus, setConfigFocus] = useState(null);
-  const [lateOpen, setLateOpen] = useState(null);
+  // Tab Cài đặt: đang mở gì — 'shop' (cài chung cả quán), 'new' (thêm nhân viên), mã một nhân viên, hoặc null (chỉ danh sách).
+  const [staffSel, setStaffSel] = useState(null);
   // Bảng lương: bấm một ô (Vào sớm, Vào trễ, Ra dư, Về sớm, Ứng lương, Nghỉ, Vi phạm) của một người để xem từng ngày / từng khoản
   // ngay dưới dòng đó. { id: staffId, kind } — mỗi lần mở một ô.
   const [detail, setDetail] = useState(null);
@@ -724,7 +746,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     if (await send(`cancel-${id}`, 'cancel_request', { id, kind })) say('Đã huỷ đơn.');
   };
 
-  // Cài chấm công: giờ làm, máy quầy, chạy thử / chặn thật, điện thoại đã đăng ký, lịch sử quét, đơn sửa giờ.
+  // Phần chấm công của tab Cài đặt: giờ làm, ca, máy quầy, chạy thử / chặn thật, điện thoại đã đăng ký, nút bấm, lịch sử quét, đơn sửa giờ.
   const [checkin, setCheckin] = useState(null);
   const [hoursEdit, setHoursEdit] = useState(null); // { opening_time, closing_time, grace_minutes }
   const [shiftEdit, setShiftEdit] = useState(null); // { staff_id, start, end }
@@ -740,7 +762,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         const h = hoursOn(j.settings, vnToday());
         setHoursEdit({ opening_time: h.opening, closing_time: h.closing, grace_minutes: h.grace });
       }
-    } catch { /* tab Cài chấm công hiện "đang tải" và thử lại khi đồng bộ */ }
+    } catch { /* tab Cài đặt hiện "đang tải" và thử lại khi đồng bộ */ }
   }, []);
   // Số lương đã chốt của tháng đang xem, ngày nghỉ của các đơn báo nghỉ, thưởng chuyên cần, danh sách lỗi,
   // gợi ý phạt đã xử lý, ngày / người ghi của khoản phạt.
@@ -993,7 +1015,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   useEffect(() => {
     if (!isOwner) return undefined;
     const open = () => {
-      setActiveTab('requests'); setConfigFocus(null); setReqView('pending'); setReqKind('all'); setReqOpen(null);
+      setActiveTab('requests'); setReqView('pending'); setReqKind('all'); setReqOpen(null);
       if (wantsRequestsTab(window.location.search)) window.history.replaceState(window.history.state, '', window.location.pathname);
     };
     if (takeOpenRequests() || wantsRequestsTab(window.location.search)) open();
@@ -1243,7 +1265,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     const from = draftOf(k('from'), today);
     const box = { padding: '4px 6px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', background: 'white' };
     const line = { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', flexBasis: '100%' };
-    // Nhãn không bị cắt chữ (tab Mức lương trên điện thoại cắt nhãn dài).
+    // Nhãn không bị cắt chữ (điện thoại từng cắt nhãn dài).
     const lab = { display: 'inline-flex', gap: 4, alignItems: 'center', overflow: 'visible', whiteSpace: 'nowrap' };
     const toggle = (key, on, text) => (
       <label style={{ ...lab, gap: 5, fontWeight: 700, color: on ? '#b91c1c' : '#15803d' }}>
@@ -1431,7 +1453,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     );
   };
   // Khung Sửa của Bảng lương chỉ còn số liệu tháng (từng ngày, chấm công, ứng, phạt, thưởng); cài đặt của người đó (lương, tăng ca,
-  // kỳ trả lương, đi trễ / về sớm, ngày quán nghỉ) ở tab Mức lương — một dòng tóm tắt + nút mở đúng người.
+  // kỳ trả lương, ca, đi trễ / về sớm, ngày quán nghỉ, chấm công) ở Cài đặt → tên người đó — một dòng tóm tắt + nút mở đúng người.
   // Các khoản phạt của một người trong tháng đang xem, mới nhất lên đầu (khoản cũ chưa có ngày nằm cuối).
   const finesOf = staffId => violations.filter(v => v.staff_id === staffId)
     .map(v => ({ v, m: payrollMonth.violationMeta.find(x => x.violation_id === v.id) || null }))
@@ -1752,17 +1774,6 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     const early = !r.early ? 'về sớm như mặc định' : r.early.on === false ? 'được phép về sớm' : cut(r.early.allowed, r.early.fixed, r.early.perMinute, r.early.minuteAmount, 'về sớm');
     return `riêng: ${late} · ${early}`;
   };
-  const openShiftFor = staffId => {
-    setActiveTab('qr');
-    setConfigFocus(staffId);
-    setLateOpen(staffId);
-    setTimeout(() => document.getElementById(`shift-${staffId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
-  };
-  const openConfigFor = staffId => {
-    setActiveTab('config');
-    setConfigFocus(staffId);
-    setTimeout(() => document.getElementById(`config-${staffId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
-  };
   const payEditor = s => {
     const live = calcSalary(s.id), closed = closeOf(s.id);
     const atts = attendance.filter(a => a.staff_id === s.id);
@@ -1931,8 +1942,9 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         </div>
         <div style={{ ...section, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.8rem', color: '#475569' }}>
           <span>⚙️ {settingsText(s.id)}</span>
-          <button style={smallBtn} onClick={() => openConfigFor(s.id)}>💰 Đổi lương, kỳ trả lương</button>
-          <button style={smallBtn} onClick={() => openShiftFor(s.id)}>⏰ Đổi ca, đi trễ / về sớm</button>
+          <button style={smallBtn} onClick={() => openStaffSettings(s.id, 'pay')}>💰 Đổi lương, kỳ trả lương</button>
+          <button style={smallBtn} onClick={() => openStaffSettings(s.id, 'shift')}>⏰ Đổi ca, đi trễ / về sớm</button>
+          <button style={smallBtn} onClick={() => openStaffSettings(s.id)}>⚙️ Mọi cài đặt của người này</button>
         </div>
 
         <div style={section}>
@@ -2051,10 +2063,13 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
   const handleCreateAccount = async () => {
     if (!accForm.full_name || !accForm.phone || !accForm.pin) return setAccMsg('Vui lòng điền đầy đủ!');
     if (accForm.pin.length < 4) return setAccMsg('PIN cần ít nhất 4 ký tự!');
-    try { await workforce('create_account', { full_name: accForm.full_name, phone: accForm.phone, pin: accForm.pin, role: accForm.role }); }
+    let made;
+    try { made = await workforce('create_account', { full_name: accForm.full_name, phone: accForm.phone, pin: accForm.pin, role: accForm.role }); }
     catch (err) { setAccMsg(err.message); return; }
     setAccForm({ full_name: '', phone: '', pin: '', role: 'staff' });
     setAccMsg('✅ Tạo tài khoản thành công!');
+    // Mở luôn trang của người mới để đặt lương, ca, chấm công (hiện ra khi danh sách tải lại xong).
+    if (made?.id) setStaffSel(made.id);
     fetchAll();
     setTimeout(() => setAccMsg(''), 3000);
   };
@@ -2108,6 +2123,500 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
     if (!confirm(`Cho ${name} đi làm lại? Người này đăng nhập và chấm công lại được.`)) return;
     try { await workforce('staff_return', { staff_id: staffId }); } catch (err) { return alert(err.message); }
     fetchAll();
+  };
+
+  // ── Cài đặt: MỘT chỗ. Danh sách: "Cài chung cả quán" + từng nhân viên (+ thêm người mới, người đã / sắp nghỉ). Bấm tên mở trang của
+  // người đó có đủ mọi thứ — lương, ca làm, đi trễ / về sớm, chấm công (điện thoại, nút bấm, lượt quét gần đây), tài khoản, nghỉ việc —
+  // không phải chuyển tab. Máy tính: danh sách bên trái, trang của người đang chọn bên phải. Điện thoại: bấm tên thì danh sách nhường
+  // chỗ cho trang của người đó (nút ‹ quay lại danh sách).
+  // jump = mở từ tab khác: trang còn đổi chiều cao lúc vừa chuyển tab, nên cuộn thẳng (không trượt) và chỉnh lại một lần cho đúng chỗ.
+  const scrollToPanel = (id = 'staff-panel', always = false, jump = false) => {
+    const go = (smooth, check) => {
+      const el = typeof document !== 'undefined' ? document.getElementById(id) : null;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      if (check ? Math.abs(top) > 24 : always || top < 0) el.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
+    };
+    setTimeout(() => go(!jump, false), 150);
+    if (jump) setTimeout(() => go(false, true), 700);
+  };
+  const pickStaffSel = sel => { setStaffSel(sel); setShiftEdit(null); setDepartForm(null); scrollToPanel(); };
+  // Từ chỗ khác (khung Sửa của Bảng lương): mở trang cài đặt của người đó, cuộn tới phần cần sửa ('pay' | 'shift' | 'clock' | 'account').
+  const openStaffSettings = (staffId, part) => {
+    setActiveTab('accounts'); setStaffSel(staffId); setShiftEdit(null); setDepartForm(null);
+    scrollToPanel(part ? `sp-${part}` : 'staff-panel', true, true);
+  };
+  // Mở Cài chung cả quán, cuộn tới một phần ('hours' | 'closed' | 'bonus' | 'fines' | 'kiosk' …).
+  const openShopSettings = part => { setActiveTab('accounts'); setStaffSel('shop'); scrollToPanel(part ? `sp-${part}` : 'staff-panel', true, true); };
+  // Một dòng dưới tên ở danh sách: đang trả lương thế nào + ca.
+  const staffSummary = s => {
+    const pay = hourlyEditOf(s.id), base = Number(configs[s.id]?.base_salary) || 0;
+    const wage = pay.currentType !== 'month' ? `${formatMoney(pay.current.hourly_rate)}/${payUnitText[pay.currentType]}` : base ? `Lương tháng ${formatMoney(base)}` : 'Chưa đặt lương';
+    const shift = rules ? shiftOf(rules, s.id, vnToday()) : null;
+    return [wage, shift && `ca ${shift.start}–${shift.end}${shift.own ? '' : ' (giờ quán)'}`].filter(Boolean).join(' · ');
+  };
+
+  // 💰 Lương: cách trả, mức lương (áp dụng từ ngày nào), tăng ca, ngày phát, ngày quán nghỉ có lương không, kỳ trả lương.
+  const payCard = s => {
+    const edit = configEdits[s.id] || { base_salary: 0, overtime_rate: 25000, pay_day: 5 };
+    const pay = hourlyEditOf(s.id);
+    const shift = rules ? shiftOf(rules, s.id, vnToday()) : null;
+    const shiftText = shift ? `ca ${shift.start}–${shift.end}${shift.own ? '' : ' (giờ quán)'}` : '';
+    return <>
+      <div className="sp-form">
+        <label>Trả lương
+          <select value={pay.type} onChange={e => setPayType(s.id, pay, e.target.value)}>
+            <option value="month">Theo tháng</option>
+            <option value="day">Theo ngày</option>
+            <option value="hour">Theo giờ</option>
+          </select>
+        </label>
+        {pay.type !== 'month' ? (
+          <label>Lương 1 {payUnitText[pay.type]}
+            <input type="text" inputMode="numeric" value={typedMoney(pay.rate)} placeholder={pay.type === 'day' ? '120.000' : '25.000'}
+              onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, rate: e.target.value.replace(/\D/g, '') } }))} />
+          </label>
+        ) : (
+          <label>Lương cơ bản (cả tháng)
+            <input type="text" inputMode="numeric" value={edit.base_salary ? Number(edit.base_salary).toLocaleString('vi-VN') : ''} placeholder="5.000.000"
+              onChange={e => { const raw = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setConfigEdits(p => ({ ...p, [s.id]: { ...edit, base_salary: raw || 0 } })); }} />
+          </label>
+        )}
+        {pay.changed && (
+          <label>Áp dụng từ
+            <input type="date" value={pay.from} min={`${vnToday().slice(0, 7)}-01`} onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, from: e.target.value } }))} />
+          </label>
+        )}
+        <label>Tăng ca
+          <select value={overtimeOn(s.id) ? 'on' : 'off'} onChange={e => saveOvertime(s.id, e.target.value === 'on')}>
+            <option value="on">Có</option>
+            <option value="off">Không</option>
+          </select>
+        </label>
+        {overtimeOn(s.id) && (
+          <label>Giá tăng ca 1 giờ
+            <input type="number" min="0" value={edit.overtime_rate ?? 25000} onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value } }))} />
+          </label>
+        )}
+        <label>Ngày phát lương
+          <input type="number" min="1" max="31" value={edit.pay_day || 5} onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, pay_day: e.target.value } }))} />
+        </label>
+      </div>
+      {pay.type !== 'month' && tinyWage(pay.rate) && <div className="sp-note">{tinyWageNote(pay.rate, payUnitText[pay.type])}</div>}
+      <div className="sp-actions"><button className="btn-primary" onClick={() => handleSaveConfig(s.id)}>💾 Lưu lương</button></div>
+      <div className="sp-note">
+        {pay.current
+          ? `Đang trả theo ${payUnitText[pay.currentType]}: ${formatMoney(pay.current.hourly_rate)}/${payUnitText[pay.currentType]} từ ${ddmm(String(pay.current.valid_from))}. `
+          : 'Đang trả theo tháng: đi làm đủ tháng nhận đúng lương cơ bản, mỗi ngày nghỉ trừ lương cơ bản ÷ 30, ngày quán nghỉ vẫn có công. '}
+        {pay.current && tinyWage(pay.current.hourly_rate) && <strong style={{ color: '#dc2626' }}>⚠ Số này rất nhỏ, có thể gõ thiếu số 0. </strong>}
+        {pay.type === 'hour' && shift && `Chỉ tính giờ có mặt trong ${shiftText} (đổi ca ở phần Ca làm bên dưới).${overtimeOn(s.id) ? ' Giờ ngoài ca trả theo giá tăng ca.' : ''}`}
+        {pay.type === 'day' && `Ngày có chấm công được đủ lương 1 ngày (làm dưới nửa ca tính nửa ngày, đi trễ / về sớm trừ như lương tháng); ngày không chấm công là nghỉ, không lương.${shiftText ? ` Đang theo ${shiftText}.` : ''}${overtimeOn(s.id) ? ' Giờ ngoài ca trả theo giá tăng ca.' : ''}`}
+        {!overtimeOn(s.id) && ' ⏱ Không tính tăng ca: giờ vào sớm / ở lại ngoài ca không được trả tiền.'}
+      </div>
+      <div className="sp-row"><strong>🏖 Ngày quán nghỉ</strong>{holidayEditor(s.id)}</div>
+      {showCycle(s.id, pay) && <div className="sp-row"><strong>💵 Kỳ trả lương</strong>{cycleEditor(s.id)}</div>}
+    </>;
+  };
+
+  // 🕑 Ca làm (riêng hoặc theo giờ quán, chọn được ngày bắt đầu trong tháng) + ⏰ đi trễ / về sớm (theo quán hoặc riêng).
+  const shiftCard = s => {
+    if (!checkin) return <div className="sp-note">Đang tải phần ca làm…</div>;
+    const shift = shiftOf(checkin.settings, s.id, vnToday()), own = shift.own, editing = shiftEdit?.staff_id === s.id;
+    const timeInput = { padding: '4px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 };
+    return <>
+      <div className="sp-sub">🕑 Ca làm</div>
+      {editing ? (
+        <div className="sp-line">
+          <Time24 value={shiftEdit.start} onChange={v => setShiftEdit(p => ({ ...p, start: v }))} />
+          <span>→</span>
+          <Time24 value={shiftEdit.end} onChange={v => setShiftEdit(p => ({ ...p, end: v }))} />
+          <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', whiteSpace: 'nowrap' }}>từ
+            <input type="date" value={shiftEdit.from || vnToday()} min={`${vnToday().slice(0, 7)}-01`} max={vnToday()} style={{ ...timeInput, width: 'auto' }}
+              onChange={e => setShiftEdit(p => ({ ...p, from: e.target.value || vnToday() }))} /></label>
+          <button className="btn-primary" style={{ padding: '5px 12px' }}
+            onClick={async () => {
+              const from = shiftEdit.from || vnToday(), past = from < vnToday();
+              if (!await checkinAction('save_shift', { staff_id: s.id, start_time: shiftEdit.start, end_time: shiftEdit.end, valid_from: from },
+                past ? `Ca ${shiftEdit.start} → ${shiftEdit.end} áp dụng từ ${ddmm(from)}: giờ công và lương các ngày từ ${ddmm(from)} sẽ tính lại theo ca này. Đồng ý?` : null)) return;
+              setShiftEdit(null);
+              if (past) fetchAll();
+            }}>Lưu ca</button>
+          <button style={smallBtn} onClick={() => setShiftEdit(null)}>Huỷ</button>
+          <div style={{ flexBasis: '100%' }}><SpanNote start={shiftEdit.start} end={shiftEdit.end} /></div>
+        </div>
+      ) : (
+        <div className="sp-line">
+          <strong style={{ color: own ? '#1d4ed8' : '#334155' }}>{shift.start} {partOfDay(shift.start)} → {shift.end} {partOfDay(shift.end)}</strong>
+          <span style={{ color: '#64748b' }}>{own ? '(ca riêng)' : '(theo giờ quán)'}</span>
+          <button style={smallBtn} onClick={() => setShiftEdit({ staff_id: s.id, start: shift.start, end: shift.end })}>{own ? 'Sửa ca riêng' : 'Đặt ca riêng'}</button>
+          {own && <button style={{ ...smallBtn, background: 'none', border: 'none', color: '#64748b', textDecoration: 'underline' }}
+            onClick={() => checkinAction('save_shift', { staff_id: s.id, clear: true })}>Dùng giờ quán</button>}
+          <div style={{ flexBasis: '100%' }}><SpanNote start={shift.start} end={shift.end} /></div>
+        </div>
+      )}
+      <div className="sp-note">
+        Ai làm khác giờ quán (ví dụ 17:00–23:00) thì đặt ca riêng. Giờ theo 24 giờ: 00:00 là nửa đêm, 12:00 là trưa; giờ hết ca trước giờ vào ca là làm
+        qua nửa đêm (14:00 → 00:00 là ca 10 tiếng). Ca riêng chọn được ngày bắt đầu trong tháng này (ví dụ người mới vào làm trước khi đặt ca).
+      </div>
+      <div className="sp-sub">⏰ Đi trễ / về sớm</div>
+      {lateRuleEditor(s.id)}
+    </>;
+  };
+
+  // 📱 Chấm công: điện thoại đã đăng ký (cho đổi máy), chấm bằng nút trên máy quầy (tên / ảnh trên nút), lượt quét gần đây.
+  const clockCard = s => {
+    if (!checkin) return <div className="sp-note">Đang tải phần chấm công…</div>;
+    const d = checkin.devices.find(x => x.staff_id === s.id);
+    const row = (checkin.tapStaff || []).find(t => t.staff_id === s.id);
+    const label = draftOf(`tap:${s.id}:label`, row?.label || '');
+    const pick = async e => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      try { await editAction('save_tap_staff', { staff_id: s.id, enabled: true, label, photo: await shrinkPhoto(file) }); } catch (err) { alert(err.message); }
+    };
+    const scans = checkin.scans.filter(x => x.staff_id === s.id).slice(0, 8);
+    return <>
+      <div className="sp-sub">🔐 Điện thoại chấm công</div>
+      <div className="sp-line">
+        <span style={{ flex: 1, minWidth: 180 }}>{d ? <><strong>{shortUa(d.user_agent)}</strong> · đăng ký {scanWhen(d.created_at)}</> : 'Chưa đăng ký — lần quét mã đầu tiên sẽ tự ghi máy đó.'}</span>
+        {d && <button style={smallBtn} onClick={() => checkinAction('reset_device', { staff_id: s.id }, `Cho ${s.full_name} đổi điện thoại? Lần chấm công tới sẽ ghi máy mới.`)}>Cho đổi máy</button>}
+      </div>
+      <div className="sp-note">Mỗi người một máy. Đổi / mất điện thoại thì bấm &quot;Cho đổi máy&quot;.</div>
+
+      <div className="sp-sub">🔘 Chấm công bằng nút trên máy quầy</div>
+      <label className="sp-line" style={{ fontWeight: 700, cursor: 'pointer' }}>
+        <input type="checkbox" checked={!!row} onChange={e => editAction('save_tap_staff', { staff_id: s.id, enabled: e.target.checked },
+          e.target.checked ? null : `Thôi cho ${s.full_name} chấm công bằng nút?`)} />
+        Cho {s.full_name} bấm tên trên máy quầy (người không có điện thoại)
+      </label>
+      {row && (
+        <div className="sp-line" style={{ marginTop: 6 }}>
+          {row.photo ? <img src={row.photo} alt="" style={{ width: 40, height: 40, borderRadius: '50%', objectFit: 'cover' }} />
+            : <span style={{ width: 40, height: 40, borderRadius: '50%', background: '#e2e8f0', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', color: '#64748b' }}>ảnh</span>}
+          <input value={label} placeholder={`Tên trên nút (${s.full_name})`} maxLength={30} onChange={e => setDraft(`tap:${s.id}:label`, e.target.value)}
+            style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.84rem', width: 170 }} />
+          {label !== (row.label || '') && <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }}
+            onClick={() => editAction('save_tap_staff', { staff_id: s.id, enabled: true, label }, null, `tap:${s.id}:`)}>Lưu tên</button>}
+          <label style={{ ...smallBtn, display: 'inline-block' }}>📷 {row.photo ? 'Đổi ảnh' : 'Thêm ảnh'}
+            <input type="file" accept="image/*" onChange={pick} style={{ display: 'none' }} />
+          </label>
+          {row.photo && <button style={smallBtn} onClick={() => editAction('save_tap_staff', { staff_id: s.id, enabled: true, label: row.label || '', photo: null }, 'Xoá ảnh trên nút?')}>Xoá ảnh</button>}
+        </div>
+      )}
+      <div className="sp-note">Bật thì dưới mã QR trên máy quầy có nút tên / ảnh của người này: bấm tên rồi xác nhận là chấm công, giờ công tính như quét mã. Ai đứng ở máy quầy cũng bấm được nên chỉ bật cho người không có điện thoại.</div>
+
+      <div className="sp-sub">📜 Lượt chấm gần đây (14 ngày)</div>
+      {scans.length === 0 ? <div className="sp-note" style={{ marginTop: 0 }}>Chưa có lượt nào.</div> : scans.map(x => (
+        <div key={x.id} className="sp-scan">
+          <span style={{ color: '#64748b', minWidth: 92 }}>{scanWhen(x.created_at)}</span>
+          <span style={{ fontWeight: 700, color: x.action === 'blocked' ? '#dc2626' : x.action === 'out' ? '#b45309' : '#15803d' }}>
+            {x.action === 'blocked' ? '⛔ Bị chặn' : x.action === 'out' ? 'Ra ca' : 'Vào ca'}
+          </span>
+          {x.warnings?.length > 0 && <span style={{ color: '#c2410c' }}>⚠ {x.warnings.map(w => SCAN_WARN[w] || w).join(', ')}</span>}
+          {x.method === 'tap' && <span style={{ color: '#6d28d9' }}>🔘 bấm nút</span>}
+        </div>
+      ))}
+      <div className="sp-note">Giờ vào / ra sai thì sửa ở Bảng lương → ✏️ Sửa → Từng ngày trong tháng.</div>
+    </>;
+  };
+
+  // 👤 Tài khoản: tên / số đăng nhập, mã PIN, vai trò, cho nghỉ việc (hoặc cho đi làm lại), xoá tài khoản.
+  const accountCard = s => {
+    const self = s.id === currentUser?.id, role = normalizeRole(s.role), dep = departureOf(s.id);
+    const name = draftOf(`acct:${s.id}:name`, s.full_name || ''), phone = draftOf(`acct:${s.id}:phone`, s.phone || '');
+    const phoneChanged = phone.replace(/\s+/g, '') !== String(s.phone || '').replace(/\s+/g, '');
+    const changed = name.trim() !== (s.full_name || '') || phoneChanged;
+    // Sửa tên / số điện thoại đăng nhập (mã PIN giữ nguyên; đổi số thì lần sau đăng nhập bằng số mới).
+    const saveInfo = () => (!changed ? alert('Chưa đổi gì.') : editAction('edit_account', { staff_id: s.id, full_name: name, ...(phoneChanged ? { phone } : {}) },
+      phoneChanged ? `Đổi số đăng nhập của ${s.full_name} từ ${s.phone} thành ${phone.replace(/\s+/g, '')}?\n\nMã PIN giữ nguyên; lần sau đăng nhập bằng số mới.` : null, `acct:${s.id}:`));
+    return (
+      <div className="sp-acct">
+        <div className="acct-field">Họ và tên · số điện thoại đăng nhập
+          <div className="acct-line">
+            <input type="text" value={name} maxLength={80} aria-label="Họ và tên" onChange={e => setDraft(`acct:${s.id}:name`, e.target.value)} />
+            <input type="tel" inputMode="numeric" value={phone} maxLength={16} aria-label="Số điện thoại" onChange={e => setDraft(`acct:${s.id}:phone`, e.target.value.replace(/[^\d+ ]/g, ''))} />
+          </div>
+          {changed && <div className="acct-line"><button className="btn-primary" style={{ marginTop: 0, flex: 1 }} onClick={saveInfo}>Lưu tên / số</button></div>}
+        </div>
+        <div className="acct-field">Đổi mã PIN (mật khẩu)
+          <div className="acct-line">
+            <input type="text" inputMode="numeric" maxLength={8} placeholder="PIN mới…" value={editingPin[s.id] || ''} aria-label="Mã PIN mới"
+              onChange={e => setEditingPin(p => ({ ...p, [s.id]: e.target.value.replace(/\D/g, '') }))} />
+            <button className="btn-primary" style={{ marginTop: 0, padding: '6px 16px' }} onClick={() => handleUpdatePin(s.id)}>Lưu PIN</button>
+          </div>
+        </div>
+        <div className="acct-field">Vai trò
+          {self
+            ? <span style={{ fontWeight: 500, color: '#64748b' }}>{roleLabel(s.role)} — tài khoản bạn đang dùng, không tự đổi vai trò.</span>
+            : <div className="acct-line">
+                <select value={role} onChange={e => handleSetRole(s, e.target.value)} aria-label={`Vai trò của ${s.full_name}`}>
+                  {ROLES.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
+                </select>
+              </div>}
+        </div>
+        {dep && (
+          <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '8px 12px', fontSize: '0.8rem', color: '#9a3412' }}>
+            🚪 Làm đến hết {dep.last_day.split('-').reverse().join('/')}{dep.reason ? ` · ${dep.reason}` : ''}{dep.last_day >= vnToday() ? ' (vẫn đang làm tới ngày đó)' : ''}.
+            Qua ngày đó không đăng nhập, không chấm công được; lịch sử và lương các tháng đã làm vẫn giữ.
+          </div>
+        )}
+        <div className="acct-actions">
+          {!self && !dep && (
+            <button style={{ padding: '8px 12px', background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}
+              onClick={() => setDepartForm({ staff_id: s.id, name: s.full_name, last_day: vnToday(), reason: '' })}>🚪 Cho nghỉ việc</button>
+          )}
+          {dep && (
+            <button style={{ padding: '8px 12px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}
+              onClick={() => handleReturn(s.id, s.full_name)}>↩ Cho đi làm lại</button>
+          )}
+          <button className="btn-danger" style={{ marginTop: 0 }} onClick={() => handleDeleteAccount(s.id, s.full_name)}>🗑 Xoá tài khoản</button>
+        </div>
+        {departForm?.staff_id === s.id && (
+          <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.84rem' }}>
+            <div><strong>Cho {s.full_name} nghỉ việc.</strong> Qua ngày làm cuối, người này không đăng nhập và không chấm công được nữa; lương tháng cuối tính tới ngày đó, kết toán ở tab Bảng lương.</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>Ngày làm việc cuối cùng
+              <input type="date" value={departForm.last_day} onChange={e => setDepartForm(p => ({ ...p, last_day: e.target.value }))} style={{ padding: '4px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} /></label>
+            <input type="text" placeholder="Lý do (tuỳ chọn)" value={departForm.reason} onChange={e => setDepartForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn-danger" style={{ marginTop: 0 }} onClick={handleDepart}>Xác nhận nghỉ việc</button>
+              <button style={{ padding: '6px 12px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer' }} onClick={() => setDepartForm(null)}>Huỷ</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const spCard = (id, title, sub, body, style) => (
+    <section key={id} className="sp-card" id={id ? `sp-${id}` : undefined} style={style}>
+      <div className="sp-card-head"><h3>{title}</h3>{sub && <span>{sub}</span>}</div>
+      {body}
+    </section>
+  );
+  // Trang của một nhân viên: đầu trang (tên, vai trò, tóm tắt cài đặt), nút nhảy tới từng phần, rồi 4 phần mở sẵn.
+  const staffPanel = s => {
+    const dep = departureOf(s.id), role = normalizeRole(s.role);
+    const parts = [['pay', '💰 Lương'], ['shift', '🕑 Ca · đi trễ'], ['clock', '📱 Chấm công'], ['account', '👤 Tài khoản']];
+    return (
+      <div className="sp">
+        <div className="sp-head">
+          <span className="sp-avatar" aria-hidden="true">{(s.full_name || '?').trim().charAt(0).toUpperCase()}</span>
+          <div className="sp-who">
+            <div className="sp-name">{s.full_name}{s.id === currentUser?.id ? ' (bạn)' : ''}<span className="acct-role" style={roleStyleOf(role)}>{roleLabel(s.role)}</span></div>
+            <div className="sp-meta">{s.phone}{dep ? ` · làm đến hết ${ddmm(dep.last_day)}` : ''}</div>
+            <div className="sp-sum">{settingsText(s.id)}</div>
+          </div>
+        </div>
+        <nav className="sp-jump" aria-label="Đi tới phần">
+          {parts.map(([id, t]) => <button key={id} type="button" onClick={() => scrollToPanel(`sp-${id}`, true)}>{t}</button>)}
+        </nav>
+        <div className="sp-grid">
+          {spCard('pay', '💰 Lương', 'cách trả, mức lương, tăng ca, ngày phát, ngày quán nghỉ', payCard(s))}
+          {spCard('shift', '🕑 Ca làm · đi trễ / về sớm', null, shiftCard(s))}
+          {spCard('clock', '📱 Chấm công', 'điện thoại, nút bấm, lượt quét', clockCard(s))}
+          {spCard('account', '👤 Tài khoản', 'tên, số đăng nhập, PIN, vai trò, nghỉ việc', accountCard(s))}
+        </div>
+      </div>
+    );
+  };
+
+  // Cài chung cả quán: giờ quán + đi trễ mặc định, ngày quán nghỉ, chạy thử / chặn thật, máy quầy, lịch sử chấm công cả quán.
+  const shopSettings = () => {
+    if (!checkin || !hoursEdit) return <div className="empty-state">Đang tải phần cài chung… (mở lại trang nếu lâu)</div>;
+    const nameOf = id => staffList.find(x => x.id === id)?.full_name || 'Không rõ';
+    const serverNow = Date.parse(checkin.now) || Date.now();
+    const kiosks = checkin.kiosks.filter(k => !k.revoked_at);
+    const scans = checkin.scans.filter(x => !onlyWarnings || x.warnings?.length || x.action === 'blocked' || x.method === 'tap');
+    const st = checkin.settings;
+    const nowHours = hoursOn(st, vnToday());
+    const hoursChanged = hoursEdit.opening_time !== nowHours.opening || hoursEdit.closing_time !== nowHours.closing || Number(hoursEdit.grace_minutes) !== nowHours.grace;
+    const timeInput = { padding: '4px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 };
+    // Chấm công theo giờ internet; báo khi đồng hồ máy tính chạy web lệch (bill, báo cáo vẫn theo giờ máy).
+    const c = checkin.clock, skew = c ? -c.offsetMs : 0, mins = Math.round(Math.abs(skew) / 60000), bad = c && c.synced && Math.abs(skew) > 60000;
+    return (
+      <div className="sp">
+        <div className="sp-head">
+          <span className="sp-avatar shop" aria-hidden="true">🏪</span>
+          <div className="sp-who">
+            <div className="sp-name">Cài chung cả quán</div>
+            <div className="sp-sum">Giờ mở cửa, đi trễ / về sớm mặc định, ngày quán nghỉ, thưởng chuyên cần, danh sách lỗi phạt, máy quầy và lịch sử chấm công — áp dụng cho mọi người. Ai cần khác (ca riêng, luật đi trễ riêng, lương ngày nghỉ) thì bấm tên người đó trong danh sách.</div>
+          </div>
+        </div>
+        {c && (
+          <div className="sp-card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: '0.84rem', lineHeight: 1.6, background: !c.synced || bad ? '#fff7ed' : '#f0fdf4', borderColor: !c.synced || bad ? '#fed7aa' : '#bbf7d0' }}>
+            {!c.synced
+              ? '⚠ Chưa so được giờ với internet: chấm công tạm theo giờ máy tính ở quán. Kiểm tra mạng của máy tính chạy web.'
+              : bad
+                ? <>🕒 Chấm công đang theo <strong>giờ internet</strong>. Đồng hồ máy tính chạy web ở quán đang <strong>{skew < 0 ? 'chậm' : 'nhanh'} {mins} phút</strong> — nên chỉnh lại (bật &quot;Đặt giờ tự động&quot;), vì bill và báo cáo vẫn theo giờ máy tính.</>
+                : '🕒 Chấm công theo giờ internet. Đồng hồ máy tính ở quán đúng giờ.'}
+          </div>
+        )}
+        <div className="sp-grid">
+          {spCard('hours', '🕑 Giờ làm của quán', null, <>
+            <div className="sp-note" style={{ marginTop: 0, marginBottom: 10, color: '#475569' }}>
+              Nhân viên quét mã lúc nào cũng được, nhưng <strong>chỉ tính lương giờ trong ca</strong>. Vào sớm / ở lại quá số phút cho lệch là <strong>giờ ngoài ca</strong>: tự tính tăng ca.
+              Đi trễ: trừ theo luật đi trễ bên dưới. Quên ra ca thì máy tính ra ca lúc hết ca.
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: '0.86rem' }}>
+              <span>Quán mở</span>
+              <Time24 value={hoursEdit.opening_time} onChange={v => setHoursEdit(p => ({ ...p, opening_time: v }))} />
+              <span>đóng</span>
+              <Time24 value={hoursEdit.closing_time} onChange={v => setHoursEdit(p => ({ ...p, closing_time: v }))} />
+              <span>· cho lệch</span>
+              <input type="number" min="0" max="60" value={hoursEdit.grace_minutes} onChange={e => setHoursEdit(p => ({ ...p, grace_minutes: e.target.value }))} style={{ ...timeInput, width: 64 }} />
+              <span>phút</span>
+              {hoursChanged && (
+                <button className="btn-primary" style={{ marginTop: 0, padding: '5px 12px' }}
+                  onClick={() => checkinAction('save_checkin_settings', { opening_time: hoursEdit.opening_time, closing_time: hoursEdit.closing_time, grace_minutes: Number(hoursEdit.grace_minutes) })}>Lưu</button>
+              )}
+            </div>
+            <div style={{ marginTop: 6 }}><SpanNote start={hoursEdit.opening_time} end={hoursEdit.closing_time} label="Quán mở" /></div>
+            <div className="sp-note">
+              Tính giờ theo ca từ ngày <strong>{st.hours_from.split('-').reverse().join('/')}</strong>; những ngày trước đó vẫn tính như cũ. Đổi giờ quán thì áp dụng từ hôm nay, ngày đã làm giữ giờ cũ.
+            </div>
+            <div className="sp-sub">⏰ Đi trễ / về sớm — mặc định cả quán</div>
+            {lateRuleEditor('shop')}
+            <div className="sp-note">Ai cần luật riêng thì bấm tên người đó trong danh sách → phần Ca làm · đi trễ / về sớm.</div>
+          </>)}
+          {spCard('closed', '🏖 Ngày quán nghỉ', null, <>
+            <div className="sp-note" style={{ marginTop: 0, marginBottom: 6 }}>Ngày cả quán đóng cửa. Người được nhận lương ngày nghỉ (mặc định: lương tháng có, theo ngày / theo giờ không — đổi ở phần Lương của từng người) được đủ 1 ngày công.</div>
+            {closedDaysEditor()}
+          </>)}
+          {spCard('bonus', '⭐ Thưởng chuyên cần', 'mức thưởng gợi ý, số ngày công tối thiểu', <BonusSettings settings={payrollMonth.bonusSettings} onAction={payrollAction} />)}
+          {spCard('fines', '📋 Danh sách lỗi & tiền phạt', `${(payrollMonth.fineRules || []).filter(r => r.active).length} lỗi đang dùng`, <FineRules rules={payrollMonth.fineRules || []} onAction={payrollAction} />)}
+          {spCard('enforce', checkin.settings.enforce ? '🔒 Đang chặn thật' : '🧪 Đang chạy thử', null, <>
+            <div className="sp-note" style={{ marginTop: 0, marginBottom: 10, color: '#475569', fontSize: '0.84rem' }}>
+              {checkin.settings.enforce
+                ? 'Nhân viên không vào wifi quán, hoặc dùng điện thoại khác máy đã đăng ký, sẽ KHÔNG chấm được.'
+                : 'Máy chỉ ghi lại ai không dùng wifi quán / dùng máy lạ, CHƯA chặn. Chạy thử khoảng 1 tuần, xem lịch sử bên dưới không có ai bị cảnh báo oan thì bật chặn thật.'}
+              <br />Mã QR luôn đổi liên tục và mỗi mã chỉ dùng 1 lần (phần này không có chạy thử).
+            </div>
+            <button className={checkin.settings.enforce ? 'btn-danger' : 'btn-success'}
+              onClick={() => checkinAction('save_checkin_settings', { enforce: !checkin.settings.enforce }, checkin.settings.enforce ? 'Tắt chặn, quay về chạy thử?' : 'Bật chặn thật? Nhân viên không vào wifi quán hoặc dùng máy lạ sẽ không chấm được.')}>
+              {checkin.settings.enforce ? 'Quay về chạy thử' : 'Bật chặn thật'}
+            </button>
+          </>, { background: checkin.settings.enforce ? '#f0fdf4' : '#fffbeb', borderColor: checkin.settings.enforce ? '#bbf7d0' : '#fde68a' })}
+          {spCard('kiosk', '📱 Máy quầy hiện mã QR', null, <>
+            <div className="sp-note" style={{ marginTop: 0, marginBottom: 10, color: '#475569', fontSize: '0.84rem', lineHeight: 1.7 }}>
+              1️⃣ Lấy một điện thoại / máy tính bảng để cố định ở quầy, cắm sạc, cho vào <strong>wifi quán</strong>.<br />
+              2️⃣ Trên máy đó mở <strong>{typeof window !== 'undefined' ? window.location.host : 'ocbaokhang.online'}/chamcong</strong>, đăng nhập admin để bật. Xong máy tự đăng xuất admin.<br />
+              3️⃣ Nhân viên vào wifi quán, mở app bấm nút 📷 xanh trên thanh menu (hoặc mở camera điện thoại) quét mã trên máy quầy.
+            </div>
+            {kiosks.length === 0 && <div style={{ fontSize: '0.84rem', color: '#b45309', fontWeight: 600 }}>Chưa có máy quầy nào — nhân viên chưa chấm công được.</div>}
+            {kiosks.map(k => {
+              const online = k.last_seen_at && serverNow - Date.parse(k.last_seen_at) < 90000;
+              return (
+                <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap' }}>
+                  <span style={{ width: 10, height: 10, borderRadius: '50%', background: online ? '#16a34a' : '#94a3b8' }} />
+                  <div style={{ flex: 1, minWidth: 160 }}>
+                    <div style={{ fontWeight: 700 }}>{k.name}</div>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{online ? 'Đang mở' : `Mở lần cuối ${scanWhen(k.last_seen_at)}`} · bật ngày {scanWhen(k.created_at)}</div>
+                  </div>
+                  <button className="btn-danger" onClick={() => checkinAction('revoke_kiosk', { id: k.id }, `Tắt máy quầy "${k.name}"? Mã trên máy đó sẽ không dùng được nữa.`)}>Tắt máy này</button>
+                </div>
+              );
+            })}
+            <div className="sp-note">Điện thoại chấm công và nút bấm của từng người: bấm tên người đó trong danh sách → phần Chấm công.</div>
+          </>)}
+          <section className="sp-card sp-wide" id="sp-history">
+            <div className="sp-card-head" style={{ justifyContent: 'space-between' }}>
+              <h3>📜 Lịch sử chấm công 14 ngày</h3>
+              <label style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: '#334155' }}>
+                <input type="checkbox" checked={onlyWarnings} onChange={e => setOnlyWarnings(e.target.checked)} /> Chỉ lần có cảnh báo / bấm nút
+              </label>
+            </div>
+            {scans.length === 0 && <div style={{ fontSize: '0.84rem', color: '#16a34a' }}>{onlyWarnings ? '✅ Không có lần nào bị cảnh báo.' : 'Chưa có ai chấm công.'}</div>}
+            {scans.slice(0, 150).map(x => (
+              <div key={x.id} className="sp-scan">
+                <span style={{ color: '#64748b', minWidth: 92 }}>{scanWhen(x.created_at)}</span>
+                <strong style={{ minWidth: 90 }}>{nameOf(x.staff_id)}</strong>
+                <span style={{ fontWeight: 700, color: x.action === 'blocked' ? '#dc2626' : x.action === 'out' ? '#b45309' : '#15803d' }}>
+                  {x.action === 'blocked' ? '⛔ Bị chặn' : x.action === 'out' ? 'Ra ca' : 'Vào ca'}
+                </span>
+                {x.warnings?.length > 0 && <span style={{ color: '#c2410c' }}>⚠ {x.warnings.map(w => SCAN_WARN[w] || w).join(', ')}</span>}
+                {x.method === 'tap' && <span style={{ color: '#6d28d9' }}>🔘 bấm nút trên máy quầy</span>}
+              </div>
+            ))}
+          </section>
+        </div>
+      </div>
+    );
+  };
+
+  const newAccountForm = () => (
+    <div className="sp">
+      {spCard(null, '➕ Thêm nhân viên mới', 'tạo xong mở luôn trang của người đó để đặt lương, ca, chấm công', <>
+        {accMsg && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: accMsg.startsWith('✅') ? '#dcfce7' : '#fee2e2', color: accMsg.startsWith('✅') ? '#15803d' : '#dc2626', fontSize: '0.85rem', fontWeight: 600 }}>{accMsg}</div>}
+        <div className="form-grid">
+          <div className="form-group">
+            <label>Họ và Tên</label>
+            <input type="text" placeholder="Nguyễn Văn A" value={accForm.full_name} onChange={e => setAccForm(p => ({ ...p, full_name: e.target.value }))} />
+          </div>
+          <div className="form-group">
+            <label>Số điện thoại</label>
+            <input type="tel" placeholder="0909123456" value={accForm.phone} onChange={e => setAccForm(p => ({ ...p, phone: e.target.value }))} />
+          </div>
+          <div className="form-group">
+            <label>Mã PIN (≥ 4 ký tự)</label>
+            <input type="text" placeholder="1234" maxLength={8} value={accForm.pin} onChange={e => setAccForm(p => ({ ...p, pin: e.target.value.replace(/\D/g, '') }))} />
+          </div>
+          <div className="form-group">
+            <label>Vai trò</label>
+            <select value={accForm.role} onChange={e => setAccForm(p => ({ ...p, role: e.target.value }))}>
+              <option value="staff">Nhân viên</option>
+              <option value="manager">Quản lý</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+        </div>
+        <button className="btn-primary" onClick={handleCreateAccount}>Tạo tài khoản</button>
+      </>)}
+    </div>
+  );
+
+  const settingsView = () => {
+    // Nhân viên / quản lý lên trước, tài khoản admin xuống cuối nhóm (ít khi phải cài lương, ca).
+    const adminLast = list => [...list.filter(x => normalizeRole(x.role) !== 'admin'), ...list.filter(x => normalizeRole(x.role) === 'admin')];
+    const working = adminLast(staffList.filter(x => !departureOf(x.id))), gone = staffList.filter(x => departureOf(x.id));
+    const person = staffSel && staffSel !== 'shop' && staffSel !== 'new' ? staffList.find(x => x.id === staffSel) || null : null;
+    const sel = staffSel === 'shop' || staffSel === 'new' || person ? staffSel : null;
+    const item = x => {
+      const dep = departureOf(x.id), role = normalizeRole(x.role), on = sel === x.id;
+      return (
+        <button key={x.id} type="button" className={`sset-item ${on ? 'active' : ''} ${dep ? 'gone' : ''}`} onClick={() => pickStaffSel(x.id)} aria-pressed={on}>
+          <span className="acct-avatar" aria-hidden="true">{(x.full_name || '?').trim().charAt(0).toUpperCase()}</span>
+          <span className="sset-name">{x.full_name}{x.id === currentUser?.id ? ' (bạn)' : ''}
+            <small>{dep ? `Làm đến hết ${dep.last_day.split('-').reverse().join('/')}` : staffSummary(x)}</small></span>
+          {role !== 'staff' && <span className="acct-role" style={roleStyleOf(role)}>{roleLabel(x.role)}</span>}
+          <span className="sset-chev" aria-hidden="true">›</span>
+        </button>
+      );
+    };
+    return (
+      <div className={`sset ${sel ? 'has-sel' : ''}`}>
+        <div className="sset-list" id="staff-list">
+          <button type="button" className={`sset-item shop ${sel === 'shop' ? 'active' : ''}`} onClick={() => pickStaffSel('shop')} aria-pressed={sel === 'shop'}>
+            <span className="acct-avatar" aria-hidden="true">🏪</span>
+            <span className="sset-name">Cài chung cả quán<small>Giờ mở cửa, ngày nghỉ, thưởng, lỗi phạt, máy quầy</small></span>
+            <span className="sset-chev" aria-hidden="true">›</span>
+          </button>
+          <div className="sset-group">Nhân viên đang làm ({working.length})</div>
+          {working.map(item)}
+          {staffList.length === 0 && <div className="empty-state">Chưa có nhân viên nào</div>}
+          <button type="button" className={`sset-item add ${sel === 'new' ? 'active' : ''}`} onClick={() => pickStaffSel('new')} aria-pressed={sel === 'new'}>＋ Thêm nhân viên</button>
+          {gone.length > 0 && <div className="sset-group">Đã / sắp nghỉ việc ({gone.length})</div>}
+          {gone.map(item)}
+        </div>
+        <div className="sset-panel" id="staff-panel">
+          {sel && <button type="button" className="sset-back" onClick={() => { setStaffSel(null); scrollToPanel('staff-list'); }}>‹ Danh sách nhân viên</button>}
+          {!sel
+            ? <div className="sset-empty">👈 Bấm tên một nhân viên để xem và cài <strong>mọi thứ của người đó ở một chỗ</strong>: lương, ca làm, đi trễ / về sớm, chấm công, tài khoản.
+                <br />Giờ mở cửa, ngày quán nghỉ, thưởng chuyên cần, danh sách lỗi phạt, máy quầy: bấm <strong>🏪 Cài chung cả quán</strong>.</div>
+            : sel === 'shop' ? shopSettings() : sel === 'new' ? newAccountForm() : staffPanel(person)}
+        </div>
+      </div>
+    );
   };
 
   const months = Array.from({ length: 12 }, (_, i) => i + 1);
@@ -2848,8 +3357,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
         </div>
       )}
 
-      {/* Mục chia 2 nhóm: việc hằng ngày, rồi phần cài đặt (người, mức lương, máy chấm công). Máy tính: 2 hàng có chữ nhóm.
-          Điện thoại: một hàng 5 nút (4 việc hằng ngày + Cài đặt); đang ở phần cài đặt thì hiện thêm 3 mục con bên dưới. */}
+      {/* Mục chia 2 nhóm: việc hằng ngày, rồi Cài đặt (MỘT tab: cài chung cả quán + từng nhân viên, bấm tên là có đủ lương, ca,
+          đi trễ, chấm công, tài khoản). Máy tính: 2 hàng có chữ nhóm. Điện thoại: một hàng 5 nút (4 việc hằng ngày + Cài đặt). */}
       {(() => {
         const groups = [
         ['Việc hằng ngày', [
@@ -2860,14 +3369,12 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           { key: 'violations', icon: '⚠️', label: 'Vi phạm', badge: fineHints.length + violations.filter(v => !(Number(v.amount) > 0)).length },
         ]],
         ['Cài đặt', [
-          { key: 'accounts', icon: '👤', label: 'Nhân viên' },
-          { key: 'config', icon: '💰', label: 'Mức lương' },
-          { key: 'qr', icon: '📱', label: 'Cài chấm công' },
+          { key: 'accounts', icon: '⚙️', label: 'Nhân viên & cài đặt' },
         ]],
         ];
-        const [daily, settings] = [groups[0][1], groups[1][1]];
-        const inSettings = settings.some(t => t.key === activeTab);
-        const go = key => { setActiveTab(key); setConfigFocus(null); if (settings.some(t => t.key === key)) setLastSettingTab(key); };
+        const daily = groups[0][1];
+        const inSettings = activeTab === 'accounts';
+        const go = key => setActiveTab(key);
         return <>
           {groups.map(([group, tabs]) => (
             <div key={group} className="payroll-tab-group">
@@ -2891,19 +3398,10 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   {tab.badge > 0 && <span className="pnav-badge">{tab.badge}</span>}
                 </button>
               ))}
-              <button className={`pnav-btn ${inSettings ? 'active' : ''}`} onClick={() => go(inSettings ? activeTab : lastSettingTab)} aria-pressed={inSettings}>
+              <button className={`pnav-btn ${inSettings ? 'active' : ''}`} onClick={() => go('accounts')} aria-pressed={inSettings}>
                 <span className="pnav-ic" aria-hidden="true">⚙️</span>Cài đặt
               </button>
             </div>
-            {inSettings && (
-              <div className="pnav-sub" role="group" aria-label="Cài đặt">
-                {settings.map(tab => (
-                  <button key={tab.key} className={`pnav-chip ${activeTab === tab.key ? 'active' : ''}`} onClick={() => go(tab.key)} aria-pressed={activeTab === tab.key}>
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-            )}
           </nav>
         </>;
       })()}
@@ -3003,7 +3501,7 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                 </div>
 
                 {isAdmin && dayPay && (
-                  <BonusBox year={selYear} month={selMonth} settings={payrollMonth.bonusSettings} monthOver={payrollMonth.monthOver} onAction={payrollAction}
+                  <BonusBox year={selYear} month={selMonth} settings={payrollMonth.bonusSettings} monthOver={payrollMonth.monthOver} onAction={payrollAction} onSettings={() => openShopSettings('bonus')}
                     people={activeStaff.filter(s => hasPay(s.id)).map(s => ({ s, c: calcSalary(s.id), check: bonusOf(s.id), approved: approvedBonusOf(s.id) }))} />
                 )}
 
@@ -3500,7 +3998,11 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
                   </>
                 )}
 
-                <FineRules rules={payrollMonth.fineRules} onAction={payrollAction} />
+                <div className="payroll-form" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.84rem' }}>
+                  <strong>📋 Danh sách lỗi có sẵn ({payrollMonth.fineRules.filter(r => r.active).length})</strong>
+                  <span style={{ color: '#64748b' }}>tên lỗi và tiền phạt gợi ý</span>
+                  <button style={smallBtn} onClick={() => openShopSettings('fines')}>Sửa ở Cài đặt</button>
+                </div>
               </div>
             );
           })()}
@@ -3668,460 +4170,8 @@ Gửi rồi bạn KHÔNG sửa hay xoá được. Ghi nhầm thì báo chủ qu�
           })()}
 
           {/* === CÀI CHẤM CÔNG: giờ làm, máy quầy, chạy thử / chặn thật === */}
-          {activeTab === 'qr' && (() => {
-            if (!checkin || !hoursEdit) return <div className="empty-state">Đang tải phần cài chấm công… (mở lại trang nếu lâu)</div>;
-            const nameOf = id => staffList.find(s => s.id === id)?.full_name || 'Không rõ';
-            const when = ts => ts ? new Date(ts).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : '—';
-            const serverNow = Date.parse(checkin.now) || Date.now();
-            const warnText = { other_network: 'không dùng wifi quán', unknown_device: 'máy lạ', shared_device: 'máy của người khác', admin_no_qr: 'admin chấm không quét mã', no_face: 'chưa có mặt mẫu' };
-            const card = { background: 'white', border: '1px solid #e5e7eb', borderRadius: 14, padding: 16, marginBottom: 14 };
-            const kiosks = checkin.kiosks.filter(k => !k.revoked_at);
-            const scans = checkin.scans.filter(s => !onlyWarnings || s.warnings?.length || s.action === 'blocked' || s.method === 'tap');
-            const shortUa = ua => /iPhone/.test(ua || '') ? 'iPhone' : /iPad/.test(ua || '') ? 'iPad' : /Android/.test(ua || '') ? (String(ua).match(/;\s*([^;)]+?)\s+Build/)?.[1] || 'Android') : 'Máy khác';
-            const st = checkin.settings;
-            const nowHours = hoursOn(st, vnToday());
-            const hoursChanged = hoursEdit.opening_time !== nowHours.opening || hoursEdit.closing_time !== nowHours.closing || Number(hoursEdit.grace_minutes) !== nowHours.grace;
-            const timeInput = { padding: '4px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 };
-            return (
-              <div style={{ maxWidth: 760 }}>
-                {/* Chấm công theo giờ internet; báo khi đồng hồ máy tính chạy web lệch (bill, báo cáo vẫn theo giờ máy). */}
-                {(() => {
-                  const c = checkin.clock;
-                  if (!c) return null;
-                  const skew = -c.offsetMs, mins = Math.round(Math.abs(skew) / 60000);
-                  const bad = c.synced && Math.abs(skew) > 60000;
-                  return (
-                    <div style={{ ...card, padding: '10px 14px', fontSize: '0.84rem', lineHeight: 1.6, background: !c.synced || bad ? '#fff7ed' : '#f0fdf4', borderColor: !c.synced || bad ? '#fed7aa' : '#bbf7d0' }}>
-                      {!c.synced
-                        ? '⚠ Chưa so được giờ với internet: chấm công tạm theo giờ máy tính ở quán. Kiểm tra mạng của máy tính chạy web.'
-                        : bad
-                          ? <>🕒 Chấm công đang theo <strong>giờ internet</strong>. Đồng hồ máy tính chạy web ở quán đang <strong>{skew < 0 ? 'chậm' : 'nhanh'} {mins} phút</strong> — nên chỉnh lại (bật &quot;Đặt giờ tự động&quot;), vì bill và báo cáo vẫn theo giờ máy tính.</>
-                          : '🕒 Chấm công theo giờ internet. Đồng hồ máy tính ở quán đúng giờ.'}
-                    </div>
-                  );
-                })()}
-                {/* Giờ làm: chỉ tính lương trong ca, ngoài ca chờ chủ duyệt */}
-                <div style={card}>
-                  <div style={{ fontWeight: 800, marginBottom: 6 }}>🕑 Giờ làm</div>
-                  <div style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.6, marginBottom: 10 }}>
-                    Nhân viên quét mã lúc nào cũng được, nhưng <strong>chỉ tính lương giờ trong ca</strong>. Vào sớm / ở lại quá số phút cho lệch là <strong>giờ ngoài ca</strong>: tự tính tăng ca. Đi trễ: trừ theo luật đi trễ bên dưới.
-                    Quên ra ca thì máy tính ra ca lúc hết ca.
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: '0.86rem' }}>
-                    <span>Quán mở</span>
-                    <Time24 value={hoursEdit.opening_time} onChange={v => setHoursEdit(p => ({ ...p, opening_time: v }))} />
-                    <span>đóng</span>
-                    <Time24 value={hoursEdit.closing_time} onChange={v => setHoursEdit(p => ({ ...p, closing_time: v }))} />
-                    <span>· cho lệch</span>
-                    <input type="number" min="0" max="60" value={hoursEdit.grace_minutes} onChange={e => setHoursEdit(p => ({ ...p, grace_minutes: e.target.value }))} style={{ ...timeInput, width: 64 }} />
-                    <span>phút</span>
-                    {hoursChanged && (
-                      <button className="btn-primary" style={{ marginTop: 0, padding: '5px 12px' }}
-                        onClick={() => checkinAction('save_checkin_settings', { opening_time: hoursEdit.opening_time, closing_time: hoursEdit.closing_time, grace_minutes: Number(hoursEdit.grace_minutes) })}>Lưu</button>
-                    )}
-                  </div>
-                  <div style={{ marginTop: 6 }}><SpanNote start={hoursEdit.opening_time} end={hoursEdit.closing_time} label="Quán mở" /></div>
-                  <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>⏰ Đi trễ / về sớm — mặc định cả quán</div>
-                  {lateRuleEditor('shop')}
-                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: 4 }}>Từng người đặt riêng ở mục Ca và đi trễ / về sớm từng người bên dưới.</div>
-                  <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>🏖 Ngày quán nghỉ</div>
-                  <div style={{ fontSize: '0.76rem', color: '#64748b', marginBottom: 4 }}>Ngày cả quán đóng cửa. Người được nhận lương ngày nghỉ (mặc định: lương tháng có, theo ngày / theo giờ không — đổi từng người ở tab Mức lương) được đủ 1 ngày công.</div>
-                  {closedDaysEditor()}
-                  <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 8 }}>
-                    Tính giờ theo ca từ ngày <strong>{st.hours_from.split('-').reverse().join('/')}</strong>; những ngày trước đó vẫn tính như cũ. Đổi giờ quán thì áp dụng từ hôm nay, ngày đã làm giữ giờ cũ. Ca riêng chọn được ngày bắt đầu trong tháng này (ví dụ người mới vào làm trước khi đặt ca).
-                  </div>
-
-                  <div style={{ fontWeight: 700, fontSize: '0.86rem', margin: '14px 0 4px' }}>Ca và đi trễ / về sớm từng người</div>
-                  <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 6 }}>Ai làm khác giờ quán (ví dụ 17:00–23:00) thì đặt riêng. Giờ chọn theo 24 giờ: 00:00 là nửa đêm, 12:00 là trưa. Giờ hết ca trước giờ vào ca nghĩa là làm qua nửa đêm (ví dụ 14:00 → 00:00 là ca 10 tiếng). Đi trễ / về sớm: không đặt riêng thì theo mặc định của quán ở trên.</div>
-                  {staffList.filter(s => !departureOf(s.id) || departureOf(s.id).last_day >= vnToday()).map(s => {
-                    const shift = shiftOf(st, s.id, vnToday()), own = shift.own, editing = shiftEdit?.staff_id === s.id;
-                    return (
-                      <div key={s.id} id={`shift-${s.id}`} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', fontSize: '0.85rem', scrollMarginTop: 12, ...(configFocus === s.id ? { outline: '2px solid #3b82f6', outlineOffset: 2, borderRadius: 6 } : {}) }}>
-                        <strong style={{ minWidth: 110 }}>{s.full_name}</strong>
-                        {editing ? (
-                          <>
-                            <Time24 value={shiftEdit.start} onChange={v => setShiftEdit(p => ({ ...p, start: v }))} />
-                            <span>→</span>
-                            <Time24 value={shiftEdit.end} onChange={v => setShiftEdit(p => ({ ...p, end: v }))} />
-                            <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', whiteSpace: 'nowrap' }}>từ
-                              <input type="date" value={shiftEdit.from || vnToday()} min={`${vnToday().slice(0, 7)}-01`} max={vnToday()} style={{ ...timeInput, width: 'auto' }}
-                                onChange={e => setShiftEdit(p => ({ ...p, from: e.target.value || vnToday() }))} /></label>
-                            <button className="btn-primary" style={{ marginTop: 0, padding: '5px 12px' }}
-                              onClick={async () => {
-                                const from = shiftEdit.from || vnToday(), past = from < vnToday();
-                                if (!await checkinAction('save_shift', { staff_id: s.id, start_time: shiftEdit.start, end_time: shiftEdit.end, valid_from: from },
-                                  past ? `Ca ${shiftEdit.start} → ${shiftEdit.end} áp dụng từ ${ddmm(from)}: giờ công và lương các ngày từ ${ddmm(from)} sẽ tính lại theo ca này. Đồng ý?` : null)) return;
-                                setShiftEdit(null);
-                                if (past) fetchAll();
-                              }}>Lưu</button>
-                            <button style={{ fontSize: '0.78rem', padding: '4px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }} onClick={() => setShiftEdit(null)}>Huỷ</button>
-                            <div style={{ flexBasis: '100%' }}><SpanNote start={shiftEdit.start} end={shiftEdit.end} /></div>
-                          </>
-                        ) : (
-                          <>
-                            <span style={{ color: own ? '#1d4ed8' : '#64748b' }}>{shift.start} {partOfDay(shift.start)} → {shift.end} {partOfDay(shift.end)}{own ? ' (ca riêng)' : ' (giờ quán)'}</span>
-                            <button style={{ fontSize: '0.78rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}
-                              onClick={() => setShiftEdit({ staff_id: s.id, start: shift.start, end: shift.end })}>Đặt ca riêng</button>
-                            {own && <button style={{ fontSize: '0.78rem', padding: '3px 10px', background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', textDecoration: 'underline' }}
-                              onClick={() => checkinAction('save_shift', { staff_id: s.id, clear: true })}>Dùng giờ quán</button>}
-                            <div style={{ flexBasis: '100%' }}><SpanNote start={shift.start} end={shift.end} /></div>
-                          </>
-                        )}
-                        <div style={{ flexBasis: '100%', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.8rem' }}>
-                          <span style={{ color: lateRuleOn(payrollMonth.lateRules, s.id, vnToday())?.own ? '#1d4ed8' : '#64748b' }}>⏰ Đi trễ / về sớm: {lateShort(s.id)}</span>
-                          <button style={{ fontSize: '0.78rem', padding: '3px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}
-                            onClick={() => setLateOpen(lateOpen === s.id ? null : s.id)}>{lateOpen === s.id ? 'Đóng' : 'Sửa'}</button>
-                        </div>
-                        {lateOpen === s.id && <div style={{ flexBasis: '100%', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px' }}>{lateRuleEditor(s.id)}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Chế độ */}
-                <div style={{ ...card, background: checkin.settings.enforce ? '#f0fdf4' : '#fffbeb', borderColor: checkin.settings.enforce ? '#bbf7d0' : '#fde68a' }}>
-                  <div style={{ fontWeight: 800, marginBottom: 6 }}>{checkin.settings.enforce ? '🔒 Đang chặn thật' : '🧪 Đang chạy thử'}</div>
-                  <div style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.6, marginBottom: 10 }}>
-                    {checkin.settings.enforce
-                      ? 'Nhân viên không vào wifi quán, hoặc dùng điện thoại khác máy đã đăng ký, sẽ KHÔNG chấm được.'
-                      : 'Máy chỉ ghi lại ai không dùng wifi quán / dùng máy lạ, CHƯA chặn. Chạy thử khoảng 1 tuần, xem lịch sử bên dưới không có ai bị cảnh báo oan thì bật chặn thật.'}
-                    <br />Mã QR luôn đổi liên tục và mỗi mã chỉ dùng 1 lần (phần này không có chạy thử).
-                  </div>
-                  <button className={checkin.settings.enforce ? 'btn-danger' : 'btn-success'}
-                    onClick={() => checkinAction('save_checkin_settings', { enforce: !checkin.settings.enforce }, checkin.settings.enforce ? 'Tắt chặn, quay về chạy thử?' : 'Bật chặn thật? Nhân viên không vào wifi quán hoặc dùng máy lạ sẽ không chấm được.')}>
-                    {checkin.settings.enforce ? 'Quay về chạy thử' : 'Bật chặn thật'}
-                  </button>
-                </div>
-
-                {/* Máy quầy */}
-                <div style={card}>
-                  <div style={{ fontWeight: 800, marginBottom: 6 }}>📱 Máy quầy hiện mã QR</div>
-                  <div style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.7, marginBottom: 10 }}>
-                    1️⃣ Lấy một điện thoại / máy tính bảng để cố định ở quầy, cắm sạc, cho vào <strong>wifi quán</strong>.<br />
-                    2️⃣ Trên máy đó mở <strong>{typeof window !== 'undefined' ? window.location.host : 'ocbaokhang.online'}/chamcong</strong>, đăng nhập admin để bật. Xong máy tự đăng xuất admin.<br />
-                    3️⃣ Nhân viên vào wifi quán, mở app bấm nút 📷 xanh trên thanh menu (hoặc mở camera điện thoại) quét mã trên máy quầy.
-                  </div>
-                  {kiosks.length === 0 && <div style={{ fontSize: '0.84rem', color: '#b45309', fontWeight: 600 }}>Chưa có máy quầy nào — nhân viên chưa chấm công được.</div>}
-                  {kiosks.map(k => {
-                    const online = k.last_seen_at && serverNow - Date.parse(k.last_seen_at) < 90000;
-                    return (
-                      <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap' }}>
-                        <span style={{ width: 10, height: 10, borderRadius: '50%', background: online ? '#16a34a' : '#94a3b8' }} />
-                        <div style={{ flex: 1, minWidth: 160 }}>
-                          <div style={{ fontWeight: 700 }}>{k.name}</div>
-                          <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{online ? 'Đang mở' : `Mở lần cuối ${when(k.last_seen_at)}`} · bật ngày {when(k.created_at)}</div>
-                        </div>
-                        <button className="btn-danger" onClick={() => checkinAction('revoke_kiosk', { id: k.id }, `Tắt máy quầy "${k.name}"? Mã trên máy đó sẽ không dùng được nữa.`)}>Tắt máy này</button>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Điện thoại đã đăng ký */}
-                <div style={card}>
-                  <div style={{ fontWeight: 800, marginBottom: 6 }}>🔐 Điện thoại chấm công của nhân viên</div>
-                  <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 8 }}>Mỗi người một máy. Lần chấm công đầu tiên tự ghi máy đó. Nhân viên đổi / mất điện thoại thì bấm "Cho đổi máy".</div>
-                  {staffList.filter(s => s.role !== 'admin' && (!departureOf(s.id) || departureOf(s.id).last_day >= vnToday())).map(s => {
-                    const d = checkin.devices.find(x => x.staff_id === s.id);
-                    return (
-                      <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', fontSize: '0.85rem' }}>
-                        <div style={{ flex: 1, minWidth: 160 }}>
-                          <strong>{s.full_name}</strong>
-                          <div style={{ fontSize: '0.75rem', color: '#64748b' }}>{d ? `${shortUa(d.user_agent)} · đăng ký ${when(d.created_at)}` : 'Chưa đăng ký (lần chấm đầu sẽ tự ghi)'}</div>
-                        </div>
-                        {d && <button style={{ fontSize: '0.78rem', padding: '4px 10px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }}
-                          onClick={() => checkinAction('reset_device', { staff_id: s.id }, `Cho ${s.full_name} đổi điện thoại? Lần chấm công tới sẽ ghi máy mới.`)}>Cho đổi máy</button>}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Chấm công bằng nút cho người không có điện thoại */}
-                <div style={card}>
-                  <div style={{ fontWeight: 800, marginBottom: 4 }}>🔘 Chấm công bằng nút (người không có điện thoại)</div>
-                  <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: 8, lineHeight: 1.5 }}>
-                    Người được chọn có nút tên / ảnh dưới mã QR trên máy quầy: bấm tên rồi bấm xác nhận là chấm công, giờ công tính như quét mã.
-                    Ai đứng ở máy quầy cũng bấm được nên chỉ bật cho người không có điện thoại. Lượt chấm bằng nút ghi &quot;🔘 bấm nút&quot;.
-                  </div>
-                  {staffList.filter(x => !departureOf(x.id) || departureOf(x.id).last_day >= vnToday()).map(x => {
-                    const row = (checkin.tapStaff || []).find(t => t.staff_id === x.id);
-                    const label = draftOf(`tap:${x.id}:label`, row?.label || '');
-                    const pick = async e => {
-                      const file = e.target.files?.[0];
-                      e.target.value = '';
-                      if (!file) return;
-                      try { await editAction('save_tap_staff', { staff_id: x.id, enabled: true, label, photo: await shrinkPhoto(file) }); } catch (err) { alert(err.message); }
-                    };
-                    return (
-                      <div key={x.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', fontSize: '0.84rem' }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 140, fontWeight: 700, cursor: 'pointer' }}>
-                          <input type="checkbox" checked={!!row} onChange={e => editAction('save_tap_staff', { staff_id: x.id, enabled: e.target.checked },
-                            e.target.checked ? null : `Thôi cho ${x.full_name} chấm công bằng nút?`)} />
-                          {x.full_name}
-                        </label>
-                        {row && <>
-                          {row.photo ? <img src={row.photo} alt="" style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover' }} />
-                            : <span style={{ width: 36, height: 36, borderRadius: '50%', background: '#e2e8f0', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', color: '#64748b' }}>ảnh</span>}
-                          <input value={label} placeholder={`Tên trên nút (${x.full_name})`} maxLength={30} onChange={e => setDraft(`tap:${x.id}:label`, e.target.value)}
-                            style={{ padding: '5px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6, fontSize: '0.82rem', width: 150 }} />
-                          {label !== (row.label || '') && <button style={{ ...smallBtn, background: '#111827', borderColor: '#111827', color: 'white' }}
-                            onClick={() => editAction('save_tap_staff', { staff_id: x.id, enabled: true, label }, null, `tap:${x.id}:`)}>Lưu tên</button>}
-                          <label style={{ ...smallBtn, display: 'inline-block' }}>📷 {row.photo ? 'Đổi ảnh' : 'Thêm ảnh'}
-                            <input type="file" accept="image/*" onChange={pick} style={{ display: 'none' }} />
-                          </label>
-                          {row.photo && <button style={smallBtn} onClick={() => editAction('save_tap_staff', { staff_id: x.id, enabled: true, label: row.label || '', photo: null }, 'Xoá ảnh trên nút?')}>Xoá ảnh</button>}
-                        </>}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Lịch sử quét */}
-                <div style={card}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-                    <div style={{ fontWeight: 800 }}>📜 Lịch sử chấm công 14 ngày</div>
-                    <label style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                      <input type="checkbox" checked={onlyWarnings} onChange={e => setOnlyWarnings(e.target.checked)} /> Chỉ lần có cảnh báo / bấm nút
-                    </label>
-                  </div>
-                  {scans.length === 0 && <div style={{ fontSize: '0.84rem', color: '#16a34a' }}>{onlyWarnings ? '✅ Không có lần nào bị cảnh báo.' : 'Chưa có ai chấm công.'}</div>}
-                  {scans.slice(0, 150).map(s => (
-                    <div key={s.id} style={{ display: 'flex', gap: 10, padding: '5px 0', borderTop: '1px solid #f1f5f9', fontSize: '0.82rem', flexWrap: 'wrap' }}>
-                      <span style={{ color: '#64748b', minWidth: 92 }}>{when(s.created_at)}</span>
-                      <strong style={{ minWidth: 90 }}>{nameOf(s.staff_id)}</strong>
-                      <span style={{ fontWeight: 700, color: s.action === 'blocked' ? '#dc2626' : s.action === 'out' ? '#b45309' : '#15803d' }}>
-                        {s.action === 'blocked' ? '⛔ Bị chặn' : s.action === 'out' ? 'Ra ca' : 'Vào ca'}
-                      </span>
-                      {s.warnings?.length > 0 && <span style={{ color: '#c2410c' }}>⚠ {s.warnings.map(w => warnText[w] || w).join(', ')}</span>}
-                      {s.method === 'tap' && <span style={{ color: '#6d28d9' }}>🔘 bấm nút trên máy quầy</span>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* === TÀI KHOẢN === */}
-          {activeTab === 'accounts' && (
-            <div>
-              {/* Create form — thu gọn, bấm để mở */}
-              <details className="payroll-form">
-                <summary style={{ fontWeight: 800, cursor: 'pointer' }}>➕ Tạo tài khoản nhân viên mới</summary>
-                <div style={{ height: 10 }} />
-                {accMsg && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 8, background: accMsg.startsWith('✅') ? '#dcfce7' : '#fee2e2', color: accMsg.startsWith('✅') ? '#15803d' : '#dc2626', fontSize: '0.85rem', fontWeight: 600 }}>{accMsg}</div>}
-                <div className="form-grid">
-                  <div className="form-group">
-                    <label>Họ và Tên</label>
-                    <input type="text" placeholder="Nguyễn Văn A" value={accForm.full_name} onChange={e => setAccForm(p => ({ ...p, full_name: e.target.value }))} />
-                  </div>
-                  <div className="form-group">
-                    <label>Số điện thoại</label>
-                    <input type="tel" placeholder="0909123456" value={accForm.phone} onChange={e => setAccForm(p => ({ ...p, phone: e.target.value }))} />
-                  </div>
-                  <div className="form-group">
-                    <label>Mã PIN (≥ 4 ký tự)</label>
-                    <input type="text" placeholder="1234" maxLength={8} value={accForm.pin} onChange={e => setAccForm(p => ({ ...p, pin: e.target.value.replace(/\D/g, '') }))} />
-                  </div>
-                  <div className="form-group">
-                    <label>Vai trò</label>
-                    <select value={accForm.role} onChange={e => setAccForm(p => ({ ...p, role: e.target.value }))}>
-                      <option value="staff">Nhân viên</option>
-                      <option value="manager">Quản lý</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                  </div>
-                </div>
-                <button className="btn-primary" onClick={handleCreateAccount}>Tạo tài khoản</button>
-              </details>
-
-              {/* Danh sách tài khoản: mỗi người một dòng gọn (chữ đầu tên, tên, số điện thoại, vai trò); bấm vào mở phần sửa —
-                  tên / số đăng nhập, mã PIN, vai trò, cho nghỉ việc, xoá. */}
-              <div className="acct-list">
-                {staffList.filter(s => !departureOf(s.id)).map(s => {
-                  const open = !!draftOf(`acctx:${s.id}`, false), self = s.id === currentUser?.id, role = normalizeRole(s.role);
-                  const roleStyle = role === 'admin' ? { background: '#fef9c3', color: '#92400e' } : role === 'manager' ? { background: '#f5f3ff', color: '#6d28d9' } : { background: '#e0f2fe', color: '#0369a1' };
-                  const name = draftOf(`acct:${s.id}:name`, s.full_name || ''), phone = draftOf(`acct:${s.id}:phone`, s.phone || '');
-                  const phoneChanged = phone.replace(/\s+/g, '') !== String(s.phone || '').replace(/\s+/g, '');
-                  const changed = name.trim() !== (s.full_name || '') || phoneChanged;
-                  // Sửa tên / số điện thoại đăng nhập (mã PIN giữ nguyên; đổi số thì lần sau đăng nhập bằng số mới).
-                  const saveInfo = () => (!changed ? alert('Chưa đổi gì.') : editAction('edit_account', { staff_id: s.id, full_name: name, ...(phoneChanged ? { phone } : {}) },
-                    phoneChanged ? `Đổi số đăng nhập của ${s.full_name} từ ${s.phone} thành ${phone.replace(/\s+/g, '')}?\n\nMã PIN giữ nguyên; lần sau đăng nhập bằng số mới.` : null, `acct:${s.id}:`));
-                  return (
-                    <div key={s.id} className={`acct-item ${open ? 'open' : ''}`}>
-                      <button type="button" className="acct-head" onClick={() => setDraft(`acctx:${s.id}`, !open)} aria-expanded={open}>
-                        <span className="acct-avatar" aria-hidden="true">{(s.full_name || '?').trim().charAt(0).toUpperCase()}</span>
-                        <span className="acct-name">{s.full_name}{self ? ' (bạn)' : ''}<small>{s.phone}</small></span>
-                        <span className="acct-role" style={roleStyle}>{roleLabel(s.role)}</span>
-                        <span className="acct-chev" aria-hidden="true">{open ? '▴' : '▾'}</span>
-                      </button>
-                      {open && (
-                        <div className="acct-body">
-                          <div className="acct-field">Họ và tên · số điện thoại đăng nhập
-                            <div className="acct-line">
-                              <input type="text" value={name} maxLength={80} aria-label="Họ và tên" onChange={e => setDraft(`acct:${s.id}:name`, e.target.value)} />
-                              <input type="tel" inputMode="numeric" value={phone} maxLength={16} aria-label="Số điện thoại" onChange={e => setDraft(`acct:${s.id}:phone`, e.target.value.replace(/[^\d+ ]/g, ''))} />
-                            </div>
-                            {changed && <div className="acct-line"><button className="btn-primary" style={{ marginTop: 0, flex: 1 }} onClick={saveInfo}>Lưu tên / số</button></div>}
-                          </div>
-                          <div className="acct-field">Đổi mã PIN (mật khẩu)
-                            <div className="acct-line">
-                              <input type="text" inputMode="numeric" maxLength={8} placeholder="PIN mới…" value={editingPin[s.id] || ''} aria-label="Mã PIN mới"
-                                onChange={e => setEditingPin(p => ({ ...p, [s.id]: e.target.value.replace(/\D/g, '') }))} />
-                              <button className="btn-primary" style={{ marginTop: 0, padding: '6px 16px' }} onClick={() => handleUpdatePin(s.id)}>Lưu PIN</button>
-                            </div>
-                          </div>
-                          <div className="acct-field">Vai trò
-                            {self
-                              ? <span style={{ fontWeight: 500, color: '#64748b' }}>{roleLabel(s.role)} — tài khoản bạn đang dùng, không tự đổi vai trò.</span>
-                              : <div className="acct-line">
-                                  <select value={role} onChange={e => handleSetRole(s, e.target.value)} aria-label={`Vai trò của ${s.full_name}`}>
-                                    {ROLES.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
-                                  </select>
-                                </div>}
-                          </div>
-                          <div className="acct-actions">
-                            {!self && (
-                              <button style={{ padding: '8px 12px', background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}
-                                onClick={() => setDepartForm({ staff_id: s.id, name: s.full_name, last_day: vnToday(), reason: '' })}>🚪 Cho nghỉ việc</button>
-                            )}
-                            <button className="btn-danger" style={{ marginTop: 0 }} onClick={() => handleDeleteAccount(s.id, s.full_name)}>🗑 Xoá tài khoản</button>
-                          </div>
-                          {departForm?.staff_id === s.id && (
-                            <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.84rem' }}>
-                              <div><strong>Cho {s.full_name} nghỉ việc.</strong> Qua ngày làm cuối, người này không đăng nhập và không chấm công được nữa; lương tháng cuối tính tới ngày đó, kết toán ở tab Bảng Lương.</div>
-                              <label style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>Ngày làm việc cuối cùng
-                                <input type="date" value={departForm.last_day} onChange={e => setDepartForm(p => ({ ...p, last_day: e.target.value }))} style={{ padding: '4px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} /></label>
-                              <input type="text" placeholder="Lý do (tuỳ chọn)" value={departForm.reason} onChange={e => setDepartForm(p => ({ ...p, reason: e.target.value }))} style={{ padding: '6px 8px', border: '1.5px solid #cbd5e1', borderRadius: 6 }} />
-                              <div style={{ display: 'flex', gap: 8 }}>
-                                <button className="btn-danger" style={{ marginTop: 0 }} onClick={handleDepart}>Xác nhận nghỉ việc</button>
-                                <button style={{ padding: '6px 12px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer' }} onClick={() => setDepartForm(null)}>Huỷ</button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                {staffList.length === 0 && <div className="empty-state">Chưa có nhân viên nào</div>}
-              </div>
-
-              {/* Đã nghỉ việc: không đăng nhập / chấm công được, vẫn giữ lịch sử và lương các tháng đã làm. */}
-              {staffList.some(s => departureOf(s.id)) && (
-                <div className="config-list" style={{ marginTop: 14 }}>
-                  <div style={{ fontWeight: 800, fontSize: '0.9rem', padding: '4px 2px' }}>🚪 Đã nghỉ việc</div>
-                  {staffList.filter(s => departureOf(s.id)).map(s => {
-                    const d = departureOf(s.id);
-                    return (
-                      <div key={s.id} className="config-row" style={{ flexWrap: 'wrap', gap: 10, opacity: 0.85 }}>
-                        <div style={{ flex: 1, minWidth: 160 }}>
-                          <div style={{ fontWeight: 700 }}>{s.full_name}</div>
-                          <div style={{ fontSize: '0.75rem', color: '#64748b' }}>Làm đến hết {d.last_day.split('-').reverse().join('/')}{d.reason ? ` · ${d.reason}` : ''}{d.last_day >= vnToday() ? ' (vẫn đang làm tới ngày đó)' : ''}</div>
-                        </div>
-                        <button style={{ padding: '6px 12px', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer' }}
-                          onClick={() => handleReturn(s.id, s.full_name)}>Cho đi làm lại</button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* === CẤU HÌNH === */}
-          {activeTab === 'config' && (
-            <div>
-              <div className="payroll-form" style={{ marginBottom: 8 }}>
-                <p style={{ fontSize: '0.82rem', color: '#6b7280', margin: 0 }}>💡 Thiết lập lương cơ bản (đi làm đủ tháng thì nhận đúng số này, ngày quán nghỉ cũng được tính công; mỗi ngày nghỉ trừ lương cơ bản ÷ 30, tháng nào cũng vậy), lương 1 ngày (người trả theo ngày) hoặc lương 1 giờ (người trả theo giờ), có tính tăng ca không (chọn Không thì giờ vào sớm / ở lại không được trả) và giá tăng ca mỗi giờ và ngày phát lương cho từng nhân viên.</p>
-              </div>
-              <div className="config-list config-salary">
-                {staffList.map(s => {
-                  const edit = configEdits[s.id] || { base_salary: 0, overtime_rate: 25000, pay_day: 5 };
-                  const pay = hourlyEditOf(s.id);
-                  const shift = rules ? shiftOf(rules, s.id, vnToday()) : null;
-                  return (
-                    <div key={s.id} id={`config-${s.id}`} className="config-row" style={configFocus === s.id ? { outline: '2px solid #3b82f6', outlineOffset: 2, scrollMarginTop: 12 } : { scrollMarginTop: 12 }}>
-                      <div className="staff-name">{s.full_name}<div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{s.phone}</div></div>
-                      <div className="form-group" style={{ margin: 0 }}>
-                        <label>Trả lương</label>
-                        <select value={pay.type} onChange={e => setPayType(s.id, pay, e.target.value)}>
-                          <option value="month">Theo tháng</option>
-                          <option value="day">Theo ngày</option>
-                          <option value="hour">Theo giờ</option>
-                        </select>
-                      </div>
-                      {pay.type !== 'month' ? (
-                        <div className="form-group" style={{ margin: 0 }}>
-                          <label>Lương 1 {payUnitText[pay.type]}</label>
-                          <input type="text" inputMode="numeric" value={typedMoney(pay.rate)} placeholder={pay.type === 'day' ? '120.000' : '25.000'}
-                            onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, rate: e.target.value.replace(/\D/g, '') } }))} />
-                        </div>
-                      ) : (
-                        <div className="form-group" style={{ margin: 0 }}>
-                          <label>Lương cơ bản</label>
-                          <input type="text" inputMode="numeric" value={edit.base_salary ? Number(edit.base_salary).toLocaleString('vi-VN') : ''}
-                            onChange={e => { const raw = e.target.value.replace(/\./g, '').replace(/\D/g, ''); setConfigEdits(p => ({ ...p, [s.id]: { ...edit, base_salary: raw || 0 } })); }}
-                            placeholder="5.000.000" />
-                        </div>
-                      )}
-                      {pay.changed && (
-                        <div className="form-group" style={{ margin: 0 }}>
-                          <label>Áp dụng từ</label>
-                          <input type="date" value={pay.from} min={`${vnToday().slice(0, 7)}-01`} onChange={e => setHourlyEdits(p => ({ ...p, [s.id]: { ...pay, from: e.target.value } }))} />
-                        </div>
-                      )}
-                      <div className="form-group" style={{ margin: 0 }}>
-                        <label>Tăng ca</label>
-                        <select value={overtimeOn(s.id) ? 'on' : 'off'} onChange={e => saveOvertime(s.id, e.target.value === 'on')}>
-                          <option value="on">Có</option>
-                          <option value="off">Không</option>
-                        </select>
-                      </div>
-                      {overtimeOn(s.id) && (
-                        <div className="form-group" style={{ margin: 0 }}>
-                          <label>Giá tăng ca/h</label>
-                          <input type="number" min="0" value={edit.overtime_rate ?? 25000}
-                            onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, overtime_rate: e.target.value } }))} />
-                        </div>
-                      )}
-                      <div className="form-group" style={{ margin: 0 }}>
-                        <label>Ngày phát</label>
-                        <input type="number" min="1" max="31" value={edit.pay_day || 5}
-                          onChange={e => setConfigEdits(p => ({ ...p, [s.id]: { ...edit, pay_day: e.target.value } }))} />
-                      </div>
-                      <button className="btn-primary" style={{ marginTop: 18 }} onClick={() => handleSaveConfig(s.id)}>Lưu</button>
-                      {pay.type !== 'month' && tinyWage(pay.rate) && <div className="config-note">{tinyWageNote(pay.rate, payUnitText[pay.type])}</div>}
-                      <div className="config-note" style={{ borderTop: '1px dashed #e2e8f0', paddingTop: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <strong>⏰ Đi trễ / về sớm</strong> <span>{lateShort(s.id)}</span>
-                        <button style={smallBtn} onClick={() => openShiftFor(s.id)}>Sửa ở Cài chấm công</button>
-                      </div>
-                      <div className="config-note" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <strong>🏖 Ngày quán nghỉ</strong> {holidayEditor(s.id)}
-                      </div>
-                      {showCycle(s.id, pay) && (
-                        <div className="config-note" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <strong>💵 Kỳ trả lương</strong> {cycleEditor(s.id)}
-                        </div>
-                      )}
-                      {(pay.type !== 'month' || pay.current) && (
-                        <div className="config-note">
-                          {pay.current
-                            ? `Đang trả theo ${payUnitText[pay.currentType]}: ${formatMoney(pay.current.hourly_rate)}/${payUnitText[pay.currentType]} từ ${ddmm(String(pay.current.valid_from))}. `
-                            : 'Đang trả theo tháng. '}
-                          {pay.current && tinyWage(pay.current.hourly_rate) && <strong style={{ color: '#dc2626' }}>⚠ Số này rất nhỏ, có thể gõ thiếu số 0. </strong>}
-                          {pay.type === 'hour' && shift && `Chỉ tính giờ có mặt trong ca ${shift.start}–${shift.end}${shift.own ? '' : ' (giờ quán)'}; đổi ca ở tab Cài chấm công.${overtimeOn(s.id) ? ' Giờ ngoài ca bạn cho tính trả theo giá tăng ca.' : ''}`}
-                          {pay.type === 'day' && `Ngày có chấm công được đủ lương 1 ngày (làm dưới nửa ca tính nửa ngày, đi trễ / về sớm trừ như lương tháng); ngày không chấm công là nghỉ, không lương.${shift ? ` Ca ${shift.start}–${shift.end}${shift.own ? '' : ' (giờ quán)'}.` : ''}${overtimeOn(s.id) ? ' Giờ ngoài ca trả theo giá tăng ca.' : ''}`}
-                        </div>
-                      )}
-                      {!overtimeOn(s.id) && (
-                        <div className="config-note">⏱ Không tính tăng ca cho người này: giờ vào sớm / ở lại ngoài ca không được trả tiền.</div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          {/* === CÀI ĐẶT: cài chung cả quán + từng nhân viên, mỗi người một trang có đủ mọi thứ === */}
+          {activeTab === 'accounts' && settingsView()}
         </>
       )}
     </div>
