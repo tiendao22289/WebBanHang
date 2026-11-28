@@ -1,4 +1,5 @@
 import './globals.css';
+import PhotoLinkViewer from '@/components/PhotoLinkViewer';
 
 export const metadata = {
   title: 'Nhà Hàng - Gọi Món',
@@ -86,6 +87,8 @@ export default function RootLayout({ children }) {
         }}
       >
         {children}
+        {/* Link ảnh (bill, ảnh làm chứng…) mở trong khung có nút ✕ — xem components/PhotoLinkViewer.js */}
+        <PhotoLinkViewer />
       </body>
     </html>
   );
