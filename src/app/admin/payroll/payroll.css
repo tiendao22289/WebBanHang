@@ -489,7 +489,8 @@ button.slip-row:active, .slip-row.open { background: #eff6ff; }
 }
 
 /* Tab Cài đặt: MỘT chỗ — danh sách (🏪 Cài chung cả quán + từng nhân viên) và trang của mục đang chọn. Máy tính: danh sách bên trái
-   (dính khi cuộn), trang bên phải. Điện thoại: chỉ danh sách; bấm tên thì trang của người đó thay chỗ danh sách (nút ‹ quay lại). */
+   (dính khi cuộn), trang bên phải. Điện thoại: chỉ danh sách; bấm tên thì trang của người đó thay chỗ danh sách. Ưu tiên điện thoại:
+   nút ≥ 40px, chữ ô nhập 16px (iPhone không phóng to), giải thích ẩn sau dấu ?. */
 .sset-list { display: flex; flex-direction: column; gap: 6px; }
 .sset-group { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #94a3b8; margin: 8px 2px 0; }
 .sset-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 58px; padding: 9px 12px; background: white; border: 1px solid #e2e8f0;
@@ -504,55 +505,151 @@ button.slip-row:active, .slip-row.open { background: #eff6ff; }
 .sset-name small { display: block; font-size: 0.74rem; font-weight: 500; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sset-chev { flex-shrink: 0; width: 14px; color: #94a3b8; font-size: 1.25rem; line-height: 1; text-align: center; }
 .sset-panel { min-width: 0; scroll-margin-top: 8px; }
-.sset-back { display: inline-flex; align-items: center; gap: 4px; min-height: 38px; margin-bottom: 10px; padding: 0 14px; border: 1px solid #e2e8f0; border-radius: 999px;
-  background: white; color: #1d4ed8; font: inherit; font-size: 0.84rem; font-weight: 700; cursor: pointer; }
 .sset-empty { padding: 28px 20px; background: white; border: 1px dashed #cbd5e1; border-radius: 14px; color: #64748b; font-size: 0.88rem; line-height: 1.7; text-align: center; }
 .acct-avatar { flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%; background: #e2e8f0; color: #334155; font-weight: 800; font-size: 0.9rem;
   display: flex; align-items: center; justify-content: center; }
 .acct-role { flex-shrink: 0; font-size: 0.7rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
 
-/* Trang của một người / cài chung: đầu trang, nút nhảy tới phần, các phần (thẻ) mở sẵn. */
-.sp-head { display: flex; gap: 12px; align-items: center; background: white; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; margin-bottom: 10px; }
-.sp-avatar { flex-shrink: 0; width: 48px; height: 48px; border-radius: 50%; background: #dbeafe; color: #1d4ed8; font-weight: 800; font-size: 1.25rem;
+/* Khung chung của trang admin đặt overflow: hidden (thành khung cuộn riêng) nên position: sticky không dính được. Riêng trang Lương: cắt tràn
+   bằng overflow: clip (không thành khung cuộn) để thanh nhảy nhanh, danh sách bên trái và thanh Lưu dính được. Máy cũ không hiểu thì như cũ. */
+.admin-main:has(.payroll-page) { overflow: clip; }
+
+/* Thanh dính trên đầu trang của một người / cài chung: ‹ Danh sách + nút nhảy tới từng phần (kéo ngang được). */
+.ps-bar { position: sticky; top: 0; z-index: 6; display: flex; gap: 6px; align-items: center; margin: 0 -12px 10px; padding: 8px 12px;
+  background: rgba(248, 250, 252, 0.97); border-bottom: 1px solid #e2e8f0; overflow-x: auto; scrollbar-width: none; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.ps-bar::-webkit-scrollbar { display: none; }
+.ps-bar button { flex-shrink: 0; min-height: 36px; padding: 0 12px; border: 1px solid #e2e8f0; border-radius: 999px; background: white; color: #334155;
+  font: inherit; font-size: 0.8rem; font-weight: 700; white-space: nowrap; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.ps-bar button:active { background: #eef2f7; }
+.ps-bar .back { color: #1d4ed8; border-color: #bfdbfe; background: #eff6ff; }
+
+/* Đầu trang + các thẻ (phần). */
+.ps-head { display: flex; gap: 12px; align-items: center; background: white; border: 1px solid #e2e8f0; border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; }
+.ps-avatar { flex-shrink: 0; width: 46px; height: 46px; border-radius: 50%; background: #dbeafe; color: #1d4ed8; font-weight: 800; font-size: 1.2rem;
   display: flex; align-items: center; justify-content: center; }
-.sp-avatar.shop { background: #fef3c7; }
-.sp-who { flex: 1; min-width: 0; }
-.sp-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 1.08rem; font-weight: 800; color: #0f172a; }
-.sp-meta { margin-top: 2px; font-size: 0.8rem; color: #64748b; }
-.sp-sum { margin-top: 4px; font-size: 0.78rem; color: #334155; line-height: 1.5; }
-.sp-jump { display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; scrollbar-width: none; }
-.sp-jump::-webkit-scrollbar { display: none; }
-.sp-jump button { flex-shrink: 0; min-height: 34px; padding: 0 12px; border: 1px solid #e2e8f0; border-radius: 999px; background: white; color: #334155;
-  font: inherit; font-size: 0.78rem; font-weight: 700; white-space: nowrap; cursor: pointer; }
-.sp-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
-.sp-card { background: white; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; font-size: 0.84rem; color: #1e293b; scroll-margin-top: 10px; min-width: 0; }
-.sp-card-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #f1f5f9; }
-.sp-card-head h3 { margin: 0; font-size: 0.98rem; font-weight: 800; color: #0f172a; }
-.sp-card-head > span { font-size: 0.76rem; color: #64748b; }
-.sp-sub { margin: 16px 0 6px; font-size: 0.86rem; font-weight: 800; color: #0f172a; }
-.sp-card-head + .sp-sub { margin-top: 0; }
-.sp-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-.sp-form label { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 0.74rem; font-weight: 700; color: #475569; }
-.sp-form input, .sp-form select { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 0.9rem;
-  background: white; color: #0f172a; font-family: inherit; }
-.sp-form input:focus, .sp-form select:focus { outline: none; border-color: #2563eb; }
-.sp-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-.sp-note { margin-top: 8px; font-size: 0.76rem; color: #64748b; line-height: 1.55; }
-.sp-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e2e8f0; }
-.sp-line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.sp-scan { display: flex; gap: 10px; flex-wrap: wrap; padding: 5px 0; border-top: 1px solid #f1f5f9; font-size: 0.8rem; }
-.sp-acct { display: flex; flex-direction: column; gap: 12px; }
-.acct-field { display: flex; flex-direction: column; gap: 5px; font-size: 0.74rem; font-weight: 700; color: #475569; }
-.acct-line { display: flex; gap: 6px; }
-.acct-line input, .acct-line select { flex: 1 1 0; min-width: 0; padding: 8px 10px; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 16px; background: white; color: #0f172a; }
-.acct-line button { flex-shrink: 0; }
-.acct-actions { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 10px; border-top: 1px dashed #e2e8f0; }
-@media (max-width: 640px) {
-  .sp-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sp-form input, .sp-form select { font-size: 16px; }
-  .sp-head { padding: 12px; }
+.ps-avatar.shop { background: #fef3c7; }
+.ps-who { flex: 1; min-width: 0; }
+.ps-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 1.08rem; font-weight: 800; color: #0f172a; }
+.ps-meta { margin-top: 2px; font-size: 0.8rem; color: #64748b; }
+.ps-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+.ps-card { background: white; border: 1px solid #e2e8f0; border-radius: 14px; padding: 12px 14px 10px; font-size: 0.86rem; color: #1e293b; scroll-margin-top: 62px; min-width: 0; }
+.ps-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.ps-title h3 { margin: 0; font-size: 1rem; font-weight: 800; color: #0f172a; }
+.ps-title h4 { margin: 0; font-size: 0.92rem; font-weight: 800; color: #0f172a; }
+.ps-title.sub { margin: 14px 0 2px; padding-top: 12px; border-top: 1px solid #e2e8f0; }
+
+/* Nút ? và khung giải thích (bấm mới hiện, bấm lại để đóng). */
+.ps-hint { position: relative; flex-shrink: 0; width: 24px; height: 24px; padding: 0; border-radius: 50%; border: 1.5px solid #93c5fd; background: #eff6ff; color: #1d4ed8;
+  font: inherit; font-size: 0.8rem; font-weight: 800; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; -webkit-tap-highlight-color: transparent; }
+.ps-hint::after { content: ''; position: absolute; inset: -9px; }
+.ps-hint.on { background: #1d4ed8; border-color: #1d4ed8; color: white; }
+.ps-hint-box { flex-basis: 100%; width: 100%; box-sizing: border-box; margin: 4px 0 2px; padding: 10px 12px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px;
+  font-size: 0.8rem; font-weight: 400; color: #1e3a8a; line-height: 1.6; cursor: pointer; }
+
+/* Dòng cài đặt: tên bên trái, nút / ô bên phải. */
+.ps-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-height: 50px; padding: 7px 0; border-top: 1px solid #f1f5f9; box-sizing: border-box; }
+.ps-title + .ps-row, .ps-seg + .ps-row { border-top: 0; }
+.ps-row-label { flex: 1 1 0; min-width: min(100%, 104px); font-size: 0.9rem; font-weight: 600; color: #1e293b; }
+.ps-row-t { display: inline-flex; align-items: center; gap: 4px 7px; flex-wrap: wrap; }
+.ps-row-label small { display: block; margin-top: 1px; font-size: 0.74rem; font-weight: 500; color: #64748b; }
+.ps-row-ctl { flex: 0 0 auto; max-width: 100%; margin-left: auto; display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.ps-row.stack .ps-row-label { flex-basis: 100%; }
+.ps-row.stack .ps-row-ctl { flex: 1 1 100%; margin-left: 0; justify-content: flex-start; }
+.ps-row.stack .ps-row-ctl > select, .ps-row.stack .ps-row-ctl > div > select:first-child { width: 100%; }
+.ps-row-ctl input, .ps-row-ctl select, .ps-apply input, .ps-depart input.full, .ps-tap input:not([type="file"]) { min-height: 40px; padding: 7px 10px; border: 1.5px solid #cbd5e1;
+  border-radius: 8px; font-size: 16px; background: white; color: #0f172a; font-family: inherit; box-sizing: border-box; }
+.ps-row-ctl input:focus, .ps-row-ctl select:focus, .ps-apply input:focus, .ps-tap input:focus, .ps-fine-row input:focus { outline: none; border-color: #2563eb; }
+.ps-row-ctl input.money { width: 124px; text-align: right; }
+.ps-row-ctl input.num { width: 64px; text-align: center; }
+.ps-row-ctl input.num.wide { width: 96px; }
+.ps-row-ctl .unit { font-size: 0.82rem; color: #64748b; }
+.ps-row-ctl select { max-width: 100%; }
+.ps-row.day .day-date { font-weight: 800; }
+.ps-row.day.skipped { opacity: 0.55; }
+.ps-row.day.skipped .day-date { text-decoration: line-through; }
+.ps-time { font-size: 1.05rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.ps-dot { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 50%; background: #94a3b8; vertical-align: middle; }
+.ps-dot.on { background: #16a34a; }
+
+/* Công tắc bật / tắt. */
+.ps-sw { position: relative; flex-shrink: 0; width: 50px; height: 30px; padding: 0; border: 0; border-radius: 999px; background: #cbd5e1; cursor: pointer; transition: background 0.15s;
+  -webkit-tap-highlight-color: transparent; }
+.ps-sw span { position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.3); transition: transform 0.15s; }
+.ps-sw.on { background: #16a34a; }
+.ps-sw.on span { transform: translateX(20px); }
+.ps-sw:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Chọn một trong vài lựa chọn (Theo tháng | Theo ngày | Theo giờ …). */
+.ps-seg { display: flex; gap: 3px; padding: 3px; margin: 2px 0 6px; background: #eef2f7; border-radius: 11px; }
+.ps-seg button { flex: 1 1 0; min-width: 0; min-height: 40px; padding: 0 6px; border: 0; border-radius: 8px; background: transparent; color: #475569; font: inherit; font-size: 0.86rem;
+  font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.ps-seg button.on { background: white; color: #0f172a; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.16); }
+.acct-field .ps-seg { margin: 0; }
+.ps-seg-label { margin: 0 0 4px; font-size: 0.76rem; font-weight: 700; color: #475569; }
+
+/* Dòng trạng thái nhỏ, ví dụ tính tiền, thanh Lưu (hiện khi có thay đổi chưa lưu). */
+.ps-status { margin: 6px 0 2px; padding: 7px 10px; background: #f8fafc; border-radius: 8px; font-size: 0.78rem; color: #475569; line-height: 1.5; }
+.ps-status.warn { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; }
+.ps-ex { margin: 0 0 6px; font-size: 0.76rem; color: #475569; }
+.ps-save { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 4px; padding: 8px 10px 8px 12px; background: #fffbeb; border: 1px solid #fde68a;
+  border-radius: 12px; font-size: 0.8rem; font-weight: 700; color: #92400e; }
+.ps-save > span { margin-right: auto; }
+.ps-save .btn-primary { min-height: 40px; }
+.ps-save.plain { background: none; border: 0; padding: 4px 0; justify-content: flex-end; }
+.ps-apply { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding-top: 10px; border-top: 1px dashed #e2e8f0; font-size: 0.86rem; font-weight: 600; }
+.ps-apply label { display: inline-flex; align-items: center; gap: 6px; }
+.ps-apply .btn-primary { margin-left: auto; min-height: 40px; }
+.ps-apply input.grow { flex: 1 1 140px; min-width: 0; }
+.btn-primary.ps-sm { padding: 8px 14px; font-size: 0.82rem; }
+.ps-link { border: 0; background: none; padding: 6px 4px; color: #64748b; font: inherit; font-size: 0.8rem; text-decoration: underline; cursor: pointer; }
+.ps-link.more { display: block; margin: 4px auto 0; color: #2563eb; text-decoration: none; font-weight: 700; }
+.ps-late-part + .ps-late-part { margin-top: 4px; border-top: 1px dashed #e2e8f0; }
+.ps-scan { display: flex; gap: 4px 10px; flex-wrap: wrap; align-items: baseline; padding: 6px 0; border-top: 1px solid #f1f5f9; font-size: 0.82rem; }
+.ps-scan .when { min-width: 86px; color: #64748b; font-variant-numeric: tabular-nums; }
+.ps-scan .who { min-width: 80px; }
+.ps-scan .warn { flex-basis: 100%; color: #c2410c; font-size: 0.76rem; }
+.ps-tap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 10px; }
+.ps-tap img, .ps-tap .ps-tap-ph { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.ps-tap .ps-tap-ph { background: #e2e8f0; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; color: #64748b; }
+.ps-tap input:not([type="file"]) { flex: 1 1 140px; min-width: 0; }
+
+/* Danh sách lỗi & tiền phạt: mỗi lỗi một dòng tên | tiền | Lưu / Ẩn. */
+.ps-fine-row { display: grid; grid-template-columns: minmax(0, 1fr) 104px auto; gap: 6px; align-items: center; padding: 6px 0; border-top: 1px solid #f1f5f9; }
+.ps-fine-row.off { opacity: 0.55; }
+.ps-fine-row.add { border-top: 1px dashed #cbd5e1; padding-top: 10px; margin-top: 2px; }
+.ps-fine-row input { width: 100%; min-height: 40px; padding: 7px 9px; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 16px; font-family: inherit; box-sizing: border-box; background: white; }
+.ps-fine-row .ps-fine-amt { text-align: right; }
+.ps-fine-act { display: flex; align-items: center; gap: 4px; }
+/* Điện thoại: tên lỗi một hàng, tiền phạt + nút hàng dưới. */
+@media (max-width: 480px) {
+  .ps-fine-row { grid-template-columns: minmax(0, 1fr) auto; padding: 8px 0; }
+  .ps-fine-row .ps-fine-name { grid-column: 1 / -1; font-weight: 600; }
 }
-@media (min-width: 641px) { .acct-line input, .acct-line select { font-size: 0.88rem; } .sp-acct .acct-field { max-width: 560px; } }
+
+/* Tài khoản. */
+.ps-acct { display: flex; flex-direction: column; gap: 12px; }
+.acct-field { display: flex; flex-direction: column; gap: 5px; font-size: 0.76rem; font-weight: 700; color: #475569; }
+.acct-line { display: flex; gap: 6px; }
+.acct-line input, .acct-line select { flex: 1 1 0; min-width: 0; min-height: 42px; padding: 8px 10px; border: 1.5px solid #cbd5e1; border-radius: 8px; font-size: 16px; background: white; color: #0f172a; font-family: inherit; }
+.acct-line button { flex-shrink: 0; }
+.acct-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding-top: 12px; border-top: 1px dashed #e2e8f0; }
+.acct-actions button:not(.ps-hint) { min-height: 40px; padding: 0 14px; border-radius: 9px; font: inherit; font-size: 0.84rem; font-weight: 700; cursor: pointer; }
+.acct-actions .act-warn { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; }
+.acct-actions .act-plain { background: #f1f5f9; border: 1px solid #e2e8f0; color: #334155; }
+.acct-actions .act-danger { background: #fff5f5; border: 1px solid #fecaca; color: #dc2626; }
+.ps-depart { display: flex; flex-direction: column; gap: 4px; padding: 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 12px; }
+.ps-depart .ps-row { border-top: 0; }
+.ps-depart input.full { width: 100%; }
+
+@media (max-width: 640px) {
+  .ps-head { padding: 12px; }
+  /* Thanh Lưu nổi ngay trên thanh menu dưới cùng khi có thay đổi (khỏi phải cuộn tìm nút Lưu). */
+  .ps-save:not(.plain) { position: sticky; bottom: calc(var(--admin-bottom-nav-height, 53px) + 10px); z-index: 5; box-shadow: 0 6px 18px rgba(15, 23, 42, 0.14); }
+}
+@media (min-width: 641px) {
+  .ps-row-ctl input, .ps-row-ctl select, .ps-apply input, .acct-line input, .acct-line select, .ps-fine-row input, .ps-tap input:not([type="file"]), .ps-depart input.full { font-size: 0.9rem; }
+  .ps-acct .acct-field { max-width: 560px; }
+}
 @media (max-width: 899px) {
   .sset.has-sel .sset-list { display: none; }
   .sset:not(.has-sel) .sset-panel { display: none; }
@@ -560,11 +657,13 @@ button.slip-row:active, .slip-row.open { background: #eff6ff; }
 @media (min-width: 900px) {
   .sset { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start; }
   .sset-list { position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow-y: auto; padding: 2px; }
-  .sset-back { display: none; }
+  .ps-bar { margin: 0 0 10px; padding: 6px 0; border-bottom: 0; background: #f8fafc; }
+  .ps-bar .back { display: none; }
+  .ps-bar.only-back { display: none; }
 }
 @media (min-width: 1360px) {
-  .sp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sp-wide { grid-column: 1 / -1; }
+  .ps-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ps-wide { grid-column: 1 / -1; }
 }
 
 /* Bảng lương trên điện thoại: mỗi người MỘT hàng — tên · công · trễ · ứng · phạt · nước uống · thực lĩnh; tên cột ghi một lần ở đầu. */
